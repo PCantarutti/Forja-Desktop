@@ -16,6 +16,7 @@
   "build": {
     "appId": "dev.forja.desktop",
     "productName": "Forja",
+    "copyright": "Forja",
     "files": ["electron/**", "package.json"],
     "extraResources": [{ "from": "resources", "to": ".", "filter": ["**/*"] }],
     "win": {
@@ -27,7 +28,14 @@
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Forja",
+      "uninstallDisplayName": "Forja ${version}",
+      "runAfterFinish": true,
+      "allowElevation": false,
+      "menuCategory": false
     }
   }
 }

@@ -122,10 +122,17 @@ function makeIcon() {
   });
 }
 
+/** O ícone da bandeja é lido em tempo de execução: empacotado, ele precisa estar em resources/. */
+function copyIcon() {
+  const png = path.join(ROOT, "build", "icon.png");
+  if (fs.existsSync(png)) fs.copyFileSync(png, path.join(RES, "icon.png"));
+}
+
 await fetchPython();
 pipInstall();
 await playwrightChromium();
 makeIcon();
+copyIcon();
 buildUi();
 copyBackend();
 console.log("\nresources/ pronto. Agora: npx electron-builder --win nsis");

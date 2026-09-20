@@ -3,7 +3,15 @@ export type ToolCall = { id: string; name: string; arguments: Record<string, unk
 export type Preview = { kind: "diff" | "new" | "command"; path: string; text: string };
 
 /** Aprovação pendente: preview é null para ferramentas sem preview (ex.: MCP); sent = decisão já enviada. */
-export type Approval = { preview: Preview | null; suggest?: string; tool?: string; plan?: string; sent?: boolean };
+export type Approval = {
+  preview: Preview | null;
+  suggest?: string;
+  tool?: string;
+  plan?: string; // exit_plan_mode
+  question?: string; // ask_user
+  options?: string[];
+  sent?: boolean;
+};
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" };
 
@@ -98,6 +106,7 @@ export type BrowserState = {
   scale?: number;
   tabs?: BrowserTab[];
   file_chooser?: boolean;
+  native?: boolean; // Forja Desktop: as abas são views nativas na janela; não há frames no stream
 };
 
 export type Settings = {

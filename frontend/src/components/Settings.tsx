@@ -46,8 +46,10 @@ type Memory = {
   raw?: string;
 };
 
-const TABS = ["Geral", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
-type Tab = (typeof TABS)[number];
+const BASE_TABS = ["Geral", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
+type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
+// "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
+const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
 
 const input = "w-full rounded-lg border border-line bg-raised px-3 py-1.5 text-sm text-fg focus:border-[#555] focus:outline-none";
 const btn = "rounded-full border border-line px-3 py-1.5 text-sm text-fg hover:bg-raised";
@@ -121,7 +123,7 @@ export default function Settings(props: {
       >
         <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-line bg-side p-3">
           <div className="mb-2 px-2 text-sm font-medium">Configurações</div>
-          {TABS.map((t) => (
+          {tabs().map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -140,7 +142,7 @@ export default function Settings(props: {
             <h2 className="flex-1 text-sm text-muted">{tab}</h2>
             {error && <span className="truncate text-sm text-red-300">{error}</span>}
             {saved && <span className="text-sm text-emerald-400">{saved}</span>}
-            {tab !== "MCP" && tab !== "Memória" && (
+            {tab !== "MCP" && tab !== "Memória" && tab !== "Aplicativo" && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
                 Salvar
               </button>
@@ -151,7 +153,9 @@ export default function Settings(props: {
           </header>
 
           <div className="flex-1 overflow-y-auto p-5">
-            {!s ? (
+            {tab === "Aplicativo" ? (
+              <AppTab />
+            ) : !s ? (
               <div className="text-muted">Carregando…</div>
             ) : tab === "Geral" ? (
               <div className="max-w-xl space-y-5">
@@ -219,6 +223,152 @@ export default function Settings(props: {
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ aplicativo (Electron)
+
+function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
+  return (
+    <label className={`flex items-start gap-3 rounded-xl border border-line bg-surface p-3 ${disabled ? "opacity-50" : "cursor-pointer hover:border-[#3d3d3d]"}`}>
+      <input type="checkbox" className="mt-0.5 size-4 accent-white" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span className="min-w-0">
+        <span className="block text-sm text-fg">{label}</span>
+        {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
+      </span>
+    </label>
+  );
+}
+
+/** Janela, zoom, bandeja e início com o Windows. Salva na hora (não passa pelo botão Salvar). */
+function AppTab() {
+  const bridge = window.forja!.desktop;
+  const [d, setD] = useState<DesktopState | null>(null);
+
+  useEffect(() => {
+    bridge.get().then(setD);
+  }, [bridge]);
+
+  if (!d) return <div className="text-muted">Carregando…</div>;
+  const patch = (p: Parameters<typeof bridge.set>[0]) => bridge.set(p).then(setD);
+
+  return (
+    <div className="max-w-xl space-y-5">
+      <Field label="Zoom da interface" hint="O mesmo que Ctrl + (+), Ctrl + (−) e Ctrl + 0 na janela, ou Ctrl + roda do mouse.">
+        <div className="flex items-center gap-2">
+          <button className={btn} onClick={() => bridge.zoom("out").then((zoom) => setD({ ...d, zoom }))} title="Diminuir (Ctrl -)">
+            −
+          </button>
+          <span className="w-16 text-center font-mono text-sm text-fg">{Math.round(d.zoom * 100)}%</span>
+          <button className={btn} onClick={() => bridge.zoom("in").then((zoom) => setD({ ...d, zoom }))} title="Aumentar (Ctrl +)">
+            +
+          </button>
+          <button className={btn} onClick={() => bridge.zoom("reset").then((zoom) => setD({ ...d, zoom }))} title="Voltar para 100% (Ctrl 0)">
+            100%
+          </button>
+        </div>
+      </Field>
+
+      <div className="space-y-2">
+        <div className="text-sm text-fg">Ao fechar a janela</div>
+        <div className="text-xs text-muted">O agente continua rodando enquanto o Forja estiver na bandeja.</div>
+        <div className="mt-1.5 grid gap-2">
+          {[
+            { v: false, label: "Fechar o Forja", hint: "O X encerra o app e o backend. Nada fica rodando." },
+            { v: true, label: "Minimizar para a bandeja", hint: "O X esconde a janela; o ícone ao lado do relógio reabre ou sai." },
+          ].map((o) => (
+            <label
+              key={String(o.v)}
+              className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${d.closeToTray === o.v ? "border-[#4d4d4d] bg-raised" : "border-line bg-surface hover:border-[#3d3d3d]"}`}
+            >
+              <input type="radio" name="close" className="mt-0.5 size-4 accent-white" checked={d.closeToTray === o.v} onChange={() => patch({ closeToTray: o.v })} />
+              <span className="min-w-0">
+                <span className="block text-sm text-fg">{o.label}</span>
+                <span className="mt-0.5 block text-xs text-muted">{o.hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-sm text-fg">Inicialização</div>
+        <div className="grid gap-2">
+          <Toggle
+            label="Abrir o Forja junto com o Windows"
+            hint={d.packaged ? undefined : "Só vale no app instalado; em desenvolvimento não mexe no registro."}
+            checked={d.startWithWindows}
+            disabled={!d.packaged}
+            onChange={(v) => patch({ startWithWindows: v })}
+          />
+          <Toggle
+            label="Iniciar direto na bandeja, sem abrir a janela"
+            hint="Precisa de abrir com o Windows e de fechar-para-bandeja ligados."
+            checked={d.startMinimized}
+            disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
+            onChange={(v) => patch({ startMinimized: v })}
+          />
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-sm text-fg">Sobre</div>
+        <div className="space-y-2 rounded-xl border border-line bg-surface p-3 text-xs">
+          <div className="flex gap-2">
+            <span className="w-24 shrink-0 text-muted">Versão</span>
+            <span className="font-mono text-fg">
+              {d.version}
+              {d.packaged ? "" : " (desenvolvimento)"}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <span className="w-24 shrink-0 text-muted">Dados</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.data}>
+              {d.paths.data}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <span className="w-24 shrink-0 text-muted">Conversas</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.db}>
+              {d.paths.db}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <span className="w-24 shrink-0 text-muted">Markdown</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.md}>
+              {d.paths.md}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <span className="w-24 shrink-0 text-muted">Log</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.log}>
+              {d.paths.log}
+            </span>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button className={btn} onClick={() => bridge.open("data")}>
+              Abrir a pasta de dados
+            </button>
+            <button className={btn} onClick={() => bridge.open("md")}>
+              Abrir as conversas em Markdown
+            </button>
+            <button className={btn} onClick={() => bridge.open("db")}>
+              Mostrar o banco
+            </button>
+            <button className={btn} onClick={() => bridge.open("log")}>
+              Mostrar o log
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-muted">
+          O banco <span className="font-mono">forja.db</span> guarda as conversas, provedores, chaves e configurações. Em
+          paralelo, cada conversa é espelhada em Markdown em <span className="font-mono">conversas\forja-code</span> (agente) e{" "}
+          <span className="font-mono">conversas\forja-chat</span> — arquivos soltos, prontos para copiar para outro PC, um backup
+          ou o git. O espelho é só de leitura: editar o .md não muda a conversa, e apagar a conversa no Forja apaga o .md junto.
+          Desinstalar o Forja não apaga nada disso.
+        </p>
       </div>
     </div>
   );

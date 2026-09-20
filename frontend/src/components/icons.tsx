@@ -50,7 +50,7 @@ export const Folder = base(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2
 export const Laptop = base(<><rect x="4" y="5" width="16" height="11" rx="1.5" /><path d="M2 19h20" /></>);
 export const Undo = base(<><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></>);
 export const Split = base(<><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 8v2a4 4 0 0 0 4 4h0a2 2 0 0 1 2 2v1M18 8v2a4 4 0 0 1-4 4" /></>);
-export const Bubble = base(<path d="M21 12a8 8 0 0 1-8 8H7l-4 3v-6a8 8 0 0 1 8-8h2a8 8 0 0 1 8 3z" />);
+export const Bubble = base(<><rect x="3" y="4" width="18" height="13" rx="3.5" /><path d="M8.5 17v3.5L13 17" /></>);
 export const Code = base(<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 5l-4 14" />);
 export const PanelLeft = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>);
 export const Sliders = base(<><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle cx="16" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>);

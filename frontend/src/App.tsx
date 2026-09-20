@@ -29,7 +29,10 @@ import {
   EventNotice,
   Markdown,
   setFileConv,
+  ActivityGroup,
+  groupActivity,
   PlanCard,
+  QuestionCard,
   StatsRow,
   SubagentSteps,
   Thinking,
@@ -38,7 +41,7 @@ import {
   type TurnStats,
 } from "./components/MessageView";
 import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip, Refresh, Square, Undo } from "./components/icons";
-import type { Approval, Attachment, BrowserState, Conversation, Message, Settings, Skill, Stats, Task, ToolsSent } from "./types";
+import type { Approval, Attachment, BrowserState, Conversation, Message, Settings, Skill, Stats, Task, ToolCall, ToolsSent } from "./types";
 
 /** Notificação do sistema quando a aba não está em foco (execução terminou, aprovação pendente). */
 function notify(title: string, body: string, force = false) {
@@ -556,6 +559,10 @@ export default function App() {
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "exit_plan_mode", plan: ev.plan } }));
         notify("Forja propôs um plano", "Abra a conversa para aprovar ou pedir ajustes.");
         break;
+      case "question_request":
+        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "ask_user", question: ev.question, options: ev.options } }));
+        notify("Forja tem uma pergunta", String(ev.question ?? ""));
+        break;
       case "context":
         setCtx(ev);
         break;
@@ -758,6 +765,14 @@ export default function App() {
   }
 
   /** Decisão sobre um plano: aprovar (com o modo de execução) ou pedir mudanças. */
+  async function decideAnswer(callId: string, answer: string) {
+    if (!runId.current) return;
+    setApprovals((a) => ({ ...a, [callId]: { ...a[callId], sent: true } }));
+    await api
+      .post(`/runs/${runId.current}/approve`, { call_id: callId, approved: true, answer })
+      .catch((e) => setError(e.message));
+  }
+
   async function decidePlan(callId: string, approved: boolean, mode?: string, feedback?: string) {
     if (!runId.current) return;
     setApprovals((a) => ({ ...a, [callId]: { ...a[callId], sent: true } }));
@@ -771,6 +786,8 @@ export default function App() {
     for (const msg of messages) if (msg.role === "tool" && msg.tool_call_id) m.set(msg.tool_call_id, msg);
     return m;
   }, [messages]);
+
+  const segments = useMemo(() => groupActivity(messages), [messages]);
 
   // Planos do modo Plano nesta conversa (chamadas exit_plan_mode), para a aba Planos.
   const plans = useMemo<PlanEntry[]>(() => {
@@ -922,7 +939,7 @@ export default function App() {
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
       <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
+        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
           {sidebarHidden && (
@@ -1065,48 +1082,66 @@ export default function App() {
               if (m.role !== "assistant") return null;
               const turn = turns.get(i);
               const showTurn = turn && !(running && i > lastUserIndex);
+              const toolNode = (c: ToolCall, queued: boolean) => (
+                <ToolBlock
+                  call={c}
+                  result={results.get(c.id)}
+                  approval={approvals[c.id]}
+                  running={running}
+                  queued={queued}
+                  live={liveOutput[c.id]}
+                  hideImages
+                  onOpen={openPath}
+                  onDecide={(ok, always) => decide(c.id, ok, always)}
+                >
+                  {c.name === "delegate_task" && (
+                    <SubagentSteps
+                      info={results.get(c.id)?.meta?.sub}
+                      status={subSteps[c.id]?.status}
+                      steps={
+                        subSteps[c.id]?.steps ??
+                        (results.get(c.id)?.meta?.sub?.steps ?? []).map((st: any) => ({
+                          call: { id: st.id, name: st.name, arguments: st.arguments },
+                          result: { ...st, content: st.result, tool_call_id: st.id } as Message,
+                        }))
+                      }
+                      approvals={approvals}
+                      running={running}
+                      onDecide={decide}
+                    />
+                  )}
+                </ToolBlock>
+              );
               return (
                 <div key={m.id} className="my-4">
-                  <Thinking text={m.thinking} />
-                  {m.content && <Markdown text={m.content} />}
-                  {m.tool_calls?.map((c, k) =>
-                    c.name === "exit_plan_mode" ? (
-                      <div key={c.id} id={`plan-${c.id}`}>
+                  {(segments.get(i) ?? []).map((seg, si) =>
+                    seg.kind === "text" ? (
+                      <Markdown key={si} text={m.content} />
+                    ) : seg.kind === "plan" ? (
+                      <div key={si} id={`plan-${seg.call.id}`}>
                         <PlanCard
-                          plan={(approvals[c.id]?.plan ?? results.get(c.id)?.meta?.plan ?? c.arguments.plan ?? "") as string}
-                          done={results.get(c.id)}
-                          onDecide={(ok, mode, feedback) => decidePlan(c.id, ok, mode, feedback)}
+                          plan={(approvals[seg.call.id]?.plan ?? results.get(seg.call.id)?.meta?.plan ?? seg.call.arguments.plan ?? "") as string}
+                          done={results.get(seg.call.id)}
+                          onDecide={(ok, mode, feedback) => decidePlan(seg.call.id, ok, mode, feedback)}
                         />
                       </div>
+                    ) : seg.kind === "question" ? (
+                      <QuestionCard
+                        key={si}
+                        question={(approvals[seg.call.id]?.question ?? seg.call.arguments.question ?? "") as string}
+                        options={(approvals[seg.call.id]?.options ?? seg.call.arguments.options ?? []) as string[]}
+                        done={results.get(seg.call.id)}
+                        onAnswer={(a) => decideAnswer(seg.call.id, a)}
+                      />
                     ) : (
-                    <ToolBlock
-                      key={c.id}
-                      call={c}
-                      result={results.get(c.id)}
-                      approval={approvals[c.id]}
-                      running={running}
-                      queued={m.tool_calls!.slice(0, k).some((p) => !results.has(p.id))}
-                      live={liveOutput[c.id]}
-                      onOpen={openPath}
-                      onDecide={(ok, always) => decide(c.id, ok, always)}
-                    >
-                      {c.name === "delegate_task" && (
-                        <SubagentSteps
-                          info={results.get(c.id)?.meta?.sub}
-                          status={subSteps[c.id]?.status}
-                          steps={
-                            subSteps[c.id]?.steps ??
-                            (results.get(c.id)?.meta?.sub?.steps ?? []).map((st: any) => ({
-                              call: { id: st.id, name: st.name, arguments: st.arguments },
-                              result: { ...st, content: st.result, tool_call_id: st.id } as Message,
-                            }))
-                          }
-                          approvals={approvals}
-                          running={running}
-                          onDecide={decide}
-                        />
-                      )}
-                    </ToolBlock>
+                      <ActivityGroup
+                        key={si}
+                        items={seg.items}
+                        results={results}
+                        live={running && i > lastUserIndex}
+                        forceOpen={seg.items.some((p) => p.kind === "tool" && !!approvals[p.call.id] && !results.has(p.call.id))}
+                        renderTool={toolNode}
+                      />
                     ),
                   )}
                   {showTurn && (

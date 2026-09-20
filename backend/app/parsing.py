@@ -141,6 +141,16 @@ def detect_promise(text: str) -> bool:
     return bool(PROMISE_RE.search(visible.replace("’", "'")))
 
 
+def looks_like_plan(text: str) -> bool:
+    """True se o texto é um plano escrito na resposta em vez de ir em exit_plan_mode.
+
+    Modelo fraco no modo Plano costuma redigir o plano e parar; o agente converte esse texto na
+    chamada da ferramenta para o card de aprovação aparecer.
+    """
+    t = split_think(text)[1].strip()
+    return len(t) >= 400 and bool(re.search(r"^\s*(?:\*\*)?#{1,4}\s|^\s*\d+[.)]\s", t, re.M))
+
+
 # ------------------------------------------------------------------ loop
 
 class LoopDetector:

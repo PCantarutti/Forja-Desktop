@@ -4,9 +4,19 @@ Um processo Chromium compartilhado (`Manager`) e uma **sessão por conversa** (`
 com suas abas). Trocar de conversa na UI troca a sessão mostrada; a chave "0" é o rascunho da tela
 inicial. A sessão vive até fechar, apagar a conversa ou ficar ociosa (`BROWSER_IDLE_MINUTES`).
 
-Espelho: screencast CDP da aba ativa (PNG sem perda ou JPEG, `BROWSER_STREAM`) renderizado em
-`BROWSER_SCALE`x, em SSE. O usuário interage pelo espelho (`input`/`navigate`/abas/upload) sem
-aprovação: é o próprio usuário agindo. Ferramentas do modelo:
+Dois modos, mesma API para o agente e para a UI:
+
+- **Nativo** (Forja Desktop, `FORJA_CDP` definido): o Playwright liga por CDP ao Chromium do próprio Electron.
+  Cada aba é uma `WebContentsView` dentro da janela: o usuário interage direto, sem espelho. O Electron
+  não implementa `Target.createTarget`, então a aba nasce lá: o backend emite `create` no canal
+  `/api/browser/host` (SSE que o main.js assina) com uma URL-marcador `about:blank?forja=CHAVE/ID`, o
+  Electron cria a view carregando esse marcador e o backend acha a page pela URL. Fechar é `page.close()`
+  (o Electron destrói a view sozinho). `active` diz ao Electron qual view mostrar.
+- **Espelho** (web/Docker): Chromium headless; screencast CDP da aba ativa (JPEG ou PNG, `BROWSER_STREAM`)
+  em SSE, e o usuário interage pelo espelho (`input`/`navigate`/abas/upload) sem aprovação: é o próprio
+  usuário agindo.
+
+Ferramentas do modelo:
 
 - browser_navigate, browser_read, browser_console, browser_tabs, browser_screenshot: leitura
 - browser_click, browser_type, browser_upload: `mutating` (seguem a política de escrita)
@@ -22,8 +32,10 @@ import asyncio
 import base64
 import contextvars
 import json
+import math
 import re
 import time
+import uuid
 from collections import deque
 from pathlib import Path
 from typing import AsyncIterator
@@ -38,9 +50,12 @@ MIN_VIEWPORT, MAX_VIEWPORT = (320, 240), (3840, 2400)
 NAV_TIMEOUT = 15_000
 ACT_TIMEOUT = 5_000
 JPEG_QUALITY = 75  # screenshot que vai ao modelo
+CAST_JPEG_QUALITY = 85  # espelho ao vivo: texto ainda nítido, frame 3-5x menor que PNG
 MAX_TABS = 8
 SCRATCH = "0"  # sessão do painel quando nenhuma conversa está aberta
 REF_RE = re.compile(r"^(?:ref=)?((?:f\d+)?e\d+)$")  # e12 na página principal; f1e12 dentro de frame
+MARKER = "about:blank?forja="  # URL inicial de uma aba nativa: identifica a view do Electron para o Playwright
+MARKER_WAIT = 8.0  # segundos para o Electron criar a view depois do `create`
 ERROR_PREFIXES = ("pageerror", "console.error", "requestfailed")
 
 # Conversa dona das chamadas de ferramenta em andamento (agent.run_agent define no início do run).
@@ -64,6 +79,7 @@ class Session:
         self._cast_mime = "image/png"
         self._lock = asyncio.Lock()
         self.viewport = dict(VIEWPORT)  # segue o tamanho do painel na UI
+        self.dpr = 1.0  # devicePixelRatio da tela onde o painel está; limita a resolução do espelho
         self.logs: deque[str] = deque(maxlen=200)
         # Espelhamento: último frame + versão; assinantes esperam a versão mudar (lento pula frames).
         self.latest: dict | None = None
@@ -73,6 +89,7 @@ class Session:
         self._cond = asyncio.Condition()
         self.last_used = time.monotonic()
         self.file_chooser = None  # a página pediu um arquivo; a UI oferece o upload
+        self.markers: dict[int, str] = {}  # id(page) -> marcador (modo nativo)
 
     def touch(self) -> None:
         self.last_used = time.monotonic()
@@ -89,21 +106,40 @@ class Session:
         async with self._lock:
             if self.open:
                 return self.active
-            browser = await self._m.browser()
             for attempt in (1, 2):
                 try:
-                    if self._ctx is None:
-                        self._ctx = await browser.new_context(viewport=dict(self.viewport), accept_downloads=False)
-                        self._ctx.on("page", lambda p: asyncio.ensure_future(self._adopt(p)))  # popups viram abas
-                    page = await self._ctx.new_page()
+                    page = await self._new_page()
                     break
+                except ToolError:
+                    raise
                 except Exception as e:  # contexto morto (Chromium caiu): recria uma vez
                     self._ctx, self.pages, self.active = None, [], None
                     if attempt == 2:
                         raise ToolError(f"Não consegui abrir o navegador: {_err(e)}") from e
-                    browser = await self._m.browser()
             await self._adopt(page)
             return page
+
+    async def _new_page(self):
+        """Uma aba nova, ainda sem registrar. Nativo: pede a view ao Electron e espera a page aparecer."""
+        browser = await self._m.browser()
+        if self._m.native:
+            if not self._m.hosts:
+                raise ToolError("O app não está ligado ao navegador integrado (Electron sem conexão com o backend).")
+            self._ctx = browser.contexts[0]  # todas as views caem no contexto padrão do CDP
+            marker = f"{MARKER}{self.key}/{uuid.uuid4().hex[:8]}"
+            self._m.host_emit({"type": "create", "key": self.key, "marker": marker})
+            deadline = time.monotonic() + MARKER_WAIT
+            while time.monotonic() < deadline:
+                for p in self._ctx.pages:
+                    if p.url == marker:
+                        self.markers[id(p)] = marker
+                        return p
+                await asyncio.sleep(0.05)
+            raise ToolError("O app não abriu a aba do navegador a tempo.")
+        if self._ctx is None:
+            self._ctx = await browser.new_context(viewport=dict(self.viewport), accept_downloads=False)
+            self._ctx.on("page", lambda p: asyncio.ensure_future(self._adopt(p)))  # popups viram abas
+        return await self._ctx.new_page()
 
     async def _adopt(self, page) -> None:
         """Registra uma aba (criada por nós ou popup) e a torna ativa."""
@@ -118,7 +154,8 @@ class Session:
         page.on("pageerror", lambda e: self._log(page, f"pageerror: {e}"))
         page.on("requestfailed", lambda r: self._log(page, f"requestfailed: {r.method} {r.url} ({r.failure})"))
         page.on("dialog", lambda d: asyncio.ensure_future(d.dismiss()))  # senão click trava em alert()
-        page.on("filechooser", lambda fc: asyncio.ensure_future(self._on_filechooser(fc)))
+        if not self._m.native:  # nativo: o diálogo de arquivo do sistema abre sozinho
+            page.on("filechooser", lambda fc: asyncio.ensure_future(self._on_filechooser(fc)))
         page.on("framenavigated", lambda f: f == page.main_frame and asyncio.ensure_future(self._publish_state()))
         page.on("close", lambda _: asyncio.ensure_future(self._on_page_close(page)))
         await self._activate(page)
@@ -141,10 +178,13 @@ class Session:
             pass
         if self.subs:
             await self._start_cast()
+        if self._m.native:
+            self._m.host_emit({"type": "active", "key": self.key, "marker": self.markers.get(id(page), "")})
         await self._publish_state()
 
     async def _on_page_close(self, page) -> None:
         was_active = page is self.active
+        self.markers.pop(id(page), None)
         if page in self.pages:
             self.pages.remove(page)
         if was_active:
@@ -158,8 +198,16 @@ class Session:
         """Fecha a sessão (botão da UI, conversa apagada ou ociosidade). O próximo uso abre outra."""
         await self._stop_cast()
         ctx, self._ctx = self._ctx, None
-        self.pages, self.active, self.latest, self.file_chooser = [], None, None, None
-        if ctx:
+        pages, self.pages, self.active, self.latest, self.file_chooser = self.pages, [], None, None, None
+        self.markers.clear()
+        if self._m.native:  # o contexto é o do Electron, compartilhado: fecha só as nossas abas (as views somem)
+            for p in pages:
+                try:
+                    await p.close()
+                except Exception:
+                    pass
+            self._m.host_emit({"type": "active", "key": self.key, "marker": ""})
+        elif ctx:
             try:
                 await ctx.close()
             except Exception:
@@ -194,7 +242,7 @@ class Session:
             if len(self.pages) >= MAX_TABS:
                 raise ToolError(f"Máximo de {MAX_TABS} abas abertas. Feche uma com browser_tabs close.")
             self.touch()
-            page = await self._ctx.new_page()
+            page = await self._new_page()
             await self._adopt(page)
         if url:
             await self._goto(page, url)
@@ -233,7 +281,7 @@ class Session:
         return {"type": "state", "key": self.key, "open": self.open, "url": self.active.url if self.open else "",
                 "title": "", "width": self.viewport["width"], "height": self.viewport["height"],
                 "scale": self._m.scale or int(config.BROWSER_SCALE), "tabs": [],
-                "file_chooser": self.file_chooser is not None}
+                "file_chooser": self.file_chooser is not None, "native": self._m.native}
 
     async def state_with_title(self) -> dict:
         st = self.state()
@@ -257,14 +305,16 @@ class Session:
             self._cond.notify_all()
 
     async def _start_cast(self) -> None:
-        if self._cdp or not self.open:
+        if self._cdp or not self.open or self._m.native:
             return
         self._cdp = cdp = await self._ctx.new_cdp_session(self.active)
         cdp.on("Page.screencastFrame", lambda ev: asyncio.ensure_future(self._on_frame(cdp, ev)))
-        scale = self._m.scale or 1
+        # Render em N x, mas o frame nunca sai maior do que a tela consegue mostrar: em monitor 1x, um espelho
+        # 2x é 4x mais pixels para decodificar sem ganho nenhum.
+        scale = min(self._m.scale or 1, max(1, math.ceil(self.dpr)))
         params: dict = {"maxWidth": self.viewport["width"] * scale, "maxHeight": self.viewport["height"] * scale}
         if config.BROWSER_STREAM == "jpeg":
-            params.update(format="jpeg", quality=90)
+            params.update(format="jpeg", quality=CAST_JPEG_QUALITY)
             self._cast_mime = "image/jpeg"
         else:
             params["format"] = "png"
@@ -298,7 +348,7 @@ class Session:
             seen = self.version
             if self.latest:
                 yield self.latest
-            elif self.open:  # sem frame ainda (página parada): uma foto para não ficar em branco
+            elif self.open and not self._m.native:  # sem frame ainda (página parada): uma foto para não ficar em branco
                 try:
                     png = await self.active.screenshot(type="png")
                     yield {"type": "frame", "mime": "image/png", "data": base64.b64encode(png).decode(),
@@ -359,15 +409,16 @@ class Session:
         except Exception as e:
             raise ToolError(_err(e)) from e
 
-    async def set_viewport(self, width: int, height: int) -> None:
+    async def set_viewport(self, width: int, height: int, dpr: float = 1.0) -> None:
         """Painel da UI redimensionou: as abas passam a ter exatamente esse tamanho (px de CSS)."""
         w = max(MIN_VIEWPORT[0], min(MAX_VIEWPORT[0], int(width)))
         h = max(MIN_VIEWPORT[1], min(MAX_VIEWPORT[1], int(height)))
-        if (w, h) == (self.viewport["width"], self.viewport["height"]):
+        dpr = max(1.0, min(3.0, float(dpr or 1)))
+        if (w, h, dpr) == (self.viewport["width"], self.viewport["height"], self.dpr):
             return
-        self.viewport = {"width": w, "height": h}
+        self.viewport, self.dpr = {"width": w, "height": h}, dpr
         self.touch()
-        if self.open:
+        if self.open and not self._m.native:  # nativo: a view já tem o tamanho do painel
             for p in list(self.pages):
                 try:
                     await p.set_viewport_size(self.viewport)
@@ -403,6 +454,28 @@ class Manager:
         self.sessions: dict[str, Session] = {}
         self._lock = asyncio.Lock()
         self._sweeper: asyncio.Task | None = None
+        self.hosts: set[asyncio.Queue] = set()  # assinantes de /api/browser/host (o main.js do Electron)
+
+    @property
+    def native(self) -> bool:
+        return bool(config.BROWSER_CDP)
+
+    # ------------------------------------------------------------ canal com o Electron (modo nativo)
+
+    def host_emit(self, ev: dict) -> None:
+        for q in self.hosts:
+            q.put_nowait(ev)
+
+    async def host_events(self) -> AsyncIterator[dict]:
+        """Eventos para o Electron: `create` (abrir view com o marcador) e `active` (qual view mostrar)."""
+        q: asyncio.Queue = asyncio.Queue()
+        self.hosts.add(q)
+        try:
+            yield {"type": "hello", "native": self.native}
+            while True:
+                yield await q.get()
+        finally:
+            self.hosts.discard(q)
 
     async def browser(self):
         async with self._lock:
@@ -415,10 +488,17 @@ class Manager:
                                 "Rode `docker compose up -d --build`.") from None
             if self._pw is None:
                 self._pw = await async_playwright().start()
-            # Render em N x: o screencast sai com viewport*N pixels e a UI mostra no tamanho de CSS (nítido).
-            self.scale = max(1, min(3, int(config.BROWSER_SCALE)))
-            self._browser = await self._pw.chromium.launch(
-                headless=True, args=["--disable-dev-shm-usage", f"--force-device-scale-factor={self.scale}"])
+            if self.native:  # o Chromium é o do Electron; as views já estão na escala da tela
+                self.scale = 1
+                try:
+                    self._browser = await self._pw.chromium.connect_over_cdp(config.BROWSER_CDP, timeout=10_000)
+                except Exception as e:
+                    raise ToolError(f"Não consegui ligar ao navegador do app ({config.BROWSER_CDP}): {_err(e)}") from e
+            else:
+                # Render em N x: o screencast sai com viewport*N pixels e a UI mostra no tamanho de CSS (nítido).
+                self.scale = max(1, min(3, int(config.BROWSER_SCALE)))
+                self._browser = await self._pw.chromium.launch(
+                    headless=True, args=["--disable-dev-shm-usage", f"--force-device-scale-factor={self.scale}"])
             if self._sweeper is None:
                 self._sweeper = asyncio.create_task(self._sweep())
             return self._browser
@@ -444,7 +524,7 @@ class Manager:
                 for s in list(self.sessions.values()):
                     if idle > 0 and s.open and s.subs == 0 and now - s.last_used > idle:
                         await s.close()
-                if (self._browser and not any(s.open for s in self.sessions.values())
+                if (self._browser and not self.native and not any(s.open for s in self.sessions.values())
                         and self.scale != max(1, min(3, int(config.BROWSER_SCALE)))):
                     await self._browser.close()
                     self._browser = None

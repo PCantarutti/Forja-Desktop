@@ -16,6 +16,7 @@ Ambiente de desenvolvimento pessoal com agente de IA **local**, num app de deskt
 - Compactação automática do contexto quando a conversa fica grande
 - Tokens, tempo e tokens/s de cada resposta
 - Tela de Configurações: provedores e chaves de API (inclui Ollama Cloud), liga/desliga de ferramentas, permissões, MCP e memória da IA
+- Janela como a do Claude Desktop: zoom com **Ctrl +**, **Ctrl −** e **Ctrl 0** (ou Ctrl + roda do mouse), tamanho e posição lembrados, e o X podendo minimizar para a bandeja em vez de fechar
 - Memória do projeto em `FORJA.md`, anexos de arquivos e imagens, editar mensagem e regenerar resposta
 - **Pasta de trabalho por conversa**, escolhida em qualquer lugar do disco pelo Explorer
 - **Checkpoints**: desfazer as alterações de arquivo de um turno
@@ -80,15 +81,17 @@ Seus dados (conversas, configurações, chaves e `mcp.json`) ficam em `%APPDATA%
 
 Os botões **Info**, **Navegador**, **Terminal**, **Alterações**, **Instâncias** e **Planos** ficam sempre visíveis no topo direito do chat. Clicar abre o painel lateral naquela aba; clicar de novo recolhe. Planos lista o que o agente propôs nesta conversa no modo Plano, com status e atalho para o card no chat. Só a aba Navegador é redimensionável pela borda; as outras têm largura fixa (Planos é mais larga). O painel lembra, por conversa, se estava aberto e em qual aba; conversa nova começa recolhida.
 
-Um Chromium (Playwright, `chromium-headless-shell`) vem dentro do app e roda junto com o backend. O agente o controla pelas ferramentas `browser_*`; a aba **Navegador** da coluna direita mostra a tela ao vivo (screencast) e abre sozinha na primeira chamada.
+No **Forja Desktop** o navegador é nativo, como o painel do Claude Desktop: cada aba é uma `WebContentsView` do próprio Electron desenhada dentro da janela, na área da aba **Navegador**. Você clica, digita e rola direto na página, sem espelho nem atraso. O agente controla as mesmas abas pelas ferramentas `browser_*`: o backend (Playwright) liga por CDP ao Chromium do Electron (`--remote-debugging-port` só em 127.0.0.1, sem `--remote-allow-origins`, então página web nenhuma consegue conectar). A aba Navegador abre sozinha na primeira chamada.
+
+No modo **web/Docker** (sem Electron) vale o esquema antigo: um Chromium headless (Playwright, `chromium-headless-shell`) roda junto com o backend e a aba Navegador mostra um espelho ao vivo (screencast) por onde você interage.
 
 - **Uma sessão por conversa**: cada chat tem o próprio navegador (com suas abas). Trocar de chat troca o que o painel mostra; a tela inicial usa um rascunho à parte. Apagar a conversa fecha a sessão.
 - **Abas**: a página que abre popup vira aba nova; você troca/fecha na faixa de abas e o agente usa `browser_tabs`. Limite de 8 por sessão. As outras ferramentas agem na aba ativa.
 - **Ociosidade**: sessão sem uso e sem ninguém assistindo fecha após *Navegador: fechar sessão ociosa* (Configurações › Geral, padrão 30 min; 0 = nunca).
-- **Upload**: se a página abrir um seletor de arquivo, aparece uma barra no painel para você escolher ou cancelar. O agente usa `browser_upload` com um arquivo da pasta de trabalho.
-- **Você também pode usar**: barra de URL, voltar/avançar/recarregar, clique, teclado, roda e colar direto no espelho. O agente vê o estado novo no próximo `browser_read`.
-- **Tamanho**: a página do Chromium tem sempre o tamanho da área visível da aba. Redimensione a coluna pela borda e o viewport acompanha, como numa janela de verdade.
-- **Qualidade**: o Chromium renderiza em 2x (*escala de renderização*, 1 a 3) e o espelho é PNG sem perda ou JPEG (*formato do espelho*), ambos em Configurações › Geral.
+- **Upload**: no Desktop a página abre o seletor de arquivo do Windows normalmente. No modo web aparece uma barra no painel para você escolher ou cancelar. O agente usa `browser_upload` com um arquivo da pasta de trabalho nos dois modos.
+- **Você também pode usar**: barra de URL, voltar/avançar/recarregar e a própria página (clique, teclado, roda, colar). O agente vê o estado novo no próximo `browser_read`. Downloads são bloqueados; links para fora de http(s) também.
+- **Tamanho**: a página tem sempre o tamanho da área visível da aba. Redimensione a coluna pela borda e ela acompanha, como numa janela de verdade. Modais da interface por cima do painel escondem a view enquanto estão abertos.
+- **Qualidade (só modo web)**: o Chromium renderiza em 2x (*escala de renderização*, 1 a 3), mas o espelho nunca sai maior do que a sua tela mostra (segue o `devicePixelRatio` do painel). O formato padrão é JPEG (leve); PNG sem perda pesa 3 a 5 vezes mais e deixa a interface lenta. Ambos em Configurações › Geral. No Desktop não há espelho, então nada disso se aplica.
 - **Screenshots** do agente aparecem grandes no chat, dentro do card da ferramenta; clique para ampliar (Esc fecha).
 - **Endereços**: um servidor subido por `run_command` ou `serve_start` fica em `http://localhost:PORTA` — o mesmo endereço para você e para o navegador integrado. Só `http(s)`; `file:` e afins são bloqueados.
 - **Visão**: `browser_screenshot` sempre funciona (o print aparece no chat para você), mas a imagem só entra no contexto do modelo se ele tiver visão; sem visão ele recebe um aviso e valida pelo `browser_read`. O Forja detecta no Ollama (`/api/show` → `capabilities`) e no LM Studio (`type: vlm`); para outros providers, ou para forçar, use **Visão do modelo** (auto/sim/não) no painel Info. A imagem entra no contexto como mensagem do usuário; só as 2 últimas ficam como imagem, as anteriores viram texto.
@@ -120,7 +123,13 @@ As regras de *Configurações › Permissões* valem em todos os modos (menos Pl
 
 ### Modo Plano
 
-O agente recebe **só as ferramentas de leitura** mais uma, `exit_plan_mode`, e o painel lateral mostra exatamente isso. Ele investiga, apresenta o plano num card e espera: você **aprova escolhendo o modo de execução** (por padrão Aceitar edições) ou pede mudanças, e ele replaneja. Depois de aprovado, as ferramentas de escrita voltam e o Forja avisa na conversa qual modo passou a valer.
+O agente recebe **só as ferramentas de leitura** mais duas, `ask_user` e `exit_plan_mode`, e o painel lateral mostra exatamente isso. Ele investiga (lendo os arquivos que o plano vai tocar; com `delegate_task` ligado, varre pastas grandes por subagente), apresenta o plano num card e espera: você **aprova escolhendo o modo de execução** (por padrão Aceitar edições) ou pede mudanças, e ele replaneja. Depois de aprovado, as ferramentas de escrita voltam e o Forja avisa na conversa qual modo passou a valer.
+
+O plano segue o mesmo esqueleto do Claude Code, imposto pelo system prompt: **Contexto** (o que ele achou no código), **Abordagem** (a escolhida e as descartadas), **Passos** numerados com arquivo e mudança, **Verificação** (como provar que funcionou) e **Riscos e dúvidas**. Sem blocos de código.
+
+- **Plano aprovado fica no contexto**: entra no fim do system prompt até o fim do trabalho e nos turnos seguintes da conversa, sobrevivendo à compactação. Outro plano aprovado o substitui.
+- **`ask_user`** existe em todos os modos do agente: quando uma decisão muda o trabalho (duas abordagens válidas, requisito ambíguo), ele pergunta num card com 2 a 4 opções e campo para outra resposta, e espera. Não é aprovação de ferramenta: é escolha sua.
+- **Espelho em Markdown**: no `.md` da conversa (pasta `conversas/`) o plano aparece inteiro, com o status, e cada pergunta com a resposta dada.
 
 ## Esforço
 
@@ -200,6 +209,7 @@ Botão **Configurações** no rodapé da barra lateral. O que você muda ali fic
 
 | Aba | O que dá para fazer |
 |---|---|
+| **Aplicativo** | Zoom da janela, o que o X faz (fechar de verdade ou minimizar para a bandeja), abrir junto com o Windows (e direto na bandeja), versão e atalhos para a pasta de dados, o banco e as conversas em Markdown. Só aparece no app instalado — essas preferências ficam em `%APPDATA%\Forja\desktop.json`, fora do banco |
 | **Geral** | Instruções personalizadas (vão no fim do system prompt, sempre), `num_ctx`, máximo de iterações, limite da compactação, tamanho máximo de arquivo, timeout do shell e URL de uma SearXNG própria (vazio = DuckDuckGo) |
 | **Provedores** | Editar Ollama/LM Studio e **adicionar qualquer API compatível com OpenAI** (OpenRouter, OpenAI, Groq...) com chave. Botão *Testar conexão* lista os modelos |
 | **Ferramentas** | Ligar/desligar cada ferramenta, nativa ou de MCP. O que está desligado não vai no `tools` nem é citado no prompt, e recusa ser chamado |
@@ -209,6 +219,23 @@ Botão **Configurações** no rodapé da barra lateral. O que você muda ali fic
 **Chaves de API** ficam no SQLite (`%APPDATA%\Forja\forja.db`) e **nunca voltam para a interface**: a tela só mostra se existe chave e os 4 últimos caracteres. Como é uso pessoal na sua máquina, elas são gravadas sem criptografia; quem tiver acesso ao seu perfil do Windows lê o arquivo.
 
 Para acrescentar uma configuração nova no futuro: adicione a chave em `ENV_DEFAULTS` (e a regra em `NUMBERS`, se for número) em `backend/app/settings.py`, aplique em `apply()` e mostre o campo na aba certa de `frontend/src/components/Settings.tsx`.
+
+### Conversas em Markdown
+
+Além do banco, cada conversa é espelhada num `.md` solto:
+
+```
+%APPDATA%\Forja\conversas\forja-code\0007 - Refatorar o build.md   (modo agente)
+%APPDATA%\Forja\conversas\forja-chat\0008 - Duvida de SQL.md       (chat)
+```
+
+Serve para copiar entre máquinas, jogar num backup ou versionar no git — é o mesmo texto do botão
+*Exportar*. O arquivo é regravado no fim de cada execução e quando a conversa é renomeada (o título
+está no nome do arquivo, e o nome antigo é apagado em vez de virar duplicata). Apagar a conversa no
+Forja apaga o `.md`; na subida, o app gera o que falta e varre `.md` de conversa que não existe mais.
+
+O espelho é **só de leitura**: o `forja.db` continua sendo a fonte da verdade, então editar o `.md`
+não muda nada dentro do app, e copiar um `.md` para a pasta de outro PC não importa a conversa.
 
 ### Memória da IA
 
@@ -308,7 +335,8 @@ O app define o que precisa; elas existem para desenvolvimento e casos especiais.
 | `SEARXNG_URL` | vazio | Instância SearXNG própria; vazio = DuckDuckGo |
 | `BROWSER_IDLE_MINUTES` | `30` | Fecha a sessão do navegador ociosa (0 = nunca) |
 | `BROWSER_SCALE` | `2` | Escala de renderização do Chromium (1 a 3) |
-| `BROWSER_STREAM` | `png` | Formato do espelho: `png` ou `jpeg` |
+| `BROWSER_STREAM` | `jpeg` | Formato do espelho (modo web): `jpeg` (padrão, leve) ou `png` (sem perda, pesado) |
+| `FORJA_CDP` | vazio | Endpoint CDP do Electron (`http://127.0.0.1:PORTA`); o main.js define sozinho. Com ele, as abas são views nativas na janela e o espelho fica desligado |
 
 ### Estrutura
 
@@ -326,7 +354,7 @@ backend/app/
   shell.py       run_command e serve_*
   terminal.py    o shell da aba Terminal
   web.py         web_search (DuckDuckGo/SearXNG) e fetch_url
-  browser.py     navegador integrado (Playwright): sessão, screencast, input do usuário e browser_*
+  browser.py     navegador integrado (Playwright): sessão, abas nativas via CDP do Electron ou headless + screencast, browser_*
   mcp_client.py  conexão com servidores MCP (stdio/HTTP) e registro das ferramentas
   parsing.py     parser de tool calls em texto, detector de promessa e de loop
   compact.py     compactação de contexto

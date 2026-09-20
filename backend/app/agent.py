@@ -13,10 +13,10 @@ import uuid
 from dataclasses import dataclass
 from typing import AsyncIterator
 
-from . import checkpoints, compact, config, db, llm, memory, native, policy, uploads, workspace
+from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import browser, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks)
 from . import hooks
-from .parsing import LoopDetector, detect_promise, parse_text_tool_calls, split_think
+from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps
 
 MAX_NUDGES = 2
@@ -31,12 +31,30 @@ MODE_LABEL = {"auto": "Automático", "manual": "Manual", "edits": "Aceitar ediç
               "plan": "Plano", "bypass": "Ignorar permissões"}
 
 # Ferramenta só do modo Plano: não fica no REGISTRY (não aparece nos outros modos nem nas Configurações).
+PLAN_FORMAT = ("Formato do plano, nesta ordem: '## Contexto' (o que você achou no código, 3 a 6 linhas); "
+               "'## Abordagem' (a escolhida, e as descartadas em uma linha cada com o motivo); "
+               "'## Passos' (numerados; cada um com o arquivo e o que muda nele); "
+               "'## Verificação' (como provar que funcionou: teste, comando, o que olhar); "
+               "'## Riscos e dúvidas'. Curto, sem blocos de código, sem repetir o pedido.")
 EXIT_PLAN = Tool(
     "exit_plan_mode",
     "Apresenta o plano ao usuário e pede autorização para executar. Só chame quando terminar de investigar. "
-    "O plano deve estar em markdown: o que será feito, em quais arquivos, e riscos.",
+    "Markdown com as seções Contexto, Abordagem, Passos, Verificação, Riscos e dúvidas.",
     {"type": "object", "properties": {"plan": {"type": "string", "description": "Plano em markdown"}},
      "required": ["plan"]},
+    lambda *_: "", mutating=False)
+# Também fora do REGISTRY: pergunta ao usuário no meio do trabalho (card com opções), em qualquer modo do agente.
+ASK_USER = Tool(
+    "ask_user",
+    "Faz UMA pergunta ao usuário e espera a resposta. Use quando uma decisão muda o trabalho (duas abordagens "
+    "válidas, requisito ambíguo, escolha de biblioteca) e não dá para inferir do código. Não use para confirmar o "
+    "óbvio nem para pedir permissão: as ferramentas já pedem.",
+    {"type": "object",
+     "properties": {"question": {"type": "string", "description": "A pergunta, direta, uma frase"},
+                    "options": {"type": "array", "items": {"type": "string"},
+                                "description": "2 a 4 opções curtas, a recomendada primeiro. "
+                                               "O usuário também pode escrever outra resposta."}},
+     "required": ["question", "options"]},
     lambda *_: "", mutating=False)
 
 
@@ -77,6 +95,7 @@ class Run:
         self.waiting: dict[str, tuple] = {}  # call_id -> (tool, args) das aprovações abertas
         self.queue: list[str] = []      # mensagens enviadas pelo usuário durante a execução (entram no próximo passo)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
+        self.plan: str | None = None    # plano aprovado: fica preso no system prompt até outro substituí-lo
         self.cancel = asyncio.Event()
         self.pending: dict[str, asyncio.Future] = {}
         self.events: list[dict] = []
@@ -100,6 +119,8 @@ class Run:
         elif t == "approval_request":
             self.approvals[ev["call"]["id"]] = {"call": ev["call"], "preview": ev["preview"],
                                                 "suggest": ev.get("suggest"), "parent": ev.get("parent")}
+        elif t in ("plan_request", "question_request"):  # reconexão: a UI recria o card pelos argumentos
+            self.approvals[ev["call"]["id"]] = {"call": ev["call"], "preview": None, "suggest": None, "parent": None}
         elif t == "tool_result":
             self.approvals.pop(ev["message"]["tool_call_id"], None)
         elif t == "tools_sent":
@@ -133,6 +154,7 @@ class Run:
                 await self.publish(_event(self.conv_id, "error", f"Erro interno: {e.__class__.__name__}: {e}"))
                 await self.publish({"type": "done"})
             finally:
+                mirror.write(self.conv_id)  # espelho em Markdown atualizado no fim do turno
                 async with self._changed:
                     self.finished = True
                     self._changed.notify_all()
@@ -187,7 +209,7 @@ Ferramentas (JSON Schema):
 
 
 def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
-                  permission: str = "manual", effort: str = "medio") -> str:
+                  permission: str = "manual", effort: str = "medio", plan: str | None = None) -> str:
     if via == "none":
         return _extra("Você é o Forja, um assistente de programação. Você está no modo Chat: NÃO tem ferramentas "
                       "e não acessa arquivos. Se o usuário pedir para criar ou editar arquivos, peça para ele "
@@ -233,10 +255,19 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                      "por completo: o subagente não vê esta conversa.")
     if permission == "plan":
         rules = ["- MODO PLANO: você NÃO pode alterar nada (sem escrever arquivos, sem comandos, sem agir na página).",
-                 "- Investigue com as ferramentas de leitura o quanto precisar.",
-                 "- Quando souber o que fazer, chame exit_plan_mode com o plano em markdown e PARE. "
-                 "O usuário aprova (e escolhe o modo de execução) ou pede mudanças."]
+                 "- Investigue com as ferramentas de leitura o quanto precisar: leia os arquivos que o plano vai "
+                 "tocar, não planeje de memória."]
+        if "delegate_task" in names:
+            rules.append("- Para varrer muitos arquivos ou pastas, use delegate_task level='rapido' com perguntas "
+                         "objetivas (onde está X, como Y é usado) e siga lendo enquanto ele responde.")
+        rules += ["- Decisão que muda o trabalho (duas abordagens válidas, requisito ambíguo)? Chame ask_user com as "
+                  "opções ANTES de fechar o plano. Não chute.",
+                  "- Quando souber o que fazer, chame exit_plan_mode com o plano em markdown e PARE. "
+                  "O usuário aprova (e escolhe o modo de execução) ou pede mudanças.",
+                  "- " + PLAN_FORMAT]
     else:
+        rules.append("- Dúvida que muda o resultado e não dá para inferir do código: ask_user com opções. "
+                     "Não pergunte o óbvio.")
         rules.append("- Ao terminar, responda com um resumo curto do que foi feito.")
     dica = EFFORT.get(effort, EFFORT["medio"])[1]
     if dica:
@@ -244,6 +275,9 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     header = ["Você é o Forja, um agente de programação.", *environment_block(names),
               f"Ferramentas disponíveis: {', '.join(names)}.", "Regras:"]
     prompt = "\n".join(header + rules + ["Responda no idioma do usuário."])
+    if plan and permission != "plan":  # o plano aprovado acompanha o resto do trabalho, mesmo após compactar
+        prompt += ("\n\nPlano aprovado pelo usuário. Siga-o passo a passo; se precisar desviar, diga o porquê antes. "
+                   "Se o pedido atual não tiver relação com ele, ignore-o.\n" + plan)
     if via == "prompt":
         prompt += "\n" + TEXT_FORMAT + json.dumps(
             [t.openai_schema()["function"] for t in tools], ensure_ascii=False)
@@ -279,8 +313,17 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
     exclude = exclude or set()
     tools = [t for t in active(caps) if t.name not in exclude]
     if permission == "plan":
-        return [t for t in tools if not t.mutating] + [EXIT_PLAN]
-    return tools
+        return [t for t in tools if not t.mutating] + [ASK_USER, EXIT_PLAN]
+    return tools + [ASK_USER]
+
+
+def last_plan(msgs) -> str | None:
+    """Último plano aprovado na conversa: continua valendo em turnos seguintes e depois de compactar."""
+    for m in reversed(msgs):
+        meta = m.meta or {}
+        if m.role == "tool" and m.name == "exit_plan_mode" and meta.get("approved"):
+            return meta.get("plan") or None
+    return None
 
 
 def _extra(prompt: str) -> str:
@@ -319,9 +362,10 @@ def _join_user(a, b):
 
 
 def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None,
-                  permission: str = "manual", effort: str = "medio") -> list[dict]:
+                  permission: str = "manual", effort: str = "medio", plan: str | None = None) -> list[dict]:
     native = via == "native"
-    out: list[dict] = [{"role": "system", "content": system_prompt(via, caps, permission=permission, effort=effort)}]
+    out: list[dict] = [{"role": "system",
+                        "content": system_prompt(via, caps, permission=permission, effort=effort, plan=plan)}]
     summary = compact.last_summary(msgs)
     if summary:
         out.append({"role": "user", "content": f"[Resumo automático da conversa anterior]\n{summary[0]}"})
@@ -536,12 +580,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
         msgs = _load(conv_id)
         mode_at_start = run.permission
-        messages = build_history(msgs, via, caps, run.permission, req.effort)
+        if run.plan is None:
+            run.plan = last_plan(msgs)
+        messages = build_history(msgs, via, caps, run.permission, req.effort, run.plan)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
         if ctx_max and _estimate(messages, tools) > config.COMPACT_AT * ctx_max:
             async for ev in _compact(conv_id, msgs, req, ctx_max):
                 yield ev
-            messages = build_history(_load(conv_id), via, caps)
+            messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan)
 
         content = reasoning = ""
         done: dict = {"tool_calls": [], "prompt_tokens": None, "completion_tokens": None}
@@ -597,6 +643,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if agent and not calls and tool_mode != "native":
             parsed, visible = parse_text_tool_calls(content, [t.name for t in current_tools()])
             calls = [{"id": "call_" + uuid.uuid4().hex[:12], **c} for c in parsed]
+        if agent and not calls and run.permission == "plan" and looks_like_plan(visible):
+            # Modelo escreveu o plano na resposta e parou: vira exit_plan_mode para o card e a aba
+            # Planos aparecerem, em vez de o turno acabar em texto solto.
+            calls = [{"id": "call_" + uuid.uuid4().hex[:12], "name": "exit_plan_mode",
+                      "arguments": {"plan": visible.strip()}}]
+            visible = ""
 
         msg = _save(conv_id, role="assistant", content=visible, thinking=reasoning,
                     tool_calls=calls or None, meta={"via": via, "stats": stats})
@@ -696,6 +748,13 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         async for ev in _plan(call, run, out, meta):
             yield ev
         return
+    if name == "ask_user":
+        if parent:
+            result("erro", "Um subagente não fala com o usuário: decida sozinho ou relate a dúvida no resultado.")
+            return
+        async for ev in _ask(call, run, out, meta):
+            yield ev
+        return
     if name == "delegate_task":
         if parent:
             result("erro", "Um subagente não pode delegar tarefas.")
@@ -778,6 +837,26 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         result("erro", f"Erro inesperado: {e.__class__.__name__}: {e}")
 
 
+async def _ask(call: dict, run: Run, out: dict, meta: dict) -> AsyncIterator[dict]:
+    """ask_user: mostra a pergunta com opções e espera a resposta (ou a interrupção)."""
+    q = str(call["arguments"].get("question") or "").strip()
+    opts = [str(o).strip() for o in (call["arguments"].get("options") or []) if str(o).strip()][:4]
+    if not q:
+        out.update(status="erro", text="Envie a pergunta em 'question'.", meta=meta)
+        return
+    fut = asyncio.get_running_loop().create_future()
+    run.pending[call["id"]] = fut
+    yield {"type": "question_request", "call": call, "question": q, "options": opts}
+    decision = await fut
+    run.pending.pop(call["id"], None)
+    answer = str((decision.get("answer") if isinstance(decision, dict) else "") or "").strip()
+    if run.cancel.is_set() or not answer:
+        out.update(status="cancelada", text="O usuário não respondeu: geração interrompida.", meta=meta)
+        return
+    meta["answer"] = answer
+    out.update(status="ok", text=f"Resposta do usuário: {answer}", meta=meta)
+
+
 async def _plan(call: dict, run: Run, out: dict, meta: dict) -> AsyncIterator[dict]:
     """Modo Plano: mostra o plano e espera o usuário aprovar (escolhendo o modo) ou pedir mudanças."""
     plan = str(call["arguments"].get("plan") or "").strip()
@@ -804,6 +883,7 @@ async def _plan(call: dict, run: Run, out: dict, meta: dict) -> AsyncIterator[di
         return
     mode = decision.get("mode") if decision.get("mode") in policy.MODES and decision.get("mode") != "plan" else "edits"
     run.set_permission(mode, f"Plano aprovado. Modo de permissão: {MODE_LABEL[mode]}.")
+    run.plan = plan
     meta["approved"] = True
     meta["approved_mode"] = mode
     out.update(status="ok", meta=meta,

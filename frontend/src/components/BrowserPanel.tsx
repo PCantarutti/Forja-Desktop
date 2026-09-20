@@ -7,9 +7,13 @@ const EMPTY: BrowserState = { open: false, url: "", title: "", width: 1280, heig
 const KEYS: Record<string, string> = { " ": "Space" };
 
 /**
- * Aba Navegador: espelho ao vivo da sessão da conversa atual (`conv`), com abas e interação do usuário.
- * Clique, teclado, roda, barra de URL, abas e upload vão para o backend, que repassa ao Chromium.
- * A sessão continua viva no backend quando esta aba não está montada; só o stream de frames fecha.
+ * Aba Navegador da sessão da conversa atual (`conv`), com abas e barra de URL.
+ *
+ * - Forja Desktop (`state.native`): a página é uma WebContentsView do Electron desenhada por cima da área
+ *   escura deste painel; a gente só informa ao main.js onde a área está. Interação é direta, sem espelho.
+ * - Web/Docker: espelho ao vivo (frames em SSE); clique, teclado e roda vão para o backend, que repassa ao Chromium.
+ *
+ * A sessão continua viva no backend quando esta aba não está montada; só o stream fecha.
  */
 export default function BrowserPanel(props: { conv: string; onState: (s: BrowserState) => void }) {
   const { conv } = props;
@@ -19,6 +23,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
   const [urlInput, setUrlInput] = useState("");
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
+  const native = !!state.native && !!window.forja?.browser;
   const editing = useRef(false);
   const img = useRef<HTMLImageElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -29,6 +34,9 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
   // Movimento do mouse: no máximo um POST em voo; o último movimento pendente vence (coalescido).
   const moveInFlight = useRef(false);
   const movePending = useRef<{ x: number; y: number } | null>(null);
+  // Roda: idem, somando os deltas que chegaram enquanto o POST anterior estava em voo.
+  const wheelInFlight = useRef(false);
+  const wheelPending = useRef<{ x: number; y: number; delta_x: number; delta_y: number } | null>(null);
 
   /** A página do Chromium tem exatamente o tamanho da área visível (como a janela do Claude Desktop). */
   function syncViewport() {
@@ -39,7 +47,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     if (width < 320 || height < 240) return;
     if (wanted.current?.width === width && wanted.current?.height === height) return;
     wanted.current = { width, height };
-    api.post(`/browser/viewport${q}`, { width, height }).catch(() => {});
+    api.post(`/browser/viewport${q}`, { width, height, dpr: window.devicePixelRatio || 1 }).catch(() => {});
   }
 
   // Troca de conversa: zera o espelho e assina a sessão dela.
@@ -88,14 +96,39 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     };
   }, [conv]);
 
+  // Nativo: diz ao Electron onde a view deve ficar. Some quando o painel encolhe ou algo cobre a área.
+  useEffect(() => {
+    const el = box.current;
+    const bridge = window.forja?.browser;
+    if (!native || !el || !bridge) return;
+    const report = () => {
+      const r = el.getBoundingClientRect();
+      // ponytail: elementFromPoint no centro detecta modal/lightbox por cima do painel; a view nativa não
+      // está no DOM, então uma cobertura só pode ser da própria interface.
+      const mid = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      const covered = !!mid && mid !== el && !el.contains(mid);
+      const hidden = covered || r.width < 50 || r.height < 50;
+      bridge.view({ key: conv, bounds: hidden ? null : { x: r.left, y: r.top, width: r.width, height: r.height } });
+    };
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    const iv = setInterval(report, 250);
+    report();
+    return () => {
+      ro.disconnect();
+      clearInterval(iv);
+      bridge.view({ key: conv, bounds: null });
+    };
+  }, [native, conv]);
+
   // React registra "wheel" como passive: preventDefault só funciona com listener nativo.
   useEffect(() => {
     const el = box.current;
-    if (!el) return;
+    if (!el || native) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const c = coords(e.clientX, e.clientY);
-      if (c) send({ type: "wheel", ...c, delta_x: e.deltaX, delta_y: e.deltaY });
+      if (c) sendWheel({ ...c, delta_x: e.deltaX, delta_y: e.deltaY });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -122,6 +155,22 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
       }
     } finally {
       moveInFlight.current = false;
+    }
+  }
+
+  async function sendWheel(w: { x: number; y: number; delta_x: number; delta_y: number }) {
+    const p = wheelPending.current;
+    wheelPending.current = p ? { ...w, delta_x: p.delta_x + w.delta_x, delta_y: p.delta_y + w.delta_y } : w;
+    if (wheelInFlight.current) return;
+    wheelInFlight.current = true;
+    try {
+      while (wheelPending.current) {
+        const next = wheelPending.current;
+        wheelPending.current = null;
+        await api.post(`/browser/input${q}`, { type: "wheel", ...next }).catch(() => {});
+      }
+    } finally {
+      wheelInFlight.current = false;
     }
   }
 
@@ -256,20 +305,25 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
 
       <div
         ref={box}
-        tabIndex={0}
-        onKeyDown={onKey}
-        onPaste={(e) => {
-          e.preventDefault();
-          const text = e.clipboardData.getData("text");
-          if (text) send({ type: "text", text });
-        }}
+        tabIndex={native ? -1 : 0}
+        onKeyDown={native ? undefined : onKey}
+        onPaste={
+          native
+            ? undefined
+            : (e) => {
+                e.preventDefault();
+                const text = e.clipboardData.getData("text");
+                if (text) send({ type: "text", text });
+              }
+        }
         className="min-h-0 flex-1 overflow-hidden bg-black outline-none focus:ring-1 focus:ring-sky-500/60 focus:ring-inset"
       >
-        {frame ? (
+        {native && state.open ? null /* a view nativa cobre esta área */ : frame ? (
           <img
             ref={img}
             src={frame}
             alt="Tela do navegador"
+            decoding="async"
             draggable={false}
             className="block h-full w-full cursor-default select-none object-contain object-left-top"
             onClick={(e) => {
@@ -304,9 +358,11 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
         )}
       </div>
       <div className="border-t border-line px-3 py-1 text-[11px] text-faint">
-        {state.open
-          ? `viewport ${state.width}×${state.height} (segue o painel) · render ${state.scale ?? 1}x · ${tabs.length} aba${tabs.length === 1 ? "" : "s"} · clique na tela para focar e digitar`
-          : "sessão fechada"}
+        {!state.open
+          ? "sessão fechada"
+          : native
+            ? `navegador nativo · ${state.width}×${state.height} · ${tabs.length} aba${tabs.length === 1 ? "" : "s"}`
+            : `viewport ${state.width}×${state.height} (segue o painel) · render ${state.scale ?? 1}x · ${tabs.length} aba${tabs.length === 1 ? "" : "s"} · clique na tela para focar e digitar`}
       </div>
     </div>
   );

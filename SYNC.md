@@ -40,6 +40,11 @@ Mudança que só toca os arquivos "comuns" (a maioria) aplica sem conflito. Muda
 | `backend/app/agent.py` | bloco *Ambiente* fala de runner/container | fala só da máquina do usuário |
 | `backend/app/web.py` | `web_search` via SearXNG do compose | DuckDuckGo quando `SEARXNG_URL` está vazio |
 | `backend/app/gitops.py` | `worktree` traduz caminho | caminho direto |
+| `backend/app/mirror.py` | espelho em `/data/conversas` (volume) | espelho em `%APPDATA%\Forja\conversas` |
+| `backend/app/browser.py` | só o modo espelho (Chromium headless + screencast) | mais o modo nativo (`FORJA_CDP`, views do Electron) |
+| `frontend/src/components/BrowserPanel.tsx` | espelho: clique/teclado/roda vão ao backend | mais as views nativas do Electron |
+| `frontend/src/components/Settings.tsx` | 7 abas | mais a aba *Aplicativo* (zoom, bandeja, iniciar com o Windows) |
+| `frontend/src/forja.d.ts` | não existe | tipos da ponte `window.forja` |
 | `frontend/src/App.tsx` | `chooseFolder` usa o forja-picker | usa `window.forja.pickFolder` |
 | `frontend/src/components/InfoPanel.tsx` | linha de status do runner | "Comandos em: <sistema>" |
 | `frontend/src/components/ServersPanel.tsx` | `runner` na resposta de `/api/servers` | `environment` |

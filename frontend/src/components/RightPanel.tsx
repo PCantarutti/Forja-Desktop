@@ -42,7 +42,7 @@ export function RightTabsBar(props: {
     ) : null;
 
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-line p-0.5" role="tablist" aria-label="Painel direito">
+    <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-line p-1" role="tablist" aria-label="Painel direito">
       {TABS.map((t) => {
         const active = !props.collapsed && props.tab === t.id;
         const b = badge(t.id);
@@ -53,7 +53,7 @@ export function RightTabsBar(props: {
             aria-selected={active}
             title={active ? `${t.label} (clique para recolher)` : t.label}
             onClick={() => props.onSelect(t.id)}
-            className={`relative grid size-8 place-items-center rounded-md ${
+            className={`relative grid size-7 place-items-center rounded-md ${
               active ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
             }`}
           >

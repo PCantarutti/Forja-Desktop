@@ -12,8 +12,8 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (checkpoints, compact, config, db, gitops, llm, mcp_client, memory, native, policy, settings, shell,
-               skills, subagents, terminal, uploads, workspace)
+from . import (checkpoints, compact, config, db, gitops, llm, mcp_client, memory, mirror, native, policy, settings,
+               shell, skills, subagents, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .tools import REGISTRY, ToolError
@@ -31,6 +31,8 @@ async def lifespan(_app):
         print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
+    # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
+    print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
     task = asyncio.create_task(mcp_client.start())
     yield
@@ -270,6 +272,7 @@ class InputBody(BaseModel):
 class ViewportBody(BaseModel):
     width: int
     height: int
+    dpr: float = 1.0  # devicePixelRatio da tela do painel
 
 
 class TabsBody(BaseModel):
@@ -321,7 +324,7 @@ async def browser_input(body: InputBody, conv: str = "0"):
 async def browser_viewport(body: ViewportBody, conv: str = "0"):
     """O painel da UI redimensionou: as abas do Chromium passam a ter esse tamanho."""
     try:
-        await _sess(conv).set_viewport(body.width, body.height)
+        await _sess(conv).set_viewport(body.width, body.height, body.dpr)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sess(conv).state()
@@ -364,6 +367,27 @@ async def browser_upload(conv: str = "0", file: UploadFile | None = File(None)):
 async def browser_close(conv: str = "0"):
     await MANAGER.close(conv)
     return _sess(conv).state()
+
+
+@app.get("/api/browser/host")
+def browser_host():
+    """SSE para o Electron (modo nativo): pedidos de criar view e de qual view mostrar."""
+    async def stream():
+        async for ev in MANAGER.host_events():
+            yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/browser/host/popup")
+async def browser_host_popup(body: NavigateBody, conv: str = "0"):
+    """Uma view nativa quis abrir janela (window.open, target=_blank): vira aba nova da mesma sessão."""
+    try:
+        await _sess(conv).new_tab(body.url)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return await _sess(conv).state_with_title()
 
 
 # ------------------------------------------------------------------ conversas
@@ -471,6 +495,7 @@ async def bulk_conversations(body: BulkBody):
         s.commit()
     for cid in closed:
         await MANAGER.close(str(cid))
+        mirror.remove(cid)
     return {"ok": True, "done": done, "skipped": skipped}
 
 
@@ -492,29 +517,18 @@ def patch_conversation(conv_id: int, body: ConvPatch):
         if body.archived is not None:
             c.archived = body.archived
         s.commit()
-        return _conv_dict(c)
+        out = _conv_dict(c)
+    if body.title is not None:
+        mirror.write(conv_id)  # o título está no nome do arquivo: regrava e apaga o antigo
+    return out
 
 
 @app.get("/api/conversations/{conv_id}/export")
 def export_conversation(conv_id: int):
-    """A conversa em Markdown (download)."""
+    """A conversa em Markdown (download). O mesmo texto do espelho em disco."""
     with db.session() as s:
-        c = _get_conv(s, conv_id)
-        lines = [f"# {c.title}", "", f"Pasta: {workspace.label(c.workspace)}  ·  exportado do Forja", ""]
-        for m in c.messages:
-            if m.role == "user":
-                lines += ["## Usuário", "", m.content or "", ""]
-            elif m.role == "assistant":
-                lines += ["## Forja", "", m.content or ""]
-                for tc in m.tool_calls or []:
-                    lines.append(f"- `{tc['name']}` {json.dumps(tc.get('arguments', {}), ensure_ascii=False)[:300]}")
-                lines.append("")
-            elif m.role == "tool":
-                lines += [f"<details><summary>{m.name} [{m.status}]</summary>", "", "```",
-                          (m.content or "")[:4000], "```", "", "</details>", ""]
-            elif m.role == "event":
-                lines += [f"> {(m.content or '').replace(chr(10), chr(10) + '> ')}", ""]
-    return PlainTextResponse("\n".join(lines), media_type="text/markdown; charset=utf-8",
+        texto = mirror.markdown(_get_conv(s, conv_id))
+    return PlainTextResponse(texto, media_type="text/markdown; charset=utf-8",
                              headers={"Content-Disposition": f'attachment; filename="forja-conversa-{conv_id}.md"'})
 
 
@@ -747,6 +761,7 @@ async def delete_conversation(conv_id: int):
     with db.session() as s:
         s.delete(_get_conv(s, conv_id))
         s.commit()
+    mirror.remove(conv_id)  # o .md espelhado vai junto
     await MANAGER.close(str(conv_id))  # a sessão do navegador morre com a conversa
     return {"ok": True}
 
@@ -830,7 +845,9 @@ def rewind(conv_id: int, body: dict):
             s.delete(m)
         s.commit()
         c = _get_conv(s, conv_id)
-        return {"messages": [m.to_dict() for m in c.messages], "removed": len(removed), "restored": restored}
+        out = {"messages": [m.to_dict() for m in c.messages], "removed": len(removed), "restored": restored}
+    mirror.write(conv_id)  # turnos apagados somem do espelho também
+    return out
 
 
 @app.get("/api/conversations/{conv_id}/live")
@@ -867,6 +884,7 @@ class ApproveBody(BaseModel):
     approved: bool
     mode: str | None = None       # modo escolhido ao aprovar um plano
     feedback: str | None = None   # o que mudar no plano, quando não aprovado
+    answer: str | None = None     # resposta a um ask_user
 
 
 def _get_run(run_id: str) -> Run:
@@ -878,7 +896,7 @@ def _get_run(run_id: str) -> Run:
 
 @app.post("/api/runs/{run_id}/approve")
 def approve(run_id: str, body: ApproveBody):
-    decision = {"approved": body.approved, "mode": body.mode, "feedback": body.feedback}
+    decision = {"approved": body.approved, "mode": body.mode, "feedback": body.feedback, "answer": body.answer}
     if not _get_run(run_id).resolve(body.call_id, decision):
         raise HTTPException(409, "Nenhuma aprovação pendente para esta chamada")
     return {"ok": True}

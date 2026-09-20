@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Approval, Attachment, Message, Preview, Task, ToolCall } from "../types";
-import { Brain, Check, Chevron, Clipboard, Split, Clock, Copy, Cube, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
 function CodeBlock(props: React.ComponentProps<"pre">) {
@@ -38,7 +38,7 @@ export function Thinking({ text, live }: { text: string; live?: boolean }) {
   return (
     <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
       <button
-        onClick={() => setOpen(!isOpen)}
+        onClick={() => setOpen(!open)}
         className="flex w-full items-center gap-2 px-4 py-2.5 font-mono text-sm text-muted hover:text-fg"
       >
         <Brain className={`size-4 ${live ? "animate-pulse" : ""}`} />
@@ -76,12 +76,12 @@ export function Lightbox({ src, onClose }: { src: string; onClose: () => void })
 }
 
 /** Screenshot devolvido por uma ferramenta: grande no chat, clique abre em tela cheia. */
-export function ToolImages({ list }: { list: Attachment[] }) {
+export function ToolImages({ list, bare }: { list: Attachment[]; bare?: boolean }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const images = list.filter((a) => a.kind === "image");
   if (!images.length) return null;
   return (
-    <div className="space-y-2 border-t border-line p-3">
+    <div className={bare ? "my-2 space-y-2" : "space-y-2 border-t border-line p-3"}>
       {images.map((a) => (
         <img
           key={a.path}
@@ -89,7 +89,7 @@ export function ToolImages({ list }: { list: Attachment[] }) {
           alt={a.name}
           title="Clique para ampliar"
           onClick={() => setZoom(fileUrl(a))}
-          className="block w-full cursor-zoom-in rounded-xl border border-line bg-black"
+          className="block max-h-48 w-auto max-w-sm cursor-zoom-in rounded-xl border border-line bg-black object-contain"
         />
       ))}
       {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
@@ -275,6 +275,7 @@ export function ToolBlock(props: {
   live?: string; // saída ao vivo (run_command) enquanto não há resultado
   onOpen?: (path: string, mode: "editor" | "reveal") => void; // abrir no editor / revelar (via runner)
   onDecide: (approved: boolean, alwaysAllow?: boolean) => void;
+  hideImages?: boolean; // screenshot desenhado fora do bloco (ver ActivityGroup)
   children?: React.ReactNode; // passos de um subagente (delegate_task)
 }) {
   const { call, result, approval, running, queued } = props;
@@ -313,7 +314,7 @@ export function ToolBlock(props: {
           {props.live}
         </pre>
       )}
-      {result?.meta?.attachments && <ToolImages list={result.meta.attachments} />}
+      {!props.hideImages && result?.meta?.attachments && <ToolImages list={result.meta.attachments} />}
       {props.children && <div className="border-t border-line px-3 py-2">{props.children}</div>}
 
       {waiting && !approval?.sent && (
@@ -389,6 +390,135 @@ export function ToolBlock(props: {
   );
 }
 
+export type ActivityPiece =
+  | { kind: "thinking"; id: string; text: string }
+  | { kind: "tool"; id: string; call: ToolCall };
+
+// Primeira ferramenta do grupo vira a frase de abertura do resumo.
+const ACTION: Record<string, string> = {
+  run_command: "Executou um comando",
+  read_file: "Leu um arquivo",
+  edit_file: "Editou um arquivo",
+  write_file: "Escreveu um arquivo",
+  list_dir: "Olhou a pasta",
+  search: "Procurou no projeto",
+  web_search: "Pesquisou na web",
+  fetch_url: "Abriu uma página",
+  delegate_task: "Delegou a um subagente",
+  update_tasks: "Atualizou as tarefas",
+  ask_user: "Perguntou ao usuário",
+};
+
+export type ActivitySeg =
+  | { kind: "group"; items: ActivityPiece[] }
+  | { kind: "plan"; call: ToolCall }
+  | { kind: "question"; call: ToolCall }
+  | { kind: "text" };
+
+/**
+ * Divide as respostas do agente em segmentos por mensagem: texto e planos aparecem sempre; raciocínio
+ * e ferramentas viram um grupo condensado, que pode atravessar várias iterações sem texto no meio.
+ * O grupo é desenhado na mensagem onde começou.
+ */
+export function groupActivity(messages: Message[]): Map<number, ActivitySeg[]> {
+  const out = new Map<number, ActivitySeg[]>();
+  const push = (i: number, s: ActivitySeg) => out.set(i, [...(out.get(i) ?? []), s]);
+  let cur: ActivityPiece[] = [];
+  let at = -1; // mensagem onde o grupo aberto será desenhado
+  const flush = () => {
+    if (cur.length) push(at, { kind: "group", items: cur });
+    cur = [];
+    at = -1;
+  };
+  const open = (i: number) => {
+    if (at < 0) at = i;
+  };
+  messages.forEach((m, i) => {
+    if (m.role === "tool") return; // resultado é desenhado dentro do bloco da ferramenta, não corta o grupo
+    if (m.role !== "assistant") return flush();
+    if (m.thinking) {
+      open(i);
+      cur.push({ kind: "thinking", id: `think-${m.id}`, text: m.thinking });
+    }
+    if (m.content) {
+      flush();
+      push(i, { kind: "text" });
+    }
+    for (const c of m.tool_calls ?? []) {
+      if (c.name === "exit_plan_mode") {
+        flush();
+        push(i, { kind: "plan", call: c }); // plano nunca fica escondido: é decisão do usuário
+        continue;
+      }
+      if (c.name === "ask_user") {
+        flush();
+        push(i, { kind: "question", call: c }); // idem: pergunta para o usuário fica sempre visível
+        continue;
+      }
+      open(i);
+      cur.push({ kind: "tool", id: c.id, call: c });
+    }
+  });
+  flush();
+  return out;
+}
+
+/**
+ * Condensador: raciocínio + ferramentas de um trecho viram uma linha só, entre as falas do agente.
+ * Fica aberto enquanto o turno roda ou quando há aprovação pendente; depois colapsa.
+ */
+export function ActivityGroup(props: {
+  items: ActivityPiece[];
+  results: Map<string, Message>;
+  live?: boolean;
+  forceOpen?: boolean;
+  renderTool: (call: ToolCall, queued: boolean) => React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const isOpen = !!props.forceOpen || open;
+  const tools = props.items.flatMap((p) => (p.kind === "tool" ? [p.call] : []));
+  const fails = tools.filter((c) => {
+    const st = props.results.get(c.id)?.status;
+    return st === "erro" || st === "rejeitada";
+  }).length;
+  const head = tools.length ? (ACTION[tools[0].name] ?? `Usou ${tools[0].name}`) : "Raciocinou";
+  // Screenshot é resposta, não detalhe de execução: sai do grupo e fica visível mesmo colapsado.
+  const shots = tools.flatMap((c) => props.results.get(c.id)?.meta?.attachments ?? []);
+  const summary =
+    (props.live && !tools.length ? "Trabalhando" : tools.length > 1 ? `${head}, usou ${tools.length} ferramentas` : head) +
+    (fails ? ` (${fails} falha${fails > 1 ? "s" : ""})` : "") +
+    (props.live ? "…" : "");
+
+  return (
+    <div className="my-3">
+      <button
+        onClick={() => setOpen(!isOpen)}
+        className="flex items-center gap-1.5 text-sm text-faint transition-colors hover:text-muted"
+      >
+        <span className={props.live ? "animate-pulse" : ""}>{summary}</span>
+        <ChevronDown className={`size-3.5 transition-transform ${isOpen ? "" : "-rotate-90"}`} />
+      </button>
+      {isOpen && (
+        <div className="mt-1 border-l border-line pl-3">
+          {props.items.map((p, k) =>
+            p.kind === "thinking" ? (
+              <Thinking key={p.id} text={p.text} />
+            ) : (
+              <div key={p.id}>
+                {props.renderTool(
+                  p.call,
+                  props.items.slice(0, k).some((q) => q.kind === "tool" && !props.results.has(q.id)),
+                )}
+              </div>
+            ),
+          )}
+        </div>
+      )}
+      <ToolImages list={shots} bare />
+    </div>
+  );
+}
+
 const EVENT_STYLE: Record<string, string> = {
   warning: "border-amber-500/30 text-amber-200",
   error: "border-red-500/30 text-red-200",
@@ -460,6 +590,78 @@ export function SubagentSteps(props: {
   );
 }
 
+
+/** Pergunta do agente (ask_user): opções em botões ou resposta livre. Respondida, mostra a resposta. */
+export function QuestionCard(props: { question: string; options: string[]; done?: Message; onAnswer: (answer: string) => void }) {
+  const [other, setOther] = useState(false);
+  const [text, setText] = useState("");
+  const decided = props.done?.status;
+  const answer = props.done?.meta?.answer as string | undefined;
+  const primary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
+  const secondary = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
+
+  return (
+    <div className={`my-3 overflow-hidden rounded-2xl border ${decided ? "border-line" : "border-amber-500/50"} bg-surface`}>
+      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-sm">
+        <span className="grid size-4 place-items-center rounded-full bg-amber-500/20 text-[11px] font-bold text-amber-300">?</span>
+        <span className="text-fg">Pergunta do agente</span>
+        {decided && (
+          <span className={`ml-auto text-xs ${decided === "ok" ? "text-emerald-400" : "text-orange-400"}`}>
+            ● {decided === "ok" ? "respondida" : decided}
+          </span>
+        )}
+      </div>
+      <div className="px-4 py-3 text-sm text-fg">{props.question}</div>
+      {decided ? (
+        answer && (
+          <div className="border-t border-line px-4 py-2 text-sm text-muted">
+            Resposta: <span className="text-fg">{answer}</span>
+          </div>
+        )
+      ) : (
+        <div className="space-y-2 border-t border-line p-4">
+          {other ? (
+            <>
+              <textarea
+                autoFocus
+                rows={2}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey && text.trim()) {
+                    e.preventDefault();
+                    props.onAnswer(text.trim());
+                  }
+                }}
+                placeholder="Sua resposta"
+                className="w-full rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <button disabled={!text.trim()} onClick={() => props.onAnswer(text.trim())} className={primary}>
+                  Responder
+                </button>
+                <button onClick={() => setOther(false)} className={secondary}>
+                  Voltar
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {props.options.map((o, i) => (
+                <button key={i} onClick={() => props.onAnswer(o)} className={i === 0 ? primary : secondary}>
+                  {o}
+                </button>
+              ))}
+              <button onClick={() => setOther(true)} className="rounded-full border border-dashed border-line px-4 py-1.5 text-sm text-muted hover:bg-raised hover:text-fg">
+                Outra resposta…
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Plano proposto no modo Plano: aprovar (escolhendo o modo de execução) ou pedir mudanças. */
 export function PlanCard(props: {

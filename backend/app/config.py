@@ -39,7 +39,10 @@ COMPACT_AT = float(os.getenv("COMPACT_AT", "0.8"))  # fração da janela que dis
 # Navegador integrado
 BROWSER_IDLE_MINUTES = int(os.getenv("BROWSER_IDLE_MINUTES", "30"))  # 0 = nunca fechar sessão ociosa
 BROWSER_SCALE = int(os.getenv("BROWSER_SCALE", "2"))                  # render 1x..3x (vale ao (re)lançar o Chromium)
-BROWSER_STREAM = os.getenv("BROWSER_STREAM", "png")                   # png (sem perda) | jpeg (mais leve)
+# Forja Desktop: endpoint CDP do Electron (http://127.0.0.1:PORTA). As abas viram WebContentsViews nativas na
+# janela e o espelho (screencast) fica desligado. Vazio = Chromium headless + espelho (modo web/Docker).
+BROWSER_CDP = os.getenv("FORJA_CDP", "").strip()
+BROWSER_STREAM = os.getenv("BROWSER_STREAM", "jpeg")                  # jpeg (leve, padrão) | png (sem perda, 3-5x mais pesado)
 
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai
 PROVIDERS = {
