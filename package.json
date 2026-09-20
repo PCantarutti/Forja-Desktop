@@ -1,8 +1,9 @@
 {
   "name": "forja-desktop",
   "productName": "Forja",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Forja: agente de IA local com pasta de trabalho, navegador integrado e terminal, num app de desktop.",
+  "author": "DRUVE",
   "main": "electron/main.js",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -15,13 +16,15 @@
   },
   "build": {
     "appId": "dev.forja.desktop",
+    "directories": { "output": "dist/${version}" },
     "productName": "Forja",
-    "copyright": "Forja",
+    "copyright": "Copyright © 2026 DRUVE",
     "files": ["electron/**", "package.json"],
     "extraResources": [{ "from": "resources", "to": ".", "filter": ["**/*"] }],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico",
+      "publisherName": "DRUVE",
       "artifactName": "Forja-Setup-${version}.${ext}"
     },
     "nsis": {

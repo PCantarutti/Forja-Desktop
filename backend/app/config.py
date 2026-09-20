@@ -60,6 +60,9 @@ MODELS_DIR = Path(os.getenv("MODELS_DIR") or Path.home() / "Forja" / "modelos")
 LOCAL_PROVIDER = {"id": "local", "name": "IA local (llama.cpp)", "type": "llamacpp",
                   "url": f"http://127.0.0.1:{LOCAL_PORT}/v1", "api_key": ""}
 
+PERSONAL_MEMORY = True             # memória sobre o usuário (índice no prompt, corpo sob demanda)
+PERSONAL_MEMORY_DIR = Path(os.getenv("PERSONAL_MEMORY_DIR") or DATA_DIR / "memoria")
+
 DISABLED_TOOLS: set[str] = set()   # ferramentas desligadas na tela de Configurações
 CUSTOM_INSTRUCTIONS = ""           # texto extra no fim do system prompt
 AUTO_APPROVE_TOOLS: list[str] = []     # globs de nomes de ferramenta que dispensam aprovação

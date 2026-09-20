@@ -560,9 +560,21 @@ export function EventNotice({ m }: { m: Message }) {
 
 type SubStep = { call: ToolCall; result?: Message };
 
+const SUB_LEVELS: Record<string, string> = { rapido: "Rápido", capaz: "Capaz", nuvem: "Nuvem" };
+
 /** Passos de um subagente, desenhados dentro do bloco do delegate_task (aprovações inclusas). */
 export function SubagentSteps(props: {
-  info?: { level: string; model: string; tokens?: number; seconds?: number; fallback?: string };
+  info?: {
+    level: string;
+    model: string;
+    provider?: string;
+    tokens?: number;
+    seconds?: number;
+    iterations?: number;
+    fallback?: string;
+    verify?: { command: string; status: string };
+    review?: string;
+  };
   status?: string;
   steps: SubStep[];
   approvals: Record<string, Approval>;
@@ -574,16 +586,29 @@ export function SubagentSteps(props: {
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted">
         <span className="inline-flex items-center gap-1.5">
-          <Split className="size-3.5" /> subagente{info ? ` ${info.level === "capaz" ? "Capaz" : "Rápido"} · ${info.model}` : ""}
+          <Split className="size-3.5" /> subagente{info ? ` ${SUB_LEVELS[info.level] ?? info.level} · ${info.model}` : ""}
         </span>
         {info?.tokens != null && info.seconds != null && (
           <span className="text-faint">
             {info.tokens.toLocaleString("pt-BR")} tokens · {info.seconds}s · {props.steps.length} passos
+            {info.iterations ? ` · ${info.iterations} iterações` : ""}
+            {info.provider ? ` · ${info.provider}` : ""}
           </span>
         )}
         {props.status && <span className="animate-pulse text-sky-300">{props.status}</span>}
       </div>
       {info?.fallback && <div className="text-xs text-amber-200">{info.fallback}</div>}
+      {info?.verify && (
+        <div className={`text-xs ${info.verify.status === "ok" ? "text-emerald-300" : "text-rose-300"}`}>
+          {info.verify.status === "ok" ? "✓" : "✗"} verificação: <span className="font-mono">{info.verify.command}</span>
+        </div>
+      )}
+      {info?.review && (
+        <div className="whitespace-pre-wrap rounded-xl border border-line bg-raised/40 px-2.5 py-1.5 text-xs text-muted">
+          <div className="text-faint">revisão do diff (não bloqueante)</div>
+          {info.review}
+        </div>
+      )}
       {props.steps.map((st, k) => (
         <ToolBlock
           key={st.call.id}

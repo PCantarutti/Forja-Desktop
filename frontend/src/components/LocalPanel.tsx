@@ -6,16 +6,16 @@ import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
 import ModelSearch from "./ModelSearch";
 
 const POLL_MS = 3000;
-const card = "rounded-2xl border border-line bg-surface p-3.5";
-const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
+export const card = "rounded-2xl border border-line bg-surface p-3.5";
+export const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
+export const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
 // `campo` sem largura: quem precisa de outra (w-24, w-auto) usa a base, senão o w-full do `input` vence
 // no CSS e o irmão flex-1 colapsa para zero.
-const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
-const input = `w-full ${campo}`;
+export const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+export const input = `w-full ${campo}`;
 
 const CACHE_TYPES = ["f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
-const SAMPLERS = ["euler_a", "euler", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "lcm",
+export const SAMPLERS = ["euler_a", "euler", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "lcm",
   "ddim_trailing", "tcd", "res_multistep", "er_sde", "dpm++2m_sde", "lms"];
 const SUBTABS = ["Modelos", "Inferência", "Baixar", "Imagem"] as const;
 type SubTab = (typeof SUBTABS)[number];
@@ -342,7 +342,7 @@ function Rotulo(props: { label: string; chave?: string; mudado?: boolean; onRese
   );
 }
 
-function Field(props: {
+export function Field(props: {
   label: string;
   chave?: string;
   hint?: string;
@@ -359,7 +359,7 @@ function Field(props: {
   );
 }
 
-function Num(props: {
+export function Num(props: {
   label: string;
   chave?: string;
   value: number;

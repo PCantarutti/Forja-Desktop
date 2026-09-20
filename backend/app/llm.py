@@ -90,7 +90,7 @@ def _raise_for(provider: str, status: int, body: bytes) -> None:
 
 
 # Esforço -> raciocínio do modelo. Só mandamos quando o modelo entende, senão o servidor recusa.
-EFFORT_LEVEL = {"baixo": "low", "medio": "medium", "alto": "high", "maximo": "high"}
+EFFORT_LEVEL = {"baixo": "low", "medio": "medium", "alto": "high", "maximo": "high", "extremo": "high"}
 REASONING_MODELS = re.compile(r"gpt-oss|gpt-5|^o[1-4](-|$)|deepseek-r|grok|magistral", re.I)
 
 

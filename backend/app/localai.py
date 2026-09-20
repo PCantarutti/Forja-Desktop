@@ -112,7 +112,9 @@ def inference_defaults(path: str = "") -> dict:
 DEFAULT_IMAGE = {
     "model": "", "vae": "", "clip_l": "", "t5xxl": "", "diffusion_model": "",
     "steps": 20, "cfg": 7.0, "width": 512, "height": 512, "sampler": "euler_a", "negative": "",
+    "seed": 0,      # 0 = aleatória
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
+    "descarte_dias": 7,  # quanto tempo as imagens reprovadas ficam em descartadas/ antes do expurgo
 }
 
 _cfg_lock = threading.Lock()

@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Bubble, Check, Clipboard, Code, Gauge, PanelLeft, Shield, Sliders } from "./icons";
+import { Bubble, Check, Clipboard, Code, Gauge, Image, PanelLeft, Shield, Sliders } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
-export type Effort = "baixo" | "medio" | "alto" | "maximo";
-export type Section = "chat" | "agent";
+export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
+// "imagem" é o mesmo literal do `kind` da conversa no backend: a barra lateral interpola
+// a seção direto na query de /conversations.
+export type Section = "chat" | "agent" | "imagem";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string }[] = [
   { id: "auto", label: "Automático", hint: "O Forja decide: edições passam, o resto pergunta" },
@@ -18,6 +20,7 @@ export const EFFORTS: { id: Effort; label: string; hint: string }[] = [
   { id: "medio", label: "Médio", hint: "Equilíbrio entre rapidez e cuidado" },
   { id: "alto", label: "Alto", hint: "Confere o que fez e roda testes quando faz sentido" },
   { id: "maximo", label: "Máximo", hint: "Investiga a fundo, testa e revisa antes de concluir" },
+  { id: "extremo", label: "Extremo", hint: "Delega o difícil a um modelo mais forte, verifica com um comando e revisa o diff" },
 ];
 
 /** Shift+Tab: durante uma resposta o modo Plano fica de fora (entrar nele no meio não faz sentido). */
@@ -133,7 +136,7 @@ export function EffortMenu({ value, onChange }: { value: Effort; onChange: (v: E
   );
 }
 
-/** Chat | Agente, no canto superior esquerdo (com o botão de esconder a barra lateral). */
+/** Chat | Agente | Imagens, no canto superior esquerdo (com o botão de esconder a barra lateral). */
 export function SectionTabs(props: {
   value: Section;
   onChange: (v: Section) => void;
@@ -153,6 +156,7 @@ export function SectionTabs(props: {
         {([
           { id: "chat" as const, icon: <Bubble className="size-4" />, title: "Chat (sem ferramentas)" },
           { id: "agent" as const, icon: <Code className="size-4" />, title: "Agente (ferramentas)" },
+          { id: "imagem" as const, icon: <Image className="size-4" />, title: "Imagens (Stable Diffusion)" },
         ]).map((t) => (
           <button
             key={t.id}

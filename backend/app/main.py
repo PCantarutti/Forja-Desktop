@@ -12,10 +12,11 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (checkpoints, compact, config, db, downloads, gitops, imagegen, llm, localai, mcp_client, memory,
-               mirror, native, policy, settings, shell, skills, subagents, terminal, uploads, workspace)
+from . import (checkpoints, compact, config, db, downloads, gitops, imagegen, llm, localai, lotes, mcp_client,
+               memory, mirror, native, policy, settings, shell, skills, subagents, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
+from .parsing import split_think
 from .tools import REGISTRY, ToolError
 
 
@@ -32,6 +33,7 @@ async def lifespan(_app):
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
     localai.reap_orphan()  # sobra de um backend que morreu sem descarregar o modelo
+    lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     asyncio.create_task(asyncio.to_thread(localai.load_last))  # "carregar ao iniciar", se estiver ligado
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
@@ -151,6 +153,44 @@ def put_project_memory(body: dict):
     try:
         return memory.project_write(body.get("content", ""))
     except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class PersonalMemoryBody(BaseModel):
+    name: str
+    description: str = ""
+    content: str = ""
+    type: str = "usuario"
+
+
+@app.get("/api/memory/personal")
+def get_personal_memory():
+    """Memórias sobre o usuário: só o índice (nome, descrição, tipo, data)."""
+    return {"enabled": config.PERSONAL_MEMORY, "dir": str(memory.personal_dir()),
+            "items": memory.personal_list()}
+
+
+@app.get("/api/memory/personal/{name}")
+def read_personal_memory(name: str):
+    try:
+        return memory.personal_read(name)
+    except memory.MemoryError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.put("/api/memory/personal")
+def put_personal_memory(body: PersonalMemoryBody):
+    try:
+        return memory.personal_write(body.name, body.description, body.content, body.type)
+    except memory.MemoryError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/memory/personal/delete")
+def delete_personal_memory(body: dict):
+    try:
+        return {"removed": memory.personal_delete(body.get("names") or [])}
+    except memory.MemoryError as e:
         raise HTTPException(400, str(e))
 
 
@@ -523,6 +563,88 @@ def local_image_file(path: str):
     return FileResponse(f)
 
 
+# ------------------------------------------------------------------ imagens (lotes)
+
+MELHORAR_PROMPT = (
+    "Você reescreve descrições para geradores de imagem (Stable Diffusion). Devolva SÓ o prompt "
+    "reescrito, em inglês, numa linha, com termos visuais concretos: assunto, composição, luz, "
+    "material, lente, estilo. Sem explicação, sem aspas, sem 'prompt:', sem negativos."
+)
+
+
+class LoteBody(BaseModel):
+    prompt: str = ""
+    opts: dict = {}
+    models: list[str] = []
+    count: int = 1
+    seed: int = 0
+    seed_mode: str = "incremental"  # incremental | aleatoria | fixa
+    confirm: bool = False
+
+
+class DecidirBody(BaseModel):
+    keep: list[str] = []
+
+
+class PromptBody(BaseModel):
+    prompt: str
+    provider: str
+    model: str
+
+
+@app.post("/api/imagens/{conv_id}/gerar")
+async def imagens_gerar(conv_id: int, body: LoteBody):
+    try:
+        return await asyncio.to_thread(lotes.start, conv_id, body.prompt, body.opts, body.models,
+                                       body.count, body.seed, body.seed_mode, body.confirm)
+    except imagegen.ModeloCarregado as e:
+        raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/{message_id}/decidir")
+async def imagens_decidir(message_id: int, body: DecidirBody):
+    try:
+        return await asyncio.to_thread(lotes.decidir, message_id, body.keep)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/{message_id}/cancelar")
+def imagens_cancelar(message_id: int):
+    try:
+        return lotes.cancelar(message_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/descartadas/limpar")
+async def imagens_limpar(dias: int = 0):
+    """Expurgo manual da pasta descartadas/. Sem `dias`, apaga tudo o que está lá."""
+    return {"apagados": await asyncio.to_thread(lotes.limpar_descartadas, dias)}
+
+
+@app.post("/api/imagens/prompt")
+async def imagens_prompt(body: PromptBody):
+    """Passa o pedido por um LLM para virar um prompt de imagem decente. Opcional: a geração não usa."""
+    if not body.prompt.strip():
+        raise HTTPException(400, "Escreva alguma coisa antes de melhorar.")
+    out = ""
+    try:
+        async for kind, val in llm.chat_stream(body.provider, body.model,
+                                               [{"role": "system", "content": MELHORAR_PROMPT},
+                                                {"role": "user", "content": body.prompt}], None, 8192):
+            if kind == "content":
+                out += val
+    except llm.LLMError as e:
+        raise HTTPException(400, str(e))
+    texto = split_think(out)[1].strip().strip("`").strip()
+    if not texto:
+        raise HTTPException(400, "O modelo não devolveu um prompt.")
+    return {"prompt": texto}
+
+
 # ------------------------------------------------------------------ navegador integrado
 # Uma sessão por conversa: `conv` é o id da conversa ("0" = rascunho da tela inicial).
 
@@ -714,8 +836,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent"):
-        raise HTTPException(400, "kind deve ser chat ou agent")
+    if kind not in ("chat", "agent", "imagem"):
+        raise HTTPException(400, "kind deve ser chat, agent ou imagem")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)
@@ -1088,8 +1210,8 @@ async def start_run(conv_id: int, body: RunBody):
         _get_conv(s, conv_id)
     if body.permission not in policy.MODES:
         raise HTTPException(400, f"permission deve ser um de {', '.join(policy.MODES)}")
-    if body.effort not in ("baixo", "medio", "alto", "maximo"):
-        raise HTTPException(400, "effort deve ser baixo, medio, alto ou maximo")
+    if body.effort not in ("baixo", "medio", "alto", "maximo", "extremo"):
+        raise HTTPException(400, "effort deve ser baixo, medio, alto, maximo ou extremo")
     if active_run(conv_id):
         raise HTTPException(409, "Esta conversa já tem uma execução em andamento")
     with db.session() as s:

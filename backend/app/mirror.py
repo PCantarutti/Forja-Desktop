@@ -6,6 +6,7 @@ app: é uma cópia de leitura.
 
     %APPDATA%\\Forja\\conversas\\forja-code\\0007 - titulo.md   (modo agente)
     %APPDATA%\\Forja\\conversas\\forja-chat\\0008 - titulo.md   (chat)
+    %APPDATA%\\Forja\\conversas\\forja-imagens\\0009 - titulo.md   (lotes de imagem)
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import re
 from . import config, db, workspace
 
 ROOT = config.DATA_DIR / "conversas"
-DIRS = {"agent": "forja-code", "chat": "forja-chat"}
+DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens"}
 
 # Proibidos em nome de arquivo no Windows, mais os de controle.
 _PROIBIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -42,6 +43,12 @@ def markdown(c) -> str:
     for m in c.messages:
         if m.role == "user":
             linhas += ["## Usuário", "", m.content or "", ""]
+        elif m.role == "assistant" and (m.meta or {}).get("images"):  # lote de imagem
+            linhas += [f"## Imagens ({m.status or 'pendente'})", ""]
+            for img in m.meta["images"]:
+                etiqueta = f"semente {img['seed']} · {img.get('model_name') or '?'} · {img['status']}"
+                linhas += [f"- {etiqueta}", f"  ![{etiqueta}]({img['path']})"]
+            linhas.append("")
         elif m.role == "assistant":
             linhas += ["## Forja", "", m.content or ""]
             for tc in m.tool_calls or []:

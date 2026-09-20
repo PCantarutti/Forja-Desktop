@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar";
 import BrowserPanel from "./components/BrowserPanel";
 import ServersPanel from "./components/ServersPanel";
 import LocalPanel from "./components/LocalPanel";
+import ImagensView from "./components/ImagensView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
@@ -1022,6 +1023,17 @@ export default function App() {
         </div>
         <div className="flex min-h-0 flex-1">
       <main className="flex min-w-0 flex-1 flex-col bg-bg">
+        {section === "imagem" ? (
+          <ImagensView
+            conv={currentId}
+            ensureConversation={ensureConversation}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
+          />
+        ) : (
+        <>
         {showFolder && (
           <FolderPicker
             current={conv ? conv.workspace ?? null : pendingWs}
@@ -1375,6 +1387,8 @@ export default function App() {
             </div>
           </div>
         </div>
+        </>
+        )}
       </main>
 
       <RightPanel tab={right.tab} collapsed={right.collapsed} onCollapse={(collapsed) => setRight((r) => ({ ...r, collapsed }))}>

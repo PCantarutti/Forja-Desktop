@@ -36,7 +36,10 @@ TIMEOUT = 1800  # 30 min: CPU puro com modelo grande é lento mesmo
 def _opts(patch: dict | None = None) -> dict:
     """Padrão da aba Imagem + ajustes daquele modelo + o que veio na chamada."""
     base = localai.read_config()["image"]
-    do_modelo = localai.image_params(base.get("model", "")) if base.get("model") else {}
+    # Os ajustes são do modelo que vai gerar — num lote multi-modelo o patch troca o modelo a cada
+    # imagem, e usar os ajustes do padrão vazaria o VAE/clip do modelo errado.
+    alvo = (patch or {}).get("model") or base.get("model", "")
+    do_modelo = localai.image_params(alvo) if alvo else {}
     return {**base, **do_modelo, **{k: v for k, v in (patch or {}).items() if v not in (None, "")}}
 
 

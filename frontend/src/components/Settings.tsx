@@ -25,10 +25,11 @@ export type AppSettings = {
   custom_instructions: string;
   auto_approve_tools: string[];
   auto_approve_commands: string[];
+  personal_memory: boolean;
   project_memory: boolean;
   project_memory_file: string;
   enabled_models: Record<string, string[] | undefined>;
-  subagents: Record<"rapido" | "capaz", { provider: string; model: string }>;
+  subagents: Record<"rapido" | "capaz" | "nuvem", { provider: string; model: string }>;
   subagent_max_iterations: number;
   browser_idle_minutes: number;
   browser_scale: number;
@@ -223,6 +224,7 @@ export default function Settings(props: {
               <Mcp mcp={props.mcp} onChanged={props.onChanged} />
             ) : (
               <>
+                <PersonalMemory s={s} set={set} save={save} />
                 <ProjectMemory s={s} set={set} save={save} />
                 <MemoryTab />
               </>
@@ -877,6 +879,7 @@ function ProviderModels({ id, chosen, onChange }: {
 const SLOTS = [
   { key: "rapido", title: "Rápido", hint: "Modelo menor e rápido para tarefas simples: buscar, listar, resumir, edições óbvias." },
   { key: "capaz", title: "Capaz", hint: "Modelo maior e mais lento para raciocínio difícil: depurar, projetar, código complexo." },
+  { key: "nuvem", title: "Nuvem", hint: "Rede de segurança: entra quando o slot escolhido não roda nesta máquina ou falha (ex.: Ollama Cloud). O modelo nunca escolhe este slot sozinho." },
 ] as const;
 
 function SlotModels({ provider, value, onChange }: { provider: string; value: string; onChange: (m: string) => void }) {
@@ -910,7 +913,7 @@ function SlotModels({ provider, value, onChange }: { provider: string; value: st
 }
 
 function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
-  const change = (slot: "rapido" | "capaz", patch: Partial<{ provider: string; model: string }>) =>
+  const change = (slot: "rapido" | "capaz" | "nuvem", patch: Partial<{ provider: string; model: string }>) =>
     set("subagents", { ...s.subagents, [slot]: { ...s.subagents[slot], ...patch } });
   return (
     <div className="max-w-2xl space-y-5">
@@ -1212,6 +1215,96 @@ function ProjectMemory({ s, set, save }: {
         <span className="text-sm text-muted">{msg || (file?.exists ? "" : "O arquivo ainda não existe.")}</span>
       </div>
     </section>
+  );
+}
+
+type Lembranca = { name: string; slug: string; description: string; type: string; updated: string; size: number };
+
+/** O que o agente guardou sobre o usuário. No prompt entra só esta lista (uma linha cada); o conteúdo
+ *  ele lê com `recall` quando o assunto aparece — é o que segura o custo no modelo local. */
+function PersonalMemory({ s, set, save }: {
+  s: AppSettings;
+  set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void;
+  save: (patch?: Partial<AppSettings>) => Promise<void>;
+}) {
+  const [itens, setItens] = useState<Lembranca[] | null>(null);
+  const [pasta, setPasta] = useState("");
+  const [aberta, setAberta] = useState<string>("");
+  const [corpo, setCorpo] = useState("");
+
+  const carrega = () =>
+    api
+      .get<{ items: Lembranca[]; dir: string }>("/memory/personal")
+      .then((r) => {
+        setItens(r.items);
+        setPasta(r.dir);
+      })
+      .catch(() => setItens([]));
+
+  useEffect(() => {
+    carrega();
+  }, []);
+
+  async function abrir(m: Lembranca) {
+    if (aberta === m.slug) return setAberta("");
+    setAberta(m.slug);
+    setCorpo("");
+    const r = await api.get<{ content: string }>(`/memory/personal/${encodeURIComponent(m.slug)}`).catch(() => null);
+    setCorpo(r?.content ?? "(vazio)");
+  }
+
+  async function apagar(m: Lembranca) {
+    if (!confirm(`Esquecer "${m.name}"?`)) return;
+    await api.post("/memory/personal/delete", { names: [m.slug] }).catch(() => null);
+    carrega();
+  }
+
+  return (
+    <div className="max-w-3xl space-y-3">
+      <Field
+        label="Memória sobre você"
+        hint="O agente guarda o que você contar de duradouro (como gosta de trabalhar, seu hardware, decisões suas). No prompt entra só o índice — uma linha por memória —, e o conteúdo só quando o assunto aparece. Vale a partir da conversa seguinte."
+      >
+        <Toggle
+          checked={s.personal_memory}
+          onChange={(v) => {
+            set("personal_memory", v);
+            save({ personal_memory: v });
+          }}
+          label={s.personal_memory ? "Ligada" : "Desligada"}
+        />
+      </Field>
+
+      {itens === null ? (
+        <p className="text-sm text-muted">Carregando…</p>
+      ) : !itens.length ? (
+        <p className="text-sm text-muted">Nada guardado ainda.</p>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-line">
+          {itens.map((m) => (
+            <div key={m.slug} className="border-b border-line last:border-0">
+              <div className="flex items-center gap-3 px-3 py-2 hover:bg-raised">
+                <button className="min-w-0 flex-1 text-left" onClick={() => abrir(m)}>
+                  <span className="block truncate text-sm text-fg">{m.name}</span>
+                  <span className="block truncate text-xs text-muted">{m.description}</span>
+                </button>
+                <span className="shrink-0 text-xs text-faint">{m.type}</span>
+                <span className="shrink-0 text-xs text-faint">{m.updated}</span>
+                <button className="shrink-0 text-xs text-faint hover:text-red-400" onClick={() => apagar(m)}>
+                  esquecer
+                </button>
+              </div>
+              {aberta === m.slug && (
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#0d0d0d] px-3 py-2 text-xs text-muted">
+                  {corpo || "…"}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {pasta && <p className="text-xs text-faint">Arquivos em {pasta} — um .md por memória, dá para editar à mão.</p>}
+    </div>
   );
 }
 

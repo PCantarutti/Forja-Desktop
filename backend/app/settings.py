@@ -25,13 +25,15 @@ ENV_DEFAULTS: dict[str, Any] = {
     "custom_instructions": "",
     "auto_approve_tools": [],
     "auto_approve_commands": [],
+    "personal_memory": config.PERSONAL_MEMORY,
     "project_memory": True,
     "project_memory_file": "FORJA.md",
     "browser_idle_minutes": config.BROWSER_IDLE_MINUTES,
     "browser_scale": config.BROWSER_SCALE,
     "browser_stream": config.BROWSER_STREAM,
     "enabled_models": {},
-    "subagents": {"rapido": {"provider": "", "model": ""}, "capaz": {"provider": "", "model": ""}},
+    "subagents": {"rapido": {"provider": "", "model": ""}, "capaz": {"provider": "", "model": ""},
+                  "nuvem": {"provider": "", "model": ""}},
     "subagent_max_iterations": 15,
 }
 
@@ -78,6 +80,7 @@ def apply(values: dict | None = None) -> dict:
     config.CUSTOM_INSTRUCTIONS = values["custom_instructions"]
     config.AUTO_APPROVE_TOOLS = list(values["auto_approve_tools"])
     config.AUTO_APPROVE_COMMANDS = list(values["auto_approve_commands"])
+    config.PERSONAL_MEMORY = bool(values["personal_memory"])
     config.PROJECT_MEMORY = bool(values["project_memory"])
     config.PROJECT_MEMORY_FILE = values["project_memory_file"]
     config.ENABLED_MODELS = dict(values["enabled_models"])
@@ -156,14 +159,14 @@ def validate(patch: dict, current: dict) -> dict:
             if not isinstance(raw, dict):
                 raise SettingsError("'subagents' precisa ser um objeto.")
             out = {}
-            for slot in ("rapido", "capaz"):
+            for slot in ("rapido", "capaz", "nuvem"):
                 spec = raw.get(slot) or {}
                 provider, model = str(spec.get("provider") or ""), str(spec.get("model") or "")
                 if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out
-        elif key == "project_memory":
+        elif key in ("project_memory", "personal_memory"):
             values[key] = bool(raw)
         elif key == "project_memory_file":
             name = str(raw).strip() or "FORJA.md"

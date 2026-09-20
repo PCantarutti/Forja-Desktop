@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Settings, ToolsSent } from "../types";
+import type { Section } from "./Controls";
 import { Chevron, Wrench } from "./icons";
 
 export type ToolInfo = { name: string; description?: string; mutating: boolean; always_ask?: boolean; source?: string; enabled?: boolean };
@@ -124,7 +125,7 @@ export default function InfoPanel(props: {
   mcp: McpStatus | null;
   onReloadMcp: () => void;
   usage: { model: string; tokens: number; seconds: number; tps: number | null }[];
-  section: "chat" | "agent";
+  section: Section;
 }) {
   const { settings, sent, mcp } = props;
   const agent = props.section === "agent";

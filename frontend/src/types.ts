@@ -30,7 +30,7 @@ export type Message = {
   tool_calls: ToolCall[] | null;
   tool_call_id: string | null;
   name: string | null;
-  status: "ok" | "erro" | "rejeitada" | "cancelada" | null;
+  status: "ok" | "erro" | "rejeitada" | "cancelada" | "running" | "pronto" | "cancelado" | null;
   meta: Record<string, any> | null;
 };
 
@@ -38,6 +38,7 @@ export type Conversation = {
   id: number;
   title: string;
   updated_at: string;
+  kind?: "chat" | "agent" | "imagem";
   workspace?: string | null;
   workspace_label?: string;
   pinned?: boolean;
@@ -120,7 +121,7 @@ export type Settings = {
   provider: string;
   model: string;
   permission: "auto" | "manual" | "edits" | "plan" | "bypass";
-  effort: "baixo" | "medio" | "alto" | "maximo";
+  effort: "baixo" | "medio" | "alto" | "maximo" | "extremo";
 };
 
 export type Stats = {
@@ -275,7 +276,30 @@ export type ImageOpts = {
   height: number;
   sampler: string;
   negative: string;
+  seed: number; // 0 = aleatória
+  descarte_dias: number; // prazo das imagens reprovadas em descartadas/ (0 = guardar para sempre)
 };
+
+/** Uma variação dentro de um lote da seção Imagens. */
+export type LoteImagem = {
+  path: string;
+  seed: number;
+  model: string;
+  model_name: string;
+  status: "pendente" | "gerando" | "pronta" | "erro" | "mantida" | "descartada" | "cancelada";
+  error: string;
+};
+
+/** meta da mensagem do assistente num lote (a thread do backend vai preenchendo `images`). */
+export type LoteMeta = {
+  job: string;
+  count: number;
+  seed_mode: SeedMode;
+  opts: Partial<ImageOpts>;
+  images: LoteImagem[];
+};
+
+export type SeedMode = "incremental" | "aleatoria" | "fixa";
 
 export type RuntimeInfo = {
   installed: boolean;
