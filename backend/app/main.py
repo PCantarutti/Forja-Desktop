@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -9,7 +10,9 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from . import (checkpoints, compact, config, db, gitops, llm, mcp_client, memory, policy, runner, settings, shell,
+from fastapi.staticfiles import StaticFiles
+
+from . import (checkpoints, compact, config, db, gitops, llm, mcp_client, memory, native, policy, settings, shell,
                skills, subagents, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -21,6 +24,13 @@ settings.apply()
 
 @asynccontextmanager
 async def lifespan(_app):
+    # Primeira linha do log: onde estão os dados desta execução (ajuda no suporte).
+    print(f"Forja: dados em {config.DATA_DIR} · banco {config.DB_PATH} · interface {config.WEB_DIR or '(só API)'}",
+          flush=True)
+    if "WindowsApps" in sys.base_prefix:  # só acontece em dev: o app empacotado traz o seu próprio Python
+        print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
+              "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
+              "python.org ou do uv para desenvolver.", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
     task = asyncio.create_task(mcp_client.start())
     yield
@@ -37,7 +47,6 @@ def get_config():
     return {"providers": [{"id": p["id"], "name": p["name"]} for p in config.PROVIDERS.values()],
             "num_ctx": config.NUM_CTX, "max_iterations": config.MAX_ITERATIONS,
             "default_workspace": workspace.label(None), "drives": [d["name"] for d in workspace.roots()],
-            "picker_url": config.PICKER_URL,
             "subagents": {k: v for k, v in subagents.configured().items()}}
 
 
@@ -214,53 +223,29 @@ def put_model_settings(body: ModelSettingBody):
     return {"model": body.model, **db.get_model_setting(body.model)}
 
 
-# ------------------------------------------------------------------ forja-runner
-
-@app.post("/api/picker/start")
-async def picker_start():
-    """O navegador não inicia processos; o runner (no sistema do usuário) sobe o forja-picker por ele."""
-    if not runner.online():
-        await asyncio.to_thread(runner.refresh, True)
-    if not runner.online():
-        raise HTTPException(400, "Nem o forja-picker nem o forja-runner estão rodando. Inicie tools/forja-picker.cmd "
-                                 "(Windows) ou tools/forja_runner.py: ele sobe o seletor junto.")
-    try:
-        return await asyncio.to_thread(runner.picker_start)
-    except runner.RunnerError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.get("/api/runner")
-async def get_runner():
-    """Estado do forja-runner (sistema do usuário) para o painel; força um /ping novo."""
-    info = await asyncio.to_thread(runner.refresh, True)
-    return {"online": bool(info and info.get("ok")), "label": runner.describe(info), "info": info,
-            "url": config.RUNNER_URL}
-
-
 # ------------------------------------------------------------------ instâncias (servidores do agente)
 
 @app.get("/api/servers")
 async def get_servers():
-    """Servidores iniciados por serve_start (no seu sistema via runner e no container)."""
-    return {"servers": await asyncio.to_thread(shell.list_servers), "runner": runner.describe(runner.refresh())}
+    """Servidores iniciados por serve_start nesta sessão."""
+    return {"servers": await asyncio.to_thread(shell.list_servers), "environment": native.describe()}
 
 
 @app.get("/api/servers/{name}/log")
 async def get_server_log(name: str, tail: int = 80):
     try:
         return {"name": name, "log": await asyncio.to_thread(shell.server_log, name, tail)}
-    except (ToolError, runner.RunnerError) as e:
+    except ToolError as e:
         raise HTTPException(404, str(e))
 
 
 @app.post("/api/servers/{name}/stop")
 async def stop_server(name: str):
     try:
-        where = await asyncio.to_thread(shell.stop_server, name)
-    except (ToolError, runner.RunnerError) as e:
+        await asyncio.to_thread(shell.stop_server, name)
+    except ToolError as e:
         raise HTTPException(400, str(e))
-    return {"ok": True, "name": name, "where": where}
+    return {"ok": True, "name": name}
 
 
 # ------------------------------------------------------------------ navegador integrado
@@ -598,13 +583,9 @@ class OpenBody(BaseModel):
 
 @app.post("/api/open")
 async def open_in_system(body: OpenBody):
-    """Abre um arquivo no editor ou o revela no Explorer/Finder do sistema do usuário (via runner)."""
-    if not runner.online():
-        await asyncio.to_thread(runner.refresh, True)
-    if not runner.online():
-        raise HTTPException(400, "Precisa do forja-runner ligado no seu sistema (tools/forja-picker.cmd).")
+    """Abre um arquivo no editor (VS Code, senão o programa padrão) ou o revela no Explorer/Finder."""
     raw = body.path.strip()
-    if len(raw) > 2 and raw[1] == ":" or raw.startswith("/") and not raw.startswith(("/workspace", "/host")):
+    if len(raw) > 2 and raw[1] == ":" or raw.startswith("/") and not raw.startswith("/workspace"):
         host = workspace.normalize(raw)
     else:
         from .tools import resolve_path
@@ -612,11 +593,9 @@ async def open_in_system(body: OpenBody):
             host = workspace.to_host(resolve_path(_conv_root(body.conv), raw))
         except ToolError as e:
             raise HTTPException(400, str(e))
-    if not host:
-        raise HTTPException(400, "Esse caminho não existe no seu sistema.")
     try:
-        return await asyncio.to_thread(runner.open_path, host, body.mode)
-    except runner.RunnerError as e:
+        return {"opened": await asyncio.to_thread(native.open_path, host, body.mode)}
+    except (ValueError, OSError) as e:
         raise HTTPException(400, str(e))
 
 
@@ -926,3 +905,15 @@ def change_permission(run_id: str, body: dict):
 def stop(run_id: str):
     _get_run(run_id).stop()
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ interface (build do Vite)
+# No app empacotado o Electron passa FORJA_WEB; em dev, o Vite serve a UI e isto fica desligado.
+
+if config.WEB_DIR and config.WEB_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=config.WEB_DIR / "assets"), name="assets")
+
+    @app.get("/{path:path}")
+    def spa(path: str):
+        f = config.WEB_DIR / path
+        return FileResponse(f if path and f.is_file() else config.WEB_DIR / "index.html")

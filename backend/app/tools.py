@@ -137,19 +137,10 @@ def resolve_path(root: Path, path: str | None) -> Path:
     """Resolve `path` dentro de `root`. Bloqueia `..`, absolutos fora da raiz e symlinks que escapem."""
     root_r = root.resolve()
     raw = (path or ".").strip() or "."
-    # Modelos costumam mandar "/workspace/x" ou "C:/.../x"; trate como relativo/absoluto na raiz.
+    # Modelos às vezes mandam "/workspace/x"; trate como relativo à raiz. Caminho absoluto de verdade
+    # (C:/... ou /home/...) passa direto: o join abaixo o mantém e o confinamento decide.
     if raw == "/workspace" or raw.startswith("/workspace/"):
         raw = raw[len("/workspace"):].lstrip("/") or "."
-    elif workspace.DRIVE_RE.match(raw):
-        try:
-            raw = str(workspace.to_container(raw))
-        except workspace.WorkspaceError as e:
-            raise ToolError(str(e)) from None
-    elif raw.startswith("/") and not Path(raw).is_relative_to(root_r):
-        try:  # caminho absoluto do Linux/macOS do usuário (ex.: /home/voce/app/x)
-            raw = str(workspace.to_container(raw))
-        except workspace.WorkspaceError:
-            pass  # segue como está e cai na checagem de confinamento abaixo
     target = (root_r / raw).resolve()  # resolve() segue symlinks
     if not target.is_relative_to(root_r):
         raise ToolError(

@@ -66,9 +66,8 @@ export type ToolsSent = {
   vision_source?: "detectado" | "override" | "desconhecido";
   /** Ferramentas ligadas mas não enviadas porque o modelo não tem a capacidade exigida. */
   blocked?: { name: string; missing: string[] }[];
-  /** forja-runner (sistema do usuário) visto nesta requisição e onde run_command/serve_* executam. */
-  runner?: string;
-  exec_target?: "host" | "container";
+  /** Máquina e shell onde run_command/serve_* executam nesta requisição. */
+  environment?: string;
 };
 
 /** Servidor iniciado pelo agente com serve_start, no seu sistema ("host") ou no container. */
@@ -85,7 +84,6 @@ export type ServerInfo = {
   error?: string;
 };
 
-export type RunnerStatus = { online: boolean; label: string; url?: string; info?: Record<string, any> | null };
 
 export type BrowserTab = { index: number; url: string; title: string; active: boolean };
 

@@ -15,16 +15,16 @@ function uptime(s?: number) {
 /** Aba Instâncias: servidores que o agente subiu com serve_start, com log e botão Parar. */
 export default function ServersPanel(props: { onCount: (alive: number) => void }) {
   const [servers, setServers] = useState<ServerInfo[] | null>(null);
-  const [runner, setRunner] = useState("");
+  const [environment, setEnvironment] = useState("");
   const [error, setError] = useState("");
   const [openLog, setOpenLog] = useState<string | null>(null);
   const [log, setLog] = useState("");
 
   async function refresh() {
     try {
-      const r = await api.get<{ servers: ServerInfo[]; runner: string }>("/servers");
+      const r = await api.get<{ servers: ServerInfo[]; environment: string }>("/servers");
       setServers(r.servers);
-      setRunner(r.runner);
+      setEnvironment(r.environment);
       props.onCount(r.servers.filter((s) => s.alive).length);
       setError("");
     } catch (e: any) {
@@ -64,7 +64,7 @@ export default function ServersPanel(props: { onCount: (alive: number) => void }
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-xs">
       <div className="text-faint">
-        Servidores iniciados pelo agente com <span className="font-mono">serve_start</span>. Runner: {runner || "…"}.
+        Servidores iniciados pelo agente com <span className="font-mono">serve_start</span>, em {environment || "…"}.
       </div>
       {error && <div className="text-red-300">{error}</div>}
       {servers && !list.length && (

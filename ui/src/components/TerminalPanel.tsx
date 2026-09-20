@@ -6,8 +6,8 @@ type Session = { id: string; where: string; shell: string; cwd: string; buf: str
 const SESSIONS: Record<string, Session> = {};
 
 /**
- * Aba Terminal: seu shell na pasta da conversa (PowerShell/bash no seu sistema via runner, senão
- * bash no container). Sem PTY: comandos comuns funcionam; programas de tela cheia, não.
+ * Aba Terminal: seu shell na pasta da conversa (PowerShell no Windows, bash no Linux/macOS).
+ * Sem PTY: comandos comuns funcionam; programas de tela cheia, não.
  */
 export default function TerminalPanel(props: { conv: string }) {
   const { conv } = props;

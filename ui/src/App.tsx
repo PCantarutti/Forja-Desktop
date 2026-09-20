@@ -38,7 +38,7 @@ import {
   type TurnStats,
 } from "./components/MessageView";
 import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip, Refresh, Square, Undo } from "./components/icons";
-import type { Approval, Attachment, BrowserState, Conversation, Message, RunnerStatus, Settings, Skill, Stats, Task, ToolsSent } from "./types";
+import type { Approval, Attachment, BrowserState, Conversation, Message, Settings, Skill, Stats, Task, ToolsSent } from "./types";
 
 /** Notificação do sistema quando a aba não está em foco (execução terminou, aprovação pendente). */
 function notify(title: string, body: string, force = false) {
@@ -55,7 +55,6 @@ type Config = {
   providers: { id: string; name: string }[];
   num_ctx: number;
   default_workspace?: string;
-  picker_url?: string;
 };
 type SubState = { status: string; steps: { call: any; result?: Message }[] };
 type Live = {
@@ -117,7 +116,6 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
-  const [runner, setRunner] = useState<RunnerStatus | null>(null);
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [catalogKey, setCatalogKey] = useState(0); // força o seletor de modelo a recarregar
   const [showFolder, setShowFolder] = useState(false);
@@ -307,7 +305,7 @@ export default function App() {
       .catch(() => setSkills([]));
   }, [currentId]);
 
-  /** Abre um arquivo/pasta da conversa no editor ou no Explorer do seu sistema (precisa do runner). */
+  /** Abre um arquivo/pasta da conversa no editor ou no Explorer do seu sistema. */
   function openPath(path: string, mode: "editor" | "reveal") {
     api.post("/open", { conv: currentId ?? "0", path, mode }).catch((e) => setError(e.message));
   }
@@ -352,7 +350,6 @@ export default function App() {
     api.get<Config>("/config").then(setConfig).catch(() => {});
     api.get<ToolInfo[]>("/tools").then(setAllTools).catch(() => {});
     api.get<McpStatus>("/mcp").then(setMcp).catch(() => {});
-    api.get<RunnerStatus>("/runner").then(setRunner).catch(() => {});
   }
 
   async function reloadMcp() {
@@ -575,38 +572,19 @@ export default function App() {
     return c.id;
   }
 
-  /** Seletor de pasta do sistema (Explorer no Windows) via forja-picker; sem ele, o seletor interno. */
+  /** Seletor de pasta do sistema (Explorer no Windows), pelo Electron. Fora do app, o seletor interno. */
   async function chooseFolder() {
-    const base = config.picker_url ?? "http://127.0.0.1:3001";
     const start = (currentId !== null ? conv?.workspace : pendingWs) ?? config.default_workspace ?? "";
     setNativeError("");
-    const ping = () => fetch(`${base}/ping`, { signal: AbortSignal.timeout(1500) }).then((r) => r.ok);
-    let online = await ping().catch(() => false);
-    if (!online) {
-      // O navegador não inicia processos: o runner (no seu sistema) sobe o forja-picker por nós.
-      setPicking(true);
-      try {
-        const r = await api.post<{ online: boolean; error?: string }>("/picker/start");
-        for (let i = 0; i < 10 && !online; i++) {
-          online = await ping().catch(() => false);
-          if (!online) await new Promise((res) => setTimeout(res, 500));
-        }
-        if (!online) throw new Error(r.error ?? "o forja-picker foi iniciado mas não respondeu.");
-      } catch (e: any) {
-        setPicking(false);
-        setNativeError(String(e.message));
-        setShowFolder(true);
-        return;
-      }
-      setPicking(false);
+    if (!window.forja) {
+      setShowFolder(true);
+      return;
     }
     setShowFolder(false);
     setPicking(true);
     try {
-      const r = await fetch(`${base}/pick?start=${encodeURIComponent(start)}`);
-      const body = await r.json();
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
-      if (body.path) await pickFolder(body.path);
+      const path = await window.forja.pickFolder(start);
+      if (path) await pickFolder(path);
     } catch (e: any) {
       setNativeError(String(e.message));
       setShowFolder(true);
@@ -972,7 +950,7 @@ export default function App() {
             <ChevronDown className="size-3 shrink-0" />
           </button>
           )}
-          {section === "agent" && runner?.online && (
+          {section === "agent" && (
             <>
               <button onClick={() => openPath(".", "editor")} title="Abrir a pasta da conversa no editor" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
                 <ExternalLink className="size-3.5" />
@@ -1109,7 +1087,7 @@ export default function App() {
                       running={running}
                       queued={m.tool_calls!.slice(0, k).some((p) => !results.has(p.id))}
                       live={liveOutput[c.id]}
-                      onOpen={runner?.online ? openPath : undefined}
+                      onOpen={openPath}
                       onDecide={(ok, always) => decide(c.id, ok, always)}
                     >
                       {c.name === "delegate_task" && (
@@ -1369,7 +1347,6 @@ export default function App() {
             onToolMode={changeToolMode}
             vision={vision}
             onVision={changeVision}
-            runner={runner}
             allTools={allTools}
             sent={sent}
             mcp={mcp}

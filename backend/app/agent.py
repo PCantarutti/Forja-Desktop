@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from typing import AsyncIterator
 
-from . import checkpoints, compact, config, db, llm, memory, policy, uploads, workspace, runner
+from . import checkpoints, compact, config, db, llm, memory, native, policy, uploads, workspace
 from . import browser, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, parse_text_tool_calls, split_think
@@ -253,39 +253,24 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
 def environment_block(names: list[str]) -> list[str]:
     """Onde o modelo está e onde os comandos rodam. O harness diz; o modelo não precisa adivinhar."""
     root = workspace.root()
-    host = workspace.to_host(root)
-    info = runner.current()
+    info = native.info()
     shell_names = " e ".join(n for n in ("run_command", "serve_start") if n in names)
-    lines = ["Ambiente:"]
-    if host:
-        lines.append(f"- Pasta da conversa: {host} no sistema do usuário (= {root} dentro do container do Forja). "
-                     "Use caminhos relativos a ela.")
-    else:
-        lines.append(f"- Pasta da conversa: {root} (dentro do container do Forja). Use caminhos relativos a ela.")
+    lines = ["Ambiente:",
+             f"- Pasta da conversa: {workspace.to_host(root)}, na máquina do usuário. Use caminhos relativos a ela."]
     if not shell_names:
         return lines
-    if info and info.get("ok") and host:
-        vers = ", ".join(f"{k} {v}" for k, v in (info.get("versions") or {}).items() if v)
-        lines.append(f"- Sistema do usuário: {runner.describe(info)}, ligado via forja-runner. {shell_names} "
-                     f"executa LÁ, na pasta da conversa, com o shell {info.get('shell')}."
-                     + (f" Instalado: {vers}." if vers else ""))
-        if str(info.get("shell", "")).lower() in ("powershell", "pwsh"):
-            lines.append("- Sintaxe PowerShell: encadeie comandos com ';' (não use '&&' nem '||'); variáveis são "
-                         "$env:NOME; barras normais nos caminhos funcionam; executável por caminho entre aspas "
-                         "precisa do operador &, ex.: & 'C:/x/app.exe' arg.")
-        lines.append("- Servidores iniciados por serve_start rodam no sistema do usuário: no navegador integrado abra "
-                     "http://host.docker.internal:PORTA; o usuário abre http://localhost:PORTA no navegador dele.")
-        lines.append("- Para executar no container Linux do Forja (python, git, node dele), passe target='container'.")
-    else:
-        why = ("o forja-runner está desligado" if not info else
-               f"o forja-runner falhou ({info.get('error')})" if not info.get("ok") else
-               "esta pasta não existe no sistema do usuário")
-        lines.append(f"- Comandos: {why}, então {shell_names} roda bash no container Linux do Forja "
-                     "(python, git, node). Pacotes instalados aqui ficam com binários Linux dentro da pasta do "
-                     "usuário: para npm install, venv ou servidores do projeto dele, sugira iniciar "
-                     "tools/forja-picker.cmd (Windows) ou tools/forja_runner.py e tente de novo.")
-        lines.append("- Servidores iniciados no container: no navegador integrado abra http://localhost:PORTA "
-                     "(o usuário não alcança de fora do container).")
+    vers = ", ".join(f"{k} {v}" for k, v in (info.get("versions") or {}).items() if v)
+    lines.append(f"- Sistema: {native.describe(info)}. {shell_names} executa aí, na pasta da conversa, com o shell "
+                 f"{info.get('shell')}." + (f" Instalado: {vers}." if vers else ""))
+    faltando = [k for k, v in (info.get("versions") or {}).items() if not v]
+    if faltando:
+        lines.append(f"- Não encontrado no PATH: {', '.join(faltando)}. Não tente usar; avise o usuário.")
+    if str(info.get("shell", "")).lower() in ("powershell", "pwsh"):
+        lines.append("- Sintaxe PowerShell: encadeie comandos com ';' (não use '&&' nem '||'); variáveis são "
+                     "$env:NOME; barras normais nos caminhos funcionam; executável por caminho entre aspas "
+                     "precisa do operador &, ex.: & 'C:/x/app.exe' arg.")
+    lines.append("- Servidores iniciados por serve_start ficam em http://localhost:PORTA, tanto para o navegador "
+                 "integrado quanto para o navegador do usuário.")
     return lines
 
 
@@ -482,8 +467,6 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         yield _event(conv_id, "error", f"Pasta de trabalho indisponível: {e}")
         yield {"type": "done"}
         return
-    # forja-runner ligado? Decide onde run_command/serve_* executam e o que o bloco Ambiente diz.
-    runner.INFO.set(await asyncio.to_thread(runner.refresh))
     # update_tasks roda em thread: publica a lista na UI pelo loop principal.
     main_loop = asyncio.get_running_loop()
 
@@ -538,8 +521,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 "effort": req.effort, "max_iterations": max_iterations,
                 "capabilities": sorted(caps), "vision_source": vision_source,
                 "capabilities_detected": sorted(detected) if detected is not None else None,
-                "runner": runner.describe(runner.current()),
-                "exec_target": "host" if runner.online() and workspace.to_host(workspace.root()) else "container",
+                "environment": native.describe(),
                 "blocked": blocked(caps) if agent else [],
                 "tools": [{"name": t.name, "mutating": t.mutating} for t in current_tools()]}
 

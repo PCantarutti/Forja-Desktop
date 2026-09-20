@@ -1,28 +1,39 @@
 """Configuração.
 
-Os valores vêm do .env e podem ser sobrescritos em tempo de execução pela tela de
-Configurações (settings.py aplica os valores salvos no banco nestes atributos). Por isso todo
-módulo deve ler `config.X` na hora de usar, nunca copiar o valor no import.
+Os valores vêm do ambiente (o Electron injeta FORJA_DATA/FORJA_WEB/FORJA_PORT ao subir o backend) e
+podem ser sobrescritos em tempo de execução pela tela de Configurações (settings.py aplica os
+valores salvos no banco nestes atributos). Por isso todo módulo deve ler `config.X` na hora de usar,
+nunca copiar o valor no import.
 """
 import os
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "/workspace"))  # pasta padrão (conversa sem pasta escolhida)
-WORKSPACE_HOST = os.getenv("WORKSPACE_HOST", "")  # o mesmo caminho visto no Windows, só para exibir
-PICKER_URL = os.getenv("FORJA_PICKER_URL", "http://127.0.0.1:3001")  # forja-picker (diálogo nativo), visto pelo navegador
-# forja-runner: comandos e servidores no sistema do usuário, visto pelo backend (container -> host)
-RUNNER_URL = os.getenv("FORJA_RUNNER_URL", "http://host.docker.internal:3002")
-RUNNER_TOKEN = os.getenv("FORJA_RUNNER_TOKEN", "")
-RUNNER_TOKEN_FILE = os.getenv("FORJA_RUNNER_TOKEN_FILE", "/config/runner-token")  # gerado pelo runner
-HOST_MOUNTS = os.getenv("HOST_MOUNTS", "")          # discos do Windows no container: "C=/host/c,D=/host/d"
-DB_PATH = os.getenv("DB_PATH", "/data/forja.db")
-MCP_CONFIG = Path(os.getenv("MCP_CONFIG", "/config/mcp.json"))
+
+def data_dir() -> Path:
+    """Onde ficam banco, mcp.json e logs. O Electron passa app.getPath('userData')."""
+    env = os.getenv("FORJA_DATA")
+    if env:
+        return Path(env)
+    base = os.getenv("APPDATA") or os.path.expanduser("~/.config")
+    return Path(base) / "Forja"
+
+
+DATA_DIR = data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# Pasta padrão (conversas sem pasta escolhida). Cada conversa escolhe a sua na interface.
+WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT") or Path.home() / "Forja")
+WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+DB_PATH = os.getenv("DB_PATH") or str(DATA_DIR / "forja.db")
+MCP_CONFIG = Path(os.getenv("MCP_CONFIG") or DATA_DIR / "mcp.json")
+_web = os.getenv("FORJA_WEB", "").strip()
+WEB_DIR = Path(_web) if _web else None  # build da interface; None = só API (modo dev com Vite)
 
 NUM_CTX = int(os.getenv("NUM_CTX", "32768"))
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "25"))
 MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", "1000000"))
 SHELL_TIMEOUT_MAX = int(os.getenv("SHELL_TIMEOUT_MAX", "300"))
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://searxng:8080")
+SEARXNG_URL = os.getenv("SEARXNG_URL", "")  # vazio = web_search usa o DuckDuckGo
 COMPACT_AT = float(os.getenv("COMPACT_AT", "0.8"))  # fração da janela que dispara a compactação
 
 # Navegador integrado
@@ -33,9 +44,9 @@ BROWSER_STREAM = os.getenv("BROWSER_STREAM", "png")                   # png (sem
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai
 PROVIDERS = {
     "ollama": {"id": "ollama", "name": "Ollama", "type": "ollama",
-               "url": os.getenv("OLLAMA_URL", "http://host.docker.internal:11434/v1"), "api_key": ""},
+               "url": os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/v1"), "api_key": ""},
     "lmstudio": {"id": "lmstudio", "name": "LM Studio", "type": "lmstudio",
-                 "url": os.getenv("LMSTUDIO_URL", "http://host.docker.internal:1234/v1"), "api_key": ""},
+                 "url": os.getenv("LMSTUDIO_URL", "http://127.0.0.1:1234/v1"), "api_key": ""},
 }
 
 DISABLED_TOOLS: set[str] = set()   # ferramentas desligadas na tela de Configurações

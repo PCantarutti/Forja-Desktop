@@ -1,7 +1,6 @@
 """Git da pasta da conversa: status, diff, commit com mensagem gerada pelo modelo, PR (gh) e worktree.
 
-Os comandos rodam onde o run_command rodaria (sistema do usuário via runner, senão container), na
-pasta da conversa. A mensagem de commit e o corpo do PR vão por arquivo (`.forja/`) para não brigar
+Os comandos rodam como os do run_command: no sistema do usuário, na pasta da conversa. A mensagem de commit e o corpo do PR vão por arquivo (`.forja/`) para não brigar
 com as aspas do PowerShell.
 """
 from __future__ import annotations
@@ -153,16 +152,7 @@ def worktree(root: Path, branch: str) -> dict:
     if not is_repo(root):
         raise ToolError("A pasta da conversa não é um repositório git.")
     top = Path(_ok(root, "git rev-parse --show-toplevel", 20).strip().replace("\\", "/"))
-    # `top` vem no formato de onde o git rodou (Windows ou container): traduz para o container para criar o nome.
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "forja"
-    name = f"{top.name}-{slug}"
-    if str(top)[1:3] == ":/":  # caminho do Windows: cria via git (que roda lá) e traduz depois
-        dest_host = f"{top.parent.as_posix()}/{name}"
-        _ok(root, f'git worktree add "{dest_host}" -b "{branch}"', 120)
-        return {"path": workspace.normalize(dest_host), "branch": branch}
-    dest = top.parent / name
+    dest = f"{top.parent.as_posix()}/{top.name}-{slug}"
     _ok(root, f'git worktree add "{dest}" -b "{branch}"', 120)
-    host = workspace.to_host(dest)
-    if not host:
-        raise ToolError(f"Worktree criado em {dest}, mas fora das pastas montadas: não dá para usá-lo como pasta da conversa.")
-    return {"path": host, "branch": branch}
+    return {"path": workspace.normalize(dest), "branch": branch}

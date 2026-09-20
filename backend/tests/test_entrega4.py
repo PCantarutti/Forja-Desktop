@@ -9,13 +9,13 @@ from app.tools import ToolError, active, resolve_path
 
 @pytest.fixture(autouse=True)
 def clean(tmp_path, monkeypatch):
-    drive = tmp_path / "hostc"
-    (drive / "Users" / "pedro" / "app").mkdir(parents=True)
-    monkeypatch.setattr(config, "HOST_MOUNTS", f"C={drive}")
+    """Pasta de conversa de verdade (rodando nativo, o caminho da conversa é o caminho do disco)."""
+    folder = tmp_path / "Users" / "pedro" / "app"
+    folder.mkdir(parents=True)
     monkeypatch.setattr(config, "WORKSPACE_ROOT", tmp_path / "padrao")
     (tmp_path / "padrao").mkdir()
     settings.reset()
-    yield drive
+    yield folder
     settings.reset()
     workspace.CURRENT.set(None)
 
@@ -37,75 +37,46 @@ def test_normalize_rejects(bad):
         workspace.normalize(bad)
 
 
-def test_roundtrip_host_container(clean):
-    p = workspace.to_container("C:/Users/pedro/app")
-    assert p == clean / "Users" / "pedro" / "app"
-    assert workspace.to_host(p) == "C:/Users/pedro/app"
-
-
-def test_default_folder_shows_windows_path(monkeypatch):
-    monkeypatch.setattr(config, "WORKSPACE_HOST", "C:/Users/pedro/Dev/forja-workspace")
-    assert workspace.to_host(config.WORKSPACE_ROOT / "a" / "b.txt") == "C:/Users/pedro/Dev/forja-workspace/a/b.txt"
-
-
-def test_unmounted_drive_is_explained():
-    with pytest.raises(workspace.WorkspaceError, match="não está dentro de uma pasta montada"):
-        workspace.to_container("D:/dados")
-
-
-# ------------------------------------------------ Linux/macOS
-
 @pytest.mark.parametrize("raw,expected", [("/home/pedro/app/", "/home/pedro/app"), ("/", "/"), ("//home//x", "/home/x")])
 def test_normalize_posix(raw, expected):
     assert workspace.normalize(raw) == expected
 
 
-def test_linux_mount_roundtrip(tmp_path, monkeypatch):
-    home = tmp_path / "hosthome"
-    (home / "app" / "src").mkdir(parents=True)
-    monkeypatch.setattr(config, "HOST_MOUNTS", f"/home/pedro={home}")
-    assert workspace.to_container("/home/pedro/app") == home / "app"
-    assert workspace.to_host(home / "app" / "src") == "/home/pedro/app/src"
-    assert workspace.roots() == [{"name": "/home/pedro", "path": "/home/pedro"}]
-    listing = workspace.list_dirs("/home/pedro/app")
-    assert listing["parent"] == "/home/pedro" and listing["dirs"][0]["path"] == "/home/pedro/app/src"
-    assert workspace.list_dirs("/home/pedro")["parent"] is None  # não sobe para fora do que está montado
-    with pytest.raises(workspace.WorkspaceError):
-        workspace.to_container("/home/outra")
-    # caminho absoluto do Linux dentro da pasta da conversa é aceito pelas ferramentas
-    workspace.CURRENT.set(workspace.resolve("/home/pedro/app"))
-    assert resolve_path(workspace.root(), "/home/pedro/app/src") == (home / "app" / "src").resolve()
-    with pytest.raises(ToolError, match="fora da pasta"):
-        resolve_path(workspace.root(), "/home/pedro/segredo")
+def test_resolve_and_to_host(clean):
+    assert workspace.resolve(str(clean)) == Path(workspace.normalize(str(clean)))
+    assert workspace.to_host(clean) == workspace.normalize(str(clean))
+    assert workspace.resolve(None) == config.WORKSPACE_ROOT  # conversa sem pasta escolhida
 
 
-def test_longest_mount_wins(tmp_path, monkeypatch):
-    a, b = tmp_path / "a", tmp_path / "b"
-    (a).mkdir(); (b / "x").mkdir(parents=True)
-    monkeypatch.setattr(config, "HOST_MOUNTS", f"C={a},C:/Users/pedro={b}")
-    assert workspace.to_container("C:/Users/pedro/x") == b / "x"
-    assert workspace.to_container("c:/users/PEDRO/x") == b / "x"  # Windows ignora maiúsculas
+def test_missing_folder_is_explained(clean):
+    with pytest.raises(workspace.WorkspaceError, match="A pasta não existe"):
+        workspace.resolve(str(clean / "nao-existe"))
 
 
 def test_list_dirs_and_parent(clean):
-    out = workspace.list_dirs("C:/Users")
-    assert out["parent"] == "C:/" and [d["name"] for d in out["dirs"]] == ["pedro"]
+    out = workspace.list_dirs(str(clean.parent))  # .../Users/pedro
+    assert out["parent"] == workspace.normalize(str(clean.parent.parent))
+    assert [d["name"] for d in out["dirs"]] == ["app"]
+
+
+def test_roots_are_real(clean):
+    assert all(Path(r["path"]).is_dir() for r in workspace.roots())
 
 
 def test_tools_follow_conversation_folder(clean):
-    workspace.CURRENT.set(workspace.resolve("C:/Users/pedro/app"))
+    workspace.CURRENT.set(workspace.resolve(str(clean)))
     from app.tools import run_tool
     run_tool("write_file", {"path": "a.txt", "content": "x"})
-    assert (clean / "Users" / "pedro" / "app" / "a.txt").read_text() == "x"
-    # caminho do Windows dentro da pasta funciona; fora dela é bloqueado
-    assert resolve_path(workspace.root(), "C:/Users/pedro/app/a.txt").name == "a.txt"
+    assert (clean / "a.txt").read_text() == "x"
+    # caminho absoluto dentro da pasta funciona; fora dela é bloqueado
+    assert resolve_path(workspace.root(), str(clean / "a.txt")).name == "a.txt"
     with pytest.raises(ToolError, match="fora da pasta"):
-        resolve_path(workspace.root(), "C:/Users/pedro/segredo.txt")
+        resolve_path(workspace.root(), str(clean.parent / "segredo.txt"))
 
 
-def test_system_prompt_shows_windows_path(clean):
-    workspace.CURRENT.set(workspace.resolve("C:/Users/pedro/app"))
-    assert "C:/Users/pedro/app" in agent.system_prompt("native")
+def test_system_prompt_shows_folder(clean):
+    workspace.CURRENT.set(workspace.resolve(str(clean)))
+    assert workspace.normalize(str(clean)) in agent.system_prompt("native")
 
 
 # ------------------------------------------------ checkpoints
@@ -128,7 +99,8 @@ def test_checkpoint_restores_edit_and_removes_new_file(tmp_path):
     checkpoints.record(conv, 10, old)  # segunda escrita no mesmo turno não sobrescreve o "antes"
     old.write_text("depois 2")
     new.write_text("criado")
-    assert set(checkpoints.summary(conv)[10]) == {str(old), str(new)}
+    # summary devolve o caminho como a UI mostra (barras normais)
+    assert set(checkpoints.summary(conv)[10]) == {workspace.to_host(old), workspace.to_host(new)}
     restored = checkpoints.restore_from(conv, 10)
     assert old.read_text() == "antes" and not new.exists() and len(restored) == 2
     assert checkpoints.summary(conv) == {}

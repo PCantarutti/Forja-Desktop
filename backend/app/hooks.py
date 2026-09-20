@@ -5,7 +5,7 @@
         {"tools": ["run_command"], "command": "echo rodou {tool}"}
     ]}
 
-`{path}` e `{tool}` são substituídos. O comando roda onde o run_command roda (runner ou container), na
+`{path}` e `{tool}` são substituídos. O comando roda como o run_command, na
 pasta da conversa, com timeout curto; a saída (resumida) é anexada ao resultado da ferramenta para o
 modelo ver (ex.: erro de lint). Só ferramentas que terminaram com sucesso disparam hooks.
 """

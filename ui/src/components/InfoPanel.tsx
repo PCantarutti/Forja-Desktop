@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { RunnerStatus, Settings, ToolsSent } from "../types";
+import type { Settings, ToolsSent } from "../types";
 import { Chevron, Wrench } from "./icons";
 
 export type ToolInfo = { name: string; description?: string; mutating: boolean; always_ask?: boolean; source?: string; enabled?: boolean };
@@ -119,7 +119,6 @@ export default function InfoPanel(props: {
   onToolMode: (m: string) => void;
   vision: string;
   onVision: (v: string) => void;
-  runner?: RunnerStatus | null;
   allTools: ToolInfo[];
   sent: ToolsSent | null;
   mcp: McpStatus | null;
@@ -156,22 +155,8 @@ export default function InfoPanel(props: {
         <Row k="Visão">{visionLabel}</Row>
         {agent && (
           <Row k="Comandos em">
-            <span
-              title={
-                (sent?.runner ?? props.runner?.label) === "desligado"
-                  ? "forja-runner desligado: run_command roda no container. Inicie tools/forja-picker.cmd (Windows) ou tools/forja_runner.py para executar no seu sistema."
-                  : "forja-runner ligado: run_command e serve_start executam no seu sistema, na pasta da conversa."
-              }
-            >
-              {sent && sameModel
-                ? sent.exec_target === "host"
-                  ? `seu sistema · ${sent.runner}`
-                  : `container · runner ${sent.runner ?? "desligado"}`
-                : props.runner
-                  ? props.runner.online
-                    ? `seu sistema · ${props.runner.label}`
-                    : `container · runner ${props.runner.label}`
-                  : "…"}
+            <span title="run_command, serve_start e o Terminal rodam na sua máquina, na pasta da conversa.">
+              {sent?.environment ?? "…"}
             </span>
           </Row>
         )}

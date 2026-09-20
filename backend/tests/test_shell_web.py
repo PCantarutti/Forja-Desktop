@@ -1,12 +1,8 @@
-import sys
-
 import pytest
 
 import app.shell  # noqa: F401  (registra run_command)
 from app.tools import REGISTRY, ToolError, preview_tool, run_tool
 from app.web import check_public_url, html_to_text
-
-linux = pytest.mark.skipif(sys.platform == "win32", reason="shell roda no container Linux")
 
 
 # ------------------------------------------------ run_command
@@ -14,25 +10,6 @@ linux = pytest.mark.skipif(sys.platform == "win32", reason="shell roda no contai
 def test_shell_registered_and_always_asks():
     t = REGISTRY["run_command"]
     assert t.mutating and t.always_ask
-
-
-@linux
-def test_shell_ok_uses_workspace_cwd(tmp_path):
-    (tmp_path / "a.txt").write_text("x")
-    out = run_tool("run_command", {"command": "ls && echo fim"}, tmp_path)
-    assert out.startswith("exit code: 0") and "a.txt" in out and "fim" in out
-
-
-@linux
-def test_shell_nonzero_exit_is_error(tmp_path):
-    with pytest.raises(ToolError, match="exit code: 3"):
-        run_tool("run_command", {"command": "echo ruim; exit 3"}, tmp_path)
-
-
-@linux
-def test_shell_timeout_kills(tmp_path):
-    with pytest.raises(ToolError, match="Timeout"):
-        run_tool("run_command", {"command": "sleep 30", "timeout": 1}, tmp_path)
 
 
 def test_shell_cwd_confined(tmp_path):
@@ -43,7 +20,6 @@ def test_shell_cwd_confined(tmp_path):
 def test_shell_preview(tmp_path):
     (tmp_path / "sub").mkdir()
     pv = preview_tool("run_command", {"command": "pytest -q", "cwd": "sub"}, tmp_path)
-    # fora de um disco montado, mostra o caminho do container
     assert pv["kind"] == "command" and pv["text"] == "pytest -q" and pv["path"].replace("\\", "/").endswith("/sub")
 
 
