@@ -95,7 +95,7 @@ async function playwrightChromium() {
 
 function buildUi() {
   step("build da interface");
-  const ui = path.join(ROOT, "ui");
+  const ui = path.join(ROOT, "frontend");
   run("npm", [fs.existsSync(path.join(ui, "node_modules")) ? "install" : "ci"], { cwd: ui, shell: true });
   run("npm", ["run", "build"], { cwd: ui, shell: true });
   fs.rmSync(path.join(RES, "web"), { recursive: true, force: true });

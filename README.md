@@ -208,7 +208,7 @@ Botão **Configurações** no rodapé da barra lateral. O que você muda ali fic
 
 **Chaves de API** ficam no SQLite (`%APPDATA%\Forja\forja.db`) e **nunca voltam para a interface**: a tela só mostra se existe chave e os 4 últimos caracteres. Como é uso pessoal na sua máquina, elas são gravadas sem criptografia; quem tiver acesso ao seu perfil do Windows lê o arquivo.
 
-Para acrescentar uma configuração nova no futuro: adicione a chave em `ENV_DEFAULTS` (e a regra em `NUMBERS`, se for número) em `backend/app/settings.py`, aplique em `apply()` e mostre o campo na aba certa de `ui/src/components/Settings.tsx`.
+Para acrescentar uma configuração nova no futuro: adicione a chave em `ENV_DEFAULTS` (e a regra em `NUMBERS`, se for número) em `backend/app/settings.py`, aplique em `apply()` e mostre o campo na aba certa de `frontend/src/components/Settings.tsx`.
 
 ### Memória da IA
 
@@ -267,11 +267,11 @@ py -3.12 -m venv .venv; .venv\Scripts\pip install -r requirements.txt
 .venv\Scripts\python -m pytest
 
 # interface + app
-cd ..\ui; npm install; npm run build
+cd ..\frontend; npm install; npm run build
 cd ..; npm install; npm run dev
 ```
 
-`npm run dev` sobe o Electron com o backend do venv e a interface de `ui/dist`. Para mexer na interface com hot reload, rode o backend sozinho (`.venv\Scripts\python -m uvicorn app.main:app --port 8000` dentro de `backend/`) e, em outro terminal, `cd ui; npx vite` — o Vite faz proxy de `/api` (mude o alvo com `$env:API_URL`).
+`npm run dev` sobe o Electron com o backend do venv e a interface de `frontend/dist`. Para mexer na interface com hot reload, rode o backend sozinho (`.venv\Scripts\python -m uvicorn app.main:app --port 8000` dentro de `backend/`) e, em outro terminal, `cd frontend; npx vite` — o Vite faz proxy de `/api` (mude o alvo com `$env:API_URL`).
 
 ### Gerar o instalador
 
@@ -340,7 +340,7 @@ backend/app/
   uploads.py     anexos do chat (arquivos e imagens para visão)
   memory.py      leitura/limpeza da memória (via servidor MCP de grafo)
   main.py        rotas FastAPI + serviço da interface
-ui/src/          React + Tailwind (App, Sidebar, RightPanel, InfoPanel, BrowserPanel, MessageView)
+frontend/src/    React + Tailwind (App, Sidebar, RightPanel, InfoPanel, BrowserPanel, MessageView)
 ```
 
 Para adicionar uma ferramenta, registre um `Tool(name, description, parameters, handler, mutating, preview)` em `tools.py`. O loop, o painel e o card de aprovação passam a usá-la automaticamente.

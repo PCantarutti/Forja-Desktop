@@ -1,7 +1,7 @@
 /**
- * Roda o app sem empacotar: Electron + o backend do venv de backend/.venv, servindo ui/dist.
+ * Roda o app sem empacotar: Electron + o backend do venv de backend/.venv, servindo frontend/dist.
  *
- * Para mexer na interface com hot reload, deixe `npx vite` rodando em ui/ (ele faz proxy de /api)
+ * Para mexer na interface com hot reload, deixe `npx vite` rodando em frontend/ (ele faz proxy de /api)
  * em vez de usar este script.
  */
 import { spawn } from "node:child_process";
@@ -10,10 +10,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dist = path.join(ROOT, "ui", "dist");
+const dist = path.join(ROOT, "frontend", "dist");
 
 if (!fs.existsSync(dist)) {
-  console.error("ui/dist não existe. Rode antes:  cd ui && npm install && npm run build");
+  console.error("frontend/dist não existe. Rode antes:  cd frontend && npm install && npm run build");
   process.exit(1);
 }
 

@@ -1,4 +1,4 @@
-"""Gera build/icon.png (1024x1024) a partir de ui/public/favicon.svg.
+"""Gera build/icon.png (1024x1024) a partir de frontend/public/favicon.svg.
 
 O Chromium do Playwright já vem no bundle, então ele mesmo rasteriza o SVG: nenhuma dependência
 nova. O electron-builder converte o PNG em .ico na hora de gerar o instalador.
@@ -8,7 +8,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
-SVG = ROOT / "ui" / "public" / "favicon.svg"
+SVG = ROOT / "frontend" / "public" / "favicon.svg"
 OUT = ROOT / "build" / "icon.png"
 SIZE = 1024
 
@@ -19,7 +19,7 @@ HTML = """<!doctype html><meta charset="utf-8">
 
 def main() -> None:
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    page_html = ROOT / "ui" / "public" / "_icon.html"
+    page_html = ROOT / "frontend" / "public" / "_icon.html"
     page_html.write_text(HTML.format(size=SIZE), encoding="utf-8")
     try:
         with sync_playwright() as pw:
