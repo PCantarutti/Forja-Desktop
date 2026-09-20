@@ -4,8 +4,8 @@ São dois repositórios com a mesma história até `5fc50e8`:
 
 | Repo | Pasta | O que é |
 |---|---|---|
-| Forja | `C:\Projetos\aquiles` | versão Docker (backend + searxng + nginx), remoto `origin` no GitHub |
-| Forja Desktop | `C:\Projetos\forja-desktop` | versão nativa do Windows (Electron + NSIS) |
+| Forja (web/Docker) | `C:\Projetos\Forja\forja-web` | versão Docker (backend + searxng + nginx), remoto `origin` no GitHub |
+| Forja Desktop | `C:\Projetos\Forja\forja-desktop` | versão nativa do Windows (Electron + NSIS) |
 
 Cada um enxerga o outro como remoto (`docker` lá, `desktop` cá), então **toda mudança compartilhada viaja por `git cherry-pick`** — não por copiar arquivo.
 
