@@ -33,10 +33,14 @@ async function fetchPython() {
   if (!asset) throw new Error(`nenhum build ${PY_VERSION} x86_64-pc-windows-msvc (install_only) nesse release`);
   const tgz = path.join(RES, asset.name);
   fs.mkdirSync(RES, { recursive: true });
-  const dl = await fetch(asset.browser_download_url);
-  if (!dl.ok) throw new Error(`falha ao baixar ${asset.name}: HTTP ${dl.status}`);
-  fs.writeFileSync(tgz, Buffer.from(await dl.arrayBuffer()));
-  run("tar", ["-xzf", tgz, "-C", RES]); // o tar do Windows 11 (bsdtar) extrai .tar.gz; cria python/
+  if (!fs.existsSync(tgz)) {
+    const dl = await fetch(asset.browser_download_url);
+    if (!dl.ok) throw new Error(`falha ao baixar ${asset.name}: HTTP ${dl.status}`);
+    fs.writeFileSync(tgz, Buffer.from(await dl.arrayBuffer()));
+  }
+  // O tar do Windows (bsdtar) entende C:\...; o tar do Git Bash acha que é um host remoto.
+  const winTar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  run(fs.existsSync(winTar) ? winTar : "tar", ["-xzf", asset.name], { cwd: RES }); // cria python/
   fs.rmSync(tgz);
   if (!fs.existsSync(PY)) throw new Error("o arquivo extraiu, mas não achei resources/python/python.exe");
 }
@@ -47,11 +51,46 @@ function pipInstall() {
   run(PY, ["-m", "pip", "install", "--no-warn-script-location", "-r", path.join(ROOT, "backend", "requirements.txt")]);
 }
 
-function playwrightChromium() {
+/**
+ * Chromium do navegador integrado.
+ *
+ * O download é feito aqui, com fetch, em vez de `playwright install`: o downloader embutido do
+ * Playwright trava nesta rede (estoura o timeout sem receber um byte, mesmo com 300 s). O `--dry-run`
+ * dele diz o que baixar e para onde; o resto é descompactar e deixar o marcador que ele procura.
+ */
+async function playwrightChromium() {
   step("baixando o Chromium do navegador integrado");
-  run(PY, ["-m", "playwright", "install", "--only-shell", "chromium"], {
-    env: { PLAYWRIGHT_BROWSERS_PATH: path.join(RES, "ms-playwright") },
-  });
+  const browsers = path.join(RES, "ms-playwright");
+  const dry = execFileSync(PY, ["-m", "playwright", "install", "--only-shell", "--dry-run", "chromium"], {
+    cwd: ROOT,
+    env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: browsers },
+  }).toString();
+
+  const pacotes = [];
+  for (const bloco of dry.split(/\n(?=\S)/)) {
+    const dir = bloco.match(/Install location:\s+(.+)/)?.[1]?.trim();
+    const url = bloco.match(/Download url:\s+(\S+)/)?.[1];
+    if (dir && url) pacotes.push({ dir, url });
+  }
+  if (!pacotes.length) throw new Error("não consegui ler o --dry-run do playwright");
+
+  const winTar = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  for (const { dir, url } of pacotes) {
+    const marker = path.join(dir, "INSTALLATION_COMPLETE"); // é o que o Playwright checa
+    if (fs.existsSync(marker)) {
+      console.log(`já instalado: ${path.basename(dir)}`);
+      continue;
+    }
+    console.log(`${path.basename(dir)} <- ${url}`);
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`HTTP ${r.status} ao baixar ${url}`);
+    const zip = path.join(RES, path.basename(new URL(url).pathname));
+    fs.writeFileSync(zip, Buffer.from(await r.arrayBuffer()));
+    fs.mkdirSync(dir, { recursive: true });
+    run(fs.existsSync(winTar) ? winTar : "tar", ["-xf", zip], { cwd: dir });
+    fs.rmSync(zip);
+    fs.writeFileSync(marker, "");
+  }
 }
 
 function buildUi() {
@@ -85,7 +124,7 @@ function makeIcon() {
 
 await fetchPython();
 pipInstall();
-playwrightChromium();
+await playwrightChromium();
 makeIcon();
 buildUi();
 copyBackend();

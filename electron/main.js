@@ -50,10 +50,15 @@ function startBackend() {
     ...process.env,
     FORJA_DATA: USER_DATA,
     FORJA_WEB: process.env.FORJA_WEB ?? path.join(ROOT, "web"),
-    PLAYWRIGHT_BROWSERS_PATH: path.join(ROOT, "ms-playwright"),
     PYTHONUNBUFFERED: "1",
     PYTHONUTF8: "1",
   };
+  // Empacotado, o Chromium vem em resources/ms-playwright. Em dev, usa o de resources/ se já foi
+  // baixado; senão deixa o Playwright procurar no cache dele.
+  const browsers = [path.join(ROOT, "ms-playwright"), path.join(ROOT, "resources", "ms-playwright")].find((p) =>
+    fs.existsSync(p),
+  );
+  if (browsers) env.PLAYWRIGHT_BROWSERS_PATH = browsers;
   backend = spawn(pythonExe(), ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)], {
     cwd: backendDir(),
     env,

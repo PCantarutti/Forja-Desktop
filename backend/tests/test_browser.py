@@ -1,5 +1,6 @@
 """Navegador integrado: bloqueio por capacidade (visão), imagens de ferramenta no histórico, estimativa."""
 import asyncio
+import os
 import sys
 
 import pytest
@@ -170,9 +171,11 @@ def test_estimate_counts_image_flat():
     assert _estimate([{"role": "user", "content": "abcd" * 100}], None) == pytest.approx(100 + 8, abs=10)
 
 
-# ------------------------------------------------ smoke com Chromium (só no container)
+# ------------------------------------------------ smoke com Chromium
+# Precisa do Chromium baixado: rode `npm run prepare-resources` (ou `playwright install --only-shell
+# chromium`) e chame o pytest com FORJA_BROWSER_TESTS=1 e PLAYWRIGHT_BROWSERS_PATH apontado para ele.
 
-@pytest.mark.skipif(sys.platform == "win32", reason="chromium só está instalado no container")
+@pytest.mark.skipif(not os.getenv("FORJA_BROWSER_TESTS"), reason="smoke do Chromium: defina FORJA_BROWSER_TESTS=1")
 def test_snapshot_refs_click_and_tabs_work():
     pytest.importorskip("playwright")
 

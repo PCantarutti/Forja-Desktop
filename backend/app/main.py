@@ -915,5 +915,7 @@ if config.WEB_DIR and config.WEB_DIR.is_dir():
 
     @app.get("/{path:path}")
     def spa(path: str):
+        if path.startswith("api/"):  # rota de API inexistente: 404, e não a interface
+            raise HTTPException(404, "Rota não encontrada")
         f = config.WEB_DIR / path
         return FileResponse(f if path and f.is_file() else config.WEB_DIR / "index.html")
