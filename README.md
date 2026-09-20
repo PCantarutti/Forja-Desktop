@@ -279,7 +279,14 @@ cd ..; npm install; npm run dev
 npm run dist
 ```
 
-`scripts/prepare.mjs` baixa o CPython portátil (python-build-standalone), instala as dependências, baixa o `chromium-headless-shell`, gera o ícone, builda a interface e copia o backend para `resources/`. Depois o electron-builder monta `dist/Forja-Setup-<versão>.exe` (~350-400 MB). Tudo em `resources/` e `build/` é gerado: pode apagar e rodar de novo.
+Se o electron-builder parar em `Cannot create symbolic link` ao extrair o `winCodeSign`, é o Windows recusando os symlinks do macOS que vêm nesse pacote. Ligue o **Modo de Desenvolvedor** (Configurações › Sistema › Para desenvolvedores) e rode de novo, ou extraia o pacote uma vez sem a parte do macOS:
+
+```powershell
+$cache = "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign"
+node_modules\7zip-bin\win\x64\7za.exe x -y "-o$cache\winCodeSign-2.6.0" "$cache\winCodeSign-2.6.0.7z" "-x!darwin*"
+```
+
+`scripts/prepare.mjs` baixa o CPython portátil (python-build-standalone), instala as dependências, baixa o `chromium-headless-shell`, gera o ícone, builda a interface e copia o backend para `resources/`. Depois o electron-builder monta `dist/Forja-Setup-<versão>.exe` (~245 MB; ~900 MB instalado). Tudo em `resources/` e `build/` é gerado: pode apagar e rodar de novo.
 
 ### Variáveis de ambiente
 
