@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ImageOpts, ImageParams, Inference, Job, LlamaParams, LocalModel, LocalState, ModelView }
+import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView }
   from "../types";
 import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
 import ModelSearch from "./ModelSearch";
@@ -42,6 +42,7 @@ const AJUDA: Record<string, string> = {
   mlock: "Trava o modelo na memória para o Windows não empurrar para o disco.",
   mmap: "Mapeia o arquivo em vez de copiar tudo para a RAM. Ligado carrega mais rápido; com especialistas na CPU o llama.cpp sugere desligar.",
   mmproj: "Arquivo mmproj-*.gguf do mesmo modelo: liga a visão, e aí as imagens do chat chegam ao modelo.",
+  fit: "Deixa o llama.cpp reduzir sozinho o que não couber na memória (-fit on). A estimativa acima é estimativa; ele mede na hora.",
   temperature: "Quanto o modelo arrisca. Baixo (0,2) responde sempre parecido e obedece mais; alto (1,0+) inventa mais. Para agente, baixo costuma ser melhor.",
   top_k: "Só os K tokens mais prováveis entram no sorteio. 0 desliga o corte.",
   top_p: "Corta a cauda: sorteia entre os tokens que somam P de probabilidade. 1 desliga.",
@@ -61,7 +62,10 @@ function size(n: number): string {
 const gb = (n: number) => `${(n / 2 ** 30).toFixed(2)} GB`;
 
 /** Painel IA local: runtimes do llama.cpp/sd.cpp, modelos .gguf, carga e geração de imagem. */
-export default function LocalPanel(props: { onRunning: (running: boolean) => void }) {
+export default function LocalPanel(props: {
+  onRunning: (running: boolean, alias: string) => void;
+  chatModel?: string; // modelo escolhido no chat: a aba Inferência cai nele quando não há local carregado
+}) {
   const [st, setSt] = useState<LocalState | null>(null);
   const [tab, setTab] = useState<SubTab>("Modelos");
   const [error, setError] = useState("");
@@ -70,7 +74,7 @@ export default function LocalPanel(props: { onRunning: (running: boolean) => voi
     try {
       const s = await api.get<LocalState>("/local");
       setSt(s);
-      props.onRunning(s.server.running);
+      props.onRunning(s.server.running, s.server.alias || "");
     } catch (e: any) {
       setError(e.message);
     }
@@ -86,7 +90,7 @@ export default function LocalPanel(props: { onRunning: (running: boolean) => voi
 
   return (
     <div className="flex h-full flex-col text-xs">
-      {st.server.loading?.percent !== undefined && <LoadingOverlay loading={st.server.loading} />}
+      {st.server.loading?.percent !== undefined && <LoadingOverlay loading={st.server.loading} onDone={refresh} />}
       <div className="flex shrink-0 gap-1 border-b border-line px-3 py-1.5">
         {SUBTABS.map((t) => (
           <button
@@ -107,7 +111,7 @@ export default function LocalPanel(props: { onRunning: (running: boolean) => voi
         )}
         <Jobs jobs={st.jobs} onDone={refresh} />
         {tab === "Modelos" && <Models st={st} onDone={refresh} onError={setError} />}
-        {tab === "Inferência" && <Inferencia st={st} onError={setError} />}
+        {tab === "Inferência" && <Inferencia st={st} chatModel={props.chatModel} onError={setError} />}
         {tab === "Baixar" && <Downloader st={st} onDone={refresh} onError={setError} />}
         {tab === "Imagem" && <ImageTab st={st} onDone={refresh} onError={setError} />}
       </div>
@@ -156,10 +160,10 @@ function ErroDeCarga(props: { erro: { message: string; log: string; path: string
 }
 
 /** Barra de carregamento no alto da janela, por cima de tudo, enquanto o modelo sobe. */
-function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["loading"]> }) {
+function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["loading"]>; onDone: () => void }) {
   const l = props.loading;
   return (
-    <div className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center">
+    <div className="fixed inset-x-0 top-3 z-50 flex justify-center">
       <div className="w-80 rounded-2xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-fg">Carregando {l.name}</span>
@@ -168,9 +172,17 @@ function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["load
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-raised">
           <div className="h-full bg-sky-500 transition-[width] duration-500" style={{ width: `${l.percent}%` }} />
         </div>
-        <p className="mt-1 text-faint">
-          {l.elapsed}s de ~{l.eta}s estimados · lendo o modelo do disco
-        </p>
+        <div className="mt-1 flex items-center gap-2 text-faint">
+          <span>
+            {l.elapsed}s de ~{l.eta}s estimados
+          </span>
+          <button
+            className="ml-auto underline hover:text-fg"
+            onClick={() => api.post("/local/cancel-load").then(props.onDone)}
+          >
+            cancelar
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -198,12 +210,32 @@ function Runtime(props: { st: LocalState; kind: "llama" | "sd"; onDone: () => vo
 
   if (info.installed)
     return (
-      <p className="text-faint">
-        {nome} instalado ({info.backend}).{" "}
+      <div className="flex items-center gap-2 text-faint">
+        <span className="shrink-0">{nome}</span>
+        <select
+          className={`${campo} w-auto py-0.5`}
+          value={info.chosen || info.backend}
+          title="Motor em uso. Trocar não baixa nada: os instalados ficam lado a lado."
+          onChange={(e) =>
+            api
+              .put("/local/runtime", { kind: props.kind, backend: e.target.value })
+              .then(props.onDone)
+              .catch((err) => props.onError(err.message))
+          }
+        >
+          {info.available.map((a) => (
+            <option key={a.backend} value={a.backend}>
+              {a.backend}
+            </option>
+          ))}
+        </select>
         <button className="underline hover:text-fg" onClick={install} disabled={busy}>
           atualizar
         </button>
-      </p>
+        <span className="ml-auto truncate" title="Mais motores em Configurações › Runtime">
+          {info.available.find((a) => a.backend === (info.chosen || info.backend))?.version}
+        </span>
+      </div>
     );
 
   return (
@@ -649,6 +681,7 @@ Não dá para desfazer.`)) return;
                 <Num label="Semente" chave="seed" value={form.seed} onChange={(v) => set("seed", v)} mudado={mudou("seed")} onReset={() => reset("seed")} hint="0 = aleatória" />
                 <Num label="RoPE freq. base" chave="rope_freq_base" value={form.rope_freq_base} onChange={(v) => set("rope_freq_base", v)} mudado={mudou("rope_freq_base")} onReset={() => reset("rope_freq_base")} hint="0 = automático" />
                 <Num label="RoPE escala" chave="rope_freq_scale" value={form.rope_freq_scale} onChange={(v) => set("rope_freq_scale", v)} mudado={mudou("rope_freq_scale")} onReset={() => reset("rope_freq_scale")} hint="0 = automático" />
+                <Toggle label="Ajustar para caber na memória" chave="fit" value={form.fit} onChange={(v) => set("fit", v)} mudado={mudou("fit")} onReset={() => reset("fit")} />
                 <Toggle label="Cache KV unificado" chave="kv_unified" value={form.kv_unified} onChange={(v) => set("kv_unified", v)} mudado={mudou("kv_unified")} onReset={() => reset("kv_unified")} />
                 <Toggle label="Descarregar cache KV para a GPU" chave="no_kv_offload" value={!form.no_kv_offload} onChange={(v) => set("no_kv_offload", !v)} mudado={mudou("no_kv_offload")} onReset={() => reset("no_kv_offload")} />
                 <Toggle label="Manter modelo na memória" chave="mlock" value={form.mlock} onChange={(v) => set("mlock", v)} mudado={mudou("mlock")} onReset={() => reset("mlock")} />
@@ -793,16 +826,22 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
 
 /** Amostragem por modelo, igual à aba Inference do LM Studio. Fica salva em model_settings, então vale
  *  para esse modelo em qualquer conversa — e também quando ele vier do Ollama ou do LM Studio. */
-function Inferencia(props: { st: LocalState; onError: (e: string) => void }) {
-  const alvo = props.st.server.running ? props.st.server.path || "" : props.st.last;
-  const [view, setView] = useState<ModelView | null>(null);
+function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: string) => void }) {
+  // Modelo local carregado > último local usado > o que está escolhido no chat (Ollama, LM Studio...).
+  const caminho = props.st.server.running ? props.st.server.path || "" : props.st.last;
+  const nome = props.st.server.running ? props.st.server.alias || "" : "";
+  const [view, setView] = useState<InferenceView | null>(null);
   const [form, setForm] = useState<Inference | null>(null);
   const [salvo, setSalvo] = useState("");
+  const alvo = caminho || props.chatModel || "";
 
   useEffect(() => {
     if (!alvo) return;
-    api
-      .post<ModelView>("/local/model", { path: alvo, params: {} })
+    const nomeModelo = nome || (caminho ? "" : props.chatModel || "");
+    const pedido = caminho
+      ? api.get<InferenceView>(`/local/inference?path=${encodeURIComponent(caminho)}&model=${encodeURIComponent(nomeModelo || caminho.split(/[\\/]/).pop()!.replace(/\.gguf$/i, ""))}`)
+      : api.get<InferenceView>(`/local/inference?model=${encodeURIComponent(props.chatModel!)}`);
+    pedido
       .then((v) => {
         setView(v);
         setForm(v.inference);
@@ -810,7 +849,8 @@ function Inferencia(props: { st: LocalState; onError: (e: string) => void }) {
       .catch((e) => props.onError(e.message));
   }, [alvo]);
 
-  if (!alvo) return <p className="text-muted">Carregue um modelo na aba Modelos para ajustar a amostragem dele.</p>;
+  if (!alvo)
+    return <p className="text-muted">Escolha um modelo no chat ou carregue um local para ajustar a amostragem dele.</p>;
   if (!view || !form) return <p className="text-muted">Carregando…</p>;
 
   const d = view.inference_defaults;
@@ -821,7 +861,7 @@ function Inferencia(props: { st: LocalState; onError: (e: string) => void }) {
   const reset = (k: keyof Inference) => set(k, d[k] as never);
   const mudou = (k: keyof Inference) => JSON.stringify(form[k]) !== JSON.stringify(d[k]);
 
-  async function salvar(v: ModelView, atual: Inference) {
+  async function salvar(v: InferenceView, atual: Inference) {
     // Só o que saiu do padrão vai para o banco: se o padrão do modelo mudar, o resto acompanha.
     const fora = (Object.keys(d) as (keyof Inference)[]).filter(mudou);
     try {
@@ -839,7 +879,8 @@ function Inferencia(props: { st: LocalState; onError: (e: string) => void }) {
     <section className={card}>
       <p className="truncate font-medium text-fg">{view.model}</p>
       <p className="mt-0.5 text-faint">
-        Vale para este modelo em qualquer conversa. O padrão de cada campo é o que o próprio .gguf recomenda.
+        Vale para este modelo em qualquer conversa e em qualquer provedor. O padrão de cada campo é o que o próprio
+        .gguf recomenda — e, quando não há arquivo local, o padrão do llama.cpp.
       </p>
       <div className="mt-3 flex flex-col gap-2.5">
         <Num label="Temperatura" chave="temperature" value={form.temperature} max={2} step={0.05}

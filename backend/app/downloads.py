@@ -7,6 +7,7 @@ painel já faz poll por outros motivos.
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 import time
 import uuid
@@ -94,18 +95,35 @@ def list_jobs() -> list[dict]:
 
 # ------------------------------------------------------------------ download
 
-def _fetch(url: str, dest: Path, job: dict, base: int, total_all: int) -> None:
-    """Baixa uma URL para `dest` (via .part), somando `base` no progresso do job."""
+def _fetch(url: str, dest: Path, job: dict, base: int, total_all: int, headers: dict | None = None) -> None:
+    """Baixa uma URL para `dest` (via .part), somando `base` no progresso do job.
+
+    Se já existe um .part, continua de onde parou (Range). Modelo tem dezenas de GB: recomeçar do
+    zero porque a rede piscou é o tipo de coisa que faz a pessoa desistir.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(dest.suffix + ".part")
+    ja_tem = part.stat().st_size if part.exists() else 0
+    cabecalho = dict(headers or {})
+    if ja_tem:
+        cabecalho["Range"] = f"bytes={ja_tem}-"
     try:
-        with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(30, read=120)) as r:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(30, read=120),
+                          headers=cabecalho) as r:
+            if r.status_code == 416:  # já estava inteiro
+                ja_tem = 0 if not part.exists() else ja_tem
+                raise _Pronto()
             if r.status_code >= 400:
                 raise RuntimeError(f"HTTP {r.status_code} em {url}")
-            size = int(r.headers.get("content-length") or 0)
-            update(job["id"], total=total_all or (base + size))
-            got = 0
-            with open(part, "wb") as f:
+            retomou = r.status_code == 206
+            if ja_tem and not retomou:
+                ja_tem = 0  # servidor ignorou o Range: recomeça, mas só depois de saber disso
+            size = int(r.headers.get("content-length") or 0) + (ja_tem if retomou else 0)
+            update(job["id"], total=total_all or (base + size), detail=dest.name + (" (retomando)" if retomou else ""))
+            _espaco(dest.parent, size - ja_tem)
+            got = ja_tem
+            update(job["id"], done=base + got)
+            with open(part, "ab" if retomou else "wb") as f:
                 for chunk in r.iter_bytes(1 << 20):
                     if cancelled(job["id"]):
                         raise _Cancelled()
@@ -114,17 +132,38 @@ def _fetch(url: str, dest: Path, job: dict, base: int, total_all: int) -> None:
                     update(job["id"], done=base + got)
         if cancelled(job["id"]):  # cancelado entre o último chunk e o fim: nada de arquivo final
             raise _Cancelled()
-    except BaseException:
-        part.unlink(missing_ok=True)  # cancelado, rede caiu, disco cheio: não deixa .part no meio dos modelos
+    except _Pronto:
+        pass
+    except _Cancelled:
+        part.unlink(missing_ok=True)  # cancelou de propósito: limpa o rastro
         raise
+    except BaseException:
+        raise  # rede caiu/disco cheio: o .part FICA, e a próxima tentativa continua dele
     os.replace(part, dest)
+
+
+class _Pronto(Exception):
+    """O servidor disse que o arquivo já está inteiro no .part."""
+
+
+def _espaco(pasta: Path, precisa: int) -> None:
+    """Sem espaço, o download só falha lá na frente, depois de 20 GB baixados."""
+    if precisa <= 0:
+        return
+    try:
+        livre = shutil.disk_usage(pasta).free
+    except OSError:
+        return
+    if livre < precisa + (500 << 20):
+        raise RuntimeError(f"Espaço insuficiente em {pasta}: faltam "
+                           f"{(precisa + (500 << 20) - livre) / 2 ** 30:.1f} GB")
 
 
 class _Cancelled(Exception):
     pass
 
 
-def _run(job: dict, urls: list[str], dest: Path, extract: bool) -> None:
+def _run(job: dict, urls: list[str], dest: Path, extract: bool, headers: dict | None = None) -> None:
     try:
         total = 0
         for url in urls:  # HEAD para a barra fazer sentido com vários arquivos (cuda = zip + cudart)
@@ -140,7 +179,7 @@ def _run(job: dict, urls: list[str], dest: Path, extract: bool) -> None:
             name = url.rsplit("/", 1)[-1].split("?")[0]
             target = (dest / name) if extract else dest
             update(job["id"], detail=name)
-            _fetch(url, target, job, base, total)
+            _fetch(url, target, job, base, total, headers)
             base = job["done"]
             if extract:
                 update(job["id"], detail=f"extraindo {name}")
@@ -169,8 +208,9 @@ def _flat(members: list[str]) -> bool:
     return not any("/" not in m for m in members)
 
 
-def start(kind: str, name: str, urls: list[str], dest: Path, extract: bool = False) -> dict:
+def start(kind: str, name: str, urls: list[str], dest: Path, extract: bool = False,
+          headers: dict | None = None) -> dict:
     """Baixa em thread e devolve o job já registrado. `extract`: dest é pasta, zips são abertos."""
     job = _new(kind, name)
-    threading.Thread(target=_run, args=(job, urls, dest, extract), daemon=True).start()
+    threading.Thread(target=_run, args=(job, urls, dest, extract, headers), daemon=True).start()
     return job

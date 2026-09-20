@@ -150,6 +150,7 @@ export type LlamaParams = {
   n_cpu_moe: number;
   n_expert: number;
   mmproj: string;
+  fit: boolean; // deixa o llama.cpp ajustar o que não couber
 };
 
 export type LocalModel = {
@@ -219,6 +220,14 @@ export type Inference = {
   reasoning_budget: number; // -1 = sem teto
 };
 
+/** Resposta de GET /local/inference: serve para modelo local e para modelo de qualquer provedor. */
+export type InferenceView = {
+  model: string;
+  inference: Inference;
+  inference_defaults: Inference;
+  inference_overrides: (keyof Inference)[];
+};
+
 /** Resposta de POST /local/model: padrões, valores atuais, o que saiu do padrão e a estimativa. */
 export type ModelView = {
   path: string;
@@ -261,11 +270,19 @@ export type ImageOpts = {
   negative: string;
 };
 
-export type RuntimeInfo = { installed: boolean; exe: string; backend: string; backends: string[] };
+export type RuntimeInfo = {
+  installed: boolean;
+  exe: string;
+  backend: string; // o que está em uso
+  backends: string[]; // o que dá para baixar
+  available: { backend: string; exe: string; version: string }[]; // o que já está no disco
+  chosen: string; // escolhido à mão em Configurações › Runtime ("" = automático)
+};
 
 /** Memória da máquina: é o que diz se um modelo cabe na GPU, na RAM, ou em lugar nenhum. */
 export type Hardware = {
-  gpus: { name: string; total: number; free: number }[];
+  gpus: { id: string; name: string; total: number; free: number; enabled: boolean }[];
+  cpu: { name: string; arch: string; flags: string[]; cores: number };
   vram: number;
   vram_free: number;
   ram: number;
@@ -295,6 +312,9 @@ export type LocalState = {
   data_dir: string;
   image_busy: boolean; // gerando imagem: carregar modelo fica bloqueado
   hardware: Hardware;
+  guardrail: "off" | "relaxado" | "rigoroso";
+  autoload: boolean; // carregar o último modelo ao abrir o Forja
+  hf_token: boolean; // só diz se existe; o token não volta do backend
   jobs: Job[];
   defaults: LlamaParams;
   last: string;

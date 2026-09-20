@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import platform
 import re
 import struct
 import subprocess
@@ -80,6 +81,7 @@ DEFAULT_PARAMS = {
     "n_cpu_moe": 0,           # --n-cpu-moe (camadas MoE na CPU)
     "n_expert": 0,            # nº de especialistas ativos (override do gguf)
     "mmproj": "",             # projetor multimodal: dá visão ao modelo
+    "fit": True,              # -fit on: o llama.cpp ajusta o que não foi definido para caber na memória
 }
 
 # Amostragem: padrão do llama.cpp, sobrescrito pelo que o próprio gguf recomenda (general.sampling.*).
@@ -137,7 +139,8 @@ def _image_valores(patch: dict) -> dict:
 
 def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
-            "download_dir": "", "models_dir": "", "image_models": {}}
+            "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
+            "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {}}
 
 
 def read_config() -> dict:
@@ -225,12 +228,20 @@ def defaults_for(path: str = "") -> dict:
                 d[key] = do_help[flag]
     if path:
         d["mmproj"] = projector_for(path)   # visão já vem ligada quando o mmproj está do lado
+    d.update({k: v for k, v in (read_config().get("defaults") or {}).items() if k in d})
     info = gguf_info(path) if path else None
     if info and info["n_layer"]:
         d["ngl"] = info["n_layer"]                                   # tudo na GPU, como o LM Studio
         d["ctx"] = min(info["ctx_train"] or d["ctx"], 32768)         # a janela cheia costuma não caber
         d["n_expert"] = info["n_expert_used"] or 0
     return d
+
+
+def set_defaults(patch: dict) -> dict:
+    """Padrões que valem para todo modelo (tela Hardware: cache KV na GPU, por exemplo)."""
+    atuais = {**(read_config().get("defaults") or {}), **_clean_params(patch)}
+    _patch("defaults", atuais)
+    return defaults_for("")
 
 
 def overrides(path: str) -> dict:
@@ -273,23 +284,76 @@ def runtime_dir(kind: str, backend: str) -> Path:
     return RUNTIMES / kind / backend
 
 
-def find_exe(kind: str) -> Path | None:
-    """Binário instalado, preferindo o backend mais rápido disponível."""
+def exe_em(kind: str, backend: str) -> Path | None:
     sufixo = ".exe" if native.WINDOWS else ""
-    for backend in ("cuda", "vulkan", "cpu"):
-        for name in EXE[kind]:
-            exe = runtime_dir(kind, backend) / (name + sufixo)
-            if exe.exists():
-                return exe
+    for name in EXE[kind]:
+        exe = runtime_dir(kind, backend) / (name + sufixo)
+        if exe.exists():
+            return exe
     return None
 
 
+def find_exe(kind: str) -> Path | None:
+    """Binário em uso: o backend escolhido em Configurações › Runtime, senão o mais rápido instalado."""
+    escolhido = (read_config().get("runtime") or {}).get(kind)
+    if escolhido:
+        exe = exe_em(kind, escolhido)
+        if exe:
+            return exe
+    for backend in ("cuda", "vulkan", "cpu"):
+        exe = exe_em(kind, backend)
+        if exe:
+            return exe
+    return None
+
+
+def set_runtime(kind: str, backend: str) -> dict:
+    """Troca o motor sem reinstalar nada: CPU, Vulkan e CUDA convivem lado a lado no disco."""
+    if kind not in EXE:
+        raise ToolError(f"Runtime desconhecido: {kind}")
+    if backend and not exe_em(kind, backend):
+        raise ToolError(f"O build de {backend} do {kind} não está instalado. Baixe primeiro.")
+    data = read_config()
+    escolha = dict(data.get("runtime") or {})
+    escolha[kind] = backend
+    data["runtime"] = escolha
+    write_config(data)
+    devices.cache_clear()  # outra engine, outra lista de dispositivos
+    _help.cache_clear()
+    help_defaults.cache_clear()
+    return runtimes()
+
+
+@functools.lru_cache(maxsize=8)
+def runtime_version(exe: str) -> str:
+    """"build 11064" do --version. Serve para a tela de Runtime dizer o que está instalado."""
+    try:
+        r = subprocess.run([exe, "--version"], cwd=str(Path(exe).parent), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60, **native.popen_kwargs())
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = re.search(r"version:\s*(\S+).*?build\s+(\w+)", r.stdout + r.stderr, re.S)
+    if m:
+        return f"{m.group(1)} (build {m.group(2)})"
+    m = re.search(r"(master-\S+|b\d+)", r.stdout + r.stderr)
+    return m.group(1) if m else ""
+
+
 def runtimes() -> dict:
+    """O que está instalado de cada motor, qual está em uso e a versão de cada um."""
+    escolha = read_config().get("runtime") or {}
     out = {}
     for kind in EXE:
         exe = find_exe(kind)
+        instalados = []
+        for backend in BACKENDS:
+            achado = exe_em(kind, backend)
+            if achado:
+                instalados.append({"backend": backend, "exe": str(achado),
+                                   "version": runtime_version(str(achado)) if kind == "llama" else ""})
         out[kind] = {"installed": bool(exe), "exe": str(exe) if exe else "",
-                     "backend": exe.parent.name if exe else "", "backends": list(BACKENDS)}
+                     "backend": exe.parent.name if exe else "", "backends": list(BACKENDS),
+                     "available": instalados, "chosen": escolha.get(kind, "")}
     return out
 
 
@@ -387,8 +451,8 @@ def devices(exe: str) -> list[dict]:
     except (OSError, subprocess.SubprocessError):
         return []
     saida = []
-    for _, nome, total, livre in DEVICE_RE.findall(r.stdout + r.stderr):
-        saida.append({"name": nome, "total": int(total) << 20, "free": int(livre or total) << 20})
+    for ident, nome, total, livre in DEVICE_RE.findall(r.stdout + r.stderr):
+        saida.append({"id": ident, "name": nome, "total": int(total) << 20, "free": int(livre or total) << 20})
     return saida
 
 
@@ -417,13 +481,47 @@ def system_ram() -> tuple[int, int]:
         return 0, 0
 
 
+@functools.lru_cache(maxsize=1)
+def cpu_info() -> dict:
+    """Nome e núcleos da CPU para a tela de Hardware.
+
+    ponytail: sem AVX/AVX2 na lista — o llama.cpp só imprime isso no log quando está em modo verboso,
+    e inventar a detecção aqui seria mais código do que a informação vale.
+    """
+    nome = platform.processor() or ""
+    if native.WINDOWS:
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0") as k:
+                nome = winreg.QueryValueEx(k, "ProcessorNameString")[0].strip()
+        except OSError:
+            pass
+    return {"name": nome, "arch": platform.machine(), "flags": [], "cores": os.cpu_count() or 0}
+
+
+def devices_off() -> list[str]:
+    return [str(d) for d in (read_config().get("devices_off") or [])]
+
+
+def set_device(nome: str, ligado: bool) -> list[dict]:
+    """Liga/desliga uma GPU. Com duas placas, dá para dizer qual o modelo usa."""
+    fora = set(devices_off())
+    fora.discard(nome) if ligado else fora.add(nome)
+    _patch("devices_off", sorted(fora))
+    return hardware()["gpus"]
+
+
 def hardware() -> dict:
     """Quanta memória a máquina tem. É o que diz se um modelo cabe na GPU, na RAM, ou em lugar nenhum."""
     exe = find_exe("llama")
-    gpus = devices(str(exe)) if exe else []
+    fora = set(devices_off())
+    gpus = [{**g, "enabled": g["id"] not in fora} for g in (devices(str(exe)) if exe else [])]
+    ativas = [g for g in gpus if g["enabled"]]
     ram, ram_livre = system_ram()
-    return {"gpus": gpus, "vram": sum(g["total"] for g in gpus), "vram_free": sum(g["free"] for g in gpus),
-            "ram": ram, "ram_free": ram_livre}
+    return {"gpus": gpus, "vram": sum(g["total"] for g in ativas), "vram_free": sum(g["free"] for g in ativas),
+            "ram": ram, "ram_free": ram_livre, "cpu": cpu_info()}
 
 
 # ---------------------------------------------------------------- metadados do gguf
@@ -720,15 +818,25 @@ def remove_model(path: str) -> list[str]:
     return apagados
 
 
+_KINDS: dict[str, str] = {}
+
+
 def kind_of(f: Path) -> str:
     """chat ou image. Modelo de linguagem tem camadas e cabeças de atenção no cabeçalho; difusão não.
 
-    Sem isso, um .gguf de chat aparecia na lista de modelos de imagem (e vice-versa).
+    Sem isso, um .gguf de chat aparecia na lista de modelos de imagem (e vice-versa). O resultado fica
+    em cache por (caminho, tamanho): a varredura roda a cada 3 s e abrir 50 arquivos toda vez é caro.
     """
     if f.suffix.lower() != ".gguf":
         return "image"  # .safetensors/.ckpt: só difusão usa por aqui
-    info = gguf_info(str(f))
-    return "chat" if info["n_layer"] and info["n_head"] else "image"
+    try:
+        chave = f"{f}|{f.stat().st_size}"
+    except OSError:
+        return "chat"
+    if chave not in _KINDS:
+        info = gguf_info(str(f))
+        _KINDS[chave] = "chat" if info["n_layer"] and info["n_head"] else "image"
+    return _KINDS[chave]
 
 
 # Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
@@ -831,6 +939,12 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
     a = [str(exe), "-m", str(path), "--host", "127.0.0.1", "--port", str(config.LOCAL_PORT),
          "--alias", alias_of(path), "--jinja"]  # --jinja: templates do gguf, necessário p/ tool calling
     a += ["-c", str(int(p["ctx"])), "-ngl", str(int(p["ngl"]))]
+    if p.get("fit", True) and ok("--fit"):
+        # Ele reduz sozinho o que não couber (e a nossa estimativa é estimativa).
+        a += ["-fit", "on"]
+    ligadas = [g["id"] for g in hardware()["gpus"] if g["enabled"]]
+    if ligadas and len(ligadas) != len(hardware()["gpus"]) and ok("--device"):
+        a += ["--device", ",".join(ligadas)]  # GPU desligada em Configurações › Hardware
     for key, flag in (("threads", "-t"), ("batch", "-b"), ("ubatch", "-ub"), ("ctx_checkpoints", "--ctx-checkpoints"),
                       ("n_cpu_moe", "--n-cpu-moe")):
         if int(p.get(key) or 0) > 0 and ok(flag):
@@ -962,6 +1076,69 @@ def unload() -> None:
         native.kill_tree(proc)
 
 
+GUARDRAILS = ("off", "relaxado", "rigoroso")
+
+
+def guardrail() -> str:
+    g = str(read_config().get("guardrail") or "relaxado")
+    return g if g in GUARDRAILS else "relaxado"
+
+
+def set_guardrail(nivel: str) -> str:
+    if nivel not in GUARDRAILS:
+        raise ToolError(f"Nível desconhecido: {nivel}")
+    _patch("guardrail", nivel)
+    return nivel
+
+
+def _checa_memoria(path: str, p: dict) -> None:
+    """Impede a carga que o sistema não aguenta. Rigoroso olha a VRAM; relaxado, só o total."""
+    nivel = guardrail()
+    if nivel == "off":
+        return
+    e = estimate(path, p)
+    if not e.get("ok"):
+        return
+    hw = hardware()
+    if nivel == "rigoroso" and hw["vram"] and e["gpu"] > hw["vram_free"]:
+        raise ToolError(f"Proteção rigorosa: a estimativa pede {e['gpu'] / 2 ** 30:.1f} GB de VRAM e há "
+                        f"{hw['vram_free'] / 2 ** 30:.1f} GB livres. Baixe as camadas na GPU ou o contexto, "
+                        "ou troque a proteção em Configurações › Hardware.")
+    if hw["ram"] and e["total"] > hw["ram"] + hw["vram"]:
+        raise ToolError(f"A estimativa pede {e['total'] / 2 ** 30:.1f} GB e a máquina tem "
+                        f"{(hw['ram'] + hw['vram']) / 2 ** 30:.1f} GB no total (RAM + VRAM). "
+                        "Escolha uma quantização menor ou reduza o contexto.")
+
+
+def cancel_load() -> bool:
+    """Desiste de uma carga em andamento. Sem isso só restava esperar o timeout."""
+    if not _loading:
+        return False
+    _loading["cancel"] = True
+    return True
+
+
+def autoload() -> bool:
+    return bool(read_config().get("autoload"))
+
+
+def set_autoload(ligado: bool) -> bool:
+    _patch("autoload", bool(ligado))
+    return autoload()
+
+
+def load_last() -> None:
+    """Sobe o último modelo usado, se a pessoa pediu isso em Configurações. Erro aqui não derruba o app."""
+    ultimo = read_config().get("last")
+    if not (autoload() and ultimo and Path(str(ultimo)).is_file()):
+        return
+    try:
+        print(f"Forja: carregando o último modelo local ({alias_of(str(ultimo))})…", flush=True)
+        load(str(ultimo))
+    except Exception as e:  # sem runtime, sem memória, arquivo mudou: o painel mostra o erro depois
+        print(f"Forja: não deu para carregar o último modelo: {e}", flush=True)
+
+
 def load(path: str, patch: dict | None = None) -> dict:
     """Sobe o llama-server com o modelo. Substitui o que estiver carregado (um por vez).
 
@@ -976,6 +1153,7 @@ def load(path: str, patch: dict | None = None) -> dict:
     if not Path(path).is_file():
         raise ToolError(f"Modelo não encontrado: {path}")
     p = save_params(path, patch or {})
+    _checa_memoria(path, p)
     unload()
     for _ in range(10):  # a porta leva um instante para liberar depois do kill do modelo anterior
         if not _health():
@@ -1029,6 +1207,9 @@ def _wait_ready(proc: subprocess.Popen, timeout: int = 900) -> None:
     """Espera /health responder 200. Carregar 30GB do disco demora (mais ainda sem mmap); o erro mostra o log."""
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if _loading.get("cancel"):
+            unload()
+            raise ToolError("Carregamento cancelado.")
         if proc.poll() is not None:
             unload()
             raise ToolError(f"llama-server saiu com código {proc.returncode}.\n{log(15)}")
@@ -1043,6 +1224,20 @@ def _wait_ready(proc: subprocess.Popen, timeout: int = 900) -> None:
 # ------------------------------------------------------------------ Hugging Face
 
 HF = "https://huggingface.co"
+
+
+def hf_token() -> str:
+    """Token do Hugging Face (Configurações). Sem ele, repositório gated responde 401."""
+    return str(read_config().get("hf_token") or "").strip()
+
+
+def hf_headers() -> dict:
+    return {"Authorization": f"Bearer {hf_token()}"} if hf_token() else {}
+
+
+def set_hf_token(token: str) -> bool:
+    _patch("hf_token", str(token).strip())
+    return bool(hf_token())
 NOVA_LINHA = chr(10)
 TAB = chr(9)
 QUANT = re.compile(r"(IQ\d[A-Z_]*|Q\d_[A-Z0-9_]+|F16|BF16|F32)", re.I)
@@ -1058,7 +1253,7 @@ def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia"
     """kind=text: repos com .gguf (chat). kind=image: modelos de difusão (.safetensors também)."""
     tipo = {"pipeline_tag": "text-to-image"} if kind == "image" else {"filter": "gguf"}
     ordem = ORDENS.get(sort, "")
-    r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True,
+    r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True, headers=hf_headers(),
                   params={"search": q, "limit": limit * 2 if kind == "image" else limit, "full": "true", **tipo,
                           **({"sort": ordem, "direction": -1} if ordem else {})})
     if r.status_code >= 400:
@@ -1112,7 +1307,8 @@ def _capacidades(j: dict, arquivos: list[dict], readme: str) -> dict:
 def _readme(repo: str) -> str:
     """Card do modelo, sem o cabeçalho YAML e cortado: é para ler, não para guardar."""
     try:
-        r = httpx.get(f"{HF}/{repo}/raw/main/README.md", timeout=20, follow_redirects=True)
+        r = httpx.get(f"{HF}/{repo}/raw/main/README.md", timeout=20, follow_redirects=True,
+                      headers=hf_headers())
     except httpx.HTTPError:
         return ""
     if r.status_code >= 400:
@@ -1151,9 +1347,10 @@ def _desindenta(texto: str) -> str:
 
 def repo_info(repo: str, kind: str = "text") -> dict:
     """Tudo que a janela de busca mostra de um modelo: números, capacidades, arquivos e README."""
-    r = httpx.get(f"{HF}/api/models/{repo}", timeout=20, follow_redirects=True)
-    if r.status_code == 401:
-        raise ToolError("Repositório restrito (gated). Baixe manualmente e aponte a pasta.")
+    r = httpx.get(f"{HF}/api/models/{repo}", timeout=20, follow_redirects=True, headers=hf_headers())
+    if r.status_code in (401, 403):
+        raise ToolError("Repositório restrito (gated). Aceite os termos no site do Hugging Face e coloque seu "
+                        "token em Configurações › Pastas para baixar por aqui.")
     if r.status_code >= 400:
         raise ToolError(f"Hugging Face respondeu {r.status_code} para {repo}.")
     j = r.json()
@@ -1184,7 +1381,7 @@ def _serve_para_sd(caminho: str, tamanho: int) -> bool:
 def files(repo: str, kind: str = "text") -> list[dict]:
     exts = WEIGHTS if kind == "image" else (".gguf",)
     r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True,
-                  params={"recursive": "true"})
+                  headers=hf_headers(), params={"recursive": "true"})
     if r.status_code == 401:
         raise ToolError("Repositório restrito (gated). Baixe manualmente e aponte a pasta.")
     if r.status_code >= 400:
@@ -1235,18 +1432,19 @@ def download(repo: str, path: str, folder: str = "") -> dict:
         names = [f"{prefix}{m.group('base')}-{i:05d}-of-{total:05d}.gguf" for i in range(1, total + 1)]
     urls = [f"{HF}/{repo}/resolve/main/{n}?download=true" for n in names]
     job = downloads.create("modelo", f"{repo}/{Path(path).name}")
-    threading.Thread(target=_download_files, args=(job, urls, names, dest_dir), daemon=True).start()
+    threading.Thread(target=_download_files, args=(job, urls, names, dest_dir, hf_headers()), daemon=True).start()
     return job
 
 
-def _download_files(job: dict, urls: list[str], names: list[str], dest_dir: Path) -> None:
+def _download_files(job: dict, urls: list[str], names: list[str], dest_dir: Path, headers: dict) -> None:
     """Cada arquivo vai com o seu nome (o helper genérico de downloads baixa pra um destino só)."""
     from .downloads import _Cancelled, _fetch, finish, update
     try:
         total = 0
         for u in urls:
             try:
-                total += int(httpx.head(u, follow_redirects=True, timeout=20).headers.get("content-length") or 0)
+                total += int(httpx.head(u, follow_redirects=True, timeout=20,
+                                        headers=headers).headers.get("content-length") or 0)
             except httpx.HTTPError:
                 total = 0
                 break
@@ -1254,7 +1452,7 @@ def _download_files(job: dict, urls: list[str], names: list[str], dest_dir: Path
         base = 0
         for url, name in zip(urls, names):
             update(job["id"], detail=Path(name).name)
-            _fetch(url, dest_dir / Path(name).name, job, base, total)
+            _fetch(url, dest_dir / Path(name).name, job, base, total, headers)
             base = job["done"]
         finish(job["id"], result=str(dest_dir))
     except _Cancelled:
@@ -1285,6 +1483,16 @@ def set_image(patch: dict) -> dict:
 
 # ------------------------------------------------------------------ painel
 
+def inference_view(model: str, path: str = "") -> dict:
+    """Amostragem de um modelo pelo NOME, com ou sem arquivo local — serve para Ollama e LM Studio também."""
+    from . import db
+
+    d = inference_defaults(path)
+    atual = {**d, **(db.get_model_setting(model).get("inference") or {})}
+    return {"model": model, "inference": atual, "inference_defaults": d,
+            "inference_overrides": sorted(k for k, v in atual.items() if v != d[k])}
+
+
 def model_view(path: str, patch: dict | None = None) -> dict:
     """Tudo que o painel precisa de um modelo: metadados, padrões, o que foi mudado e a estimativa."""
     d = defaults_for(path)
@@ -1307,8 +1515,9 @@ def state() -> dict:
     imagens = [{**m, "params": image_params(m["path"])} for m in todos if m["kind"] == "image"]
     baixar = cfg.get("download_dir") or models_dir()
     return {"runtimes": runtimes(), "models": models, "server": status(), "dirs": dirs(), "download_dir": baixar,
-            "hardware": hardware(),
-            "jobs": downloads.list_jobs(), "defaults": DEFAULT_PARAMS, "last": cfg["last"],
+            "hardware": hardware(), "guardrail": guardrail(), "autoload": autoload(),
+            "hf_token": bool(hf_token()),
+            "jobs": downloads.list_jobs(), "defaults": defaults_for(""), "last": cfg["last"],
             "image": cfg["image"], "image_models": imagens, "port": config.LOCAL_PORT,
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

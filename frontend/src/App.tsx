@@ -143,12 +143,16 @@ export default function App() {
   const [serversRunning, setServersRunning] = useState(0);
   const [localRunning, setLocalRunning] = useState(false);
 
-  /** O provedor "IA local" só tem modelo quando o llama-server está de pé: a lista recarrega na hora. */
-  function onLocalRunning(running: boolean) {
-    setLocalRunning((antes) => {
-      if (antes !== running) setCatalogKey((k) => k + 1);
-      return running;
-    });
+  /** O provedor "IA local" só tem modelo quando o llama-server está de pé: a lista recarrega na hora,
+   *  e quem acabou de carregar um modelo quer conversar com ele — então o chat já muda para ele.
+   *  A comparação é num ref: efeito dentro de um updater de estado o React pode rodar duas vezes. */
+  const localAntes = useRef(false);
+  function onLocalRunning(running: boolean, alias: string) {
+    if (localAntes.current === running) return;
+    localAntes.current = running;
+    setLocalRunning(running);
+    setCatalogKey((k) => k + 1);
+    if (running && alias) setSettings((s) => ({ ...s, provider: "local", model: alias }));
   }
   const [liveOutput, setLiveOutput] = useState<Record<string, string>>({}); // saída ao vivo por chamada (run_command)
   const [liveTasks, setLiveTasks] = useState<Task[] | null>(null); // lista de tarefas do run atual
@@ -1379,7 +1383,7 @@ export default function App() {
         ) : right.tab === "servers" ? (
           <ServersPanel onCount={setServersRunning} />
         ) : right.tab === "local" ? (
-          <LocalPanel onRunning={onLocalRunning} />
+          <LocalPanel onRunning={onLocalRunning} chatModel={settings.model} />
         ) : right.tab === "terminal" ? (
           <TerminalPanel conv={browserKey} />
         ) : right.tab === "changes" ? (

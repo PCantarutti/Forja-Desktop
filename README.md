@@ -275,7 +275,7 @@ O painel **IA local** (ícone de chip, à direita) roda o modelo dentro do próp
 servidor separado. Ele usa os binários oficiais do [llama.cpp](https://github.com/ggml-org/llama.cpp) (chat) e do
 [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (imagem).
 
-**Runtime sob demanda.** Nada disso vem no instalador. Na primeira vez, o painel oferece o download:
+**Runtime sob demanda, e trocável.** Nada disso vem no instalador. Na primeira vez, o painel oferece o download:
 
 | Backend | Tamanho | Quando usar |
 |---|---|---|
@@ -283,8 +283,16 @@ servidor separado. Ele usa os binários oficiais do [llama.cpp](https://github.c
 | `cuda` | ~240 MB + ~370 MB do runtime da NVIDIA | Só NVIDIA; costuma ser o mais rápido |
 | `cpu` | ~18 MB | Sem GPU |
 
-Os binários ficam em `%APPDATA%\Forja\runtimes`. Para trocar de backend, baixe o outro: o Forja usa sempre o melhor
-instalado (cuda › vulkan › cpu).
+Os binários ficam em `%APPDATA%\Forja\runtimes` e **convivem lado a lado**: dá para ter CPU, Vulkan e CUDA ao mesmo
+tempo e trocar em **Configurações › Runtime** (ou no seletor do próprio painel) sem baixar nada de novo — útil para
+comparar GPU e CPU, ou quando você troca a placa de vídeo. Sem escolha manual, vale o melhor instalado
+(cuda › vulkan › cpu). A tela mostra a versão de cada um (`build 11064`) e atualiza pelo mesmo botão.
+
+**Configurações › Hardware** mostra o processador, RAM e VRAM (total e livre) e as GPUs que o motor atual enxerga,
+cada uma com um interruptor — desligar tira a placa do próximo carregamento (`--device` do llama.cpp). Ali também
+ficam o padrão de cache KV na GPU, o "carregar o último modelo ao abrir" e as **proteções de carregamento**: o Forja
+estima a memória antes de subir o modelo e, no nível *relaxado*, recusa o que não cabe nem somando RAM e VRAM; no
+*rigoroso*, recusa também o que não couber na VRAM livre.
 
 **Modelos.** A aba *Baixar* tem as pastas de modelos e o botão **Procurar modelos**, que abre a janela de busca do
 Hugging Face. A busca sai sozinha quando você para de digitar (sem Enter) e tem ordenação: relevância — o ranking do
@@ -303,7 +311,10 @@ tooltip de cada um diz os números. As capacidades não são
 chute: saem do template de chat e da arquitetura que o próprio Hugging Face expõe do gguf. O README vem sem as tags
 HTML do card — a janela mostra markdown, e renderizar HTML de terceiros dentro do app não é uma boa ideia.
 
-O download tem barra de progresso e leva junto as partes de um modelo dividido (`00001-of-00003`). O campo
+O download tem barra de progresso, **retoma de onde parou** se a rede cair ou o app fechar (o `.part` fica no disco
+e a próxima tentativa continua dele), confere se há espaço antes de começar e leva junto as partes de um modelo
+dividido (`00001-of-00003`). Para repositório restrito (gated), cole seu token do Hugging Face em
+**Configurações › Pastas**. O campo
 **Baixar para** escolhe em qual pasta o arquivo cai, e a escolha fica valendo para os próximos. Se você já baixou por fora, clique em
 **Adicionar** e aponte a pasta: ela passa a ser varrida junto com a padrão (`~\Forja\modelos`), e a lista mostra em
 qual pasta cada modelo está. A lixeira ao lado de um modelo **apaga o arquivo do disco** (com as outras partes, se for
@@ -351,7 +362,10 @@ Os parâmetros, traduzidos direto para a linha de comando do `llama-server`:
 A lixeira no card do erro (e no log aberto) apaga o log do llama-server e esquece a falha; o X ao lado de um
 download ou geração já terminado tira aquele item da lista.
 
-Enquanto o modelo sobe, uma barra no alto da janela mostra a porcentagem (tempo decorrido sobre o estimado; o Forja
+Carregar um modelo **já troca o modelo do chat** para ele — quem carrega quer conversar com ele. E o llama.cpp
+recebe `-fit on`: ele mesmo reduz o que não couber na memória, o que cobre a margem de erro da estimativa.
+
+Enquanto o modelo sobe, uma barra no alto da janela mostra a porcentagem (e tem **cancelar**) (tempo decorrido sobre o estimado; o Forja
 aprende a velocidade da sua máquina na primeira carga). Se falhar, o erro **fica na tela** com o fim do log do
 llama-server ao lado de um "ver log" — não some no próximo refresh.
 
@@ -371,6 +385,9 @@ top-p, min-p, penalidade de repetição, limite da resposta, strings de parada, 
 (`enable_thinking` do template) e teto de raciocínio. O padrão de cada campo é o que o **próprio .gguf recomenda**
 (`general.sampling.*`) e, na falta dele, o do llama.cpp — o Qwen3.6, por exemplo, já vem com temperatura 1,0 e
 top-k 20. Como nos parâmetros de carga, só o que você muda fica salvo e destacado.
+
+A aba vale para o modelo local carregado e, quando não há nenhum, para o **modelo escolhido no chat** — então dá
+para ajustar a amostragem de um modelo do Ollama ou do LM Studio por ali também.
 
 Esses ajustes ficam em `model_settings`, por modelo, então **valem em qualquer provedor**: o mesmo modelo servido pelo
 Ollama ou pelo LM Studio usa os mesmos valores. O que é específico do llama.cpp (top-k, min-p, penalidade de

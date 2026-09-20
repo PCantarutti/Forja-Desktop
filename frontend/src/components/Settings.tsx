@@ -46,7 +46,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Pastas", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
+const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
 type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
@@ -142,7 +142,7 @@ export default function Settings(props: {
             <h2 className="flex-1 text-sm text-muted">{tab}</h2>
             {error && <span className="truncate text-sm text-red-300">{error}</span>}
             {saved && <span className="text-sm text-emerald-400">{saved}</span>}
-            {tab !== "MCP" && tab !== "Memória" && tab !== "Aplicativo" && tab !== "Pastas" && (
+            {!["MCP", "Memória", "Aplicativo", "Pastas", "Runtime", "Hardware"].includes(tab) && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
                 Salvar
               </button>
@@ -157,6 +157,10 @@ export default function Settings(props: {
               <AppTab />
             ) : tab === "Pastas" ? (
               <PastasTab onError={setError} />
+            ) : tab === "Runtime" ? (
+              <RuntimeTab onError={setError} />
+            ) : tab === "Hardware" ? (
+              <HardwareTab onError={setError} />
             ) : !s ? (
               <div className="text-muted">Carregando…</div>
             ) : tab === "Geral" ? (
@@ -244,14 +248,235 @@ function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean
   );
 }
 
+/** Motores do llama.cpp e do sd.cpp: qual está instalado, qual está em uso, e baixar/atualizar. */
+function RuntimeTab(props: { onError: (e: string) => void }) {
+  const [st, setSt] = useState<any>(null);
+  const recarrega = () => api.get("/local").then(setSt).catch((e) => props.onError(e.message));
+
+  useEffect(() => {
+    recarrega();
+    const t = setInterval(recarrega, 3000); // enquanto baixa, a lista muda sozinha
+    return () => clearInterval(t);
+  }, []);
+
+  if (!st) return <div className="text-muted">Carregando…</div>;
+
+  const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
+
+  const bloco = (kind: "llama" | "sd", titulo: string, descricao: string) => {
+    const r = st.runtimes[kind];
+    return (
+      <Field key={kind} label={titulo} hint={descricao}>
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted">Em uso</span>
+            <select
+              className={input}
+              value={r.chosen || r.backend || ""}
+              onChange={(e) => acao(api.put("/local/runtime", { kind, backend: e.target.value }))}
+              disabled={!r.available.length}
+            >
+              {!r.available.length && <option value="">nenhum instalado</option>}
+              {r.available.map((a: any) => (
+                <option key={a.backend} value={a.backend}>
+                  {a.backend}
+                  {a.version ? ` · ${a.version}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {r.backends.map((b: string) => {
+              const tem = r.available.some((a: any) => a.backend === b);
+              return (
+                <button
+                  key={b}
+                  className={btn}
+                  onClick={() => acao(api.post("/local/runtime", { kind, backend: b }))}
+                  title={b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
+                >
+                  {tem ? `Atualizar ${b}` : `Baixar ${b}`}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </Field>
+    );
+  };
+
+  return (
+    <div className="max-w-2xl space-y-5">
+      {bloco("llama", "Motor de chat (llama.cpp)", "CPU, Vulkan e CUDA convivem no disco: dá para trocar a qualquer momento, sem baixar de novo.")}
+      {bloco("sd", "Motor de imagem (stable-diffusion.cpp)", "Mesma ideia, para a geração de imagem.")}
+      {!!st.jobs?.filter((j: any) => j.kind === "runtime").length && (
+        <div className="space-y-1 text-xs text-muted">
+          {st.jobs
+            .filter((j: any) => j.kind === "runtime")
+            .map((j: any) => (
+              <p key={j.id}>
+                {j.name}: {j.status === "running" ? `${j.total ? Math.round((j.done / j.total) * 100) : 0}%` : j.status}
+                {j.error ? ` — ${j.error}` : ""}
+              </p>
+            ))}
+        </div>
+      )}
+      <p className="text-xs text-faint">
+        O motor em uso vale para o próximo carregamento. Trocar de Vulkan para CUDA (ou para CPU) não mexe nos modelos
+        baixados.
+      </p>
+    </div>
+  );
+}
+
+/** CPU, memória, GPUs e as proteções de carregamento. */
+function HardwareTab(props: { onError: (e: string) => void }) {
+  const [st, setSt] = useState<any>(null);
+  const recarrega = () => api.get("/local").then(setSt).catch((e) => props.onError(e.message));
+
+  useEffect(() => {
+    recarrega();
+    const t = setInterval(recarrega, 5000); // VRAM livre muda enquanto se usa o computador
+    return () => clearInterval(t);
+  }, []);
+
+  if (!st) return <div className="text-muted">Carregando…</div>;
+  const hw = st.hardware;
+  const gb = (n: number) => `${(n / 2 ** 30).toFixed(2)} GB`;
+  const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
+
+  const NIVEIS: [string, string, string][] = [
+    ["off", "Desligado", "Nenhuma precaução: carrega o que você mandar."],
+    ["relaxado", "Relaxado", "Recusa só o que não cabe nem somando RAM e VRAM."],
+    ["rigoroso", "Rigoroso", "Recusa também o que não couber na VRAM livre."],
+  ];
+
+  return (
+    <div className="max-w-2xl space-y-5">
+      <Field label="Processador">
+        <div className="rounded-lg border border-line bg-raised px-3 py-2 text-sm">
+          <p className="text-fg">{hw.cpu.name || "desconhecido"}</p>
+          <p className="text-xs text-muted">
+            {hw.cpu.arch} · {hw.cpu.cores} threads
+          </p>
+        </div>
+      </Field>
+
+      <Field label="Memória">
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded-lg border border-line bg-raised px-3 py-2">
+            <p className="text-xs text-muted">RAM</p>
+            <p className="text-fg">{gb(hw.ram)}</p>
+            <p className="text-xs text-faint">{gb(hw.ram_free)} livres</p>
+          </div>
+          <div className="rounded-lg border border-line bg-raised px-3 py-2">
+            <p className="text-xs text-muted">VRAM</p>
+            <p className="text-fg">{gb(hw.vram)}</p>
+            <p className="text-xs text-faint">{gb(hw.vram_free)} livres</p>
+          </div>
+        </div>
+      </Field>
+
+      <Field label="GPUs" hint="Desligar uma GPU tira ela do próximo carregamento (--device do llama.cpp).">
+        <div className="space-y-2">
+          {!hw.gpus.length && <p className="text-sm text-muted">Nenhuma GPU detectada pelo motor atual.</p>}
+          {hw.gpus.map((g: any) => (
+            <div key={g.id} className="flex items-center gap-3 rounded-lg border border-line bg-raised px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm text-fg">{g.name}</p>
+                <p className="text-xs text-muted">
+                  {gb(g.total)} · {gb(g.free)} livres · {g.id}
+                </p>
+              </div>
+              <button
+                className={`rounded-full px-3 py-1 text-xs ${g.enabled ? "bg-sky-600 text-white" : "border border-line text-muted"}`}
+                onClick={() => acao(api.put("/local/device", { id: g.id, enabled: !g.enabled }))}
+              >
+                {g.enabled ? "ON" : "OFF"}
+              </button>
+            </div>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Cache KV na GPU" hint="Padrão para todo modelo. Desligado, o cache vai para a RAM: libera VRAM e custa velocidade.">
+        <button
+          role="switch"
+          aria-checked={!st.defaults_no_kv_offload}
+          onClick={() => acao(api.put("/local/prefs", { defaults: { no_kv_offload: !stDefault(st, "no_kv_offload") } }))}
+          className={`h-5 w-10 rounded-full transition-colors ${stDefault(st, "no_kv_offload") ? "bg-raised" : "bg-sky-500"}`}
+        >
+          <span
+            className={`block size-4 rounded-full bg-white transition-transform ${stDefault(st, "no_kv_offload") ? "translate-x-0.5" : "translate-x-5"}`}
+          />
+        </button>
+      </Field>
+
+      <Field label="Proteções de carregamento" hint="O Forja estima a memória antes de subir o modelo; isto diz o que fazer quando não cabe.">
+        <div className="space-y-1">
+          {NIVEIS.map(([v, titulo, desc]) => (
+            <label key={v} className="flex cursor-pointer items-start gap-2 rounded-lg px-1 py-1 hover:bg-raised">
+              <input
+                type="radio"
+                className="mt-1 accent-sky-500"
+                checked={st.guardrail === v}
+                onChange={() => acao(api.put("/local/prefs", { guardrail: v }))}
+              />
+              <span>
+                <span className="text-sm text-fg">{titulo}</span>
+                <span className="block text-xs text-muted">{desc}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+
+      <Field label="Carregar o último modelo ao abrir" hint="Sobe sozinho o modelo local usado por último quando o Forja inicia.">
+        <button
+          role="switch"
+          aria-checked={st.autoload}
+          onClick={() => acao(api.put("/local/prefs", { autoload: !st.autoload }))}
+          className={`h-5 w-10 rounded-full transition-colors ${st.autoload ? "bg-sky-500" : "bg-raised"}`}
+        >
+          <span className={`block size-4 rounded-full bg-white transition-transform ${st.autoload ? "translate-x-5" : "translate-x-0.5"}`} />
+        </button>
+      </Field>
+    </div>
+  );
+}
+
+/** Valor de um padrão global vindo do state (o backend já devolve os padrões resolvidos). */
+function stDefault(st: any, chave: string) {
+  return !!st?.defaults?.[chave];
+}
+
 /** Pastas padrão da IA local. Salva na hora, como a aba Aplicativo. */
 function PastasTab(props: { onError: (e: string) => void }) {
-  const [st, setSt] = useState<{ models_dir: string; image_dir: string; data_dir: string; dirs: string[] } | null>(null);
+  const [st, setSt] = useState<{
+    models_dir: string;
+    image_dir: string;
+    data_dir: string;
+    dirs: string[];
+    hf_token: boolean;
+  } | null>(null);
   const [salvo, setSalvo] = useState("");
+  const [token, setToken] = useState("");
+  const temToken = !!st?.hf_token;
 
   useEffect(() => {
     api.get<typeof st>("/local").then(setSt).catch((e) => props.onError(e.message));
   }, []);
+
+  async function salvarToken() {
+    try {
+      const r = await api.put<{ hf_token: boolean }>("/local/prefs", { hf_token: token });
+      setSt((s) => s && { ...s, hf_token: r.hf_token });
+      setToken("");
+      setSalvo("Token salvo.");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
 
   if (!st) return <div className="text-muted">Carregando…</div>;
 
@@ -296,6 +521,23 @@ function PastasTab(props: { onError: (e: string) => void }) {
       </Field>
       <Field label="Imagens geradas" hint="Onde o painel salva as imagens. As geradas pelo agente vão para a pasta de trabalho da conversa.">
         {linha("image_dir")}
+      </Field>
+      <Field
+        label="Token do Hugging Face"
+        hint="Só para baixar modelo restrito (Llama, Gemma oficial...). Aceite os termos no site, cole o token aqui. Fica no seu computador."
+      >
+        <div className="flex items-center gap-2">
+          <input
+            className={input}
+            type="password"
+            placeholder={temToken ? "•••••••• (salvo)" : "hf_..."}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <button className={btn} disabled={!token} onClick={() => salvarToken()}>
+            Salvar
+          </button>
+        </div>
       </Field>
       <Field label="Dados do Forja" hint="Banco, configurações, logs, runtimes do llama.cpp e do sd.cpp. Não dá para mudar: é a pasta do usuário do app.">
         <div className="flex items-center gap-2">

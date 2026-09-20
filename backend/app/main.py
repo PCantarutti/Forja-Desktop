@@ -32,6 +32,7 @@ async def lifespan(_app):
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
     localai.reap_orphan()  # sobra de um backend que morreu sem descarregar o modelo
+    asyncio.create_task(asyncio.to_thread(localai.load_last))  # "carregar ao iniciar", se estiver ligado
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
@@ -293,6 +294,24 @@ class PathsBody(BaseModel):
     image_dir: str = ""
 
 
+class RuntimeChoiceBody(BaseModel):
+    kind: str = "llama"
+    backend: str = ""
+
+
+class DeviceBody(BaseModel):
+    id: str
+    enabled: bool = True
+
+
+class LocalPrefsBody(BaseModel):
+    """Preferências da IA local que não pertencem a um modelo específico."""
+    hf_token: str | None = None
+    guardrail: str | None = None
+    autoload: bool | None = None
+    defaults: dict | None = None
+
+
 @app.get("/api/local")
 async def local_state():
     """Tudo que o painel IA local precisa: runtimes, modelos, servidor e downloads em andamento."""
@@ -323,6 +342,50 @@ async def local_model_delete(body: LoadBody):
         return {"removed": await asyncio.to_thread(localai.remove_model, body.path)}
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/runtime")
+async def local_runtime_choice(body: RuntimeChoiceBody):
+    """Troca o motor em uso (CPU, Vulkan, CUDA) sem baixar nada de novo."""
+    try:
+        return await asyncio.to_thread(localai.set_runtime, body.kind, body.backend)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/device")
+async def local_device(body: DeviceBody):
+    """Liga ou desliga uma GPU para a IA local."""
+    return {"gpus": await asyncio.to_thread(localai.set_device, body.id, body.enabled)}
+
+
+@app.put("/api/local/prefs")
+async def local_prefs(body: LocalPrefsBody):
+    """Token do Hugging Face, proteção de carregamento, autoload e padrões de todo modelo."""
+    try:
+        if body.hf_token is not None:
+            await asyncio.to_thread(localai.set_hf_token, body.hf_token)
+        if body.guardrail is not None:
+            await asyncio.to_thread(localai.set_guardrail, body.guardrail)
+        if body.autoload is not None:
+            await asyncio.to_thread(localai.set_autoload, body.autoload)
+        if body.defaults is not None:
+            await asyncio.to_thread(localai.set_defaults, body.defaults)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return await asyncio.to_thread(localai.state)
+
+
+@app.get("/api/local/inference")
+async def local_inference(model: str, path: str = ""):
+    """Ajustes de amostragem de um modelo qualquer (local, Ollama ou LM Studio)."""
+    return await asyncio.to_thread(localai.inference_view, model, path)
+
+
+@app.post("/api/local/cancel-load")
+def local_cancel_load():
+    """Desiste da carga em andamento (modelo grande demais, escolha errada...)."""
+    return {"cancelled": localai.cancel_load()}
 
 
 @app.post("/api/local/load")

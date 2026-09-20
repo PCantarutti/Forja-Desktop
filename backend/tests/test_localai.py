@@ -3,7 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from app import config, db, imagegen, llm, localai
+from app import config, db, downloads, imagegen, llm, localai
+
+FIND_EXE_REAL = localai.find_exe  # a fixture troca por None; alguns testes querem o de verdade
 
 
 @pytest.fixture(autouse=True)
@@ -646,3 +648,131 @@ def test_arquivos_de_imagem_so_o_que_o_sd_abre(monkeypatch):
 
     # fora: pasta do diffusers, LoRA e embedding. dentro: os gguf e o VAE, do menor para o maior
     assert achados == ["ae.safetensors", "flux1-dev-Q2_K.gguf", "flux1-dev-Q4_0.gguf"]
+
+
+# ---------------------------------------------------------------- retomada de download
+
+class _Resposta:
+    """Resposta falsa do httpx.stream, com os pedaços que a gente quiser."""
+
+    def __init__(self, status, pedacos, headers=None):
+        self.status_code, self._pedacos, self.headers = status, pedacos, headers or {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def iter_bytes(self, _n=0):
+        yield from self._pedacos
+
+
+def test_download_retoma_do_que_ja_baixou(isolado, monkeypatch):
+    """20 GB pela metade não podem recomeçar do zero porque a rede piscou."""
+    destino = isolado / "m.gguf"
+    parcial = isolado / "m.gguf.part"
+    parcial.write_bytes(b"a" * 100)
+    vistos = {}
+
+    def stream(_metodo, _url, **k):
+        vistos.update(k.get("headers") or {})
+        return _Resposta(206, [b"b" * 50], {"content-length": "50"})
+
+    monkeypatch.setattr(downloads.httpx, "stream", stream)
+    job = downloads.create("modelo", "m")
+
+    downloads._fetch("http://x/m.gguf", destino, job, 0, 0)
+
+    assert vistos["Range"] == "bytes=100-"          # pediu só o que falta
+    assert destino.read_bytes() == b"a" * 100 + b"b" * 50   # colou no que já tinha
+    assert not parcial.exists()
+
+
+def test_download_que_falha_guarda_o_pedaco(isolado, monkeypatch):
+    def stream(*_a, **_k):
+        raise OSError("rede caiu")
+
+    monkeypatch.setattr(downloads.httpx, "stream", stream)
+    (isolado / "m.gguf.part").write_bytes(b"x" * 10)
+    job = downloads.create("modelo", "m")
+
+    with pytest.raises(OSError):
+        downloads._fetch("http://x/m.gguf", isolado / "m.gguf", job, 0, 0)
+
+    assert (isolado / "m.gguf.part").read_bytes() == b"x" * 10  # o .part FICA para a próxima tentativa
+
+
+def test_download_checa_espaco(isolado, monkeypatch):
+    monkeypatch.setattr(downloads.shutil, "disk_usage", lambda _p: type("U", (), {"free": 1 << 20})())
+    monkeypatch.setattr(downloads.httpx, "stream",
+                        lambda *a, **k: _Resposta(200, [], {"content-length": str(50 << 30)}))
+    job = downloads.create("modelo", "m")
+
+    with pytest.raises(RuntimeError, match="Espaço insuficiente"):
+        downloads._fetch("http://x/m.gguf", isolado / "m.gguf", job, 0, 0)
+
+
+# ---------------------------------------------------------------- motor, GPU e proteções
+
+def test_troca_de_motor(isolado, monkeypatch):
+    """CPU, Vulkan e CUDA convivem no disco; escolher é só apontar qual usar."""
+    monkeypatch.setattr(localai, "RUNTIMES", isolado / "runtimes")  # nunca a pasta real do app
+    monkeypatch.setattr(localai, "find_exe", FIND_EXE_REAL)
+    monkeypatch.setattr(localai, "runtime_version", lambda exe: "b1")
+    for backend in ("vulkan", "cpu"):
+        pasta = localai.runtime_dir("llama", backend)
+        pasta.mkdir(parents=True, exist_ok=True)
+        (pasta / ("llama-server.exe" if localai.native.WINDOWS else "llama-server")).write_bytes(b"x")
+
+    localai.set_runtime("llama", "cpu")
+    assert localai.find_exe("llama").parent.name == "cpu"
+    assert localai.runtimes()["llama"]["chosen"] == "cpu"
+
+    localai.set_runtime("llama", "vulkan")
+    assert localai.find_exe("llama").parent.name == "vulkan"
+
+    with pytest.raises(Exception):
+        localai.set_runtime("llama", "cuda")  # não está instalado
+
+
+def test_gpu_desligada_entra_no_comando(isolado, monkeypatch):
+    monkeypatch.setattr(localai, "hardware", lambda: {
+        "gpus": [{"id": "Vulkan0", "enabled": True}, {"id": "Vulkan1", "enabled": False}],
+        "vram": 0, "vram_free": 0, "ram": 0, "ram_free": 0})
+    conhecidas = frozenset(["-c", "-ngl", "--device", "--fit"])
+
+    a = localai.argv(Path("llama-server"), "m.gguf", localai.DEFAULT_PARAMS, conhecidas)
+
+    assert a[a.index("--device") + 1] == "Vulkan0"
+    assert ["-fit", "on"] == a[a.index("-fit"):a.index("-fit") + 2]
+
+
+def test_protecoes_de_carregamento(isolado, monkeypatch):
+    GB = 2 ** 30
+    monkeypatch.setattr(localai, "hardware", lambda: {"vram": 12 * GB, "vram_free": 11 * GB,
+                                                      "ram": 32 * GB, "ram_free": 16 * GB, "gpus": []})
+    monkeypatch.setattr(localai, "estimate", lambda *_a: {"ok": True, "gpu": 14 * GB, "total": 20 * GB})
+
+    localai.set_guardrail("rigoroso")
+    with pytest.raises(Exception, match="rigorosa"):
+        localai._checa_memoria("m.gguf", localai.DEFAULT_PARAMS)
+
+    localai.set_guardrail("relaxado")
+    localai._checa_memoria("m.gguf", localai.DEFAULT_PARAMS)  # cabe somando RAM: passa
+
+    monkeypatch.setattr(localai, "estimate", lambda *_a: {"ok": True, "gpu": 14 * GB, "total": 90 * GB})
+    with pytest.raises(Exception, match="no total"):
+        localai._checa_memoria("m.gguf", localai.DEFAULT_PARAMS)
+
+    localai.set_guardrail("off")
+    localai._checa_memoria("m.gguf", localai.DEFAULT_PARAMS)  # desligado não olha nada
+
+
+def test_ajustes_de_amostragem_por_nome(isolado):
+    """A tela Inferência precisa funcionar para modelo do Ollama, que não tem arquivo local."""
+    v = localai.inference_view("gemma4:31b")
+
+    assert v["model"] == "gemma4:31b"
+    assert v["inference"]["temperature"] == localai.INFERENCE_DEFAULTS["temperature"]
+    assert v["inference_overrides"] == []
