@@ -3,13 +3,20 @@ export type ToolCall = { id: string; name: string; arguments: Record<string, unk
 export type Preview = { kind: "diff" | "new" | "command"; path: string; text: string };
 
 /** Aprovação pendente: preview é null para ferramentas sem preview (ex.: MCP); sent = decisão já enviada. */
+/** Uma pergunta do ask_user: o agente manda até 4 de uma vez. */
+export type AskQuestion = {
+  header?: string;
+  question: string;
+  options: { label: string; description?: string }[];
+  multi_select?: boolean;
+};
+
 export type Approval = {
   preview: Preview | null;
   suggest?: string;
   tool?: string;
   plan?: string; // exit_plan_mode
-  question?: string; // ask_user
-  options?: string[];
+  questions?: AskQuestion[]; // ask_user
   sent?: boolean;
 };
 

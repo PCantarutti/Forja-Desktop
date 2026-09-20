@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import type { Approval, Attachment, Message, Preview, Task, ToolCall } from "../types";
+import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
 import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
@@ -19,7 +19,16 @@ function CodeBlock(props: React.ComponentProps<"pre">) {
   );
 }
 
-const MD_COMPONENTS = { pre: CodeBlock };
+/** Tabela larga rola dentro do card em vez de estourar (o painel de planos e chato de estreito). */
+function Table(props: React.ComponentProps<"table">) {
+  return (
+    <div className="md-table">
+      <table {...props} />
+    </div>
+  );
+}
+
+const MD_COMPONENTS = { pre: CodeBlock, table: Table };
 
 export function Markdown({ text }: { text: string }) {
   return (
@@ -591,77 +600,147 @@ export function SubagentSteps(props: {
 }
 
 
-/** Pergunta do agente (ask_user): opções em botões ou resposta livre. Respondida, mostra a resposta. */
-export function QuestionCard(props: { question: string; options: string[]; done?: Message; onAnswer: (answer: string) => void }) {
-  const [other, setOther] = useState(false);
-  const [text, setText] = useState("");
+/** Argumentos de um ask_user salvo no histórico, no formato novo (questions[]) ou no antigo. */
+export function askQuestions(args: Record<string, unknown>): AskQuestion[] {
+  const raw = Array.isArray(args.questions) ? args.questions : [{ question: args.question, options: args.options }];
+  return raw
+    .filter((q: any) => q && typeof q.question === "string" && q.question.trim())
+    .slice(0, 4)
+    .map((q: any) => ({
+      header: typeof q.header === "string" ? q.header : undefined,
+      question: q.question,
+      multi_select: !!q.multi_select,
+      options: (Array.isArray(q.options) ? q.options : [])
+        .slice(0, 4)
+        .map((o: any) => (typeof o === "string" ? { label: o } : { label: String(o?.label ?? ""), description: o?.description }))
+        .filter((o: { label: string }) => o.label),
+    }));
+}
+
+/**
+ * Perguntas do agente (ask_user): até 4 numa chamada só, uma por tela (1/2, 2/2), com opções
+ * descritas, múltipla escolha quando o agente pedir e sempre um campo de resposta livre.
+ */
+export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; onAnswer: (answers: string[]) => void }) {
+  const qs = props.questions.length ? props.questions : [{ question: "", options: [] }];
+  const [at, setAt] = useState(0);
+  const [picked, setPicked] = useState<string[][]>(() => qs.map(() => []));
+  const [texts, setTexts] = useState<string[]>(() => qs.map(() => ""));
   const decided = props.done?.status;
-  const answer = props.done?.meta?.answer as string | undefined;
+  const meta = props.done?.meta ?? {};
+  const answers = (meta.answers ?? (meta.answer ? [meta.answer] : [])) as string[];
+
+  const q = qs[Math.min(at, qs.length - 1)];
+  const sel = picked[at] ?? [];
+  const livre = (texts[at] ?? "").trim();
+  const last = at === qs.length - 1;
   const primary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
   const secondary = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
+
+  function toggle(label: string) {
+    setPicked((p) =>
+      p.map((v, i) =>
+        i !== at ? v : q.multi_select ? (v.includes(label) ? v.filter((x) => x !== label) : [...v, label]) : [label]),
+    );
+  }
+
+  /** Avança ou envia. `skip` descarta o que foi marcado nesta pergunta. */
+  function advance(skip: boolean) {
+    const nextPicked = skip ? picked.map((v, i) => (i === at ? [] : v)) : picked;
+    const nextTexts = skip ? texts.map((v, i) => (i === at ? "" : v)) : texts;
+    if (skip) {
+      setPicked(nextPicked);
+      setTexts(nextTexts);
+    }
+    if (!last) return setAt(at + 1);
+    props.onAnswer(qs.map((_, i) => [...(nextPicked[i] ?? []), ...((nextTexts[i] ?? "").trim() ? [nextTexts[i].trim()] : [])].join(", ")));
+  }
 
   return (
     <div className={`my-3 overflow-hidden rounded-2xl border ${decided ? "border-line" : "border-amber-500/50"} bg-surface`}>
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-sm">
         <span className="grid size-4 place-items-center rounded-full bg-amber-500/20 text-[11px] font-bold text-amber-300">?</span>
-        <span className="text-fg">Pergunta do agente</span>
+        <span className="text-fg">{qs.length > 1 ? `Perguntas do agente` : "Pergunta do agente"}</span>
+        {!decided && qs.length > 1 && (
+          <span className="rounded-full bg-raised px-2 py-0.5 font-mono text-[11px] text-muted">
+            {at + 1}/{qs.length}
+          </span>
+        )}
+        {!decided && q.header && <span className="text-xs text-faint">{q.header}</span>}
         {decided && (
           <span className={`ml-auto text-xs ${decided === "ok" ? "text-emerald-400" : "text-orange-400"}`}>
             ● {decided === "ok" ? "respondida" : decided}
           </span>
         )}
       </div>
-      <div className="px-4 py-3 text-sm text-fg">{props.question}</div>
       {decided ? (
-        answer && (
-          <div className="border-t border-line px-4 py-2 text-sm text-muted">
-            Resposta: <span className="text-fg">{answer}</span>
-          </div>
-        )
+        <div className="divide-y divide-line">
+          {qs.map((item, i) => (
+            <div key={i} className="px-4 py-2.5 text-sm">
+              <div className="text-fg">{item.question}</div>
+              <div className="text-muted">
+                Resposta: <span className="text-fg">{answers[i] || "(sem resposta)"}</span>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
-        <div className="space-y-2 border-t border-line p-4">
-          {other ? (
-            <>
-              <textarea
-                autoFocus
-                rows={2}
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey && text.trim()) {
-                    e.preventDefault();
-                    props.onAnswer(text.trim());
-                  }
-                }}
-                placeholder="Sua resposta"
-                className="w-full rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:outline-none"
-              />
-              <div className="flex gap-2">
-                <button disabled={!text.trim()} onClick={() => props.onAnswer(text.trim())} className={primary}>
-                  Responder
+        <>
+          <div className="px-4 py-3 text-sm text-fg">{q.question}</div>
+          <div className="space-y-2 border-t border-line p-4">
+            {q.options.map((o, i) => {
+              const on = sel.includes(o.label);
+              return (
+                <button
+                  key={i}
+                  onClick={() => toggle(o.label)}
+                  className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left ${on ? "border-fg/50 bg-raised" : "border-line hover:bg-raised/60"}`}
+                >
+                  <span
+                    className={`mt-0.5 grid size-4 shrink-0 place-items-center ${q.multi_select ? "rounded" : "rounded-full"} border text-[10px] ${on ? "border-fg bg-fg font-bold text-black" : "border-line text-faint"}`}
+                  >
+                    {on ? "✓" : i + 1}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm text-fg">{o.label}</span>
+                    {o.description && <span className="block text-xs text-muted">{o.description}</span>}
+                  </span>
                 </button>
-                <button onClick={() => setOther(false)} className={secondary}>
+              );
+            })}
+            <textarea
+              rows={1}
+              value={texts[at] ?? ""}
+              onChange={(e) => setTexts((t) => t.map((v, i) => (i === at ? e.target.value : v)))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (sel.length || e.currentTarget.value.trim()) advance(false);
+                }
+              }}
+              placeholder="Digite sua própria resposta…"
+              className="w-full rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:outline-none"
+            />
+            <div className="flex items-center gap-2 pt-1">
+              {at > 0 && (
+                <button onClick={() => setAt(at - 1)} className={secondary}>
                   Voltar
                 </button>
-              </div>
-            </>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {props.options.map((o, i) => (
-                <button key={i} onClick={() => props.onAnswer(o)} className={i === 0 ? primary : secondary}>
-                  {o}
-                </button>
-              ))}
-              <button onClick={() => setOther(true)} className="rounded-full border border-dashed border-line px-4 py-1.5 text-sm text-muted hover:bg-raised hover:text-fg">
-                Outra resposta…
+              )}
+              <button onClick={() => advance(true)} className={`${secondary} ml-auto`}>
+                Pular
+              </button>
+              <button disabled={!sel.length && !livre} onClick={() => advance(false)} className={primary}>
+                {last ? "Enviar" : "Próximo"}
               </button>
             </div>
-          )}
-        </div>
+          </div>
+        </>
       )}
     </div>
   );
 }
+
 
 /** Plano proposto no modo Plano: aprovar (escolhendo o modo de execução) ou pedir mudanças. */
 export function PlanCard(props: {

@@ -56,8 +56,11 @@ def markdown(c) -> str:
             linhas += [f"### Plano ({estado})", "", meta.get("plan") or "", ""]
         elif m.role == "tool" and m.name == "ask_user":
             meta = m.meta or {}
-            pergunta = (meta.get("arguments") or {}).get("question", "")
-            linhas += [f"> **Pergunta:** {pergunta}", f"> **Resposta:** {meta.get('answer') or m.status}", ""]
+            perguntas = meta.get("questions") or [{"question": (meta.get("arguments") or {}).get("question", "")}]
+            respostas = meta.get("answers") or [meta.get("answer")]
+            for i, q in enumerate(perguntas):
+                resposta = (respostas[i] if i < len(respostas) else "") or m.status
+                linhas += [f"> **Pergunta:** {q.get('question', '')}", f"> **Resposta:** {resposta}", ""]
         elif m.role == "tool":
             linhas += [f"<details><summary>{m.name} [{m.status}]</summary>", "", "```",
                        (m.content or "")[:4000], "```", "", "</details>", ""]

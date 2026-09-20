@@ -1157,7 +1157,8 @@ class ApproveBody(BaseModel):
     approved: bool
     mode: str | None = None       # modo escolhido ao aprovar um plano
     feedback: str | None = None   # o que mudar no plano, quando não aprovado
-    answer: str | None = None     # resposta a um ask_user
+    answer: str | None = None     # resposta a um ask_user (formato antigo, uma pergunta)
+    answers: list | None = None   # respostas do ask_user em lote, na ordem das perguntas
 
 
 def _get_run(run_id: str) -> Run:
@@ -1169,7 +1170,8 @@ def _get_run(run_id: str) -> Run:
 
 @app.post("/api/runs/{run_id}/approve")
 def approve(run_id: str, body: ApproveBody):
-    decision = {"approved": body.approved, "mode": body.mode, "feedback": body.feedback, "answer": body.answer}
+    decision = {"approved": body.approved, "mode": body.mode, "feedback": body.feedback,
+                "answer": body.answer, "answers": body.answers}
     if not _get_run(run_id).resolve(body.call_id, decision):
         raise HTTPException(409, "Nenhuma aprovação pendente para esta chamada")
     return {"ok": True}

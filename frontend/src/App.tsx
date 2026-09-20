@@ -34,6 +34,7 @@ import {
   groupActivity,
   PlanCard,
   QuestionCard,
+  askQuestions,
   StatsRow,
   SubagentSteps,
   Thinking,
@@ -577,7 +578,7 @@ export default function App() {
         notify("Forja propôs um plano", "Abra a conversa para aprovar ou pedir ajustes.");
         break;
       case "question_request":
-        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "ask_user", question: ev.question, options: ev.options } }));
+        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "ask_user", questions: ev.questions } }));
         notify("Forja tem uma pergunta", String(ev.question ?? ""));
         break;
       case "context":
@@ -792,12 +793,12 @@ export default function App() {
     await api.post(`/runs/${runId.current}/approve`, { call_id: callId, approved }).catch((e) => setError(e.message));
   }
 
-  /** Decisão sobre um plano: aprovar (com o modo de execução) ou pedir mudanças. */
-  async function decideAnswer(callId: string, answer: string) {
+  /** Respostas de um ask_user (uma por pergunta): voltam para o agente como resultado da ferramenta. */
+  async function decideAnswer(callId: string, answers: string[]) {
     if (!runId.current) return;
     setApprovals((a) => ({ ...a, [callId]: { ...a[callId], sent: true } }));
     await api
-      .post(`/runs/${runId.current}/approve`, { call_id: callId, approved: true, answer })
+      .post(`/runs/${runId.current}/approve`, { call_id: callId, approved: true, answers })
       .catch((e) => setError(e.message));
   }
 
@@ -1157,8 +1158,7 @@ export default function App() {
                     ) : seg.kind === "question" ? (
                       <QuestionCard
                         key={si}
-                        question={(approvals[seg.call.id]?.question ?? seg.call.arguments.question ?? "") as string}
-                        options={(approvals[seg.call.id]?.options ?? seg.call.arguments.options ?? []) as string[]}
+                        questions={approvals[seg.call.id]?.questions ?? askQuestions(seg.call.arguments)}
                         done={results.get(seg.call.id)}
                         onAnswer={(a) => decideAnswer(seg.call.id, a)}
                       />

@@ -18,9 +18,13 @@ const STATUS: Record<PlanEntry["status"], [string, string]> = {
   cancelado: ["cancelado", "text-faint"],
 };
 
+const SECOES = /^#{1,4}\s*(contexto|abordagem|passos|verifica|riscos)/i;
+
+/** Título do plano: a primeira linha de conteúdo, pulando os cabeçalhos fixos do formato. */
 function title(plan: string) {
-  const line = plan.split("\n").find((l) => l.trim()) ?? "";
-  return line.replace(/^#+\s*/, "").replace(/\*\*/g, "").slice(0, 80) || "(plano vazio)";
+  const linhas = plan.split("\n").filter((l) => l.trim());
+  const line = linhas.find((l) => !SECOES.test(l.trim())) ?? linhas[0] ?? "";
+  return line.replace(/^#+\s*/, "").replace(/\*\*/g, "").replace(/^[-*]\s+/, "").slice(0, 80) || "(plano vazio)";
 }
 
 /** Aba Planos: todos os planos do modo Plano desta conversa, do mais recente ao mais antigo. */

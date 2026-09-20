@@ -16,6 +16,8 @@ def test_plan_prompt_has_skeleton_and_ask_user():
     for sec in ("## Contexto", "## Abordagem", "## Passos", "## Verificação", "## Riscos"):
         assert sec in p
     assert "ask_user" in p
+    assert "| Arquivo | Mudança |" in p  # plano rico: tabela quando forem vários arquivos
+    assert "de uma em uma" in p          # e perguntas em lote, não uma por rodada
 
 
 def test_approved_plan_is_pinned_only_outside_plan_mode():
@@ -35,18 +37,26 @@ def test_last_plan_picks_latest_approved():
     assert agent.last_plan([M("user")]) is None
 
 
-def test_ask_user_flow_and_markdown_mirror(monkeypatch):
+def test_ask_user_asks_everything_in_one_card(monkeypatch):
+    """Até 4 perguntas numa chamada só: um card, todas as respostas voltam juntas ao modelo."""
+    perguntas = [{"header": "Banco", "question": "Qual banco?",
+                  "options": [{"label": "postgres", "description": "já usado no time"}, {"label": "sqlite"}]},
+                 {"header": "Extras", "question": "O que mais entra?", "multi_select": True,
+                  "options": [{"label": "cache"}, {"label": "fila"}]},
+                 {"header": "Deploy", "question": "Onde sobe?", "options": [{"label": "docker"}, {"label": "vps"}]}]
     step = {"n": 0}
 
     async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
         step["n"] += 1
         if step["n"] == 1:
             assert "ask_user" in [t["function"]["name"] for t in (tools or [])]
-            yield "done", {"tool_calls": [{"id": "q1", "name": "ask_user",
-                                           "arguments": {"question": "Qual banco?", "options": ["sqlite", "postgres"]}}]}
+            yield "done", {"tool_calls": [{"id": "q1", "name": "ask_user", "arguments": {"questions": perguntas}}]}
         else:
-            assert any("Resposta do usuário: postgres" in str(m.get("content", "")) for m in messages)
-            yield "content", "Vou de postgres."
+            texto = "\n".join(str(m.get("content", "")) for m in messages)
+            assert "- Qual banco?: postgres" in texto
+            assert "- O que mais entra?: cache, fila" in texto  # múltipla escolha vira uma linha
+            assert "- Onde sobe?: (sem resposta)" in texto      # pulada
+            yield "content", "Fechado."
             yield "done", {"tool_calls": []}
 
     async def none(*a):
@@ -68,15 +78,25 @@ def test_ask_user_flow_and_markdown_mirror(monkeypatch):
         async for ev in agent.run_agent(conv, req, run):
             if ev["type"] == "question_request":
                 asked.append(ev)
-                assert ev["options"] == ["sqlite", "postgres"]
-                run.resolve(ev["call"]["id"], {"approved": True, "answer": "postgres"})
+                run.resolve(ev["call"]["id"], {"approved": True, "answers": ["postgres", ["cache", "fila"], ""]})
         return asked, conv
 
     asked, conv = asyncio.run(scenario())
-    assert len(asked) == 1
+    assert len(asked) == 1  # um card só, não um por pergunta
+    assert [q["question"] for q in asked[0]["questions"]] == ["Qual banco?", "O que mais entra?", "Onde sobe?"]
+    assert asked[0]["questions"][1]["multi_select"] and asked[0]["questions"][0]["options"][0]["description"]
     with db.session() as s:
         md = mirror.markdown(s.get(db.Conversation, conv))
     assert "**Pergunta:** Qual banco?" in md and "**Resposta:** postgres" in md
+    assert "**Pergunta:** Onde sobe?" in md
+
+
+def test_ask_user_accepts_the_old_single_question_shape():
+    """Conversa salva antes do lote (ou modelo que simplifica) continua virando uma pergunta."""
+    qs = agent.ask_questions({"question": "Qual banco?", "options": ["postgres", "sqlite"]})
+    assert len(qs) == 1 and qs[0]["question"] == "Qual banco?"
+    assert qs[0]["options"] == [{"label": "postgres", "description": ""}, {"label": "sqlite", "description": ""}]
+    assert agent.ask_questions({"questions": [{"question": "  ", "options": []}]}) == []
 
 
 def test_approved_plan_survives_into_next_turn(monkeypatch):

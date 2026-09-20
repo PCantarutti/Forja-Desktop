@@ -33,28 +33,51 @@ MODE_LABEL = {"auto": "Automático", "manual": "Manual", "edits": "Aceitar ediç
 # Ferramenta só do modo Plano: não fica no REGISTRY (não aparece nos outros modos nem nas Configurações).
 PLAN_FORMAT = ("Formato do plano, nesta ordem: '## Contexto' (o que você achou no código, 3 a 6 linhas); "
                "'## Abordagem' (a escolhida, e as descartadas em uma linha cada com o motivo); "
-               "'## Passos' (numerados; cada um com o arquivo e o que muda nele); "
+               "'## Passos' (a partir de 3 arquivos, tabela markdown '| Arquivo | Mudança |'; menos que isso, "
+               "lista numerada — sempre o arquivo e o que muda nele); "
                "'## Verificação' (como provar que funcionou: teste, comando, o que olhar); "
-               "'## Riscos e dúvidas'. Curto, sem blocos de código, sem repetir o pedido.")
+               "'## Riscos e dúvidas'. Caminhos, funções, campos, comandos e rotas em `código inline`; o que "
+               "muda em **negrito**. Bloco de código só para rotas, assinaturas ou comandos, até 10 linhas, "
+               "nunca implementação. Sem repetir o pedido.")
 EXIT_PLAN = Tool(
     "exit_plan_mode",
     "Apresenta o plano ao usuário e pede autorização para executar. Só chame quando terminar de investigar. "
-    "Markdown com as seções Contexto, Abordagem, Passos, Verificação, Riscos e dúvidas.",
+    "Markdown com as seções Contexto, Abordagem, Passos, Verificação, Riscos e dúvidas: tabela nos Passos "
+    "quando forem vários arquivos, caminhos e comandos em código inline.",
     {"type": "object", "properties": {"plan": {"type": "string", "description": "Plano em markdown"}},
      "required": ["plan"]},
     lambda *_: "", mutating=False)
 # Também fora do REGISTRY: pergunta ao usuário no meio do trabalho (card com opções), em qualquer modo do agente.
 ASK_USER = Tool(
     "ask_user",
-    "Faz UMA pergunta ao usuário e espera a resposta. Use quando uma decisão muda o trabalho (duas abordagens "
-    "válidas, requisito ambíguo, escolha de biblioteca) e não dá para inferir do código. Não use para confirmar o "
-    "óbvio nem para pedir permissão: as ferramentas já pedem.",
+    "Faz até 4 perguntas ao usuário de uma vez e espera as respostas. Use quando uma decisão muda o trabalho "
+    "(duas abordagens válidas, requisito ambíguo, escolha de biblioteca) e não dá para inferir do código. "
+    "Junte TODAS as dúvidas abertas nesta chamada: perguntar uma por vez faz o usuário esperar uma rodada para "
+    "cada. Não use para confirmar o óbvio nem para pedir permissão: as ferramentas já pedem.",
     {"type": "object",
-     "properties": {"question": {"type": "string", "description": "A pergunta, direta, uma frase"},
-                    "options": {"type": "array", "items": {"type": "string"},
-                                "description": "2 a 4 opções curtas, a recomendada primeiro. "
-                                               "O usuário também pode escrever outra resposta."}},
-     "required": ["question", "options"]},
+     "properties": {
+         "questions": {
+             "type": "array", "minItems": 1, "maxItems": 4,
+             "description": "As perguntas abertas, da mais importante para a menos.",
+             "items": {
+                 "type": "object",
+                 "properties": {
+                     "header": {"type": "string", "description": "Rótulo do assunto, até 12 caracteres"},
+                     "question": {"type": "string", "description": "A pergunta, direta, uma frase"},
+                     "multi_select": {"type": "boolean",
+                                      "description": "true quando o usuário pode marcar mais de uma opção"},
+                     "options": {
+                         "type": "array", "minItems": 2, "maxItems": 4,
+                         "description": "2 a 4 opções, a recomendada primeiro. O usuário também pode escrever "
+                                        "outra resposta.",
+                         "items": {"type": "object",
+                                   "properties": {
+                                       "label": {"type": "string", "description": "A opção, 1 a 5 palavras"},
+                                       "description": {"type": "string",
+                                                       "description": "Uma linha com o que essa escolha implica"}},
+                                   "required": ["label"]}}},
+                 "required": ["question", "options"]}}},
+     "required": ["questions"]},
     lambda *_: "", mutating=False)
 
 
@@ -260,14 +283,15 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
         if "delegate_task" in names:
             rules.append("- Para varrer muitos arquivos ou pastas, use delegate_task level='rapido' com perguntas "
                          "objetivas (onde está X, como Y é usado) e siga lendo enquanto ele responde.")
-        rules += ["- Decisão que muda o trabalho (duas abordagens válidas, requisito ambíguo)? Chame ask_user com as "
-                  "opções ANTES de fechar o plano. Não chute.",
+        rules += ["- Decisão que muda o trabalho (duas abordagens válidas, requisito ambíguo)? Junte as dúvidas e "
+                  "chame ask_user UMA vez, com todas (até 4), ANTES de fechar o plano. Não chute e não pergunte "
+                  "de uma em uma.",
                   "- Quando souber o que fazer, chame exit_plan_mode com o plano em markdown e PARE. "
                   "O usuário aprova (e escolhe o modo de execução) ou pede mudanças.",
                   "- " + PLAN_FORMAT]
     else:
-        rules.append("- Dúvida que muda o resultado e não dá para inferir do código: ask_user com opções. "
-                     "Não pergunte o óbvio.")
+        rules.append("- Dúvida que muda o resultado e não dá para inferir do código: ask_user com todas as "
+                     "perguntas de uma vez. Não pergunte o óbvio.")
         rules.append("- Ao terminar, responda com um resumo curto do que foi feito.")
     dica = EFFORT.get(effort, EFFORT["medio"])[1]
     if dica:
@@ -837,24 +861,56 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         result("erro", f"Erro inesperado: {e.__class__.__name__}: {e}")
 
 
+def ask_questions(args: dict) -> list[dict]:
+    """Perguntas normalizadas: schema novo (questions[]) ou o antigo (question + options de string)."""
+    raw = args.get("questions")
+    if not isinstance(raw, list) or not raw:  # conversa salva antes do lote, ou modelo que simplificou
+        raw = [{"question": args.get("question"), "options": args.get("options") or []}]
+    perguntas = []
+    for q in raw[:4]:
+        if not isinstance(q, dict) or not str(q.get("question") or "").strip():
+            continue
+        opts = []
+        for o in (q.get("options") or [])[:4]:
+            label = str((o.get("label") if isinstance(o, dict) else o) or "").strip()
+            desc = str(o.get("description") or "").strip() if isinstance(o, dict) else ""
+            if label:
+                opts.append({"label": label, "description": desc})
+        perguntas.append({"header": str(q.get("header") or "").strip()[:12],
+                          "question": str(q["question"]).strip(),
+                          "options": opts, "multi_select": bool(q.get("multi_select"))})
+    return perguntas
+
+
+def _answer_text(a) -> str:
+    return ", ".join(str(x).strip() for x in a if str(x).strip()) if isinstance(a, list) else str(a or "").strip()
+
+
 async def _ask(call: dict, run: Run, out: dict, meta: dict) -> AsyncIterator[dict]:
-    """ask_user: mostra a pergunta com opções e espera a resposta (ou a interrupção)."""
-    q = str(call["arguments"].get("question") or "").strip()
-    opts = [str(o).strip() for o in (call["arguments"].get("options") or []) if str(o).strip()][:4]
-    if not q:
-        out.update(status="erro", text="Envie a pergunta em 'question'.", meta=meta)
+    """ask_user: mostra até 4 perguntas num card só e espera as respostas (ou a interrupção)."""
+    qs = ask_questions(call["arguments"])
+    if not qs:
+        out.update(status="erro", meta=meta,
+                   text="Envie as perguntas em 'questions', cada uma com 'question' e 'options'.")
         return
+    meta["questions"] = qs
     fut = asyncio.get_running_loop().create_future()
     run.pending[call["id"]] = fut
-    yield {"type": "question_request", "call": call, "question": q, "options": opts}
+    yield {"type": "question_request", "call": call, "questions": qs,
+           "question": qs[0]["question"], "options": [o["label"] for o in qs[0]["options"]]}
     decision = await fut
     run.pending.pop(call["id"], None)
-    answer = str((decision.get("answer") if isinstance(decision, dict) else "") or "").strip()
-    if run.cancel.is_set() or not answer:
+    decision = decision if isinstance(decision, dict) else {}
+    raw = decision.get("answers")
+    answers = [_answer_text(a) for a in (raw if isinstance(raw, list) else [decision.get("answer")])][:len(qs)]
+    answers += [""] * (len(qs) - len(answers))
+    if run.cancel.is_set() or not any(answers):
         out.update(status="cancelada", text="O usuário não respondeu: geração interrompida.", meta=meta)
         return
-    meta["answer"] = answer
-    out.update(status="ok", text=f"Resposta do usuário: {answer}", meta=meta)
+    meta["answers"] = answers
+    out.update(status="ok", meta=meta,
+               text="Respostas do usuário:\n" + "\n".join(f"- {q['question']}: {a or '(sem resposta)'}"
+                                                           for q, a in zip(qs, answers)))
 
 
 async def _plan(call: dict, run: Run, out: dict, meta: dict) -> AsyncIterator[dict]:
