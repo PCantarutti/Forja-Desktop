@@ -17,7 +17,7 @@ from typing import AsyncIterator
 
 import httpx
 
-from . import config
+from . import config, db, localai
 
 TIMEOUT = httpx.Timeout(connect=10, read=600, write=60, pool=10)
 
@@ -50,6 +50,7 @@ def _conn_error(provider: str, e: Exception) -> LLMError:
     hint = {
         "ollama": "Ollama está rodando? Ele precisa escutar em 0.0.0.0 (OLLAMA_HOST=0.0.0.0) para o Docker alcançar.",
         "lmstudio": "LM Studio está com o servidor ligado e 'Serve on Local Network' ativo?",
+        "llamacpp": "Nenhum modelo carregado. Abra o painel IA local e carregue um .gguf.",
     }.get(spec(provider)["type"], "Confira a URL em Configurações › Provedores.")
     return LLMError(f"Não foi possível conectar em {base_url(provider)}: {e.__class__.__name__}. {hint}")
 
@@ -70,6 +71,8 @@ async def context_limit(provider: str, model: str, num_ctx: int) -> int | None:
     kind = spec(provider)["type"]
     if kind == "ollama":
         return num_ctx
+    if kind == "llamacpp":
+        return localai.status().get("ctx")
     if kind == "lmstudio":
         try:
             async with httpx.AsyncClient(timeout=5) as c:
@@ -108,12 +111,47 @@ async def _reasoning(provider: str, model: str, effort: str | None, body: dict, 
         messages[0] = {**messages[0], "content": messages[0]["content"] + "\n/no_think"}
 
 
+# Amostragem por modelo (tela Inferência) -> corpo da requisição. `openai` genérico só aceita o que
+# está no padrão da API; o que é do llama.cpp (top_k, min_p, repeat_penalty...) faria ele devolver 400.
+OPENAI_PADRAO = {"temperature": "temperature", "top_p": "top_p", "max_tokens": "max_tokens", "stop": "stop"}
+LLAMACPP_EXTRA = {"top_k": "top_k", "min_p": "min_p", "repeat_penalty": "repeat_penalty"}
+OLLAMA_OPTS = {"temperature": "temperature", "top_p": "top_p", "top_k": "top_k", "min_p": "min_p",
+               "repeat_penalty": "repeat_penalty", "max_tokens": "num_predict", "stop": "stop"}
+
+
+def _inference(provider: str, model: str, extra: dict) -> None:
+    """Aplica os ajustes de amostragem salvos para este modelo. Nada salvo = padrão do servidor."""
+    cfg = db.get_model_setting(model).get("inference") or {}
+    cfg = {k: v for k, v in cfg.items() if not (k == "max_tokens" and not v) and not (k == "stop" and not v)}
+    if not cfg:
+        return
+    kind = spec(provider)["type"]
+    if kind == "ollama":
+        opts = {destino: cfg[chave] for chave, destino in OLLAMA_OPTS.items() if chave in cfg}
+        if opts:
+            extra["options"] = {**extra.get("options", {}), **opts}
+        if "think" in cfg and not cfg["think"]:
+            extra["think"] = False
+        return
+    mapa = dict(OPENAI_PADRAO) if kind == "openai" else {**OPENAI_PADRAO, **LLAMACPP_EXTRA}
+    for chave, destino in mapa.items():
+        if chave in cfg:
+            extra[destino] = cfg[chave]
+    if kind in ("llamacpp", "lmstudio"):
+        if "think" in cfg:  # o template do gguf decide; o Qwen3 usa enable_thinking
+            extra["chat_template_kwargs"] = {**extra.get("chat_template_kwargs", {}),
+                                             "enable_thinking": bool(cfg["think"])}
+        if cfg.get("reasoning_budget", -1) != -1:
+            extra["reasoning_budget"] = int(cfg["reasoning_budget"])
+
+
 async def chat_stream(provider: str, model: str, messages: list[dict], tools: list[dict] | None,
                       num_ctx: int, effort: str | None = None) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     messages = list(messages)
     extra: dict = {}
     await _reasoning(provider, model, effort, extra, messages)
+    _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     try:
         async for ev in impl(provider, model, messages, tools, num_ctx, extra):
             yield ev
@@ -210,8 +248,10 @@ def _to_ollama(messages: list[dict]) -> list[dict]:
 
 async def _ollama_stream(provider, model, messages, tools, num_ctx, extra: dict | None = None):
     host = base_url(provider).removesuffix("/v1")
+    extra = dict(extra or {})
+    opts = extra.pop("options", {})  # amostragem do modelo: entra junto com num_ctx, não por cima dele
     body: dict = {"model": model, "messages": _to_ollama(messages), "stream": True,
-                  "options": {"num_ctx": num_ctx}, **(extra or {})}
+                  "options": {"num_ctx": num_ctx, **opts}, **extra}
     if tools:
         body["tools"] = tools
     calls, prompt_tokens, completion_tokens = [], None, None
@@ -270,6 +310,9 @@ async def capabilities(provider: str, model: str) -> set[str] | None:
             elif kind == "lmstudio":
                 t = (await c.get(f"{host}/api/v0/models/{model}")).json().get("type")
                 caps = None if not t else ({"vision"} if t == "vlm" else set())
+            elif kind == "llamacpp":
+                # Quem carregou o modelo fomos nós: visão = tem mmproj.
+                caps = {"vision"} if localai.status().get("vision") else set()
     except (httpx.HTTPError, ValueError, AttributeError):
         caps = None
     if caps is not None:

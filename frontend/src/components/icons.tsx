@@ -56,3 +56,5 @@ export const PanelLeft = base(<><rect x="3" y="4" width="18" height="16" rx="2" 
 export const Sliders = base(<><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle cx="16" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>);
 export const Clipboard = base(<><rect x="6" y="4" width="12" height="16" rx="2" /><path d="M9 4h6v3H9z" /><path d="M9 11h6M9 15h4" /></>);
 export const Wrench = base(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z" />);
+export const Cpu = base(<><rect x="7" y="7" width="10" height="10" rx="1.5" /><rect x="4" y="4" width="16" height="16" rx="2.5" /><path d="M9 1.5v2.5M15 1.5v2.5M9 20v2.5M15 20v2.5M1.5 9H4M1.5 15H4M20 9h2.5M20 15h2.5" /></>);
+export const Image = base(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10" r="1.5" /><path d="m4 17 5-5 4 4 3-3 4 4" /></>);

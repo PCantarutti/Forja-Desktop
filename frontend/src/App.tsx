@@ -3,6 +3,7 @@ import { api, streamSSE, uploadFile } from "./api";
 import Sidebar from "./components/Sidebar";
 import BrowserPanel from "./components/BrowserPanel";
 import ServersPanel from "./components/ServersPanel";
+import LocalPanel from "./components/LocalPanel";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
@@ -137,6 +138,7 @@ export default function App() {
   const prevConv = useRef<number | null | undefined>(undefined);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [serversRunning, setServersRunning] = useState(0);
+  const [localRunning, setLocalRunning] = useState(false);
   const [liveOutput, setLiveOutput] = useState<Record<string, string>>({}); // saída ao vivo por chamada (run_command)
   const [liveTasks, setLiveTasks] = useState<Task[] | null>(null); // lista de tarefas do run atual
   const [queued, setQueued] = useState<string[]>([]); // mensagens na fila (enviadas durante a execução)
@@ -985,6 +987,7 @@ export default function App() {
             onSelect={(tab) => setRight((r) => (r.collapsed || r.tab !== tab ? { tab, collapsed: false } : { ...r, collapsed: true }))}
             browserOpen={browserOpen}
             serversRunning={serversRunning}
+            localRunning={localRunning}
             plansPending={plans.filter((p) => p.status === "pendente").length}
             plansTotal={plans.length}
             changesCount={changesCount}
@@ -1352,6 +1355,8 @@ export default function App() {
           <BrowserPanel conv={browserKey} onState={(s) => setBrowserOpen(s.open)} />
         ) : right.tab === "servers" ? (
           <ServersPanel onCount={setServersRunning} />
+        ) : right.tab === "local" ? (
+          <LocalPanel onRunning={setLocalRunning} />
         ) : right.tab === "terminal" ? (
           <TerminalPanel conv={browserKey} />
         ) : right.tab === "changes" ? (

@@ -55,6 +55,8 @@ class ModelSetting(Base):
     model: Mapped[str] = mapped_column(String(300), primary_key=True)
     tool_mode: Mapped[str] = mapped_column(String(10), default="auto")  # native | text | auto
     vision: Mapped[str] = mapped_column(String(5), default="auto")  # auto (detectar) | yes | no
+    # Amostragem deste modelo: só as chaves que o usuário mudou. O resto fica com o padrão do servidor.
+    inference: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class Checkpoint(Base):
@@ -91,6 +93,8 @@ def _migrate() -> None:
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(model_settings)")}
         if "vision" not in cols:
             c.exec_driver_sql("ALTER TABLE model_settings ADD COLUMN vision VARCHAR(5) DEFAULT 'auto'")
+        if "inference" not in cols:
+            c.exec_driver_sql("ALTER TABLE model_settings ADD COLUMN inference JSON")
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(conversations)")}
         if "workspace" not in cols:
             c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN workspace VARCHAR(1000)")
@@ -118,7 +122,8 @@ def session() -> Session:
 def get_model_setting(model: str) -> dict:
     with session() as s:
         ms = s.get(ModelSetting, model)
-        return {"tool_mode": ms.tool_mode if ms else "auto", "vision": (ms.vision if ms else None) or "auto"}
+        return {"tool_mode": ms.tool_mode if ms else "auto", "vision": (ms.vision if ms else None) or "auto",
+                "inference": (ms.inference if ms else None) or {}}
 
 
 def get_tool_mode(model: str) -> str:

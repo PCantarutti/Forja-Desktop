@@ -52,6 +52,14 @@ PROVIDERS = {
                  "url": os.getenv("LMSTUDIO_URL", "http://127.0.0.1:1234/v1"), "api_key": ""},
 }
 
+# IA local (llama.cpp + stable-diffusion.cpp rodando dentro do Forja)
+LOCAL_PORT = int(os.getenv("FORJA_LOCAL_PORT", "8077"))   # porta do llama-server que o Forja sobe
+LOCAL_CONFIG = Path(os.getenv("LOCAL_CONFIG") or DATA_DIR / "local.json")  # pastas e params por modelo
+MODELS_DIR = Path(os.getenv("MODELS_DIR") or Path.home() / "Forja" / "modelos")
+# Provedor fixo do modelo local. Reinjetado em settings.apply() para não sumir de quem já salvou provedores.
+LOCAL_PROVIDER = {"id": "local", "name": "IA local (llama.cpp)", "type": "llamacpp",
+                  "url": f"http://127.0.0.1:{LOCAL_PORT}/v1", "api_key": ""}
+
 DISABLED_TOOLS: set[str] = set()   # ferramentas desligadas na tela de Configurações
 CUSTOM_INSTRUCTIONS = ""           # texto extra no fim do system prompt
 AUTO_APPROVE_TOOLS: list[str] = []     # globs de nomes de ferramenta que dispensam aprovação

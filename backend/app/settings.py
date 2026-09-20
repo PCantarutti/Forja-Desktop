@@ -47,7 +47,7 @@ NUMBERS = {  # chave: (tipo, mínimo, máximo)
     "browser_scale": (int, 1, 3),
     "subagent_max_iterations": (int, 1, 100),
 }
-TYPES = ("ollama", "lmstudio", "openai")
+TYPES = ("ollama", "lmstudio", "openai", "llamacpp")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 
 
@@ -66,6 +66,8 @@ def load() -> dict:
 def apply(values: dict | None = None) -> dict:
     values = values or load()
     config.PROVIDERS = {p["id"]: p for p in values["providers"]}
+    # O provedor local não é editável na tela de Provedores: ele existe sempre que o app existe.
+    config.PROVIDERS.setdefault("local", copy.deepcopy(config.LOCAL_PROVIDER))
     config.NUM_CTX = int(values["num_ctx"])
     config.MAX_ITERATIONS = int(values["max_iterations"])
     config.MAX_FILE_BYTES = int(values["max_file_bytes"])
@@ -157,7 +159,7 @@ def validate(patch: dict, current: dict) -> dict:
             for slot in ("rapido", "capaz"):
                 spec = raw.get(slot) or {}
                 provider, model = str(spec.get("provider") or ""), str(spec.get("model") or "")
-                if provider and provider not in {p["id"] for p in values["providers"]}:
+                if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out

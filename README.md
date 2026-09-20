@@ -25,7 +25,8 @@ Ambiente de desenvolvimento pessoal com agente de IA **local**, num app de deskt
 ## Requisitos
 
 - Windows 10/11 (x64)
-- **Ollama** ou **LM Studio** rodando no seu PC, com um modelo que saiba usar ferramentas (testado com Qwen3.6-35B-A3B)
+- Um modelo que saiba usar ferramentas (testado com Qwen3.6-35B-A3B). Três caminhos: a **IA local** do próprio
+  Forja (llama.cpp embutido, veja abaixo), o **Ollama** ou o **LM Studio** rodando no seu PC
 
 Opcionais, cada um só para a parte que usa: **git** (aba Alterações), **GitHub CLI** (`gh`, botão Criar PR), **Node.js** e **uv** (servidores MCP via `npx`/`uvx`). O painel *Info* mostra o que ele encontrou no PATH, e o agente é avisado do que falta.
 
@@ -54,6 +55,7 @@ Seus dados (conversas, configurações, chaves e `mcp.json`) ficam em `%APPDATA%
 | `browser_tabs` | Lista, abre, troca ou fecha abas da sessão | não |
 | `browser_eval` | Executa JavaScript na página | **sempre** |
 | `browser_screenshot` | Screenshot da página: aparece no chat para você; vai ao modelo como imagem **só se ele tiver visão** | não |
+| `image_generate` | Gera uma imagem com o stable-diffusion.cpp local; o PNG vai para a pasta de trabalho e aparece no chat | conforme o **modo de permissão** |
 | `mcp__<servidor>__<tool>` | Ferramentas dos servidores MCP configurados | sim, a menos que o servidor marque a ferramenta como somente leitura (`readOnlyHint`) |
 
 `run_command`, `serve_start` e o Terminal rodam **na sua máquina**, na pasta da conversa, com `pwsh` se existir, senão `powershell`. `npm install`, venvs e servidores ficam nativos, como se você tivesse digitado. Há timeout (padrão 60 s, teto `SHELL_TIMEOUT_MAX`) e, ao estourar, a árvore inteira de processos é encerrada.
@@ -263,6 +265,106 @@ No painel lateral, em **Tool calling deste modelo**:
 - `native`: só tool calling nativo.
 - `text`: não envia `tools`. O schema vai no system prompt e o modelo responde com `<tool_call>{...}</tool_call>`. Use com modelos sem suporte nativo.
 
+## IA local (llama.cpp e stable-diffusion.cpp)
+
+O painel **IA local** (ícone de chip, à direita) roda o modelo dentro do próprio Forja: sem Ollama, sem LM Studio, sem
+servidor separado. Ele usa os binários oficiais do [llama.cpp](https://github.com/ggml-org/llama.cpp) (chat) e do
+[stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) (imagem).
+
+**Runtime sob demanda.** Nada disso vem no instalador. Na primeira vez, o painel oferece o download:
+
+| Backend | Tamanho | Quando usar |
+|---|---|---|
+| `vulkan` | ~30 MB | Padrão. Roda em NVIDIA, AMD e Intel |
+| `cuda` | ~240 MB + ~370 MB do runtime da NVIDIA | Só NVIDIA; costuma ser o mais rápido |
+| `cpu` | ~18 MB | Sem GPU |
+
+Os binários ficam em `%APPDATA%\Forja\runtimes`. Para trocar de backend, baixe o outro: o Forja usa sempre o melhor
+instalado (cuda › vulkan › cpu).
+
+**Modelos.** A aba *Baixar* tem as pastas de modelos e o botão **Procurar modelos**, que abre a janela de busca do
+Hugging Face: lista à esquerda (nome, publicador, downloads, curtidas, data) e a ficha do modelo à direita —
+downloads, curtidas, última atualização, PARAMS/ARCH/CTX/licença, **capacidades** (visão, ferramentas, raciocínio),
+as **opções de download** com quantização e tamanho de cada arquivo, e o README do modelo. As capacidades não são
+chute: saem do template de chat e da arquitetura que o próprio Hugging Face expõe do gguf. O README vem sem as tags
+HTML do card — a janela mostra markdown, e renderizar HTML de terceiros dentro do app não é uma boa ideia.
+
+O download tem barra de progresso e leva junto as partes de um modelo dividido (`00001-of-00003`). O campo
+**Baixar para** escolhe em qual pasta o arquivo cai, e a escolha fica valendo para os próximos. Se você já baixou por fora, clique em
+**Adicionar** e aponte a pasta: ela passa a ser varrida junto com a padrão (`~\Forja\modelos`), e a lista mostra em
+qual pasta cada modelo está. A lixeira ao lado de um modelo **apaga o arquivo do disco** (com as outras partes, se for
+dividido, e com os ajustes de carga dele) — pede confirmação, não vai para a lixeira do Windows e não dá para desfazer.
+O modelo carregado não pode ser apagado: descarregue antes.
+
+**Carregar.** Na aba *Modelos*, escolha um `.gguf`. Cada campo já vem com o padrão de verdade — os do `--help`
+daquela build do llama.cpp (lote 2048, lote físico 512, checkpoints 32) e os que saem do próprio arquivo: todas as
+camadas na GPU, os especialistas que o modelo usa e o contexto que ele suporta. O que você mudar fica **destacado em
+azul com uma lixeira do lado** para voltar ao padrão, e só o que está fora do padrão é salvo. Cada rótulo tem um (?)
+explicando o que a opção faz. Se houver um `mmproj-*.gguf` na pasta do modelo, ele entra sozinho no campo do projetor
+e o modelo já carrega com visão.
+
+Em cima do formulário fica o **uso estimado de memória**, GPU e total, recalculado a cada ajuste: ele soma os pesos
+que sobem para a GPU (respeitando os especialistas que ficam na CPU), o cache KV das camadas de atenção e os buffers
+de cálculo. Num Qwen3.6-35B-A3B com 19 camadas na GPU, a estimativa deu 6,9 GB de VRAM contra 6,7 GB medidos no log
+do llama.cpp.
+
+Os parâmetros, traduzidos direto para a linha de comando do `llama-server`:
+
+| Controle | Flag | Observação |
+|---|---|---|
+| Tamanho do contexto | `-c` | Quanto maior, mais memória |
+| Camadas na GPU | `-ngl` | 999 = tudo que couber; diminua se faltar VRAM |
+| Flash Attention | `-fa on\|off` | Precisa estar ligado para quantizar o cache KV |
+| Cache K / V | `--cache-type-k/-v` | `q8_0` corta quase metade da memória do cache |
+| Threads da CPU | `-t` | 0 = automático |
+| Lote de avaliação / físico | `-b` / `-ub` | 0 = padrão do llama.cpp |
+| Previsões simultâneas | `-np` | |
+| Checkpoints de contexto | `--ctx-checkpoints` | |
+| Camadas MoE na CPU | `--n-cpu-moe` | Para rodar MoE grande com pouca VRAM |
+| Número de especialistas | `--override-kv` | Sobrescreve o valor do gguf; o prefixo sai da arquitetura lida do próprio arquivo (`qwen35moe.expert_used_count`) |
+| Semente, RoPE base/escala | `--seed`, `--rope-freq-base/-scale` | 0 = automático |
+| KV unificado / KV fora da GPU | `--kv-unified`, `--no-kv-offload` | |
+| Manter na memória / Tentar mmap() | `--load-mode` (`mmap+mlock`, `mlock`, `none`) | mlock **sem** mmap faz o llama.cpp abortar se o modelo não couber de uma vez na RAM; na dúvida, deixe mmap ligado |
+| Projetor multimodal | `--mmproj` | Aponte o `mmproj-*.gguf` e o modelo passa a enxergar imagens |
+
+A lixeira no card do erro (e no log aberto) apaga o log do llama-server e esquece a falha; o X ao lado de um
+download ou geração já terminado tira aquele item da lista.
+
+Enquanto o modelo sobe, uma barra no alto da janela mostra a porcentagem (tempo decorrido sobre o estimado; o Forja
+aprende a velocidade da sua máquina na primeira carga). Se falhar, o erro **fica na tela** com o fim do log do
+llama-server ao lado de um "ver log" — não some no próximo refresh.
+
+Antes de subir o servidor, o Forja lê o `--help` do binário e descarta a opção que aquela build não conhece — o
+llama.cpp renomeia opção de tempos em tempos (o `--mlock`/`--no-mmap` virou `--load-mode`) e, com um nome que
+ele não conhece, sai com código 1 e uma linha de erro.
+
+Os ajustes ficam salvos **por modelo** em `%APPDATA%\Forja\local.json`. Campos em zero não viram flag: quem decide é
+o llama.cpp.
+
+Carregado, o modelo aparece no seletor do chat sob o provedor **IA local** (`llama-server` em `127.0.0.1:8077`, com
+`--jinja` para o tool calling nativo sair do template do gguf). Um modelo por vez; carregar outro descarrega o anterior,
+e fechar o Forja descarrega tudo.
+
+**Inferência.** A aba *Inferência* é a amostragem do modelo, como a aba homônima do LM Studio: temperatura, top-k,
+top-p, min-p, penalidade de repetição, limite da resposta, strings de parada, "pensar antes de responder"
+(`enable_thinking` do template) e teto de raciocínio. O padrão de cada campo é o que o **próprio .gguf recomenda**
+(`general.sampling.*`) e, na falta dele, o do llama.cpp — o Qwen3.6, por exemplo, já vem com temperatura 1,0 e
+top-k 20. Como nos parâmetros de carga, só o que você muda fica salvo e destacado.
+
+Esses ajustes ficam em `model_settings`, por modelo, então **valem em qualquer provedor**: o mesmo modelo servido pelo
+Ollama ou pelo LM Studio usa os mesmos valores. O que é específico do llama.cpp (top-k, min-p, penalidade de
+repetição) não é enviado para um provedor OpenAI genérico, que responderia HTTP 400.
+
+Ficam de fora, de propósito: prompt de sistema, truncagem de contexto e saída estruturada — no Forja quem cuida disso
+é o agente (Configurações › Instruções e a compactação automática).
+
+**Imagem.** A aba *Imagem* gera na hora: modelo, prompt, negativo, passos, CFG, tamanho, amostrador e semente
+(0 = aleatória). Embaixo do seletor, uma linha diz qual modelo está em uso, de qual pasta e com que tamanho — o
+sd.cpp carrega o modelo a cada imagem e libera a memória no fim, então nada fica preso na GPU entre uma e outra.
+O campo **Salvar imagens em** escolhe a pasta de saída (padrão `%APPDATA%\Forja\imagens`). Os mesmos ajustes valem
+para a ferramenta `image_generate`, então basta pedir *"gere uma imagem de uma raposa na neve"* na conversa; a imagem
+do agente vai para a pasta de trabalho da conversa, não para a pasta do painel.
+
 ## Troubleshooting
 
 **A janela não abre / fecha sozinha**
@@ -315,6 +417,15 @@ node_modules\7zip-bin\win\x64\7za.exe x -y "-o$cache\winCodeSign-2.6.0" "$cache\
 
 `scripts/prepare.mjs` baixa o CPython portátil (python-build-standalone), instala as dependências, baixa o `chromium-headless-shell`, gera o ícone, builda a interface e copia o backend para `resources/`. Depois o electron-builder monta `dist/Forja-Setup-<versão>.exe` (~245 MB; ~900 MB instalado). Tudo em `resources/` e `build/` é gerado: pode apagar e rodar de novo.
 
+**Sobrou um llama-server rodando**
+Ao sair, o Electron mata a árvore de processos do backend e o modelo sai da memória junto. Se o backend levar um kill
+seco (ou travar), o llama-server pode ficar de pé segurando a memória; na próxima vez que o Forja subir, ele encerra
+esse processo órfão pelo pid que ficou anotado em `%APPDATA%\Forja\llama-server.pid`.
+
+**A porta 8077 já está ocupada / o modelo local não carrega**
+Outro `llama-server` está rodando (talvez de uma execução anterior travada). Feche-o, ou mude `FORJA_LOCAL_PORT`. Se o
+carregamento falhar, o painel mostra o fim de `%APPDATA%\Forja\logs\llama-server.log`, que traz o erro do llama.cpp.
+
 ### Variáveis de ambiente
 
 O app define o que precisa; elas existem para desenvolvimento e casos especiais.
@@ -336,6 +447,9 @@ O app define o que precisa; elas existem para desenvolvimento e casos especiais.
 | `BROWSER_IDLE_MINUTES` | `30` | Fecha a sessão do navegador ociosa (0 = nunca) |
 | `BROWSER_SCALE` | `2` | Escala de renderização do Chromium (1 a 3) |
 | `BROWSER_STREAM` | `jpeg` | Formato do espelho (modo web): `jpeg` (padrão, leve) ou `png` (sem perda, pesado) |
+| `FORJA_LOCAL_PORT` | `8077` | Porta do `llama-server` da IA local |
+| `MODELS_DIR` | `~/Forja/modelos` | Pasta padrão dos modelos locais (.gguf) |
+| `LOCAL_CONFIG` | `%APPDATA%\Forja\local.json` | Pastas de modelo e parâmetros de carga de cada modelo |
 | `FORJA_CDP` | vazio | Endpoint CDP do Electron (`http://127.0.0.1:PORTA`); o main.js define sozinho. Com ele, as abas são views nativas na janela e o espelho fica desligado |
 
 ### Estrutura
@@ -354,6 +468,9 @@ backend/app/
   shell.py       run_command e serve_*
   terminal.py    o shell da aba Terminal
   web.py         web_search (DuckDuckGo/SearXNG) e fetch_url
+  localai.py     IA local: runtimes do llama.cpp/sd.cpp, modelos, Hugging Face e o llama-server
+  imagegen.py    geração de imagem com o sd-cli + ferramenta image_generate
+  downloads.py   downloads e trabalhos com progresso (runtime, modelo, imagem)
   browser.py     navegador integrado (Playwright): sessão, abas nativas via CDP do Electron ou headless + screencast, browser_*
   mcp_client.py  conexão com servidores MCP (stdio/HTTP) e registro das ferramentas
   parsing.py     parser de tool calls em texto, detector de promessa e de loop

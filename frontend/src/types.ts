@@ -125,3 +125,182 @@ export type Stats = {
   tps: number | null;
   ctx_max: number | null;
 };
+
+// ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
+
+/** Parâmetros de carga do llama-server. Zero/padrão = deixa o llama.cpp decidir. */
+export type LlamaParams = {
+  ctx: number;
+  ngl: number;
+  threads: number;
+  batch: number;
+  ubatch: number;
+  parallel: number;
+  flash_attn: boolean;
+  cache_type_k: string;
+  cache_type_v: string;
+  kv_unified: boolean;
+  no_kv_offload: boolean;
+  mlock: boolean;
+  mmap: boolean;
+  seed: number;
+  rope_freq_base: number;
+  rope_freq_scale: number;
+  ctx_checkpoints: number;
+  n_cpu_moe: number;
+  n_expert: number;
+  mmproj: string;
+};
+
+export type LocalModel = {
+  path: string;
+  name: string;
+  size: number;
+  mtime: number;
+  shards: number; // > 1 = modelo dividido em vários arquivos
+  folder: string;
+};
+
+/** Metadados lidos do cabeçalho do .gguf. */
+export type ModelInfo = {
+  arch: string;
+  n_layer: number;
+  n_head_kv: number;
+  head_dim: number;
+  ctx_train: number; // contexto máximo treinado
+  n_expert: number;
+  n_expert_used: number;
+  attn_interval: number; // 1 em cada N camadas tem atenção (modelos híbridos)
+  size: number;
+};
+
+/** Estimativa de memória: o que vai para a VRAM e o total com a RAM. */
+export type MemoryEstimate = {
+  ok: boolean;
+  gpu: number;
+  total: number;
+  weights_gpu: number;
+  weights_cpu: number;
+  kv: number;
+  kv_gpu: number;
+  recurrent: number;
+  compute_gpu: number;
+  layers_gpu: number;
+  n_layer: number;
+  ctx_train: number;
+  attn_layers: number;
+};
+
+/** Amostragem de um modelo (tela Inferência). Vale para qualquer provedor: fica em model_settings. */
+export type Inference = {
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  min_p: number;
+  repeat_penalty: number;
+  max_tokens: number; // 0 = sem limite
+  stop: string[];
+  think: boolean; // enable_thinking do template
+  reasoning_budget: number; // -1 = sem teto
+};
+
+/** Resposta de POST /local/model: padrões, valores atuais, o que saiu do padrão e a estimativa. */
+export type ModelView = {
+  path: string;
+  info: ModelInfo;
+  defaults: LlamaParams;
+  params: LlamaParams;
+  overrides: (keyof LlamaParams)[];
+  estimate: MemoryEstimate;
+  model: string; // id do modelo no chat (alias do llama-server)
+  inference: Inference;
+  inference_defaults: Inference;
+  inference_overrides: (keyof Inference)[];
+};
+
+/** Download ou geração em andamento (barra de progresso no painel). */
+export type Job = {
+  id: string;
+  kind: "runtime" | "modelo" | "imagem" | string;
+  name: string;
+  done: number;
+  total: number;
+  status: "running" | "pronto" | "erro" | "cancelado" | string;
+  error: string;
+  detail: string;
+  result: string | null;
+};
+
+export type ImageOpts = {
+  model: string;
+  out_dir: string; // vazio = %APPDATA%/Forja/imagens
+  vae: string;
+  clip_l: string;
+  t5xxl: string;
+  diffusion_model: string;
+  steps: number;
+  cfg: number;
+  width: number;
+  height: number;
+  sampler: string;
+  negative: string;
+};
+
+export type RuntimeInfo = { installed: boolean; exe: string; backend: string; backends: string[] };
+
+export type LocalState = {
+  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo };
+  models: LocalModel[];
+  server: {
+    running: boolean;
+    port: number;
+    path?: string;
+    alias?: string;
+    params?: LlamaParams;
+    ctx?: number | null;
+    pid?: number;
+    uptime?: number;
+    vision?: boolean;
+    // Carga em andamento (barra no topo da janela) e a falha da última tentativa, que fica até a próxima.
+    loading?: { path: string; name: string; elapsed: number; eta: number; percent: number };
+    error?: { when: number; path: string; message: string; log: string };
+  };
+  dirs: string[];
+  download_dir: string; // para onde vão os downloads (uma das dirs)
+  jobs: Job[];
+  defaults: LlamaParams;
+  last: string;
+  image: ImageOpts;
+  image_dir: string; // pasta onde as imagens do painel são salvas
+  image_models: LocalModel[];
+  port: number;
+};
+
+export type HfModel = {
+  id: string;
+  author: string;
+  downloads: number;
+  likes: number;
+  updated: string;
+  gated: boolean;
+  tags: string[];
+};
+
+/** Ficha de um repositório na janela de busca. */
+export type HfRepo = {
+  id: string;
+  author: string;
+  downloads: number;
+  likes: number;
+  updated: string;
+  gated: boolean;
+  tags: string[];
+  license: string;
+  params: number;
+  arch: string;
+  ctx_train: number;
+  capabilities: { vision: boolean; tools: boolean; reasoning: boolean };
+  files: HfFile[];
+  readme: string;
+};
+export type HfFile = { path: string; size: number; quant: string; shards: number };

@@ -12,8 +12,8 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (checkpoints, compact, config, db, gitops, llm, mcp_client, memory, mirror, native, policy, settings,
-               shell, skills, subagents, terminal, uploads, workspace)
+from . import (checkpoints, compact, config, db, downloads, gitops, imagegen, llm, localai, mcp_client, memory,
+               mirror, native, policy, settings, shell, skills, subagents, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .tools import REGISTRY, ToolError
@@ -31,12 +31,14 @@ async def lifespan(_app):
         print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
+    localai.reap_orphan()  # sobra de um backend que morreu sem descarregar o modelo
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
     task = asyncio.create_task(mcp_client.start())
     yield
     task.cancel()
+    localai.unload()  # o modelo local morre com o backend (no app o Electron já mata a árvore)
     await mcp_client.stop()
     await MANAGER.shutdown()
 
@@ -204,6 +206,7 @@ class ModelSettingBody(BaseModel):
     model: str
     tool_mode: str | None = None  # native | text | auto
     vision: str | None = None     # auto | yes | no
+    inference: dict | None = None  # amostragem: só o que saiu do padrão (tela Inferência)
 
 
 @app.get("/api/model-settings")
@@ -218,9 +221,14 @@ def put_model_settings(body: ModelSettingBody):
     if body.vision is not None and body.vision not in ("auto", "yes", "no"):
         raise HTTPException(400, "vision deve ser auto, yes ou no")
     current = db.get_model_setting(body.model)
+    try:
+        # A tela Inferência manda só o que saiu do padrão; substitui o conjunto, não faz merge.
+        inference = current["inference"] if body.inference is None else localai.clean_inference(body.inference)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
     with db.session() as s:
         s.merge(db.ModelSetting(model=body.model, tool_mode=body.tool_mode or current["tool_mode"],
-                                vision=body.vision or current["vision"]))
+                                vision=body.vision or current["vision"], inference=inference))
         s.commit()
     return {"model": body.model, **db.get_model_setting(body.model)}
 
@@ -248,6 +256,199 @@ async def stop_server(name: str):
     except ToolError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "name": name}
+
+
+# ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
+# O llama-server sobe como filho deste processo; o Electron mata a árvore ao sair, então o modelo
+# descarrega junto com o app.
+
+class RuntimeBody(BaseModel):
+    kind: str = "llama"      # llama | sd
+    backend: str = "vulkan"  # vulkan | cpu | cuda
+
+
+class LoadBody(BaseModel):
+    path: str
+    params: dict = {}
+
+
+class DirsBody(BaseModel):
+    dirs: list[str] = []
+
+
+class DownloadBody(BaseModel):
+    repo: str
+    file: str
+    folder: str = ""
+
+
+class ImageBody(BaseModel):
+    prompt: str = ""
+    opts: dict = {}
+    confirm: bool = False  # sim, pode descarregar o modelo que está na VRAM
+
+
+class PathsBody(BaseModel):
+    models_dir: str = ""
+    image_dir: str = ""
+
+
+@app.get("/api/local")
+async def local_state():
+    """Tudo que o painel IA local precisa: runtimes, modelos, servidor e downloads em andamento."""
+    return await asyncio.to_thread(localai.state)
+
+
+@app.post("/api/local/runtime")
+async def local_runtime(body: RuntimeBody):
+    try:
+        return await asyncio.to_thread(localai.install_runtime, body.kind, body.backend)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/model")
+async def local_model(body: LoadBody):
+    """Metadados, padrões, o que o usuário mudou e a estimativa de memória de um modelo."""
+    try:
+        return await asyncio.to_thread(localai.model_view, body.path, body.params)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/model/delete")
+async def local_model_delete(body: LoadBody):
+    """Apaga o .gguf do disco (com os shards). Irreversível: a interface confirma antes."""
+    try:
+        return {"removed": await asyncio.to_thread(localai.remove_model, body.path)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/load")
+async def local_load(body: LoadBody):
+    try:
+        return await asyncio.to_thread(localai.load, body.path, body.params)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/unload")
+async def local_unload():
+    await asyncio.to_thread(localai.unload)
+    return {"ok": True}
+
+
+@app.put("/api/local/params")
+async def local_params(body: LoadBody):
+    try:
+        return await asyncio.to_thread(localai.save_params, body.path, body.params)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/log")
+async def local_log(tail: int = 80):
+    return {"log": await asyncio.to_thread(localai.log, tail)}
+
+
+@app.put("/api/local/dirs")
+async def local_dirs(body: DirsBody):
+    try:
+        return {"dirs": await asyncio.to_thread(localai.set_dirs, body.dirs)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/search")
+async def local_search(q: str, kind: str = "text"):
+    try:
+        return {"models": await asyncio.to_thread(localai.search, q, kind)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/files")
+async def local_files(repo: str, kind: str = "text"):
+    try:
+        return {"files": await asyncio.to_thread(localai.files, repo, kind)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/repo")
+async def local_repo(repo: str, kind: str = "text"):
+    """Ficha do modelo no Hugging Face: números, capacidades, arquivos para baixar e README."""
+    try:
+        return await asyncio.to_thread(localai.repo_info, repo, kind)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/download")
+async def local_download(body: DownloadBody):
+    try:
+        return await asyncio.to_thread(localai.download, body.repo, body.file, body.folder)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/jobs/{job_id}/dismiss")
+def local_dismiss(job_id: str):
+    """Tira um download/geração já terminado da lista (inclusive o que falhou)."""
+    downloads.dismiss(job_id)
+    return {"ok": True}
+
+
+@app.post("/api/local/log/clear")
+async def local_log_clear():
+    """Apaga o log do llama-server e esquece o erro da última carga."""
+    await asyncio.to_thread(localai.clear_error)
+    return {"ok": True}
+
+
+@app.post("/api/local/jobs/{job_id}/cancel")
+def local_cancel(job_id: str):
+    downloads.cancel(job_id)
+    return {"ok": True}
+
+
+@app.post("/api/local/image")
+def local_image(body: ImageBody):
+    try:
+        return imagegen.start_job(body.prompt, body.opts, body.confirm)
+    except imagegen.ModeloCarregado as e:
+        # 409: a interface pergunta se pode descarregar e repete com confirm=true.
+        raise HTTPException(409, str(e))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/paths")
+async def local_paths(body: PathsBody):
+    """Pastas padrão: modelos baixados e imagens geradas."""
+    try:
+        return await asyncio.to_thread(localai.set_paths, body.models_dir, body.image_dir)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/image/defaults")
+async def local_image_defaults(body: dict):
+    try:
+        return await asyncio.to_thread(localai.set_image, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/image/file")
+def local_image_file(path: str):
+    """Só serve PNG gerado pelo painel (a pasta padrão ou a que a tela Imagem escolheu)."""
+    f = Path(path).resolve()
+    pastas = {imagegen.OUT_DIR.resolve(), imagegen.out_dir().resolve()}
+    if not (pastas & set(f.parents)) or not f.is_file():
+        raise HTTPException(404, "Imagem não encontrada")
+    return FileResponse(f)
 
 
 # ------------------------------------------------------------------ navegador integrado

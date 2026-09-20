@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, Clipboard, GitBranch, Globe, Info, PanelRight, Terminal } from "./icons";
+import { Activity, Clipboard, Cpu, GitBranch, Globe, Info, PanelRight, Terminal } from "./icons";
 
-export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "terminal";
+export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "terminal" | "local";
 
 // Largura de cada aba. Só o Navegador redimensiona (mínimo MIN_BROWSER, valor salvo).
-const WIDTH: Record<Exclude<RightTab, "browser">, number> = { info: 288, servers: 288, plans: 440, changes: 520, terminal: 560 };
+const WIDTH: Record<Exclude<RightTab, "browser">, number> = { info: 288, servers: 288, plans: 440, changes: 520, terminal: 560, local: 420 };
 const MIN_BROWSER = 320;
 const KEY = "forja.right.width";
 
@@ -14,6 +14,7 @@ const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: "terminal", label: "Terminal", icon: <Terminal className="size-4" /> },
   { id: "changes", label: "Alterações", icon: <GitBranch className="size-4" /> },
   { id: "servers", label: "Instâncias", icon: <Activity className="size-4" /> },
+  { id: "local", label: "IA local", icon: <Cpu className="size-4" /> },
   { id: "plans", label: "Planos", icon: <Clipboard className="size-4" /> },
 ];
 
@@ -27,11 +28,14 @@ export function RightTabsBar(props: {
   plansPending: number; // planos esperando decisão do usuário
   plansTotal: number;
   changesCount: number; // arquivos alterados pelo agente nesta conversa
+  localRunning: boolean; // modelo local carregado no llama-server
 }) {
   const badge = (id: RightTab) =>
     id === "changes" && props.changesCount > 0 ? (
       <span className="rounded-full bg-amber-600/80 px-1.5 text-[10px] leading-4 text-white">{props.changesCount}</span>
     ) : id === "browser" && props.browserOpen ? (
+      <span className="size-1.5 rounded-full bg-emerald-400" />
+    ) : id === "local" && props.localRunning ? (
       <span className="size-1.5 rounded-full bg-emerald-400" />
     ) : id === "servers" && props.serversRunning > 0 ? (
       <span className="rounded-full bg-emerald-600/80 px-1.5 text-[10px] leading-4 text-white">{props.serversRunning}</span>
