@@ -34,7 +34,10 @@ TIMEOUT = 1800  # 30 min: CPU puro com modelo grande é lento mesmo
 
 
 def _opts(patch: dict | None = None) -> dict:
-    return {**localai.read_config()["image"], **{k: v for k, v in (patch or {}).items() if v not in (None, "")}}
+    """Padrão da aba Imagem + ajustes daquele modelo + o que veio na chamada."""
+    base = localai.read_config()["image"]
+    do_modelo = localai.image_params(base.get("model", "")) if base.get("model") else {}
+    return {**base, **do_modelo, **{k: v for k, v in (patch or {}).items() if v not in (None, "")}}
 
 
 def argv(exe: Path, prompt: str, out: Path, o: dict) -> list[str]:
@@ -58,11 +61,16 @@ def argv(exe: Path, prompt: str, out: Path, o: dict) -> list[str]:
     return a
 
 
-def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "") -> Path:
-    """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread."""
+def _exe() -> Path:
     exe = localai.find_exe("sd")
     if not exe:
         raise ToolError("stable-diffusion.cpp não instalado. Baixe o runtime no painel IA local.")
+    return exe
+
+
+def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "") -> Path:
+    """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread."""
+    exe = _exe()
     if not prompt.strip():
         raise ToolError("Descreva a imagem (prompt vazio).")
     o = _opts(opts)
@@ -97,7 +105,8 @@ def start_job(prompt: str, opts: dict | None = None, confirm: bool = False) -> d
     Com um LLM carregado, os dois disputam a VRAM — então descarregamos antes, mas só depois de a
     pessoa confirmar, porque isso derruba o cache de contexto do chat que estiver aberto.
     """
-    if localai.status()["running"]:
+    argv(_exe(), prompt or " ", OUT_DIR / "x.png", _opts(opts))  # valida runtime, modelo e prompt ANTES
+    if localai.status()["running"]:                                # de descarregar o LLM por nada
         if not confirm:
             raise ModeloCarregado(localai.status().get("alias") or "um modelo")
         localai.unload()

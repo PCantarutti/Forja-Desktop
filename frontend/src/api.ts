@@ -5,7 +5,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error(body.detail ?? `HTTP ${r.status}`);
+    // O status vai junto: alguns erros são perguntas (409 = precisa de confirmação), não falhas.
+    throw Object.assign(new Error(body.detail ?? `HTTP ${r.status}`), { status: r.status });
   }
   return r.json();
 }

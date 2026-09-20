@@ -116,9 +116,28 @@ DEFAULT_IMAGE = {
 _cfg_lock = threading.Lock()
 
 
+CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "diffusion_model", "out_dir")
+
+
+def _image_valores(patch: dict) -> dict:
+    """Só as chaves conhecidas, no tipo certo e com a barra normalizada."""
+    out: dict = {}
+    for k, default in DEFAULT_IMAGE.items():
+        if k not in patch:
+            continue
+        try:
+            out[k] = type(default)(patch[k])
+        except (TypeError, ValueError):
+            raise ToolError(f"Valor inválido para '{k}': {patch[k]!r}")
+        if k in CAMINHOS_IMAGEM and out[k]:
+            # O que vem da API com "/" tem que bater com o que a varredura acha com barra invertida.
+            out[k] = os.path.normpath(str(out[k]))
+    return out
+
+
 def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
-            "download_dir": "", "models_dir": ""}
+            "download_dir": "", "models_dir": "", "image_models": {}}
 
 
 def read_config() -> dict:
@@ -350,8 +369,61 @@ def scan(exts: tuple[str, ...] = (".gguf",)) -> list[dict]:
                             if f.with_name(f"{m.group('base')}-{i:05d}-of-{shards:05d}.gguf").exists()), 0)
             key = str(f)
             seen[key] = {"path": key, "name": m.group("base") if m else f.stem, "size": size,
-                         "mtime": mtime, "shards": shards, "folder": str(root)}
+                         "mtime": mtime, "shards": shards, "folder": str(root), "kind": kind_of(f)}
     return sorted(seen.values(), key=lambda m: m["name"].lower())
+
+
+# ---------------------------------------------------------------- memória da máquina
+
+DEVICE_RE = re.compile(r"^\s*(\S+):\s*(.+?)\s*\((\d+) MiB(?:,\s*(\d+) MiB free)?\)", re.M)
+
+
+@functools.lru_cache(maxsize=4)
+def devices(exe: str) -> list[dict]:
+    """GPUs que o llama.cpp enxerga, com a VRAM de cada uma (`--list-devices`)."""
+    try:
+        r = subprocess.run([exe, "--list-devices"], cwd=str(Path(exe).parent), capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=60, **native.popen_kwargs())
+    except (OSError, subprocess.SubprocessError):
+        return []
+    saida = []
+    for _, nome, total, livre in DEVICE_RE.findall(r.stdout + r.stderr):
+        saida.append({"name": nome, "total": int(total) << 20, "free": int(livre or total) << 20})
+    return saida
+
+
+def system_ram() -> tuple[int, int]:
+    """(total, livre) da RAM. Sem dependência: é uma chamada da API do sistema."""
+    if native.WINDOWS:
+        import ctypes
+
+        class _Mem(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+        m = _Mem()
+        m.dwLength = ctypes.sizeof(_Mem)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+            return int(m.ullTotalPhys), int(m.ullAvailPhys)
+        return 0, 0
+    try:
+        total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+        livre = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_AVPHYS_PAGES")
+        return int(total), int(livre)
+    except (ValueError, OSError, AttributeError):
+        return 0, 0
+
+
+def hardware() -> dict:
+    """Quanta memória a máquina tem. É o que diz se um modelo cabe na GPU, na RAM, ou em lugar nenhum."""
+    exe = find_exe("llama")
+    gpus = devices(str(exe)) if exe else []
+    ram, ram_livre = system_ram()
+    return {"gpus": gpus, "vram": sum(g["total"] for g in gpus), "vram_free": sum(g["free"] for g in gpus),
+            "ram": ram, "ram_free": ram_livre}
 
 
 # ---------------------------------------------------------------- metadados do gguf
@@ -419,7 +491,7 @@ def gguf_info(path: str) -> dict:
     """Metadados úteis do modelo. Tudo zero/vazio quando o arquivo não dá para ler."""
     vazio = {"sampling": {}, "arch": "", "n_layer": 0, "n_head_kv": 0, "head_dim": 0, "ctx_train": 0, "n_expert": 0,
              "n_expert_used": 0, "n_head": 0, "embedding": 0, "attn_interval": 1, "ssm_inner": 0,
-             "ssm_state": 0, "ssm_conv": 0, "ssm_groups": 0, "size": 0, "tensors": []}
+             "ssm_state": 0, "ssm_conv": 0, "ssm_groups": 0, "layers": [], "size": 0, "tensors": []}
     try:
         st = Path(path).stat()
         data = _gguf(path, (st.st_size, int(st.st_mtime)))
@@ -427,14 +499,27 @@ def gguf_info(path: str) -> dict:
         return vazio
     kv, arch = data["kv"], str(data["kv"].get("general.architecture") or "")
 
+    def bruto(sufixo, padrao=0):
+        return kv.get(f"{arch}.{sufixo}", padrao)
+
     def get(sufixo, padrao=0):
-        return int(kv.get(f"{arch}.{sufixo}", padrao) or padrao)
+        """Inteiro da chave. O Gemma 4 declara algumas por camada (lista); aqui vale o maior."""
+        v = bruto(sufixo, padrao)
+        if isinstance(v, list):
+            numeros = [x for x in v if isinstance(x, (int, float))]
+            v = max(numeros) if numeros else padrao
+        try:
+            return int(v or padrao)
+        except (TypeError, ValueError):
+            return int(padrao)
 
     n_head = get("attention.head_count")
     embed = get("embedding_length")
     head_dim = get("attention.key_length") or (embed // n_head if n_head else 0)
     sampling = {k.rsplit(".", 1)[-1]: v for k, v in kv.items() if k.startswith("general.sampling.")}
-    return {"sampling": sampling, "arch": arch, "n_layer": get("block_count"), "n_head_kv": get("attention.head_count_kv", n_head),
+    n_layer = get("block_count")
+    info = {"sampling": sampling, "arch": arch, "n_layer": n_layer,
+            "n_head_kv": get("attention.head_count_kv", n_head),
             "head_dim": head_dim, "ctx_train": get("context_length"), "n_expert": get("expert_count"),
             "n_expert_used": get("expert_used_count"), "n_head": n_head, "embedding": embed,
             # Modelos híbridos (Qwen3.6, Granite): só 1 em cada N camadas tem atenção; as outras são
@@ -443,6 +528,48 @@ def gguf_info(path: str) -> dict:
             "ssm_inner": get("ssm.inner_size"), "ssm_state": get("ssm.state_size"),
             "ssm_conv": get("ssm.conv_kernel"), "ssm_groups": get("ssm.group_count"),
             "size": st.st_size, "tensors": data["tensors"]}
+    info["layers"] = _camadas(info, kv, arch, bruto)
+    return info
+
+
+def _camadas(info: dict, kv: dict, arch: str, bruto) -> list[dict]:
+    """Como cada camada gasta cache KV. Hoje existem três jeitos, e o mesmo modelo pode misturar:
+
+    - atenção plena: guarda o contexto inteiro;
+    - janela deslizante (Gemma 4): guarda só os últimos N tokens, com cabeças/dimensão próprias;
+    - recorrente (Qwen3.6): não tem cache KV, tem estado fixo.
+    """
+    n_layer = info["n_layer"]
+    if not n_layer:
+        return []
+    cabecas = bruto("attention.head_count_kv", info["n_head"] or 1)
+    janela = info_int(bruto("attention.sliding_window", 0))
+    padrao_swa = bruto("attention.sliding_window_pattern", None)
+    dim_swa = info_int(bruto("attention.key_length_swa", 0)) or info["head_dim"]
+    intervalo = max(1, info["attn_interval"])
+    recorrente = bool(info["ssm_inner"]) and intervalo > 1
+
+    saida = []
+    for i in range(n_layer):
+        kvh = cabecas[i] if isinstance(cabecas, list) and i < len(cabecas) else cabecas
+        kvh = info_int(kvh) or 1
+        if recorrente and (i + 1) % intervalo != 0:
+            saida.append({"kind": "recurrent", "kv_heads": 0, "head_dim": 0, "window": 0})
+            continue
+        desliza = bool(padrao_swa[i]) if isinstance(padrao_swa, list) and i < len(padrao_swa) else bool(
+            janela and padrao_swa is None)
+        if desliza and janela:
+            saida.append({"kind": "swa", "kv_heads": kvh, "head_dim": dim_swa, "window": janela})
+        else:
+            saida.append({"kind": "full", "kv_heads": kvh, "head_dim": info["head_dim"], "window": 0})
+    return saida
+
+
+def info_int(v, padrao: int = 0) -> int:
+    try:
+        return int(v or padrao)
+    except (TypeError, ValueError):
+        return padrao
 
 
 def gguf_arch(path: str) -> str:
@@ -517,15 +644,22 @@ def estimate(path: str, p: dict) -> dict:
             pesos_cpu += tam
 
     ctx = int(p.get("ctx") or 0)
-    intervalo = max(1, info["attn_interval"])
-    atencao = [i for i in range(n_layer) if (i + 1) % intervalo == 0]
-    por_token = info["n_head_kv"] * info["head_dim"] * (
-        KV_BYTES.get(str(p.get("cache_type_k") or "f16"), 2.0) + KV_BYTES.get(str(p.get("cache_type_v") or "f16"), 2.0))
-    kv = int(ctx * len(atencao) * por_token)
-    kv_gpu = int(ctx * len([i for i in atencao if i in na_gpu]) * por_token) if not p.get("no_kv_offload") else 0
+    por_elemento = (KV_BYTES.get(str(p.get("cache_type_k") or "f16"), 2.0)
+                    + KV_BYTES.get(str(p.get("cache_type_v") or "f16"), 2.0))
+    camadas = info["layers"]
+    kv = kv_gpu = 0
+    for i, camada in enumerate(camadas):
+        if camada["kind"] == "recurrent":
+            continue
+        tokens = min(ctx, camada["window"]) if camada["window"] else ctx
+        bytes_camada = int(tokens * camada["kv_heads"] * camada["head_dim"] * por_elemento)
+        kv += bytes_camada
+        if i in na_gpu and not p.get("no_kv_offload"):
+            kv_gpu += bytes_camada
+    atencao = [i for i, c in enumerate(camadas) if c["kind"] != "recurrent"]
 
     slots = int(p.get("parallel") or 0) or SLOTS_AUTO
-    recorrentes = [i for i in range(n_layer) if (i + 1) % intervalo != 0]
+    recorrentes = [i for i, c in enumerate(camadas) if c["kind"] == "recurrent"]
     por_camada = 0
     if info["ssm_inner"]:  # estado das camadas recorrentes: não cresce com o contexto
         conv = max(0, info["ssm_conv"] - 1) * (info["ssm_inner"] + 2 * info["ssm_groups"] * info["ssm_state"])
@@ -584,6 +718,40 @@ def remove_model(path: str) -> list[str]:
     data["models"].pop(str(alvo), None)  # os ajustes de carga daquele modelo vão junto
     write_config(data)
     return apagados
+
+
+def kind_of(f: Path) -> str:
+    """chat ou image. Modelo de linguagem tem camadas e cabeças de atenção no cabeçalho; difusão não.
+
+    Sem isso, um .gguf de chat aparecia na lista de modelos de imagem (e vice-versa).
+    """
+    if f.suffix.lower() != ".gguf":
+        return "image"  # .safetensors/.ckpt: só difusão usa por aqui
+    info = gguf_info(str(f))
+    return "chat" if info["n_layer"] and info["n_head"] else "image"
+
+
+# Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
+IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl")
+
+
+def image_params(path: str) -> dict:
+    base = read_config()["image"]
+    salvo = (read_config().get("image_models") or {}).get(str(path)) or {}
+    return {**{k: base[k] for k in IMAGE_PER_MODEL}, **salvo}
+
+
+def save_image_params(path: str, patch: dict) -> dict:
+    """Guarda só o que sai do padrão geral da aba Imagem."""
+    base = read_config()["image"]
+    limpo = {k: v for k, v in set_image_valores(patch).items() if k in IMAGE_PER_MODEL}
+    data = read_config()
+    modelos = dict(data.get("image_models") or {})
+    fora = {k: v for k, v in {**(modelos.get(str(path)) or {}), **limpo}.items() if v != base[k]}
+    modelos[str(path)] = fora
+    data["image_models"] = modelos
+    write_config(data)
+    return image_params(path)
 
 
 def alias_of(path: str) -> str:
@@ -880,17 +1048,35 @@ TAB = chr(9)
 QUANT = re.compile(r"(IQ\d[A-Z_]*|Q\d_[A-Z0-9_]+|F16|BF16|F32)", re.I)
 
 
-def search(q: str, kind: str = "text", limit: int = 20) -> list[dict]:
+# Ordenação da busca. "relevancia" = sem sort: o ranking do próprio Hugging Face para o termo.
+ORDENS = {"relevancia": "", "curtidas": "likes", "downloads": "downloads", "recentes": "lastModified"}
+# Repositório que o sd.cpp não carrega: peça solta, não modelo inteiro.
+IMAGEM_FORA = ("lora", "controlnet", "ip-adapter", "textual-inversion", "embedding", "upscaler", "adapter")
+
+
+def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia") -> list[dict]:
     """kind=text: repos com .gguf (chat). kind=image: modelos de difusão (.safetensors também)."""
     tipo = {"pipeline_tag": "text-to-image"} if kind == "image" else {"filter": "gguf"}
+    ordem = ORDENS.get(sort, "")
     r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True,
-                  params={"search": q, "sort": "downloads", "direction": -1, "limit": limit, "full": "true", **tipo})
+                  params={"search": q, "limit": limit * 2 if kind == "image" else limit, "full": "true", **tipo,
+                          **({"sort": ordem, "direction": -1} if ordem else {})})
     if r.status_code >= 400:
         raise ToolError(f"Hugging Face respondeu {r.status_code}.")
-    return [{"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0),
-             "likes": m.get("likes", 0), "updated": m.get("lastModified", ""),
-             "gated": bool(m.get("gated")), "tags": _tags(m.get("tags") or [])}
-            for m in r.json()]
+    saida = []
+    for m in r.json():
+        tags = m.get("tags") or []
+        if kind == "image" and _peca_solta(m["id"], tags):
+            continue  # LoRA, ControlNet e afins: o sd.cpp quer o modelo inteiro
+        saida.append({"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0),
+                      "likes": m.get("likes", 0), "updated": m.get("lastModified", ""),
+                      "gated": bool(m.get("gated")), "tags": _tags(tags)})
+    return saida[:limit]
+
+
+def _peca_solta(repo: str, tags: list[str]) -> bool:
+    texto = (repo + " " + " ".join(tags)).lower()
+    return any(p in texto for p in IMAGEM_FORA)
 
 
 # Tags do HF vêm com muito ruído de catálogo (region:, endpoints_compatible, base_model:...).
@@ -982,6 +1168,19 @@ def repo_info(repo: str, kind: str = "text") -> dict:
             "capabilities": _capacidades(j, arquivos, readme), "files": arquivos, "readme": readme}
 
 
+# Pastas do formato diffusers: o sd.cpp não carrega repositório espalhado, só arquivo único.
+DIFFUSERS = ("unet/", "transformer/", "text_encoder", "tokenizer", "scheduler/", "feature_extractor/",
+             "safety_checker/", "image_encoder/")
+MIN_IMAGEM = 32 << 20  # abaixo disso é LoRA/embedding, não modelo
+
+
+def _serve_para_sd(caminho: str, tamanho: int) -> bool:
+    p = caminho.lower()
+    if any(pasta in p for pasta in DIFFUSERS) or any(x in p for x in IMAGEM_FORA):
+        return False
+    return tamanho == 0 or tamanho >= MIN_IMAGEM
+
+
 def files(repo: str, kind: str = "text") -> list[dict]:
     exts = WEIGHTS if kind == "image" else (".gguf",)
     r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True,
@@ -998,9 +1197,13 @@ def files(repo: str, kind: str = "text") -> list[dict]:
         if m and m.group("idx") != "00001":
             continue  # shard do meio: baixar o primeiro já traz o conjunto inteiro
         quant = QUANT.search(Path(f["path"]).stem)
-        out.append({"path": f["path"], "size": f.get("size") or (f.get("lfs") or {}).get("size") or 0,
+        tamanho = f.get("size") or (f.get("lfs") or {}).get("size") or 0
+        if kind == "image" and not _serve_para_sd(f["path"], tamanho):
+            continue
+        out.append({"path": f["path"], "size": tamanho,
                     "quant": quant.group(0).upper() if quant else "", "shards": int(m.group("total")) if m else 1})
-    return sorted(out, key=lambda f: f["path"])
+    # Do menor para o maior: é assim que se escolhe quantização, e o LM Studio faz igual.
+    return sorted(out, key=lambda f: (f["size"], f["path"]))
 
 
 def _mesma_pasta(a, b) -> bool:
@@ -1060,17 +1263,16 @@ def _download_files(job: dict, urls: list[str], names: list[str], dest_dir: Path
         finish(job["id"], error=f"{e.__class__.__name__}: {e}")
 
 
+def set_image_valores(patch: dict) -> dict:
+    """Valida e normaliza valores da aba Imagem, sem salvar."""
+    return {k: v for k, v in _image_valores(patch).items()}
+
+
 def set_image(patch: dict) -> dict:
     """Padrões da aba Imagem (modelo, passos, tamanho...)."""
     data = read_config()
     img = {**DEFAULT_IMAGE, **data["image"]}
-    for k, default in DEFAULT_IMAGE.items():
-        if k not in patch:
-            continue
-        try:
-            img[k] = type(default)(patch[k])
-        except (TypeError, ValueError):
-            raise ToolError(f"Valor inválido para '{k}': {patch[k]!r}")
+    img.update(_image_valores(patch))
     if img["out_dir"]:
         try:
             Path(img["out_dir"]).mkdir(parents=True, exist_ok=True)
@@ -1100,10 +1302,13 @@ def model_view(path: str, patch: dict | None = None) -> dict:
 
 def state() -> dict:
     cfg = read_config()
-    models = scan()
+    todos = scan(WEIGHTS)
+    models = [m for m in todos if m["kind"] == "chat"]
+    imagens = [{**m, "params": image_params(m["path"])} for m in todos if m["kind"] == "image"]
     baixar = cfg.get("download_dir") or models_dir()
     return {"runtimes": runtimes(), "models": models, "server": status(), "dirs": dirs(), "download_dir": baixar,
+            "hardware": hardware(),
             "jobs": downloads.list_jobs(), "defaults": DEFAULT_PARAMS, "last": cfg["last"],
-            "image": cfg["image"], "image_models": scan(WEIGHTS), "port": config.LOCAL_PORT,
+            "image": cfg["image"], "image_models": imagens, "port": config.LOCAL_PORT,
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

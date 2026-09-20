@@ -207,6 +207,10 @@ Edite em **Configurações › MCP** (com validação, salvar e reconectar). O a
 
 ## Configurações
 
+Em **Configurações › Pastas** ficam os caminhos padrão: onde os modelos baixados caem, onde as imagens geradas são
+salvas e (só para consultar) a pasta de dados do app. Mudar a pasta de modelos troca o destino padrão do download; as
+outras pastas cadastradas no painel continuam sendo varridas.
+
 Botão **Configurações** no rodapé da barra lateral. O que você muda ali fica no banco e vale na próxima requisição, sem reiniciar o app. "Restaurar padrões" apaga tudo o que foi salvo e volta aos padrões de fábrica.
 
 | Aba | O que dá para fazer |
@@ -283,9 +287,19 @@ Os binários ficam em `%APPDATA%\Forja\runtimes`. Para trocar de backend, baixe 
 instalado (cuda › vulkan › cpu).
 
 **Modelos.** A aba *Baixar* tem as pastas de modelos e o botão **Procurar modelos**, que abre a janela de busca do
-Hugging Face: lista à esquerda (nome, publicador, downloads, curtidas, data) e a ficha do modelo à direita —
+Hugging Face. A busca sai sozinha quando você para de digitar (sem Enter) e tem ordenação: relevância — o ranking do
+próprio HF para o termo —, mais downloads, mais curtidas ou atualizados recentemente. Em `imagem`, a lista traz só o
+que o sd.cpp carrega: LoRA, ControlNet, embedding e repositório no formato diffusers ficam de fora, porque são
+complemento ou peça solta, não modelo inteiro.
+
+À esquerda ficam os resultados (nome, publicador, downloads, curtidas, data) e à direita a ficha do modelo —
 downloads, curtidas, última atualização, PARAMS/ARCH/CTX/licença, **capacidades** (visão, ferramentas, raciocínio),
-as **opções de download** com quantização e tamanho de cada arquivo, e o README do modelo. As capacidades não são
+as **opções de download** e o README do modelo.
+
+As opções vêm **do menor para o maior**, e o tamanho é colorido pelo que cabe na sua máquina — o Forja lê a VRAM do
+`--list-devices` do llama.cpp e a RAM do sistema: verde cabe inteiro na GPU (com folga para contexto e buffers),
+âmbar só carrega com parte das camadas na RAM (mais devagar), vermelho é maior que VRAM + RAM e não vai carregar. O
+tooltip de cada um diz os números. As capacidades não são
 chute: saem do template de chat e da arquitetura que o próprio Hugging Face expõe do gguf. O README vem sem as tags
 HTML do card — a janela mostra markdown, e renderizar HTML de terceiros dentro do app não é uma boa ideia.
 
@@ -303,9 +317,16 @@ azul com uma lixeira do lado** para voltar ao padrão, e só o que está fora do
 explicando o que a opção faz. Se houver um `mmproj-*.gguf` na pasta do modelo, ele entra sozinho no campo do projetor
 e o modelo já carrega com visão.
 
+A aba lista **modelos de chat e modelos de imagem em seções separadas** — quem é quem sai do cabeçalho do arquivo,
+não da extensão (um `.gguf` pode ser os dois). Modelo de imagem não tem "Carregar", porque o sd.cpp sobe e desce a
+cada geração; o que ele tem são **ajustes próprios** (passos, CFG, tamanho, amostrador, negativo padrão, VAE,
+clip_l/t5xxl), que valem quando ele estiver escolhido na aba Imagem — o Flux não quer o mesmo CFG que o SD 1.5.
+
 Em cima do formulário fica o **uso estimado de memória**, GPU e total, recalculado a cada ajuste: ele soma os pesos
-que sobem para a GPU (respeitando os especialistas que ficam na CPU), o cache KV das camadas de atenção e os buffers
-de cálculo. Num Qwen3.6-35B-A3B com 19 camadas na GPU, a estimativa deu 6,9 GB de VRAM contra 6,7 GB medidos no log
+que sobem para a GPU (respeitando os especialistas que ficam na CPU), o cache KV e os buffers de cálculo. O cache é
+contado camada a camada, porque os modelos novos misturam tipos: atenção plena guarda o contexto inteiro, janela
+deslizante (Gemma 4) guarda só os últimos N tokens com cabeças e dimensão próprias, e camada recorrente (Qwen3.6)
+não usa cache nenhum. Num Qwen3.6-35B-A3B com 19 camadas na GPU, a estimativa deu 6,9 GB de VRAM contra 6,7 GB medidos no log
 do llama.cpp.
 
 Os parâmetros, traduzidos direto para a linha de comando do `llama-server`:
@@ -361,7 +382,16 @@ Ficam de fora, de propósito: prompt de sistema, truncagem de contexto e saída 
 **Imagem.** A aba *Imagem* gera na hora: modelo, prompt, negativo, passos, CFG, tamanho, amostrador e semente
 (0 = aleatória). Embaixo do seletor, uma linha diz qual modelo está em uso, de qual pasta e com que tamanho — o
 sd.cpp carrega o modelo a cada imagem e libera a memória no fim, então nada fica preso na GPU entre uma e outra.
-O campo **Salvar imagens em** escolhe a pasta de saída (padrão `%APPDATA%\Forja\imagens`). Os mesmos ajustes valem
+O campo **Salvar imagens em** escolhe a pasta de saída (padrão `%APPDATA%\Forja\imagens`), e **Mostrar na pasta**
+abre a imagem pronta no Explorer.
+
+**Imagem e chat disputam a VRAM.** Com um modelo carregado, o Forja não gera a imagem escondido: ele avisa qual modelo
+está na memória, explica que vai descarregá-lo e o que isso significa para uma conversa aberta — o llama-server guarda
+o contexto já processado em cache, esse cache vai junto, a próxima mensagem reprocessa o histórico (primeira resposta
+mais lenta) e uma resposta em andamento é cortada; o histórico em si não se perde. Só gera depois do **Descarregar e
+gerar**. Sem modelo carregado, gera direto. Enquanto a imagem está sendo feita, carregar modelo fica bloqueado — pela
+mesma razão. A ferramenta `image_generate` do agente nunca descarrega nada: a conversa pode estar rodando justamente
+no modelo local. Os mesmos ajustes valem
 para a ferramenta `image_generate`, então basta pedir *"gere uma imagem de uma raposa na neve"* na conversa; a imagem
 do agente vai para a pasta de trabalho da conversa, não para a pasta do painel.
 

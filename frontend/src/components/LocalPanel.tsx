@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ImageOpts, Inference, Job, LlamaParams, LocalModel, LocalState, ModelView } from "../types";
+import type { ImageOpts, ImageParams, Inference, Job, LlamaParams, LocalModel, LocalState, ModelView }
+  from "../types";
 import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
 import ModelSearch from "./ModelSearch";
 
@@ -546,6 +547,8 @@ Não dá para desfazer.`)) return;
         </div>
       </section>
 
+      <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} />
+
       {sel && form && view && (
         <section className={card}>
           <p className="truncate font-medium text-fg">{view.path.split(/[\\/]/).pop()}</p>
@@ -658,7 +661,7 @@ Não dá para desfazer.`)) return;
           </div>
 
           <div className="mt-3 flex items-center gap-2">
-            <button className={btnPrimary} onClick={() => act("load")} disabled={!!busy}>
+            <button className={btnPrimary} onClick={() => act("load")} disabled={!!busy || st.image_busy}>
               Carregar
             </button>
             <button className={btn} onClick={() => act("params")} disabled={!!busy}>
@@ -666,10 +669,123 @@ Não dá para desfazer.`)) return;
             </button>
             {!!view.overrides.length && <span className="text-faint">{view.overrides.length} fora do padrão</span>}
             {busy && <span className="text-muted">{busy}</span>}
+            {st.image_busy && <span className="text-amber-300">gerando imagem — a VRAM está ocupada</span>}
           </div>
         </section>
       )}
     </>
+  );
+}
+
+/** Modelos de difusão que estão nas pastas. Não têm "Carregar": o sd.cpp sobe e desce a cada imagem —
+ *  o que dá para guardar aqui são os ajustes de cada um (o Flux não quer o mesmo CFG que o SD 1.5). */
+function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
+  const [sel, setSel] = useState("");
+  const [form, setForm] = useState<ImageParams | null>(null);
+  const [salvo, setSalvo] = useState("");
+  const lista = props.st.image_models;
+
+  if (!lista.length) return null;
+  const set = <K extends keyof ImageParams>(k: K, v: ImageParams[K]) => {
+    setForm((f) => f && { ...f, [k]: v });
+    setSalvo("");
+  };
+
+  async function apagar(m: LocalModel) {
+    if (!confirm(`Apagar ${m.name} (${size(m.size)}) do disco?\n\n${m.path}\n\nNão dá para desfazer.`)) return;
+    try {
+      await api.post("/local/model/delete", { path: m.path });
+      if (sel === m.path) setSel("");
+      props.onDone();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function salvar() {
+    try {
+      await api.put("/local/image/model", { path: sel, params: form });
+      setSalvo("Salvo.");
+      props.onDone();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  return (
+    <section className={card}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-fg">Modelos de imagem ({lista.length})</span>
+        <span className="text-faint">usados na aba Imagem</span>
+      </div>
+      <div className="flex flex-col">
+        {lista.map((m) => (
+          <div
+            key={m.path}
+            className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${sel === m.path ? "bg-raised" : "hover:bg-raised"}`}
+          >
+            <button
+              className="min-w-0 flex-1 text-left"
+              title={m.path}
+              onClick={() => {
+                const novo = sel === m.path ? "" : m.path;
+                setSel(novo);
+                setForm(novo ? m.params ?? null : null);
+                setSalvo("");
+              }}
+            >
+              <span className="block truncate text-fg">{m.name}</span>
+              {props.st.dirs.length > 1 && <span className="block truncate text-faint">{m.folder}</span>}
+            </button>
+            {props.st.image.model === m.path && <span className="shrink-0 text-faint">em uso</span>}
+            <span className="shrink-0 text-faint">{size(m.size)}</span>
+            <button title="Apagar do disco" className="shrink-0 text-faint hover:text-red-400" onClick={() => apagar(m)}>
+              <Trash className="size-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {sel && form && (
+        <div className="mt-3 border-t border-line pt-3">
+          <p className="mb-2 text-muted">Ajustes deste modelo</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Num label="Passos" value={form.steps} onChange={(v) => set("steps", v)} />
+            <Num label="CFG" value={form.cfg} onChange={(v) => set("cfg", v)} />
+            <Num label="Largura" value={form.width} onChange={(v) => set("width", v)} />
+            <Num label="Altura" value={form.height} onChange={(v) => set("height", v)} />
+          </div>
+          <div className="mt-2.5 flex flex-col gap-2.5">
+            <Field label="Amostrador">
+              <select className={input} value={form.sampler} onChange={(e) => set("sampler", e.target.value)}>
+                {SAMPLERS.map((s) => (
+                  <option key={s}>{s}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Negativo padrão">
+              <input className={input} value={form.negative} onChange={(e) => set("negative", e.target.value)} />
+            </Field>
+            <Field label="VAE" hint="Opcional. Alguns modelos precisam do VAE em arquivo separado.">
+              <input className={input} value={form.vae} onChange={(e) => set("vae", e.target.value)} placeholder="opcional" />
+            </Field>
+            <Field label="clip_l / t5xxl" hint="Só para Flux e SD3, que trazem os codificadores de texto à parte.">
+              <div className="grid grid-cols-2 gap-2">
+                <input className={input} value={form.clip_l} onChange={(e) => set("clip_l", e.target.value)} placeholder="clip_l" />
+                <input className={input} value={form.t5xxl} onChange={(e) => set("t5xxl", e.target.value)} placeholder="t5xxl" />
+              </div>
+            </Field>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button className={btnPrimary} onClick={salvar}>
+              Salvar
+            </button>
+            {salvo && <span className="text-emerald-400">{salvo}</span>}
+            <span className="text-faint">Valem quando este modelo estiver escolhido na aba Imagem.</span>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -847,6 +963,7 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
         <ModelSearch
           kind={kind}
           onKind={setKind}
+          hardware={props.st.hardware}
           destino={destino}
           onDownload={baixar}
           onClose={() => setBuscando(false)}
@@ -867,12 +984,24 @@ function ImageTab(props: { st: LocalState; onDone: () => void; onError: (e: stri
   const set = <K extends keyof ImageOpts>(k: K, v: ImageOpts[K]) => setO((c) => ({ ...c, [k]: v }));
   const pronta = st.jobs.filter((j) => j.kind === "imagem" && j.status === "pronto" && j.result).pop();
   const atual = st.image_models.find((m) => m.path === o.model);
+  const [perguntando, setPerguntando] = useState(false);
 
-  async function gerar() {
+  async function gerar(confirm = false) {
     try {
       await api.put("/local/image/defaults", o); // o que está na tela vira o padrão da ferramenta do agente
-      await api.post("/local/image", { prompt, opts: { seed } });
+      await api.post("/local/image", { prompt, opts: { seed }, confirm });
+      setPerguntando(false);
       props.onDone();
+    } catch (e: any) {
+      // 409 = tem um LLM na VRAM; a conta de descarregar é do usuário, não nossa.
+      if (e.status === 409) setPerguntando(true);
+      else props.onError(e.message);
+    }
+  }
+
+  async function mostrarNaPasta(caminho: string) {
+    try {
+      await api.post("/open", { path: caminho, mode: "reveal" });
     } catch (e: any) {
       props.onError(e.message);
     }
@@ -944,18 +1073,52 @@ function ImageTab(props: { st: LocalState; onDone: () => void; onError: (e: stri
             </button>
           </div>
         </Field>
-        <button className={btnPrimary} onClick={gerar} disabled={!prompt.trim() || !st.runtimes.sd.installed}>
-          Gerar
+        <button
+          className={btnPrimary}
+          onClick={() => gerar()}
+          disabled={!prompt.trim() || !st.runtimes.sd.installed || st.image_busy}
+        >
+          {st.image_busy ? "Gerando…" : "Gerar"}
         </button>
+        {perguntando && (
+          <div className="rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-amber-200">
+            <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
+            <p className="mt-1 text-amber-200/80">
+              O sd.cpp precisa dessa memória, então o Forja vai descarregá-lo antes de gerar. O que muda para uma
+              conversa aberta: o llama-server guarda o contexto já processado em cache; ao descarregar, esse cache
+              vai junto. A próxima mensagem reprocessa o histórico inteiro — a primeira resposta demora mais, e uma
+              resposta em andamento é cortada. O histórico da conversa em si não se perde.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button className={btnPrimary} onClick={() => gerar(true)}>
+                Descarregar e gerar
+              </button>
+              <button className={btn} onClick={() => setPerguntando(false)}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
         <p className="text-faint">
           O agente também gera imagens com esses padrões, pela ferramenta <code>image_generate</code>.
         </p>
         {pronta?.result && (
-          <img
-            src={`/api/local/image/file?path=${encodeURIComponent(pronta.result)}`}
-            alt={pronta.name}
-            className="mt-1 w-full rounded-lg border border-line"
-          />
+          <>
+            <img
+              src={`/api/local/image/file?path=${encodeURIComponent(pronta.result)}`}
+              alt={pronta.name}
+              className="mt-1 w-full rounded-lg border border-line"
+            />
+            <div className="flex items-center gap-2">
+              <button className={btn} onClick={() => mostrarNaPasta(pronta.result!)}>
+                <FolderOpen className="mr-1 inline size-3.5" />
+                Mostrar na pasta
+              </button>
+              <span className="min-w-0 flex-1 truncate text-faint" title={pronta.result}>
+                {pronta.result}
+              </span>
+            </div>
+          </>
         )}
       </div>
     </section>

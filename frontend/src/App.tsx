@@ -81,6 +81,8 @@ function loadSettings(): Settings {
   }
 }
 
+const COMPOSER_MAX = 420; // altura máxima do campo de mensagem; a partir daí o texto rola por dentro
+
 const pill = "rounded-full border border-line bg-transparent px-3 py-1 text-xs text-muted hover:bg-raised";
 
 type RightState = { tab: RightTab; collapsed: boolean };
@@ -122,6 +124,7 @@ export default function App() {
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [catalogKey, setCatalogKey] = useState(0); // força o seletor de modelo a recarregar
+  const composer = useRef<HTMLTextAreaElement | null>(null);
   const [showFolder, setShowFolder] = useState(false);
   // Chat e Agente são seções separadas (como no Claude): cada uma lista só as suas conversas.
   const [section, setSection] = useState<Section>(() => (localStorage.getItem("forja.section") as Section) || "agent");
@@ -139,6 +142,14 @@ export default function App() {
   const [browserOpen, setBrowserOpen] = useState(false);
   const [serversRunning, setServersRunning] = useState(0);
   const [localRunning, setLocalRunning] = useState(false);
+
+  /** O provedor "IA local" só tem modelo quando o llama-server está de pé: a lista recarrega na hora. */
+  function onLocalRunning(running: boolean) {
+    setLocalRunning((antes) => {
+      if (antes !== running) setCatalogKey((k) => k + 1);
+      return running;
+    });
+  }
   const [liveOutput, setLiveOutput] = useState<Record<string, string>>({}); // saída ao vivo por chamada (run_command)
   const [liveTasks, setLiveTasks] = useState<Task[] | null>(null); // lista de tarefas do run atual
   const [queued, setQueued] = useState<string[]>([]); // mensagens na fila (enviadas durante a execução)
@@ -580,6 +591,17 @@ export default function App() {
     refreshConversations();
     return c.id;
   }
+
+  // O campo cresce com o texto até COMPOSER_MAX e, daí em diante, rola por dentro (como o Claude Desktop).
+  // Contar "\n" não serve: uma linha longa quebra na tela e continuaria de duas linhas de altura.
+  useEffect(() => {
+    const el = composer.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const teto = Math.min(COMPOSER_MAX, Math.round(window.innerHeight * 0.45));
+    el.style.height = `${Math.min(el.scrollHeight, teto)}px`;
+    el.style.overflowY = el.scrollHeight > teto ? "auto" : "hidden";
+  }, [input, attachments.length]);
 
   /** Seletor de pasta do sistema (Explorer no Windows), pelo Electron. Fora do app, o seletor interno. */
   async function chooseFolder() {
@@ -1281,9 +1303,10 @@ export default function App() {
                     changePermission(nextPermission(settings.permission, running));
                   }
                 }}
-                rows={Math.min(8, Math.max(2, input.split("\n").length))}
+                ref={composer}
+                rows={2}
                 placeholder={running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "agent" ? "Peça algo ao agente... ( / para comandos )" : "Digite uma mensagem..."}
-                className="w-full resize-none bg-transparent text-[15px] text-fg placeholder:text-faint focus:outline-none"
+                className="w-full resize-none overflow-y-auto bg-transparent text-[15px] text-fg placeholder:text-faint focus:outline-none"
               />
               <div className="mt-1 flex items-center gap-2">
                 <label
@@ -1356,7 +1379,7 @@ export default function App() {
         ) : right.tab === "servers" ? (
           <ServersPanel onCount={setServersRunning} />
         ) : right.tab === "local" ? (
-          <LocalPanel onRunning={setLocalRunning} />
+          <LocalPanel onRunning={onLocalRunning} />
         ) : right.tab === "terminal" ? (
           <TerminalPanel conv={browserKey} />
         ) : right.tab === "changes" ? (

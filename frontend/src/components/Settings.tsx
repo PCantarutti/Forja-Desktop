@@ -46,7 +46,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
+const BASE_TABS = ["Geral", "Pastas", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
 type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
@@ -142,7 +142,7 @@ export default function Settings(props: {
             <h2 className="flex-1 text-sm text-muted">{tab}</h2>
             {error && <span className="truncate text-sm text-red-300">{error}</span>}
             {saved && <span className="text-sm text-emerald-400">{saved}</span>}
-            {tab !== "MCP" && tab !== "Memória" && tab !== "Aplicativo" && (
+            {tab !== "MCP" && tab !== "Memória" && tab !== "Aplicativo" && tab !== "Pastas" && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
                 Salvar
               </button>
@@ -155,6 +155,8 @@ export default function Settings(props: {
           <div className="flex-1 overflow-y-auto p-5">
             {tab === "Aplicativo" ? (
               <AppTab />
+            ) : tab === "Pastas" ? (
+              <PastasTab onError={setError} />
             ) : !s ? (
               <div className="text-muted">Carregando…</div>
             ) : tab === "Geral" ? (
@@ -239,6 +241,79 @@ function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean
         {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
       </span>
     </label>
+  );
+}
+
+/** Pastas padrão da IA local. Salva na hora, como a aba Aplicativo. */
+function PastasTab(props: { onError: (e: string) => void }) {
+  const [st, setSt] = useState<{ models_dir: string; image_dir: string; data_dir: string; dirs: string[] } | null>(null);
+  const [salvo, setSalvo] = useState("");
+
+  useEffect(() => {
+    api.get<typeof st>("/local").then(setSt).catch((e) => props.onError(e.message));
+  }, []);
+
+  if (!st) return <div className="text-muted">Carregando…</div>;
+
+  async function salvar(patch: { models_dir?: string; image_dir?: string }) {
+    try {
+      const r = await api.put<{ models_dir: string; image_dir: string; dirs: string[] }>("/local/paths", patch);
+      setSt({ ...st!, ...r });
+      setSalvo("Salvo.");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function escolher(campo: "models_dir" | "image_dir") {
+    const atual = st![campo];
+    const escolhida = window.forja ? await window.forja.pickFolder(atual) : prompt("Caminho da pasta:", atual);
+    if (escolhida) salvar({ [campo]: escolhida });
+  }
+
+  const linha = (campo: "models_dir" | "image_dir") => (
+    <div className="flex items-center gap-2">
+      <input
+        className={input}
+        value={st![campo]}
+        spellCheck={false}
+        onChange={(e) => setSt({ ...st!, [campo]: e.target.value })}
+        onBlur={(e) => e.target.value !== "" && salvar({ [campo]: e.target.value })}
+      />
+      <button className={btn} onClick={() => escolher(campo)}>
+        Escolher…
+      </button>
+    </div>
+  );
+
+  return (
+    <div className="max-w-2xl space-y-5">
+      <Field
+        label="Modelos baixados"
+        hint="Para onde vão os downloads do painel IA local. As outras pastas continuam sendo varridas; troque lá quem é a padrão do download."
+      >
+        {linha("models_dir")}
+      </Field>
+      <Field label="Imagens geradas" hint="Onde o painel salva as imagens. As geradas pelo agente vão para a pasta de trabalho da conversa.">
+        {linha("image_dir")}
+      </Field>
+      <Field label="Dados do Forja" hint="Banco, configurações, logs, runtimes do llama.cpp e do sd.cpp. Não dá para mudar: é a pasta do usuário do app.">
+        <div className="flex items-center gap-2">
+          <input className={input} value={st.data_dir} readOnly spellCheck={false} />
+          {window.forja?.desktop && (
+            <button className={btn} onClick={() => window.forja!.desktop.open("data")}>
+              Abrir
+            </button>
+          )}
+        </div>
+      </Field>
+      {st.dirs.length > 1 && (
+        <p className="text-xs text-muted">
+          Também varrendo: {st.dirs.slice(1).join(" · ")}
+        </p>
+      )}
+      {salvo && <p className="text-xs text-emerald-400">{salvo}</p>}
+    </div>
   );
 }
 

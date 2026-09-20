@@ -1,10 +1,42 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { HfFile, HfModel, HfRepo } from "../types";
+import type { Hardware, HfFile, HfModel, HfRepo } from "../types";
 import { Markdown } from "./MessageView";
 import { Check, Copy, Download, Search, X } from "./icons";
 
 const chip = "rounded-md bg-raised px-1.5 py-0.5 text-[11px] text-muted";
+
+const ORDENS = [
+  ["relevancia", "Relevância"],
+  ["downloads", "Mais downloads"],
+  ["curtidas", "Mais curtidas"],
+  ["recentes", "Atualizados recentemente"],
+] as const;
+
+const FOLGA = 1.2 * 2 ** 30; // contexto e buffers de cálculo que sobem junto com os pesos
+
+/** Se o arquivo cabe na VRAM, se cabe só com parte na RAM, ou se não cabe de jeito nenhum. */
+function cabe(bytes: number, hw?: Hardware) {
+  if (!bytes || !hw?.ram) return { cor: "text-faint", dica: "" };
+  const vram = hw.vram;
+  const gb = (n: number) => `${(n / 2 ** 30).toFixed(1)} GB`;
+  if (vram && bytes + FOLGA <= vram)
+    return {
+      cor: "text-emerald-400",
+      dica: `Cabe inteiro na GPU: ${gb(bytes)} de ${gb(vram)} de VRAM, com folga para o contexto. É o caso mais rápido.`,
+    };
+  if (bytes + FOLGA <= hw.ram + vram)
+    return {
+      cor: "text-amber-300",
+      dica: vram
+        ? `Não cabe todo na VRAM (${gb(vram)}): parte das camadas fica na RAM (${gb(hw.ram)}). Carrega, mas gera mais devagar — ajuste "Camadas na GPU".`
+        : `Sem GPU detectada: roda na CPU com ${gb(hw.ram)} de RAM. Devagar.`,
+    };
+  return {
+    cor: "text-red-400",
+    dica: `Maior que a memória total da máquina (${gb(vram)} de VRAM + ${gb(hw.ram)} de RAM). Não vai carregar.`,
+  };
+}
 
 function milhares(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(".", ",")}M`;
@@ -36,32 +68,45 @@ function quando(iso: string): string {
 export default function ModelSearch(props: {
   kind: "text" | "image";
   destino: string;
+  hardware?: Hardware;
   onKind: (k: "text" | "image") => void;
   onDownload: (repo: string, file: string) => void;
   onClose: () => void;
   onError: (e: string) => void;
 }) {
   const [q, setQ] = useState("");
+  const [ordem, setOrdem] = useState<string>("relevancia");
   const [lista, setLista] = useState<HfModel[] | null>(null);
   const [buscando, setBuscando] = useState(false);
   const [sel, setSel] = useState("");
   const [repo, setRepo] = useState<HfRepo | null>(null);
   const [baixados, setBaixados] = useState<string[]>([]);
+  const pedido = useRef(0);
 
   async function buscar() {
-    if (!q.trim()) return;
+    if (q.trim().length < 2) return;
+    const meu = ++pedido.current;
     setBuscando(true);
     setSel("");
     setRepo(null);
     try {
-      const r = await api.get<{ models: HfModel[] }>(`/local/search?kind=${props.kind}&q=${encodeURIComponent(q)}`);
-      setLista(r.models);
+      const r = await api.get<{ models: HfModel[] }>(
+        `/local/search?kind=${props.kind}&sort=${ordem}&q=${encodeURIComponent(q)}`,
+      );
+      if (meu === pedido.current) setLista(r.models);
     } catch (e: any) {
       props.onError(e.message);
     } finally {
-      setBuscando(false);
+      if (meu === pedido.current) setBuscando(false);
     }
   }
+
+  // Busca sozinha quando a digitação para — sem Enter. 450 ms é o tempo de uma pausa entre palavras.
+  useEffect(() => {
+    if (q.trim().length < 2) return;
+    const t = setTimeout(buscar, 450);
+    return () => clearTimeout(t);
+  }, [q, ordem, props.kind]);
 
   useEffect(() => {
     if (!sel) return;
@@ -98,6 +143,7 @@ export default function ModelSearch(props: {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && buscar()}
+            spellCheck={false}
           />
           <div className="flex shrink-0 gap-0.5 rounded-full border border-line p-0.5">
             {(["text", "image"] as const).map((k) => (
@@ -114,10 +160,31 @@ export default function ModelSearch(props: {
               </button>
             ))}
           </div>
+          <select
+            className="shrink-0 rounded-lg border border-line bg-raised px-2 py-1 text-xs text-muted"
+            value={ordem}
+            onChange={(e) => setOrdem(e.target.value)}
+            title="Ordenar por"
+          >
+            {ORDENS.map(([v, rotulo]) => (
+              <option key={v} value={v}>
+                {rotulo}
+              </option>
+            ))}
+          </select>
           <button onClick={props.onClose} title="Fechar (Esc)" className="shrink-0 text-muted hover:text-fg">
             <X className="size-4" />
           </button>
         </div>
+        {props.hardware?.ram ? (
+          <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1 text-faint">
+            <span>
+              {props.hardware.gpus[0]?.name ?? "sem GPU"} · VRAM {(props.hardware.vram / 2 ** 30).toFixed(1)} GB · RAM{" "}
+              {(props.hardware.ram / 2 ** 30).toFixed(1)} GB
+            </span>
+            <span className="ml-auto">as cores no tamanho dizem se o arquivo cabe</span>
+          </div>
+        ) : null}
 
         <div className="flex min-h-0 flex-1">
           <aside className="w-80 shrink-0 overflow-y-auto border-r border-line">
@@ -170,13 +237,15 @@ export default function ModelSearch(props: {
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {repo.params > 0 && <span className={chip}>PARAMS {bilhoes(repo.params)}</span>}
                   {repo.arch && <span className={chip}>ARCH {repo.arch}</span>}
-                  {repo.ctx_train > 0 && <span className={chip}>CTX {milhares(repo.ctx_train)}</span>}
+                  {repo.ctx_train > 0 && props.kind === "text" && <span className={chip}>CTX {milhares(repo.ctx_train)}</span>}
                   {repo.license && <span className={chip}>{repo.license}</span>}
                   <span className="rounded-md bg-sky-900/50 px-1.5 py-0.5 text-[11px] text-sky-300">
                     {props.kind === "text" ? "GGUF" : "imagem"}
                   </span>
                 </div>
 
+                {/* Capacidades são de modelo de chat; num modelo de difusão a seção só faria ruído. */}
+                {props.kind === "text" && (
                 <div className="mt-3">
                   <p className="text-muted">Capacidades</p>
                   <div className="mt-1 flex flex-wrap gap-1.5">
@@ -201,10 +270,11 @@ export default function ModelSearch(props: {
                   </div>
                   <p className="mt-1 text-faint">Tiradas do template de chat e da arquitetura do modelo.</p>
                 </div>
+                )}
 
                 <div className="mt-4">
                   <div className="flex items-center gap-2">
-                    <p className="flex-1 text-muted">Opções de download ({repo.files.length})</p>
+                    <p className="flex-1 text-muted">Opções de download ({repo.files.length}) · do menor para o maior</p>
                     <span className="truncate text-faint" title={props.destino}>
                       para {props.destino}
                     </span>
@@ -218,7 +288,9 @@ export default function ModelSearch(props: {
                           {f.path.split("/").pop()}
                           {f.shards > 1 ? ` · ${f.shards} partes` : ""}
                         </span>
-                        <span className="shrink-0 text-faint">{tamanho(f.size)}</span>
+                        <span className={`shrink-0 ${cabe(f.size, props.hardware).cor}`} title={cabe(f.size, props.hardware).dica}>
+                          {tamanho(f.size)}
+                        </span>
                         <button
                           className="shrink-0 rounded-full bg-fg px-2.5 py-0.5 font-medium text-black hover:bg-white disabled:opacity-40"
                           disabled={baixados.includes(f.path)}

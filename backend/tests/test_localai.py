@@ -194,13 +194,19 @@ def test_asset_do_runtime_bate_com_os_nomes_do_github():
 
 # ---------------------------------------------------------------- imagem
 
+def test_caminho_da_imagem_normaliza_a_barra(isolado):
+    """Barra normal e invertida são o mesmo caminho; sem normalizar, o seletor da tela some."""
+    img = localai.set_image({"model": "D:/Modelos/sd.gguf"})
+    assert img["model"] == str(Path("D:/Modelos/sd.gguf"))
+
+
 def test_argv_do_sd(isolado):
     localai.set_image({"model": "C:/m/sd15.safetensors", "steps": 25, "width": 768})
     o = imagegen._opts({"seed": 7, "negative": "blurry"})
     a = imagegen.argv(Path("sd.exe"), "um gato", isolado / "out.png", o)
 
     assert a[:3] == ["sd.exe", "-p", "um gato"]  # sem -M: o padrão do sd.cpp já é gerar imagem
-    assert a[a.index("-m") + 1] == "C:/m/sd15.safetensors"
+    assert a[a.index("-m") + 1] == str(Path("C:/m/sd15.safetensors"))  # caminho normalizado ao salvar
     assert a[a.index("--steps") + 1] == "25" and a[a.index("-W") + 1] == "768"
     assert a[a.index("-n") + 1] == "blurry" and a[a.index("-s") + 1] == "7"
     # semente 0 na UI = aleatória (o padrão do sd.cpp é 42, que repetiria a mesma imagem)
@@ -290,7 +296,8 @@ def test_estimativa_separa_gpu_de_ram(isolado):
     especialistas na RAM, e só camada de atenção gasta cache KV."""
     kvs = [("h.block_count", 4, _u32(4)), ("h.attention.head_count", 4, _u32(8)),
            ("h.attention.head_count_kv", 4, _u32(2)), ("h.attention.key_length", 4, _u32(64)),
-           ("h.context_length", 4, _u32(8192)), ("h.full_attention_interval", 4, _u32(2))]
+           ("h.context_length", 4, _u32(8192)), ("h.full_attention_interval", 4, _u32(2)),
+           ("h.ssm.inner_size", 4, _u32(256))]  # híbrido: as camadas sem atenção são recorrentes
     tensores = [("output.weight", 500)]
     for i in range(4):
         tensores += [(f"blk.{i}.attn_q.weight", 100), (f"blk.{i}.ffn_down_exps.weight", 1000)]
@@ -481,6 +488,8 @@ license: apache-2.0
 def test_imagem_pede_confirmacao_com_modelo_na_vram(isolado, monkeypatch):
     """sd.cpp e llama-server brigam pela VRAM: descarregar é preciso, mas derruba o cache do chat."""
     monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "qwen3"})
+    monkeypatch.setattr(localai, "find_exe", lambda kind: Path("sd-cli"))
+    localai.set_image({"model": str(gguf(isolado / "modelos", "sd.gguf"))})
     descarregou = []
     monkeypatch.setattr(localai, "unload", lambda: descarregou.append(True))
     monkeypatch.setattr(imagegen.threading, "Thread", lambda target, daemon: type("T", (), {"start": lambda _s: None})())
@@ -512,3 +521,128 @@ def test_pastas_padrao(isolado):
     assert localai.dirs()[0] == str(novo)                          # a padrão é sempre a primeira
     localai.set_dirs([str(novo)])
     assert localai.dirs().count(str(novo)) == 1                    # não duplica com a padrão
+
+
+def test_gemma4_declara_valores_por_camada(isolado):
+    """Isto derrubava o painel com HTTP 500: o Gemma 4 manda head_count_kv como lista, uma por camada.
+
+    E cada tipo de camada gasta cache diferente — a de janela deslizante guarda só os últimos N tokens.
+    """
+    import struct
+
+    def lista_u32(valores):
+        return struct.pack("<IQ", 4, len(valores)) + b"".join(_u32(v) for v in valores)
+
+    def lista_bool(valores):
+        return struct.pack("<IQ", 7, len(valores)) + bytes(1 if v else 0 for v in valores)
+
+    kvs = [("gemma4.block_count", 4, _u32(4)),
+           ("gemma4.attention.head_count", 4, _u32(16)),
+           ("gemma4.attention.head_count_kv", 9, lista_u32([8, 8, 8, 1])),
+           ("gemma4.attention.key_length", 4, _u32(512)),
+           ("gemma4.attention.key_length_swa", 4, _u32(256)),
+           ("gemma4.attention.sliding_window", 4, _u32(1024)),
+           ("gemma4.attention.sliding_window_pattern", 9, lista_bool([True, True, True, False])),
+           ("gemma4.context_length", 4, _u32(262144))]
+    tensores = [("output.weight", 10)] + [(f"blk.{i}.attn_q.weight", 10) for i in range(4)]
+    modelo = _gguf(isolado / "gemma.gguf", "gemma4", kvs, tensores)
+
+    info = localai.gguf_info(str(modelo))
+    assert [c["kind"] for c in info["layers"]] == ["swa", "swa", "swa", "full"]
+    assert info["layers"][0] == {"kind": "swa", "kv_heads": 8, "head_dim": 256, "window": 1024}
+    assert info["layers"][3] == {"kind": "full", "kv_heads": 1, "head_dim": 512, "window": 0}
+
+    e = localai.estimate(str(modelo), {**localai.DEFAULT_PARAMS, "ctx": 8192, "ngl": 4,
+                                       "cache_type_k": "f16", "cache_type_v": "f16"})
+    # as 3 de janela guardam 1024 tokens; só a última guarda o contexto inteiro
+    assert e["kv"] == 3 * 1024 * 8 * 256 * 4 + 8192 * 1 * 512 * 4
+    assert e["ok"] and e["attn_layers"] == 4
+
+
+def test_chave_por_camada_nao_derruba_o_resto(isolado):
+    """Qualquer outra chave que venha como lista vira o maior valor, em vez de estourar."""
+    import struct
+
+    kvs = [("x.block_count", 9, struct.pack("<IQ", 4, 2) + _u32(30) + _u32(48))]
+    info = localai.gguf_info(str(_gguf(isolado / "x.gguf", "x", kvs)))
+
+    assert info["n_layer"] == 48
+
+
+def test_separa_modelo_de_chat_de_modelo_de_imagem(isolado):
+    """Um .gguf de chat aparecia na lista de modelos de imagem: os dois usam a mesma extensão."""
+    import struct
+
+    pasta = isolado / "modelos"
+    chat = _gguf(pasta / "chat.gguf", "qwen3",
+                 [("qwen3.block_count", 4, _u32(28)), ("qwen3.attention.head_count", 4, _u32(16))])
+    difusao = _gguf(pasta / "sd.gguf", "sd1")          # sem camadas nem cabeças: não é modelo de linguagem
+    (pasta / "checkpoint.safetensors").write_bytes(b"x")
+
+    achados = {m["name"]: m["kind"] for m in localai.scan(localai.WEIGHTS)}
+
+    assert achados == {"chat": "chat", "sd": "image", "checkpoint": "image"}
+    assert [m["name"] for m in localai.scan()] == ["chat", "sd"]  # scan() padrão continua só .gguf
+
+
+def test_ajustes_por_modelo_de_imagem(isolado):
+    """Flux e SD 1.5 querem CFG e passos diferentes; o que está no padrão geral não vira ajuste salvo."""
+    localai.set_image({"steps": 20, "cfg": 7.0})
+
+    localai.save_image_params("C:/m/flux.gguf", {"steps": 4, "cfg": 1.0})
+
+    assert localai.image_params("C:/m/flux.gguf")["steps"] == 4
+    assert localai.read_config()["image_models"]["C:/m/flux.gguf"] == {"steps": 4, "cfg": 1.0}
+    assert localai.image_params("C:/m/outro.gguf")["steps"] == 20      # outro modelo segue o padrão
+
+    localai.save_image_params("C:/m/flux.gguf", {"steps": 20})          # voltou ao padrão: some do arquivo
+    assert localai.read_config()["image_models"]["C:/m/flux.gguf"] == {"cfg": 1.0}
+
+
+# ---------------------------------------------------------------- busca: ordem e filtro de imagem
+
+def _resposta(itens):
+    return type("R", (), {"status_code": 200, "json": lambda _s: itens})()
+
+
+def test_ordem_da_busca(monkeypatch):
+    """Relevância é o ranking do próprio HF: manda a busca SEM sort, senão vira lista por downloads."""
+    vistos = {}
+    monkeypatch.setattr(localai.httpx, "get", lambda *a, **k: vistos.update(k["params"]) or _resposta([]))
+
+    localai.search("qwen", "text", 5, "relevancia")
+    assert "sort" not in vistos
+
+    localai.search("qwen", "text", 5, "curtidas")
+    assert vistos["sort"] == "likes" and vistos["direction"] == -1
+
+    localai.search("qwen", "text", 5, "recentes")
+    assert vistos["sort"] == "lastModified"
+
+
+def test_busca_de_imagem_ignora_peca_solta(monkeypatch):
+    """LoRA, ControlNet e afins não carregam no sd.cpp: são complemento, não modelo."""
+    itens = [{"id": "org/sdxl-base", "tags": ["text-to-image"]},
+             {"id": "org/detail-lora-sdxl", "tags": ["lora"]},
+             {"id": "org/controlnet-canny", "tags": ["controlnet"]},
+             {"id": "org/flux-gguf", "tags": ["gguf"]}]
+    monkeypatch.setattr(localai.httpx, "get", lambda *a, **k: _resposta(itens))
+
+    achados = [m["id"] for m in localai.search("sdxl", "image")]
+
+    assert achados == ["org/sdxl-base", "org/flux-gguf"]
+
+
+def test_arquivos_de_imagem_so_o_que_o_sd_abre(monkeypatch):
+    arquivos = [{"type": "file", "path": "flux1-dev-Q4_0.gguf", "size": 6 << 30},
+                {"type": "file", "path": "unet/diffusion_pytorch_model.safetensors", "size": 6 << 30},
+                {"type": "file", "path": "loras/detalhe.safetensors", "size": 200 << 20},
+                {"type": "file", "path": "ae.safetensors", "size": 300 << 20},
+                {"type": "file", "path": "embeddings/x.safetensors", "size": 1 << 20},
+                {"type": "file", "path": "flux1-dev-Q2_K.gguf", "size": 3 << 30}]
+    monkeypatch.setattr(localai.httpx, "get", lambda *a, **k: _resposta(arquivos))
+
+    achados = [f["path"] for f in localai.files("org/flux", "image")]
+
+    # fora: pasta do diffusers, LoRA e embedding. dentro: os gguf e o VAE, do menor para o maior
+    assert achados == ["ae.safetensors", "flux1-dev-Q2_K.gguf", "flux1-dev-Q4_0.gguf"]

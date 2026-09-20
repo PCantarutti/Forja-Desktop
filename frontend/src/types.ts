@@ -159,6 +159,21 @@ export type LocalModel = {
   mtime: number;
   shards: number; // > 1 = modelo dividido em vários arquivos
   folder: string;
+  kind: "chat" | "image";
+  params?: ImageParams; // só nos modelos de imagem: ajustes próprios daquele modelo
+};
+
+/** Ajustes que um modelo de imagem pode ter por conta própria. */
+export type ImageParams = {
+  steps: number;
+  cfg: number;
+  width: number;
+  height: number;
+  sampler: string;
+  negative: string;
+  vae: string;
+  clip_l: string;
+  t5xxl: string;
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -248,6 +263,15 @@ export type ImageOpts = {
 
 export type RuntimeInfo = { installed: boolean; exe: string; backend: string; backends: string[] };
 
+/** Memória da máquina: é o que diz se um modelo cabe na GPU, na RAM, ou em lugar nenhum. */
+export type Hardware = {
+  gpus: { name: string; total: number; free: number }[];
+  vram: number;
+  vram_free: number;
+  ram: number;
+  ram_free: number;
+};
+
 export type LocalState = {
   runtimes: { llama: RuntimeInfo; sd: RuntimeInfo };
   models: LocalModel[];
@@ -267,6 +291,10 @@ export type LocalState = {
   };
   dirs: string[];
   download_dir: string; // para onde vão os downloads (uma das dirs)
+  models_dir: string; // pasta padrão dos modelos (Configurações › Pastas)
+  data_dir: string;
+  image_busy: boolean; // gerando imagem: carregar modelo fica bloqueado
+  hardware: Hardware;
   jobs: Job[];
   defaults: LlamaParams;
   last: string;

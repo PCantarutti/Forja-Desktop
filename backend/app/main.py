@@ -361,9 +361,9 @@ async def local_dirs(body: DirsBody):
 
 
 @app.get("/api/local/search")
-async def local_search(q: str, kind: str = "text"):
+async def local_search(q: str, kind: str = "text", sort: str = "relevancia"):
     try:
-        return {"models": await asyncio.to_thread(localai.search, q, kind)}
+        return {"models": await asyncio.to_thread(localai.search, q, kind, 20, sort)}
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -437,6 +437,15 @@ async def local_paths(body: PathsBody):
 async def local_image_defaults(body: dict):
     try:
         return await asyncio.to_thread(localai.set_image, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/image/model")
+async def local_image_model(body: LoadBody):
+    """Ajustes de um modelo de imagem (passos, CFG, VAE...). Só o que sai do padrão fica salvo."""
+    try:
+        return await asyncio.to_thread(localai.save_image_params, body.path, body.params)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
