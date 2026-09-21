@@ -258,11 +258,15 @@ export default function CompararView(props: {
                     <span className={`text-[11px] ${CORES[item.status]}`}>{ROTULOS[item.status]}</span>
                     {!rodando && (
                       <button
-                        title={estado.voto === item.id ? "Desfazer voto" : "Votar neste"}
+                        title={estado.voto === item.id ? "Desfazer voto" : "Marcar como melhor resposta"}
                         onClick={() => votar(item)}
-                        className={`rounded-full px-1.5 ${estado.voto === item.id ? "text-amber-300" : "text-faint hover:text-fg"}`}
+                        className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${
+                          estado.voto === item.id
+                            ? "border-amber-700/70 bg-amber-950/40 text-amber-300"
+                            : "border-line text-faint hover:bg-raised hover:text-fg"
+                        }`}
                       >
-                        🏆
+                        {estado.voto === item.id ? "Vencedor" : "Votar"} 🏆
                       </button>
                     )}
                   </div>
