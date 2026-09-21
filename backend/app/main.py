@@ -312,17 +312,24 @@ async def get_activity():
     por_conversa: dict[int, dict] = {}
 
     def entrada(conv_id: int) -> dict:
-        return por_conversa.setdefault(int(conv_id), {"id": int(conv_id), "running": False, "subagents": 0})
+        return por_conversa.setdefault(int(conv_id),
+                                       {"id": int(conv_id), "running": False, "subagents": 0, "servers": 0})
 
     for r in RUNS.values():
         if not r.finished:
             entrada(r.conv_id)["running"] = True
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
+    vivos = 0
     try:
-        vivos = sum(1 for s in await asyncio.to_thread(shell.list_servers) if s.get("alive"))
+        for s in await asyncio.to_thread(shell.list_servers):
+            if not s.get("alive"):
+                continue
+            vivos += 1
+            if str(s.get("conv") or "").isdigit():  # processo sabe de que conversa nasceu
+                entrada(int(s["conv"]))["servers"] += 1
     except Exception:  # runner fora do ar não pode derrubar a barra lateral
-        vivos = 0
+        pass
     return {"conversations": list(por_conversa.values()), "servers": vivos}
 
 

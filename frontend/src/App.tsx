@@ -870,8 +870,8 @@ export default function App() {
   const segments = useMemo(() => groupActivity(messages), [messages]);
 
   // Instâncias desta conversa (delegações) + processos vivos, para o indicador embaixo da resposta.
-  const instancias =
-    (activity.conversations.find((c) => c.id === currentId)?.subagents ?? 0) + activity.servers;
+  const daConversa = activity.conversations.find((c) => c.id === currentId);
+  const instancias = (daConversa?.subagents ?? 0) + (daConversa?.servers ?? 0);
   const lastAssistantIndex = messages.reduce((acc, m, i) => (m.role === "assistant" ? i : acc), -1);
 
   // Planos do modo Plano nesta conversa (chamadas exit_plan_mode), para a aba Planos.
@@ -1520,7 +1520,7 @@ export default function App() {
         {right.tab === "browser" ? (
           <BrowserPanel conv={browserKey} onState={(s) => setBrowserOpen(s.open)} />
         ) : right.tab === "servers" ? (
-          <ServersPanel onCount={setServersRunning} onOpen={openConversation} />
+          <ServersPanel onCount={setServersRunning} onOpen={openConversation} current={currentId} />
         ) : right.tab === "local" ? (
           <LocalPanel onRunning={onLocalRunning} chatModel={settings.model} />
         ) : right.tab === "terminal" ? (

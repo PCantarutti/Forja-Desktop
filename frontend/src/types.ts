@@ -22,7 +22,7 @@ export type Approval = {
 
 /** O que está rodando agora: turno do agente e delegações por conversa, e processos vivos. */
 export type Activity = {
-  conversations: { id: number; running: boolean; subagents: number }[];
+  conversations: { id: number; running: boolean; subagents: number; servers: number }[];
   servers: number;
 };
 
@@ -127,6 +127,7 @@ export type ServerInfo = {
   cwd?: string;
   log?: string;
   uptime?: number;
+  conv?: string; // conversa que subiu o processo, para a aba separar por conversa
   where: "host" | "container";
   error?: string;
 };

@@ -23,6 +23,8 @@ _SERVERS: dict[str, dict] = {}  # nome -> {proc, log, command, cwd, started}
 _servers_lock = threading.Lock()
 # Saída ao vivo: o agente define um sink por chamada e cada linha do comando vira evento na UI.
 OUTPUT_SINK: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar("forja_output_sink", default=None)
+# Conversa do turno atual: fica gravada no processo para a aba Instâncias separar por conversa.
+CONV: contextvars.ContextVar[str] = contextvars.ContextVar("forja_conv", default="")
 
 
 def _truncate(text: str) -> str:
@@ -111,7 +113,8 @@ def _start(name: str, command: str, cwd: Path) -> dict:
         fh = open(log, "wb")
         proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, **native.popen_kwargs())
-        _SERVERS[name] = {"proc": proc, "log": str(log), "command": command, "cwd": str(cwd), "started": time.time()}
+        _SERVERS[name] = {"proc": proc, "log": str(log), "command": command, "cwd": str(cwd),
+                          "started": time.time(), "conv": CONV.get()}
     return _info(name)
 
 
@@ -119,7 +122,8 @@ def _info(name: str) -> dict:
     s = _SERVERS[name]
     code = s["proc"].poll()
     return {"name": name, "pid": s["proc"].pid, "alive": code is None, "exit_code": code, "command": s["command"],
-            "cwd": s["cwd"], "log": s["log"], "uptime": int(time.time() - s["started"])}
+            "cwd": s["cwd"], "log": s["log"], "uptime": int(time.time() - s["started"]),
+            "conv": s.get("conv") or ""}
 
 
 def _log(name: str, tail: int) -> str:
