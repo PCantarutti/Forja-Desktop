@@ -17,6 +17,7 @@ export const ChevronDown = base(<path d="m6 9 6 6 6-6" />);
 export const Cube = base(<><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></>);
 export const Tokens = base(<><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" /></>);
 export const Clock = base(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>);
+export const Balanca = base(<><path d="M12 4v16M8 20h8M4 8h16" /><path d="m4 8-2.5 5a3 3 0 0 0 5 0z" /><path d="m20 8-2.5 5a3 3 0 0 0 5 0z" /></>);
 export const Gauge = base(<><path d="M4 16a8 8 0 1 1 16 0" /><path d="m12 16 4-5" /></>);
 export const ArrowUp = base(<path d="M12 19V5m-6 6 6-6 6 6" />);
 export const Square = ({ className = "size-3.5" }: P) => (

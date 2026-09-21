@@ -12,8 +12,9 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (checkpoints, compact, config, db, downloads, gitops, imagegen, llm, localai, lotes, mcp_client,
-               memory, mirror, native, policy, settings, shell, skills, subagents, terminal, uploads, workspace)
+from . import (checkpoints, compact, comparar, config, db, downloads, gitops, imagegen, llm, localai, lotes,
+               mcp_client, memory, mirror, native, policy, settings, shell, skills, subagents, terminal, uploads,
+               workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
@@ -702,6 +703,78 @@ async def imagens_prompt(body: PromptBody):
     return {"prompt": texto}
 
 
+# ------------------------------------------------------------------ comparar modelos
+
+
+class CompararBody(BaseModel):
+    prompt: str = ""
+    itens: list[dict] = []          # [{"provider","model"} | {"path"}]
+    modo: str = "paralelo"          # paralelo | sequencial (o .gguf só entra no sequencial)
+    system: str = ""
+    effort: str = "medio"
+    cego: bool = False
+    confirm: bool = False
+
+
+class VotoBody(BaseModel):
+    voto: str = ""                  # id do item vencedor; o mesmo de novo desfaz
+
+
+def _sse_comparar(message_id: int) -> StreamingResponse:
+    """Retrato inteiro a cada tick em vez de evento por token: a comparação toda cabe num JSON,
+    reconectar não precisa de cursor e recarregar a página se resolve sozinho."""
+    async def stream():
+        while True:
+            try:
+                estado = comparar.estado(message_id)
+            except ToolError as e:
+                yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+                return
+            yield f"data: {json.dumps(estado, ensure_ascii=False, default=str)}\n\n"
+            if estado["status"] != "rodando":
+                return
+            await asyncio.sleep(comparar.TICK)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/comparar/{conv_id}/rodar")
+async def comparar_rodar(conv_id: int, body: CompararBody):
+    try:
+        msg = comparar.start(conv_id, body.prompt, body.itens, body.modo, body.system, body.effort,
+                             body.cego, body.confirm)
+    except comparar.ModeloCarregado as e:
+        raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_comparar(msg["id"])
+
+
+@app.get("/api/comparar/{message_id}/stream")
+def comparar_stream(message_id: int):
+    """Reconexão: acompanhar uma comparação já em andamento, ou reabrir uma do histórico."""
+    return _sse_comparar(message_id)
+
+
+@app.post("/api/comparar/{message_id}/cancelar")
+def comparar_cancelar(message_id: int):
+    return comparar.cancelar(message_id)
+
+
+@app.post("/api/comparar/{message_id}/voto")
+def comparar_voto(message_id: int, body: VotoBody):
+    try:
+        return comparar.votar(message_id, body.voto)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/comparar/placar")
+def comparar_placar():
+    return comparar.placar()
+
+
 # ------------------------------------------------------------------ navegador integrado
 # Uma sessão por conversa: `conv` é o id da conversa ("0" = rascunho da tela inicial).
 
@@ -893,8 +966,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "imagem"):
-        raise HTTPException(400, "kind deve ser chat, agent ou imagem")
+    if kind not in ("chat", "agent", "imagem", "comparar"):
+        raise HTTPException(400, "kind deve ser chat, agent, imagem ou comparar")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)

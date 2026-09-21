@@ -19,7 +19,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200), default="Nova conversa")
-    kind: Mapped[str] = mapped_column(String(10), default="agent")  # chat | agent (seções separadas)
+    kind: Mapped[str] = mapped_column(String(10), default="agent")  # chat | agent | imagem | comparar (seções)
     workspace: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # pasta do Windows; None = padrão
     pinned: Mapped[bool] = mapped_column(default=False)    # fixada no topo da lista
     archived: Mapped[bool] = mapped_column(default=False)  # fora da lista principal

@@ -5,6 +5,7 @@ import BrowserPanel from "./components/BrowserPanel";
 import ServersPanel from "./components/ServersPanel";
 import LocalPanel, { LocalLoading } from "./components/LocalPanel";
 import ImagensView from "./components/ImagensView";
+import CompararView from "./components/CompararView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
@@ -1096,7 +1097,16 @@ export default function App() {
         </div>
         <div className="flex min-h-0 flex-1">
       <main className="flex min-w-0 flex-1 flex-col bg-bg">
-        {section === "imagem" ? (
+        {section === "comparar" ? (
+          <CompararView
+            conv={currentId}
+            ensureConversation={ensureConversation}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
+          />
+        ) : section === "imagem" ? (
           <ImagensView
             conv={currentId}
             ensureConversation={ensureConversation}

@@ -166,6 +166,37 @@ export type Stats = {
   ctx_max: number | null;
 };
 
+// ------------------------------------------------------------------ comparar modelos
+
+/** O que a tela manda para o backend: um modelo de provedor, ou um arquivo .gguf. */
+export type CompararEntrada = { provider?: string; model?: string; path?: string; nome: string };
+
+export type CompararItem = {
+  id: string;
+  rotulo: string; // A, B, C… é o que aparece no modo cego
+  provider: string;
+  model: string;
+  path: string; // vazio = modelo de provedor
+  nome: string;
+  status: "pendente" | "carregando" | "rodando" | "pronto" | "erro" | "cancelado";
+  content: string;
+  reasoning: string;
+  stats: Stats | null;
+  error: string;
+};
+
+export type CompararEstado = {
+  message_id: number;
+  status: "rodando" | "pronto" | "erro" | "cancelado";
+  modo: "paralelo" | "sequencial";
+  cego: boolean;
+  revelado: boolean;
+  voto: string; // id do item vencedor
+  itens: CompararItem[];
+};
+
+export type PlacarLinha = { nome: string; rodadas: number; vitorias: number; erros: number; tps: number | null };
+
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
 
 /** Parâmetros de carga do llama-server. Zero/padrão = deixa o llama.cpp decidir. */

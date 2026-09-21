@@ -34,7 +34,8 @@ export async function streamSSE(path: string, init: RequestInit, onEvent: (ev: a
   const r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...init.headers } });
   if (!r.ok || !r.body) {
     const b = await r.json().catch(() => ({}));
-    throw new Error(b.detail ?? `HTTP ${r.status}`);
+    // O status vai junto, como no req(): 409 é pergunta (confirmar), não falha.
+    throw Object.assign(new Error(b.detail ?? `HTTP ${r.status}`), { status: r.status });
   }
   const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = "";

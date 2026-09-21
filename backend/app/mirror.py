@@ -7,6 +7,7 @@ app: é uma cópia de leitura.
     %APPDATA%\\Forja\\conversas\\forja-code\\0007 - titulo.md   (modo agente)
     %APPDATA%\\Forja\\conversas\\forja-chat\\0008 - titulo.md   (chat)
     %APPDATA%\\Forja\\conversas\\forja-imagens\\0009 - titulo.md   (lotes de imagem)
+    %APPDATA%\\Forja\\conversas\\forja-comparacoes\\0010 - titulo.md   (comparação de modelos)
 """
 from __future__ import annotations
 
@@ -17,7 +18,8 @@ import re
 from . import config, db, workspace
 
 ROOT = config.DATA_DIR / "conversas"
-DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens"}
+DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens",
+        "comparar": "forja-comparacoes"}
 
 # Proibidos em nome de arquivo no Windows, mais os de controle.
 _PROIBIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -49,6 +51,13 @@ def markdown(c) -> str:
                 etiqueta = f"semente {img['seed']} · {img.get('model_name') or '?'} · {img['status']}"
                 linhas += [f"- {etiqueta}", f"  ![{etiqueta}]({img['path']})"]
             linhas.append("")
+        elif m.role == "assistant" and (m.meta or {}).get("itens"):  # comparação de modelos
+            for item in m.meta["itens"]:
+                st = item.get("stats") or {}
+                medida = f"{st.get('tokens', '?')} tokens · {st.get('tps', '?')} tok/s · {st.get('seconds', '?')}s"
+                venceu = " 🏆" if item["id"] == (m.meta.get("voto") or None) else ""
+                linhas += [f"## {item['nome']}{venceu} ({item['status']})", "", f"*{medida}*", "",
+                           item["content"] or item["error"] or "", ""]
         elif m.role == "assistant":
             linhas += ["## Forja", "", m.content or ""]
             for tc in m.tool_calls or []:
