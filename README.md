@@ -36,6 +36,8 @@ Não precisa de Docker, WSL2 nem Python instalado: o app traz o seu próprio Pyt
 
 Baixe `Forja-Setup-<versão>.exe` e instale (instalação por usuário, sem pedir administrador). Abra o Forja pelo menu Iniciar.
 
+Daí em diante ele se atualiza sozinho — quer dizer, ele **avisa**: na abertura o app pergunta ao GitHub se há versão nova e, se houver, *Configurações › Aplicativo* mostra qual é, com os botões **Baixar** e **Reiniciar e instalar**. Nada baixa nem instala sem você clicar. O download é diferencial (`.blockmap`): uma versão que só mexeu no backend e na interface custa dezenas de MB, não os 245 do instalador inteiro, porque o Python e o Chromium embutidos não mudaram. O arquivo é conferido pelo sha512 antes de instalar; o que isso não resolve é o aviso de "editor desconhecido" do Windows, que continua até o instalador ser assinado.
+
 No topo, escolha o provider e o modelo, selecione **Agente**, clique no chip da pasta para escolher onde trabalhar e peça, por exemplo: *"crie calc.py com funções soma e multiplicacao"*.
 
 Seus dados (conversas, configurações, chaves e `mcp.json`) ficam em `%APPDATA%\Forja`. Desinstalar **não** apaga essa pasta.
@@ -521,6 +523,13 @@ cd ..; npm install; npm run dev
 
 ```powershell
 npm run dist
+```
+
+Para publicar uma versão (instalador + `latest.yml` + `.blockmap` numa release do GitHub, que é de
+onde o app se atualiza), com um `GH_TOKEN` no ambiente:
+
+```powershell
+npm run release
 ```
 
 Se o electron-builder parar em `Cannot create symbolic link` ao extrair o `winCodeSign`, é o Windows recusando os symlinks do macOS que vêm nesse pacote. Ligue o **Modo de Desenvolvedor** (Configurações › Sistema › Para desenvolvedores) e rode de novo, ou extraia o pacote uma vez sem a parte do macOS:

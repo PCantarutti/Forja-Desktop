@@ -567,6 +567,66 @@ function PastasTab(props: { onError: (e: string) => void }) {
 }
 
 /** Janela, zoom, bandeja e início com o Windows. Salva na hora (não passa pelo botão Salvar). */
+const ATUALIZACAO: Record<UpdateState["state"], string> = {
+  idle: "Ainda não verificado.",
+  dev: "Rodando fora do app instalado: não há release para comparar.",
+  checking: "Procurando…",
+  current: "Você está na versão mais recente.",
+  available: "Há uma versão nova.",
+  downloading: "Baixando…",
+  ready: "Baixada e pronta para instalar.",
+  error: "Não consegui verificar.",
+};
+
+/**
+ * Atualização pelo GitHub Releases. Nada baixa nem instala sem clique: o instalador é grande, e
+ * quem decide gastar a internet é quem está pagando por ela.
+ */
+function Atualizacao() {
+  const bridge = window.forja?.update;
+  const [u, setU] = useState<UpdateState | null>(null);
+
+  useEffect(() => {
+    if (!bridge) return;
+    bridge.get().then(setU);
+    // Enquanto a aba estiver aberta: é o progresso do download que muda sozinho.
+    const t = setInterval(() => bridge.get().then(setU), 1000);
+    return () => clearInterval(t);
+  }, [bridge]);
+
+  if (!bridge || !u) return null;
+  const ocupado = u.state === "checking" || u.state === "downloading";
+
+  return (
+    <div className="space-y-2">
+      <div className="text-sm text-fg">Atualização</div>
+      <div className="space-y-2 rounded-xl border border-line bg-surface p-3">
+        <div className="text-xs text-muted">
+          {ATUALIZACAO[u.state]}
+          {u.version && (u.state === "available" || u.state === "ready") ? ` Versão ${u.version}.` : ""}
+          {u.state === "downloading" ? ` ${u.percent}%` : ""}
+        </div>
+        {u.error && <div className="text-xs text-red-300">{u.error}</div>}
+        <div className="flex flex-wrap gap-2">
+          <button className={btn} disabled={ocupado} onClick={() => bridge.check().then(setU)}>
+            Procurar atualizações
+          </button>
+          {u.state === "available" && (
+            <button className={btnPrimary} onClick={() => bridge.download().then(setU)}>
+              Baixar
+            </button>
+          )}
+          {u.state === "ready" && (
+            <button className={btnPrimary} onClick={() => bridge.install()}>
+              Reiniciar e instalar
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppTab() {
   const bridge = window.forja!.desktop;
   const [d, setD] = useState<DesktopState | null>(null);
@@ -636,6 +696,8 @@ function AppTab() {
           />
         </div>
       </div>
+
+      <Atualizacao />
 
       <div className="space-y-2">
         <div className="text-sm text-fg">Sobre</div>

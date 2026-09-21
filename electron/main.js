@@ -13,6 +13,7 @@ const net = require("net");
 const path = require("path");
 const { ZOOM_STEPS, nextZoom } = require("./zoom");
 const { BrowserHost } = require("./browserHost");
+const { autoUpdater } = require("electron-updater");
 const { isSafeExternal, sameOrigin } = require("./links");
 
 const DEV = !app.isPackaged;
@@ -389,6 +390,70 @@ function createWindow({ hidden = false } = {}) {
   return win;
 }
 
+// ------------------------------------------------------------------ atualização
+
+/**
+ * Atualização pelo GitHub Releases, sem nada acontecendo às escondidas.
+ *
+ * O instalador tem ~245 MB por causa do Python e do Chromium embutidos, e é justamente por isso
+ * que o `.blockmap` importa: com ele o electron-updater baixa só os blocos que mudaram, então uma
+ * versão que mexeu no backend e na interface custa dezenas de MB, não 245.
+ *
+ * `autoDownload` desligado de propósito: quem decide baixar é quem está pagando a internet. E o
+ * sha512 do latest.yml é conferido antes de instalar — o que ele não cobre é o SmartScreen, que
+ * segue avisando "editor desconhecido" enquanto o instalador não for assinado.
+ */
+let update = { state: "idle", version: "", percent: 0, error: "", notes: "" };
+
+function setUpdate(patch) {
+  update = { ...update, ...patch };
+}
+
+function wireUpdater() {
+  if (!app.isPackaged) return; // em dev não há release para comparar
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on("checking-for-update", () => setUpdate({ state: "checking", error: "" }));
+  autoUpdater.on("update-available", (info) => setUpdate({ state: "available", version: info.version, notes: String(info.releaseNotes ?? "") }));
+  autoUpdater.on("update-not-available", () => setUpdate({ state: "current", version: "", percent: 0 }));
+  autoUpdater.on("download-progress", (p) => setUpdate({ state: "downloading", percent: Math.round(p.percent) }));
+  autoUpdater.on("update-downloaded", (info) => setUpdate({ state: "ready", version: info.version, percent: 100 }));
+  autoUpdater.on("error", (e) => setUpdate({ state: "error", error: String(e?.message ?? e) }));
+  autoUpdater.checkForUpdates().catch(() => {
+    /* sem rede na abertura: o botão em Configurações tenta de novo */
+  });
+}
+
+ipcMain.handle("forja:update:get", () => update);
+
+ipcMain.handle("forja:update:check", async () => {
+  if (!app.isPackaged) return setUpdate({ state: "dev" }), update;
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (e) {
+    setUpdate({ state: "error", error: String(e?.message ?? e) });
+  }
+  return update;
+});
+
+ipcMain.handle("forja:update:download", async () => {
+  try {
+    setUpdate({ state: "downloading", percent: 0 });
+    await autoUpdater.downloadUpdate();
+  } catch (e) {
+    setUpdate({ state: "error", error: String(e?.message ?? e) });
+  }
+  return update;
+});
+
+ipcMain.handle("forja:update:install", () => {
+  if (update.state !== "ready") return update;
+  app.isQuitting = true;
+  stopBackend(); // o instalador não pode encontrar o Python segurando arquivo
+  autoUpdater.quitAndInstall(false, true);
+  return update;
+});
+
 // ------------------------------------------------------------------ ponte com a interface
 
 ipcMain.handle("forja:pickFolder", async (_e, start) => {
@@ -474,6 +539,7 @@ if (!app.requestSingleInstanceLock()) {
       const hidden = process.argv.includes("--hidden") && prefs.closeToTray;
       if (hidden) ensureTray();
       createWindow({ hidden });
+      wireUpdater();
     } catch (e) {
       dialog.showErrorBox("Forja", `Não foi possível iniciar: ${e.message}`);
       app.quit();

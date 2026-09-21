@@ -10,6 +10,15 @@ interface DesktopState {
   paths: { data: string; log: string; db: string; md: string; exe: string };
 }
 
+/** Estado da atualização. `dev` = rodando fora do app instalado, onde não há release para comparar. */
+interface UpdateState {
+  state: "idle" | "dev" | "checking" | "available" | "downloading" | "ready" | "current" | "error";
+  version: string;
+  percent: number;
+  error: string;
+  notes: string;
+}
+
 interface ForjaBridge {
   /** Token desta execução do app; vai no header de toda chamada de /api (ver api.ts). */
   token: string;
@@ -21,6 +30,13 @@ interface ForjaBridge {
     set(patch: Partial<Pick<DesktopState, "zoom" | "closeToTray" | "startWithWindows" | "startMinimized">>): Promise<DesktopState>;
     zoom(dir: "in" | "out" | "reset"): Promise<number>;
     open(what: "log" | "data" | "db" | "md"): Promise<unknown>;
+  };
+  /** Atualização pelo GitHub Releases; nada baixa ou instala sem clique. */
+  update: {
+    get(): Promise<UpdateState>;
+    check(): Promise<UpdateState>;
+    download(): Promise<UpdateState>;
+    install(): Promise<UpdateState>;
   };
   /** Navegador nativo: onde o painel da conversa `key` está (px de CSS), ou bounds null quando não está visível. */
   browser: {

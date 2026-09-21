@@ -13,6 +13,13 @@ contextBridge.exposeInMainWorld("forja", {
     zoom: (dir) => ipcRenderer.invoke("forja:desktop:zoom", dir),
     open: (what) => ipcRenderer.invoke("forja:desktop:open", what),
   },
+  // Atualização: a tela consulta o estado enquanto estiver aberta (ver Settings › Aplicativo).
+  update: {
+    get: () => ipcRenderer.invoke("forja:update:get"),
+    check: () => ipcRenderer.invoke("forja:update:check"),
+    download: () => ipcRenderer.invoke("forja:update:download"),
+    install: () => ipcRenderer.invoke("forja:update:install"),
+  },
   browser: {
     // Onde o painel Navegador está (px de CSS) e de qual conversa; bounds null = não mostrar view nenhuma.
     view: (shown) => ipcRenderer.send("forja:browser:view", shown),

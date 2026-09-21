@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "prepare-resources": "node scripts/prepare.mjs",
-    "dist": "npm run prepare-resources && electron-builder --win nsis"
+    "dist": "npm run prepare-resources && electron-builder --win nsis",
+    "release": "npm run prepare-resources && electron-builder --win nsis --publish always"
   },
   "devDependencies": {
     "electron": "^33.0.0",
@@ -16,11 +17,24 @@
   },
   "build": {
     "appId": "dev.forja.desktop",
-    "directories": { "output": "dist/${version}" },
+    "directories": {
+      "output": "dist/${version}"
+    },
     "productName": "Forja",
     "copyright": "Copyright © 2026 DRUVE",
-    "files": ["electron/**", "package.json"],
-    "extraResources": [{ "from": "resources", "to": ".", "filter": ["**/*"] }],
+    "files": [
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico",
@@ -39,6 +53,16 @@
       "runAfterFinish": true,
       "allowElevation": false,
       "menuCategory": false
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "PCantarutti",
+        "repo": "Forja-Desktop"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }
