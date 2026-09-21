@@ -784,6 +784,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                   meta={"kind": "tasks", "tasks": run.tasks})
         yield {"type": "event", "message": m.to_dict()}
     if len(provisorio) >= TITLE_MIN and not run.cancel.is_set():
+        # A interface precisa saber por que o turno ainda não acabou: é o título, não a resposta.
+        yield {"type": "status", "text": "Resumindo o título da conversa…"}
         if ev := await retitle(conv_id, provisorio, req):
             yield ev
     yield {"type": "done"}

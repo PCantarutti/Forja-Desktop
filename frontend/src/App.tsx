@@ -558,6 +558,7 @@ export default function App() {
         break;
       case "title": // o modelo resumiu um título melhor no fim do turno
         refreshConversations();
+        setStatus(null);
         break;
       case "queued":
         setQueued((q) => (q.includes(ev.content) ? q : [...q, ev.content]));
@@ -983,7 +984,7 @@ export default function App() {
     if (chamando) return `Usando ${chamando.name}`;
     if (draft?.content) return "Escrevendo a resposta";
     if (draft?.thinking) return (liveStats?.seconds ?? 0) > 30 ? "Ainda pensando…" : "Pensando…";
-    return status || "Trabalhando…";
+    return status ?? ""; // sem sinal de atividade, nada de spinner girando à toa
   })();
 
   // Uso por modelo (a conversa pode trocar de modelo no meio).
