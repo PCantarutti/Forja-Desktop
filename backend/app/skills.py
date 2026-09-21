@@ -23,8 +23,11 @@ BUILTIN = [
      "description": "Abre a aba Alterações (arquivos que o agente mudou e git)"},
     {"name": "revisar", "kind": "prompt",
      "description": "Revisa as alterações desta conversa em busca de bugs e melhorias",
-     "prompt": "Revise as alterações que você fez nesta conversa (use git diff e leia os arquivos tocados). "
-               "Liste bugs, riscos e melhorias em ordem de gravidade, com arquivo e linha. Não altere nada ainda. $ARGUMENTS"},
+     "prompt": "Revise as alterações desta conversa. Comece por `git status` e `git diff` para saber o que mudou. "
+               "Havendo subagente disponível, divida o diff por arquivo ou área e delegue os pedaços NA MESMA "
+               "resposta — eles rodam em paralelo: delegate_task(agent='revisor') se existir essa persona no "
+               "projeto, senão level='capaz'. Peça a cada um os problemas reais com arquivo e linha, sem estilo. "
+               "Junte tudo num relatório único, em ordem de gravidade e sem repetir. Não altere nada. $ARGUMENTS"},
     {"name": "testar", "kind": "prompt",
      "description": "Descobre e roda os testes do projeto, corrigindo falhas",
      "prompt": "Descubra como rodar os testes deste projeto (package.json, pytest, etc.), rode-os e corrija as falhas "
