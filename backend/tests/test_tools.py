@@ -61,6 +61,27 @@ def test_edit_many_occurrences(ws):
     assert (ws / "dup.txt").read_text() == "x\nx\nx\n"
 
 
+def test_edit_replace_all(ws):
+    (ws / "dup.txt").write_text("x\nx\nx\n")
+    out = run_tool("edit_file", {"path": "dup.txt", "old_str": "x", "new_str": "y", "replace_all": True}, ws)
+    assert "3 trechos" in out
+    assert (ws / "dup.txt").read_text() == "y\ny\ny\n"
+
+
+def test_edit_batch_is_all_or_nothing(ws):
+    antes = (ws / "calc.py").read_text(encoding="utf-8")
+    with pytest.raises(ToolError, match="Edição 2"):
+        run_tool("edit_file", {"path": "calc.py",
+                               "edits": [{"old_str": "a + b", "new_str": "b + a"},
+                                         {"old_str": "não existe", "new_str": "z"}]}, ws)
+    assert (ws / "calc.py").read_text(encoding="utf-8") == antes  # a primeira edição não foi escrita
+    run_tool("edit_file", {"path": "calc.py",
+                           "edits": [{"old_str": "a + b", "new_str": "b + a"},
+                                     {"old_str": "def ", "new_str": "def  "}]}, ws)
+    depois = (ws / "calc.py").read_text(encoding="utf-8")
+    assert "return b + a" in depois and "def  " in depois
+
+
 def test_edit_preview_is_diff(ws):
     pv = edit_preview(ws, {"path": "calc.py", "old_str": "a + b", "new_str": "b + a"})
     assert pv["kind"] == "diff" and "-    return a + b" in pv["text"] and "+    return b + a" in pv["text"]

@@ -252,32 +252,55 @@ def write_preview(root: Path, args: dict) -> dict:
 
 # ---------------------------------------------------------------- edit_file
 
-def _apply_edit(root: Path, args: dict) -> tuple[Path, str, str]:
-    p = resolve_path(root, args.get("path"))
-    old_str, new_str = args["old_str"], args["new_str"]
+def _edits(args: dict) -> list[dict]:
+    """As edições desta chamada: a lista `edits`, ou o par old_str/new_str do topo (uma edição)."""
+    raw = args.get("edits")
+    if isinstance(raw, list) and raw:
+        return [e for e in raw if isinstance(e, dict)]
+    return [{"old_str": args.get("old_str"), "new_str": args.get("new_str"),
+             "replace_all": args.get("replace_all")}]
+
+
+def _one_edit(text: str, edit: dict, onde: str) -> tuple[str, int]:
+    old_str, new_str = edit.get("old_str"), edit.get("new_str")
     if not old_str:
-        raise ToolError("old_str vazio. Para criar ou reescrever o arquivo inteiro use write_file.")
-    old = _read_text(p)
-    count = old.count(old_str)
+        raise ToolError(f"{onde}old_str vazio. Para criar ou reescrever o arquivo inteiro use write_file.")
+    count = text.count(old_str)
     if count == 0:
         raise ToolError(
-            "old_str não encontrado no arquivo. Leia o arquivo com read_file e copie o trecho "
+            f"{onde}old_str não encontrado no arquivo. Leia o arquivo com read_file e copie o trecho "
             "exatamente (espaços, indentação e quebras de linha), sem os números de linha.")
-    if count > 1:
+    if count > 1 and not edit.get("replace_all"):
         raise ToolError(
-            f"old_str aparece {count} vezes. Inclua mais linhas de contexto para que o trecho seja único.")
-    return p, old, old.replace(old_str, new_str, 1)
+            f"{onde}old_str aparece {count} vezes. Inclua mais linhas de contexto para que o trecho seja único, "
+            "ou mande replace_all=true para trocar todas.")
+    trocas = count if edit.get("replace_all") else 1
+    return text.replace(old_str, new_str or "", trocas), trocas
+
+
+def _apply_edit(root: Path, args: dict) -> tuple[Path, str, str, int]:
+    """Aplica as edições em sequência, tudo ou nada: se uma não bater, nada é escrito."""
+    p = resolve_path(root, args.get("path"))
+    edits = _edits(args)
+    old = novo = _read_text(p)
+    trocas = 0
+    for i, edit in enumerate(edits, 1):
+        onde = f"Edição {i}: " if len(edits) > 1 else ""
+        novo, n = _one_edit(novo, edit, onde)
+        trocas += n
+    return p, old, novo, trocas
 
 
 def edit_file(root: Path, args: dict) -> str:
-    p, _, new = _apply_edit(root, args)
+    p, _, new, trocas = _apply_edit(root, args)
     _check_size(new)
     p.write_text(new, encoding="utf-8", newline="")
-    return f"Arquivo editado: {_rel(root, p)}"
+    detalhe = f" ({trocas} trechos)" if trocas > 1 else ""
+    return f"Arquivo editado: {_rel(root, p)}{detalhe}"
 
 
 def edit_preview(root: Path, args: dict) -> dict:
-    p, old, new = _apply_edit(root, args)
+    p, old, new, _ = _apply_edit(root, args)
     return {"kind": "diff", "path": _rel(root, p), "text": _diff(old, new, _rel(root, p))}
 
 
@@ -304,9 +327,18 @@ register(Tool(
          ["path", "content"]),
     write_file, mutating=True, preview=write_preview))
 register(Tool(
-    "edit_file", "Substitui um trecho exato de um arquivo. old_str precisa aparecer exatamente uma vez.",
+    "edit_file",
+    "Substitui trechos exatos de um arquivo. Por padrão old_str precisa aparecer uma vez só; use "
+    "replace_all para trocar todas as ocorrências, e `edits` para várias trocas no mesmo arquivo numa "
+    "chamada só (aplicadas em ordem; se uma não bater, nada é escrito).",
     _obj({"path": {"type": "string"},
           "old_str": {"type": "string", "description": "Trecho exato existente (sem números de linha)"},
-          "new_str": {"type": "string", "description": "Texto que substitui old_str"}},
-         ["path", "old_str", "new_str"]),
+          "new_str": {"type": "string", "description": "Texto que substitui old_str"},
+          "replace_all": {"type": "boolean",
+                          "description": "Trocar todas as ocorrências em vez de exigir trecho único"},
+          "edits": {"type": "array",
+                    "description": "Várias edições no mesmo arquivo, em vez de old_str/new_str soltos",
+                    "items": _obj({"old_str": {"type": "string"}, "new_str": {"type": "string"},
+                                   "replace_all": {"type": "boolean"}}, ["old_str", "new_str"])}},
+         ["path"]),
     edit_file, mutating=True, preview=edit_preview))
