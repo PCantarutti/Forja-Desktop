@@ -78,8 +78,9 @@ export default function Settings(props: {
   tools: ToolInfo[];
   mcp: McpStatus | null;
   onChanged: () => void; // recarrega ferramentas/MCP no app
+  aba?: Tab; // quem abre por um atalho (o aviso de atualização) escolhe onde cair
 }) {
-  const [tab, setTab] = useState<Tab>("Geral");
+  const [tab, setTab] = useState<Tab>(props.aba ?? "Geral");
   const [s, setS] = useState<AppSettings | null>(null);
   const [dirty, setDirty] = useState<Partial<AppSettings>>({});
   const [error, setError] = useState("");
