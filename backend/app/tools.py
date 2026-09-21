@@ -207,9 +207,34 @@ def list_dir(root: Path, args: dict) -> str:
 MAX_READ_LINES = 2000
 
 
+def _conteudo(p: Path) -> str:
+    """Texto do arquivo. Documento de escritório vira Markdown; o resto é lido como texto.
+
+    Sem este desvio, .pdf/.docx/.xlsx/.pptx batiam em "Arquivo binário" no `_read_text` — os três
+    últimos são ZIP, então o teste de byte nulo os pegava logo nos primeiros bytes.
+    """
+    from . import documentos  # import tardio: o documentos.py é quem depende daqui, não o contrário
+
+    if p.suffix.lower() not in documentos.LEITURA:
+        return _read_text(p)
+    if not p.is_file():
+        raise ToolError(f"Arquivo não encontrado: '{p.name}'. Use list_dir para ver o que existe.")
+    tamanho = p.stat().st_size
+    if tamanho > config.MAX_DOC_BYTES:
+        raise ToolError(f"Documento grande demais ({tamanho // 1024} KB, limite "
+                        f"{config.MAX_DOC_BYTES // 1024} KB). Ajuste MAX_DOC_BYTES se precisar.")
+    texto = documentos.extrair(p)
+    if texto is None:
+        raise ToolError(
+            f"Não consegui extrair texto de '{p.name}'. Pode ser um PDF escaneado (imagem, e aqui "
+            "não há OCR), um arquivo protegido por senha, ou um arquivo corrompido. Diga isso ao "
+            "usuário em vez de tentar de novo.")
+    return texto
+
+
 def read_file(root: Path, args: dict) -> str:
     p = resolve_path(root, args.get("path"))
-    lines = _read_text(p).splitlines()
+    lines = _conteudo(p).splitlines()
     start = max(int(args.get("start_line") or 1), 1)
     end = int(args.get("end_line") or len(lines))
     end = min(end, len(lines), start + MAX_READ_LINES - 1)
@@ -317,7 +342,9 @@ register(Tool(
           "recursive": {"type": "boolean", "description": "Listar subpastas também. Padrão: false"}}, []),
     list_dir))
 register(Tool(
-    "read_file", "Lê um arquivo de texto e devolve o conteúdo com números de linha.",
+    "read_file",
+    "Lê um arquivo e devolve o conteúdo com números de linha. Entende texto e também documentos: "
+    ".pdf, .docx, .xlsx, .pptx e .csv saem convertidos em Markdown (tabela vira tabela).",
     _obj({"path": {"type": "string"},
           "start_line": {"type": "integer", "description": "Primeira linha (1-based), opcional"},
           "end_line": {"type": "integer", "description": "Última linha (inclusiva), opcional"}}, ["path"]),

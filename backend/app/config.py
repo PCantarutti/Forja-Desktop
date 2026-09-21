@@ -32,6 +32,9 @@ WEB_DIR = Path(_web) if _web else None  # build da interface; None = só API (mo
 NUM_CTX = int(os.getenv("NUM_CTX", "32768"))
 MAX_ITERATIONS = int(os.getenv("MAX_ITERATIONS", "25"))
 MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", "1000000"))
+# Documento de escritório entra pelo caminho do `documentos.py`, que extrai texto em vez de
+# mandar o arquivo inteiro ao modelo: o teto pode ser bem mais folgado que o do texto puro.
+MAX_DOC_BYTES = int(os.getenv("MAX_DOC_BYTES", "25000000"))
 SHELL_TIMEOUT_MAX = int(os.getenv("SHELL_TIMEOUT_MAX", "300"))
 SEARXNG_URL = os.getenv("SEARXNG_URL", "")  # vazio = web_search usa o DuckDuckGo
 COMPACT_AT = float(os.getenv("COMPACT_AT", "0.8"))  # fração da janela que dispara a compactação
@@ -45,6 +48,15 @@ BROWSER_CDP = os.getenv("FORJA_CDP", "").strip()
 # Token da API local, gerado pelo Electron a cada execução e exigido nas rotas /api (ver main.py).
 # Vazio = sem exigência: é o caso do dev com Vite e o do repo Docker, onde o nginx é a fronteira.
 API_TOKEN = os.getenv("FORJA_TOKEN", "").strip()
+
+# Chromium do Playwright: no app empacotado quem aponta é o Electron, mas o backend também roda
+# sozinho (é o que o README manda fazer para mexer na interface com hot reload) e aí ninguém aponta.
+# Sem isto, gerar PDF e abrir o navegador integrado morrem com "Please run playwright install".
+for _candidato in (Path(__file__).resolve().parents[2] / "resources" / "ms-playwright",
+                   Path(__file__).resolve().parents[2] / "ms-playwright"):
+    if _candidato.is_dir():
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_candidato))
+        break
 
 BROWSER_STREAM = os.getenv("BROWSER_STREAM", "jpeg")                  # jpeg (leve, padrão) | png (sem perda, 3-5x mais pesado)
 

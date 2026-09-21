@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import browser, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks)
+from . import browser, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps

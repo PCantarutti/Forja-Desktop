@@ -15,7 +15,8 @@ from sqlalchemy import select
 
 from . import config, db, workspace
 
-TRACKED = {"write_file", "edit_file"}
+TRACKED = {"write_file", "edit_file", "write_document", "write_spreadsheet",
+           "edit_document", "edit_spreadsheet"}
 # Cada checkpoint guarda o arquivo INTEIRO como estava antes, num BLOB. Sem poda, uma conversa que
 # edita um arquivo grande muitas vezes engorda o forja.db para sempre — e o desfazer de trinta
 # turnos atrás não serve para nada, porque desfazer um turno antigo desfaz todos os seguintes junto.
