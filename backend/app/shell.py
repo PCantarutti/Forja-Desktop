@@ -66,10 +66,19 @@ def exec_in(root: Path, command: str, timeout: int = 60) -> tuple[int, str]:
 
 # ------------------------------------------------------------------ run_command
 
+def background(root: Path, args: dict) -> str:
+    """Comando demorado (build, suíte de teste) vira processo em segundo plano, o mesmo mecanismo dos
+    servidores: o turno não fica preso e o modelo acompanha com serve_status."""
+    nome = _safe_name(str(args.get("name") or "").strip() or args["command"].split()[0])
+    return serve_start(root, {**args, "name": nome}, kind="Processo")
+
+
 def run_command(root: Path, args: dict) -> str:
     command = args["command"].strip()
     if not command:
         raise ToolError("command vazio.")
+    if args.get("background"):
+        return background(root, args)
     cwd = resolve_path(root, args.get("cwd"))
     timeout = max(1, min(int(args.get("timeout") or 60), config.SHELL_TIMEOUT_MAX))
     code, out, timed_out = _execute(command, cwd, timeout, OUTPUT_SINK.get())
@@ -121,7 +130,7 @@ def _log(name: str, tail: int) -> str:
     return "\n".join(lines[-max(1, min(int(tail or 40), 500)):])
 
 
-def serve_start(root: Path, args: dict) -> str:
+def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
     name = _safe_name(str(args.get("name") or "server"))
     command = str(args["command"]).strip()
     if not command:
@@ -130,9 +139,11 @@ def serve_start(root: Path, args: dict) -> str:
     info = _start(name, command, cwd)
     time.sleep(2.5)  # dá tempo de o servidor imprimir a porta
     log, alive = _log(name, 30), _info(name)["alive"]
-    status = "rodando" if alive else "JÁ ENCERROU (veja o log: provável erro)"
-    return (f"Servidor '{name}' iniciado (pid {info.get('pid')}), {status}.\n"
-            f"Abra http://localhost:PORTA — vale para o navegador integrado e para o navegador do usuário.\n"
+    status = "rodando" if alive else ("JÁ ENCERROU (veja o log: provável erro)" if kind == "Servidor"
+                                      else "JÁ TERMINOU (o log abaixo é o resultado)")
+    dica = ("Abra http://localhost:PORTA — vale para o navegador integrado e para o navegador do usuário.\n"
+            if kind == "Servidor" else "")
+    return (f"{kind} '{name}' iniciado (pid {info.get('pid')}), {status}.\n{dica}"
             f"Use serve_status(name='{name}') para acompanhar e serve_stop para encerrar.\n"
             f"--- log ---\n{log or '(vazio ainda)'}")
 
@@ -195,11 +206,15 @@ register(Tool(
     "run_command",
     "Executa um comando de shell na pasta da conversa, na máquina do usuário (veja o bloco Ambiente), e devolve "
     "a saída. Use para testes, scripts, git, instalar pacotes. NÃO use para servidores (fica preso até o "
-    "timeout): use serve_start. Sem stdin.",
+    "timeout): use serve_start. Comando demorado: background=true. Sem stdin.",
     {"type": "object", "properties": {
         "command": {"type": "string", "description": "Comando (PowerShell no Windows, bash no Linux/macOS)"},
         "cwd": {"type": "string", "description": "Subpasta da pasta de trabalho. Padrão: '.'"},
-        "timeout": {"type": "integer", "description": f"Segundos (padrão 60, máx {config.SHELL_TIMEOUT_MAX})"}},
+        "timeout": {"type": "integer", "description": f"Segundos (padrão 60, máx {config.SHELL_TIMEOUT_MAX})"},
+        "background": {"type": "boolean",
+                       "description": "Roda em segundo plano e devolve na hora: use para o que passa de ~1 min "
+                                      "(build, suíte de teste longa). Acompanhe com serve_status."},
+        "name": {"type": "string", "description": "Apelido do processo em background, ex.: build, testes"}},
      "required": ["command"]},
     run_command, mutating=True, preview=command_preview, always_ask=True))
 register(Tool(

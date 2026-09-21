@@ -39,3 +39,16 @@ def test_html_to_text():
     assert title == "T"
     assert "alert" not in text and "menu" not in text and "x{}" not in text
     assert text == "Oi\n\num texto\n\ndois"
+
+
+# ------------------------------------------------ run_command em background
+
+def test_run_command_background_becomes_a_process(tmp_path, monkeypatch):
+    """Comando demorado não prende o turno: vira processo, com log e nome, como um servidor."""
+    from app import shell
+
+    monkeypatch.setattr(shell.time, "sleep", lambda *_: None)  # serve_start espera o log; no teste não precisa
+    out = run_tool("run_command", {"command": "echo ok", "background": True, "name": "build"}, tmp_path)
+    assert "Processo 'build'" in out and "http" not in out  # dica de URL é coisa de servidor
+    assert any(s["name"] == "build" for s in shell.list_servers())
+    shell.stop_server("build")
