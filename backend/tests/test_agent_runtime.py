@@ -128,3 +128,58 @@ def test_retry_and_shell_always_asks(monkeypatch):
     types = asyncio.run(scenario())
     assert calls["n"] == 3
     assert "approval_request" in types and types[-1] == "done"
+
+
+# ------------------------------------------------ compactação sem janela conhecida
+
+
+def _conversa_grande(db, texto: str, turnos: int) -> int:
+    with db.session() as s:
+        c = db.Conversation(kind="agent")
+        s.add(c)
+        s.commit()
+        for i in range(turnos):
+            s.add(db.Message(conversation_id=c.id, role="user", content=f"{i} {texto}"))
+            s.add(db.Message(conversation_id=c.id, role="assistant", content=f"{i} {texto}"))
+        s.commit()
+        return c.id
+
+
+def test_compacta_mesmo_sem_o_provider_informar_a_janela(monkeypatch):
+    """`context_limit` devolve None em todo provider OpenAI-compatível genérico.
+
+    Com a condição antiga (`if ctx_max and ...`) a compactação nunca disparava nesses providers: o
+    prompt crescia sem teto até o servidor recusar a requisição.
+    """
+    from app import agent, compact, config, db, llm
+
+    resumos = []
+
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+        if messages[0]["content"].startswith(compact.PROMPT[:40]):
+            resumos.append(messages[1]["content"])
+            yield "content", "Resumo do que veio antes."
+        else:
+            yield "content", "Respondido."
+        yield "done", {"tool_calls": []}
+
+    async def sem_janela(*a):
+        return None  # é o que o provider devolve quando não sabe dizer
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", sem_janela)
+    monkeypatch.setattr(llm, "capabilities", sem_janela)
+    monkeypatch.setattr(config, "NUM_CTX", 2_000)
+
+    conv = _conversa_grande(db, "palavra " * 200, turnos=12)
+    run = agent.Run(conv)
+    req = agent.RunRequest(content="e agora?", provider="lmstudio", model="m", mode="agent", permission="manual")
+
+    async def scenario():
+        return [ev async for ev in agent.run_agent(conv, req, run)]
+
+    eventos = asyncio.run(scenario())
+    resumo = [e for e in eventos
+              if e.get("type") == "event" and (e["message"].get("meta") or {}).get("kind") == "summary"]
+    assert resumos, "o modelo nem foi chamado para resumir"
+    assert resumo, "a conversa estourou o teto e mesmo assim nada foi compactado"

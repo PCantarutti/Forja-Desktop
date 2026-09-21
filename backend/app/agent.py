@@ -625,6 +625,11 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     tool_mode = setting["tool_mode"] if agent else "none"
     via = "none" if not agent else ("prompt" if tool_mode == "text" else "native")
     ctx_max = await llm.context_limit(req.provider, req.model, config.NUM_CTX)
+    # Provider que não informa a janela (qualquer OpenAI-compatível, ou LM Studio com a sonda
+    # falhando) devolve None, e com `if ctx_max and ...` a compactação simplesmente nunca disparava:
+    # o prompt crescia até o servidor recusar a requisição. Supor o num_ctx configurado erra menos
+    # do que nunca compactar. Para a UI o valor continua None — o anel de contexto não deve chutar.
+    teto = ctx_max or config.NUM_CTX
     # Capacidades do modelo (visão): o provider informa ou o usuário força no painel. Ferramentas que
     # exigem o que o modelo não tem (browser_screenshot) ficam fora do `tools`, do prompt e da execução.
     detected = await llm.capabilities(req.provider, req.model) if agent else None
@@ -664,8 +669,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             run.plan = last_plan(msgs)
         messages = build_history(msgs, via, caps, run.permission, req.effort, run.plan)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
-        if ctx_max and _estimate(messages, tools) > config.COMPACT_AT * ctx_max:
-            async for ev in _compact(conv_id, msgs, req, ctx_max):
+        if _estimate(messages, tools) > config.COMPACT_AT * teto:
+            async for ev in _compact(conv_id, msgs, req, teto):
                 yield ev
             messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan)
 

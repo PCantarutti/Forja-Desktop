@@ -38,6 +38,7 @@ MODOS = ("paralelo", "sequencial")
 TICK = 0.2  # segundos entre retratos do SSE; abaixo disso ninguém percebe a diferença
 
 _RUNS: dict[int, dict] = {}  # message_id -> corrida viva (sai daqui quando termina)
+_TAREFAS: set = set()  # referência forte das execuções em voo (ver start)
 
 
 class ModeloCarregado(ToolError):
@@ -150,7 +151,11 @@ def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "para
                       "effort": effort, "descarregado": descarregado, "itens": itens})
     run = _RUNS[msg.id] = {"message_id": msg.id, "conv_id": conv_id, "status": "rodando", "modo": modo,
                            "cego": cego, "cancelar": False, "itens": itens}
-    asyncio.create_task(_rodar(run, _mensagens(prompt, system), effort))
+    # O loop só guarda referência fraca para a task: sem manter a nossa, o coletor de lixo pode
+    # levar a execução no meio e a mensagem fica em "running" para sempre, sem erro nenhum.
+    t = asyncio.create_task(_rodar(run, _mensagens(prompt, system), effort))
+    _TAREFAS.add(t)
+    t.add_done_callback(_TAREFAS.discard)
     return msg.to_dict()
 
 

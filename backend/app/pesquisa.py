@@ -55,6 +55,7 @@ MAX_PERGUNTAS = 3
 TICK = 0.2               # segundos entre retratos do SSE
 
 _RUNS: dict[int, dict] = {}  # message_id -> corrida viva (sai daqui quando termina)
+_TAREFAS: set = set()  # referência forte das execuções em voo (ver start)
 
 LIXO = re.compile(r"(?i)não (contém|há|encontr\w+) (nenhuma )?informaç|cookie|habilite o javascript|"
                   r"verifique se você é human|acesso negado|assine para|página não encontrada|"
@@ -570,7 +571,11 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
     run = _RUNS[msg.id] = {**publico, "message_id": msg.id, "conv_id": conv_id, "cancelar": False,
                            "t0": time.monotonic(), "teto": teto, "lidas": lidas, "anterior": anterior,
                            "erro_busca": "", "porte": porte, "parcial": ""}
-    asyncio.create_task(_rodar(run, extrator, escritor, rodadas, porte["fontes"], porte["buscas"]))
+    # O loop só guarda referência fraca para a task: sem manter a nossa, o coletor de lixo pode
+    # levar a execução no meio e a mensagem fica em "running" para sempre, sem erro nenhum.
+    t = asyncio.create_task(_rodar(run, extrator, escritor, rodadas, porte["fontes"], porte["buscas"]))
+    _TAREFAS.add(t)
+    t.add_done_callback(_TAREFAS.discard)
     return msg.to_dict()
 
 

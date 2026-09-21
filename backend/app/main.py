@@ -37,13 +37,16 @@ async def lifespan(_app):
               "python.org ou do uv para desenvolver.", flush=True)
     localai.reap_orphan()  # sobra de um backend que morreu sem descarregar o modelo
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
-    asyncio.create_task(asyncio.to_thread(localai.load_last))  # "carregar ao iniciar", se estiver ligado
+    # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
+    vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
     task = asyncio.create_task(mcp_client.start())
+    vivas.add(task)
     yield
     task.cancel()
+    await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
     localai.unload()  # o modelo local morre com o backend (no app o Electron já mata a árvore)
