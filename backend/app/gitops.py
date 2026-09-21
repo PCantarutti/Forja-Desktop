@@ -1,14 +1,14 @@
 """Git da pasta da conversa: status, diff, commit com mensagem gerada pelo modelo, PR (gh) e worktree.
 
 Os comandos rodam como os do run_command: no sistema do usuário, na pasta da conversa. A mensagem de commit e o corpo do PR vão por arquivo (`.forja/`) para não brigar
-com as aspas do PowerShell.
+com as aspas do PowerShell; o que sobra interpolado passa por `native.quote`.
 """
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from . import llm, shell, workspace
+from . import llm, native, shell, workspace
 from .parsing import split_think
 from .tools import ToolError
 
@@ -66,7 +66,7 @@ def status(root: Path) -> dict:
 
 def diff(root: Path, path: str | None = None) -> str:
     """Diff do working tree (staged + unstaged) contra HEAD; untracked vira 'arquivo novo'."""
-    target = f' -- "{path}"' if path else ""
+    target = f" -- {native.quote(path)}" if path else ""
     out = _run(root, f"git diff HEAD{target}", 60)[1]
     if path and not out.strip():
         p = root / path
@@ -113,8 +113,8 @@ def commit(root: Path, message: str) -> dict:
     rel = _write_forja_file(root, "commit-msg.txt", message)
     try:
         # .forja/ pode não estar no .gitignore: não deixa o arquivo da mensagem entrar no commit.
-        _run(root, f'git reset -q -- "{rel}"', 20)
-        out = _ok(root, f'git commit -F "{rel}"', 120)
+        _run(root, f"git reset -q -- {native.quote(rel)}", 20)
+        out = _ok(root, f"git commit -F {native.quote(rel)}", 120)
     finally:
         try:
             (root / rel).unlink()
@@ -136,7 +136,8 @@ def create_pr(root: Path, title: str, body: str) -> dict:
     push = _ok(root, "git push -u origin HEAD", 180)
     rel = _write_forja_file(root, "pr-body.md", body or "")
     try:
-        cmd = f'gh pr create --title "{title.replace(chr(34), chr(39))}" --body-file "{rel}"' if title else "gh pr create --fill"
+        cmd = (f"gh pr create --title {native.quote(title)} --body-file {native.quote(rel)}"
+               if title else "gh pr create --fill")
         out = _ok(root, cmd, 120)
     finally:
         try:
@@ -154,5 +155,5 @@ def worktree(root: Path, branch: str) -> dict:
     top = Path(_ok(root, "git rev-parse --show-toplevel", 20).strip().replace("\\", "/"))
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", branch).strip("-") or "forja"
     dest = f"{top.parent.as_posix()}/{top.name}-{slug}"
-    _ok(root, f'git worktree add "{dest}" -b "{branch}"', 120)
+    _ok(root, f"git worktree add {native.quote(dest)} -b {native.quote(branch)}", 120)
     return {"path": workspace.normalize(dest), "branch": branch}

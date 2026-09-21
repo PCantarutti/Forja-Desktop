@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
 import signal
 import subprocess
@@ -36,6 +37,16 @@ def shell_argv(command: str) -> list[str]:
         script = PS_PREAMBLE + command + "\nif ($LASTEXITCODE) { exit $LASTEXITCODE } elseif (-not $?) { exit 1 }"
         return [shell_name(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script]
     return ["bash", "-lc", command]
+
+
+def quote(value: str) -> str:
+    """Um valor como argumento literal do shell: sem interpolação, sem virar outro comando.
+
+    No PowerShell a aspa simples não interpola nada (a dupla avalia `$(...)` e crase), e a própria
+    aspa simples se escapa dobrando. No bash, `shlex.quote` faz o mesmo trabalho.
+    """
+    text = str(value)
+    return "'" + text.replace("'", "''") + "'" if WINDOWS else shlex.quote(text)
 
 
 def term_argv() -> list[str]:
@@ -118,7 +129,7 @@ def open_path(path: str, mode: str) -> str:
         return "revelado"
     # editor: VS Code se existir, senão o programa padrão do sistema
     if shutil.which("code") or (WINDOWS and shutil.which("code.cmd")):
-        subprocess.Popen(shell_argv(f'code "{path}"'), **popen_kwargs())
+        subprocess.Popen(shell_argv(f"code {quote(path)}"), **popen_kwargs())
         return "code"
     if WINDOWS:
         os.startfile(path)  # type: ignore[attr-defined]
