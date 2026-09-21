@@ -6,3 +6,4 @@ mcp>=1.9,<2
 pytest==8.*
 python-multipart==0.0.*
 playwright==1.63.*
+pypdf>=5,<7

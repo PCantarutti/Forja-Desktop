@@ -149,7 +149,7 @@ Baixo, Médio, Alto, Máximo ou Extremo, ao lado do modo. Mexe em três coisas:
 
 ## Conversa: anexos, editar e regenerar
 
-- **Anexos**: clipe no campo de mensagem ou arraste arquivos para o chat. Eles são salvos em `.forja/uploads/` **dentro da pasta de trabalho**, então o agente abre com `read_file`/`run_command` como qualquer arquivo. **Imagens** vão para o modelo como visão (formato OpenAI `image_url`; no Ollama, campo `images`). Imagem maior que 8 MB não é enviada como imagem.
+- **Anexos**: clipe no campo de mensagem ou arraste arquivos para o chat. Eles são salvos em `.forja/uploads/` **dentro da pasta de trabalho**, então o agente abre com `read_file`/`run_command` como qualquer arquivo. **PDF** ganha um `.txt` ao lado no momento do upload, e é para ele que o agente é mandado — `read_file` recusa binário. PDF escaneado não tem texto para extrair (não há OCR): nesse caso o agente é avisado disso em vez de tentar abrir e falhar. **Imagens** vão para o modelo como visão (formato OpenAI `image_url`; no Ollama, campo `images`). Imagem maior que 8 MB não é enviada como imagem.
 - **Editar**: passe o mouse na sua mensagem → lápis. Ao reenviar, tudo o que veio depois dela é apagado e a resposta é refeita.
 - **Regenerar**: botão ⟳ embaixo da última resposta. Apaga a resposta (incluindo as chamadas de ferramenta dela) e gera outra para a mesma mensagem, com o modelo selecionado agora.
 - **Editar/regenerar e arquivos**: se o agente alterou arquivos nos turnos que vão ser apagados, o Forja pergunta se também desfaz essas alterações (veja *Checkpoints*).
