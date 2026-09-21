@@ -542,6 +542,9 @@ export default function App() {
       case "tasks":
         setLiveTasks(ev.tasks);
         break;
+      case "title": // o modelo resumiu um título melhor no fim do turno
+        refreshConversations();
+        break;
       case "queued":
         setQueued((q) => (q.includes(ev.content) ? q : [...q, ev.content]));
         break;

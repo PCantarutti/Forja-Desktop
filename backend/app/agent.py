@@ -593,11 +593,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
     tasks.SINK.set(_tasks_sink)
 
+    provisorio = ""  # título tirado da 1ª mensagem; no fim do turno o modelo resume um melhor
     if req.content is not None:
         with db.session() as s:
             conv = s.get(db.Conversation, conv_id)
             if conv.title == "Nova conversa":
-                conv.title = req.content.strip().splitlines()[0][:60] or "Nova conversa"
+                provisorio = conv.title = req.content.strip().splitlines()[0][:60] or "Nova conversa"
             s.commit()
         user_msg = _save(conv_id, role="user", content=req.content,
                          meta={"attachments": req.attachments} if req.attachments else None)
@@ -781,7 +782,59 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         m = _save(conv_id, role="event", content=f"{done_n}/{len(run.tasks)} tarefas concluídas",
                   meta={"kind": "tasks", "tasks": run.tasks})
         yield {"type": "event", "message": m.to_dict()}
+    if len(provisorio) >= TITLE_MIN and not run.cancel.is_set():
+        if ev := await retitle(conv_id, provisorio, req):
+            yield ev
     yield {"type": "done"}
+
+
+TITLE_PROMPT = ("Você dá nome a conversas. Responda SÓ com um título de 3 a 6 palavras para a conversa "
+                "abaixo, no idioma do usuário, dizendo o assunto dela. Sem aspas, sem ponto final, sem "
+                "prefixo como 'Título:' e sem explicar.")
+TITLE_CTX = 8192
+TITLE_MIN = 40      # 1ª mensagem curta já é um bom título: não gasta uma chamada de modelo com ela
+TITLE_CHARS = 600   # de cada mensagem mandada ao modelo
+TITLE_MAX = 60
+
+
+def _clean_title(bruto: str) -> str:
+    linha = split_think(bruto)[1].strip().splitlines()[0] if split_think(bruto)[1].strip() else ""
+    linha = linha.strip().strip("#").strip().strip('"').strip("'").strip("`").strip()
+    for prefixo in ("título:", "titulo:", "title:"):
+        if linha.lower().startswith(prefixo):
+            linha = linha[len(prefixo):].strip()
+    return linha.rstrip(".").strip()[:TITLE_MAX]
+
+
+async def retitle(conv_id: int, provisorio: str, req: RunRequest) -> dict | None:
+    """Troca o título provisório por um resumo do modelo, depois que o turno terminou.
+
+    Depois e não antes: assim o título vê a resposta também, e a chamada extra não disputa vaga com o
+    turno no servidor do modelo local. Se o usuário renomeou a conversa no meio, nada é trocado.
+    """
+    msgs = [m for m in _load(conv_id) if m.role in ("user", "assistant") and (m.content or "").strip()]
+    if not msgs:
+        return None
+    texto = "\n\n".join(f"{m.role}: {(m.content or '').strip()[:TITLE_CHARS]}" for m in msgs[:4])
+    bruto = ""
+    try:
+        async for kind, val in llm.chat_stream(req.provider, req.model,
+                                               [{"role": "system", "content": TITLE_PROMPT},
+                                                {"role": "user", "content": texto}], None, TITLE_CTX, "baixo"):
+            if kind == "content":
+                bruto += val
+    except (llm.LLMError, asyncio.TimeoutError):
+        return None  # título é enfeite: falhou, fica o provisório
+    titulo = _clean_title(bruto)
+    if not titulo:
+        return None
+    with db.session() as s:
+        conv = s.get(db.Conversation, conv_id)
+        if not conv or conv.title != provisorio:  # renomeada pelo usuário no meio do turno: respeita
+            return None
+        conv.title = titulo
+        s.commit()
+    return {"type": "title", "title": titulo}
 
 
 def _flush_queue(conv_id: int, run: Run) -> list[dict]:
