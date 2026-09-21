@@ -33,10 +33,10 @@ def _inline(texto: str) -> str:
     return CODIGO.sub(r"<code>\1</code>", s)
 
 
-def _md(texto: str) -> tuple[str, list[tuple[str, str]]]:
-    """Markdown -> (HTML, [(id, título) das seções ##]). O que não for reconhecido vira parágrafo."""
+def _md(texto: str) -> tuple[str, list[tuple[str, str, int]]]:
+    """Markdown -> (HTML, [(id, título, nível) do sumário]). O resto vira parágrafo."""
     out: list[str] = []
-    secoes: list[tuple[str, str]] = []
+    secoes: list[tuple[str, str, int]] = []
     lista: str | None = None
 
     def fecha() -> None:
@@ -51,12 +51,12 @@ def _md(texto: str) -> tuple[str, list[tuple[str, str]]]:
             continue
         if m := TITULO.match(linha):
             fecha()
-            nivel = min(len(m.group(1)), 4)
+            nivel = min(max(len(m.group(1)), 2), 4)  # # e ## viram h2; o resto desce
             corpo = _inline(m.group(2).strip())
-            if nivel <= 2:
+            if nivel <= 3:  # h2 e h3 entram no sumário lateral e ganham âncora
                 alvo = f"s{len(secoes) + 1}"
-                secoes.append((alvo, m.group(2).strip()))
-                out.append(f'<h2 id="{alvo}">{corpo}</h2>')
+                secoes.append((alvo, m.group(2).strip(), nivel))
+                out.append(f'<h{nivel} id="{alvo}">{corpo}</h{nivel}>')
             else:
                 out.append(f"<h{nivel}>{corpo}</h{nivel}>")
             continue
@@ -75,41 +75,46 @@ def _md(texto: str) -> tuple[str, list[tuple[str, str]]]:
 
 
 def _fontes(pesquisa: dict) -> str:
-    uteis = [f for f in pesquisa.get("fontes", []) if f.get("status") == "util"]
+    """Painel recolhível com a lista numerada, no mesmo desenho do odysseus."""
+    uteis = [f for f in pesquisa.get("fontes", [])
+             if f.get("status") == "util" and (f.get("url") or "").startswith("http")]
     if not uteis:
-        return "<p>Nenhuma fonte aproveitada.</p>"
-    linhas = [
-        f'<li><a href="{html.escape(f["url"], quote=True)}" target="_blank" rel="noreferrer">'
-        f'{html.escape(f.get("titulo") or f["url"])}</a>'
-        f'<span class="dominio">{html.escape(f.get("dominio", ""))}</span>'
-        f'<p>{html.escape(f.get("resumo", ""))}</p></li>'
-        for f in uteis if (f.get("url") or "").startswith("http")
-    ]
-    return f'<ol class="fontes">{"".join(linhas)}</ol>'
+        return ""
+    itens = "".join(
+        f'<a href="{html.escape(f["url"], quote=True)}" target="_blank" rel="noopener noreferrer" '
+        f'title="{html.escape(f.get("resumo", "")[:300], quote=True)}">'
+        f'<span class="snum">{i}.</span>'
+        f'<span>{html.escape(f.get("titulo") or f["url"])}</span>'
+        f'<span class="sdomain">{html.escape(f.get("dominio", ""))}</span></a>'
+        for i, f in enumerate(uteis, 1))
+    return ('<div class="sources-panel"><details><summary>'
+            f'Fontes ({len(uteis)})</summary><div class="sources-list">{itens}</div></details></div>')
 
 
 def _stats(pesquisa: dict) -> str:
     s = pesquisa.get("stats", {})
     segundos = int(s.get("segundos") or 0)
-    itens = [("Tempo", f"{segundos // 60}m{segundos % 60:02d}s"),
-             ("Rodadas", str(s.get("rodadas") or 0)),
-             ("Páginas lidas", str(s.get("fontes") or 0)),
-             ("Fontes úteis", str(s.get("uteis") or 0)),
-             ("Extração", s.get("extrator") or "—"),
-             ("Relatório", s.get("escritor") or "—")]
-    return "".join(f"<div><span>{r}</span><strong>{html.escape(str(v))}</strong></div>" for r, v in itens)
+    itens = [(f"{segundos // 60}m{segundos % 60:02d}s", "de pesquisa"),
+             (str(s.get("rodadas") or 0), "rodadas"),
+             (str(s.get("fontes") or 0), "páginas lidas"),
+             (str(s.get("uteis") or 0), "fontes úteis"),
+             (s.get("extrator") or "—", "extração"),
+             (s.get("escritor") or "—", "relatório")]
+    return "\n  ".join(f'<div class="stat"><span class="stat-value">{html.escape(str(v))}</span> '
+                       f'{html.escape(r)}</div>' for v, r in itens)
 
 
 def html_do(pesquisa: dict, markdown: str) -> str:
     """A página inteira, pronta para abrir no navegador (CSS embutido, sem rede)."""
     corpo, secoes = _md(markdown or pesquisa.get("resumo") or pesquisa.get("aviso") or "")
-    sumario = "".join(f'<li><a href="#{i}">{html.escape(t)}</a></li>' for i, t in secoes)
+    sumario = "\n      ".join(f'<a href="#{i}" class="depth-{n}">{html.escape(t)}</a>'
+                              for i, t, n in secoes)
     aviso = pesquisa.get("aviso") or ""
     return (TEMPLATE.read_text("utf-8")
             .replace("{{TITULO}}", html.escape(pesquisa.get("pergunta") or "Pesquisa"))
             .replace("{{DATA}}", datetime.now().strftime("%d/%m/%Y %H:%M"))
             .replace("{{AVISO}}", f'<div class="aviso">{html.escape(aviso)}</div>' if aviso else "")
-            .replace("{{SUMARIO}}", f"<ol>{sumario}</ol>" if sumario else "")
+            .replace("{{SUMARIO}}", sumario)
             .replace("{{CORPO}}", corpo)
             .replace("{{FONTES}}", _fontes(pesquisa))
             .replace("{{STATS}}", _stats(pesquisa)))

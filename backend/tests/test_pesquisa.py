@@ -293,7 +293,7 @@ def test_html_converte_listas_e_recusa_link_estranho():
     assert "<ul><li>um</li>" in corpo.replace("\n", "") and "<ol><li>passo</li>" in corpo.replace("\n", "")
     assert '<a href="https://x.com"' in corpo
     assert "javascript:" in corpo and "<a href=\"javascript:" not in corpo  # ficou como texto
-    assert secoes == [("s1", "A")]
+    assert secoes == [("s1", "A", 2)]
 
 
 def test_api_roda_pesquisa_e_devolve_sse(monkeypatch):
@@ -313,5 +313,5 @@ def test_api_roda_pesquisa_e_devolve_sse(monkeypatch):
         assert eventos[-1]["status"] == "pronto"
         mid = eventos[-1]["message_id"]
         pagina = c.get(f"/api/pesquisa/{mid}/relatorio")
-        assert pagina.status_code == 200 and "Pesquisa profunda · Forja" in pagina.text
+        assert pagina.status_code == 200 and "Forja &mdash; Pesquisa profunda" in pagina.text
         assert c.post(f"/api/pesquisa/{mid}/cancelar").json() == {"ok": True}
