@@ -104,7 +104,7 @@ export default function PesquisaView(props: {
         setPergunta(p.pergunta);
         setProfundidade(p.profundidade);
         setEstado({ ...p, message_id: m.id, status: situacao(m.status), relatorio: m.content || "" });
-        if (m.status === "running") ouvir(m.id);
+        if (situacao(m.status) === "rodando") ouvir(m.id);
       } catch (e: any) {
         props.onError(e.message);
       }
