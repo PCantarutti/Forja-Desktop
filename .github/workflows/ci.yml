@@ -1,0 +1,57 @@
+# Roda o que dá para rodar sem GPU, sem modelo e sem instalador: os testes do backend, o
+# typecheck e o lint da interface, e os self-checks dos módulos da casca Electron.
+#
+# Windows de propósito: o Forja Desktop é um app do Windows, e boa parte do que os testes cobrem
+# (PowerShell, taskkill, caminho com letra de disco) só se comporta como em produção aqui.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+        working-directory: backend
+      - run: python -m pytest -q
+        working-directory: backend
+
+  frontend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run lint
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  casca:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # Sem `npm ci` na raiz: estes módulos não importam nada do Electron de propósito, justamente
+      # para poderem ser verificados assim, em 2 segundos.
+      - run: node electron/zoom.js
+      - run: node electron/links.js
+      - run: node electron/browserHost.js
