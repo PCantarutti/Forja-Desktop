@@ -402,3 +402,80 @@ def test_substituir_com_tabela_agora_aponta_o_inserir(ws):
     with pytest.raises(ToolError, match="inserir"):
         roda("edit_document", {"path": alvo, "operations": [
             {"tipo": "substituir", "de": "OBSERVAÇÕES", "para": tabela}]}, ws)
+
+
+# ------------------------------------------------ não passar por cima do arquivo do usuário
+
+def test_write_document_recusa_caminho_ja_ocupado(ws):
+    """Aconteceu em uso: pedido para acrescentar ao documento anexado, o modelo chamou
+    write_document no caminho dele. Só não destruiu porque o Word estava com o arquivo aberto."""
+    roda("write_document", {"path": "modelo.docx", "content": "# MODELO" + chr(10) * 2 + "NOME: ____"}, ws)
+    with pytest.raises(ToolError, match="edit_document"):
+        roda("write_document", {"path": "documentos/modelo.docx", "content": "# so a tabela"}, ws)
+    assert "NOME: ____" in run_tool("read_file", {"path": "documentos/modelo.docx"}, ws)
+
+
+def test_write_spreadsheet_tambem_recusa(ws):
+    roda("write_spreadsheet", {"path": "v.xlsx", "sheets": [{"nome": "A", "linhas": [["x"]]}]}, ws)
+    with pytest.raises(ToolError, match="edit_spreadsheet"):
+        roda("write_spreadsheet", {"path": "documentos/v.xlsx", "sheets": [{"nome": "B", "linhas": [["y"]]}]}, ws)
+
+
+def test_sobrescrever_explicito_continua_podendo(ws):
+    """Refazer do zero é legítimo — desde que seja escolha, não acidente."""
+    roda("write_document", {"path": "d.docx", "content": "# antes"}, ws)
+    roda("write_document", {"path": "documentos/d.docx", "content": "# depois", "sobrescrever": True}, ws)
+    lido = run_tool("read_file", {"path": "documentos/d.docx"}, ws)
+    assert "depois" in lido and "antes" not in lido
+
+
+def test_o_card_de_aprovacao_nao_quebra_com_arquivo_existente(ws):
+    """O preview só resolve caminho: se ele levantasse o mesmo erro, sumiria o card em vez de
+    aparecer o aviso da ferramenta."""
+    roda("write_document", {"path": "d.docx", "content": "# antes"}, ws)
+    p = documentos._preview_documento(ws, {"path": "documentos/d.docx", "content": "# depois"})
+    assert p["kind"] == "diff" and p["path"] == "documentos/d.docx"
+
+
+def test_arquivo_aberto_no_word_diz_o_que_fazer(ws, monkeypatch):
+    """O Word segura o arquivo e o save estoura PermissionError. O modelo tem que saber que a saída
+    é pedir para fechar, e não gerar uma cópia com outro nome — que foi o que ele fez."""
+    roda("write_document", {"path": "d.docx", "content": "# oi"}, ws)
+
+    def ocupado(*a, **kw):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(documentos, "_editar_office", ocupado)
+    with pytest.raises(ToolError, match="aberto em outro programa"):
+        roda("edit_document", {"path": "documentos/d.docx",
+                               "operations": [{"tipo": "acrescentar", "conteudo": "x"}]}, ws)
+
+
+# ------------------------------------------------ <br> na célula
+
+def test_br_na_celula_vira_quebra_de_linha_no_word(ws):
+    """Aconteceu em uso: o modelo pôs <br><br> nas células para dar altura, e os literais foram
+    parar no Word como texto."""
+    import docx
+
+    tabela = ("| DIA | ATIVIDADE |" + chr(10) + "| --- | --- |" + chr(10) + "| SEG | manha<br>tarde |")
+    roda("write_document", {"path": "t.docx", "content": tabela}, ws)
+    celula = docx.Document(str(ws / "documentos" / "t.docx")).tables[0].cell(1, 1)
+    assert "<br>" not in celula.text
+    assert [p.text for p in celula.paragraphs] == ["manha", "tarde"]
+
+
+def test_celula_com_quebra_volta_como_br_na_leitura(ws):
+    """Ida e volta: uma quebra crua dentro da célula arrebentaria a tabela Markdown relida."""
+    tabela = ("| A | B |" + chr(10) + "| --- | --- |" + chr(10) + "| um<br>dois | tres |")
+    roda("write_document", {"path": "t.docx", "content": tabela}, ws)
+    lido = run_tool("read_file", {"path": "documentos/t.docx"}, ws)
+    assert "um<br>dois" in lido
+    assert len([l for l in lido.splitlines() if "|" in l]) == 3  # cabeçalho, separador, uma linha
+
+
+def test_br_na_celula_tambem_no_html(ws):
+    tabela = ("| A |" + chr(10) + "| --- |" + chr(10) + "| um<br/>dois |")
+    roda("write_document", {"path": "t.html", "content": tabela}, ws)
+    html = (ws / "documentos" / "t.html").read_text(encoding="utf-8")
+    assert "<td>um<br>dois</td>" in html

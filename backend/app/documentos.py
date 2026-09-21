@@ -51,10 +51,11 @@ def _tabela_md(linhas: list[list[str]]) -> str:
     largura = max(len(l) for l in linhas)
     corpo = [list(l) + [""] * (largura - len(l)) for l in linhas]
     cabecalho = corpo[0]
-    saida = ["| " + " | ".join(c.replace("|", BARRA_PIPE) for c in cabecalho) + " |",
+    limpa = lambda c: str(c).replace("|", BARRA_PIPE).replace(NL, "<br>")  # noqa: E731
+    saida = ["| " + " | ".join(limpa(c) for c in cabecalho) + " |",
              "|" + "|".join([" --- "] * largura) + "|"]
     for linha in corpo[1:]:
-        saida.append("| " + " | ".join(str(c).replace("|", BARRA_PIPE) for c in linha) + " |")
+        saida.append("| " + " | ".join(limpa(c) for c in linha) + " |")
     return NL.join(saida)
 
 
@@ -206,9 +207,15 @@ LINHA_TABELA = re.compile(r"^\s*\|.*\|\s*$")
 SEPARADOR_TABELA = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 
 
+# Markdown não tem quebra de linha dentro de célula, então quem escreve tabela usa <br> — foi o
+# que o modelo fez, e os "<br><br>" foram parar no Word como texto. Aqui vira quebra de verdade.
+QUEBRA_NA_CELULA = re.compile(r"<br\s*/?>", re.I)
+
+
 def _celulas(linha: str) -> list[str]:
     bruto = linha.strip().strip("|")
-    return [c.strip().replace(BARRA_PIPE, "|") for c in re.split(r"(?<!" + re.escape(chr(92)) + r")\|", bruto)]
+    partes = re.split(r"(?<!" + re.escape(chr(92)) + r")\|", bruto)
+    return [QUEBRA_NA_CELULA.sub(NL, c.strip()).replace(BARRA_PIPE, "|") for c in partes]
 
 
 def blocos(markdown: str) -> list[dict]:
@@ -285,6 +292,25 @@ ITALICO = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
 CODIGO_INLINE = re.compile(r"`([^`]+)`")
 
 
+def _tabela_docx(doc, linhas: list[list[str]]):
+    """Tabela de Word a partir das linhas do parser. Quebra dentro da célula vira parágrafo.
+
+    `cell.text = "a
+b"` deixa o 
+ cru dentro de um run, e o Word não mostra quebra nenhuma.
+    """
+    tabela = doc.add_table(rows=len(linhas), cols=max(len(l) for l in linhas))
+    tabela.style = "Table Grid"
+    for i, linha in enumerate(linhas):
+        for j, celula in enumerate(linha):
+            partes = _sem_marcas(celula).split(NL)
+            alvo = tabela.cell(i, j)
+            alvo.text = partes[0]
+            for extra in partes[1:]:
+                alvo.add_paragraph(extra)
+    return tabela
+
+
 def _sem_marcas(texto: str) -> str:
     """Tira as marcas de linha do Markdown. Para onde não dá para estilizar palavra a palavra."""
     texto = NEGRITO.sub(r"\1", texto)
@@ -320,8 +346,9 @@ def para_html(bs: list[dict], titulo: str = "") -> str:
             corpo.append(f'<img src="{_html.escape(b["caminho"], quote=True)}" alt="{_html.escape(b["alt"])}">')
         elif b["tipo"] == "tabela":
             linhas = b["linhas"]
-            cab = "".join(f"<th>{inline(c)}</th>" for c in linhas[0])
-            resto = "".join("<tr>" + "".join(f"<td>{inline(c)}</td>" for c in l) + "</tr>" for l in linhas[1:])
+            celula = lambda c: inline(c).replace(NL, "<br>")  # noqa: E731
+            cab = "".join(f"<th>{celula(c)}</th>" for c in linhas[0])
+            resto = "".join("<tr>" + "".join(f"<td>{celula(c)}</td>" for c in l) + "</tr>" for l in linhas[1:])
             corpo.append(f"<table><thead><tr>{cab}</tr></thead><tbody>{resto}</tbody></table>")
     return (f"<!doctype html><html lang=\"pt-BR\"><head><meta charset=\"utf-8\">"
             f"<title>{_html.escape(titulo)}</title><style>{CSS}</style></head>"
@@ -373,11 +400,7 @@ def para_docx(bs: list[dict], destino: Path) -> None:
                 doc.add_picture(str(caminho))
         elif b["tipo"] == "tabela":
             linhas = b["linhas"]
-            tabela = doc.add_table(rows=len(linhas), cols=max(len(l) for l in linhas))
-            tabela.style = "Table Grid"
-            for i, linha in enumerate(linhas):
-                for j, celula in enumerate(linha):
-                    tabela.cell(i, j).text = _sem_marcas(celula)
+            _tabela_docx(doc, linhas)
     doc.save(str(destino))
 
 
@@ -547,8 +570,13 @@ MIMES = {
 }
 
 
-def _destino(root: Path, caminho: str, aceitas: set[str]) -> Path:
-    """Resolve o caminho de saída, confinado à pasta da conversa, e valida a extensão."""
+def _destino(root: Path, caminho: str, aceitas: set[str], sobrescrever: bool = False) -> Path:
+    """Resolve o caminho de saída, confinado à pasta da conversa, e valida a extensão.
+
+    Com `sobrescrever` falso, recusa por cima de arquivo que já existe. Aconteceu duas vezes em
+    uso: pedido para acrescentar algo a um documento anexado, o modelo chamou write_document no
+    caminho dele — que gera do zero, e teria levado o documento do usuário junto. Errar aqui não
+    tem desfazer depois do turno, então a porta fica fechada e a mensagem diz por onde é a saída."""
     bruto = (caminho or "").strip().replace(chr(92), "/")
     if not bruto:
         raise ToolError("Informe o caminho do arquivo, com a extensão.")
@@ -558,6 +586,12 @@ def _destino(root: Path, caminho: str, aceitas: set[str]) -> Path:
     if "/" not in bruto:
         bruto = f"{PASTA}/{bruto}"
     destino = resolve_path(root, bruto)
+    if destino.exists() and not sobrescrever:
+        raise ToolError(
+            f"'{bruto}' já existe, e esta ferramenta gera o arquivo do zero: o conteúdo atual se "
+            "perderia. Para ACRESCENTAR ou alterar preservando o resto, use edit_document (ou "
+            "edit_spreadsheet, se for planilha) neste mesmo caminho. Para um arquivo à parte, "
+            "escolha outro nome. Para refazer este do zero mesmo assim, mande sobrescrever: true.")
     destino.parent.mkdir(parents=True, exist_ok=True)
     return destino
 
@@ -569,7 +603,7 @@ def _resultado(root: Path, destino: Path, o_que: str) -> dict:
 
 
 async def write_document(root: Path, args: dict) -> dict:
-    destino = _destino(root, str(args.get("path") or ""), DOCUMENTO)
+    destino = _destino(root, str(args.get("path") or ""), DOCUMENTO, bool(args.get("sobrescrever")))
     conteudo = str(args.get("content") or "")
     if not conteudo.strip():
         raise ToolError("content vazio: mande o conteúdo do documento em Markdown.")
@@ -620,7 +654,7 @@ def normalizar_abas(bruto) -> list[dict]:
 
 
 def write_spreadsheet(root: Path, args: dict) -> dict:
-    destino = _destino(root, str(args.get("path") or ""), PLANILHA)
+    destino = _destino(root, str(args.get("path") or ""), PLANILHA, bool(args.get("sobrescrever")))
     abas = normalizar_abas(args.get("sheets"))
     if destino.suffix.lower() == ".csv":
         para_csv(abas, destino)
@@ -632,6 +666,16 @@ def write_spreadsheet(root: Path, args: dict) -> dict:
 
 
 # ------------------------------------------------------------------ editar o que já existe
+
+class _Ocupado(ToolError):
+    """Arquivo aberto no Word/Excel. Mensagem à parte porque o que resolve é do usuário, não do modelo."""
+
+
+def _aberto_em_outro_programa(alvo: Path) -> _Ocupado:
+    return _Ocupado(f"'{alvo.name}' está aberto em outro programa (Word, Excel, o visualizador do "
+                    "Windows). Peça ao usuário para fechar o arquivo e tente de novo — não adianta "
+                    "gerar uma cópia com outro nome, ele quer este arquivo.")
+
 
 def _existente(root: Path, caminho: str, aceitas: set[str]) -> Path:
     alvo = resolve_path(root, (caminho or "").strip())
@@ -703,10 +747,13 @@ async def edit_document(root: Path, args: dict) -> dict:
     if not isinstance(ops, list) or not ops:
         raise ToolError('operations vazio. Ex.: [{"tipo": "acrescentar", "conteudo": "## Nova seção"}]')
     ext = alvo.suffix.lower()
-    if ext == ".pdf":
-        feitas = await asyncio.to_thread(_editar_pdf, alvo, ops)
-    else:
-        feitas = await asyncio.to_thread(_editar_office, alvo, ops, ext)
+    try:
+        if ext == ".pdf":
+            feitas = await asyncio.to_thread(_editar_pdf, alvo, ops)
+        else:
+            feitas = await asyncio.to_thread(_editar_office, alvo, ops, ext)
+    except PermissionError:
+        raise _aberto_em_outro_programa(alvo) from None
     return {"text": f"{alvo.name} atualizado: {'; '.join(feitas)}.", "attachments": [_anexo(root, alvo)]}
 
 
@@ -780,11 +827,7 @@ def _montar_docx(doc, bs: list[dict]) -> None:
                 _runs_docx(doc.add_paragraph(style="List Number" if b["ordenada"] else "List Bullet"), item)
         elif b["tipo"] == "tabela":
             linhas = b["linhas"]
-            tabela = doc.add_table(rows=len(linhas), cols=max(len(l) for l in linhas))
-            tabela.style = "Table Grid"
-            for i, linha in enumerate(linhas):
-                for j, celula in enumerate(linha):
-                    tabela.cell(i, j).text = _sem_marcas(celula)
+            _tabela_docx(doc, linhas)
         elif b["tipo"] in ("paragrafo", "codigo"):
             _runs_docx(doc.add_paragraph(), b.get("texto", ""))
 
@@ -948,14 +991,14 @@ def _obj(props: dict, required: list[str]) -> dict:
 
 def _preview_documento(root: Path, args: dict) -> dict:
     """O card mostra o Markdown de origem, não os bytes: é o que dá para ler e conferir."""
-    destino = _destino(root, str(args.get("path") or ""), DOCUMENTO)
+    destino = _destino(root, str(args.get("path") or ""), DOCUMENTO, sobrescrever=True)
     rel = destino.relative_to(root.resolve()).as_posix()
     conteudo = str(args.get("content") or "")
     return {"kind": "diff" if destino.exists() else "new", "path": rel, "text": conteudo}
 
 
 def _preview_planilha(root: Path, args: dict) -> dict:
-    destino = _destino(root, str(args.get("path") or ""), PLANILHA)
+    destino = _destino(root, str(args.get("path") or ""), PLANILHA, sobrescrever=True)
     rel = destino.relative_to(root.resolve()).as_posix()
     partes = []
     # Pela mesma normalização do handler: se o card aceitar o que a ferramenta recusa (ou o
@@ -986,9 +1029,13 @@ register(Tool(
     "`---` vira quebra de página (e slide novo no .pptx). Caminho sem pasta cai em documentos/. "
     "NÃO use para mexer num documento que já existe (inclusive um que o usuário anexou): o "
     "resultado tem só o que você escrever, e o conteúdo original se perde. Para isso é o "
-    "edit_document, no caminho do próprio arquivo. Para planilha use write_spreadsheet.",
+    "edit_document, no caminho do próprio arquivo — e caminho ocupado é recusado aqui. "
+    "Dentro da célula de uma tabela, <br> vira quebra de linha. Para planilha use write_spreadsheet.",
     _obj({"path": {"type": "string", "description": "Ex.: relatorio.docx, propostas/resumo.pdf"},
-          "content": {"type": "string", "description": "O documento inteiro, em Markdown"}},
+          "content": {"type": "string", "description": "O documento inteiro, em Markdown"},
+          "sobrescrever": {"type": "boolean", "description":
+                           "Só para refazer do zero um arquivo que já existe, perdendo o conteúdo "
+                           "atual. Para alterar preservando, é o edit_document."}},
          ["path", "content"]),
     write_document, mutating=True, preview=_preview_documento))
 
@@ -1001,7 +1048,10 @@ register(Tool(
                      "items": _obj({"nome": {"type": "string"},
                                     "linhas": {"type": "array", "description": "Linhas; a primeira é o cabeçalho",
                                                "items": {"type": "array", "items": {"type": "string"}}}},
-                                   ["nome", "linhas"])}},
+                                   ["nome", "linhas"])},
+          "sobrescrever": {"type": "boolean", "description":
+                           "Só para refazer do zero uma planilha que já existe. Para alterar "
+                           "preservando fórmulas e as outras abas, é o edit_spreadsheet."}},
          ["path", "sheets"]),
     write_spreadsheet, mutating=True, preview=_preview_planilha))
 
