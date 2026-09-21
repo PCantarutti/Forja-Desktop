@@ -165,6 +165,8 @@ As ferramentas de arquivo (`read_file`, `write_file`, `edit_file`, `list_dir`), 
 
 Antes da **primeira** alteração do agente em cada arquivo, dentro de um turno, o Forja guarda como o arquivo estava, ou registra que ele não existia. Isso vale para `write_file` e `edit_file`, inclusive quando quem altera é um subagente. Embaixo da resposta aparece **desfazer N arquivos**: o botão volta os arquivos ao estado de antes daquele turno, desfazendo também os turnos seguintes (dos mais novos para os mais antigos), para não deixar estados misturados.
 
+O Forja guarda os **20 turnos mais recentes** de cada conversa, e varre na abertura o que passou de 30 dias: cada checkpoint é uma cópia inteira do arquivo dentro do banco, e desfazer um turno antigo desfaz todos os seguintes junto — guardar mais do que isso engordaria o `forja.db` por nada.
+
 Mudanças feitas por **`run_command`**, servidores MCP ou pelo navegador **não** são rastreadas. Arquivos maiores que `MAX_FILE_BYTES` também não. Para esses casos, use git na sua pasta.
 
 ## Cota do Ollama Cloud

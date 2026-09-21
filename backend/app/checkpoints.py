@@ -8,6 +8,7 @@ estados misturados. Só write_file/edit_file são rastreados: run_command, MCP e
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import select
@@ -15,6 +16,11 @@ from sqlalchemy import select
 from . import config, db, workspace
 
 TRACKED = {"write_file", "edit_file"}
+# Cada checkpoint guarda o arquivo INTEIRO como estava antes, num BLOB. Sem poda, uma conversa que
+# edita um arquivo grande muitas vezes engorda o forja.db para sempre — e o desfazer de trinta
+# turnos atrás não serve para nada, porque desfazer um turno antigo desfaz todos os seguintes junto.
+MAX_TURNOS = 20   # turnos com desfazer guardado, por conversa
+MAX_DIAS = 30     # idade máxima; varrido na subida do backend
 
 
 def record(conv_id: int, turn_id: int, path: Path) -> None:
@@ -32,6 +38,35 @@ def record(conv_id: int, turn_id: int, path: Path) -> None:
         s.add(db.Checkpoint(conversation_id=conv_id, turn_id=turn_id, path=str(path),
                             existed=existed, content=content))
         s.commit()
+    podar(conv_id)
+
+
+def podar(conv_id: int) -> int:
+    """Descarta os checkpoints dos turnos mais antigos desta conversa. Devolve quantas linhas saíram."""
+    with db.session() as s:
+        turnos = [t for (t,) in s.execute(
+            select(db.Checkpoint.turn_id).where(db.Checkpoint.conversation_id == conv_id)
+            .distinct().order_by(db.Checkpoint.turn_id.desc())).all()]
+        if len(turnos) <= MAX_TURNOS:
+            return 0
+        corte = turnos[MAX_TURNOS - 1]
+        n = s.query(db.Checkpoint).filter(db.Checkpoint.conversation_id == conv_id,
+                                          db.Checkpoint.turn_id < corte).delete()
+        s.commit()
+        return n
+
+
+def podar_antigos() -> int:
+    """Na subida: descarta checkpoint mais velho que MAX_DIAS, de qualquer conversa.
+
+    Sem VACUUM de propósito: com WAL o SQLite reaproveita as páginas liberadas, e um VACUUM numa
+    base grande seguraria a abertura do app por segundos para economizar o que ele já economiza.
+    """
+    limite = datetime.now(timezone.utc) - timedelta(days=MAX_DIAS)
+    with db.session() as s:
+        n = s.query(db.Checkpoint).filter(db.Checkpoint.created_at < limite).delete()
+        s.commit()
+        return n
 
 
 def summary(conv_id: int) -> dict[int, list[str]]:
