@@ -711,12 +711,18 @@ export default function App() {
   }
 
   async function addFiles(files: FileList | File[]) {
+    // Copia ANTES de qualquer await. O FileList do input é vivo: o `value = ""` do onChange — que
+    // existe para deixar escolher o mesmo arquivo de novo — roda assim que esta função cede no
+    // primeiro await e esvazia a lista, então o laço não via arquivo nenhum e nada era anexado,
+    // sem erro nenhum na tela. O dataTransfer do arrastar tem o mesmo prazo de validade.
+    const lista = Array.from(files);
+    if (!lista.length) return;
     setUploading(true);
     const conv = await ensureConversation().catch((e) => {
       setError(e.message);
       return null;
     });
-    for (const f of Array.from(files)) {
+    for (const f of lista) {
       if (conv === null) break;
       try {
         const att = await uploadFile(f, conv);
