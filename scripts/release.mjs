@@ -75,6 +75,26 @@ async function conferirToken() {
   ok(`token válido, com escrita em ${owner}/${repo}`);
 }
 
+/**
+ * `publisherName` liga a checagem de assinatura do electron-updater: ele só instala se o .exe
+ * baixado estiver assinado por esse nome. Com o instalador sem assinatura, a atualização baixa os
+ * 245 MB e é recusada na hora de instalar — foi o que aconteceu na 0.3.2. Só faz sentido declarar
+ * o nome quando existe certificado para assinar de verdade.
+ */
+function conferirAssinatura() {
+  passo("conferindo a assinatura");
+  const { build } = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  const win = build.win || {};
+  const nome = win.publisherName ?? win.signtoolOptions?.publisherName;
+  const assina =
+    process.env.CSC_LINK || process.env.WIN_CSC_LINK || win.certificateFile || win.signtoolOptions?.certificateFile;
+  if (nome && !assina) {
+    parar(`o build declara publisherName "${nome}" mas não assina nada.`,
+      "O updater vai recusar a instalação. Tire o publisherName do package.json, ou configure o certificado.");
+  }
+  ok(nome ? "assinatura configurada" : "sem assinatura, e sem publisherName declarado (o updater não vai barrar)");
+}
+
 function rodarTestes() {
   if (PULAR_TESTES) return aviso("testes pulados (--rapido)");
   passo("rodando a bateria");
@@ -166,6 +186,7 @@ try {
   const atual = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
   await conferirGit();
   await conferirToken();
+  conferirAssinatura();
   const { versao, notas } = await perguntar(rl, atual);
   rl.close();
   rodarTestes();

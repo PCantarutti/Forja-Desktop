@@ -40,7 +40,6 @@
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico",
-      "publisherName": "DRUVE",
       "artifactName": "Forja-Setup-${version}.${ext}"
     },
     "nsis": {
