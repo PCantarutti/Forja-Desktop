@@ -3,6 +3,7 @@ import { api, streamSSE } from "../api";
 import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato, PesquisaProfundidade }
   from "../types";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
+import type { CloudUsage } from "../types";
 import { ArrowUp, Check, Copy, ExternalLink, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -86,6 +87,49 @@ function comoMarkdown(e: PesquisaEstado): string {
 
 type Par = { provider: string; model: string };
 type Modelos = { escritor: Par; extrator: Par | null };  // extrator null = slot "rapido" dos subagentes
+
+/** Anel da cota do plano, irmão do anel de contexto do chat: preenche com a janela mais apertada. */
+function AnelCota({ dados }: { dados: CloudUsage[] }) {
+  const [aberto, setAberto] = useState(false);
+  const caixa = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!aberto) return;
+    const fora = (e: MouseEvent) => !caixa.current?.contains(e.target as Node) && setAberto(false);
+    document.addEventListener("mousedown", fora);
+    return () => document.removeEventListener("mousedown", fora);
+  }, [aberto]);
+
+  const pct = Math.min(1, Math.max(0, ...dados.flatMap((d) => d.limits.map((l) => l.usage))));
+  const r = 7;
+  const c = 2 * Math.PI * r;
+  const cor = pct >= 0.9 ? "#f87171" : pct >= 0.7 ? "#fbbf24" : "#a3a3a3";
+  const titulo = `Cota do plano: ${Math.round(pct * 100)}% da janela mais apertada`;
+
+  return (
+    <div ref={caixa} className="relative">
+      <button onClick={() => setAberto((v) => !v)} title={titulo} aria-label={titulo}
+              className="grid size-8 place-items-center rounded-full text-muted hover:bg-raised hover:text-fg">
+        <svg viewBox="0 0 20 20" className="size-5 -rotate-90">
+          <circle cx="10" cy="10" r={r} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.5" />
+          <circle cx="10" cy="10" r={r} fill="none" stroke={cor} strokeWidth="2.5" strokeLinecap="round"
+                  strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
+                  style={{ transition: "stroke-dashoffset 400ms ease" }} />
+        </svg>
+      </button>
+      {aberto && (
+        <div className="absolute bottom-full left-0 z-30 mb-2 w-60 rounded-xl border border-line bg-surface p-3 font-mono text-xs text-muted shadow-xl">
+          {dados.map((d) => (
+            <div key={d.provider} className="mb-2 last:mb-0">
+              <div className="mb-1.5 text-faint">Cota · {d.name}</div>
+              <UsageBars data={d} models />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function PesquisaView(props: {
   conv: number | null;
@@ -352,15 +396,6 @@ export default function PesquisaView(props: {
                 </div>
               )}
 
-              {!!nuvem.length && (
-                <div className={card}>
-                  <p className="mb-1.5 text-[11px] uppercase tracking-wider text-faint">
-                    Uso do plano · {nuvem.map((u) => u.name).join(", ")}
-                  </p>
-                  {nuvem.map((u) => <UsageBars key={u.provider} data={u} />)}
-                </div>
-              )}
-
               {estado.resumo && (
                 <div className={card}>
                   <p className="text-[11px] uppercase tracking-wider text-faint">Resumo</p>
@@ -467,8 +502,14 @@ export default function PesquisaView(props: {
                        onChange={(e) => setPerguntarAntes(e.target.checked)} />
                 Perguntar antes
               </label>
+              {!!nuvem.length && (
+                <div className="ml-auto">
+                  <AnelCota dados={nuvem} />
+                </div>
+              )}
               {/* Div à parte: o ModelPicker traz ml-auto, que jogaria o resto da linha para a direita. */}
-              <div className="ml-auto flex items-center gap-1" title="Modelo que escreve o relatório">
+              <div className={`${nuvem.length ? "" : "ml-auto"} flex items-center gap-1`}
+                   title="Modelo que escreve o relatório">
                 <span className="text-faint">relatório</span>
                 <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
                              onChange={(provider, model) =>
