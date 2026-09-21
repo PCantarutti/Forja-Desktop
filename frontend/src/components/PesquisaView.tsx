@@ -20,12 +20,18 @@ const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg
 // querer um modelo pequeno na extração e o bom só no relatório.
 const KEY_MODELOS = "forja.pesquisa.modelos";
 
+// Os números espelham os PRESETS do backend: cada profundidade é uma promessa diferente, não só
+// mais rodadas — muda quanto de cada página é lido e o tamanho do relatório.
 const PROFUNDIDADES = [
-  { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas", minutos: 5, rodadas: 1 },
-  { id: "normal" as const, label: "Normal", hint: "2 rodadas, até 8 páginas", minutos: 10, rodadas: 2 },
-  { id: "funda" as const, label: "Funda", hint: "4 rodadas, até 16 páginas", minutos: 15, rodadas: 4 },
-  { id: "personalizado" as const, label: "Personalizado", hint: "Você escolhe rodadas e tempo",
-    minutos: 10, rodadas: 2 },
+  { id: "rapida" as const, label: "Rápida", minutos: 5, rodadas: 1,
+    hint: "1 rodada, 3 páginas, relatório de ~800 palavras — cabe num modelo local pequeno" },
+  { id: "normal" as const, label: "Normal", minutos: 10, rodadas: 2,
+    hint: "2 rodadas, 5 páginas por rodada, relatório de ~1200 palavras" },
+  { id: "funda" as const, label: "Funda", minutos: 30, rodadas: 4,
+    hint: "4 rodadas, 8 páginas por rodada, relatório de 1800 a 3000 palavras com subseções; "
+      + "o relatório é refeito a cada rodada. Peça a um modelo grande." },
+  { id: "personalizado" as const, label: "Personalizado", minutos: 10, rodadas: 2,
+    hint: "Você escolhe rodadas e tempo; leitura e relatório no tamanho da Funda" },
 ];
 const MIN_MINUTOS = 1;
 const MAX_MINUTOS = 120;   // mesmos limites do backend (TETO_MIN/TETO_MAX)

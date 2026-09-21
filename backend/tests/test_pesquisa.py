@@ -40,6 +40,8 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
             return "perguntas"
         if system.startswith("Classifique a pergunta"):
             return "classificar"
+        if system.startswith("Você mantém um relatório"):
+            return "sintese"
         return "relatorio"
 
     vez = {"n": 0}
@@ -53,6 +55,7 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
                       "## Preços\nCaiu 12% [fonte](https://a.com/x).\n\n## Conclusão\nMarço."),
         "perguntas": '["Qual período?", "Qual região?"]',
         "classificar": "comparar",
+        "sintese": "## 1. Parcial\n\ntexto acumulado",
     }
 
     async def chat_stream(provider, model, messages, tools, num_ctx, effort=None):
@@ -408,6 +411,55 @@ def test_tempo_estourado_ainda_escreve_o_relatorio(monkeypatch):
     est = _rodar(**_base(profundidade="funda", teto=1))
     assert est["status"] == "pronto" and "Tempo esgotado" in est["aviso"]
     assert est["relatorio"]      # o parcial vira relatório, não vai para o lixo
+
+
+def test_porte_cresce_com_a_profundidade(monkeypatch):
+    lidos: list[int] = []
+    _fake_llm(monkeypatch)
+    _fake_web(monkeypatch)
+    monkeypatch.setattr(pesquisa.web, "ler", lambda url, max_chars=20_000: (
+        lidos.append(max_chars) or {"url": url, "title": "T", "text": "t", "chars": 1, "imagem": ""}))
+    _rodar(**_base(profundidade="rapida"))
+    assert set(lidos) == {pesquisa.PRESETS["rapida"]["pagina"]}
+    lidos.clear()
+    _rodar(**_base(profundidade="funda"))
+    assert set(lidos) == {pesquisa.PRESETS["funda"]["pagina"]}   # 15k contra 6k da rápida
+
+
+def test_relatorio_pede_secoes_numeradas(monkeypatch):
+    vistos: list[str] = []
+    _fake_llm(monkeypatch)
+    original = pesquisa.llm.chat_stream
+
+    async def espiao(provider, model, messages, tools, num_ctx, effort=None):
+        vistos.append(messages[0]["content"])
+        async for ev in original(provider, model, messages, tools, num_ctx, effort):
+            yield ev
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", espiao)
+    _fake_web(monkeypatch)
+    _rodar(**_base(profundidade="funda"))
+    prompt = next(v for v in vistos if v.startswith("Você escreve o relatório final"))
+    assert "### 1.1" in prompt and "Pelo menos 6 seções" in prompt
+    assert "Entre 1800 e 3000 palavras" in prompt
+
+
+def test_sintese_so_nas_pesquisas_longas(monkeypatch):
+    def rodar(rodadas):
+        chamados = _fake_llm(monkeypatch)
+        pagina = {"n": 0}
+        _fake_web(monkeypatch)
+        monkeypatch.setattr(pesquisa.web, "buscar", lambda q, n=6: [
+            {"title": f"P{(pagina.__setitem__('n', pagina['n'] + 1) or pagina['n'])}-{i}",
+             "url": f"https://s{pagina['n']}x{i}.com/a", "content": ""} for i in range(n)])
+        est = _rodar(**_base(profundidade="personalizado", rodadas=rodadas))
+        return est, [t for t, _ in chamados if t == "sintese"]
+
+    _, sem = rodar(2)
+    assert sem == []                       # 2 rodadas: escreve uma vez só, como antes
+    est, com = rodar(3)
+    assert len(com) == 3                   # 3 rodadas: o relatório cresce a cada uma
+    assert est["status"] == "pronto" and est["relatorio"]
 
 
 def test_contadores_de_token_e_tempo(monkeypatch):

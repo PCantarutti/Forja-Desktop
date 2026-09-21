@@ -30,17 +30,24 @@ from .agent import _save
 from .parsing import split_think
 from .tools import ToolError
 
-# rodadas, fontes por rodada, buscas por rodada, teto de segundos
-PRESETS = {"rapida": (1, 3, 3, 300), "normal": (2, 4, 3, 600), "funda": (4, 4, 3, 900),
-           "personalizado": (2, 4, 3, 600)}  # aqui rodadas e tempo vêm da tela
+# Cada profundidade é uma promessa diferente: a Rápida cabe num 7B local, a Funda foi calibrada
+# para modelo grande (mesma ordem de grandeza do odysseus). "pagina" é quanto de cada página vai
+# para o extrator; "resumo", o tamanho do achado; "palavras"/"secoes", o alvo do relatório.
+PRESETS = {
+    "rapida": {"rodadas": 1, "fontes": 3, "buscas": 3, "teto": 300, "pagina": 6_000,
+               "resumo": 900, "achados": 24_000, "palavras": (600, 1000), "secoes": 3},
+    "normal": {"rodadas": 2, "fontes": 5, "buscas": 3, "teto": 600, "pagina": 9_000,
+               "resumo": 1_400, "achados": 40_000, "palavras": (900, 1500), "secoes": 4},
+    "funda": {"rodadas": 4, "fontes": 8, "buscas": 4, "teto": 1_800, "pagina": 15_000,
+              "resumo": 2_200, "achados": 80_000, "palavras": (1800, 3000), "secoes": 6},
+}
+PRESETS["personalizado"] = {**PRESETS["funda"], "rodadas": 2, "teto": 600}  # rodadas e tempo vêm da tela
 TETO_MIN, TETO_MAX = 60, 7200   # limites do tempo máximo escolhido na tela (1 min a 2 h)
 RODADAS_MAX = 8                 # teto do modo personalizado; acima disso é madrugada de spinner
-RESULTADOS_POR_BUSCA = 6
-TETO_PAGINA = 6_000      # caracteres da página que vão para o extrator
+RESULTADOS_POR_BUSCA = 10       # o excedente é descartado na escolha, mas dá margem ao dedupe
+SINTESE_A_PARTIR_DE = 3         # com 3+ rodadas o relatório passa a crescer a cada rodada
 LEITURAS_PARALELAS = 3
 TIMEOUT_LEITURA = 25     # o httpx já corta em 20; isto cobre DNS travado
-TETO_ACHADOS = 24_000    # soma dos resumos que entra no relatório
-TETO_RESUMO = 900
 MIN_RESUMO = 60          # abaixo disso o "achado" é ruído
 MAX_PERGUNTAS = 3
 TICK = 0.2               # segundos entre retratos do SSE
@@ -81,12 +88,25 @@ RELATORIO_PROMPT = """Você escreve o relatório final de uma pesquisa na web, e
 Use SOMENTE os achados numerados abaixo. Não invente fato nem fonte.
 Estrutura obrigatória:
 1. Um parágrafo de abertura (4 a 6 linhas) que já responde à pergunta. Sem título antes dele.
-2. De 3 a 5 seções "## Título" com o desenvolvimento.
-3. "## Conclusão" com a resposta direta.
-Toda afirmação tirada de um achado leva a citação no próprio texto, no formato [título](url).
+2. Pelo menos {secoes} seções numeradas: "## 1. Título", "## 2. Título"… Use quantas o assunto pedir.
+3. Onde um assunto tiver partes, abra subseções numeradas pela seção: "### 1.1 Título", "### 1.2 Título".
+   Cada subseção com 2 ou mais parágrafos de conteúdo; nada de subseção de uma linha.
+4. A última seção é "## Conclusão", com a resposta direta.
+Toda afirmação tirada de um achado leva a citação no próprio texto, no formato [título](url), junto
+da frase que ela sustenta — não empilhe os links no fim do parágrafo.
 Se os achados se contradizem, diga isso em vez de escolher um lado. O que ficou sem resposta,
 escreva "não encontrado nas fontes".
-Entre 600 e 1000 palavras. Não repita a mesma frase. Não escreva nada fora do relatório."""
+Entre {minimo} e {maximo} palavras — este é o tamanho esperado, não um exercício de resumo.
+Não repita a mesma frase. Não escreva nada fora do relatório."""
+
+SINTESE_PROMPT = """Você mantém um relatório de pesquisa que cresce a cada rodada, em Markdown.
+Receba o relatório atual e os achados novos, e devolva o relatório inteiro atualizado.
+- Integre o que é novo na seção que faz sentido; abra seção ou subseção nova quando o assunto pedir.
+- Não jogue fora o que já estava escrito, a não ser que um achado novo corrija.
+- Mantenha a numeração das seções ("## 2. Título") e das subseções ("### 2.1 Título") em ordem.
+- Preserve as citações [título](url) existentes e acrescente as dos achados novos.
+- Contradição entre fontes fica registrada, não resolvida no chute.
+Devolva só o relatório, sem comentário sobre o que você mudou."""
 
 FORMATOS = ("auto", "produto", "comparar", "guia", "checagem")
 
@@ -176,18 +196,18 @@ CAMPO = re.compile(r"^[ \t]*(RELEVANTE|RESUMO|TRECHO)[ \t]*:[ \t]*"
                    r"(.*(?:\n(?![ \t]*(?:RELEVANTE|RESUMO|TRECHO)[ \t]*:).*)*)", re.M | re.I)
 
 
-def _campos(texto: str) -> dict:
+def _campos(texto: str, teto: int = 900) -> dict:
     """RELEVANTE/RESUMO/TRECHO. O modelo que responder prosa solta tem a prosa como resumo."""
     visivel = split_think(texto or "")[1].strip()
     achados = {k.upper(): v.strip() for k, v in CAMPO.findall(visivel)}
     if achados:
         relevante = not achados.get("RELEVANTE", "sim").lower().startswith(("n", "no"))
-        return {"relevante": relevante, "resumo": achados.get("RESUMO", "")[:TETO_RESUMO],
+        return {"relevante": relevante, "resumo": achados.get("RESUMO", "")[:teto],
                 "trecho": achados.get("TRECHO", "")[:400]}
     if isinstance(obj := _json(visivel), dict):  # alguns modelos insistem em JSON
         resumo = str(obj.get("resumo") or obj.get("summary") or obj.get("evidence") or "")
-        return {"relevante": bool(resumo), "resumo": resumo[:TETO_RESUMO], "trecho": ""}
-    return {"relevante": bool(visivel), "resumo": visivel[:TETO_RESUMO], "trecho": ""}
+        return {"relevante": bool(resumo), "resumo": resumo[:teto], "trecho": ""}
+    return {"relevante": bool(visivel), "resumo": visivel[:teto], "trecho": ""}
 
 
 def _lixo(resumo: str) -> bool:
@@ -261,7 +281,8 @@ def _mensagem(message_id: int) -> dict:
         return {**m.to_dict(), "conversation_id": m.conversation_id}
 
 
-INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "anterior", "erro_busca")
+INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "anterior", "erro_busca",
+           "porte", "parcial")
 
 
 def _publico(run: dict) -> dict:
@@ -367,8 +388,8 @@ async def _extrair(run: dict, fonte: dict, spec: dict) -> None:
     fonte["status"] = "lendo"
     _persistir(run)
     try:
-        pagina = await asyncio.wait_for(asyncio.to_thread(web.ler, fonte["url"], TETO_PAGINA),
-                                        TIMEOUT_LEITURA)
+        pagina = await asyncio.wait_for(
+            asyncio.to_thread(web.ler, fonte["url"], run["porte"]["pagina"]), TIMEOUT_LEITURA)
     except Exception as e:
         fonte.update(status="erro", erro=str(e)[:200] if isinstance(e, ToolError) else
                      f"{e.__class__.__name__} ao abrir a página")
@@ -388,7 +409,7 @@ async def _extrair(run: dict, fonte: dict, spec: dict) -> None:
         fonte.update(status="erro", erro=f"Falha ao resumir: {e}"[:200])
         _persistir(run)
         return
-    campos = _campos(texto)
+    campos = _campos(texto, run["porte"]["resumo"])
     if not campos["relevante"] or _lixo(campos["resumo"]):
         fonte["status"] = "vazia"
     else:
@@ -416,11 +437,33 @@ def _achados(run: dict) -> str:
     for i, f in enumerate(uteis, 1):
         bloco = (f"[{i}] {f['titulo']}\nURL: {f['url']}\n{f['resumo']}"
                  + (f'\nTrecho: "{f["trecho"]}"' if f["trecho"] else ""))
-        if total + len(bloco) > TETO_ACHADOS:
+        if total + len(bloco) > run["porte"]["achados"]:
             break  # cabe tudo nos presets atuais; o corte é a rede de segurança
         linhas.append(bloco)
         total += len(bloco)
     return "\n\n".join(linhas)
+
+
+async def _sintetizar(run: dict, spec: dict, novas: list[dict]) -> None:
+    """Funde os achados da rodada no relatório em construção (só nas pesquisas de 3+ rodadas).
+
+    É o que dá profundidade: sem isso o modelo vê todos os achados de uma vez só no fim e escreve
+    um texto raso sobre muita coisa. Custa uma chamada longa por rodada.
+    """
+    uteis = [f for f in novas if f["status"] == "util"]
+    if not uteis or _acabou(run):
+        return
+    achados = "\n\n".join(f"{f['titulo']} ({f['url']})\n{f['resumo']}" for f in uteis)
+    atual = run["parcial"] or "(ainda não há relatório; escreva a primeira versão)"
+    user = (f"Pergunta: {run['pergunta']}\n\nRelatório atual:\n\n{atual}\n\n"
+            f"Achados da rodada {run['rodada']}:\n\n{achados}")
+    try:
+        texto = await _perguntar(spec, SINTESE_PROMPT, user, run, effort="medio")
+    except Exception as e:  # síntese é melhoria, não pré-requisito: o relatório final ainda sai
+        run["aviso"] = run["aviso"] or f"Não consegui atualizar o relatório na rodada {run['rodada']}: {e}"
+        return
+    if novo := split_think(texto)[1].strip():
+        run["parcial"] = novo
 
 
 async def _classificar(run: dict, spec: dict) -> str:
@@ -441,9 +484,11 @@ async def _relatorio(run: dict, spec: dict) -> str:
     user = (f"Pergunta: {run['pergunta']}\n"
             + (f"Contexto do usuário: {run['contexto']}\n" if run["contexto"] else "")
             + f"\nAchados:\n\n{_achados(run)}")
-    if run["anterior"]:
-        user += f"\n\nRelatório anterior desta pesquisa (atualize e amplie):\n\n{run['anterior']}"
-    system = RELATORIO_PROMPT
+    base = run["parcial"] or run["anterior"]   # síntese das rodadas, ou a pesquisa que está sendo continuada
+    if base:
+        user += f"\n\nRelatório já construído (revise, amplie e organize):\n\n{base}"
+    minimo, maximo = run["porte"]["palavras"]
+    system = RELATORIO_PROMPT.format(secoes=run["porte"]["secoes"], minimo=minimo, maximo=maximo)
     if extra := FORMATO_PROMPT.get(run["formato_usado"]):
         system += "\n\n" + extra
     texto = await _perguntar(spec, system, user, run, effort="medio")
@@ -474,11 +519,11 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         raise ToolError(f"formato deve ser {', '.join(FORMATOS)}.")
     if not (provider and model):
         raise ToolError("Escolha um modelo antes de pesquisar.")
-    padrao_rodadas, fontes_por_rodada, n_buscas, padrao_teto = PRESETS[profundidade]
+    porte = PRESETS[profundidade]
     # 0 = o valor do preset. Os tetos existem para a pesquisa não rodar a noite inteira num modelo lento.
-    teto = max(TETO_MIN, min(int(teto), TETO_MAX)) if teto else padrao_teto
+    teto = max(TETO_MIN, min(int(teto), TETO_MAX)) if teto else porte["teto"]
     rodadas = (max(1, min(int(rodadas), RODADAS_MAX)) if rodadas and profundidade == "personalizado"
-               else padrao_rodadas)
+               else porte["rodadas"])
     extrator, escritor = _modelos(provider, model, ex_provider, ex_model)
 
     anterior, lidas = "", set()
@@ -511,8 +556,8 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
     msg = _save(conv_id, role="assistant", content="", status="running", meta={"pesquisa": publico})
     run = _RUNS[msg.id] = {**publico, "message_id": msg.id, "conv_id": conv_id, "cancelar": False,
                            "t0": time.monotonic(), "teto": teto, "lidas": lidas, "anterior": anterior,
-                           "erro_busca": ""}
-    asyncio.create_task(_rodar(run, extrator, escritor, rodadas, fontes_por_rodada, n_buscas))
+                           "erro_busca": "", "porte": porte, "parcial": ""}
+    asyncio.create_task(_rodar(run, extrator, escritor, rodadas, porte["fontes"], porte["buscas"]))
     return msg.to_dict()
 
 
@@ -557,6 +602,10 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, rodadas: int, fontes
             await asyncio.gather(*(uma(f) for f in novas))
             run["stats"].update(fontes=len(run["fontes"]),
                                 uteis=sum(f["status"] == "util" for f in run["fontes"]), rodadas=n)
+            if rodadas >= SINTESE_A_PARTIR_DE and not _acabou(run):
+                run["fase"] = "escrevendo"   # a tela mostra que o relatório já está sendo montado
+                _persistir(run)
+                await _sintetizar(run, escritor, novas)
             if n < rodadas and not _acabou(run):
                 consultas = await _novas_buscas(run, escritor, n_buscas)
 
