@@ -625,7 +625,8 @@ def test_previa_sai_do_arquivo_salvo(ws):
     anexo = r["attachments"][0]
     assert anexo["kind"] == "image" and anexo["mime"] == "image/jpeg"
     assert (ws / anexo["path"]).stat().st_size > 1000
-    assert "diagramação exata do Word não é reproduzida" in r["text"]
+    # Com Word na máquina a prévia sai dele; sem Word, do nosso HTML. As duas dizem qual é.
+    assert ("renderizado pelo Word" in r["text"]) or ("sem a diagramação do Word" in r["text"])
 
 
 @precisa_chromium
@@ -635,10 +636,20 @@ def test_previa_de_planilha_tambem(ws):
     assert r["attachments"][0]["kind"] == "image"
 
 
-def test_previa_de_arquivo_sem_texto_avisa(ws):
+def test_previa_de_arquivo_quebrado_avisa(ws):
+    """O pypdfium estoura com um traceback; quem lê o resultado precisa de uma frase."""
     (ws / "vazio.pdf").write_bytes(b"%PDF-1.4 nao e um pdf de verdade")
-    with pytest.raises(ToolError, match="prévia"):
+    with pytest.raises(ToolError, match="corrompido ou protegido"):
         asyncio.run(execute("preview_document", {"path": "vazio.pdf"}, ws))
+
+
+def test_previa_de_docx_sem_word_cai_no_html(ws, monkeypatch):
+    """O caminho fiel depende de Word instalado. Sem ele — Linux, Docker, máquina sem Office — a
+    prévia continua saindo, pelo nosso HTML, e o texto diz que a diagramação não é a do Word."""
+    monkeypatch.setattr(documentos, "_office_para_pdf", lambda *a: False)
+    roda("write_document", {"path": "d.docx", "content": "# OI"}, ws)
+    r = asyncio.run(execute("preview_document", {"path": "documentos/d.docx"}, ws))
+    assert "sem a diagramação do Word" in r["text"] and r["attachments"][0]["kind"] == "image"
 
 
 def test_previa_confinada_a_pasta_da_conversa(ws):

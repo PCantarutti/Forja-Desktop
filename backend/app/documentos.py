@@ -24,9 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import csv
-from contextlib import asynccontextmanager
 import io
 import re
+import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from . import config
@@ -726,6 +727,95 @@ async def write_document(root: Path, args: dict) -> dict:
 
 MAX_PREVIA_CHARS = 20_000  # o suficiente para umas 15 páginas; acima disso a imagem só engorda
 LARGURA_PREVIA = 820          # ~A4 a 96dpi, que é a largura do CSS do para_html
+PAGINAS_PREVIA = 3            # quantas páginas viram imagem quando dá para paginar de verdade
+ESCALA_PREVIA = 1.4           # legível sem virar um JPEG gigante
+VIRTUAL_PDF = "Microsoft Print to PDF"  # impressora que não existe fisicamente; ver _office_para_pdf
+
+
+def _pdf_para_imagens(pdf: Path, paginas: int = PAGINAS_PREVIA) -> list[bytes]:
+    """Páginas do PDF como JPEG, pelo PDFium — o mesmo motor do visualizador do Chrome.
+
+    O Chromium que empacotamos é o `headless-shell`, que não traz o visualizador de PDF: apontar o
+    navegador para o arquivo só dispara um download. Daí a biblioteca à parte.
+    """
+    import pypdfium2 as pdfium
+
+    try:
+        doc = pdfium.PdfDocument(str(pdf))
+    except Exception as e:
+        raise ToolError(f"Não consegui abrir '{pdf.name}' para montar a prévia: o arquivo está "
+                        f"corrompido ou protegido por senha. ({type(e).__name__})") from e
+    try:
+        saida = []
+        for i in range(min(len(doc), paginas)):
+            buf = io.BytesIO()
+            doc[i].render(scale=ESCALA_PREVIA).to_pil().convert("RGB").save(buf, "JPEG", quality=75)
+            saida.append(buf.getvalue())
+        return saida
+    finally:
+        doc.close()
+
+
+def _office_para_pdf(origem: Path, destino: Path) -> bool:
+    """Pede ao Word que exporte o .docx em PDF. Só no Windows, e só se o Word estiver instalado.
+
+    É a única forma de ver o documento como o usuário vai vê-lo: fonte, margem, paginação e os
+    estilos do arquivo. Sem Word a prévia continua saindo do nosso HTML, que mostra conteúdo e
+    estrutura mas não a diagramação.
+
+    ponytail: só .docx. .pptx e .xlsx caem no HTML; se algum dia incomodar, o caminho é o mesmo
+    (PowerPoint.Application / Excel.Application, com o mesmo ExportAsFixedFormat).
+    """
+    try:
+        import pythoncom
+        import win32com.client
+        import win32print
+    except ImportError:
+        return False
+
+    # O Word repagina consultando a impressora ativa, e com uma impressora de rede isso custa caro:
+    # exportar DUAS páginas levava 48 segundos aqui. Apontando para a virtual do Windows, 0,8s.
+    #
+    # `ActivePrinter` do Word escreve no padrão do SISTEMA, então tem que ser devolvido. Devolver
+    # pelo Word custaria os mesmos 48s (ele vai à impressora de novo); pelo win32print é instantâneo.
+    padrao = None
+    try:
+        if VIRTUAL_PDF in {p[2] for p in win32print.EnumPrinters(
+                win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)}:
+            padrao = win32print.GetDefaultPrinter()
+    except Exception:
+        padrao = None
+
+    pythoncom.CoInitialize()
+    app = None
+    try:
+        app = win32com.client.DispatchEx("Word.Application")
+        app.Visible = False
+        app.DisplayAlerts = 0
+        if padrao:
+            app.ActivePrinter = VIRTUAL_PDF
+        doc = app.Documents.Open(str(origem.resolve()), ReadOnly=True, AddToRecentFiles=False)
+        try:
+            doc.ExportAsFixedFormat(OutputFileName=str(destino), ExportFormat=17,  # wdExportFormatPDF
+                                    OptimizeFor=1, DocStructureTags=False, BitmapMissingFonts=False,
+                                    IncludeDocProps=False, CreateBookmarks=0)
+        finally:
+            doc.Close(False)
+        return destino.is_file()
+    except Exception:
+        return False  # sem Word, licença expirada, arquivo travado: a prévia cai no HTML
+    finally:
+        if app is not None:
+            try:
+                app.Quit()
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+        if padrao:
+            try:
+                win32print.SetDefaultPrinter(padrao)
+            except Exception:
+                pass
 
 
 async def preview_document(root: Path, args: dict) -> dict:
@@ -741,7 +831,22 @@ async def preview_document(root: Path, args: dict) -> dict:
     from . import uploads  # tardio: uploads importa documentos, e o contrário fecharia o ciclo
 
     alvo = _existente(root, str(args.get("path") or ""), LEITURA | {".md", ".html"})
-    if alvo.suffix.lower() in (".md", ".html"):
+    ext = alvo.suffix.lower()
+
+    # Caminho fiel: o PDF já é o que o usuário vê; o .docx vira PDF pelo próprio Word, quando ele
+    # existe na máquina. O PDF intermediário mora numa pasta temporária e some ao fim da chamada —
+    # ele serve só para virar imagem.
+    if ext == ".pdf":
+        imagens = await asyncio.to_thread(_pdf_para_imagens, alvo)
+        return _resposta_previa(root, alvo, imagens, "como ele será aberto")
+    if ext == ".docx":
+        with tempfile.TemporaryDirectory(prefix="forja-previa-") as tmp:
+            pdf = Path(tmp) / "previa.pdf"
+            if await asyncio.to_thread(_office_para_pdf, alvo, pdf):
+                imagens = await asyncio.to_thread(_pdf_para_imagens, pdf)
+                return _resposta_previa(root, alvo, imagens, "renderizado pelo Word desta máquina")
+
+    if ext in (".md", ".html"):
         texto = alvo.read_text(encoding="utf-8", errors="replace")
     else:
         texto = await asyncio.to_thread(extrair, alvo)
@@ -749,18 +854,28 @@ async def preview_document(root: Path, args: dict) -> dict:
         raise ToolError(f"Não consegui extrair conteúdo de '{alvo.name}' para montar a prévia. "
                         "PDF escaneado e arquivo protegido caem aqui.")
     cortado = len(texto) > MAX_PREVIA_CHARS
-    html = (alvo.read_text(encoding="utf-8", errors="replace") if alvo.suffix.lower() == ".html"
+    html = (alvo.read_text(encoding="utf-8", errors="replace") if ext == ".html"
             else para_html(blocos(texto[:MAX_PREVIA_CHARS]), alvo.stem))
 
     async with _pagina_chromium(html, alvo.parent, "montar a prévia") as pagina:
         await pagina.set_viewport_size({"width": LARGURA_PREVIA, "height": 1160})
         dados = await pagina.screenshot(type="jpeg", quality=75, full_page=True, scale="css")
 
-    anexo = uploads.save(f"previa-{alvo.stem}.jpg", dados, "image/jpeg", root)
-    aviso = f" (só o começo: o arquivo passa de {MAX_PREVIA_CHARS} caracteres)" if cortado else ""
-    return {"text": f"Prévia de {alvo.name} anexada{aviso}. Ela mostra o conteúdo como o Forja lê o "
-                    "arquivo salvo; a diagramação exata do Word não é reproduzida.",
-            "attachments": [anexo]}
+    corte = f" Só o começo: o arquivo passa de {MAX_PREVIA_CHARS} caracteres." if cortado else ""
+    return _resposta_previa(root, alvo, [dados],
+                            "como o Forja lê o arquivo salvo, sem a diagramação do Word" + corte)
+
+
+def _resposta_previa(root: Path, alvo: Path, imagens: list[bytes], o_que_mostra: str) -> dict:
+    from . import uploads
+
+    if not imagens:
+        raise ToolError(f"'{alvo.name}' não rendeu nenhuma página para a prévia.")
+    anexos = [uploads.save(f"previa-{alvo.stem}-{i}.jpg" if len(imagens) > 1 else f"previa-{alvo.stem}.jpg",
+                           img, "image/jpeg", root)
+              for i, img in enumerate(imagens, 1)]
+    pags = f"{len(anexos)} página(s)" if len(anexos) > 1 else "1 página"
+    return {"text": f"Prévia de {alvo.name} anexada ({pags}): {o_que_mostra}.", "attachments": anexos}
 
 
 def normalizar_abas(bruto) -> list[dict]:
@@ -1207,10 +1322,11 @@ register(Tool(
 
 register(Tool(
     "preview_document",
-    "Gera uma imagem do documento ou planilha para conferir o resultado. A imagem aparece no chat "
-    "para o usuário; se você tiver visão, também chega a você. Sai do arquivo salvo, então pega "
-    "tabela que virou texto, conteúdo que sumiu e caixa alta que não pegou. Não reproduz a "
-    "diagramação do Word — para .pdf, que o Forja gera desta mesma página, é fiel.",
+    "Gera uma imagem do arquivo para conferir o resultado. Ela aparece no chat para o usuário; se "
+    "você tiver visão, também chega a você. Sai sempre do arquivo salvo, então pega tabela que "
+    "virou texto, conteúdo que sumiu e caixa alta que não pegou. Num .pdf mostra as páginas de "
+    "verdade; num .docx, o Word da máquina renderiza quando está instalado (o texto da resposta diz "
+    "qual caminho foi usado). Planilha e apresentação saem pela leitura, sem a diagramação do Office.",
     _obj({"path": {"type": "string", "description": "O arquivo a pré-visualizar"}}, ["path"]),
     preview_document))
 

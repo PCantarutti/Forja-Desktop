@@ -292,8 +292,8 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
         if "preview_document" in names:
             if caps is not None and "vision" in caps:
                 rules.append("- preview_document devolve uma imagem do arquivo e você a recebe: use para conferir "
-                             "espaçamento, alinhamento e coluna espremida, que o read_file não mostra. Ela sai do "
-                             "arquivo salvo, mas não reproduz a diagramação do Word — para .pdf é fiel.")
+                             "espaçamento, alinhamento e coluna espremida, que o read_file não mostra. A resposta "
+                             "diz se veio do Word da máquina (fiel) ou da nossa leitura (conteúdo e estrutura).")
             else:
                 rules.append("- preview_document gera uma imagem do arquivo para o usuário ver no chat; peça quando "
                              "ele quiser olhar o resultado. Você não tem visão e não recebe a imagem, então confira "
