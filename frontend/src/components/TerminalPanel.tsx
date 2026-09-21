@@ -110,7 +110,7 @@ export default function TerminalPanel(props: { conv: string }) {
       <div className="flex items-center gap-2 border-b border-line px-3 py-1.5 text-faint">
         {sess ? (
           <span className="truncate" title={sess.cwd}>
-            {sess.shell} · {sess.where === "host" ? "seu sistema" : "container"} · {sess.cwd}
+            {sess.shell} · {sess.where === "container" ? "container" : "seu sistema"} · {sess.cwd}
           </span>
         ) : (
           <span>abrindo shell…</span>

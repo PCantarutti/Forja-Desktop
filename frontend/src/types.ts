@@ -92,7 +92,7 @@ export type ToolsSent = {
   environment?: string;
 };
 
-/** Servidor iniciado pelo agente com serve_start, no seu sistema ("host") ou no container. */
+/** Servidor iniciado pelo agente com serve_start. No Desktop roda sempre na sua máquina. */
 /** Cota consumida num provedor do Ollama Cloud (GET /api/usage). */
 export type CloudUsage = {
   provider: string;
@@ -128,7 +128,7 @@ export type ServerInfo = {
   log?: string;
   uptime?: number;
   conv?: string; // conversa que subiu o processo, para a aba separar por conversa
-  where: "host" | "container";
+  where: "local" | "host" | "container"; // no Desktop é sempre "local": tudo roda na sua máquina
   error?: string;
 };
 

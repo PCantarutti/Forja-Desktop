@@ -6,6 +6,7 @@ prompt por conta própria e faz polling da saída (`poll` espera até 20 s por n
 """
 from __future__ import annotations
 
+import codecs
 import subprocess
 import threading
 import time
@@ -26,6 +27,12 @@ class Term:
         self.proc = subprocess.Popen(native.term_argv(), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, **native.popen_kwargs())
         self.buf = ""
+        # Total já escrito desde o início, não o tamanho do buffer: é ele que vira o cursor do
+        # cliente. Com `len(buf)` o cursor empacava em MAX_BUFFER assim que o buffer saturava e
+        # `len(buf) <= cursor` virava sempre verdade — o terminal congelava de vez.
+        self.written = 0
+        self.lock = threading.Lock()  # dois POST de input não podem intercalar no stdin do shell
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.cond = threading.Condition()
         if native.WINDOWS:  # saída em UTF-8 e sem barra de progresso quebrando o texto
             self.write(native.PS_PREAMBLE + "$ProgressPreference='SilentlyContinue'")
@@ -37,8 +44,14 @@ class Term:
             chunk = self.proc.stdout.read1(4096) if hasattr(self.proc.stdout, "read1") else self.proc.stdout.read(1)
             if not chunk:
                 break
+            # Decodificador incremental: caractere multibyte partido entre duas leituras do pipe
+            # virava U+FFFD com o decode por chunk.
+            texto = self.decoder.decode(chunk).replace(chr(13) + chr(10), chr(10))
+            if not texto:
+                continue
             with self.cond:
-                self.buf = (self.buf + native.decode(chunk))[-MAX_BUFFER:]
+                self.written += len(texto)
+                self.buf = (self.buf + texto)[-MAX_BUFFER:]
                 self.cond.notify_all()
         with self.cond:
             self.cond.notify_all()
@@ -46,19 +59,26 @@ class Term:
     def write(self, text: str) -> None:
         if self.proc.poll() is not None or not self.proc.stdin:
             raise ToolError("O shell deste terminal já encerrou. Abra outro.")
-        self.proc.stdin.write((text.rstrip("\n") + "\n").encode("utf-8"))
-        self.proc.stdin.flush()
+        with self.lock:
+            self.proc.stdin.write((text.rstrip(chr(10)) + chr(10)).encode("utf-8"))
+            self.proc.stdin.flush()
 
     def poll(self, cursor: int) -> dict:
+        """Saída a partir de `cursor`, que é posição absoluta no total já escrito.
+
+        Cliente que ficou para trás do buffer recebe o que sobrou dele, não o vazio: perde-se o
+        miolo de uma saída enorme, mas o terminal continua vivo — que é o ponto.
+        """
         deadline = time.monotonic() + POLL_WAIT
         with self.cond:
-            while len(self.buf) <= cursor and self.proc.poll() is None:
+            while self.written <= cursor and self.proc.poll() is None:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     break
                 self.cond.wait(left)
-            text = self.buf[cursor:] if cursor < len(self.buf) else ""
-            return {"text": text, "cursor": len(self.buf), "alive": self.proc.poll() is None}
+            comeco = self.written - len(self.buf)  # posição absoluta do 1º char ainda no buffer
+            text = self.buf[max(0, cursor - comeco):] if cursor < self.written else ""
+            return {"text": text, "cursor": self.written, "alive": self.proc.poll() is None}
 
     def close(self) -> None:
         native.kill_tree(self.proc)
@@ -67,10 +87,23 @@ class Term:
 SESSIONS: dict[str, Term] = {}
 
 
+def _reap() -> None:
+    """Tira da lista os shells que já morreram. A UI fecha o dela, mas recarregar a página não."""
+    for tid in [t for t, s in list(SESSIONS.items()) if s.proc.poll() is not None]:
+        SESSIONS.pop(tid, None)
+
+
 def start(root: Path) -> dict:
+    _reap()
     tid = uuid.uuid4().hex[:12]
     SESSIONS[tid] = Term(root)
     return {"id": tid, "where": "local", "cwd": str(root), "shell": native.shell_name()}
+
+
+def close_all() -> None:
+    """Encerra todos os shells. Chamado no fim do backend: sem isto eles só morrem com o Electron."""
+    for tid in list(SESSIONS):
+        close(tid)
 
 
 def _get(tid: str) -> Term:

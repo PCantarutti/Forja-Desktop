@@ -44,6 +44,7 @@ async def lifespan(_app):
     task = asyncio.create_task(mcp_client.start())
     yield
     task.cancel()
+    terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
     localai.unload()  # o modelo local morre com o backend (no app o Electron já mata a árvore)
     await mcp_client.stop()
     await MANAGER.shutdown()
