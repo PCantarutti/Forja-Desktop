@@ -20,9 +20,10 @@ function viewBounds(b, zoom) {
 }
 
 class BrowserHost {
-  constructor(win, api) {
+  constructor(win, api, token) {
     this.win = win;
     this.api = api; // http://127.0.0.1:PORTA
+    this.headers = { "x-forja-token": token }; // a API local só atende com ele
     this.views = new Map(); // marker -> { view, key }
     this.active = new Map(); // key -> marker
     this.shown = null; // { key, bounds } do painel, ou null (painel fechado / coberto)
@@ -46,7 +47,7 @@ class BrowserHost {
     while (!this.stopped) {
       this.ctl = new AbortController();
       try {
-        const r = await fetch(`${this.api}/api/browser/host`, { signal: this.ctl.signal });
+        const r = await fetch(`${this.api}/api/browser/host`, { signal: this.ctl.signal, headers: this.headers });
         if (!r.ok || !r.body) throw new Error(`HTTP ${r.status}`);
         this.reset();
         const reader = r.body.getReader();
@@ -117,7 +118,7 @@ class BrowserHost {
   popup(key, url) {
     fetch(`${this.api}/api/browser/host/popup?conv=${encodeURIComponent(key)}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...this.headers },
       body: JSON.stringify({ url }),
     }).catch(() => {});
   }

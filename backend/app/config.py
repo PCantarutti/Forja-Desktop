@@ -42,6 +42,10 @@ BROWSER_SCALE = int(os.getenv("BROWSER_SCALE", "2"))                  # render 1
 # Forja Desktop: endpoint CDP do Electron (http://127.0.0.1:PORTA). As abas viram WebContentsViews nativas na
 # janela e o espelho (screencast) fica desligado. Vazio = Chromium headless + espelho (modo web/Docker).
 BROWSER_CDP = os.getenv("FORJA_CDP", "").strip()
+# Token da API local, gerado pelo Electron a cada execução e exigido nas rotas /api (ver main.py).
+# Vazio = sem exigência: é o caso do dev com Vite e o do repo Docker, onde o nginx é a fronteira.
+API_TOKEN = os.getenv("FORJA_TOKEN", "").strip()
+
 BROWSER_STREAM = os.getenv("BROWSER_STREAM", "jpeg")                  # jpeg (leve, padrão) | png (sem perda, 3-5x mais pesado)
 
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai

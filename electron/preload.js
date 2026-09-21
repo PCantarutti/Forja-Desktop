@@ -1,7 +1,11 @@
 /** Ponte entre a interface e o sistema: diálogo de pasta e as preferências da casca. O resto vai pela API do backend. */
 const { contextBridge, ipcRenderer } = require("electron");
 
+// O token vem síncrono: o api.ts precisa dele na primeira chamada, antes de qualquer await.
+const token = ipcRenderer.sendSync("forja:token");
+
 contextBridge.exposeInMainWorld("forja", {
+  token,
   pickFolder: (start) => ipcRenderer.invoke("forja:pickFolder", start),
   desktop: {
     get: () => ipcRenderer.invoke("forja:desktop:get"),

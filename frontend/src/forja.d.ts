@@ -11,6 +11,8 @@ interface DesktopState {
 }
 
 interface ForjaBridge {
+  /** Token desta execução do app; vai no header de toda chamada de /api (ver api.ts). */
+  token: string;
   /** Diálogo de pasta do sistema; devolve o caminho escolhido ou null se cancelou. */
   pickFolder(start?: string): Promise<string | null>;
   /** Preferências da janela: zoom, bandeja, início com o Windows. */

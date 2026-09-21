@@ -1,7 +1,11 @@
+// Token desta execução do app, exigido pelo backend nas rotas /api. Ausente quando a UI abre
+// numa aba comum do navegador (dev com Vite) — e ali o backend também não exige.
+const auth = (): Record<string, string> => (window.forja?.token ? { "X-Forja-Token": window.forja.token } : {});
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { "Content-Type": "application/json", ...auth(), ...init?.headers },
   });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
@@ -24,14 +28,14 @@ export const api = {
 export async function uploadFile(file: File, conv: number | null = null) {
   const form = new FormData();
   form.append("file", file);
-  const r = await fetch(`/api/uploads?conv=${conv ?? 0}`, { method: "POST", body: form });
+  const r = await fetch(`/api/uploads?conv=${conv ?? 0}`, { method: "POST", body: form, headers: auth() });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
   return r.json();
 }
 
 /** Lê um SSE via fetch (EventSource não faz POST nem aceita AbortSignal). Chama onEvent a cada `data:`. */
 export async function streamSSE(path: string, init: RequestInit, onEvent: (ev: any) => void) {
-  const r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...init.headers } });
+  const r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...auth(), ...init.headers } });
   if (!r.ok || !r.body) {
     const b = await r.json().catch(() => ({}));
     // O status vai junto, como no req(): 409 é pergunta (confirmar), não falha.

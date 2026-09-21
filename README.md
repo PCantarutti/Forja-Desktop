@@ -62,6 +62,8 @@ Seus dados (conversas, configurações, chaves e `mcp.json`) ficam em `%APPDATA%
 
 **Segurança (igual ao Claude Desktop)**: as ferramentas de arquivo ficam presas à pasta da conversa, mas o shell enxerga o sistema inteiro. A proteção é a aprovação: ele sempre pede confirmação, exceto nos comandos que você liberou em *Permissões*. Evite regras largas (`*`) e leia o comando antes de aprovar.
 
+**A porta do backend não é pública, e nem é aberta.** O backend escuta só em `127.0.0.1`, numa porta que o sistema escolhe a cada execução — e isso, sozinho, não bastaria: uma página web que você abra no Chrome consegue disparar requisição contra o loopback (o navegador manda; só não deixa a página ler a resposta), e outro usuário da mesma máquina alcança a porta direto. Então a API recusa qualquer requisição cujo `Origin` não seja loopback, e exige um token gerado a cada execução do app no resto das rotas `/api`. Quem serve isso ao navegador é o próprio Forja: a interface recebe o token pela ponte do Electron, e ninguém mais tem como pedir nada.
+
 ## Trabalhando como no Claude Desktop
 
 - **Alterações**: aba com os arquivos que o agente mudou nesta conversa (diff do antes para o agora, abrir no editor, revelar na pasta) e o **git** da pasta: branch, arquivos alterados com diff, **Commit** (o modelo escreve a mensagem, você edita e confirma), **Criar PR** (push + `gh pr create`) e **Worktree** (branch nova num worktree irmão; a conversa passa a trabalhar lá).
@@ -548,6 +550,7 @@ O app define o que precisa; elas existem para desenvolvimento e casos especiais.
 | `FORJA_DATA` | `%APPDATA%\Forja` | Onde ficam banco, `mcp.json` e logs |
 | `FORJA_WEB` | `resources/web` | Build da interface servido pelo backend (vazio = só API, para o Vite) |
 | `FORJA_PORT` | porta livre | Porta do backend em `127.0.0.1` |
+| `FORJA_TOKEN` | gerado pelo app | Token exigido nas rotas `/api`. Vazio = sem exigência (dev com o Vite) |
 | `WORKSPACE_ROOT` | `~/Forja` | Pasta **padrão** (conversas sem pasta escolhida) |
 | `OLLAMA_URL` | `http://127.0.0.1:11434/v1` | Endpoint do Ollama |
 | `LMSTUDIO_URL` | `http://127.0.0.1:1234/v1` | Endpoint do LM Studio |

@@ -7,6 +7,7 @@
  */
 const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, screen, shell } = require("electron");
 const { spawn, execFileSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const net = require("net");
 const path = require("path");
@@ -28,6 +29,9 @@ app.commandLine.appendSwitch("remote-debugging-port", "0");
 
 let backend = null;
 let port = 0;
+// Token desta execução: o backend só atende /api com ele no header. Fecha a porta para outro
+// processo (ou outro usuário) da mesma máquina, que alcança 127.0.0.1 tão bem quanto o app.
+const token = crypto.randomBytes(32).toString("hex");
 let mainWindow = null;
 let tray = null;
 let host = null; // views do navegador integrado (BrowserHost)
@@ -114,6 +118,7 @@ function startBackend(cdp) {
   const env = {
     ...process.env,
     FORJA_DATA: USER_DATA,
+    FORJA_TOKEN: token,
     ...(cdp ? { FORJA_CDP: cdp } : {}), // sem CDP o backend cai no Chromium headless com espelho
     FORJA_WEB: process.env.FORJA_WEB ?? path.join(ROOT, "web"),
     PYTHONUNBUFFERED: "1",
@@ -158,7 +163,7 @@ async function waitForBackend(timeoutMs = 60000) {
   while (Date.now() < deadline) {
     if (!backend) throw new Error(`o backend não subiu. Log: ${LOG_FILE}`);
     try {
-      const r = await fetch(`http://127.0.0.1:${port}/api/config`);
+      const r = await fetch(`http://127.0.0.1:${port}/api/config`, { headers: { "x-forja-token": token } });
       if (r.ok) return;
     } catch {
       /* ainda subindo */
@@ -295,7 +300,7 @@ function createWindow({ hidden = false } = {}) {
 
   win.loadURL(`http://127.0.0.1:${port}`);
   wireZoomShortcuts(win);
-  host = new BrowserHost(win, `http://127.0.0.1:${port}`);
+  host = new BrowserHost(win, `http://127.0.0.1:${port}`, token);
   host.start();
 
   // Links para fora do app abrem no navegador do usuário, não dentro da janela.
@@ -348,6 +353,11 @@ const desktopState = () => ({
   version: app.getVersion(),
   packaged: app.isPackaged,
   paths: { data: USER_DATA, log: LOG_FILE, db: DB_FILE, md: MD_DIR, exe: app.getPath("exe") },
+});
+
+// Síncrono de propósito: o api.ts precisa do token antes da primeira chamada, sem await.
+ipcMain.on("forja:token", (e) => {
+  e.returnValue = token;
 });
 
 ipcMain.handle("forja:desktop:get", () => desktopState());
