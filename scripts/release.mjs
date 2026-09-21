@@ -117,6 +117,33 @@ function proxima(versao, tipo) {
   return `${maior}.${menor}.${correcao + 1}`;
 }
 
+const VERSAO_OK = /^[0-9]+[.][0-9]+[.][0-9]+$/;
+
+/** Valor de `--nome valor` na linha de comando, ou null. */
+function opcao(nome) {
+  const i = process.argv.indexOf(nome);
+  return i >= 0 ? process.argv[i + 1] ?? null : null;
+}
+
+/**
+ * Sem perguntas: `--versao 0.3.3 --notas notas.md`. Existe porque o prompt não sobrevive a um
+ * stdin que não é terminal — o readline fecha no fim do arquivo e a pergunta seguinte estoura.
+ * Devolve null quando não foi pedido, e aí segue o caminho interativo.
+ */
+function semPerguntar(atual) {
+  const versao = opcao("--versao");
+  const arq = opcao("--notas");
+  if (!versao && !arq) return null;
+  if (!versao || !arq) parar("--versao e --notas andam juntos.", "Ex.: npm run release -- --versao 0.3.3 --notas notas.md");
+  if (!VERSAO_OK.test(versao)) parar(`"${versao}" não é uma versão válida.`);
+  if (versao === atual) parar("a versão precisa ser diferente da atual: o updater compara número.");
+  if (!fs.existsSync(arq)) parar(`não achei o arquivo de notas: ${arq}`);
+  const notas = fs.readFileSync(arq, "utf8").trim();
+  if (!notas) parar("o arquivo de notas está vazio.", "Quem for atualizar precisa saber o que muda.");
+  passo(`versão ${versao} (sem perguntar)`);
+  return { versao, notas };
+}
+
 async function perguntar(rl, atual) {
   passo("versão");
   const opcoes = {
@@ -133,7 +160,7 @@ async function perguntar(rl, atual) {
   const escolha = (await rl.question(NL + "  escolha [1]: ")).trim() || "1";
   let versao = opcoes[escolha]?.[1];
   if (escolha === "4") versao = (await rl.question("  versão (ex.: 1.2.0): ")).trim();
-  if (!/^[0-9]+[.][0-9]+[.][0-9]+$/.test(versao || "")) parar(`"${versao}" não é uma versão válida.`);
+  if (!VERSAO_OK.test(versao || "")) parar(`"${versao}" não é uma versão válida.`);
   if (versao === atual) parar("a versão precisa ser diferente da atual: o updater compara número.");
 
   passo("o que mudou nesta versão");
@@ -195,7 +222,7 @@ try {
   await conferirGit();
   await conferirToken();
   conferirAssinatura();
-  const { versao, notas } = await perguntar(rl, atual);
+  const { versao, notas } = semPerguntar(atual) ?? (await perguntar(rl, atual));
   rl.close();
   rodarTestes();
   subirVersao(versao, notas);
