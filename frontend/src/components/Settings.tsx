@@ -198,7 +198,7 @@ export default function Settings(props: {
                 <Field label="Timeout máximo do run_command (s)">
                   <Num value={s.shell_timeout_max} onChange={(v) => set("shell_timeout_max", v)} />
                 </Field>
-                <Field label="URL do SearXNG" hint="Serviço de busca. O padrão é o container do compose.">
+                <Field label="URL do SearXNG" hint="Instância própria de busca. Vazio = DuckDuckGo, sem chave e sem conta.">
                   <input className={input} value={s.searxng_url} onChange={(e) => set("searxng_url", e.target.value)} />
                 </Field>
                 <Field label="Navegador: fechar sessão ociosa após (min)" hint="0 = nunca. Sessões com o painel aberto não contam como ociosas.">
@@ -1139,7 +1139,8 @@ function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void 
     <div className="max-w-2xl space-y-4">
       <p className="text-sm text-muted">
         Servidores MCP, no mesmo formato do Claude Desktop. Comandos (<span className="font-mono">command</span>) rodam dentro do
-        container do backend, que tem <span className="font-mono">npx</span> e <span className="font-mono">uvx</span>. Para
+        na sua máquina, no seu PATH — precisam do <span className="font-mono">npx</span> (Node.js) ou do{" "}
+        <span className="font-mono">uvx</span> (uv) instalados. Para
         servidores HTTP use <span className="font-mono">url</span>.
       </p>
       <div className="font-mono text-xs text-faint">{path}</div>

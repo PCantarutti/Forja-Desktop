@@ -484,8 +484,9 @@ class Manager:
             try:
                 from playwright.async_api import async_playwright
             except ImportError:  # imagem antiga sem playwright
-                raise ToolError("Navegador indisponível: Playwright não está instalado no backend. "
-                                "Rode `docker compose up -d --build`.") from None
+                raise ToolError("Navegador indisponível: o Playwright não está instalado neste backend. "
+                                "Reinstale o Forja, ou rode `pip install -r backend/requirements.txt` "
+                                "no ambiente do backend se estiver em desenvolvimento.") from None
             if self._pw is None:
                 self._pw = await async_playwright().start()
             if self.native:  # o Chromium é o do Electron; as views já estão na escala da tela
@@ -562,12 +563,11 @@ def current() -> Session:
 # ------------------------------------------------------------------ ferramentas do modelo
 
 def check_url(url: str) -> str:
-    """Só http(s) completo. file:/chrome:/javascript:/data: leriam o container ou rodariam JS local."""
+    """Só http(s) completo. file:/chrome:/javascript:/data: leriam o disco ou rodariam JS local."""
     url = (url or "").strip()
     u = urlparse(url)
     if u.scheme not in ("http", "https") or not u.netloc:
-        raise ToolError("Só URLs http(s) completas, ex.: http://localhost:5173/rota ou "
-                        "http://host.docker.internal:7001 (app rodando no Windows).")
+        raise ToolError("Só URLs http(s) completas, ex.: http://localhost:5173/rota.")
     return url
 
 
@@ -730,8 +730,9 @@ SELECTOR = {"type": "string", "description": "Ref do browser_read (ex.: e12) ou 
 
 register(Tool(
     "browser_navigate",
-    "Abre uma URL na aba ativa do navegador integrado (o usuário vê ao vivo). Apps subidos por run_command "
-    "ficam em http://localhost:PORTA; apps rodando no Windows em http://host.docker.internal:PORTA.",
+    "Abre uma URL na aba ativa do navegador integrado (o usuário vê ao vivo). Um app subido por "
+    "run_command ou serve_start fica em http://localhost:PORTA — o mesmo endereço para você e para "
+    "o usuário, porque tudo roda na mesma máquina.",
     _obj({"url": {"type": "string", "description": "URL http(s) completa"}}, ["url"]), navigate))
 register(Tool(
     "browser_read",

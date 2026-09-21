@@ -15,6 +15,7 @@ import re
 import time
 import uuid
 from typing import AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
 
@@ -48,8 +49,15 @@ def _conn_error(provider: str, e: Exception) -> LLMError:
     if not isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
         return LLMError(f"Conexão com {provider} interrompida ({e.__class__.__name__}). "
                         "O modelo pode ter sido descarregado/recarregado; tente de novo.")
+    # A dica do Ollama depende de onde ele está: no Forja Desktop o endereço é o loopback e não há
+    # nada a configurar; apontando para outra máquina (ou para o Forja em Docker), aí sim ele
+    # precisa escutar em 0.0.0.0. Dizer a segunda coisa na primeira situação só confunde.
+    longe = urlparse(base_url(provider)).hostname not in ("127.0.0.1", "localhost", "::1")
     hint = {
-        "ollama": "Ollama está rodando? Ele precisa escutar em 0.0.0.0 (OLLAMA_HOST=0.0.0.0) para o Docker alcançar.",
+        "ollama": ("Ollama está rodando e escutando em " + str(urlparse(base_url(provider)).hostname)
+                   + "? Para aceitar conexão de fora da máquina dele, ele precisa subir com "
+                     "OLLAMA_HOST=0.0.0.0." if longe
+                   else "O Ollama está rodando? Procure o ícone dele na bandeja do sistema."),
         "lmstudio": "LM Studio está com o servidor ligado e 'Serve on Local Network' ativo?",
         "llamacpp": "Nenhum modelo carregado. Abra o painel IA local e carregue um .gguf.",
     }.get(spec(provider)["type"], "Confira a URL em Configurações › Provedores.")
