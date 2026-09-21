@@ -1580,5 +1580,20 @@ if config.WEB_DIR and config.WEB_DIR.is_dir():
     def spa(path: str):
         if path.startswith("api/"):  # rota de API inexistente: 404, e não a interface
             raise HTTPException(404, "Rota não encontrada")
-        f = config.WEB_DIR / path
-        return FileResponse(f if path and f.is_file() else config.WEB_DIR / "index.html")
+        return FileResponse(_web_file(path) or config.WEB_DIR / "index.html")
+
+
+def _web_file(path: str):
+    """Arquivo do build da interface, ou None. Confinado: `/..%2f..%2fforja.db` cai no index.html.
+
+    O caminho vem da URL já decodificada, então `..` chega aqui inteiro; sem o confinamento, o
+    FileResponse serviria qualquer arquivo legível pelo usuário — o banco com as chaves, inclusive.
+    """
+    if not path:
+        return None
+    base = config.WEB_DIR.resolve()
+    try:
+        f = (base / path).resolve()
+    except OSError:
+        return None
+    return f if f.is_relative_to(base) and f.is_file() else None
