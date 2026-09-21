@@ -541,7 +541,7 @@ $cache = "$env:LOCALAPPDATA\electron-builder\Cache\winCodeSign"
 node_modules\7zip-bin\win\x64\7za.exe x -y "-o$cache\winCodeSign-2.6.0" "$cache\winCodeSign-2.6.0.7z" "-x!darwin*"
 ```
 
-`scripts/prepare.mjs` baixa o CPython portátil (python-build-standalone), instala as dependências, baixa o `chromium-headless-shell`, gera o ícone, builda a interface e copia o backend para `resources/`. Depois o electron-builder monta `dist/<versão>/Forja-Setup-<versão>.exe` (uma pasta por versão: mudou o `version` do `package.json`, a build vai para uma pasta nova e a anterior fica intacta) (~245 MB; ~900 MB instalado). Tudo em `resources/` e `build/` é gerado: pode apagar e rodar de novo.
+`scripts/prepare.mjs` baixa o CPython portátil (python-build-standalone), instala as dependências, baixa o `chromium-headless-shell`, gera o ícone, builda a interface e copia o backend para `resources/`. **Os dois downloads são conferidos antes de virar parte do instalador**: o Python pelo `SHA256SUMS` que a própria release publica, e o Chromium — que não tem checksum publicado — pelo hash travado em `scripts/checksums.json`, anotado na primeira build e conferido nas seguintes (trocar a versão do Playwright faz a build anotar o novo e pedir para commitar). Divergência para a build em vez de empacotar. Depois o electron-builder monta `dist/<versão>/Forja-Setup-<versão>.exe` (uma pasta por versão: mudou o `version` do `package.json`, a build vai para uma pasta nova e a anterior fica intacta) (~245 MB; ~900 MB instalado). Tudo em `resources/` e `build/` é gerado: pode apagar e rodar de novo.
 
 **Sobrou um llama-server rodando**
 Ao sair, o Electron mata a árvore de processos do backend e o modelo sai da memória junto. Se o backend levar um kill
