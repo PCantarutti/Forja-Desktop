@@ -152,11 +152,19 @@ async function perguntar(rl, atual) {
 
 function subirVersao(versao, notas) {
   passo(`preparando a ${versao}`);
+  const tocados = [];
   for (const dir of [ROOT, path.join(ROOT, "frontend")]) {
-    const arq = path.join(dir, "package.json");
-    const pkg = JSON.parse(fs.readFileSync(arq, "utf8"));
-    pkg.version = versao;
-    fs.writeFileSync(arq, JSON.stringify(pkg, null, 2) + NL);
+    // O lock guarda a versão em dois lugares. Sem atualizar, o próximo `npm install` reescreve o
+    // arquivo e a árvore amanhece suja — o que faz a release SEGUINTE parar na conferência do git.
+    for (const nome of ["package.json", "package-lock.json"]) {
+      const arq = path.join(dir, nome);
+      if (!fs.existsSync(arq)) continue;
+      const json = JSON.parse(fs.readFileSync(arq, "utf8"));
+      json.version = versao;
+      if (json.packages?.[""]) json.packages[""].version = versao;
+      fs.writeFileSync(arq, JSON.stringify(json, null, 2) + NL);
+      tocados.push(path.relative(ROOT, arq).split(path.sep).join("/"));
+    }
   }
   // O electron-builder lê este arquivo sozinho: getResource() procura "release-notes.md" em
   // buildResources (= build/), e o conteúdo vai para o latest.yml — é o texto que o app mostra
@@ -166,7 +174,7 @@ function subirVersao(versao, notas) {
   ok("versão e notas gravadas");
 
   if (SECO) return aviso("--seco: não vou commitar nem publicar");
-  git(["add", "package.json", "frontend/package.json"]);
+  git(["add", ...tocados]);
   execSync(`git commit -q -m "chore: versão ${versao}"`, { cwd: ROOT });
   git(["push", "origin", "main"]);
   ok(`commit da versão enviado`);
