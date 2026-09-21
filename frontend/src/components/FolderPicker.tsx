@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { Modal } from "./Modal";
 import { ChevronDown, Folder, X } from "./icons";
 
 type Listing = { path: string; parent: string | null; dirs: { name: string; path: string }[] };
@@ -47,11 +48,11 @@ export default function FolderPicker(props: {
   const crumbs = list ? list.path.split("/").filter(Boolean) : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={props.onClose}>
-      <div
-        className="flex h-[70vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-bg"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={props.onClose}
+      label="Escolher pasta de trabalho"
+      className="flex h-[70vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-line bg-bg"
+    >
         <header className="flex items-center gap-3 border-b border-line px-5 py-3">
           <Folder className="size-4 text-muted" />
           <h2 className="flex-1 text-sm font-medium">Pasta de trabalho</h2>
@@ -161,7 +162,6 @@ export default function FolderPicker(props: {
             {error && <p className="px-4 pb-3 text-sm text-red-300">{error}</p>}
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
+import { Modal } from "./Modal";
 import type { Hardware, HfFile, HfModel, HfRepo } from "../types";
 import { Markdown } from "./MessageView";
 import { Check, Copy, Download, Search, X } from "./icons";
@@ -117,23 +118,17 @@ export default function ModelSearch(props: {
       .then((r) => r && setRepo(r));
   }, [sel, props.kind]);
 
-  useEffect(() => {
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  }, []);
-
   function baixar(f: HfFile) {
     props.onDownload(sel, f.path);
     setBaixados((b) => [...b, f.path]);
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6" onClick={props.onClose}>
-      <div
-        className="flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-line bg-bg text-xs"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={props.onClose}
+      label="Procurar modelos no Hugging Face"
+      className="flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-line bg-bg text-xs"
+    >
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
           <Search className="size-4 shrink-0 text-muted" />
           <input
@@ -316,7 +311,6 @@ export default function ModelSearch(props: {
             )}
           </section>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

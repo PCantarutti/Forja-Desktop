@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { api } from "../api";
+import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench } from "./icons";
 
@@ -119,11 +120,14 @@ export default function Settings(props: {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={props.onClose}>
-      <div
-        className="flex h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-line bg-bg"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal
+      onClose={props.onClose}
+      // Clicar fora com campo mexido apagava a edição sem perguntar — um erro de mira custava
+      // um mcp.json ou uma instrução personalizada inteira.
+      canClose={() => !Object.keys(dirty).length || confirm("Descartar as alterações não salvas?")}
+      label="Configurações"
+      className="flex h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-line bg-bg"
+    >
         <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-line bg-side p-3">
           <div className="mb-2 px-2 text-sm font-medium">Configurações</div>
           {tabs().map((t) => (
@@ -233,8 +237,7 @@ export default function Settings(props: {
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 
