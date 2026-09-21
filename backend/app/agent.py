@@ -295,6 +295,10 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     if "update_tasks" in names:
         rules.append("- Trabalho com 3 ou mais passos: crie a lista com update_tasks no início e atualize a cada "
                      "passo (doing ao começar, done ao terminar). O usuário acompanha essa lista.")
+    if "serve_status" in names and "run_command" in names:  # a regra cita as duas; ferramenta desligada não entra
+        rules.append("- Comando demorado: run_command com background=true e depois "
+                     "serve_status(name=..., wait=60) para esperar o fim. Responda só quando terminar — não "
+                     "comente o andamento a cada consulta.")
     if "delegate_task" in names and (personas := subagents.agents_for(workspace.root())):
         lista = "; ".join(f"{a['name']} ({a['description']})" for a in personas.values())
         rules.append(f"- Subagentes prontos deste projeto: {lista}. Chame delegate_task(agent='NOME', task=...) "
@@ -743,7 +747,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         stop = False
         cancelar: set[str] = set()
         for call in calls:  # o detector olha a sequência inteira antes de executar qualquer coisa
-            if not stop and loop.record(call["name"], call["arguments"]):
+            if not stop and not _poll(call) and loop.record(call["name"], call["arguments"]):
                 stop = True
                 yield _event(conv_id, "warning",
                              f"Loop detectado: {call['name']} pedida 3 vezes seguidas com os mesmos argumentos. "
@@ -803,6 +807,15 @@ def _save_result(conv_id: int, call: dict, out: dict) -> dict:
               status=out.get("status") or "erro", content=out.get("text") or "",
               meta=out.get("meta") or {"arguments": call["arguments"]})
     return {"type": "tool_result", "message": m.to_dict()}
+
+
+def _poll(call: dict) -> bool:
+    """Ferramenta de acompanhamento (serve_status): repetir a mesma chamada é o uso normal, porque o que
+    muda é o resultado, não os argumentos. Fica fora do freio de loop; o teto de iterações ainda vale."""
+    try:
+        return get_tool(call["name"]).poll
+    except ToolError:
+        return False
 
 
 def _parallel(call: dict) -> bool:

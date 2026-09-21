@@ -169,9 +169,28 @@ def stop_server(name: str) -> None:
     native.kill_tree(s["proc"])
 
 
+WAIT_MAX = 120  # teto da espera do serve_status, para o turno nunca ficar preso
+
+
+def _wait_end(name: str, seconds: int) -> None:
+    """Segura a chamada até o processo sair ou o tempo acabar.
+
+    Sem isto, acompanhar um processo em background custa uma inferência por consulta — o modelo
+    pergunta, comenta, pergunta de novo. Com a espera, é um serve_status só.
+    """
+    limite = time.monotonic() + max(1, min(seconds, WAIT_MAX))
+    while time.monotonic() < limite:
+        vivo = next((s.get("alive") for s in list_servers() if s.get("name") == name), None)
+        if not vivo:
+            return
+        time.sleep(1)
+
+
 def serve_status(root: Path, args: dict) -> str:
     name = args.get("name")
     tail = int(args.get("tail") or 40)
+    if name and int(args.get("wait") or 0) > 0:
+        _wait_end(_safe_name(str(name)), int(args["wait"]))
     entries = list_servers()
     if not entries:
         return "Nenhum servidor iniciado por serve_start nesta sessão."
@@ -213,7 +232,8 @@ register(Tool(
         "timeout": {"type": "integer", "description": f"Segundos (padrão 60, máx {config.SHELL_TIMEOUT_MAX})"},
         "background": {"type": "boolean",
                        "description": "Roda em segundo plano e devolve na hora: use para o que passa de ~1 min "
-                                      "(build, suíte de teste longa). Acompanhe com serve_status."},
+                                      "(build, suíte de teste longa). Espere o fim com "
+                                      "serve_status(name=..., wait=60)."},
         "name": {"type": "string", "description": "Apelido do processo em background, ex.: build, testes"}},
      "required": ["command"]},
     run_command, mutating=True, preview=command_preview, always_ask=True))
@@ -228,11 +248,17 @@ register(Tool(
      "required": ["name", "command"]},
     serve_start, mutating=True, preview=serve_preview, always_ask=True))
 register(Tool(
-    "serve_status", "Lista os servidores iniciados por serve_start e, com name, as últimas linhas do log.",
+    "serve_status",
+    "Lista os processos iniciados por serve_start ou por run_command(background) e, com name, as últimas "
+    "linhas do log. Com `wait`, espera o processo terminar antes de responder — é assim que se acompanha "
+    "algo demorado sem ficar consultando de novo.",
     {"type": "object", "properties": {
         "name": {"type": "string", "description": "Apelido para ver o log"},
-        "tail": {"type": "integer", "description": "Linhas do log (padrão 40)"}}, "required": []},
-    serve_status))
+        "tail": {"type": "integer", "description": "Linhas do log (padrão 40)"},
+        "wait": {"type": "integer",
+                 "description": f"Espera até N segundos (máx {WAIT_MAX}) o processo terminar. Precisa de name."}},
+     "required": []},
+    serve_status, poll=True))
 register(Tool(
     "serve_stop", "Encerra um servidor iniciado por serve_start.",
     {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},

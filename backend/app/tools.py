@@ -33,6 +33,7 @@ class Tool:
     source: str = "builtin"   # builtin | mcp:<servidor>
     requires: frozenset[str] = frozenset()  # capacidades do modelo exigidas, ex.: {"vision"}
     available: Callable[[], bool] | None = None  # some da lista quando False (ex.: delegate_task sem subagente)
+    poll: bool = False        # acompanhar um processo é repetir a mesma chamada: fica fora do freio de loop
 
     def openai_schema(self) -> dict:
         return {"type": "function", "function": {
