@@ -86,3 +86,26 @@ def test_arquivo_de_texto_segue_igual(raiz):
     anexo = uploads.save("notas.txt", b"oi", "text/plain", raiz)
     assert anexo["kind"] == "text" and "sem_texto" not in anexo
     assert anexo["path"] in uploads.user_message("veja", [anexo])["content"]
+
+
+def test_documento_de_verdade_cabe_no_anexo(raiz, monkeypatch):
+    """Aconteceu em uso: nenhum documento anexava. O teto do anexo era o do texto puro (1 MB), e
+    PDF ou planilha de verdade passa disso sem esforço."""
+    from app import config
+
+    grande = pdf_com_texto("conteudo") + b"%" + b"x" * 1_500_000  # 1,5 MB
+    anexo = uploads.save("relatorio.pdf", grande, "application/pdf", raiz)
+    assert anexo["size"] > config.MAX_FILE_BYTES
+
+    monkeypatch.setattr(config, "MAX_DOC_BYTES", 1000)
+    with pytest.raises(ValueError, match="maior que o limite"):
+        uploads.save("outro.pdf", grande, "application/pdf", raiz)
+
+
+def test_arquivo_de_texto_mantem_o_teto_menor(raiz, monkeypatch):
+    """O teto folgado é só para documento: texto vai inteiro ao contexto e continua com 1 MB."""
+    from app import config
+
+    monkeypatch.setattr(config, "MAX_FILE_BYTES", 100)
+    with pytest.raises(ValueError, match="maior que o limite"):
+        uploads.save("notas.txt", b"x" * 200, "text/plain", raiz)

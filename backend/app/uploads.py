@@ -39,8 +39,12 @@ def safe_name(name: str) -> str:
 
 
 def save(name: str, data: bytes, mime: str | None = None, root: Path | None = None) -> dict:
-    if len(data) > config.MAX_FILE_BYTES:
-        raise ValueError(f"Arquivo maior que o limite ({config.MAX_FILE_BYTES} bytes). "
+    # Documento tem o teto do documento, não o do texto: `MAX_FILE_BYTES` é 1 MB porque vale para
+    # arquivo que vai INTEIRO ao contexto, e um PDF ou .xlsx de verdade passa disso sem esforço —
+    # anexar qualquer documento real esbarrava nesse limite e parecia que o anexo não funcionava.
+    teto = config.MAX_DOC_BYTES if Path(name).suffix.lower() in documentos.LEITURA else config.MAX_FILE_BYTES
+    if len(data) > teto:
+        raise ValueError(f"Arquivo maior que o limite ({teto // 1024} KB). "
                          "Aumente em Configurações › Geral se precisar.")
     mime = mime or mimetypes.guess_type(name)[0] or "application/octet-stream"
     folder = (root or workspace.root()) / UPLOAD_DIR

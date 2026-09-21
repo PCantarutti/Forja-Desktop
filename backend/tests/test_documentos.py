@@ -283,3 +283,57 @@ def test_preview_de_planilha_mostra_as_abas(ws):
     pv = documentos._preview_planilha(ws, {"path": "p.xlsx", "sheets": [
         {"nome": "Vendas", "linhas": [["a", "b"], ["1", "2"]]}]})
     assert "## Vendas" in pv["text"] and "| a | b |" in pv["text"]
+
+
+# ------------------------------------------------ o que quebrou em uso de verdade
+
+@pytest.mark.parametrize("sheets", [
+    [[["Produto", "Receita"], ["Cafe", "100"]]],          # aba como lista de linhas, sem envelope
+    [{"name": "Vendas", "rows": [["a", "1"]]}],           # chaves em inglês
+    [{"nome": "V", "data": [["a", "1"]]}],                # "data" no lugar de "linhas"
+    {"nome": "Uma", "linhas": [["a", "1"]]},              # uma aba só, sem lista em volta
+    [{"nome": "Y", "linhas": ["texto solto"]}],           # linha que não é lista
+])
+def test_aceita_as_formas_que_o_modelo_realmente_manda(ws, sheets):
+    """O modelo escreve mais de um dialeto, e o primeiro que ele escolheu derrubou a ferramenta
+    com AttributeError no preview, antes de qualquer validação."""
+    documentos._preview_planilha(ws, {"path": "v.xlsx", "sheets": sheets})   # não pode estourar
+    roda("write_spreadsheet", {"path": "v.xlsx", "sheets": sheets}, ws)
+    assert (ws / "documentos" / "v.xlsx").is_file()
+
+
+def test_sheets_que_nao_da_para_entender_vira_erro_legivel(ws):
+    with pytest.raises(ToolError, match="sheets vazio"):
+        roda("write_spreadsheet", {"path": "v.xlsx", "sheets": []}, ws)
+    with pytest.raises(ToolError, match="não é objeto nem lista"):
+        roda("write_spreadsheet", {"path": "v.xlsx", "sheets": ["só uma string"]}, ws)
+
+
+def test_substituir_recusa_markdown_em_vez_de_escrever_os_pipes(ws):
+    """Aconteceu em uso: o modelo mandou uma tabela por 'substituir' e ela foi para o documento
+    com os `|` à mostra, porque substituir é troca literal."""
+    roda("write_document", {"path": "d.docx", "content": "NOME:"}, ws)
+    tabela = ("| SEG | TER |" + chr(10) + "| --- | --- |" + chr(10) + "| 01 | 02 |")
+    with pytest.raises(ToolError, match="acrescentar"):
+        roda("edit_document", {"path": "documentos/d.docx",
+                               "operations": [{"tipo": "substituir", "de": "NOME:", "para": tabela}]}, ws)
+
+
+def test_substituir_texto_simples_continua_passando(ws):
+    roda("write_document", {"path": "d.docx", "content": "prazo de 30 dias"}, ws)
+    roda("edit_document", {"path": "documentos/d.docx",
+                           "operations": [{"tipo": "substituir", "de": "30 dias", "para": "45 dias"}]}, ws)
+    assert "45 dias" in run_tool("read_file", {"path": "documentos/d.docx"}, ws)
+
+
+def test_acrescentar_monta_tabela_de_verdade(ws):
+    """O caminho certo para o caso acima: `acrescentar` passa pelo parser."""
+    import docx
+
+    roda("write_document", {"path": "d.docx", "content": "# Plano"}, ws)
+    tabela = ("| SEG | TER |" + chr(10) + "| --- | --- |" + chr(10) + "| 01 | 02 |")
+    roda("edit_document", {"path": "documentos/d.docx",
+                           "operations": [{"tipo": "acrescentar", "conteudo": tabela}]}, ws)
+    doc = docx.Document(str(ws / "documentos" / "d.docx"))
+    assert len(doc.tables) == 1 and doc.tables[0].cell(0, 0).text == "SEG"
+    assert "|" not in (doc.paragraphs[-1].text if doc.paragraphs else "")

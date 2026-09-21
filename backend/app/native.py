@@ -116,19 +116,31 @@ def describe(i: dict | None = None) -> str:
 
 # ------------------------------------------------------------------ abrir no editor / revelar
 
+# Documento e mídia abrem no programa do sistema (Word, Excel, leitor de PDF). O VS Code só faz
+# sentido para o que é texto — abrir um .docx nele mostra XML zipado, que não serve para ninguém.
+DO_SISTEMA = {".docx", ".xlsx", ".xlsm", ".pptx", ".pdf", ".odt", ".ods", ".odp", ".csv",
+              ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".mp4", ".zip"}
+
+
 def open_path(path: str, mode: str) -> str:
     if not os.path.exists(path):
         raise ValueError(f"Caminho não existe: {path}")
     if mode == "reveal":
         if WINDOWS:
-            subprocess.Popen(["explorer", f"/select,{os.path.normpath(path)}"])
+            # As aspas vão em volta do CAMINHO, não do argumento inteiro: o Popen citaria
+            # "/select,C:/pasta com espaco/x.pdf" de uma vez, o explorer não entenderia e abriria a
+            # pasta padrão (Documentos) — que é exatamente o que acontecia com pasta com espaço.
+            # String (não lista) e sem shell: no Windows o Popen manda a linha direto para o
+            # CreateProcess, sem o list2cmdline no meio e sem interpretador nenhum.
+            alvo = os.path.normpath(path).replace(chr(34), "")
+            subprocess.Popen('explorer /select,' + chr(34) + alvo + chr(34))
         elif SYSTEM == "Darwin":
             subprocess.Popen(["open", "-R", path])
         else:
             subprocess.Popen(["xdg-open", path if os.path.isdir(path) else os.path.dirname(path)])
         return "revelado"
-    # editor: VS Code se existir, senão o programa padrão do sistema
-    if shutil.which("code") or (WINDOWS and shutil.which("code.cmd")):
+    # editor: VS Code para texto; documento e mídia vão para o programa padrão do sistema
+    if Path(path).suffix.lower() not in DO_SISTEMA and (shutil.which("code") or (WINDOWS and shutil.which("code.cmd"))):
         subprocess.Popen(shell_argv(f"code {quote(path)}"), **popen_kwargs())
         return "code"
     if WINDOWS:

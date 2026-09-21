@@ -72,3 +72,45 @@ def test_environment_block_describes_the_machine(monkeypatch, tmp_path):
     assert "Não encontrado no PATH: git" in text and "http://localhost:PORTA" in text
     assert "';'" in text  # dica de sintaxe do PowerShell
     assert len(short) == 2  # sem ferramentas de shell, só a pasta
+
+
+# ------------------------------------------------ abrir e revelar (bugs vistos em uso)
+
+@pytest.mark.skipif(not WIN, reason="o caminho do Explorer é do Windows")
+def test_revelar_cita_o_caminho_e_nao_o_argumento_inteiro(tmp_path, monkeypatch):
+    """Pasta com espaço no nome levava o Explorer para Documentos em vez do arquivo.
+
+    O Popen com lista cita o argumento todo — `"/select,C:/pasta com espaco/x"` —, e o Explorer
+    não entende isso: ele abre a pasta padrão e some com o arquivo.
+    """
+    alvo = tmp_path / "pasta com espaco"
+    alvo.mkdir()
+    arquivo = alvo / "relatorio.pdf"
+    arquivo.write_bytes(b"%PDF-1.4")
+    vistos = []
+    monkeypatch.setattr(native.subprocess, "Popen", lambda cmd, **kw: vistos.append((cmd, kw)))
+
+    native.open_path(str(arquivo), "reveal")
+    cmd, kw = vistos[0]
+    assert isinstance(cmd, str), "tem que ser string: lista passaria pelo list2cmdline"
+    assert cmd.startswith("explorer /select,")
+    assert not kw.get("shell"), "sem shell: a linha vai direto para o CreateProcess"
+    assert '"' + str(arquivo) + '"' in cmd  # as aspas em volta do caminho, só
+
+
+@pytest.mark.skipif(not WIN, reason="o caminho do VS Code é do Windows")
+@pytest.mark.parametrize("nome,espera_sistema", [
+    ("relatorio.docx", True), ("planilha.xlsx", True), ("leitura.pdf", True),
+    ("modulo.py", False), ("notas.md", False),
+])
+def test_documento_abre_no_programa_do_sistema_e_codigo_no_editor(tmp_path, monkeypatch, nome, espera_sistema):
+    """Abrir um .docx no VS Code mostra XML zipado. Quem abre documento é o Word."""
+    arquivo = tmp_path / nome
+    arquivo.write_text("x", encoding="utf-8")
+    chamou_startfile = []
+    monkeypatch.setattr(native.os, "startfile", lambda p: chamou_startfile.append(p), raising=False)
+    monkeypatch.setattr(native.subprocess, "Popen", lambda *a, **kw: None)
+    monkeypatch.setattr(native.shutil, "which", lambda cmd: "C:/code.cmd")  # VS Code instalado
+
+    assert native.open_path(str(arquivo), "editor") == ("padrão" if espera_sistema else "code")
+    assert bool(chamou_startfile) is espera_sistema

@@ -589,15 +589,39 @@ async def write_document(root: Path, args: dict) -> dict:
     return _resultado(root, destino, "Documento gerado")
 
 
+def normalizar_abas(bruto) -> list[dict]:
+    """O que o modelo mandou -> [{"nome", "linhas"}]. Levanta ToolError se não der para entender.
+
+    Aceita mais de uma forma porque o modelo escreve mais de uma: chave em português ou em inglês,
+    e a aba como lista de linhas direto, sem o envelope com nome. Recusar isso seria fazer o modelo
+    adivinhar o dialeto certo — e foi exatamente aí que a primeira versão quebrou, com um
+    AttributeError feio em vez de uma planilha.
+    """
+    if isinstance(bruto, dict):  # uma aba só, sem lista em volta
+        bruto = [bruto]
+    if not isinstance(bruto, list) or not bruto:
+        raise ToolError('sheets vazio. Ex.: [{"nome": "Dados", "linhas": [["A", "B"], [1, 2]]}]')
+    abas: list[dict] = []
+    for i, aba in enumerate(bruto, 1):
+        if isinstance(aba, list):  # a aba veio como as linhas direto
+            linhas, nome = aba, f"Planilha{i}" if len(bruto) > 1 else "Planilha"
+        elif isinstance(aba, dict):
+            linhas = aba.get("linhas") or aba.get("rows") or aba.get("data") or []
+            nome = str(aba.get("nome") or aba.get("name") or aba.get("title") or f"Planilha{i}")
+        else:
+            raise ToolError(f'Aba {i} não é objeto nem lista de linhas. Ex.: '
+                            '{"nome": "Dados", "linhas": [["A", "B"], [1, 2]]}')
+        if not isinstance(linhas, list):
+            raise ToolError(f"As linhas da aba '{nome}' precisam ser uma lista de listas.")
+        # Linha solta (não-lista) vira linha de uma célula: é erro comum e não vale recusar por isso.
+        abas.append({"nome": nome, "linhas": [l if isinstance(l, list) else [l] for l in linhas],
+                     "cabecalho": aba.get("cabecalho", True) if isinstance(aba, dict) else True})
+    return abas
+
+
 def write_spreadsheet(root: Path, args: dict) -> dict:
     destino = _destino(root, str(args.get("path") or ""), PLANILHA)
-    abas = args.get("sheets") or []
-    if not isinstance(abas, list) or not abas:
-        raise ToolError("sheets vazio: mande ao menos uma aba, com nome e linhas.")
-    for aba in abas:
-        if not isinstance(aba, dict) or not isinstance(aba.get("linhas") or aba.get("rows"), list):
-            raise ToolError('Cada aba é {"nome": "Dados", "linhas": [["A", "B"], [1, 2]]}.')
-        aba.setdefault("linhas", aba.get("rows"))
+    abas = normalizar_abas(args.get("sheets"))
     if destino.suffix.lower() == ".csv":
         para_csv(abas, destino)
         if len(abas) > 1:
@@ -706,6 +730,12 @@ def _editar_office(alvo: Path, ops: list, ext: str) -> list[str]:
             para = str(op.get("para") or op.get("new") or "")
             if not de:
                 raise ToolError("Falta 'de': o texto a ser substituído.")
+            if any(b["tipo"] in ("tabela", "titulo", "lista") for b in blocos(para)):
+                raise ToolError(
+                    "'substituir' troca texto por texto, literalmente: uma tabela em Markdown ia "
+                    "parar no documento com os `|` à mostra. Para conteúdo formatado use "
+                    "{'tipo': 'acrescentar', 'conteudo': '<markdown>'}, que monta tabela e título "
+                    "de verdade — ou gere o documento inteiro com write_document.")
             n = _substituir(alvo, de, para, ext)
             if not n:
                 raise ToolError(f"Não achei '{de[:40]}' no documento. Leia com read_file antes, e "
@@ -884,10 +914,12 @@ def _preview_planilha(root: Path, args: dict) -> dict:
     destino = _destino(root, str(args.get("path") or ""), PLANILHA)
     rel = destino.relative_to(root.resolve()).as_posix()
     partes = []
-    for aba in args.get("sheets") or []:
-        linhas = (aba or {}).get("linhas") or (aba or {}).get("rows") or []
-        partes.append(f"## {(aba or {}).get('nome') or (aba or {}).get('name') or 'Planilha'}"
-                      + NL + _tabela_md([[str(c) for c in l] for l in linhas[:20]])
+    # Pela mesma normalização do handler: se o card aceitar o que a ferramenta recusa (ou o
+    # contrário), o usuário aprova uma coisa e acontece outra.
+    for aba in normalizar_abas(args.get("sheets")):
+        linhas = aba["linhas"]
+        partes.append(f"## {aba['nome']}" + NL
+                      + _tabela_md([[str(c) for c in l] for l in linhas[:20]])
                       + (f"{NL}(+{len(linhas) - 20} linha(s))" if len(linhas) > 20 else ""))
     return {"kind": "diff" if destino.exists() else "new", "path": rel, "text": (NL * 2).join(partes)}
 
@@ -940,7 +972,9 @@ register(Tool(
 register(Tool(
     "edit_document",
     "Altera um .docx, .pptx ou .pdf que já existe. Word e PowerPoint: "
-    "{'tipo':'acrescentar','conteudo':'<markdown>'} ou {'tipo':'substituir','de':'x','para':'y'}. "
+    "{'tipo':'acrescentar','conteudo':'<markdown>'} para conteúdo formatado (tabela vira tabela de "
+    "verdade), ou {'tipo':'substituir','de':'x','para':'y'} para trocar texto por texto — este não "
+    "interpreta Markdown, então não mande tabela por ele. "
     "PDF, onde a unidade é a página: {'tipo':'juntar','arquivos':['outro.pdf']} | "
     "{'tipo':'paginas','paginas':'1-3,7'} | {'tipo':'girar','graus':90}. Mudar o TEXTO de um PDF não "
     "dá — para isso, gere um PDF novo com write_document.",
