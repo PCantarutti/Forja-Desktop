@@ -59,7 +59,7 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
         "sintese": "## 1. Parcial\n\ntexto acumulado",
     }
 
-    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         tipo = qual(messages[0]["content"])
         chamados.append((tipo, model))
         if pausa:
@@ -336,7 +336,7 @@ def test_formato_auto_classifica_e_muda_o_prompt(monkeypatch):
     _fake_llm(monkeypatch)
     original = pesquisa.llm.chat_stream
 
-    async def espiao(provider, model, messages, tools, num_ctx, effort=None):
+    async def espiao(provider, model, messages, tools, num_ctx, effort=None, **kw):
         vistos.append(messages[0]["content"])
         async for ev in original(provider, model, messages, tools, num_ctx, effort):
             yield ev
@@ -394,7 +394,7 @@ def test_tempo_estourado_ainda_escreve_o_relatorio(monkeypatch):
     _fake_llm(monkeypatch, pausa=0.12)
     original = pesquisa.llm.chat_stream
 
-    async def sempre_novo(provider, model, messages, tools, num_ctx, effort=None):
+    async def sempre_novo(provider, model, messages, tools, num_ctx, effort=None, **kw):
         if messages[0]["content"].startswith("Você é um pesquisador. As fontes"):
             rodada["n"] += 1
             await asyncio.sleep(0.12)
@@ -437,7 +437,7 @@ def test_relatorio_pede_secoes_numeradas(monkeypatch):
     _fake_llm(monkeypatch)
     original = pesquisa.llm.chat_stream
 
-    async def espiao(provider, model, messages, tools, num_ctx, effort=None):
+    async def espiao(provider, model, messages, tools, num_ctx, effort=None, **kw):
         vistos.append(messages[0]["content"])
         async for ev in original(provider, model, messages, tools, num_ctx, effort):
             yield ev

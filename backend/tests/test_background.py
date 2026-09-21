@@ -34,7 +34,7 @@ def test_polling_the_same_process_is_not_a_loop(monkeypatch):
     step = {"n": 0}
     call = {"id": "s1", "name": "serve_status", "arguments": {"name": "build", "wait": 1}}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] <= 4:  # quatro consultas seguidas, argumentos idênticos
             yield "done", {"tool_calls": [{**call, "id": f"s{step['n']}"}]}

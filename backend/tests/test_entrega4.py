@@ -144,7 +144,7 @@ def test_delegation_runs_subagent_and_returns_report(monkeypatch, tmp_path):
     seen_models = []
     step = {"main": 0, "mini": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         seen_models.append(model)
         if model == "main":
             step["main"] += 1

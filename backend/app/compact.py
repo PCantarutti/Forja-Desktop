@@ -65,7 +65,7 @@ PROMPT = ("Resuma a conversa abaixo entre um usuário e um agente de programaç�
 async def summarize(provider: str, model: str, text: str, num_ctx: int) -> str:
     out = ""
     messages = [{"role": "system", "content": PROMPT}, {"role": "user", "content": text}]
-    async for kind, val in llm.chat_stream(provider, model, messages, None, num_ctx):
+    async for kind, val in llm.chat_stream(provider, model, messages, None, num_ctx, think=False):
         if kind == "content":
             out += val
     return split_think(out)[1].strip()

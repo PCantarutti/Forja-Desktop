@@ -28,7 +28,7 @@ def _fake_llm(monkeypatch, textos=None, falhar=(), pausa=0.0):
     """Troca o LLM por um gerador de mentira; anota a ordem em que os modelos foram chamados."""
     textos, chamados = textos or {}, []
 
-    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         chamados.append(model)
         if model in falhar:
             raise llm.LLMError("modelo caiu")

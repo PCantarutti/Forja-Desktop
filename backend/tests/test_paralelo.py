@@ -53,7 +53,7 @@ def test_three_reads_run_at_once_and_are_saved_in_call_order(monkeypatch):
     monkeypatch.setattr(agent, "PARALLEL_OK", agent.PARALLEL_OK | {"ler_devagar"})
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] == 1:
             yield "done", {"tool_calls": [_call(1, "ler_devagar"), _call(2, "ler_devagar"),

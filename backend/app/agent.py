@@ -21,6 +21,11 @@ from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_t
 from .tools import Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps
 
 MAX_NUDGES = 2
+# Restrição do pedido vira loop de conferência no raciocínio: modelo pequeno enumera palavra por
+# palavra, recomeça e nunca entrega. O teto do llm.py corta isso; esta linha evita que comece.
+NO_COUNTING = ("Restrição do pedido (contagem de palavras, formato, idioma) se cumpre escrevendo, não "
+               "conferindo no raciocínio: não enumere item por item nem recomece para checar. Pense o "
+               "necessário e entregue.")
 # Esforço: multiplicador do limite de passos + instrução de profundidade no prompt.
 EFFORT = {
     "baixo": (0.4, "Esforço baixo: vá direto ao ponto, use o mínimo de passos e não explore além do pedido."),
@@ -263,7 +268,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     if via == "none":
         return _extra("Você é o Forja, um assistente de programação. Você está no modo Chat: NÃO tem ferramentas "
                       "e não acessa arquivos. Se o usuário pedir para criar ou editar arquivos, peça para ele "
-                      "trocar para o modo Agente. Responda no idioma do usuário.")
+                      "trocar para o modo Agente. " + NO_COUNTING + " Responda no idioma do usuário.")
     if chat:
         # Chat com a web: sem arquivos, sem shell, sem plano. Só buscar, ler e citar.
         web = chat_tools(caps)
@@ -282,6 +287,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
             "- Toda afirmação tirada da web leva a fonte no próprio texto, no formato [título](url), no fim da "
             "frase. Sem fonte inventada: só URLs que vieram das ferramentas.",
             "- Se o usuário pedir para criar ou editar arquivos, peça para ele trocar para o modo Agente.",
+            "- " + NO_COUNTING,
             "Responda no idioma do usuário.",
         ]), via, web))
     tools = available_tools(caps, permission, exclude)
@@ -294,6 +300,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
         rules.append("- Leia o arquivo antes de editar. Use edit_file para mudanças pontuais (old_str exato e único, "
                      "sem números de linha) e write_file para arquivos novos ou reescritas completas.")
     rules.append("- Se uma ferramenta devolver erro, leia a mensagem e corrija a chamada.")
+    rules.append("- " + NO_COUNTING)
     if "run_command" in names:
         rules.append("- run_command executa na pasta da conversa, no lugar indicado em Ambiente. Use para testar o que "
                      "escreveu, rodar git e instalar pacotes.")
@@ -890,7 +897,8 @@ async def retitle(conv_id: int, provisorio: str, req: RunRequest) -> dict | None
     try:
         async for kind, val in llm.chat_stream(req.provider, req.model,
                                                [{"role": "system", "content": TITLE_PROMPT},
-                                                {"role": "user", "content": texto}], None, TITLE_CTX, "baixo"):
+                                                {"role": "user", "content": texto}], None, TITLE_CTX,
+                                               "baixo", think=False):
             if kind == "content":
                 bruto += val
     except (llm.LLMError, asyncio.TimeoutError):

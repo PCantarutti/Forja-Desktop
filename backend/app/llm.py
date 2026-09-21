@@ -154,11 +154,25 @@ def _inference(provider: str, model: str, extra: dict) -> None:
             extra["reasoning_budget"] = int(cfg["reasoning_budget"])
 
 
-# Teto de raciocínio do maestro no Extremo. Medido no Qwen3.6 via llama.cpp: um brief bom sai com
-# ~2,3 mil caracteres de raciocínio; o tratado que atrasa 13 minutos passa de 15 mil. O servidor
-# ignora `reasoning_budget` neste modelo, então o corte é nosso.
-REASONING_CAP = 6000
+# Teto de raciocínio, por esforço. Medido no Qwen3.6 via llama.cpp: um brief bom sai com ~2,3 mil
+# caracteres de raciocínio; o tratado que atrasa 13 minutos passa de 15 mil. O servidor ignora
+# `reasoning_budget` nesses modelos, então o corte é nosso. Vale também o relógio: modelo local
+# lento estoura os minutos muito antes dos caracteres, e é o tempo parado que o usuário sente.
+REASONING_CAP = {             # esforço -> (caracteres, segundos)
+    "baixo": (1500, 45),
+    "medio": (4000, 90),
+    "alto": (8000, 150),
+    "maximo": (12000, 240),
+    "extremo": (6000, 120),   # o maestro delega em vez de projetar: teto curto de propósito
+}
 NO_THINK = chr(10) + "/no_think"   # interruptor por texto do template do Qwen3
+
+
+def _cap(effort: str | None, mult: float) -> tuple[float, float]:
+    """Teto desta chamada. `mult` afrouxa para o subagente, que é quem de fato resolve a tarefa."""
+    chars, seg = REASONING_CAP.get(effort or "medio", REASONING_CAP["medio"])
+    fator = mult * config.REASONING_CAP_MULT
+    return chars * fator, seg * fator
 
 
 def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict, list[dict]]:
@@ -172,19 +186,25 @@ def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict,
         return saida, msgs
     saida["chat_template_kwargs"] = {**saida.get("chat_template_kwargs", {}), "enable_thinking": False}
     saida["reasoning_budget"] = 0
-    if msgs and msgs[0]["role"] == "system" and isinstance(msgs[0].get("content"), str):
+    if (msgs and msgs[0]["role"] == "system" and isinstance(msgs[0].get("content"), str)
+            and not msgs[0]["content"].endswith(NO_THINK)):  # _reasoning já pode ter posto no esforço baixo
         msgs[0] = {**msgs[0], "content": msgs[0]["content"] + NO_THINK}
     return saida, msgs
 
 
-async def _capped(impl, provider, model, messages, tools, num_ctx, extra):
-    """Pensamento limitado: o maestro pode raciocinar, não virar tratado. Passou do teto sem ter
-    começado a responder, corta e refaz sem pensar — o prompt já está no cache do servidor, então a
-    segunda chamada é barata, e é melhor um brief rápido que meia hora de projeto que ia ser delegado."""
+async def _capped(impl, provider, model, messages, tools, num_ctx, extra, cap):
+    """Pensamento limitado: quem pensa pode raciocinar, não virar tratado. Passou do teto — de texto
+    ou de relógio — sem ter começado a responder, corta e refaz sem pensar: o prompt já está no cache
+    do servidor, então a segunda chamada é barata, e é melhor uma resposta rápida que meia hora de
+    raciocínio que ninguém vai ler. O relógio conta do primeiro evento, não da chamada: processar um
+    prompt grande demora, e essa espera não é o modelo pensando."""
+    cap_chars, cap_seg = cap
     gen = impl(provider, model, messages, tools, num_ctx, extra)
-    raciocinio, respondendo, cortou, bruto = 0, False, False, ""
+    raciocinio, respondendo, cortou, bruto, t0 = 0, False, False, "", None
     try:
         async for kind, val in gen:
+            if t0 is None:
+                t0 = time.monotonic()
             if kind == "content" and val:
                 # Servidor que não separa o canal de raciocínio manda o <think> dentro do próprio texto.
                 bruto += str(val)
@@ -194,32 +214,35 @@ async def _capped(impl, provider, model, messages, tools, num_ctx, extra):
                     respondendo = True   # já está entregando: deixa terminar
             elif kind == "reasoning" and not respondendo:
                 raciocinio += len(str(val))
-            if not respondendo and raciocinio > REASONING_CAP:
+            if not respondendo and (raciocinio > cap_chars or time.monotonic() - t0 > cap_seg):
                 cortou = True
                 break
             yield kind, val
     finally:
         await gen.aclose()
     if cortou:
-        yield "reasoning", "\n[teto de raciocínio do Extremo: refazendo sem pensar]\n"
+        yield "reasoning", "\n[teto de raciocínio atingido: refazendo sem pensar]\n"
         sem, msgs = _sem_pensar(provider, extra, messages)
         async for ev in impl(provider, model, msgs, tools, num_ctx, sem):
             yield ev
 
 
 async def chat_stream(provider: str, model: str, messages: list[dict], tools: list[dict] | None,
-                      num_ctx: int, effort: str | None = None) -> AsyncIterator[tuple[str, object]]:
+                      num_ctx: int, effort: str | None = None, think: bool | None = None,
+                      cap_mult: float = 1.0) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     messages = list(messages)
     extra: dict = {}
     await _reasoning(provider, model, effort, extra, messages)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     try:
-        if effort == "extremo":  # só o maestro; o subagente roda com 'maximo' e pensa à vontade
-            async for ev in _capped(impl, provider, model, messages, tools, num_ctx, extra):
+        if think is False:  # chamada mecânica (compactar, titular, commit): não há raciocínio a cortar
+            extra, messages = _sem_pensar(provider, extra, messages)
+            async for ev in impl(provider, model, messages, tools, num_ctx, extra):
                 yield ev
         else:
-            async for ev in impl(provider, model, messages, tools, num_ctx, extra):
+            async for ev in _capped(impl, provider, model, messages, tools, num_ctx, extra,
+                                    _cap(effort, cap_mult)):
                 yield ev
     except httpx.HTTPError as e:
         raise _conn_error(provider, e) from e

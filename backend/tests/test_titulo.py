@@ -23,7 +23,7 @@ def _conversa() -> int:
 
 
 def _monkey(monkeypatch, titulo: str):
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         if messages[0]["content"].startswith("Você dá nome a conversas"):
             assert "user: " in messages[1]["content"] and "assistant: " in messages[1]["content"]
             yield "content", titulo

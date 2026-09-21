@@ -41,6 +41,7 @@ MAX_RESULT_IN_STEP = 2000
 MAX_FILES = 12            # arquivos anexados ao brief
 MAX_DIFF = 30_000         # diff mandado para a revisão
 VERIFY_TIMEOUT = 180      # teto do done_when (o run_command ainda corta em SHELL_TIMEOUT_MAX)
+SUB_CAP_MULT = 1.5        # quem resolve a tarefa é ele: pensa mais folgado que o maestro (ver llm._cap)
 WRITE_TOOLS = {"write_file", "edit_file"}
 NUDGE_LINES = 12          # escrita maior que isto, no extremo, é trabalho de subagente
 REVIEW_PROMPT = (
@@ -253,7 +254,7 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
     texto = ""
     try:
         async for kind, val in llm.chat_stream(spec["provider"], spec["model"], messages, None,
-                                               config.NUM_CTX, "baixo"):
+                                               config.NUM_CTX, "baixo", cap_mult=SUB_CAP_MULT):
             if kind == "content":
                 texto += val
     except llm.LLMError as e:
@@ -333,7 +334,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
         done: dict = {"tool_calls": []}
         try:
             async for kind, val in llm.chat_stream(provider, model, messages, schemas, config.NUM_CTX,
-                                                   sub_effort):
+                                                   sub_effort, cap_mult=SUB_CAP_MULT):
                 if run_obj.cancel.is_set():
                     break
                 if kind == "content":

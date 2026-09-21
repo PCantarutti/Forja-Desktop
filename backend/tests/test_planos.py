@@ -46,7 +46,7 @@ def test_ask_user_asks_everything_in_one_card(monkeypatch):
                  {"header": "Deploy", "question": "Onde sobe?", "options": [{"label": "docker"}, {"label": "vps"}]}]
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] == 1:
             assert "ask_user" in [t["function"]["name"] for t in (tools or [])]
@@ -122,7 +122,7 @@ def test_ask_user_tool_demands_options_with_a_recommendation():
 def test_approved_plan_survives_into_next_turn(monkeypatch):
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] == 1:
             yield "done", {"tool_calls": [{"id": "p1", "name": "exit_plan_mode",
@@ -175,7 +175,7 @@ def test_plan_written_as_text_becomes_a_plan_card(monkeypatch):
              + "\n\n## Verificação\nRodar phpunit.\n\n## Riscos e dúvidas\nMulti-tenancy.\n")
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] == 1:
             yield "content", texto

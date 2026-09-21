@@ -38,6 +38,8 @@ MAX_DOC_BYTES = int(os.getenv("MAX_DOC_BYTES", "25000000"))
 SHELL_TIMEOUT_MAX = int(os.getenv("SHELL_TIMEOUT_MAX", "300"))
 SEARXNG_URL = os.getenv("SEARXNG_URL", "")  # vazio = web_search usa o DuckDuckGo
 COMPACT_AT = float(os.getenv("COMPACT_AT", "0.8"))  # fração da janela que dispara a compactação
+# Afrouxa (>1) ou aperta (<1) o teto de raciocínio por esforço do llm.py, sem mexer em código.
+REASONING_CAP_MULT = float(os.getenv("REASONING_CAP_MULT", "1.0"))
 
 # Navegador integrado
 BROWSER_IDLE_MINUTES = int(os.getenv("BROWSER_IDLE_MINUTES", "30"))  # 0 = nunca fechar sessão ociosa

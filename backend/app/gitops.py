@@ -88,7 +88,8 @@ async def generate_message(root: Path, provider: str, model: str) -> str:
     text = f"{stat}\n\n{patch[:MAX_DIFF_CHARS]}" + ("\n\n(diff truncado)" if len(patch) > MAX_DIFF_CHARS else "")
     out = ""
     async for kind, val in llm.chat_stream(provider, model, [{"role": "system", "content": COMMIT_PROMPT},
-                                                             {"role": "user", "content": text}], None, 16_384):
+                                                             {"role": "user", "content": text}], None, 16_384,
+                                           think=False):
         if kind == "content":
             out += val
     msg = split_think(out)[1].strip().strip("`").strip()

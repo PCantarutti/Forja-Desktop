@@ -116,7 +116,7 @@ def test_plan_prompt_forbids_changes():
 def test_plan_approved_switches_mode_and_tools(monkeypatch):
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         names = [t["function"]["name"] for t in (tools or [])]
         if step["n"] == 1:
@@ -164,7 +164,7 @@ def test_plan_approved_switches_mode_and_tools(monkeypatch):
 def test_plan_rejected_keeps_plan_mode(monkeypatch):
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] == 1:
             yield "done", {"tool_calls": [{"id": "p1", "name": "exit_plan_mode", "arguments": {"plan": "plano ruim"}}]}
@@ -210,7 +210,7 @@ def test_conversation_kind_defaults_to_agent():
 def test_chat_mode_sends_only_web_tools(monkeypatch):
     """O Chat não mexe em arquivos nem no shell, mas busca na web quando precisa."""
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         assert [t["function"]["name"] for t in tools] == ["web_search", "fetch_url"]
         assert "web_search" in messages[0]["content"]
         yield "content", "oi"
@@ -296,7 +296,7 @@ def test_permission_change_mid_run_applies_to_next_tool(monkeypatch):
     """Card de shell aberto: o usuário troca para Ignorar permissões e a execução segue sozinha."""
     step = {"n": 0}
 
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         if step["n"] == 1:
             yield "done", {"tool_calls": [{"id": "s1", "name": "run_command",
