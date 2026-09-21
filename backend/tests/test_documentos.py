@@ -337,3 +337,68 @@ def test_acrescentar_monta_tabela_de_verdade(ws):
     doc = docx.Document(str(ws / "documentos" / "d.docx"))
     assert len(doc.tables) == 1 and doc.tables[0].cell(0, 0).text == "SEG"
     assert "|" not in (doc.paragraphs[-1].text if doc.paragraphs else "")
+
+
+# ------------------------------------------------ inserir no meio (o pedido que virou write_document)
+
+def _docx_base(ws):
+    """Um documento com começo, meio e fim, para dar para provar que o resto sobreviveu."""
+    corpo = (chr(10) * 2).join(["# MODELO", "NOME: [INSIRA O NOME AQUI]", "## OBSERVAÇÕES",
+                                "Preencher antes de enviar.", "## RODAPÉ", "Documento interno."])
+    roda("write_document", {"path": "modelo.docx", "content": corpo}, ws)
+    return "documentos/modelo.docx"
+
+
+def test_inserir_poe_no_lugar_pedido_e_preserva_o_resto(ws):
+    """Aconteceu em uso: pedir 'adicione um calendário neste documento' virou write_document, e o
+    documento saiu só com o calendário. Faltava poder pôr conteúdo no meio."""
+    import docx
+
+    alvo = _docx_base(ws)
+    tabela = ("| DOM | SEG |" + chr(10) + "| --- | --- |" + chr(10) + "| 01 | 02 |")
+    roda("edit_document", {"path": alvo, "operations": [
+        {"tipo": "inserir", "depois": "OBSERVAÇÕES", "conteudo": tabela}]}, ws)
+
+    doc = docx.Document(str(ws / "documentos" / "modelo.docx"))
+    assert len(doc.tables) == 1 and doc.tables[0].cell(0, 0).text == "DOM"
+    textos = [p.text for p in doc.paragraphs]
+    assert "MODELO" in textos[0] and "NOME: [INSIRA O NOME AQUI]" in textos  # o original ficou
+    assert "Documento interno." in textos
+    # a tabela entrou entre a âncora e o que vinha depois dela, não no fim
+    corpo = list(doc.element.body)
+    pos_tabela = next(i for i, el in enumerate(corpo) if el.tag.endswith("}tbl"))
+    pos_rodape = next(i for i, el in enumerate(corpo) if "RODAPÉ" in (el.xpath("string(.)") or ""))
+    assert pos_tabela < pos_rodape
+
+
+def test_inserir_antes_da_ancora(ws):
+    import docx
+
+    alvo = _docx_base(ws)
+    roda("edit_document", {"path": alvo, "operations": [
+        {"tipo": "inserir", "antes": "RODAPÉ", "conteudo": "Assinatura: ____"}]}, ws)
+    textos = [p.text for p in docx.Document(str(ws / "documentos" / "modelo.docx")).paragraphs]
+    assert textos.index("Assinatura: ____") < textos.index("RODAPÉ")
+
+
+def test_inserir_sem_ancora_que_exista_avisa(ws):
+    alvo = _docx_base(ws)
+    with pytest.raises(ToolError, match="Não achei"):
+        roda("edit_document", {"path": alvo, "operations": [
+            {"tipo": "inserir", "depois": "SEÇÃO QUE NÃO EXISTE", "conteudo": "x"}]}, ws)
+
+
+def test_inserir_sem_dizer_onde_manda_usar_acrescentar(ws):
+    alvo = _docx_base(ws)
+    with pytest.raises(ToolError, match="acrescentar"):
+        roda("edit_document", {"path": alvo, "operations": [
+            {"tipo": "inserir", "conteudo": "x"}]}, ws)
+
+
+def test_substituir_com_tabela_agora_aponta_o_inserir(ws):
+    """A saída sugerida tem que ser a que resolve: tabela no meio é 'inserir', não 'acrescentar'."""
+    alvo = _docx_base(ws)
+    tabela = ("| A | B |" + chr(10) + "| --- | --- |" + chr(10) + "| 1 | 2 |")
+    with pytest.raises(ToolError, match="inserir"):
+        roda("edit_document", {"path": alvo, "operations": [
+            {"tipo": "substituir", "de": "OBSERVAÇÕES", "para": tabela}]}, ws)

@@ -725,6 +725,21 @@ def _editar_office(alvo: Path, ops: list, ext: str) -> list[str]:
             else:
                 _acrescentar_pptx(alvo, bs)
             feitas.append(f"{len(bs)} bloco(s) acrescentado(s)")
+        elif tipo in ("inserir", "insert"):
+            bs = blocos(str(op.get("conteudo") or op.get("content") or ""))
+            if not bs:
+                raise ToolError("Falta 'conteudo': o Markdown a inserir.")
+            depois = str(op.get("depois") or op.get("after") or "")
+            antes = str(op.get("antes") or op.get("before") or "")
+            if not depois and not antes:
+                raise ToolError("Falta 'depois' (ou 'antes'): um trecho do documento que diga onde "
+                                "entra. Sem âncora, use {'tipo': 'acrescentar'}.")
+            if ext != ".docx":
+                raise ToolError("'inserir' só vale para .docx. Num .pptx use "
+                                "{'tipo': 'acrescentar'}, que cria slides no fim.")
+            _inserir_docx(alvo, bs, antes or depois, bool(antes))
+            feitas.append(f"{len(bs)} bloco(s) inserido(s) {'antes de' if antes else 'depois de'} "
+                          f"'{(antes or depois)[:30]}'")
         elif tipo in ("substituir", "replace"):
             de = str(op.get("de") or op.get("old") or "")
             para = str(op.get("para") or op.get("new") or "")
@@ -735,14 +750,15 @@ def _editar_office(alvo: Path, ops: list, ext: str) -> list[str]:
                     "'substituir' troca texto por texto, literalmente: uma tabela em Markdown ia "
                     "parar no documento com os `|` à mostra. Para conteúdo formatado use "
                     "{'tipo': 'acrescentar', 'conteudo': '<markdown>'}, que monta tabela e título "
-                    "de verdade — ou gere o documento inteiro com write_document.")
+                    "de verdade no fim, ou {'tipo': 'inserir', 'depois': '<trecho do documento>', "
+                    "'conteudo': '<markdown>'} para montar no meio, no lugar certo.")
             n = _substituir(alvo, de, para, ext)
             if not n:
                 raise ToolError(f"Não achei '{de[:40]}' no documento. Leia com read_file antes, e "
                                 "lembre que só casa texto contínuo, com a mesma formatação.")
             feitas.append(f"{n} ocorrência(s) trocada(s)")
         else:
-            raise ToolError(f"Tipo de operação desconhecido: '{tipo}'. Use acrescentar ou substituir.")
+            raise ToolError(f"Tipo de operação desconhecido: '{tipo}'. Use acrescentar, inserir ou substituir.")
     return feitas
 
 
@@ -750,6 +766,12 @@ def _acrescentar_docx(alvo: Path, bs: list[dict]) -> None:
     import docx
 
     doc = docx.Document(str(alvo))
+    _montar_docx(doc, bs)
+    doc.save(str(alvo))
+
+
+def _montar_docx(doc, bs: list[dict]) -> None:
+    """Escreve os blocos no fim do corpo. Quem quer no meio move os elementos depois."""
     for b in bs:
         if b["tipo"] == "titulo":
             doc.add_heading(_sem_marcas(b["texto"]), level=min(b["nivel"], 9))
@@ -765,6 +787,28 @@ def _acrescentar_docx(alvo: Path, bs: list[dict]) -> None:
                     tabela.cell(i, j).text = _sem_marcas(celula)
         elif b["tipo"] in ("paragrafo", "codigo"):
             _runs_docx(doc.add_paragraph(), b.get("texto", ""))
+
+
+def _inserir_docx(alvo: Path, bs: list[dict], ancora: str, antes: bool) -> None:
+    """Põe os blocos ao lado do parágrafo que contém `ancora`, em vez de no fim do documento.
+
+    O python-docx só sabe escrever no fim, então monta-se lá e move-se o XML para o lugar. É o que
+    permite atender "adicione um calendário depois da seção tal" sem reescrever o arquivo inteiro.
+    """
+    import docx
+
+    doc = docx.Document(str(alvo))
+    alvo_par = next((p for p in doc.paragraphs if ancora.lower() in p.text.lower()), None)
+    if alvo_par is None:
+        raise ToolError(f"Não achei '{ancora[:40]}' no documento. Leia com read_file antes e use um "
+                        "trecho que exista, ou use {'tipo': 'acrescentar'} para pôr no fim.")
+    # ponytail: comparação por identidade numa lista curta; é o corpo de um .docx, não um índice.
+    antigos = list(doc.element.body)
+    _montar_docx(doc, bs)
+    novos = [el for el in doc.element.body if el not in antigos]
+    ref = alvo_par._p
+    for el in novos if antes else reversed(novos):
+        (ref.addprevious if antes else ref.addnext)(el)
     doc.save(str(alvo))
 
 
@@ -937,10 +981,12 @@ def _preview_edicao(root: Path, args: dict) -> dict:
 
 register(Tool(
     "write_document",
-    "Gera um documento a partir de Markdown: .docx (Word), .pdf, .pptx (PowerPoint), .html ou .md. "
-    "O Markdown vira o documento de verdade — título vira título, tabela vira tabela, `---` vira "
-    "quebra de página (e slide novo no .pptx). Caminho sem pasta cai em documentos/. "
-    "Para planilha use write_spreadsheet.",
+    "Cria um documento NOVO, do zero, a partir de Markdown: .docx (Word), .pdf, .pptx (PowerPoint), "
+    ".html ou .md. O Markdown vira o documento de verdade — título vira título, tabela vira tabela, "
+    "`---` vira quebra de página (e slide novo no .pptx). Caminho sem pasta cai em documentos/. "
+    "NÃO use para mexer num documento que já existe (inclusive um que o usuário anexou): o "
+    "resultado tem só o que você escrever, e o conteúdo original se perde. Para isso é o "
+    "edit_document, no caminho do próprio arquivo. Para planilha use write_spreadsheet.",
     _obj({"path": {"type": "string", "description": "Ex.: relatorio.docx, propostas/resumo.pdf"},
           "content": {"type": "string", "description": "O documento inteiro, em Markdown"}},
          ["path", "content"]),
@@ -971,9 +1017,12 @@ register(Tool(
 
 register(Tool(
     "edit_document",
-    "Altera um .docx, .pptx ou .pdf que já existe. Word e PowerPoint: "
-    "{'tipo':'acrescentar','conteudo':'<markdown>'} para conteúdo formatado (tabela vira tabela de "
-    "verdade), ou {'tipo':'substituir','de':'x','para':'y'} para trocar texto por texto — este não "
+    "Altera um .docx, .pptx ou .pdf que já existe, preservando o resto — é esta que atende "
+    "\"adicione X neste documento\". Leia com read_file antes, para escolher onde entra. "
+    "Word e PowerPoint: {'tipo':'inserir','depois':'<trecho do documento>','conteudo':'<markdown>'} "
+    "põe conteúdo formatado no meio, logo depois desse trecho ('antes' em vez de 'depois' inverte; "
+    "só .docx); {'tipo':'acrescentar','conteudo':'<markdown>'} põe no fim; "
+    "{'tipo':'substituir','de':'x','para':'y'} troca texto por texto — este não "
     "interpreta Markdown, então não mande tabela por ele. "
     "PDF, onde a unidade é a página: {'tipo':'juntar','arquivos':['outro.pdf']} | "
     "{'tipo':'paginas','paginas':'1-3,7'} | {'tipo':'girar','graus':90}. Mudar o TEXTO de um PDF não "

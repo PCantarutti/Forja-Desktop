@@ -80,7 +80,11 @@ def user_message(content: str, attachments: list | None) -> dict:
     text = content
     if others:
         lista = ", ".join(a["path"] for a in others)
-        text += NOVA_LINHA * 2 + f"[Arquivos anexados na pasta de trabalho: {lista} — use read_file para ler.]"
+        text += NOVA_LINHA * 2 + (
+            f"[Arquivos anexados na pasta de trabalho: {lista} — use read_file para ler. Para "
+            "alterar um deles, use edit_document (ou edit_spreadsheet) NESSE MESMO caminho: "
+            "write_document criaria outro arquivo, só com o que você escrevesse, e o conteúdo "
+            "atual se perderia.]")
         for a in others:
             if a.get("sem_texto"):
                 text += NOVA_LINHA + (f"[De {a['name']} não dá para extrair texto (PDF escaneado, "
