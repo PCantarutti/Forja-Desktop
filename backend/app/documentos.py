@@ -112,23 +112,38 @@ def _corpo_docx(doc):
 
 
 def _extrair_xlsx(origem: Path) -> str | None:
+    """Cada aba vira uma seção com uma tabela Markdown.
+
+    Lê duas vezes de propósito. `data_only=True` traz o valor que o Excel calculou e guardou — que
+    é o que se quer ler —, mas uma planilha recém-escrita por programa ainda não tem esse cache, e
+    a célula com fórmula sairia vazia. Então, quando não há valor, mostra a fórmula: o modelo
+    precisa saber que ali existe um cálculo, e não um branco.
+    """
     import openpyxl
 
-    livro = openpyxl.load_workbook(str(origem), read_only=True, data_only=True)
+    valores = openpyxl.load_workbook(str(origem), read_only=True, data_only=True)
+    formulas = openpyxl.load_workbook(str(origem), read_only=True, data_only=False)
     try:
         partes: list[str] = []
-        for aba in livro.worksheets:
+        for aba in valores.worksheets:
+            crua = formulas[aba.title]
             linhas: list[list[str]] = []
-            for linha in aba.iter_rows(max_row=MAX_LINHAS_ABA, max_col=MAX_COLUNAS, values_only=True):
-                if all(c is None for c in linha):
+            pares = zip(aba.iter_rows(max_row=MAX_LINHAS_ABA, max_col=MAX_COLUNAS, values_only=True),
+                        crua.iter_rows(max_row=MAX_LINHAS_ABA, max_col=MAX_COLUNAS, values_only=True))
+            for linha, original in pares:
+                celulas = [v if v is not None else f for v, f in zip(linha, original)]
+                while celulas and celulas[-1] is None:
+                    celulas.pop()  # sem isto a tabela sai com dezenas de colunas vazias
+                if not celulas:
                     continue
-                linhas.append(["" if c is None else str(c) for c in linha])
+                linhas.append(["" if c is None else str(c) for c in celulas])
             corte = f"{NL}(cortado em {MAX_LINHAS_ABA} linhas)" if aba.max_row and aba.max_row > MAX_LINHAS_ABA else ""
             tabela = _tabela_md(linhas) if linhas else "(aba vazia)"
             partes.append(f"## {aba.title}{NL}{NL}{tabela}{corte}")
         return (NL * 2).join(partes) or None
     finally:
-        livro.close()
+        valores.close()
+        formulas.close()
 
 
 def _extrair_pptx(origem: Path) -> str | None:

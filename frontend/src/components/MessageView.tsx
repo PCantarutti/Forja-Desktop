@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
-import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Download, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
 function CodeBlock(props: React.ComponentProps<"pre">) {
@@ -110,6 +110,64 @@ export function ToolImages({ list, bare }: { list: Attachment[]; bare?: boolean 
         />
       ))}
       {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
+    </div>
+  );
+}
+
+const ICONE_POR_TIPO: { casa: RegExp; rotulo: string }[] = [
+  { casa: /sheet|excel|csv/, rotulo: "Planilha" },
+  { casa: /word|document$/, rotulo: "Documento" },
+  { casa: /presentation/, rotulo: "Apresentação" },
+  { casa: /pdf/, rotulo: "PDF" },
+];
+
+/**
+ * Arquivo que o agente gerou: .docx, .xlsx, .pdf, .pptx.
+ *
+ * O `ToolImages` filtra `kind === "image"` e descarta o resto em silêncio, então até aqui um
+ * documento gerado não aparecia em lugar nenhum — só o caminho, escondido dentro do bloco da
+ * ferramenta. Abrir chama o programa padrão do sistema (Word, Excel), que é o que se quer fazer
+ * com um arquivo desses.
+ */
+export function ToolFiles({ list, onOpen }: { list: Attachment[]; onOpen?: (path: string, mode: "editor" | "reveal") => void }) {
+  const arquivos = list.filter((a) => a.kind !== "image");
+  if (!arquivos.length) return null;
+  return (
+    <div className="my-2 space-y-2">
+      {arquivos.map((a) => {
+        const rotulo = ICONE_POR_TIPO.find((t) => t.casa.test(a.mime))?.rotulo ?? "Arquivo";
+        return (
+          <div key={a.path} className="flex max-w-md items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
+            <Download className="size-4 shrink-0 text-muted" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm text-fg" title={a.path}>
+                {a.name}
+              </div>
+              <div className="text-xs text-faint">
+                {rotulo} · {Math.max(1, Math.round(a.size / 1024))} KB
+              </div>
+            </div>
+            {onOpen && (
+              <div className="flex shrink-0 gap-1">
+                <button
+                  onClick={() => onOpen(a.path, "editor")}
+                  title="Abrir no programa padrão"
+                  className="rounded-full border border-line px-2.5 py-1 text-xs text-fg hover:bg-raised"
+                >
+                  Abrir
+                </button>
+                <button
+                  onClick={() => onOpen(a.path, "reveal")}
+                  title="Revelar na pasta"
+                  className="rounded-full border border-line p-1.5 text-muted hover:bg-raised hover:text-fg"
+                >
+                  <FolderOpen className="size-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -348,6 +406,11 @@ export function ToolBlock(props: {
         </pre>
       )}
       {!props.hideImages && result?.meta?.attachments && <ToolImages list={result.meta.attachments} />}
+      {!props.hideImages && result?.meta?.attachments && (
+        <div className="border-t border-line px-3 py-1">
+          <ToolFiles list={result.meta.attachments} onOpen={props.onOpen} />
+        </div>
+      )}
       {props.children && <div className="border-t border-line px-3 py-2">{props.children}</div>}
 
       {waiting && !approval?.sent && (
@@ -506,6 +569,7 @@ export function ActivityGroup(props: {
   live?: boolean;
   forceOpen?: boolean;
   renderTool: (call: ToolCall, queued: boolean) => React.ReactNode;
+  onOpen?: (path: string, mode: "editor" | "reveal") => void;
 }) {
   const [open, setOpen] = useState(false);
   const isOpen = !!props.forceOpen || open;
@@ -515,7 +579,8 @@ export function ActivityGroup(props: {
     return st === "erro" || st === "rejeitada";
   }).length;
   const head = tools.length ? (ACTION[tools[0].name] ?? `Usou ${tools[0].name}`) : "Raciocinou";
-  // Screenshot é resposta, não detalhe de execução: sai do grupo e fica visível mesmo colapsado.
+  // Screenshot e arquivo gerado são resposta, não detalhe de execução: saem do grupo e ficam
+  // visíveis mesmo com ele colapsado.
   const shots = tools.flatMap((c) => props.results.get(c.id)?.meta?.attachments ?? []);
   const summary =
     (props.live && !tools.length ? "Trabalhando" : tools.length > 1 ? `${head}, usou ${tools.length} ferramentas` : head) +
@@ -548,6 +613,7 @@ export function ActivityGroup(props: {
         </div>
       )}
       <ToolImages list={shots} bare />
+      <ToolFiles list={shots} onOpen={props.onOpen} />
     </div>
   );
 }

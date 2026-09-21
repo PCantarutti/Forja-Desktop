@@ -154,7 +154,12 @@ async def image_generate(root: Path, args: dict) -> dict:
 
 
 def _preview(_root: Path, args: dict) -> dict:
-    return {"kind": "text", "title": "Gerar imagem", "body": str(args.get("prompt") or "")}
+    """`kind` tem que ser um dos três que o front conhece (diff | new | command).
+
+    Isto devolvia `kind: "text"` com `title`/`body`, campos que o `Preview` do frontend não tem:
+    o card caía no ramo do diff e fazia split num `text` inexistente.
+    """
+    return {"kind": "new", "path": "imagem.png", "text": str(args.get("prompt") or "")}
 
 
 register(Tool(

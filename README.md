@@ -46,8 +46,11 @@ Seus dados (conversas, configurações, chaves e `mcp.json`) ficam em `%APPDATA%
 
 | Ferramenta | O que faz | Aprovação |
 |---|---|---|
-| `list_dir`, `read_file` | Lê a pasta de trabalho | não |
+| `list_dir`, `read_file` | Lê a pasta de trabalho. `read_file` entende também **PDF, Word, Excel, PowerPoint e CSV**: o documento chega ao modelo como Markdown, com as tabelas preservadas | não |
 | `write_file`, `edit_file` | Cria e edita arquivos (card com diff) | conforme o **modo de permissão** |
+| `write_document` | Gera **.docx, .pdf, .pptx**, .html ou .md a partir de Markdown — título vira título, tabela vira tabela, `---` vira quebra de página (e slide novo no .pptx) | conforme o **modo de permissão** |
+| `write_spreadsheet` | Gera **.xlsx** (várias abas) ou .csv. Célula começando com `=` vira fórmula de verdade | conforme o **modo de permissão** |
+| `edit_document`, `edit_spreadsheet` | Altera um documento ou planilha que **já existe**, preservando o resto: outra aba, fórmula e formatação ficam como estavam | conforme o **modo de permissão** |
 | `run_command` | Comando de shell na pasta da conversa, no seu PowerShell | **sempre**, mesmo com escrita automática |
 | `serve_start`, `serve_status`, `serve_stop` | Servidor de desenvolvimento em segundo plano (log em arquivo) | `serve_start` **sempre**; `serve_stop` conforme **Escrita** |
 | `web_search` | Busca na web pelo DuckDuckGo (sem chave, sem conta) | não |
@@ -149,11 +152,21 @@ Baixo, Médio, Alto, Máximo ou Extremo, ao lado do modo. Mexe em três coisas:
 
 ## Conversa: anexos, editar e regenerar
 
-- **Anexos**: clipe no campo de mensagem ou arraste arquivos para o chat. Eles são salvos em `.forja/uploads/` **dentro da pasta de trabalho**, então o agente abre com `read_file`/`run_command` como qualquer arquivo. **PDF** ganha um `.txt` ao lado no momento do upload, e é para ele que o agente é mandado — `read_file` recusa binário. PDF escaneado não tem texto para extrair (não há OCR): nesse caso o agente é avisado disso em vez de tentar abrir e falhar. **Imagens** vão para o modelo como visão (formato OpenAI `image_url`; no Ollama, campo `images`). Imagem maior que 8 MB não é enviada como imagem.
+- **Anexos**: clipe no campo de mensagem ou arraste arquivos para o chat. Eles são salvos em `.forja/uploads/` **dentro da pasta de trabalho**, então o agente abre com `read_file`/`run_command` como qualquer arquivo — inclusive **PDF, Word, Excel e PowerPoint**, que o `read_file` converte para Markdown. Documento do qual não dá para extrair texto (PDF escaneado, arquivo protegido) é detectado no upload e o agente é avisado, em vez de tentar abrir e falhar. **Imagens** vão para o modelo como visão (formato OpenAI `image_url`; no Ollama, campo `images`). Imagem maior que 8 MB não é enviada como imagem.
 - **Editar**: passe o mouse na sua mensagem → lápis. Ao reenviar, tudo o que veio depois dela é apagado e a resposta é refeita.
 - **Regenerar**: botão ⟳ embaixo da última resposta. Apaga a resposta (incluindo as chamadas de ferramenta dela) e gera outra para a mesma mensagem, com o modelo selecionado agora.
 - **Editar/regenerar e arquivos**: se o agente alterou arquivos nos turnos que vão ser apagados, o Forja pergunta se também desfaz essas alterações (veja *Checkpoints*).
 - **Modelo**: o seletor fica no campo de mensagem (provedor à esquerda, modelos à direita, com busca) e vale para a próxima mensagem. O painel *Modelos nesta conversa* soma tokens e t/s por modelo.
+
+## Gerar documentos
+
+Peça *"monta um relatório em Word com esses números"* e sai um `.docx` de verdade. O agente escreve em Markdown e o Forja converte: título vira título, tabela vira tabela, `---` vira quebra de página. Os formatos são **.docx**, **.pdf**, **.pptx** (cada `#` ou `---` abre um slide), `.html` e `.md`; para planilha, **.xlsx** com quantas abas quiser ou `.csv`, e célula começando com `=` vira fórmula de verdade, não texto.
+
+O arquivo cai em **`documentos/`** dentro da pasta da conversa, aparece no chat com **Abrir** (no Word, no Excel, no que for o seu programa padrão) e **Revelar na pasta**, passa pelo card de aprovação mostrando o Markdown de origem, e entra no *desfazer* do turno como qualquer escrita.
+
+Documento que **já existe** também pode ser alterado sem ser reescrito: acrescentar uma seção ou trocar um texto no `.docx`, escrever uma célula ou criar uma aba no `.xlsx` — o resto da planilha (outras abas, fórmulas, formatação) fica intacto. No PDF a unidade é a página: juntar, extrair e girar. **Mudar o texto de um PDF não dá**, e a ferramenta diz isso ao modelo em vez de fingir: PDF guarda glifo posicionado, não parágrafo — o caminho é gerar um PDF novo.
+
+O PDF sai pelo Chromium que o app já traz, pelo mesmo caminho de um *imprimir para PDF*: sem biblioteca de PDF no meio, com a tipografia e as tabelas de um navegador de verdade.
 
 ## Pasta de trabalho por conversa
 
@@ -568,6 +581,7 @@ O app define o que precisa; elas existem para desenvolvimento e casos especiais.
 | `NUM_CTX` | `32768` | Janela de contexto enviada ao Ollama |
 | `MAX_ITERATIONS` | `25` | Máximo de passos do agente por mensagem |
 | `MAX_FILE_BYTES` | `1000000` | Tamanho máximo de arquivo lido/escrito |
+| `MAX_DOC_BYTES` | `25000000` | Tamanho máximo de documento (PDF, Word, Excel…) do qual se extrai texto |
 | `SHELL_TIMEOUT_MAX` | `300` | Teto em segundos do `run_command` |
 | `COMPACT_AT` | `0.8` | Fração da janela que dispara a compactação |
 | `SEARXNG_URL` | vazio | Instância SearXNG própria; vazio = DuckDuckGo |

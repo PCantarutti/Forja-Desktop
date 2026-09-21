@@ -22,6 +22,10 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - run: pip install -r requirements.txt
         working-directory: backend
+      # Sem o Chromium, os testes de geração de PDF se pulam sozinhos — e PDF é feature de
+      # primeira linha. `--only-shell` é o mesmo binário que o instalador empacota.
+      - run: python -m playwright install --only-shell chromium
+        working-directory: backend
       - run: python -m pytest -q
         working-directory: backend
 

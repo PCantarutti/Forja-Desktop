@@ -133,6 +133,21 @@ def test_planilha_guarda_numero_como_numero_e_formula_como_formula(ws):
     assert folha["B4"].value == "=SUM(B2:B3)"  # fórmula, não texto
 
 
+def test_planilha_lida_nao_traz_coluna_vazia(ws):
+    """max_col enchia a tabela de colunas vazias — dezenas de `|` por linha no contexto do modelo."""
+    roda("write_spreadsheet", {"path": "p.xlsx", "sheets": [{"nome": "A", "linhas": [["um", "dois"]]}]}, ws)
+    linha = [l for l in run_tool("read_file", {"path": "documentos/p.xlsx"}, ws).splitlines() if "um" in l][0]
+    assert linha.count("|") == 3   # borda, separador, borda
+
+
+def test_formula_aparece_na_leitura_em_vez_de_celula_vazia(ws):
+    """Planilha recém-escrita não tem o valor calculado em cache: sem isto a célula saía em branco,
+    e o modelo concluiria que a fórmula não foi gravada."""
+    abas = [{"nome": "C", "linhas": [["a", "1"], ["b", "2"], ["total", "=SUM(B1:B2)"]]}]
+    roda("write_spreadsheet", {"path": "p.xlsx", "sheets": abas}, ws)
+    assert "=SUM(B1:B2)" in run_tool("read_file", {"path": "documentos/p.xlsx"}, ws)
+
+
 # ------------------------------------------------ editar sem estragar o resto
 
 def test_edita_celula_sem_tocar_na_outra_aba(ws):
