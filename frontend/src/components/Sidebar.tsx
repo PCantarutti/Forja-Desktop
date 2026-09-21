@@ -153,7 +153,8 @@ export default function Sidebar(props: {
   function toggleSelect(id: number) {
     setSelected((s) => {
       const n = new Set(s);
-      n.has(id) ? n.delete(id) : n.add(id);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
       return n;
     });
   }
@@ -161,7 +162,8 @@ export default function Sidebar(props: {
   function toggleGroup(key: string) {
     setCollapsed((s) => {
       const n = new Set(s);
-      n.has(key) ? n.delete(key) : n.add(key);
+      if (n.has(key)) n.delete(key);
+      else n.add(key);
       return n;
     });
   }

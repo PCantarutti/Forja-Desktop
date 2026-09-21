@@ -591,7 +591,8 @@ function Lote(props: {
             onMarcar={() =>
               setSel((s) => {
                 const novo = new Set(s);
-                novo.has(img.path) ? novo.delete(img.path) : novo.add(img.path);
+                if (novo.has(img.path)) novo.delete(img.path);
+                else novo.add(img.path);
                 return novo;
               })
             }

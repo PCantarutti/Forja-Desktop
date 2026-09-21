@@ -978,7 +978,8 @@ function Tools({ tools, disabled, onToggle }: { tools: ToolInfo[]; disabled: str
   const off = new Set(disabled);
   const toggle = (name: string) => {
     const next = new Set(off);
-    next.has(name) ? next.delete(name) : next.add(name);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
     onToggle([...next]);
   };
   const groups = new Map<string, ToolInfo[]>();

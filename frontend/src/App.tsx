@@ -23,7 +23,6 @@ import {
   nextPermission,
   PermissionMenu,
   SectionTabs,
-  type Effort,
   type Permission,
   type Section,
 } from "./components/Controls";
@@ -86,8 +85,6 @@ function loadSettings(): Settings {
 }
 
 const COMPOSER_MAX = 420; // altura máxima do campo de mensagem; a partir daí o texto rola por dentro
-
-const pill = "rounded-full border border-line bg-transparent px-3 py-1 text-xs text-muted hover:bg-raised";
 
 type RightState = { tab: RightTab; collapsed: boolean };
 
