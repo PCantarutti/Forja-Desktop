@@ -173,14 +173,20 @@ export type TurnStats = { model: string; tokens: number; seconds: number; tps: n
 export function StatsRow({ s, live, instances, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; onInstances?: () => void; phase?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
-      {!!instances && (
+      {(!!instances || !!phase) && (
         <button
           onClick={onInstances}
-          title="Subagentes e processos rodando agora — clique para abrir a aba Instâncias"
-          className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-0.5 text-sky-300 hover:bg-sky-500/20"
+          title={instances ? "Subagentes e processos desta conversa — clique para abrir a aba Instâncias" : undefined}
+          className="inline-flex items-center gap-1.5 text-sky-300 hover:text-sky-200"
         >
-          <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
-          {instances} rodando
+          {phase ? (
+            <span className="size-3 animate-spin rounded-full border border-sky-400/30 border-t-sky-300" />
+          ) : (
+            <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
+          )}
+          {[instances ? `${instances} instância${instances > 1 ? "s" : ""} rodando` : "", phase]
+            .filter(Boolean)
+            .join(" · ")}
         </button>
       )}
       <Chip>
@@ -197,12 +203,6 @@ export function StatsRow({ s, live, instances, onInstances, phase }: { s: TurnSt
       {s.tps != null && (
         <span className="inline-flex items-center gap-1.5">
           <Gauge className="size-3.5" /> {s.tps.toFixed(2)} t/s
-        </span>
-      )}
-      {phase && (
-        <span className="inline-flex items-center gap-1.5 text-sky-300">
-          <span className="size-3 animate-spin rounded-full border border-sky-400/30 border-t-sky-300" />
-          {phase}
         </span>
       )}
     </div>
