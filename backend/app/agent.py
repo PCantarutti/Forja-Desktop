@@ -283,6 +283,12 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
             rules.append("- Se o usuário pedir um print, chame browser_screenshot: a imagem aparece para ele no chat. "
                          "Você não tem visão e não recebe a imagem, então valide layout pelo browser_read "
                          "(estrutura) e browser_console (erros).")
+    if "write_document" in names or "write_spreadsheet" in names:
+        rules.append("- Documento e planilha: depois de gerar ou editar, abra o arquivo com read_file e confira o "
+                     "que saiu antes de dizer que está pronto. É o arquivo salvo, lido de volta — tabela que virou "
+                     "texto com `|`, conteúdo que sumiu, caixa alta que não pegou aparecem aí.")
+        rules.append("- Para mexer num documento que já existe, inclusive um que o usuário anexou: leia primeiro, "
+                     "escolha onde entra e use edit_document. write_document gera do zero e não escreve por cima.")
     if "write_file" in names or "edit_file" in names:
         rules.append(f"- Memória do projeto: {config.PROJECT_MEMORY_FILE} na raiz da pasta de trabalho. Quando aprender "
                      "algo duradouro (decisões, convenções, comandos do projeto), atualize esse arquivo. Não guarde "

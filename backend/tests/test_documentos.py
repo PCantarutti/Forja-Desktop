@@ -588,3 +588,12 @@ def test_erro_de_dentro_da_ferramenta_nao_vira_erro_de_argumento(ws, monkeypatch
                                               "operations": [{"tipo": "acrescentar", "conteudo": "x"}]}, ws))
     assert "Argumentos inválidos" not in str(erro.value)
     assert "edit_document falhou" in str(erro.value)
+
+
+def test_o_agente_e_mandado_conferir_o_que_gerou(ws):
+    """A validação mais barata não precisa de visão: o arquivo salvo, lido de volta pelo extrator."""
+    from app import agent
+
+    prompt = agent.system_prompt("native")
+    assert "read_file e confira" in prompt
+    assert "write_document gera do zero e não escreve por cima" in prompt
