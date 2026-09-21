@@ -36,27 +36,27 @@ def _truncate(text: str) -> str:
 
 def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] | None) -> tuple[int, str, bool]:
     """Roda e devolve (exit code, saída, estourou o timeout). Lê linha a linha para a UI mostrar ao vivo."""
-    p = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, **native.popen_kwargs())
-    timed_out = threading.Event()
-
-    def _kill():
-        timed_out.set()
-        native.kill_tree(p)
-
-    timer = threading.Timer(timeout, _kill)
-    timer.start()
     chunks: list[str] = []
-    try:
-        assert p.stdout
-        for raw in p.stdout:
-            line = native.decode(raw)
-            chunks.append(line)
-            if sink:
-                sink(line)
-        p.wait()
-    finally:
-        timer.cancel()
+    timed_out = threading.Event()
+    # `with`: no caminho do timeout o pipe ficava aberto, um descritor por comando estourado.
+    with subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **native.popen_kwargs()) as p:
+        def _kill():
+            timed_out.set()
+            native.kill_tree(p)
+
+        timer = threading.Timer(timeout, _kill)
+        timer.start()
+        try:
+            assert p.stdout
+            for raw in p.stdout:
+                line = native.decode(raw)
+                chunks.append(line)
+                if sink:
+                    sink(line)
+            p.wait()
+        finally:
+            timer.cancel()
     return p.returncode, "".join(chunks), timed_out.is_set()
 
 
@@ -106,16 +106,24 @@ def _safe_name(name: str) -> str:
 def _start(name: str, command: str, cwd: Path) -> dict:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     with _servers_lock:
-        old = _SERVERS.get(name)
-        if old and old["proc"].poll() is None:
-            native.kill_tree(old["proc"])  # mesmo nome = reinicia
+        if name in _SERVERS:
+            _drop(_SERVERS.pop(name))  # mesmo nome = reinicia
         log = LOG_DIR / f"{name}.log"
-        fh = open(log, "wb")
+        fh = open(log, "wb")  # fechado em _drop: sem guardar o handle, vazava um descritor por servidor
         proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, **native.popen_kwargs())
-        _SERVERS[name] = {"proc": proc, "log": str(log), "command": command, "cwd": str(cwd),
+        _SERVERS[name] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
                           "started": time.time(), "conv": CONV.get()}
     return _info(name)
+
+
+def _drop(s: dict) -> None:
+    """Encerra o processo e fecha o arquivo de log dele."""
+    native.kill_tree(s["proc"])
+    try:
+        s["fh"].close()
+    except (OSError, KeyError):
+        pass
 
 
 def _info(name: str) -> dict:
@@ -153,8 +161,13 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
 
 
 def list_servers() -> list[dict]:
-    """Servidores vivos ou recém-encerrados."""
-    return [_info(n) for n in list(_SERVERS)]
+    """Servidores vivos ou recém-encerrados.
+
+    Sob o lock: stop_server e clear_finished mexem no dict, e ler fora dele dava KeyError
+    intermitente em /api/servers e /api/activity, que rodam em thread.
+    """
+    with _servers_lock:
+        return [_info(n) for n in list(_SERVERS)]
 
 
 def server_log(name: str, tail: int = 40) -> str:
@@ -170,7 +183,16 @@ def stop_server(name: str) -> None:
         s = _SERVERS.pop(name, None)
     if not s:
         raise ToolError(f"Servidor '{name}' não existe. Veja serve_status.")
-    native.kill_tree(s["proc"])
+    _drop(s)
+
+
+def close_all() -> None:
+    """Encerra tudo o que o agente subiu. Chamado no fim do backend; em dev o Electron não mata."""
+    with _servers_lock:
+        restantes = list(_SERVERS.values())
+        _SERVERS.clear()
+    for s in restantes:
+        _drop(s)
 
 
 WAIT_MAX = 120  # teto da espera do serve_status, para o turno nunca ficar preso
@@ -195,7 +217,9 @@ def clear_finished() -> int:
     with _servers_lock:
         mortos = [n for n, s in list(_SERVERS.items()) if s["proc"].poll() is not None]
         for n in mortos:
-            _SERVERS.pop(n, None)
+            s = _SERVERS.pop(n, None)
+            if s:
+                _drop(s)
     return len(mortos)
 
 

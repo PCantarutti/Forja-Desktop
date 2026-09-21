@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import JSON, ForeignKey, LargeBinary, String, Text, create_engine
+from sqlalchemy import JSON, ForeignKey, LargeBinary, String, Text, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 from . import config
@@ -84,6 +84,27 @@ class AppSetting(Base):
 
 Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(f"sqlite:///{config.DB_PATH}", connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def _pragmas(dbapi_conn, _record):
+    """O SQLite abre no modo mais conservador que existe; aqui ele vira o que este app precisa.
+
+    Escrevem no banco: o loop do agente, os lotes de imagem, os downloads e toda ferramenta que
+    roda em thread. No journal padrão, uma escrita bloqueia qualquer leitura — e sem `busy_timeout`
+    a segunda escrita nem espera, devolve "database is locked" na hora, que aparecia como 500 ou
+    como execução morta no meio. WAL deixa leitor e escritor conviverem, e o timeout faz a
+    concorrência virar espera. `foreign_keys` liga o ON DELETE CASCADE que os modelos declaram e o
+    SQLite ignora por padrão.
+    """
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")  # com WAL, durável o bastante para dado de app local
+    cur.execute("PRAGMA foreign_keys=ON")
+    cur.close()
+
+
 Base.metadata.create_all(engine)
 
 
