@@ -776,3 +776,29 @@ def test_ajustes_de_amostragem_por_nome(isolado):
     assert v["model"] == "gemma4:31b"
     assert v["inference"]["temperature"] == localai.INFERENCE_DEFAULTS["temperature"]
     assert v["inference_overrides"] == []
+
+
+def test_seletor_lista_gguf_mesmo_sem_modelo_carregado(isolado, monkeypatch):
+    """Contrato que o ModelPicker usa: /catalog reclama do llama-server fora do ar, mas /local
+    continua listando os .gguf baixados — é de lá que sai a lista para carregar pelo seletor."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    pasta = isolado / "modelos"
+    gguf(pasta, "modelo-a.gguf")
+    monkeypatch.setattr(localai, "kind_of", lambda f: "chat")
+
+    async def sem_servidor(provider):   # o llama-server da máquina de quem roda o teste fica fora disto
+        raise llm.LLMError("Não foi possível conectar em http://127.0.0.1:8077/v1: ConnectError. "
+                           "Nenhum modelo carregado. Abra o painel IA local e carregue um .gguf.")
+
+    monkeypatch.setattr(llm, "list_models", sem_servidor)
+
+    with TestClient(app) as c:
+        local = c.get("/api/local").json()
+        assert [m["name"] for m in local["models"]] == ["modelo-a"]
+        assert local["server"]["running"] is False and local["server"]["path"] == ""
+
+        catalogo = {p["id"]: p for p in c.get("/api/catalog").json()}
+        assert catalogo["local"]["type"] == "llamacpp"
+        assert catalogo["local"]["models"] == [] and "Nenhum modelo carregado" in catalogo["local"]["error"]

@@ -4,6 +4,13 @@ import { Check, Cube, Search } from "./icons";
 
 export type CatalogEntry = { id: string; name: string; type: string; models: string[]; error: string };
 
+/** Recorte do /api/local. Só o que este seletor usa; a versão web não tem essa rota e fica sem. */
+type IaLocal = {
+  models: { path: string; name: string; kind: string }[];
+  server: { running: boolean; path?: string; alias?: string };
+  image_busy: boolean;
+};
+
 /** Seletor de provedor + modelo no campo de mensagem (popover abrindo para cima). */
 export default function ModelPicker(props: {
   provider: string;
@@ -13,12 +20,17 @@ export default function ModelPicker(props: {
 }) {
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
+  const [local, setLocal] = useState<IaLocal | null>(null);
+  const [carregando, setCarregando] = useState("");   // caminho do .gguf subindo agora
+  const [erro, setErro] = useState("");
   const [active, setActive] = useState(props.provider);
   const [q, setQ] = useState("");
   const box = useRef<HTMLDivElement>(null);
 
-  const load = () =>
-    api
+  const load = () => {
+    // Os .gguf baixados não passam pelo /catalog: sem modelo carregado o llama-server nem está no ar.
+    api.get<IaLocal>("/local").then(setLocal).catch(() => setLocal(null));
+    return api
       .get<CatalogEntry[]>("/catalog")
       .then((c) => {
         setCatalog(c);
@@ -30,6 +42,7 @@ export default function ModelPicker(props: {
         }
       })
       .catch(() => setCatalog([]));
+  };
 
   useEffect(() => {
     load();
@@ -39,6 +52,7 @@ export default function ModelPicker(props: {
     if (!open) return;
     setActive(props.provider);
     setQ("");
+    setErro("");
     load();
     const close = (e: MouseEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
@@ -55,6 +69,41 @@ export default function ModelPicker(props: {
   const prov = catalog?.find((p) => p.id === active);
   const providerName = catalog?.find((p) => p.id === props.provider)?.name ?? props.provider;
   const models = (prov?.models ?? []).filter((m) => m.toLowerCase().includes(q.toLowerCase()));
+
+  // No provedor da IA local a lista sai dos arquivos baixados, não do /v1/models: assim ela existe
+  // mesmo com nada carregado, que é justamente quando a pessoa precisa carregar alguma coisa.
+  const ggufs = (local?.models ?? []).filter((m) => m.kind === "chat");
+  const localAtivo = prov?.type === "llamacpp" && !!local;
+  const daPasta = ggufs.filter((m) => m.name.toLowerCase().includes(q.toLowerCase()));
+
+  const contar = (p: CatalogEntry) =>
+    p.type === "llamacpp" && local ? ggufs.length : p.error ? "off" : p.models.length;
+
+  async function carregar(caminho: string) {
+    setCarregando(caminho);
+    setErro("");
+    try {
+      const s = await api.post<{ alias?: string }>("/local/load", { path: caminho, params: {} });
+      await load();
+      if (s.alias) props.onChange(active, s.alias);
+      setOpen(false);
+    } catch (e: any) {
+      setErro(e.message);
+      load();   // a falha fica registrada no painel IA local; aqui só atualizamos o estado
+    } finally {
+      setCarregando("");
+    }
+  }
+
+  async function descarregar() {
+    setErro("");
+    try {
+      await api.post("/local/unload", {});
+    } catch (e: any) {
+      setErro(e.message);
+    }
+    load();
+  }
 
   return (
     <div ref={box} className="relative ml-auto min-w-0">
@@ -81,7 +130,14 @@ export default function ModelPicker(props: {
                   }`}
                 >
                   <span className="truncate">{p.name}</span>
-                  <span className={`text-[10px] ${p.error ? "text-red-300" : "text-faint"}`}>{p.error ? "off" : p.models.length}</span>
+                  <span className="flex shrink-0 items-center gap-1">
+                    {p.type === "llamacpp" && local?.server.running && (
+                      <span className="size-1.5 rounded-full bg-emerald-400" title="tem modelo carregado" />
+                    )}
+                    <span className={`text-[10px] ${p.error && !(p.type === "llamacpp" && local) ? "text-red-300" : "text-faint"}`}>
+                      {contar(p)}
+                    </span>
+                  </span>
                 </button>
               </li>
             ))}
@@ -98,8 +154,58 @@ export default function ModelPicker(props: {
               />
             </label>
             <ul className="flex-1 overflow-y-auto p-1.5 text-sm">
-              {prov?.error && <li className="px-2 py-2 text-xs text-red-300">{prov.error}</li>}
-              {models.map((m) => {
+              {erro && <li className="px-2 py-2 text-xs text-red-300">{erro}</li>}
+              {prov?.error && !localAtivo && <li className="px-2 py-2 text-xs text-red-300">{prov.error}</li>}
+
+              {localAtivo && local.server.running && (
+                <li className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted">
+                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />
+                  <span className="min-w-0 flex-1 truncate">{local.server.alias} está carregado</span>
+                  <button onClick={descarregar} className="shrink-0 text-faint hover:text-fg">
+                    descarregar
+                  </button>
+                </li>
+              )}
+              {localAtivo && local.image_busy && (
+                <li className="px-2 py-2 text-xs text-amber-300">
+                  Uma imagem está sendo gerada; os dois disputam a mesma VRAM.
+                </li>
+              )}
+
+              {localAtivo && daPasta.map((m) => {
+                const carregado = local.server.path === m.path;
+                const subindo = carregando === m.path;
+                return (
+                  <li key={m.path}>
+                    <button
+                      disabled={!!carregando || (local.image_busy && !carregado)}
+                      title={carregado ? m.path : `Carregar ${m.name}`}
+                      onClick={() => {
+                        if (!carregado) return void carregar(m.path);
+                        props.onChange(active, local.server.alias || m.name);
+                        setOpen(false);
+                      }}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[13px] disabled:opacity-40 ${
+                        carregado ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
+                      }`}
+                    >
+                      {carregado && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />}
+                      <span className="flex-1 truncate">{m.name}</span>
+                      <span className="shrink-0 font-sans text-[11px] text-faint">
+                        {subindo ? "carregando…" : carregado ? "carregado" : "carregar"}
+                      </span>
+                      {carregado && <Check className="size-3.5 shrink-0" />}
+                    </button>
+                  </li>
+                );
+              })}
+              {localAtivo && !daPasta.length && (
+                <li className="px-2 py-2 text-xs text-muted">
+                  Nenhum .gguf{q ? " com esse nome" : ""} nas pastas de modelos. Baixe um no painel IA local.
+                </li>
+              )}
+
+              {!localAtivo && models.map((m) => {
                 const selected = active === props.provider && m === props.model;
                 return (
                   <li key={m}>
@@ -118,7 +224,7 @@ export default function ModelPicker(props: {
                   </li>
                 );
               })}
-              {prov && !prov.error && !models.length && (
+              {prov && !localAtivo && !prov.error && !models.length && (
                 <li className="px-2 py-2 text-xs text-muted">
                   Nenhum modelo{q ? " com esse nome" : ""}. Escolha quais aparecem em Configurações › Provedores.
                 </li>
