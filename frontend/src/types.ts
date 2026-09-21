@@ -53,7 +53,11 @@ export type Conversation = {
 };
 
 /** Arquivo alterado pelo agente nesta conversa (checkpoints), com diff do antes para o agora. */
-export type ChangeFile = { path: string; status: "created" | "modified" | "deleted" | "unchanged"; diff: string; additions: number; deletions: number };
+export type ChangeFile = { path: string; status: "created" | "modified" | "deleted" | "unchanged"; diff: string;
+  additions: number; deletions: number;
+  /** Nada legível para comparar (imagem, zip, PDF escaneado). Documento de escritório NÃO é binário aqui:
+   *  o diff é do texto extraído dele. */
+  binary?: boolean };
 
 export type GitStatus = {
   repo: boolean;

@@ -665,3 +665,49 @@ def test_a_regra_da_previa_depende_de_o_modelo_ter_visao(ws):
     sem = agent.system_prompt("native", caps=set())
     assert "você a recebe" in com and "não recebe a imagem" not in com.split("preview_document")[1][:400]
     assert "Você não tem visão e não recebe a imagem" in sem
+
+
+# ------------------------------------------------ aba Alterações
+
+def test_diff_de_documento_mostra_o_conteudo_e_nao_os_bytes(ws):
+    """O painel mostrava linhas de ZIP comprimido: um .docx é um zip, e o zip muda inteiro a cada
+    gravação. O que interessa é o que mudou no documento."""
+    from app.main import _legivel
+    from app.tools import _diff
+
+    roda("write_document", {"path": "d.docx", "content": "# PLANO" + chr(10) * 2 + "prazo de 30 dias"}, ws)
+    alvo = ws / "documentos" / "d.docx"
+    antes = alvo.read_bytes()
+    roda("edit_document", {"path": "documentos/d.docx", "operations": [
+        {"tipo": "substituir", "de": "30 dias", "para": "45 dias"}]}, ws)
+
+    texto_antes, bin_a = _legivel(alvo, antes)
+    texto_depois, bin_d = _legivel(alvo, alvo.read_bytes())
+    assert not bin_a and not bin_d
+    d = _diff(texto_antes, texto_depois, "d.docx")
+    assert "-prazo de 30 dias" in d and "+prazo de 45 dias" in d
+    assert "PK" not in d  # a assinatura do zip é o que aparecia antes
+
+
+def test_planilha_tambem_compara_pelo_conteudo(ws):
+    from app.main import _legivel
+
+    roda("write_spreadsheet", {"path": "v.xlsx", "sheets": [{"nome": "A", "linhas": [["Produto"], ["Cafe"]]}]}, ws)
+    texto, binario = _legivel(ws / "documentos" / "v.xlsx", (ws / "documentos" / "v.xlsx").read_bytes())
+    assert not binario and "Cafe" in texto
+
+
+def test_binario_de_verdade_nao_tenta_virar_diff(ws):
+    """Imagem e zip não têm texto; o painel diz isso em vez de despejar bytes."""
+    from app.main import _legivel
+
+    png = ws / "i.png"
+    png.write_bytes(bytes([137, 80, 78, 71, 13, 10, 26, 10]) + bytes(300))
+    assert _legivel(png, png.read_bytes()) == (None, True)
+
+
+def test_texto_comum_segue_pelo_caminho_de_sempre(ws):
+    from app.main import _legivel
+
+    (ws / "a.txt").write_text("linha", encoding="utf-8")
+    assert _legivel(ws / "a.txt", (ws / "a.txt").read_bytes()) == ("linha", False)

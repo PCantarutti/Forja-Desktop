@@ -196,8 +196,14 @@ export default function ChangesPanel(props: {
                       {f.path.split("/").pop()}
                     </span>
                     <span className={`shrink-0 ${cls}`}>{label}</span>
-                    <span className="shrink-0 font-mono text-emerald-400">+{f.additions}</span>
-                    <span className="shrink-0 font-mono text-red-400">−{f.deletions}</span>
+                    {f.binary ? (
+                      <span className="shrink-0 text-faint">binário</span>
+                    ) : (
+                      <>
+                        <span className="shrink-0 font-mono text-emerald-400">+{f.additions}</span>
+                        <span className="shrink-0 font-mono text-red-400">−{f.deletions}</span>
+                      </>
+                    )}
                   </button>
                   <button className={iconBtn} title="Abrir no editor" onClick={() => props.onOpen(f.path, "editor")}>
                     <ExternalLink className="size-3.5" />
@@ -209,7 +215,15 @@ export default function ChangesPanel(props: {
                 {isOpen && (
                   <div className="px-3.5 pb-3">
                     <div className="mb-1 truncate font-mono text-faint">{f.path}</div>
-                    {f.diff ? <DiffView preview={{ kind: "diff", path: f.path, text: f.diff }} /> : <div className="text-muted">(sem diff)</div>}
+                    {f.diff ? (
+                      <DiffView preview={{ kind: "diff", path: f.path, text: f.diff }} />
+                    ) : (
+                      <div className="text-muted">
+                        {f.binary
+                          ? "Sem comparação: não há texto a extrair deste arquivo. Abra para ver."
+                          : "(sem diff)"}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

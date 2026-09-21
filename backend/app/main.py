@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import tempfile
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -14,7 +15,7 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (checkpoints, compact, comparar, config, db, downloads, gitops, imagegen, llm, localai, lotes,
+from . import (checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
@@ -1212,6 +1213,31 @@ async def compact_now(conv_id: int, body: dict):
     return m.to_dict()
 
 
+def _legivel(caminho: Path, dados: bytes | None) -> tuple[str | None, bool]:
+    """(texto para comparar, é binário). Documento vira o texto que dá para ler dele.
+
+    Comparar os bytes de um .docx não diz nada a ninguém: o painel mostrava linhas de ZIP
+    comprimido, com o arquivo inteiro marcado como alterado porque o zip muda por completo a cada
+    gravação. O que interessa é o conteúdo — e o extrator já sabe tirá-lo.
+    """
+    if dados is None:
+        return None, False
+    if caminho.suffix.lower() in documentos.LEITURA:
+        with tempfile.NamedTemporaryFile(suffix=caminho.suffix, delete=False) as f:
+            f.write(dados)
+            tmp = Path(f.name)
+        try:
+            texto = documentos.extrair(tmp)
+        except Exception:
+            texto = None
+        finally:
+            tmp.unlink(missing_ok=True)
+        return (texto, False) if texto is not None else (None, True)
+    if bytes([0]) in dados[:8000]:
+        return None, True  # binário puro: imagem, zip, executável
+    return dados.decode("utf-8", "replace"), False
+
+
 @app.get("/api/conversations/{conv_id}/changes")
 def conversation_changes(conv_id: int):
     """Arquivos que o agente alterou nesta conversa (write_file/edit_file), com diff do antes → agora."""
@@ -1226,18 +1252,20 @@ def conversation_changes(conv_id: int):
     for path, cp in first.items():
         p = Path(path)
         label = workspace.to_host(p) or path
-        before = (cp.content or b"").decode("utf-8", "replace") if cp.existed else None
+        before, bin_antes = _legivel(p, cp.content or b"") if cp.existed else (None, False)
         try:
-            after = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else None
+            after, bin_depois = _legivel(p, p.read_bytes()) if p.is_file() else (None, False)
         except OSError:
-            after = None
-        if before is None and after is None:
+            after, bin_depois = None, False
+        existia, existe = cp.existed, p.is_file()
+        if not existia and not existe:
             continue
-        status = ("created" if before is None else "deleted" if after is None
-                  else "unchanged" if before == after else "modified")
-        d = _diff(before or "", after or "", Path(label).name) if status != "unchanged" else ""
+        binario = bin_antes or bin_depois
+        status = ("created" if not existia else "deleted" if not existe
+                  else "unchanged" if (not binario and before == after) else "modified")
+        d = "" if binario or status == "unchanged" else _diff(before or "", after or "", Path(label).name)
         body_lines = [l for l in d.splitlines() if not l.startswith(("+++", "---"))]
-        files.append({"path": label, "status": status, "diff": d[:100_000],
+        files.append({"path": label, "status": status, "diff": d[:100_000], "binary": binario,
                       "additions": sum(1 for l in body_lines if l.startswith("+")),
                       "deletions": sum(1 for l in body_lines if l.startswith("-"))})
     return {"files": files}
