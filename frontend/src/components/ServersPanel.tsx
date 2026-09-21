@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { ServerInfo, SubagentActive } from "../types";
-import { Chevron, Split, Square } from "./icons";
+import { Chevron, Split, Square, Trash } from "./icons";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 
 const NIVEIS: Record<string, string> = { rapido: "Rápido", capaz: "Capaz", nuvem: "Nuvem" };
@@ -30,6 +30,16 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
   const [error, setError] = useState("");
   const [openLog, setOpenLog] = useState<string | null>(null);
   const [aberto, setAberto] = useState<string | null>(null); // um cartão expandido por vez: a lista fica legível
+  const [verProntos, setVerProntos] = useState(false);
+
+  async function limpar() {
+    try {
+      await api.post("/servers/clear");
+      await refresh();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
   const [log, setLog] = useState("");
 
   async function refresh() {
@@ -86,13 +96,12 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
   }
 
   const list = servers ?? [];
+  const vivos = list.filter((s) => s.alive);
+  const prontos = list.filter((s) => !s.alive);
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-xs">
-      <div className="text-faint">
-        Subagentes trabalhando e servidores iniciados com <span className="font-mono">serve_start</span>, em{" "}
-        {environment || "…"}.
-      </div>
       {error && <div className="text-red-300">{error}</div>}
+      <div className="text-faint">Em execução</div>
       {recentes(subs, (s) => s.seconds).map((s) => (
         <section key={s.id} className="overflow-hidden rounded-2xl border border-sky-500/30 bg-sky-500/5">
           <button
@@ -144,13 +153,13 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
           </div>
         </section>
       ))}
-      {servers && !list.length && !subs.length && (
+      {servers && !vivos.length && !subs.length && (
         <div className="rounded-2xl border border-line bg-surface p-3.5 text-muted">
-          Nada rodando agora. Quando o agente delegar para um subagente ou subir um servidor (npm run dev, uvicorn…),
-          aparece aqui — e você pode parar.
+          Nada rodando agora. Quando o agente delegar para um subagente ou subir um processo (npm run dev, uma
+          build…), aparece aqui — e você pode parar.
         </div>
       )}
-      {recentes(list, (s) => s.uptime).map((s) => (
+      {recentes(vivos, (s) => s.uptime).map((s) => (
         <section key={`${s.where}-${s.name}`} className="overflow-hidden rounded-2xl border border-line bg-surface">
           <button
             onClick={() => setAberto(aberto === s.name ? null : s.name)}
@@ -202,6 +211,57 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
           </div>
         </section>
       ))}
+      {!!prontos.length && (
+        <>
+          <div className="mt-1 flex items-center gap-2 text-faint">
+            <button onClick={() => setVerProntos(!verProntos)} className="inline-flex items-center gap-1.5 hover:text-fg">
+              Concluído {prontos.length}
+              <Chevron className={`size-3.5 ${verProntos ? "rotate-180" : ""}`} />
+            </button>
+            <button onClick={limpar} title="Limpar os terminados da lista" className="ml-auto rounded p-1 hover:bg-raised hover:text-fg">
+              <Trash className="size-3.5" />
+            </button>
+          </div>
+          {verProntos &&
+            recentes(prontos, (s) => s.uptime).map((s) => (
+              <section key={`done-${s.where}-${s.name}`} className="overflow-hidden rounded-2xl border border-line bg-surface/60">
+                <button
+                  onClick={() => setAberto(aberto === s.name ? null : s.name)}
+                  className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left hover:bg-raised/40"
+                >
+                  <span className="text-faint">○</span>
+                  <span className="truncate font-mono text-muted" title={s.name}>
+                    {s.name}
+                  </span>
+                  <span className="ml-auto shrink-0 text-faint">
+                    {s.error ? "erro" : `exit ${s.exit_code ?? "?"}`}
+                  </span>
+                  <Chevron className={`size-3.5 shrink-0 text-faint ${aberto === s.name ? "rotate-180" : ""}`} />
+                </button>
+                <div className={`px-3.5 pb-3.5 ${aberto === s.name ? "" : "hidden"}`}>
+                  <div className="truncate font-mono text-muted" title={s.command}>
+                    $ {s.command || s.error}
+                  </div>
+                  {s.cwd && <div className="truncate text-faint">{s.cwd}</div>}
+                  <button
+                    onClick={() => setOpenLog(openLog === s.name ? null : s.name)}
+                    className="mt-2 rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                  >
+                    {openLog === s.name ? "Ocultar log" : "Log"}
+                  </button>
+                  {openLog === s.name && (
+                    <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono text-[11px] whitespace-pre-wrap text-muted">
+                      {log}
+                    </pre>
+                  )}
+                </div>
+              </section>
+            ))}
+        </>
+      )}
+      <div className="mt-1 text-faint">
+        Subagentes e processos de fundo, em {environment || "…"}.
+      </div>
     </div>
   );
 }

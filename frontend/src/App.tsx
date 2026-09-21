@@ -969,6 +969,22 @@ export default function App() {
     };
   })();
 
+  /** O que o agente está fazendo agora, em uma frase — o que o usuário lê enquanto espera. */
+  const fase = (() => {
+    void tick; // acompanha o cronômetro
+    if (!running) return "";
+    const pendente = Object.entries(approvals).find(([id]) => !results.has(id));
+    if (pendente) return "Esperando você decidir";
+    const chamando = messages
+      .slice(lastUserIndex + 1)
+      .flatMap((m) => m.tool_calls ?? [])
+      .find((c) => !results.has(c.id));
+    if (chamando) return `Usando ${chamando.name}`;
+    if (draft?.content) return "Escrevendo a resposta";
+    if (draft?.thinking) return (liveStats?.seconds ?? 0) > 30 ? "Ainda pensando…" : "Pensando…";
+    return status || "Trabalhando…";
+  })();
+
   // Uso por modelo (a conversa pode trocar de modelo no meio).
   const usage = useMemo(() => {
     const by = new Map<string, Stats[]>();
@@ -1298,7 +1314,13 @@ export default function App() {
             {status && !draft && <div className="my-4 animate-pulse text-sm text-muted">{status}</div>}
             {running && liveStats && (
               <div className="my-3">
-                <StatsRow s={liveStats} live />
+                <StatsRow
+                  s={liveStats}
+                  live
+                  phase={fase}
+                  instances={instancias}
+                  onInstances={() => setRight({ tab: "servers", collapsed: false })}
+                />
               </div>
             )}
             {running && liveTasks && <TasksCard tasks={liveTasks} live />}

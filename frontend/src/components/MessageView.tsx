@@ -170,7 +170,7 @@ function Chip({ children }: { children: React.ReactNode }) {
 
 export type TurnStats = { model: string; tokens: number; seconds: number; tps: number | null; estimated: boolean };
 
-export function StatsRow({ s, live, instances, onInstances }: { s: TurnStats; live?: boolean; instances?: number; onInstances?: () => void }) {
+export function StatsRow({ s, live, instances, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; onInstances?: () => void; phase?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
       {!!instances && (
@@ -197,6 +197,12 @@ export function StatsRow({ s, live, instances, onInstances }: { s: TurnStats; li
       {s.tps != null && (
         <span className="inline-flex items-center gap-1.5">
           <Gauge className="size-3.5" /> {s.tps.toFixed(2)} t/s
+        </span>
+      )}
+      {phase && (
+        <span className="inline-flex items-center gap-1.5 text-sky-300">
+          <span className="size-3 animate-spin rounded-full border border-sky-400/30 border-t-sky-300" />
+          {phase}
         </span>
       )}
     </div>

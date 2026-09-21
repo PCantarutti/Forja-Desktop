@@ -326,6 +326,12 @@ async def get_activity():
     return {"conversations": list(por_conversa.values()), "servers": vivos}
 
 
+@app.post("/api/servers/clear")
+async def clear_servers():
+    """Lixeira da aba Instâncias: some com os processos já terminados (não encerra nada)."""
+    return {"removed": await asyncio.to_thread(shell.clear_finished)}
+
+
 @app.get("/api/servers/{name}/log")
 async def get_server_log(name: str, tail: int = 80):
     try:
