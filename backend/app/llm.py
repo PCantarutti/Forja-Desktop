@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from typing import AsyncIterator
 
@@ -90,7 +91,7 @@ def _raise_for(provider: str, status: int, body: bytes) -> None:
 
 
 # Esforço -> raciocínio do modelo. Só mandamos quando o modelo entende, senão o servidor recusa.
-EFFORT_LEVEL = {"baixo": "low", "medio": "medium", "alto": "high", "maximo": "high", "extremo": "high"}
+EFFORT_LEVEL = {"baixo": "low", "medio": "medium", "alto": "high", "maximo": "high", "extremo": "low"}
 REASONING_MODELS = re.compile(r"gpt-oss|gpt-5|^o[1-4](-|$)|deepseek-r|grok|magistral", re.I)
 
 
@@ -145,6 +146,59 @@ def _inference(provider: str, model: str, extra: dict) -> None:
             extra["reasoning_budget"] = int(cfg["reasoning_budget"])
 
 
+# Teto de raciocínio do maestro no Extremo. Medido no Qwen3.6 via llama.cpp: um brief bom sai com
+# ~2,3 mil caracteres de raciocínio; o tratado que atrasa 13 minutos passa de 15 mil. O servidor
+# ignora `reasoning_budget` neste modelo, então o corte é nosso.
+REASONING_CAP = 6000
+NO_THINK = chr(10) + "/no_think"   # interruptor por texto do template do Qwen3
+
+
+def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict, list[dict]]:
+    """Mesma chamada com o pensamento desligado. Não existe um interruptor só: cada família usa o seu
+    (`think` no Ollama, `enable_thinking` no template do Qwen3.6/GLM, `reasoning_budget` em alguns
+    builds do llama.cpp, `/no_think` no texto do Qwen3). Mandamos todos: o que não for entendido é
+    ignorado sem erro, e assim isto vale para o modelo que você trocar amanhã, não só para o de hoje."""
+    saida, msgs = dict(extra), list(messages)
+    if spec(provider)["type"] == "ollama":
+        saida["think"] = False
+        return saida, msgs
+    saida["chat_template_kwargs"] = {**saida.get("chat_template_kwargs", {}), "enable_thinking": False}
+    saida["reasoning_budget"] = 0
+    if msgs and msgs[0]["role"] == "system" and isinstance(msgs[0].get("content"), str):
+        msgs[0] = {**msgs[0], "content": msgs[0]["content"] + NO_THINK}
+    return saida, msgs
+
+
+async def _capped(impl, provider, model, messages, tools, num_ctx, extra):
+    """Pensamento limitado: o maestro pode raciocinar, não virar tratado. Passou do teto sem ter
+    começado a responder, corta e refaz sem pensar — o prompt já está no cache do servidor, então a
+    segunda chamada é barata, e é melhor um brief rápido que meia hora de projeto que ia ser delegado."""
+    gen = impl(provider, model, messages, tools, num_ctx, extra)
+    raciocinio, respondendo, cortou, bruto = 0, False, False, ""
+    try:
+        async for kind, val in gen:
+            if kind == "content" and val:
+                # Servidor que não separa o canal de raciocínio manda o <think> dentro do próprio texto.
+                bruto += str(val)
+                if bruto.lstrip().startswith("<think") and "</think>" not in bruto:
+                    raciocinio += len(str(val))
+                else:
+                    respondendo = True   # já está entregando: deixa terminar
+            elif kind == "reasoning" and not respondendo:
+                raciocinio += len(str(val))
+            if not respondendo and raciocinio > REASONING_CAP:
+                cortou = True
+                break
+            yield kind, val
+    finally:
+        await gen.aclose()
+    if cortou:
+        yield "reasoning", "\n[teto de raciocínio do Extremo: refazendo sem pensar]\n"
+        sem, msgs = _sem_pensar(provider, extra, messages)
+        async for ev in impl(provider, model, msgs, tools, num_ctx, sem):
+            yield ev
+
+
 async def chat_stream(provider: str, model: str, messages: list[dict], tools: list[dict] | None,
                       num_ctx: int, effort: str | None = None) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
@@ -153,8 +207,12 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
     await _reasoning(provider, model, effort, extra, messages)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     try:
-        async for ev in impl(provider, model, messages, tools, num_ctx, extra):
-            yield ev
+        if effort == "extremo":  # só o maestro; o subagente roda com 'maximo' e pensa à vontade
+            async for ev in _capped(impl, provider, model, messages, tools, num_ctx, extra):
+                yield ev
+        else:
+            async for ev in impl(provider, model, messages, tools, num_ctx, extra):
+                yield ev
     except httpx.HTTPError as e:
         raise _conn_error(provider, e) from e
 
@@ -284,6 +342,62 @@ async def _ollama_stream(provider, model, messages, tools, num_ctx, extra: dict 
 
 def _new_id() -> str:
     return "call_" + uuid.uuid4().hex[:12]
+
+
+# ------------------------------------------------------------------ cota do Ollama Cloud
+
+CLOUD_HOST = "ollama.com"
+USAGE_TTL = 60          # a cota anda devagar; consultar a cada chamada seria desperdício
+_USAGE: dict[str, tuple[float, dict | None]] = {}
+
+
+def is_cloud(provider: str) -> bool:
+    """Provedor que cobra cota no Ollama Cloud: nuvem da Ollama, com chave."""
+    try:
+        s = spec(provider)
+    except LLMError:
+        return False
+    return s["type"] == "ollama" and CLOUD_HOST in s["url"] and bool(s.get("api_key"))
+
+
+def _limites(bruto: dict) -> tuple[list[dict], list[dict]]:
+    """Normaliza o `limits` do /api/usage. O plano grátis devolve só `monthly` e `models` como lista;
+    o pago devolve `session`/`weekly` e, em algumas versões, `models` como objeto. Aceita os dois."""
+    limites, modelos = [], []
+    for nome, janela in (bruto or {}).items():
+        if not isinstance(janela, dict):
+            continue
+        limites.append({"name": nome, "usage": float(janela.get("usage") or 0)})
+        crus = janela.get("models") or []
+        atual = ([{"name": k, **(v if isinstance(v, dict) else {})} for k, v in crus.items()]
+                 if isinstance(crus, dict) else [m for m in crus if isinstance(m, dict)])
+        if len(atual) > len(modelos):
+            modelos = atual
+    ordem = {"session": 0, "daily": 1, "weekly": 2, "monthly": 3}
+    limites.sort(key=lambda l: (ordem.get(l["name"], 9), l["name"]))
+    return limites, sorted(modelos, key=lambda m: -(m.get("request_count") or 0))
+
+
+async def usage(provider: str) -> dict | None:
+    """Cota consumida no Ollama Cloud, pelo GET /api/usage. None quando não se aplica ou a consulta
+    falha: o endpoint não é documentado (pode mudar ou sumir), então nada aqui levanta erro."""
+    if not is_cloud(provider):
+        return None
+    agora = time.monotonic()
+    if (cache := _USAGE.get(provider)) and agora - cache[0] < USAGE_TTL:
+        return cache[1]
+    host = base_url(provider).removesuffix("/v1")
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=headers(provider)) as c:
+            r = await c.get(f"{host}/api/usage")
+        dados = r.json() if r.status_code < 400 else {}
+    except (httpx.HTTPError, ValueError):
+        dados = {}
+    limites, modelos = _limites(dados.get("limits") or {})
+    saida = ({"provider": provider, "name": spec(provider)["name"], "limits": limites, "models": modelos}
+             if limites else None)
+    _USAGE[provider] = (agora, saida)
+    return saida
 
 
 # ------------------------------------------------------------------ capacidades do modelo

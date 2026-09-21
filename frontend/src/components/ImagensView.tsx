@@ -4,8 +4,12 @@ import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, SeedMode } f
 import { ArrowUp, Check, FolderOpen, Refresh, Search, Sliders, Square, Trash, X } from "./icons";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
+import ModelPicker from "./ModelPicker";
 
 const POLL_MS = 1500; // só enquanto um lote roda; fora disso a tela fica parada
+// O modelo que reescreve o prompt é separado do modelo do Chat: quem gera imagem costuma querer
+// um modelo pequeno e rápido aqui, não o mesmo que responde no chat.
+const KEY_LLM = "forja.imagem.llm";
 
 /** Proporções comuns em múltiplos de 64 (o que o sd.cpp pede). */
 const PROPORCOES: { label: string; width: number; height: number }[] = [
@@ -53,7 +57,21 @@ export default function ImagensView(props: {
   const [perguntando, setPerguntando] = useState(false);
   const [melhorando, setMelhorando] = useState(false);
   const [zoom, setZoom] = useState<string | null>(null);
+  // Na primeira vez herda o par do Chat; a partir daí é escolha própria desta aba.
+  const [llm, setLlm] = useState(() => {
+    try {
+      const salvo = JSON.parse(localStorage.getItem(KEY_LLM) ?? "null");
+      if (salvo?.model) return salvo as { provider: string; model: string };
+    } catch {
+      /* localStorage corrompido: cai no do Chat */
+    }
+    return { provider: props.provider, model: props.model };
+  });
   const fim = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(KEY_LLM, JSON.stringify(llm));
+  }, [llm]);
 
   const ocupado = messages.some(rodando);
 
@@ -150,14 +168,10 @@ export default function ImagensView(props: {
   }
 
   async function melhorar() {
-    if (!prompt.trim() || !props.model) return;
+    if (!prompt.trim() || !llm.model) return;
     setMelhorando(true);
     try {
-      const r = await api.post<{ prompt: string }>("/imagens/prompt", {
-        prompt,
-        provider: props.provider,
-        model: props.model,
-      });
+      const r = await api.post<{ prompt: string }>("/imagens/prompt", { prompt, ...llm });
       setPrompt(r.prompt);
     } catch (e: any) {
       props.onError(e.message);
@@ -280,13 +294,21 @@ export default function ImagensView(props: {
               </button>
               <button
                 onClick={melhorar}
-                disabled={!prompt.trim() || !props.model || melhorando}
-                title={props.model ? `Reescrever o prompt com ${props.model}` : "Escolha um modelo de texto no Chat"}
+                disabled={!prompt.trim() || !llm.model || melhorando}
+                title={llm.model ? `Reescrever o prompt com ${llm.model}` : "Escolha ao lado o modelo que reescreve"}
                 className={`inline-flex items-center gap-1 ${btn}`}
               >
                 <Refresh className={`size-3.5 ${melhorando ? "animate-spin" : ""}`} />
                 Melhorar prompt
               </button>
+              {/* Div à parte: o ModelPicker traz ml-auto, que na linha do composer jogaria tudo para a direita. */}
+              <div title="Modelo que reescreve o prompt (não é o que gera a imagem)">
+                <ModelPicker
+                  provider={llm.provider}
+                  model={llm.model}
+                  onChange={(provider, model) => setLlm({ provider, model })}
+                />
+              </div>
               <label className="inline-flex items-center gap-1.5 text-muted">
                 Variações
                 <input

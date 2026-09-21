@@ -243,6 +243,13 @@ async def catalog():
     return await asyncio.gather(*(one(p) for p in config.PROVIDERS.values()))
 
 
+@app.get("/api/cloud-usage")
+async def get_cloud_usage():
+    """Cota consumida nos provedores do Ollama Cloud (um por provedor com chave)."""
+    usos = await asyncio.gather(*(llm.usage(p) for p in config.PROVIDERS if llm.is_cloud(p)))
+    return {"providers": [u for u in usos if u]}
+
+
 class ModelSettingBody(BaseModel):
     model: str
     tool_mode: str | None = None  # native | text | auto
@@ -280,6 +287,20 @@ def put_model_settings(body: ModelSettingBody):
 async def get_servers():
     """Servidores iniciados por serve_start nesta sessão."""
     return {"servers": await asyncio.to_thread(shell.list_servers), "environment": native.describe()}
+
+
+@app.get("/api/subagents/active")
+def get_active_subagents():
+    """Delegações rodando agora, em qualquer conversa (aba Instâncias)."""
+    ativas = subagents.ativas()
+    if ativas:
+        ids = {a["conversation_id"] for a in ativas}
+        with db.session() as s:
+            titulos = {c.id: c.title for c in s.scalars(
+                select(db.Conversation).where(db.Conversation.id.in_(ids)))}
+        for a in ativas:
+            a["conversation"] = titulos.get(a["conversation_id"]) or "sem título"
+    return {"subagents": ativas}
 
 
 @app.get("/api/servers/{name}/log")

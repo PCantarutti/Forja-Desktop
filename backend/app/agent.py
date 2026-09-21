@@ -55,12 +55,16 @@ ASK_USER = Tool(
     "Faz até 4 perguntas ao usuário de uma vez e espera as respostas. Use quando uma decisão muda o trabalho "
     "(duas abordagens válidas, requisito ambíguo, escolha de biblioteca) e não dá para inferir do código. "
     "Junte TODAS as dúvidas abertas nesta chamada: perguntar uma por vez faz o usuário esperar uma rodada para "
-    "cada. Não use para confirmar o óbvio nem para pedir permissão: as ferramentas já pedem.",
+    "cada. Toda pergunta leva 2 a 4 opções sempre que houver alternativas que dê para nomear — a primeira é a "
+    "sua recomendação e o rótulo dela termina com '(Recomendado)'. A explicação de cada opção vai em "
+    "'description', NUNCA dentro do rótulo: o rótulo é só o nome da escolha, sem travessão e sem dois-pontos "
+    "explicando. Pergunta sem opções só quando não houver alternativa a listar. Não use para "
+    "confirmar o óbvio nem para pedir permissão: as ferramentas já pedem.",
     {"type": "object",
      "properties": {
          "questions": {
              "type": "array", "minItems": 1, "maxItems": 4,
-             "description": "As perguntas abertas, da mais importante para a menos.",
+             "description": "Todas as dúvidas abertas de uma vez, da mais importante para a menos.",
              "items": {
                  "type": "object",
                  "properties": {
@@ -70,15 +74,20 @@ ASK_USER = Tool(
                                       "description": "true quando o usuário pode marcar mais de uma opção"},
                      "options": {
                          "type": "array", "minItems": 2, "maxItems": 4,
-                         "description": "2 a 4 opções, a recomendada primeiro. O usuário também pode escrever "
-                                        "outra resposta.",
+                         "description": "2 a 4 opções, a recomendada primeiro e com '(Recomendado)' no fim do "
+                                        "rótulo. Deixe de fora só quando não houver alternativas a listar; o "
+                                        "usuário sempre pode escrever outra resposta.",
                          "items": {"type": "object",
                                    "properties": {
-                                       "label": {"type": "string", "description": "A opção, 1 a 5 palavras"},
+                                       "label": {"type": "string",
+                                                 "description": "Só o nome da escolha, 1 a 5 palavras, sem "
+                                                                "explicação junto; na primeira, termine com "
+                                                                "'(Recomendado)'"},
                                        "description": {"type": "string",
-                                                       "description": "Uma linha com o que essa escolha implica"}},
-                                   "required": ["label"]}}},
-                 "required": ["question", "options"]}}},
+                                                       "description": "A explicação: uma linha com o que essa "
+                                                                      "escolha implica"}},
+                                   "required": ["label", "description"]}}},
+                 "required": ["question"]}}},
      "required": ["questions"]},
     lambda *_: "", mutating=False)
 
@@ -99,7 +108,7 @@ class RunRequest:
     model: str
     mode: str = "agent"              # chat | agent (vem do tipo da conversa)
     permission: str = "manual"       # auto | manual | edits | plan | bypass
-    effort: str = "medio"            # baixo | medio | alto | maximo
+    effort: str = "medio"            # baixo | medio | alto | maximo | extremo
     attachments: list | None = None
 
 
@@ -120,6 +129,7 @@ class Run:
         self.waiting: dict[str, tuple] = {}  # call_id -> (tool, args) das aprovações abertas
         self.queue: list[str] = []      # mensagens enviadas pelo usuário durante a execução (entram no próximo passo)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
+        self.nudged: set[str] = set()   # arquivos que já levaram o freio do esforço extremo (um aviso cada)
         self.plan: str | None = None    # plano aprovado: fica preso no system prompt até outro substituí-lo
         self.cancel = asyncio.Event()
         self.pending: dict[str, asyncio.Future] = {}
@@ -279,12 +289,15 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
         rules.append("- Trabalho com 3 ou mais passos: crie a lista com update_tasks no início e atualize a cada "
                      "passo (doing ao começar, done ao terminar). O usuário acompanha essa lista.")
     if "delegate_task" in names and effort == "extremo":
-        rules.append("- ESFORÇO EXTREMO: você NÃO escreve a lógica difícil. Localize os arquivos, entenda o problema "
-                     "e chame delegate_task(level='capaz') com: 'task' completa (o que fazer e por quê), 'files' com "
-                     "os arquivos relevantes e 'done_when' com o comando que prova que ficou pronto (teste, build, "
-                     "lint). O comando roda sozinho depois e o resultado volta no relatório. Você integra o que ele "
-                     "entregou e responde. Edite direto só o trivial (import, renomear, uma ou duas linhas). Se a "
-                     "verificação falhar, delegue de novo colando a saída do erro.")
+        # primeira regra da lista: modelo pequeno obedece o que lê cedo e esquece o que lê no meio
+        rules.insert(0, "- ESFORÇO EXTREMO: quem resolve é o subagente, você é o maestro. NÃO projete a solução, não "
+                        "escreva pseudocódigo e não simule casos de teste na cabeça: isso é trabalho dele. Leia só o "
+                        "necessário para montar o pedido (quais arquivos importam e como se prova que ficou pronto) "
+                        "e chame delegate_task(level='capaz') em poucos passos, com 'task' repassando o enunciado "
+                        "por completo, 'files' com os arquivos relevantes e 'done_when' com o comando que prova "
+                        "(teste, build, lint). O comando roda sozinho depois e o resultado volta no relatório. Você "
+                        "integra o que ele entregou e responde. Edite direto só o trivial (import, renomear, uma ou "
+                        "duas linhas). Se a verificação falhar, delegue de novo colando a saída do erro.")
     elif "delegate_task" in names:
         rules.append("- delegate_task passa uma subtarefa autocontida para outro modelo e devolve só o relatório. "
                      "Use level='rapido' para tarefas simples e mecânicas (buscar, resumir, listar, editar algo óbvio) "
@@ -301,12 +314,16 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
         rules += ["- Decisão que muda o trabalho (duas abordagens válidas, requisito ambíguo)? Junte as dúvidas e "
                   "chame ask_user UMA vez, com todas (até 4), ANTES de fechar o plano. Não chute e não pergunte "
                   "de uma em uma.",
+                  "- Em cada pergunta do ask_user dê 2 a 4 opções, a sua recomendação primeiro e com "
+                  "'(Recomendado)' no fim do rótulo, cada uma com uma linha explicando o que implica. Só "
+                  "pergunte sem opções quando não houver alternativa a listar.",
                   "- Quando souber o que fazer, chame exit_plan_mode com o plano em markdown e PARE. "
                   "O usuário aprova (e escolhe o modo de execução) ou pede mudanças.",
                   "- " + PLAN_FORMAT]
     else:
         rules.append("- Dúvida que muda o resultado e não dá para inferir do código: ask_user com todas as "
-                     "perguntas de uma vez. Não pergunte o óbvio.")
+                     "perguntas de uma vez, cada uma com 2 a 4 opções (a recomendada primeiro, com "
+                     "'(Recomendado)' no rótulo) e uma linha de explicação em cada. Não pergunte o óbvio.")
         rules.append("- Ao terminar, responda com um resumo curto do que foi feito.")
     dica = EFFORT.get(effort, EFFORT["medio"])[1]
     if dica:
@@ -803,6 +820,10 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         async for ev in subagents.run(conv_id, call, req, run, out, _run_call):
             yield ev
         return
+    if req.effort == "extremo" and not parent:
+        if aviso := subagents.nudge_write(name, args, run.nudged):
+            result("erro", aviso)  # volta antes da aprovação: o usuário não vê card de algo que não vai rodar
+            return
     try:
         tool = get_tool(name, caps)  # bloqueio por capacidade vale também aqui (modo texto pode alucinar a chamada)
         if tool.mutating:

@@ -62,6 +62,9 @@ def load() -> dict:
     with db.session() as s:
         for row in s.query(db.AppSetting).all():
             values[row.key] = row.value
+    # Slot de subagente novo chegando em banco antigo: a linha salva substitui a chave inteira, e sem
+    # os slots que faltam a tela de Subagentes quebra ao ler o que não existe.
+    values["subagents"] = {**ENV_DEFAULTS["subagents"], **(values["subagents"] or {})}
     return values
 
 

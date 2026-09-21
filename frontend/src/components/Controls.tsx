@@ -67,7 +67,7 @@ function Menu<T extends string>(props: {
         {props.button(current.label, open)}
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-40 mb-2 w-72 overflow-hidden rounded-2xl border border-line bg-surface p-1.5 shadow-2xl shadow-black/50">
+        <div className="absolute bottom-full left-0 z-40 mb-2 w-80 overflow-hidden rounded-2xl border border-line bg-surface p-1.5 shadow-2xl shadow-black/50">
           <div className="px-2.5 py-1 text-[11px] tracking-wider text-faint uppercase">{props.title}</div>
           {props.items.map((item, i) => (
             <button
@@ -82,7 +82,7 @@ function Menu<T extends string>(props: {
             >
               <div className="min-w-0 flex-1">
                 <div className="text-sm text-fg">{item.label}</div>
-                <div className="truncate text-xs text-muted">{item.hint}</div>
+                <div className="text-xs leading-snug text-muted">{item.hint}</div>
               </div>
               {item.id === props.value && <Check className="mt-1 size-3.5 shrink-0 text-fg" />}
               <span className="mt-1 w-3 shrink-0 text-right text-[11px] text-faint">{i + 1}</span>

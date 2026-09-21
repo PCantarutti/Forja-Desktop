@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { ServerInfo } from "../types";
-import { Square } from "./icons";
+import type { ServerInfo, SubagentActive } from "../types";
+import { Split, Square } from "./icons";
+import { UsageBars, useCloudUsage } from "./CloudUsage";
+
+const NIVEIS: Record<string, string> = { rapido: "Rápido", capaz: "Capaz", nuvem: "Nuvem" };
 
 const POLL_MS = 4000;
 
@@ -12,8 +15,11 @@ function uptime(s?: number) {
   return `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }
 
-/** Aba Instâncias: servidores que o agente subiu com serve_start, com log e botão Parar. */
-export default function ServersPanel(props: { onCount: (alive: number) => void }) {
+/** Aba Instâncias: o que está rodando agora — delegações em andamento (de qualquer conversa) e os
+ * servidores que o agente subiu com serve_start. */
+export default function ServersPanel(props: { onCount: (alive: number) => void; onOpen?: (convId: number) => void }) {
+  const [subs, setSubs] = useState<SubagentActive[]>([]);
+  const nuvens = useCloudUsage();
   const [servers, setServers] = useState<ServerInfo[] | null>(null);
   const [environment, setEnvironment] = useState("");
   const [error, setError] = useState("");
@@ -22,10 +28,14 @@ export default function ServersPanel(props: { onCount: (alive: number) => void }
 
   async function refresh() {
     try {
-      const r = await api.get<{ servers: ServerInfo[]; environment: string }>("/servers");
+      const [r, d] = await Promise.all([
+        api.get<{ servers: ServerInfo[]; environment: string }>("/servers"),
+        api.get<{ subagents: SubagentActive[] }>("/subagents/active"),
+      ]);
       setServers(r.servers);
+      setSubs(d.subagents);
       setEnvironment(r.environment);
-      props.onCount(r.servers.filter((s) => s.alive).length);
+      props.onCount(r.servers.filter((s) => s.alive).length + d.subagents.length);
       setError("");
     } catch (e: any) {
       setError(e.message);
@@ -50,6 +60,15 @@ export default function ServersPanel(props: { onCount: (alive: number) => void }
     return () => clearInterval(t);
   }, [openLog]);
 
+  async function stopRun(runId: string) {
+    try {
+      await api.post(`/runs/${encodeURIComponent(runId)}/stop`);
+      await refresh();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
   async function stop(name: string) {
     try {
       await api.post(`/servers/${encodeURIComponent(name)}/stop`);
@@ -64,13 +83,59 @@ export default function ServersPanel(props: { onCount: (alive: number) => void }
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 text-xs">
       <div className="text-faint">
-        Servidores iniciados pelo agente com <span className="font-mono">serve_start</span>, em {environment || "…"}.
+        Subagentes trabalhando e servidores iniciados com <span className="font-mono">serve_start</span>, em{" "}
+        {environment || "…"}.
       </div>
       {error && <div className="text-red-300">{error}</div>}
-      {servers && !list.length && (
+      {subs.map((s) => (
+        <section key={s.id} className="rounded-2xl border border-sky-500/30 bg-sky-500/5 p-3.5">
+          <div className="flex items-center gap-2">
+            <Split className="size-3.5 shrink-0 text-sky-300" />
+            <span className="truncate font-medium text-fg">
+              subagente {NIVEIS[s.level] ?? s.level} · {s.model}
+            </span>
+            <span className="ml-auto shrink-0 text-faint">{uptime(s.seconds)}</span>
+          </div>
+          <div className="mt-1.5 truncate text-muted" title={s.task}>
+            {s.task}
+          </div>
+          <div className="truncate text-faint" title={s.conversation}>
+            {s.conversation ? `${s.conversation} · ` : ""}
+            {s.steps} passos · {s.iterations} iterações
+            {s.tokens ? ` · ${s.tokens.toLocaleString("pt-BR")} tokens` : ""}
+          </div>
+          {s.status && <div className="mt-1 animate-pulse truncate text-sky-300">{s.status}</div>}
+          {nuvens
+            .filter((u) => u.provider === s.provider)
+            .map((u) => (
+              <div key={u.provider} className="mt-2 border-t border-line pt-2">
+                <div className="mb-1.5 text-faint">Cota · {u.name}</div>
+                <UsageBars data={u} />
+              </div>
+            ))}
+          <div className="mt-2 flex gap-2">
+            {props.onOpen && (
+              <button
+                onClick={() => props.onOpen?.(s.conversation_id)}
+                className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+              >
+                Abrir conversa
+              </button>
+            )}
+            <button
+              onClick={() => stopRun(s.run_id)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+              title="Interrompe o turno inteiro desta conversa"
+            >
+              <Square className="size-3" /> Parar turno
+            </button>
+          </div>
+        </section>
+      ))}
+      {servers && !list.length && !subs.length && (
         <div className="rounded-2xl border border-line bg-surface p-3.5 text-muted">
-          Nenhuma instância rodando. Quando o agente subir um servidor (npm run dev, uvicorn…), ele aparece aqui e você pode
-          pará-lo.
+          Nada rodando agora. Quando o agente delegar para um subagente ou subir um servidor (npm run dev, uvicorn…),
+          aparece aqui — e você pode parar.
         </div>
       )}
       {list.map((s) => (

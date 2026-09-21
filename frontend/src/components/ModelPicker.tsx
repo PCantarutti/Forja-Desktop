@@ -57,15 +57,15 @@ export default function ModelPicker(props: {
   const models = (prov?.models ?? []).filter((m) => m.toLowerCase().includes(q.toLowerCase()));
 
   return (
-    <div ref={box} className="relative ml-auto">
+    <div ref={box} className="relative ml-auto min-w-0">
       <button
         onClick={() => setOpen(!open)}
-        title="Trocar provedor e modelo"
-        className="flex max-w-72 items-center gap-1.5 rounded-lg bg-raised px-2.5 py-1 text-xs text-muted hover:text-fg"
+        title={`Trocar provedor e modelo — ${providerName} · ${props.model}`}
+        className="flex max-w-56 items-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2.5 py-1 text-xs whitespace-nowrap text-muted hover:text-fg"
       >
         <Cube className="size-3.5 shrink-0" />
-        <span className="hidden text-faint sm:inline">{providerName} ·</span>
-        <span className="truncate">{props.model || "escolher modelo"}</span>
+        <span className="hidden max-w-24 shrink truncate text-faint sm:inline-block">{providerName} ·</span>
+        <span className="min-w-0 flex-1 truncate text-left">{props.model || "escolher modelo"}</span>
       </button>
 
       {open && (

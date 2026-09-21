@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { api } from "../api";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench } from "./icons";
@@ -695,6 +696,18 @@ function AppTab() {
 
 // ------------------------------------------------------------------ provedores
 
+/** Cota do Ollama Cloud logo abaixo da chave: é onde o usuário decide se aquele provedor ainda cabe. */
+function ProviderUsage({ id }: { id: string }) {
+  const uso = useCloudUsage().find((u) => u.provider === id);
+  if (!uso) return null;
+  return (
+    <div className="rounded-xl border border-line bg-raised/40 p-2.5">
+      <div className="mb-1.5 text-[11px] text-faint">Cota consumida</div>
+      <UsageBars data={uso} models />
+    </div>
+  );
+}
+
 function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
   const change = (i: number, patch: Partial<Provider>) =>
     set("providers", s.providers.map((p, k) => (k === i ? { ...p, ...patch } : p)));
@@ -754,6 +767,7 @@ function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
               </button>
             )}
           </div>
+          <ProviderUsage id={p.id} />
           <ProviderModels
             id={p.id}
             chosen={s.enabled_models[p.id]}
@@ -913,8 +927,10 @@ function SlotModels({ provider, value, onChange }: { provider: string; value: st
 }
 
 function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
-  const change = (slot: "rapido" | "capaz" | "nuvem", patch: Partial<{ provider: string; model: string }>) =>
-    set("subagents", { ...s.subagents, [slot]: { ...s.subagents[slot], ...patch } });
+  // slot ausente (banco salvo antes de existir) não pode derrubar a tela inteira
+  const spec = (slot: (typeof SLOTS)[number]["key"]) => s.subagents[slot] ?? { provider: "", model: "" };
+  const change = (slot: (typeof SLOTS)[number]["key"], patch: Partial<{ provider: string; model: string }>) =>
+    set("subagents", { ...s.subagents, [slot]: { ...spec(slot), ...patch } });
   return (
     <div className="max-w-2xl space-y-5">
       <p className="text-sm text-muted">
@@ -930,7 +946,7 @@ function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
           <div className="grid grid-cols-[10rem_1fr] gap-2">
             <select
               className={input}
-              value={s.subagents[slot.key].provider}
+              value={spec(slot.key).provider}
               onChange={(e) => change(slot.key, { provider: e.target.value, model: "" })}
             >
               <option value="">(desligado)</option>
@@ -941,8 +957,8 @@ function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
               ))}
             </select>
             <SlotModels
-              provider={s.subagents[slot.key].provider}
-              value={s.subagents[slot.key].model}
+              provider={spec(slot.key).provider}
+              value={spec(slot.key).model}
               onChange={(m) => change(slot.key, { model: m })}
             />
           </div>

@@ -99,6 +99,26 @@ def test_ask_user_accepts_the_old_single_question_shape():
     assert agent.ask_questions({"questions": [{"question": "  ", "options": []}]}) == []
 
 
+def test_open_question_without_options_still_works():
+    """Nem toda dúvida tem alternativa a listar: sem opções o card vira só campo de digitação."""
+    qs = agent.ask_questions({"questions": [{"question": "Qual o prazo?"}]})
+    assert len(qs) == 1 and qs[0]["options"] == []
+    assert agent.ask_questions({"questions": [{"question": "Qual banco?", "options": [{"label": "postgres"}]}]})[0][
+        "options"] == [{"label": "postgres", "description": ""}]  # opção sem explicação não quebra
+
+
+def test_ask_user_tool_demands_options_with_a_recommendation():
+    """O que faz o modelo mandar opções explicadas é o texto da ferramenta e as regras do prompt."""
+    tool = next(t for t in agent.available_tools(None, "plan") if t.name == "ask_user")
+    assert "(Recomendado)" in tool.description
+    opcao = tool.parameters["properties"]["questions"]["items"]["properties"]["options"]
+    assert opcao["items"]["required"] == ["label", "description"]  # explicação obrigatória em cada opção
+    assert tool.parameters["properties"]["questions"]["items"]["required"] == ["question"]  # pergunta aberta vale
+    for modo in ("plan", "edits"):
+        p = agent.system_prompt("native", permission=modo)
+        assert "(Recomendado)" in p and "uma linha" in p
+
+
 def test_approved_plan_survives_into_next_turn(monkeypatch):
     step = {"n": 0}
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { UsageBars, useCloudUsage } from "./CloudUsage";
 
 const fmt = (n: number) => n.toLocaleString("pt-BR");
 
@@ -13,8 +14,15 @@ export default function ContextRing(props: {
   avg: number | null;
   canCompact: boolean;
   onCompact: () => void;
+  provider: string;   // o que está no seletor de modelo
+  models: string[];   // modelos que já responderam nesta conversa
 }) {
   const [open, setOpen] = useState(false);
+  // Só consulta a cota com o popover aberto; e só mostra se a nuvem estiver em jogo nesta conversa.
+  const nuvens = useCloudUsage(open);
+  const cota =
+    nuvens.find((u) => u.provider === props.provider) ??
+    nuvens.find((u) => u.models.some((m) => props.models.includes(m.name)));
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -78,6 +86,12 @@ export default function ContextRing(props: {
             <div className="flex items-center justify-between">
               <span>Média</span>
               <span className="text-fg">{props.avg.toFixed(1)} t/s</span>
+            </div>
+          )}
+          {cota && (
+            <div className="mt-3 border-t border-line pt-2">
+              <div className="mb-1.5 text-faint">Cota · {cota.name}</div>
+              <UsageBars data={cota} />
             </div>
           )}
           <button

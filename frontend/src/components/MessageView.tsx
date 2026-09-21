@@ -625,6 +625,17 @@ export function SubagentSteps(props: {
 }
 
 
+// Modelo fraco escreve rótulo e explicação na mesma linha ("JWT (Recomendado) - escalável para APIs").
+const SEPARADOR = /\s+[—–-]\s+|:\s+/;
+
+/** Rótulo e explicação de uma opção, separando quando o modelo mandou tudo no rótulo. */
+function parteOpcao(o: { label: string; description?: string }) {
+  if (o.description || o.label.length <= 40) return o;
+  const m = SEPARADOR.exec(o.label);
+  if (!m) return o;
+  return { label: o.label.slice(0, m.index), description: o.label.slice(m.index + m[0].length) };
+}
+
 /** Argumentos de um ask_user salvo no histórico, no formato novo (questions[]) ou no antigo. */
 export function askQuestions(args: Record<string, unknown>): AskQuestion[] {
   const raw = Array.isArray(args.questions) ? args.questions : [{ question: args.question, options: args.options }];
@@ -647,10 +658,15 @@ export function askQuestions(args: Record<string, unknown>): AskQuestion[] {
  * descritas, múltipla escolha quando o agente pedir e sempre um campo de resposta livre.
  */
 export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; onAnswer: (answers: string[]) => void }) {
-  const qs = props.questions.length ? props.questions : [{ question: "", options: [] }];
+  // Defensivo: pergunta sem options (ou lista vazia) tem que renderizar o campo livre, nunca quebrar o card.
+  const qs: AskQuestion[] = (props.questions?.length ? props.questions : [{ question: "", options: [] }]).map((x) => ({
+    ...x,
+    options: x.options ?? [],
+  }));
   const [at, setAt] = useState(0);
   const [picked, setPicked] = useState<string[][]>(() => qs.map(() => []));
   const [texts, setTexts] = useState<string[]>(() => qs.map(() => ""));
+  const livreRef = useRef<HTMLTextAreaElement>(null);
   const decided = props.done?.status;
   const meta = props.done?.meta ?? {};
   const answers = (meta.answers ?? (meta.answer ? [meta.answer] : [])) as string[];
@@ -683,15 +699,18 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
 
   return (
     <div className={`my-3 overflow-hidden rounded-2xl border ${decided ? "border-line" : "border-amber-500/50"} bg-surface`}>
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-sm">
-        <span className="grid size-4 place-items-center rounded-full bg-amber-500/20 text-[11px] font-bold text-amber-300">?</span>
-        <span className="text-fg">{qs.length > 1 ? `Perguntas do agente` : "Pergunta do agente"}</span>
-        {!decided && qs.length > 1 && (
-          <span className="rounded-full bg-raised px-2 py-0.5 font-mono text-[11px] text-muted">
-            {at + 1}/{qs.length}
-          </span>
+      <div className="flex items-start gap-2 border-b border-line px-4 py-2.5 text-sm">
+        {decided ? (
+          <span className="text-fg">{qs.length > 1 ? "Perguntas do agente" : "Pergunta do agente"}</span>
+        ) : (
+          <>
+            <span className="mt-0.5 shrink-0 font-mono text-[11px] text-amber-300">
+              {at + 1}/{qs.length}
+            </span>
+            <span className="font-medium text-fg">{q.question}</span>
+            {q.header && <span className="ml-auto shrink-0 pl-2 text-xs text-faint">{q.header}</span>}
+          </>
         )}
-        {!decided && q.header && <span className="text-xs text-faint">{q.header}</span>}
         {decided && (
           <span className={`ml-auto text-xs ${decided === "ok" ? "text-emerald-400" : "text-orange-400"}`}>
             ● {decided === "ok" ? "respondida" : decided}
@@ -711,29 +730,41 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
         </div>
       ) : (
         <>
-          <div className="px-4 py-3 text-sm text-fg">{q.question}</div>
-          <div className="space-y-2 border-t border-line p-4">
+          <div className="space-y-2 p-4">
             {q.options.map((o, i) => {
               const on = sel.includes(o.label);
+              const vis = parteOpcao(o);
               return (
                 <button
                   key={i}
                   onClick={() => toggle(o.label)}
                   className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left ${on ? "border-fg/50 bg-raised" : "border-line hover:bg-raised/60"}`}
                 >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm text-fg">{vis.label}</span>
+                    {vis.description && <span className="mt-0.5 block text-xs text-muted">{vis.description}</span>}
+                  </span>
                   <span
                     className={`mt-0.5 grid size-4 shrink-0 place-items-center ${q.multi_select ? "rounded" : "rounded-full"} border text-[10px] ${on ? "border-fg bg-fg font-bold text-black" : "border-line text-faint"}`}
                   >
                     {on ? "✓" : i + 1}
                   </span>
-                  <span className="min-w-0">
-                    <span className="block text-sm text-fg">{o.label}</span>
-                    {o.description && <span className="block text-xs text-muted">{o.description}</span>}
-                  </span>
                 </button>
               );
             })}
+            {!!q.options.length && (
+              <button
+                onClick={() => livreRef.current?.focus()}
+                className="flex w-full items-center gap-3 rounded-xl border border-line px-3 py-2.5 text-left hover:bg-raised/60"
+              >
+                <span className="flex-1 text-sm text-fg">Outro</span>
+                <span className="grid size-4 shrink-0 place-items-center rounded-full border border-line text-[10px] text-faint">
+                  {q.options.length + 1}
+                </span>
+              </button>
+            )}
             <textarea
+              ref={livreRef}
               rows={1}
               value={texts[at] ?? ""}
               onChange={(e) => setTexts((t) => t.map((v, i) => (i === at ? e.target.value : v)))}
@@ -743,7 +774,7 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
                   if (sel.length || e.currentTarget.value.trim()) advance(false);
                 }
               }}
-              placeholder="Digite sua própria resposta…"
+              placeholder="Digite sua própria resposta aqui"
               className="w-full rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:outline-none"
             />
             <div className="flex items-center gap-2 pt-1">

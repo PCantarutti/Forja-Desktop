@@ -5,9 +5,10 @@ Os testes chamam `subagents.run` direto, passando um `run_call` de mentira no lu
 """
 import asyncio
 
+import httpx
 import pytest
 
-from app import agent, config, llm, settings, subagents, workspace
+from app import agent, config, db, llm, settings, subagents, workspace
 from app.tools import REGISTRY
 
 
@@ -247,4 +248,281 @@ def test_nuvem_nao_e_escolha_do_modelo():
 
 def test_extremo_e_o_esforco_mais_longo():
     assert agent.effort_iterations("extremo") > agent.effort_iterations("maximo")
-    assert llm.EFFORT_LEVEL["extremo"] == "high"
+
+
+def test_no_extremo_o_maestro_pensa_pouco_e_o_subagente_muito(monkeypatch):
+    """O maestro raciocina o mínimo para montar o pedido; quem resolve é o subagente, que herda
+    'maximo'. Quem realmente segura o tratado é o REASONING_CAP: o modelo local ignora as duas
+    chaves abaixo."""
+    monkeypatch.setitem(config.PROVIDERS, "lm",
+                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    corpo, msgs = {}, [{"role": "system", "content": "regras"}]
+    asyncio.run(llm._reasoning("lm", "gpt-oss:120b", "extremo", corpo, msgs))
+    assert corpo["reasoning_effort"] == "low"
+
+    corpo, msgs = {}, [{"role": "system", "content": "regras"}]
+    asyncio.run(llm._reasoning("lm", "gpt-oss:120b", "maximo", corpo, msgs))
+    assert corpo["reasoning_effort"] == "high"
+
+
+def test_banco_antigo_sem_o_slot_nuvem_nao_quebra():
+    """A linha salva substitui a chave inteira; sem preencher o que falta, a tela de Subagentes
+    lia um slot inexistente e apagava a interface."""
+    with db.session() as s:
+        s.merge(db.AppSetting(key="subagents", value={"rapido": {"provider": "lmstudio", "model": "mini"},
+                                                      "capaz": {"provider": "", "model": ""}}))
+        s.commit()
+    valores = settings.apply()
+    assert valores["subagents"]["nuvem"] == {"provider": "", "model": ""}
+    assert settings.public()["subagents"]["nuvem"] == {"provider": "", "model": ""}
+    assert config.SUBAGENTS["rapido"]["model"] == "mini"
+
+
+# ------------------------------------------------ freio: o principal integra, não implementa
+
+def test_freio_devolve_escrita_grande_uma_vez():
+    _slots(capaz=("lmstudio", "grande"))
+    avisados: set[str] = set()
+    args = {"path": "x.py", "content": "linha\n" * 20}
+    aviso = subagents.nudge_write("write_file", args, avisados)
+    # a primeira frase precisa dizer que nada foi gravado, senao ele vai testar um arquivo vazio
+    assert aviso.startswith("NADA FOI ESCRITO em x.py") and "delegate_task" in aviso
+    # na segunda tentativa passa: travar o turno seria pior que deixar o principal fazer
+    assert subagents.nudge_write("write_file", args, avisados) == ""
+
+
+def test_freio_pega_edit_file_pelo_new_str():
+    _slots(capaz=("lmstudio", "grande"))
+    args = {"path": "x.py", "old_str": "a", "new_str": "nova\n" * 20}
+    assert subagents.nudge_write("edit_file", args, set())
+
+
+def test_freio_deixa_passar_o_trivial_e_a_leitura():
+    _slots(capaz=("lmstudio", "grande"))
+    assert subagents.nudge_write("write_file", {"path": "x.py", "content": "a\nb\n"}, set()) == ""
+    assert subagents.nudge_write("read_file", {"path": "x.py"}, set()) == ""
+
+
+def test_sem_subagente_disponivel_o_freio_nao_existe():
+    """Sem para quem delegar, segurar a escrita só travaria o turno."""
+    config.SUBAGENTS = {}
+    assert subagents.nudge_write("write_file", {"path": "x.py", "content": "l\n" * 30}, set()) == ""
+
+
+# ------------------------------------------------ aba Instâncias
+
+def test_delegacao_aparece_entre_as_ativas_e_some_no_fim(monkeypatch):
+    _slots(capaz=("lmstudio", "grande"))
+    durante = []
+
+    async def fake(provider, model, messages, tools, num_ctx, effort=None):
+        durante.append(subagents.ativas())
+        yield "content", "pronto"
+        yield "done", {"tool_calls": []}
+
+    monkeypatch.setattr(llm, "chat_stream", fake)
+    _delegate({"task": "faz algo", "level": "capaz"})
+    assert len(durante[0]) == 1
+    ativa = durante[0][0]
+    assert ativa["model"] == "grande" and ativa["conversation_id"] == 1 and ativa["status"]
+    assert subagents.ativas() == []
+
+
+def test_ativa_some_quando_o_turno_e_abandonado(monkeypatch):
+    """Cancelar fecha o gerador no meio; sem o finally a delegação ficaria eterna na aba."""
+    _slots(capaz=("lmstudio", "grande"))
+    fake, _ = _fala()
+    monkeypatch.setattr(llm, "chat_stream", fake)
+
+    async def scenario():
+        run_obj = agent.Run(1)
+        req = agent.RunRequest(content="x", provider="lmstudio", model="main")
+        gen = subagents.run(1, {"id": "d1", "arguments": {"task": "t", "level": "capaz"}},
+                            req, run_obj, {}, _ok_run_call)
+        await gen.__anext__()  # primeiro sub_status: já entrou na lista
+        dentro = len(subagents.ativas())
+        await gen.aclose()
+        return dentro, len(subagents.ativas())
+
+    dentro, depois = asyncio.run(scenario())
+    assert (dentro, depois) == (1, 0)
+
+
+def test_endpoint_das_ativas():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    with TestClient(app) as c:
+        r = c.get("/api/subagents/active")
+        assert r.status_code == 200 and r.json() == {"subagents": []}
+
+
+# ------------------------------------------------ revisão: só onde não há medição
+
+def _com_revisao_falsa(monkeypatch):
+    chamadas = []
+
+    async def fake_review(_root, task, _paths):
+        chamadas.append(task)
+        return "nano", "VEREDITO: ajustar"
+
+    monkeypatch.setattr(subagents, "_review", fake_review)
+    return chamadas
+
+
+def _verificacao(status: str, texto: str):
+    async def run_call(_conv, _call, _req, _run, _caps, out, parent=None):
+        out.update(status=status, text=texto, meta={})
+        return
+        yield  # pragma: no cover
+
+    return run_call
+
+
+def test_verificacao_passando_dispensa_a_revisao(monkeypatch):
+    """Com exit code 0 na mão, parecer de modelo menor que o autor só gera falso-positivo."""
+    _slots(capaz=("lmstudio", "grande"))
+    fake, _ = _fala("terminei")
+    monkeypatch.setattr(llm, "chat_stream", fake)
+    chamadas = _com_revisao_falsa(monkeypatch)
+    out, _ = _delegate({"task": "t" * 200, "level": "capaz", "files": ["x.py"], "done_when": "pytest -q"},
+                       effort="extremo", run_call=_verificacao("ok", "exit code: 0"))
+    assert chamadas == [] and "Revisão do diff" not in out["text"]
+    assert "PASSOU" in out["text"]
+
+
+def test_verificacao_reprovada_pede_revisao(monkeypatch):
+    _slots(capaz=("lmstudio", "grande"))
+    fake, _ = _fala("terminei")
+    monkeypatch.setattr(llm, "chat_stream", fake)
+    chamadas = _com_revisao_falsa(monkeypatch)
+    out, _ = _delegate({"task": "t" * 200, "level": "capaz", "files": ["x.py"], "done_when": "pytest -q"},
+                       effort="extremo", run_call=_verificacao("erro", "exit code: 1"))
+    assert len(chamadas) == 1 and "VEREDITO: ajustar" in out["text"]
+
+
+def test_sem_done_when_a_revisao_e_a_unica_opiniao(monkeypatch):
+    _slots(capaz=("lmstudio", "grande"))
+    fake, _ = _fala("terminei")
+    monkeypatch.setattr(llm, "chat_stream", fake)
+    chamadas = _com_revisao_falsa(monkeypatch)
+    out, _ = _delegate({"task": "t" * 200, "level": "capaz", "files": ["x.py"]}, effort="extremo")
+    assert len(chamadas) == 1 and "VEREDITO: ajustar" in out["text"]
+
+
+# ------------------------------------------------ cota do Ollama Cloud
+
+def test_is_cloud_exige_nuvem_da_ollama_com_chave(monkeypatch):
+    monkeypatch.setitem(config.PROVIDERS, "nuvem1",
+                        {"id": "nuvem1", "name": "N", "type": "ollama", "url": "https://ollama.com/v1", "api_key": "k"})
+    monkeypatch.setitem(config.PROVIDERS, "semchave",
+                        {"id": "semchave", "name": "N", "type": "ollama", "url": "https://ollama.com/v1", "api_key": ""})
+    monkeypatch.setitem(config.PROVIDERS, "local2",
+                        {"id": "local2", "name": "L", "type": "ollama", "url": "http://127.0.0.1:11434/v1", "api_key": ""})
+    assert llm.is_cloud("nuvem1")
+    assert not llm.is_cloud("semchave") and not llm.is_cloud("local2") and not llm.is_cloud("nada")
+
+
+def test_limites_aceita_o_formato_gratis_e_o_pago():
+    """Plano grátis devolve monthly + lista; o pago, session/weekly e (em algumas versões) objeto."""
+    gratis = {"monthly": {"usage": 0.135, "models": [{"name": "gpt-oss:120b", "request_count": 220},
+                                                     {"name": "gemma4:31b", "request_count": 50}]}}
+    limites, modelos = llm._limites(gratis)
+    assert limites == [{"name": "monthly", "usage": 0.135}]
+    assert [m["name"] for m in modelos] == ["gpt-oss:120b", "gemma4:31b"]
+
+    pago = {"weekly": {"usage": 0.58, "models": {"a": {"request_count": 3}, "b": {"request_count": 9}}},
+            "session": {"usage": 0.19, "models": {}}}
+    limites, modelos = llm._limites(pago)
+    assert [l["name"] for l in limites] == ["session", "weekly"]          # sessão primeiro, como na tela
+    assert [m["name"] for m in modelos] == ["b", "a"]                     # mais requisições primeiro
+
+
+def test_usage_nao_levanta_quando_o_endpoint_some(monkeypatch):
+    """O /api/usage não é documentado: se sumir, a interface só não mostra a cota."""
+    monkeypatch.setitem(config.PROVIDERS, "nuvem2",
+                        {"id": "nuvem2", "name": "N", "type": "ollama", "url": "https://ollama.com/v1", "api_key": "k"})
+    llm._USAGE.clear()
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url): raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(llm.httpx, "AsyncClient", FakeClient)
+    assert asyncio.run(llm.usage("nuvem2")) is None
+
+
+# ------------------------------------------------ teto de raciocínio do maestro
+
+def _impl_falso(registro: list, raciocinio: int):
+    """impl de mentira: gera `raciocinio` caracteres de pensamento e depois responde."""
+    async def impl(provider, model, messages, tools, num_ctx, extra):
+        registro.append(extra)
+        pensa = (extra.get("chat_template_kwargs") or {}).get("enable_thinking", True)
+        for _ in range(raciocinio // 100 if pensa else 0):
+            yield "reasoning", "p" * 100
+        yield "content", f"resposta {len(registro)}"
+        yield "done", {"tool_calls": []}
+    return impl
+
+
+def _consome(gen):
+    async def tudo():
+        return [ev async for ev in gen]
+    return asyncio.run(tudo())
+
+
+def test_maestro_pensando_demais_e_cortado_e_refeito_sem_pensar(monkeypatch):
+    monkeypatch.setitem(config.PROVIDERS, "lm",
+                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    chamadas: list = []
+    impl = _impl_falso(chamadas, llm.REASONING_CAP * 2)
+    eventos = _consome(llm._capped(impl, "lm", "qwen", [], None, 8192, {}))
+    assert len(chamadas) == 2
+    assert chamadas[1]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert ("content", "resposta 2") in eventos          # a resposta boa é a da segunda chamada
+    assert sum(len(v) for k, v in eventos if k == "reasoning") < llm.REASONING_CAP * 1.5
+
+
+def test_raciocinio_curto_passa_inteiro(monkeypatch):
+    monkeypatch.setitem(config.PROVIDERS, "lm",
+                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    chamadas: list = []
+    impl = _impl_falso(chamadas, 500)
+    eventos = _consome(llm._capped(impl, "lm", "qwen", [], None, 8192, {}))
+    assert len(chamadas) == 1 and ("content", "resposta 1") in eventos
+
+
+def test_o_corte_manda_todos_os_interruptores(monkeypatch):
+    """Não existe um interruptor só: o que a família do modelo não entende é ignorado sem erro."""
+    monkeypatch.setitem(config.PROVIDERS, "oll",
+                        {"id": "oll", "name": "O", "type": "ollama", "url": "http://x/v1", "api_key": ""})
+    monkeypatch.setitem(config.PROVIDERS, "lm",
+                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    sistema = [{"role": "system", "content": "regras"}]
+    assert llm._sem_pensar("oll", {}, sistema) == ({"think": False}, sistema)
+
+    corpo, msgs = llm._sem_pensar("lm", {}, sistema)
+    assert corpo == {"chat_template_kwargs": {"enable_thinking": False}, "reasoning_budget": 0}
+    assert msgs[0]["content"].endswith("/no_think") and sistema[0]["content"] == "regras"  # sem mutar o original
+
+
+def test_teto_pega_pensamento_que_vem_no_proprio_texto(monkeypatch):
+    """Servidor que não separa o canal manda <think> junto do conteúdo; o teto tem que valer igual."""
+    monkeypatch.setitem(config.PROVIDERS, "lm",
+                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    chamadas: list = []
+
+    async def impl(provider, model, messages, tools, num_ctx, extra):
+        chamadas.append(extra)
+        if (extra.get("chat_template_kwargs") or {}).get("enable_thinking", True):
+            yield "content", "<think>"
+            for _ in range(llm.REASONING_CAP // 100 + 2):
+                yield "content", "p" * 100
+        yield "content", "resposta final"
+        yield "done", {"tool_calls": []}
+
+    eventos = _consome(llm._capped(impl, "lm", "qwen", [{"role": "system", "content": "s"}], None, 8192, {}))
+    assert len(chamadas) == 2 and ("content", "resposta final") in eventos

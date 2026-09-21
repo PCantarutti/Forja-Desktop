@@ -87,6 +87,31 @@ export type ToolsSent = {
 };
 
 /** Servidor iniciado pelo agente com serve_start, no seu sistema ("host") ou no container. */
+/** Cota consumida num provedor do Ollama Cloud (GET /api/usage). */
+export type CloudUsage = {
+  provider: string;
+  name: string;
+  limits: { name: string; usage: number }[];
+  models: { name: string; request_count?: number }[];
+};
+
+/** Delegação em andamento, em qualquer conversa (aba Instâncias). */
+export type SubagentActive = {
+  id: string;
+  conversation_id: number;
+  conversation?: string;
+  run_id: string;
+  task: string;
+  status: string;
+  seconds: number;
+  level: string;
+  model: string;
+  provider: string;
+  iterations: number;
+  tokens: number;
+  steps: number;
+};
+
 export type ServerInfo = {
   name: string;
   pid?: number;

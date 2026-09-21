@@ -90,7 +90,6 @@ export default function LocalPanel(props: {
 
   return (
     <div className="flex h-full flex-col text-xs">
-      {st.server.loading?.percent !== undefined && <LoadingOverlay loading={st.server.loading} onDone={refresh} />}
       <div className="flex shrink-0 gap-1 border-b border-line px-3 py-1.5">
         {SUBTABS.map((t) => (
           <button
@@ -159,12 +158,29 @@ function ErroDeCarga(props: { erro: { message: string; log: string; path: string
   );
 }
 
+/** Carga de modelo aparece em qualquer aba: este fica montado sempre, fora do painel IA local. */
+export function LocalLoading() {
+  const [loading, setLoading] = useState<LocalState["server"]["loading"] | null>(null);
+  const refresh = () =>
+    api
+      .get<LocalState>("/local")
+      .then((s) => setLoading(s.server.loading ?? null))
+      .catch(() => {});
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, POLL_MS);
+    return () => clearInterval(t);
+  }, []);
+  if (loading?.percent === undefined) return null;
+  return <LoadingOverlay loading={loading} onDone={refresh} />;
+}
+
 /** Barra de carregamento no alto da janela, por cima de tudo, enquanto o modelo sobe. */
 function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["loading"]>; onDone: () => void }) {
   const l = props.loading;
   return (
-    <div className="fixed inset-x-0 top-3 z-50 flex justify-center">
-      <div className="w-80 rounded-2xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
+    <div className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center">
+      <div className="pointer-events-auto w-80 rounded-2xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-fg">Carregando {l.name}</span>
           <span className="shrink-0 text-muted">{l.percent}%</span>

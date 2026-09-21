@@ -141,7 +141,7 @@ Baixo, Médio, Alto, Máximo ou Extremo, ao lado do modo. Mexe em três coisas:
 - **Passos**: multiplica o limite de iterações (Baixo 0,4× · Médio 1× · Alto 1,6× · Máximo 3× · Extremo 4× de `MAX_ITERATIONS`).
 - **Instrução**: uma linha no system prompt pedindo mais objetividade ou mais verificação.
 
-**Extremo (multi-modelo)** vai além da instrução: com subagentes configurados, o principal é orientado a **não escrever a lógica difícil**. Ele localiza os arquivos, delega com `files` e `done_when`, integra o que voltou e responde. Uma delegação sem contexto suficiente é recusada com um exemplo de chamada correta — é erro de ferramenta, o modelo refaz. Faz sentido quando o modelo principal é pequeno (e barato) e o *Capaz*/*Nuvem* é bem maior; com dois modelos do mesmo tamanho, você só espera duas vezes.
+**Extremo (multi-modelo)** vira o papel do principal: com subagentes configurados, ele **não escreve a lógica difícil nem projeta a solução** — é maestro, não autor. Ele ainda raciocina — é o que faz o pedido sair bom — mas com **teto**: passou de ~6 mil caracteres de raciocínio sem começar a responder, o Forja corta e refaz a chamada com o pensamento desligado. Sem o teto um modelo local gasta minutos projetando exatamente o que ia delegar; sem raciocínio nenhum ele delega rápido, mas inventa o enunciado. O subagente não tem teto: ele recebe esforço máximo e pensa à vontade. Ele localiza os arquivos, delega com `files` e `done_when`, integra o que voltou e responde. Uma delegação sem contexto suficiente é recusada com um exemplo de chamada correta — é erro de ferramenta, o modelo refaz. Regra de prompt sozinha não segura modelo pequeno, então escrever um arquivo grande na mão também volta uma vez, com a instrução de delegar; se for mesmo trivial, repetir a chamada passa. Faz sentido quando o modelo principal é pequeno (e barato) e o *Capaz*/*Nuvem* é bem maior; com dois modelos do mesmo tamanho, você só espera duas vezes.
 
 ## Conversa: anexos, editar e regenerar
 
@@ -163,6 +163,23 @@ Antes da **primeira** alteração do agente em cada arquivo, dentro de um turno,
 
 Mudanças feitas por **`run_command`**, servidores MCP ou pelo navegador **não** são rastreadas. Arquivos maiores que `MAX_FILE_BYTES` também não. Para esses casos, use git na sua pasta.
 
+## Cota do Ollama Cloud
+
+Provedor apontando para `https://ollama.com` com chave de API mostra quanto da cota já foi consumida, lida do
+`GET /api/usage` (endpoint **não documentado** da Ollama: se sair do ar, a barra simplesmente não aparece; nada quebra).
+São frações de 0 a 1 por janela — o plano grátis devolve `monthly`, o pago `session` (~5 h) e `weekly` — mais a
+contagem de requisições por modelo. Token não é exposto pela Ollama.
+
+Aparece em três lugares, e só onde a nuvem está em jogo:
+
+- **Configurações › Provedores**, embaixo da chave, com as requisições por modelo.
+- **No cartão da delegação** (aba Instâncias), quando o subagente roda num provedor de nuvem — é ali que a cota queima
+  sem você ver.
+- **No anel de contexto**, ao abrir o popover, quando o modelo da nuvem está selecionado no seletor ou já respondeu
+  nesta conversa.
+
+A consulta é uma por minuto, compartilhada pelas três telas, e o anel só pergunta com o popover aberto.
+
 ## Subagentes
 
 Em **Configurações › Subagentes**, escolha provedor e modelo para três níveis:
@@ -173,9 +190,9 @@ Em **Configurações › Subagentes**, escolha provedor e modelo para três nív
 
 Com pelo menos um nível configurado, o agente principal ganha a ferramenta `delegate_task(task, level, files, done_when)` e decide sozinho quando delegar e para qual nível. Em `files` vão os arquivos relevantes — o conteúdo segue junto com a tarefa, então o subagente começa sabendo em vez de gastar iterações procurando.
 
-**`done_when`** é o comando que prova que ficou pronto (`pytest -q ...`, `npm test`, um lint). Ele roda **depois** que o subagente para, pelo caminho normal do `run_command`: card de aprovação, políticas e globs de auto-aprovação valem igual (`pytest*` em Configurações › Permissões evita o card a cada delegação). Quem verifica é o turno principal, não o subagente — o relatório dele é palavra dele, o exit code é medição. No esforço **Extremo**, o diff dos arquivos que ele tocou ainda vai para uma revisão barata no nível *Rápido*: o parecer entra no relatório como conselho, nunca como veredito.
+**`done_when`** é o comando que prova que ficou pronto (`pytest -q ...`, `npm test`, um lint). Ele roda **depois** que o subagente para, pelo caminho normal do `run_command`: card de aprovação, políticas e globs de auto-aprovação valem igual (`pytest*` em Configurações › Permissões evita o card a cada delegação). Quem verifica é o turno principal, não o subagente — o relatório dele é palavra dele, o exit code é medição. No esforço **Extremo**, quando **não há essa prova** — sem `done_when`, ou com ele reprovando — o diff dos arquivos que ele tocou vai para uma revisão barata no nível *Rápido*, e o parecer entra no relatório como conselho, nunca como veredito. Com a verificação passando a revisão fica calada: um revisor menor que o autor gera falso-positivo, e o exit code já respondeu.
 
-**Quando um nível não roda**: um slot que aponta para o provedor local só vale se o modelo dele for justamente o que está carregado — o Forja sobe um `llama-server` por vez e o llama.cpp ignora o campo `model` do pedido, então pedir outro alias rodaria o modelo errado calado. Nesse caso a delegação cai para a *Nuvem*, e sem ela devolve um erro dizendo o porquê, para o principal fazer sozinho. Falha de conexão no meio também cai para o próximo nível — mas só se o subagente ainda não tiver mexido em arquivo nenhum. O subagente usa as mesmas ferramentas, aprovações, permissões e pasta de trabalho, mas não pode delegar de novo. Os passos dele aparecem **dentro do bloco da delegação**, inclusive os cards de aprovação, com modelo, tokens e tempo. Só o relatório final volta para a conversa, o que economiza o contexto do agente principal. O limite de passos por subagente fica na mesma tela (padrão 15).
+**Quando um nível não roda**: um slot que aponta para o provedor local só vale se o modelo dele for justamente o que está carregado — o Forja sobe um `llama-server` por vez e o llama.cpp ignora o campo `model` do pedido, então pedir outro alias rodaria o modelo errado calado. Nesse caso a delegação cai para a *Nuvem*, e sem ela devolve um erro dizendo o porquê, para o principal fazer sozinho. Falha de conexão no meio também cai para o próximo nível — mas só se o subagente ainda não tiver mexido em arquivo nenhum. O subagente usa as mesmas ferramentas, aprovações, permissões e pasta de trabalho, mas não pode delegar de novo. Os passos dele aparecem **dentro do bloco da delegação**, inclusive os cards de aprovação, com modelo, tokens e tempo. Enquanto ele trabalha, a delegação também aparece na aba **Instâncias** — de qualquer conversa, com nível, modelo, tempo, passos e o que ele está fazendo agora, mais os botões de abrir a conversa e parar o turno. Só o relatório final volta para a conversa, o que economiza o contexto do agente principal. O limite de passos por subagente fica na mesma tela (padrão 15).
 
 ## Memória sobre você
 

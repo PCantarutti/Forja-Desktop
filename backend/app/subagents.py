@@ -9,8 +9,9 @@ passos aparecem na UI dentro do bloco da delegação, mas não entram no histór
 (só o relatório entra).
 
 O relatório dele é palavra dele. Por isso o `done_when` é executado DEPOIS que ele para, pelo caminho
-normal de aprovação do agente, e no esforço extremo o diff do que ele mexeu ainda vai para uma
-revisão barata. O que volta para o principal é medição, não autoavaliação.
+normal de aprovação do agente: o que volta para o principal é medição, não autoavaliação. A revisão do
+diff só entra quando essa prova não existe (sem `done_when`, ou com ele reprovando) — com exit code 0 na
+mão, o parecer de um modelo menor que o autor rende falso-positivo, não bug.
 """
 from __future__ import annotations
 
@@ -41,10 +42,14 @@ MAX_FILES = 12            # arquivos anexados ao brief
 MAX_DIFF = 30_000         # diff mandado para a revisão
 VERIFY_TIMEOUT = 180      # teto do done_when (o run_command ainda corta em SHELL_TIMEOUT_MAX)
 WRITE_TOOLS = {"write_file", "edit_file"}
+NUDGE_LINES = 12          # escrita maior que isto, no extremo, é trabalho de subagente
 REVIEW_PROMPT = (
     "Você revisa o diff abaixo, escrito por outro modelo para a tarefa dada. Responda em no máximo 8 linhas: "
     "a primeira é 'VEREDITO: ok' ou 'VEREDITO: ajustar'; depois, um problema real por linha, com o arquivo "
     "(bug, caso não tratado, algo que contradiz a tarefa). Sem elogio, sem estilo, sem reescrever código.")
+
+
+ATIVAS: dict[str, dict] = {}   # delegações rodando agora, para a aba Instâncias
 
 
 def slot(level: str) -> dict | None:
@@ -54,6 +59,17 @@ def slot(level: str) -> dict | None:
 
 def configured() -> dict[str, dict]:
     return {lvl: spec for lvl in LEVELS if (spec := slot(lvl))}
+
+
+def ativas() -> list[dict]:
+    """Delegações em andamento, em qualquer conversa. Lê o mesmo `info` que a UI da conversa mostra,
+    então não existe estado duplicado para desencontrar."""
+    agora = time.time()
+    return [{"id": a["id"], "conversation_id": a["conversation_id"], "run_id": a["run_id"],
+             "task": a["task"], "status": a["status"], "seconds": round(agora - a["started"]),
+             "level": a["info"]["level"], "model": a["info"]["model"], "provider": a["info"]["provider"],
+             "iterations": a["info"]["iterations"], "tokens": a["info"]["tokens"],
+             "steps": len(a["info"]["steps"])} for a in list(ATIVAS.values())]
 
 
 def _fits(spec: dict) -> tuple[bool, str]:
@@ -87,6 +103,27 @@ def _why_not() -> str:
         if spec and not (fit := _fits(spec))[0]:
             motivos.append(f"{LEVELS[lvl]}: {fit[1]}")
     return "; ".join(motivos)
+
+
+def nudge_write(name: str, args: dict, avisados: set[str]) -> str:
+    """Freio do esforço extremo: o principal integra, não implementa. Escrita grande de arquivo volta
+    uma vez com a instrução de delegar — a regra no system prompt sozinha não segura modelo pequeno,
+    que lê "delegue o difícil" e escreve assim mesmo. Na segunda tentativa passa: se o subagente não
+    puder entregar, travar o turno seria pior que deixar o principal fazer."""
+    if name not in WRITE_TOOLS or not chain("capaz"):
+        return ""
+    alvo = str(args.get("path") or "")
+    corpo = str(args.get("content") or args.get("new_str") or "")
+    if alvo in avisados or corpo.count("\n") < NUDGE_LINES:
+        return ""
+    avisados.add(alvo)
+    # A primeira frase diz que NADA foi gravado: sem isso o modelo segue achando que escreveu e vai
+    # rodar o teste contra um arquivo vazio, queimando duas iteracoes para descobrir.
+    return (f"NADA FOI ESCRITO em {alvo or 'o arquivo'}: esta chamada foi recusada e o arquivo continua como "
+            "estava. Esforço Extremo: você integra, não implementa. Delegue com delegate_task(level='capaz', "
+            "files=[...], done_when='...'), dizendo por completo o que o arquivo precisa fazer e como provar que "
+            f"funcionou; depois integre o que voltar. Se for mesmo trivial, repita ESTA MESMA chamada de {name} "
+            "que a segunda passa. Não siga em frente sem fazer uma das duas.")
 
 
 def _unused(_root: Path, _args: dict) -> str:  # a execução real é o run() abaixo, chamado pelo agente
@@ -159,9 +196,10 @@ async def _setup(spec: dict, run_obj, sub_effort: str) -> tuple:
 
 
 async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
-    """(modelo, parecer) sobre o que ESTA delegação mudou. O diff sai por arquivo tocado, não do repo
-    inteiro: o usuário quase sempre tem trabalho não commitado do lado. É uma pergunta só, sem
-    ferramentas e sem a conversa — conselho para o principal, nunca portão."""
+    """(modelo, parecer) sobre o que ESTA delegação mudou, quando nenhum comando provou o resultado.
+    O diff sai por arquivo tocado, não do repo inteiro: o usuário quase sempre tem trabalho não
+    commitado do lado. É uma pergunta só, sem ferramentas e sem a conversa — conselho para o
+    principal, nunca portão."""
     escolha = next(iter(chain("rapido")), None)
     if not escolha or not paths or not gitops.is_repo(root):
         return "", ""
@@ -182,8 +220,8 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
     return spec["model"], split_think(texto)[1].strip()[:1500]
 
 
-async def run(conv_id: int, call: dict, req, run_obj, out: dict,
-              run_call: Callable) -> AsyncIterator[dict]:
+async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
+               run_call: Callable) -> AsyncIterator[dict]:
     args = call["arguments"]
     pid = call["id"]
     level = str(args.get("level") or "rapido").lower()
@@ -228,16 +266,24 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
     if used_level != level:
         info["fallback"] = f"Nível '{level}' indisponível; usei '{used_level}'."
     meta["sub"] = info
+    ATIVAS[pid] = ativa = {"id": pid, "conversation_id": conv_id, "run_id": run_obj.id,
+                           "task": task[:200], "started": time.time(), "status": "", "info": info}
+
+    def estado(texto: str) -> dict:
+        """Um lugar só atualiza o que a conversa mostra e o que a aba Instâncias lê."""
+        ativa["status"] = texto
+        return {"type": "sub_status", "parent": pid, "text": texto}
+
     t0 = time.monotonic()
     final = ""
-    yield {"type": "sub_status", "parent": pid, "text": f"{LEVELS[used_level]} · {model}: começando…"}
+    yield estado(f"{LEVELS[used_level]} · {model}: começando…")
 
     for i in range(config.SUBAGENT_MAX_ITERATIONS):
         if run_obj.cancel.is_set():
             final = final or "(interrompido pelo usuário)"
             break
         info["iterations"] = i + 1
-        yield {"type": "sub_status", "parent": pid, "text": f"{LEVELS[used_level]} · {model}: pensando (passo {i + 1})"}
+        yield estado(f"{LEVELS[used_level]} · {model}: pensando (passo {i + 1})")
         content = ""
         done: dict = {"tool_calls": []}
         try:
@@ -259,7 +305,7 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
                 via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort)
                 info.update(level=used_level, provider=provider, model=model)
                 info["fallback"] = f"O slot anterior falhou ({e}); segui com {LEVELS[used_level]} · {model}."
-                yield {"type": "sub_status", "parent": pid, "text": info["fallback"]}
+                yield estado(info["fallback"])
                 continue
             out.update(status="erro", text=f"Subagente falhou ({model}): {e}", meta=meta)
             return
@@ -310,7 +356,7 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
     # (card na UI, policy, globs de auto-aprovação) e ele não escolhe se rodou nem o que reportar.
     if done_when and not run_obj.cancel.is_set() and run_obj.permission != "plan" \
             and any(t.name == "run_command" for t in tools):
-        yield {"type": "sub_status", "parent": pid, "text": f"verificando: {done_when}"}
+        yield estado(f"verificando: {done_when}")
         ver: dict = {}
         vcall = {"id": "ver_" + uuid.uuid4().hex[:12], "name": "run_command",
                  "arguments": {"command": done_when, "timeout": VERIFY_TIMEOUT}}
@@ -325,16 +371,28 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
         final += (f"\n\nVerificação `{done_when}`: {'PASSOU' if ver['status'] == 'ok' else 'FALHOU'}\n"
                   f"{ver['text'][:MAX_RESULT_IN_STEP]}")
 
-    if effort == "extremo" and not run_obj.cancel.is_set():
+    # Opinião só vale onde não há medição: verificação passou, revisão calada.
+    provado = (info.get("verify") or {}).get("status") == "ok"
+    if effort == "extremo" and not run_obj.cancel.is_set() and not provado:
         alvos = {s["arguments"].get("path") for s in info["steps"]
                  if s["name"] in WRITE_TOOLS and s["status"] == "ok" and s["arguments"].get("path")}
-        yield {"type": "sub_status", "parent": pid, "text": "revisando o diff…" if alvos else ""}
+        yield estado("revisando o diff…" if alvos else "")
         revisor, parecer = await _review(root, task, alvos)
         if parecer:
             info["review"] = parecer
             final += f"\n\nRevisão do diff ({revisor}, não bloqueante — julgue você mesmo):\n{parecer}"
 
     info["seconds"] = round(time.monotonic() - t0, 1)
-    yield {"type": "sub_status", "parent": pid, "text": ""}
+    yield estado("")
     out.update(status="ok", meta=meta,
                text=f"[Relatório do subagente {LEVELS[used_level]} ({model})]\n{final}")
+
+async def run(conv_id: int, call: dict, req, run_obj, out: dict,
+              run_call: Callable) -> AsyncIterator[dict]:
+    """Roda a delegação e garante que ela saia da lista de ativas. O finally vale também quando o
+    usuário cancela o turno: o consumidor fecha o gerador e o finally corre."""
+    try:
+        async for ev in _run(conv_id, call, req, run_obj, out, run_call):
+            yield ev
+    finally:
+        ATIVAS.pop(call["id"], None)
