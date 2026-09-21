@@ -18,11 +18,12 @@ export default function ContextRing(props: {
   models: string[];   // modelos que já responderam nesta conversa
 }) {
   const [open, setOpen] = useState(false);
-  // Só consulta a cota com o popover aberto; e só mostra se a nuvem estiver em jogo nesta conversa.
+  // Só consulta a cota com o popover aberto. Mostra TODO provedor de nuvem configurado, mesmo
+  // quando o modelo desta conversa é local: a cota do mês é do usuário, não da conversa.
   const nuvens = useCloudUsage(open);
-  const cota =
-    nuvens.find((u) => u.provider === props.provider) ??
-    nuvens.find((u) => u.models.some((m) => props.models.includes(m.name)));
+  const emUso = (u: (typeof nuvens)[number]) =>
+    u.provider === props.provider || u.models.some((m) => props.models.includes(m.name));
+  const cotas = [...nuvens].sort((a, b) => Number(emUso(b)) - Number(emUso(a)));
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -88,12 +89,12 @@ export default function ContextRing(props: {
               <span className="text-fg">{props.avg.toFixed(1)} t/s</span>
             </div>
           )}
-          {cota && (
-            <div className="mt-3 border-t border-line pt-2">
+          {cotas.map((cota) => (
+            <div key={cota.provider} className="mt-3 border-t border-line pt-2">
               <div className="mb-1.5 text-faint">Cota · {cota.name}</div>
               <UsageBars data={cota} />
             </div>
-          )}
+          ))}
           <button
             onClick={() => {
               setOpen(false);
