@@ -8,11 +8,12 @@ Nenhum binário fica versionado: todo arquivo de entrada é produzido pelas pró
 """
 import asyncio
 import pathlib
+import zipfile
 
 import pytest
 
 from app import config, documentos
-from app.tools import ToolError, run_tool
+from app.tools import ToolError, execute, run_tool
 
 
 def _tem_chromium() -> bool:
@@ -479,3 +480,111 @@ def test_br_na_celula_tambem_no_html(ws):
     roda("write_document", {"path": "t.html", "content": tabela}, ws)
     html = (ws / "documentos" / "t.html").read_text(encoding="utf-8")
     assert "<td>um<br>dois</td>" in html
+
+
+# ------------------------------------------------ documento de fora, sem os estilos do python-docx
+
+def _sem_estilos(caminho, texto_cabecalho=""):
+    """Um .docx como os que o Word produz: sem os estilos que nunca foram usados.
+
+    `Heading 3` e `Table Grid` só existem no documento que os declara. O modelo padrão do
+    python-docx traz todos, então gerar e reeditar o que a gente mesmo gerou nunca pega o problema.
+    """
+    import docx
+
+    doc = docx.Document()
+    for estilo in list(doc.styles):
+        if estilo.name in ("Heading 3", "Table Grid", "List Bullet", "List Number"):
+            estilo.element.getparent().remove(estilo.element)
+    doc.add_paragraph("NOME: ____")
+    if texto_cabecalho:
+        doc.sections[0].header.paragraphs[0].text = texto_cabecalho
+    doc.save(str(caminho))
+
+
+def test_acrescentar_em_documento_sem_os_estilos(ws):
+    """Aconteceu em uso, com um formulário de escola: `no style with name 'Heading 3'`, depois
+    `'Table Grid'`. O modelo tentou duas vezes, desistiu e gerou por cima do arquivo do usuário."""
+    import docx
+
+    _sem_estilos(ws / "externo.docx")
+    md = ("### CALENDARIO" + chr(10) * 2 + "| DIA | FEITO |" + chr(10) + "| --- | --- |"
+          + chr(10) + "| SEGUNDA | [ ] |")
+    roda("edit_document", {"path": "externo.docx", "operations": [
+        {"tipo": "acrescentar", "conteudo": md}]}, ws)
+
+    doc = docx.Document(str(ws / "externo.docx"))
+    assert "Table Grid" not in [e.name for e in doc.styles]  # o cenário é este; sem isso não prova nada
+    assert "NOME: ____" in [p.text for p in doc.paragraphs]     # o original ficou
+    assert len(doc.tables) == 1 and doc.tables[0].cell(0, 0).text == "DIA"
+    assert any("CALENDARIO" in p.text for p in doc.paragraphs)  # o título entrou, sem o estilo
+    # sem o Table Grid, a grade vem das bordas escritas à mão, senão a tabela sai invisível
+    with zipfile.ZipFile(ws / "externo.docx") as z:
+        assert b"tblBorders" in z.read("word/document.xml")
+
+
+def test_lista_em_documento_sem_os_estilos(ws):
+    import docx
+
+    _sem_estilos(ws / "externo.docx")
+    roda("edit_document", {"path": "externo.docx", "operations": [
+        {"tipo": "acrescentar", "conteudo": "- um" + chr(10) + "- dois"}]}, ws)
+    textos = [p.text for p in docx.Document(str(ws / "externo.docx")).paragraphs]
+    assert any("um" in t for t in textos) and any("dois" in t for t in textos)
+
+
+def test_read_file_mostra_o_cabecalho_do_documento(ws):
+    """O formulário tinha prefeitura, escola, professor e turma no cabeçalho. A leitura devolvia só
+    a tabela de uma célula do corpo — o agente via um documento quase vazio e se sentiu à vontade
+    para substituir tudo."""
+    _sem_estilos(ws / "externo.docx", texto_cabecalho="PREFEITURA MUNICIPAL DE EXEMPLO")
+    lido = run_tool("read_file", {"path": "externo.docx"}, ws)
+    assert "PREFEITURA MUNICIPAL DE EXEMPLO" in lido and "cabeçalho do documento" in lido
+    assert "NOME: ____" in lido
+
+
+def test_anexo_do_usuario_nao_e_sobrescrito_nem_com_o_flag(ws):
+    """Ele levou o não duas vezes, leu o 'sobrescrever' no esquema e passou por cima assim mesmo."""
+    from app import uploads
+
+    origem = ws / uploads.UPLOAD_DIR
+    origem.mkdir(parents=True)
+    roda("write_document", {"path": "documentos/base.docx", "content": "# ORIGINAL"}, ws)
+    (origem / "anexo.docx").write_bytes((ws / "documentos" / "base.docx").read_bytes())
+    antes = (origem / "anexo.docx").read_bytes()
+
+    for args in ({"sobrescrever": True}, {}):
+        with pytest.raises(ToolError, match="pasta de anexos"):
+            roda("write_document", {"path": f"{uploads.UPLOAD_DIR}/anexo.docx",
+                                    "content": "# so a tabela", **args}, ws)
+    assert (origem / "anexo.docx").read_bytes() == antes
+
+
+def test_editar_o_anexo_continua_sendo_o_caminho(ws):
+    from app import uploads
+
+    (ws / uploads.UPLOAD_DIR).mkdir(parents=True)
+    roda("write_document", {"path": "documentos/base.docx", "content": "# ORIGINAL"}, ws)
+    alvo = ws / uploads.UPLOAD_DIR / "anexo.docx"
+    alvo.write_bytes((ws / "documentos" / "base.docx").read_bytes())
+    roda("edit_document", {"path": f"{uploads.UPLOAD_DIR}/anexo.docx",
+                           "operations": [{"tipo": "acrescentar", "conteudo": "## NOVA"}]}, ws)
+    lido = run_tool("read_file", {"path": f"{uploads.UPLOAD_DIR}/anexo.docx"}, ws)
+    assert "ORIGINAL" in lido and "NOVA" in lido
+
+
+def test_erro_de_dentro_da_ferramenta_nao_vira_erro_de_argumento(ws, monkeypatch):
+    """O KeyError do python-docx chegava como 'Argumentos inválidos', e o modelo passou a
+    reescrever o Markdown em vez de entender que o problema não era dele."""
+    roda("write_document", {"path": "d.docx", "content": "# oi"}, ws)
+
+    def estilo_faltando(*a, **kw):
+        raise KeyError("no style with name 'Heading 3'")
+
+    monkeypatch.setattr(documentos, "_editar_office", estilo_faltando)
+    # pelo `execute`, que é por onde o agente chama de verdade: o `roda` daqui pula o embrulho
+    with pytest.raises(ToolError) as erro:
+        asyncio.run(execute("edit_document", {"path": "documentos/d.docx",
+                                              "operations": [{"tipo": "acrescentar", "conteudo": "x"}]}, ws))
+    assert "Argumentos inválidos" not in str(erro.value)
+    assert "edit_document falhou" in str(erro.value)

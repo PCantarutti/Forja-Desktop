@@ -76,11 +76,32 @@ def _extrair_pdf(origem: Path) -> str | None:
     return f"{total} página(s){sobrou}.{NL * 2}{corpo}"
 
 
+def _cabecalhos_docx(doc):
+    """Texto de cabeçalho e rodapé, que não estão no corpo e o python-docx não devolve junto.
+
+    Sem isto o agente lê um formulário institucional e enxerga um documento quase vazio — foi o que
+    aconteceu com um modelo de escola: nome da prefeitura, professor e turma estavam todos no
+    cabeçalho, e a leitura devolvia só a tabela de uma célula do corpo.
+    """
+    vistos: list[str] = []
+    fora: list[str] = []
+    for secao in doc.sections:
+        for rotulo, parte in (("cabeçalho", secao.header), ("rodapé", secao.footer)):
+            linhas = [p.text.strip() for p in parte.paragraphs if p.text.strip()]
+            linhas += [_tabela_md([[c.text.strip() for c in l.cells] for l in t.rows])
+                       for t in parte.tables]
+            texto = NL.join(linhas).strip()
+            if texto and texto not in vistos:
+                vistos.append(texto)
+                fora.append(f"[{rotulo} do documento]{NL}{texto}")
+    return fora
+
+
 def _extrair_docx(origem: Path) -> str | None:
     import docx
 
     doc = docx.Document(str(origem))
-    partes: list[str] = []
+    partes: list[str] = list(_cabecalhos_docx(doc))
     for bloco in _corpo_docx(doc):
         if bloco[0] == "p":
             texto = bloco[1].text.strip()
@@ -292,15 +313,59 @@ ITALICO = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
 CODIGO_INLINE = re.compile(r"`([^`]+)`")
 
 
+def _bordas_docx(tabela) -> None:
+    """Grade preta fina, escrita direto no XML.
+
+    O `Table Grid` é um estilo, e estilo só existe no documento que o declara. Um .docx feito no
+    Word normalmente não traz os que nunca foram usados — daí o KeyError ao editar arquivo de fora.
+    """
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    bordas = OxmlElement("w:tblBorders")
+    for lado in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        linha = OxmlElement(f"w:{lado}")
+        linha.set(qn("w:val"), "single")
+        linha.set(qn("w:sz"), "4")
+        linha.set(qn("w:color"), "000000")
+        bordas.append(linha)
+    tabela._tbl.tblPr.append(bordas)
+
+
+def _titulo_docx(doc, texto: str, nivel: int):
+    """Título do jeito certo; e, se o documento não tiver o estilo, negrito e corpo maior."""
+    from docx.shared import Pt
+
+    try:
+        return doc.add_heading(texto, level=min(nivel, 9))
+    except KeyError:
+        p = doc.add_paragraph()
+        run = p.add_run(texto)
+        run.bold = True
+        run.font.size = Pt(max(18 - 2 * min(nivel, 5), 11))
+        return p
+
+
+def _item_docx(doc, ordenada: bool, indice: int):
+    """Item de lista; sem o estilo, o marcador entra como texto — feio, mas legível."""
+    try:
+        return doc.add_paragraph(style="List Number" if ordenada else "List Bullet")
+    except KeyError:
+        p = doc.add_paragraph()
+        p.add_run(f"{indice}. " if ordenada else "• ")
+        return p
+
+
 def _tabela_docx(doc, linhas: list[list[str]]):
     """Tabela de Word a partir das linhas do parser. Quebra dentro da célula vira parágrafo.
 
-    `cell.text = "a
-b"` deixa o 
- cru dentro de um run, e o Word não mostra quebra nenhuma.
+    Um run com quebra crua dentro não mostra quebra nenhuma no Word: tem que ser parágrafo.
     """
     tabela = doc.add_table(rows=len(linhas), cols=max(len(l) for l in linhas))
-    tabela.style = "Table Grid"
+    try:
+        tabela.style = "Table Grid"
+    except KeyError:
+        _bordas_docx(tabela)  # o documento não tem esse estilo; desenha as linhas na mão
     for i, linha in enumerate(linhas):
         for j, celula in enumerate(linha):
             partes = _sem_marcas(celula).split(NL)
@@ -380,13 +445,12 @@ def para_docx(bs: list[dict], destino: Path) -> None:
     doc = docx.Document()
     for b in bs:
         if b["tipo"] == "titulo":
-            doc.add_heading(_sem_marcas(b["texto"]), level=min(b["nivel"], 9))
+            _titulo_docx(doc, _sem_marcas(b["texto"]), b["nivel"])
         elif b["tipo"] == "paragrafo":
             _runs_docx(doc.add_paragraph(), b["texto"])
         elif b["tipo"] == "lista":
-            for item in b["itens"]:
-                estilo = "List Number" if b["ordenada"] else "List Bullet"
-                _runs_docx(doc.add_paragraph(style=estilo), item)
+            for n, item in enumerate(b["itens"], 1):
+                _runs_docx(_item_docx(doc, b["ordenada"], n), item)
         elif b["tipo"] == "codigo":
             p = doc.add_paragraph()
             run = p.add_run(b["texto"])
@@ -586,6 +650,16 @@ def _destino(root: Path, caminho: str, aceitas: set[str], sobrescrever: bool = F
     if "/" not in bruto:
         bruto = f"{PASTA}/{bruto}"
     destino = resolve_path(root, bruto)
+    # A pasta de anexos é do usuário: é o arquivo que ELE mandou. Nem com sobrescrever — o modelo
+    # levou o não duas vezes, leu o "sobrescrever: true" no esquema e passou por cima assim mesmo.
+    from . import uploads  # tardio: uploads importa documentos, e o contrário fecharia o ciclo
+
+    if destino.relative_to(root.resolve()).as_posix().startswith(uploads.UPLOAD_DIR + "/"):
+        raise ToolError(
+            f"'{bruto}' está na pasta de anexos, que guarda o arquivo original do usuário: gerar "
+            "por cima dele o destruiria. Para alterar esse arquivo preservando o conteúdo, use "
+            "edit_document (ou edit_spreadsheet) nesse mesmo caminho. Para um arquivo novo a "
+            "partir dele, escreva em documentos/.")
     if destino.exists() and not sobrescrever:
         raise ToolError(
             f"'{bruto}' já existe, e esta ferramenta gera o arquivo do zero: o conteúdo atual se "
@@ -821,10 +895,10 @@ def _montar_docx(doc, bs: list[dict]) -> None:
     """Escreve os blocos no fim do corpo. Quem quer no meio move os elementos depois."""
     for b in bs:
         if b["tipo"] == "titulo":
-            doc.add_heading(_sem_marcas(b["texto"]), level=min(b["nivel"], 9))
+            _titulo_docx(doc, _sem_marcas(b["texto"]), b["nivel"])
         elif b["tipo"] == "lista":
-            for item in b["itens"]:
-                _runs_docx(doc.add_paragraph(style="List Number" if b["ordenada"] else "List Bullet"), item)
+            for n, item in enumerate(b["itens"], 1):
+                _runs_docx(_item_docx(doc, b["ordenada"], n), item)
         elif b["tipo"] == "tabela":
             linhas = b["linhas"]
             _tabela_docx(doc, linhas)

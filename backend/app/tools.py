@@ -100,12 +100,33 @@ def coerce_args(tool: Tool, args: dict) -> dict:
     return out
 
 
+def _falha(tool: "Tool", e: Exception) -> ToolError:
+    """Erro de dentro da ferramenta não é erro de argumento.
+
+    Isto dizia "Argumentos inválidos" para qualquer KeyError, TypeError ou ValueError — inclusive
+    os vindos lá de dentro de uma biblioteca. Um `KeyError: no style with name 'Heading 3'` do
+    python-docx chegava ao modelo como culpa dele; ele reescreveu o Markdown duas vezes, não
+    adiantou, e acabou gerando o documento do zero por cima do arquivo do usuário.
+
+    O que separa os dois é a chave: se ela é um parâmetro desta ferramenta, o handler tropeçou no
+    que faltava nos argumentos — aí o aviso antigo está certo.
+    """
+    chave = e.args[0] if isinstance(e, KeyError) and e.args else None
+    if chave in (tool.parameters.get("properties") or {}):
+        return ToolError(f"Argumentos inválidos para {tool.name}: faltando ou incorreto {e}")
+    return ToolError(f"{tool.name} falhou: {type(e).__name__}: {e}")
+
+
 def _call(name: str, fn_attr: str, args: dict, root: Path | None):
     tool = get_tool(name)
     try:
-        return getattr(tool, fn_attr)(root or workspace.root(), coerce_args(tool, args))
-    except (KeyError, TypeError, ValueError) as e:  # argumento faltando/errado
+        argumentos = coerce_args(tool, args)
+    except (KeyError, TypeError, ValueError) as e:
         raise ToolError(f"Argumentos inválidos para {name}: faltando ou incorreto {e}") from e
+    try:
+        return getattr(tool, fn_attr)(root or workspace.root(), argumentos)
+    except (KeyError, TypeError, ValueError) as e:
+        raise _falha(tool, e) from e
 
 
 def run_tool(name: str, args: dict, root: Path | None = None) -> str:
@@ -118,9 +139,13 @@ async def execute(name: str, args: dict, root: Path | None = None) -> str:
     if not inspect.iscoroutinefunction(tool.handler):
         return await asyncio.to_thread(run_tool, name, args, root)
     try:
-        return await tool.handler(root or workspace.root(), coerce_args(tool, args))
+        argumentos = coerce_args(tool, args)
     except (KeyError, TypeError, ValueError) as e:
         raise ToolError(f"Argumentos inválidos para {name}: faltando ou incorreto {e}") from e
+    try:
+        return await tool.handler(root or workspace.root(), argumentos)
+    except (KeyError, TypeError, ValueError) as e:
+        raise _falha(tool, e) from e
 
 
 def unregister_source(source: str) -> None:

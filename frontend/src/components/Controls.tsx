@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Balanca, Bubble, Check, Clipboard, Code, Gauge, Image, PanelLeft, Search, Shield, Sliders } from "./icons";
+import { Balanca, Bubble, Check, Clipboard, Code, Gauge, Image, PanelLeft, Search, Shield, Sliders, X } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
 export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
@@ -176,14 +176,59 @@ export function SectionTabs(props: {
   );
 }
 
-/** Aviso fixo no rodapé quando o modo aceita tudo. */
+const AVISO_BYPASS = "forja.aviso.bypass";
+
+const dispensado = () => {
+  try {
+    return localStorage.getItem(AVISO_BYPASS) === "1";
+  } catch {
+    return false; // janela anônima ou storage bloqueado: mostra, que é o lado seguro
+  }
+};
+
+/**
+ * Aviso no rodapé quando o modo aceita tudo. Dá para fechar — mas volta se você sair do modo e
+ * entrar de novo: dispensar valeu para aquela vez, não para sempre. O chip do compositor continua
+ * dizendo em que modo você está, então fechar esconde o lembrete, não a informação.
+ */
 export function ModeWarning({ permission }: { permission: Permission }) {
-  if (permission !== "bypass") return null;
+  const [oculto, setOculto] = useState(dispensado);
+  const anterior = useRef(permission);
+
+  useEffect(() => {
+    if (permission === "bypass" && anterior.current !== "bypass") {
+      setOculto(false);
+      try {
+        localStorage.removeItem(AVISO_BYPASS);
+      } catch { /* sem storage: só não lembra */ }
+    }
+    anterior.current = permission;
+  }, [permission]);
+
+  if (permission !== "bypass" || oculto) return null;
+
+  const fechar = () => {
+    setOculto(true);
+    try {
+      localStorage.setItem(AVISO_BYPASS, "1");
+    } catch { /* sem storage: fecha só desta vez */ }
+  };
+
   return (
     <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-500/40 bg-surface px-3 py-1.5 text-xs text-amber-200">
       <Sliders className="size-3.5 shrink-0" />
-      Modo <strong>Ignorar permissões</strong>: comandos e alterações rodam sem perguntar. Só comando
-      destrutivo (apagar, formatar, desligar, sudo, force push) ainda pede confirmação.
+      <span className="min-w-0 flex-1">
+        Modo <strong>Ignorar permissões</strong>: comandos e alterações rodam sem perguntar. Só comando
+        destrutivo (apagar, formatar, desligar, sudo, force push) ainda pede confirmação.
+      </span>
+      <button
+        onClick={fechar}
+        title="Fechar o aviso (volta se você trocar de modo e voltar)"
+        aria-label="Fechar o aviso"
+        className="shrink-0 rounded-md p-1 text-amber-200/70 hover:bg-amber-500/20 hover:text-amber-100"
+      >
+        <X className="size-3.5" />
+      </button>
     </div>
   );
 }
