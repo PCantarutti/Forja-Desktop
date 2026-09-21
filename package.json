@@ -1,7 +1,7 @@
 {
   "name": "forja-desktop",
   "productName": "Forja",
-  "version": "0.3.5",
+  "version": "0.4.0",
   "description": "Forja: agente de IA local com pasta de trabalho, navegador integrado e terminal, num app de desktop.",
   "author": "DRUVE",
   "main": "electron/main.js",
