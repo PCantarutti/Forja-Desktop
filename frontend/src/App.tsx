@@ -296,8 +296,12 @@ export default function App() {
       .catch(() => {});
   }, [settings.model]);
 
+  // `draft` muda a cada token: sem o quadro, isto era um scroll forçado (com layout junto) a cada
+  // token recebido. Um por quadro basta — o olho não vê mais do que isso mesmo.
   useEffect(() => {
-    if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
+    if (!stick.current) return;
+    const q = requestAnimationFrame(() => bottom.current?.scrollIntoView({ block: "end" }));
+    return () => cancelAnimationFrame(q);
   }, [messages, draft, approvals]);
 
   // O que está rodando agora (subagentes por conversa e processos vivos): bolinha na lista e chip no chat.

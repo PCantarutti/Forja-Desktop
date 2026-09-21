@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -30,7 +30,15 @@ function Table(props: React.ComponentProps<"table">) {
 
 const MD_COMPONENTS = { pre: CodeBlock, table: Table };
 
-export function Markdown({ text }: { text: string }) {
+/**
+ * Memoizado, e é o `memo` que mais paga no app inteiro.
+ *
+ * Cada token recebido re-renderiza o App, e daí toda mensagem anterior da conversa. Sem isto,
+ * cada uma refazia o pipeline remark-gfm + rehype-highlight do seu texto INTEIRO, dezenas de vezes
+ * por segundo, numa lista que só cresce — era o custo dominante de uma resposta longa. Com o texto
+ * igual, o trabalho não se repete.
+ */
+export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
     <div className="md text-[15px]">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={MD_COMPONENTS}>
@@ -38,7 +46,7 @@ export function Markdown({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   );
-}
+});
 
 export function Thinking({ text, live }: { text: string; live?: boolean }) {
   const [open, setOpen] = useState<boolean | null>(null);
