@@ -1206,6 +1206,34 @@ def get_file(path: str, conv: str = "0"):
     return FileResponse(p)
 
 
+MAX_WALK = 20_000  # teto da varredura: repo grande não pode travar o menu do @
+
+
+@app.get("/api/workspace/files")
+def workspace_files(conv: str = "0", q: str = "", limit: int = 50):
+    """Caminhos da pasta da conversa que casam com `q`, para o menu do @ no campo de mensagem."""
+    import os
+
+    from .tools import IGNORED_DIRS
+
+    root = _conv_root(conv)
+    alvo = q.strip().lower().replace("\\", "/")
+    achados: list[str] = []
+    vistos = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS and not d.startswith("."))
+        for name in sorted(filenames):
+            vistos += 1
+            rel = (Path(dirpath) / name).relative_to(root).as_posix()
+            if not alvo or alvo in rel.lower():
+                achados.append(rel)
+                if len(achados) >= max(1, min(limit, 200)):
+                    return {"files": achados}
+        if vistos >= MAX_WALK:
+            break
+    return {"files": achados}
+
+
 @app.post("/api/uploads")
 async def upload(file: UploadFile = File(...), conv: str = "0"):
     """Salva o anexo dentro da pasta de trabalho da conversa para o agente conseguir abrir."""

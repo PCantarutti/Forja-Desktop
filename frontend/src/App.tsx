@@ -165,6 +165,8 @@ export default function App() {
   const [changesAction, setChangesAction] = useState<ChangesAction>(null);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [mentionHits, setMentionHits] = useState<string[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const conversationsRef = useRef<Conversation[]>([]);
   // Estatísticas em tempo real da geração atual: tokens contados conforme chegam, relógio a cada 250 ms.
   const liveGen = useRef<{ t0: number; tFirst: number | null; tokens: number } | null>(null);
@@ -722,6 +724,31 @@ export default function App() {
   const slashQuery = input.startsWith("/") && !input.includes("\n") ? input.slice(1).split(" ")[0].toLowerCase() : null;
   const slashMatches = slashQuery === null ? [] : skills.filter((s) => s.name.toLowerCase().startsWith(slashQuery));
 
+  // Menu `@`: caminhos da pasta da conversa, enquanto o @ é a última coisa digitada.
+  const mentionQuery = /(?:^|\s)@(\S*)$/.exec(input)?.[1] ?? null;
+
+  useEffect(() => {
+    if (mentionQuery === null) return setMentionHits([]);
+    const t = setTimeout(() => {
+      api
+        .get<{ files: string[] }>(
+          `/workspace/files?conv=${currentId ?? 0}&q=${encodeURIComponent(mentionQuery)}&limit=8`,
+        )
+        .then((r) => {
+          setMentionHits(r.files);
+          setMentionIndex(0);
+        })
+        .catch(() => setMentionHits([]));
+    }, 200); // digitar rápido não dispara uma varredura por tecla
+    return () => clearTimeout(t);
+  }, [mentionQuery, currentId]);
+
+  /** Escolher no menu troca o `@trecho` pelo caminho: o agente lê o arquivo se precisar. */
+  function applyMention(path: string) {
+    setInput((v) => v.replace(/@\S*$/, `${path} `));
+    setMentionHits([]);
+  }
+
   async function applySkill(s: Skill) {
     const args = input.slice(1).split(" ").slice(1).join(" ");
     setInput("");
@@ -1273,6 +1300,20 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {mentionHits.length > 0 && (
+                <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-bg py-1 text-sm">
+                  {mentionHits.map((f, i) => (
+                    <button
+                      key={f}
+                      onMouseEnter={() => setMentionIndex(i)}
+                      onClick={() => applyMention(f)}
+                      className={`flex w-full items-center gap-3 px-3 py-1.5 text-left ${i === mentionIndex ? "bg-raised" : "hover:bg-raised/60"}`}
+                    >
+                      <span className="truncate font-mono text-fg">{f}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               {slashQuery !== null && slashMatches.length > 0 && (
                 <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-bg py-1 text-sm">
                   {slashMatches.map((s, i) => (
@@ -1304,6 +1345,24 @@ export default function App() {
                   }
                 }}
                 onKeyDown={(e) => {
+                  if (mentionHits.length) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      return setMentionIndex((i) => (i + 1) % mentionHits.length);
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      return setMentionIndex((i) => (i - 1 + mentionHits.length) % mentionHits.length);
+                    }
+                    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+                      e.preventDefault();
+                      return applyMention(mentionHits[mentionIndex] ?? mentionHits[0]);
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      return setMentionHits([]);
+                    }
+                  }
                   if (slashQuery !== null && slashMatches.length) {
                     if (e.key === "ArrowDown") {
                       e.preventDefault();
@@ -1333,7 +1392,7 @@ export default function App() {
                 }}
                 ref={composer}
                 rows={2}
-                placeholder={running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "agent" ? "Peça algo ao agente... ( / para comandos )" : "Digite uma mensagem..."}
+                placeholder={running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "agent" ? "Peça algo ao agente... ( / para comandos, @ para arquivos )" : "Digite uma mensagem..."}
                 className="w-full resize-none overflow-y-auto bg-transparent text-[15px] text-fg placeholder:text-faint focus:outline-none"
               />
               <div className="mt-1 flex items-center gap-2">
