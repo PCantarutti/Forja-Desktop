@@ -96,6 +96,11 @@ def effort_iterations(effort: str) -> int:
     return max(3, round(config.MAX_ITERATIONS * EFFORT.get(effort, EFFORT["medio"])[0]))
 MAX_RETRIES = 1
 RETRY_DELAY = 2.0
+# Chamadas de leitura que o modelo pede juntas rodam juntas: a inferência já terminou, o que sobra é I/O.
+# Escrita, shell, aprovação e o resto do navegador continuam em fila, na ordem em que o modelo pediu.
+PARALLEL_OK = {"read_file", "list_dir", "search", "web_search", "fetch_url", "browser_read", "delegate_task"}
+PARALLEL_READS = 4        # leituras simultâneas no total
+PARALLEL_SUBAGENTS = 2    # delegações simultâneas por destino remoto (local é sempre 1)
 KEEP_FINISHED_RUN = 120  # segundos que uma execução terminada continua consultável
 MAX_TOOL_IMAGES = 2      # screenshots que vão como imagem ao modelo (as anteriores viram texto)
 IMAGE_TOKENS = 1000      # custo estimado de uma imagem no prompt (não é chars/4 do base64)
@@ -252,7 +257,9 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     tools = available_tools(caps, permission, exclude)
     names = [t.name for t in tools]
     # Regras só das ferramentas ligadas: citar uma desativada confunde o modelo.
-    rules = ['- Execute, não descreva. Para mexer em arquivos, CHAME a ferramenta na mesma resposta. Nunca diga "vou criar/editar" sem fazer a chamada.']
+    rules = ['- Execute, não descreva. Para mexer em arquivos, CHAME a ferramenta na mesma resposta. Nunca diga "vou criar/editar" sem fazer a chamada.',
+             "- Precisa de vários arquivos ou buscas? peça TODAS as leituras na mesma resposta: elas rodam em "
+             "paralelo. Uma por vez só desperdiça rodada."]
     if "edit_file" in names or "write_file" in names:
         rules.append("- Leia o arquivo antes de editar. Use edit_file para mudanças pontuais (old_str exato e único, "
                      "sem números de linha) e write_file para arquivos novos ou reescritas completas.")
@@ -730,20 +737,25 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             break
 
         stop = False
-        for call in calls:
+        cancelar: set[str] = set()
+        for call in calls:  # o detector olha a sequência inteira antes de executar qualquer coisa
             if not stop and loop.record(call["name"], call["arguments"]):
                 stop = True
                 yield _event(conv_id, "warning",
                              f"Loop detectado: {call['name']} pedida 3 vezes seguidas com os mesmos argumentos. "
                              "O agente foi interrompido.")
-            if stop or run.cancel.is_set():
-                # Toda tool_call precisa de resposta no histórico, senão a próxima requisição falha.
-                m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"], status="cancelada",
-                          content="Não executada: o loop foi interrompido.", meta={"arguments": call["arguments"]})
-                yield {"type": "tool_result", "message": m.to_dict()}
-                continue
-            async for ev in _execute(conv_id, call, req, run, caps):
-                yield ev
+            if stop:
+                cancelar.add(call["id"])
+        for lote in batches(calls):
+            rodar = [] if run.cancel.is_set() else [c for c in lote if c["id"] not in cancelar]
+            if rodar:
+                async for ev in _run_batch(conv_id, rodar, req, run, caps):
+                    yield ev
+            for call in lote:  # toda tool_call precisa de resposta no histórico, senão a próxima requisição falha
+                if call not in rodar:
+                    m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"], status="cancelada",
+                              content="Não executada: o loop foi interrompido.", meta={"arguments": call["arguments"]})
+                    yield {"type": "tool_result", "message": m.to_dict()}
         if run.permission != mode_at_start:  # plano aprovado ou modo trocado: o conjunto de ferramentas muda
             yield _event(conv_id, "info", run.mode_note or
                          f"Modo de permissão: {MODE_LABEL.get(run.permission, run.permission)}.")
@@ -779,9 +791,94 @@ async def _execute(conv_id: int, call: dict, req: RunRequest, run: Run,
     out: dict = {}
     async for ev in _run_call(conv_id, call, req, run, caps, out):
         yield ev
-    m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"], status=out["status"],
-              content=out["text"], meta=out["meta"])
-    yield {"type": "tool_result", "message": m.to_dict()}
+    yield _save_result(conv_id, call, out)
+
+
+def _save_result(conv_id: int, call: dict, out: dict) -> dict:
+    m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"],
+              status=out.get("status") or "erro", content=out.get("text") or "",
+              meta=out.get("meta") or {"arguments": call["arguments"]})
+    return {"type": "tool_result", "message": m.to_dict()}
+
+
+def _parallel(call: dict) -> bool:
+    if call["name"] not in PARALLEL_OK:  # ask_user e exit_plan_mode nem estão no REGISTRY
+        return False
+    try:
+        return not get_tool(call["name"]).mutating
+    except ToolError:  # desconhecida ou desligada: vai sozinha e o erro sai no caminho normal
+        return False
+
+
+def batches(calls: list[dict]) -> list[list[dict]]:
+    """As chamadas do passo em lotes: paralelizáveis seguidas juntas, o resto sozinho, na ordem original."""
+    out: list[list[dict]] = []
+    for c in calls:
+        if out and _parallel(c) and _parallel(out[-1][0]):
+            out[-1].append(c)
+        else:
+            out.append([c])
+    return out
+
+
+_SEMS: dict[str, asyncio.Semaphore] = {}
+
+
+def _sem(key: str, limit: int) -> asyncio.Semaphore:
+    sem = _SEMS.get(key)
+    if sem is None:
+        sem = _SEMS[key] = asyncio.Semaphore(limit)
+    return sem
+
+
+def _limite(call: dict) -> asyncio.Semaphore:
+    """Quem divide vaga com quem. Leitura: 4 no total. Delegação: pelo destino — duas tarefas no mesmo
+    modelo local brigariam pela mesma GPU (o Forja sobe um llama-server por vez), então ali é uma só."""
+    if call["name"] != "delegate_task":
+        return _sem("read", PARALLEL_READS)
+    spec = subagents.slot(str(call["arguments"].get("level") or "rapido")) or {}
+    provider = str(spec.get("provider") or "")
+    local = (config.PROVIDERS.get(provider) or {}).get("type") == "llamacpp"
+    return _sem(f"sub:{provider}", 1 if local else PARALLEL_SUBAGENTS)
+
+
+async def _run_batch(conv_id: int, calls: list[dict], req: RunRequest, run: Run,
+                     caps: set[str] | None) -> AsyncIterator[dict]:
+    """Roda o lote junto e grava os resultados na ordem em que o modelo pediu (o histórico não embaralha)."""
+    if len(calls) == 1:
+        async for ev in _execute(conv_id, calls[0], req, run, caps):
+            yield ev
+        return
+    fila: asyncio.Queue = asyncio.Queue()
+    outs: list[dict] = [{} for _ in calls]
+
+    async def uma(call: dict, out: dict) -> None:
+        try:
+            async with _limite(call):
+                async for ev in _run_call(conv_id, call, req, run, caps, out):
+                    await fila.put(ev)
+        except Exception as e:  # uma chamada não derruba o lote
+            out.update(status="erro", text=f"Erro inesperado: {e.__class__.__name__}: {e}",
+                       meta={"arguments": call["arguments"]})
+
+    tarefas = [asyncio.create_task(uma(c, o)) for c, o in zip(calls, outs)]
+
+    async def fim() -> None:
+        try:
+            await asyncio.gather(*tarefas)
+        finally:
+            await fila.put(None)
+
+    guarda = asyncio.create_task(fim())
+    try:
+        while (ev := await fila.get()) is not None:
+            yield ev
+        await guarda
+    finally:
+        for t in (*tarefas, guarda):
+            t.cancel()
+    for call, out in zip(calls, outs):
+        yield _save_result(conv_id, call, out)
 
 
 async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: set[str] | None,
