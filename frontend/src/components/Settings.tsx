@@ -1138,10 +1138,10 @@ function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void 
   return (
     <div className="max-w-2xl space-y-4">
       <p className="text-sm text-muted">
-        Servidores MCP, no mesmo formato do Claude Desktop. Comandos (<span className="font-mono">command</span>) rodam dentro do
-        na sua máquina, no seu PATH — precisam do <span className="font-mono">npx</span> (Node.js) ou do{" "}
-        <span className="font-mono">uvx</span> (uv) instalados. Para
-        servidores HTTP use <span className="font-mono">url</span>.
+        Servidores MCP, no mesmo formato do Claude Desktop. Comandos (<span className="font-mono">command</span>) rodam na
+        sua máquina, no seu PATH — precisam do <span className="font-mono">npx</span> (Node.js) ou do{" "}
+        <span className="font-mono">uvx</span> (uv) instalados. Para servidores HTTP use{" "}
+        <span className="font-mono">url</span>.
       </p>
       <div className="font-mono text-xs text-faint">{path}</div>
       <textarea
