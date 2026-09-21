@@ -103,7 +103,8 @@ EFFORT_LEVEL = {"baixo": "low", "medio": "medium", "alto": "high", "maximo": "hi
 REASONING_MODELS = re.compile(r"gpt-oss|gpt-5|^o[1-4](-|$)|deepseek-r|grok|magistral", re.I)
 
 
-async def _reasoning(provider: str, model: str, effort: str | None, body: dict, messages: list[dict]) -> None:
+async def _reasoning(provider: str, model: str, effort: str | None, body: dict, messages: list[dict],
+                     cap_mult: float = 1.0) -> None:
     """Acrescenta o controle de raciocínio conforme o provider e o modelo."""
     level = EFFORT_LEVEL.get(effort or "")
     if not level:
@@ -113,7 +114,15 @@ async def _reasoning(provider: str, model: str, effort: str | None, body: dict, 
         caps = await capabilities(provider, model) or set()
         if "thinking" in caps:  # Ollama recusa `think` em modelo sem raciocínio
             body["think"] = level if REASONING_MODELS.search(model) else (effort != "baixo")
-    elif REASONING_MODELS.search(model):
+        return
+    if kind in ("llamacpp", "lmstudio"):
+        # Teto NATIVO do servidor, e é ele que a gente quer que valha: ao estourar, o servidor fecha
+        # o <think> e o modelo responde na MESMA geração — uma requisição só, sem o raciocínio voltar
+        # como entrada. O corte do `_capped` é só a rede para o build que ignora este campo (foi o
+        # caso do Qwen3.6 medido no llama.cpp). O ajuste salvo do modelo ainda manda mais: quem passa
+        # por último é o `_inference`.
+        body["reasoning_budget"] = _budget(effort, cap_mult)
+    if REASONING_MODELS.search(model):
         body["reasoning_effort"] = level
     elif effort == "baixo" and re.search(r"qwen", model, re.I) and messages and messages[0]["role"] == "system":
         # Qwen: interruptor por texto, do próprio template
@@ -175,6 +184,11 @@ def _cap(effort: str | None, mult: float) -> tuple[float, float]:
     return chars * fator, seg * fator
 
 
+def _budget(effort: str | None, mult: float) -> int:
+    """O mesmo teto, em tokens, para o servidor cortar sozinho. Conta ~4 caracteres por token."""
+    return max(64, int(_cap(effort, mult)[0] // 4))
+
+
 def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict, list[dict]]:
     """Mesma chamada com o pensamento desligado. Não existe um interruptor só: cada família usa o seu
     (`think` no Ollama, `enable_thinking` no template do Qwen3.6/GLM, `reasoning_budget` em alguns
@@ -193,11 +207,15 @@ def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict,
 
 
 async def _capped(impl, provider, model, messages, tools, num_ctx, extra, cap):
-    """Pensamento limitado: quem pensa pode raciocinar, não virar tratado. Passou do teto — de texto
-    ou de relógio — sem ter começado a responder, corta e refaz sem pensar: o prompt já está no cache
-    do servidor, então a segunda chamada é barata, e é melhor uma resposta rápida que meia hora de
-    raciocínio que ninguém vai ler. O relógio conta do primeiro evento, não da chamada: processar um
-    prompt grande demora, e essa espera não é o modelo pensando."""
+    """Rede para o servidor que ignora `reasoning_budget`. O caminho bom é o nativo (ver `_reasoning`):
+    o servidor fecha o <think> e o modelo responde na MESMA geração. Quem ignora o pedido precisa ser
+    cortado daqui: passou do teto — de texto ou de relógio — sem ter começado a responder, a geração
+    é descartada e refeita sem pensamento. O raciocínio cortado NÃO volta como entrada: re-prefillar
+    o tratado que acabou de ser rejeitado gasta contexto e convida o modelo a continuar o loop. O
+    prompt já está no cache do servidor, então a segunda chamada é barata.
+
+    O relógio conta do primeiro evento, não da chamada: processar um prompt grande demora, e essa
+    espera não é o modelo pensando."""
     cap_chars, cap_seg = cap
     gen = impl(provider, model, messages, tools, num_ctx, extra)
     raciocinio, respondendo, cortou, bruto, t0 = 0, False, False, "", None
@@ -233,7 +251,7 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     messages = list(messages)
     extra: dict = {}
-    await _reasoning(provider, model, effort, extra, messages)
+    await _reasoning(provider, model, effort, extra, messages, cap_mult)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     try:
         if think is False:  # chamada mecânica (compactar, titular, commit): não há raciocínio a cortar
