@@ -116,12 +116,23 @@ function freePort() {
   });
 }
 
-/** Endpoint CDP deste Electron (http://127.0.0.1:PORTA). Vazio se o Chromium não escreveu o arquivo a tempo. */
+/**
+ * Endpoint CDP deste Electron (http://127.0.0.1:PORTA). Vazio se o Chromium não escreveu a tempo.
+ *
+ * O arquivo fica para trás quando o app morre sujo, e a primeira leitura devolvia a porta da
+ * execução ANTERIOR — o backend ligava num endpoint morto (ou, pior, no Chromium de outra coisa).
+ * Por isso ele é apagado antes de esperar: o que vier depois é desta execução.
+ */
 async function cdpEndpoint() {
   const file = path.join(USER_DATA, "DevToolsActivePort");
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    /* em uso: a espera abaixo ainda pode pegar o valor novo */
+  }
   for (let i = 0; i < 30; i++) {
     try {
-      const p = Number(fs.readFileSync(file, "utf8").split("\n")[0]);
+      const p = Number(fs.readFileSync(file, "utf8").split(String.fromCharCode(10))[0]);
       if (p > 0) return `http://127.0.0.1:${p}`;
     } catch {
       /* ainda não escreveu */
@@ -154,6 +165,14 @@ function startBackend(cdp) {
     env,
     stdio: ["ignore", log, log],
     windowsHide: true,
+  });
+  // Sem este listener, um Python que não existe vira exceção não tratada e derruba o processo
+  // principal sem diálogo nenhum — o usuário só vê a janela não abrir.
+  backend.on("error", (err) => {
+    backend = null;
+    if (app.isQuitting) return;
+    dialog.showErrorBox("Forja", `Não consegui iniciar o backend (${err.message}).\n\nLog: ${LOG_FILE}`);
+    app.quit();
   });
   backend.on("exit", (code) => {
     backend = null;
@@ -279,7 +298,26 @@ function syncTray() {
 
 // ------------------------------------------------------------------ janela
 
+/**
+ * Guarda a geometria da janela, no máximo uma vez a cada 300 ms.
+ *
+ * `resize` e `move` disparam a cada quadro: arrastar a janela virava centenas de writeFileSync
+ * síncronos na thread da interface.
+ */
+let boundsTimer = null;
+function saveBoundsLater() {
+  if (boundsTimer) return;
+  boundsTimer = setTimeout(() => {
+    boundsTimer = null;
+    saveBounds();
+  }, 300);
+}
+
 function saveBounds() {
+  if (boundsTimer) {
+    clearTimeout(boundsTimer);
+    boundsTimer = null;
+  }
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const maximized = mainWindow.isMaximized();
   // Maximizada, guarda o tamanho normal de antes: é para ele que a janela volta ao restaurar.
@@ -334,8 +372,8 @@ function createWindow({ hidden = false } = {}) {
     if (isSafeExternal(url)) shell.openExternal(url);
   });
 
-  win.on("resize", saveBounds);
-  win.on("move", saveBounds);
+  win.on("resize", saveBoundsLater);
+  win.on("move", saveBoundsLater);
   // O X: some para a bandeja ou fecha o app de verdade, conforme a configuração.
   win.on("close", (e) => {
     saveBounds();
@@ -453,3 +491,12 @@ app.on("before-quit", () => {
 });
 app.on("will-quit", stopBackend);
 process.on("exit", stopBackend);
+// `exit` não roda em SIGINT/SIGTERM: sem estes, o Ctrl+C do `npm run dev` deixava uvicorn, o
+// Chromium do navegador integrado, o llama-server e todo serve_start rodando.
+for (const sinal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sinal, () => {
+    app.isQuitting = true;
+    stopBackend();
+    process.exit(0);
+  });
+}

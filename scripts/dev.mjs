@@ -17,6 +17,16 @@ if (!fs.existsSync(dist)) {
   process.exit(1);
 }
 
-const electron = path.join(ROOT, "node_modules", ".bin", process.platform === "win32" ? "electron.cmd" : "electron");
-spawn(electron, ["."], { cwd: ROOT, stdio: "inherit", shell: process.platform === "win32", env: { ...process.env, FORJA_WEB: dist } })
-  .on("exit", (code) => process.exit(code ?? 0));
+// O pacote `electron`, importado no Node, exporta o caminho do executável. É melhor do que o
+// .cmd do node_modules/.bin: aquele exigia `shell: true`, e aí um caminho com espaço
+// (C:\Program Files\...) quebrava, porque o Node não cita o comando ao passar pelo shell.
+const { default: electron } = await import("electron");
+
+const filho = spawn(electron, ["."], {
+  cwd: ROOT,
+  stdio: "inherit",
+  env: { ...process.env, FORJA_WEB: dist },
+});
+filho.on("exit", (code) => process.exit(code ?? 0));
+// Ctrl+C aqui tem que descer para o Electron, que é quem mata a árvore do backend.
+for (const sinal of ["SIGINT", "SIGTERM"]) process.on(sinal, () => filho.kill(sinal));
