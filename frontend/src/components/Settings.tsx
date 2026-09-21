@@ -607,6 +607,10 @@ function Atualizacao() {
           {u.state === "downloading" ? ` ${u.percent}%` : ""}
         </div>
         {u.error && <div className="text-xs text-red-300">{u.error}</div>}
+        {/* O que muda na versão nova, como foi escrito no release-notes.md e guardado no latest.yml. */}
+        {u.notes && (u.state === "available" || u.state === "ready") && (
+          <div className="whitespace-pre-wrap rounded-lg border border-line bg-raised p-2 text-xs text-muted">{u.notes.trim()}</div>
+        )}
         <div className="flex flex-wrap gap-2">
           <button className={btn} disabled={ocupado} onClick={() => bridge.check().then(setU)}>
             Procurar atualizações
