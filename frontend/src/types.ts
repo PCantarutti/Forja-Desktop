@@ -227,6 +227,7 @@ export type PesquisaEstado = {
   relatorio: string;  // markdown completo; a aba não renderiza, o HTML abre fora
   formato: PesquisaFormato;
   formato_usado: string;  // o que o "auto" decidiu; vazio enquanto não decidiu
+  teto_segundos: number;  // tempo máximo desta corrida
   stats: {
     fontes: number; uteis: number; segundos: number; rodadas: number;
     tokens: number; tokens_entrada: number; gerando: number; chamadas: number; estimado: boolean;

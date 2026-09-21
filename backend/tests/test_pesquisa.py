@@ -344,6 +344,47 @@ def test_formato_escolhido_pula_a_classificacao(monkeypatch):
         pesquisa.start(**_base(formato="inventado"))
 
 
+def test_tempo_maximo_configuravel(monkeypatch):
+    _fake_llm(monkeypatch)
+    _fake_web(monkeypatch)
+    assert _rodar(**_base())["teto_segundos"] == 300                      # o do preset "rapida"
+    assert _rodar(**_base(teto=120))["teto_segundos"] == 120              # o escolhido na tela
+    assert _rodar(**_base(teto=5))["teto_segundos"] == pesquisa.TETO_MIN  # limites
+    assert _rodar(**_base(teto=99_999))["teto_segundos"] == pesquisa.TETO_MAX
+
+
+def test_tempo_estourado_ainda_escreve_o_relatorio(monkeypatch):
+    monkeypatch.setattr(pesquisa, "TETO_MIN", 0)  # o piso real é 1 min; aqui o teste precisa de 1 s
+    # Busca e termos sempre novos: sem isso a corrida acaba por falta de assunto, não por tempo.
+    rodada = {"n": 0}
+    _fake_llm(monkeypatch, pausa=0.12)
+    original = pesquisa.llm.chat_stream
+
+    async def sempre_novo(provider, model, messages, tools, num_ctx, effort=None):
+        if messages[0]["content"].startswith("Você é um pesquisador. As fontes"):
+            rodada["n"] += 1
+            await asyncio.sleep(0.12)
+            yield ("content", f'["termo {rodada["n"]}a", "termo {rodada["n"]}b"]')
+            yield ("done", {"prompt_tokens": 10, "completion_tokens": 20})
+            return
+        async for ev in original(provider, model, messages, tools, num_ctx, effort):
+            yield ev
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", sempre_novo)
+    _fake_web(monkeypatch)
+    pagina = {"n": 0}
+
+    def buscar(query, n=6):   # cada busca traz domínios inéditos
+        pagina["n"] += 1
+        return [{"title": f"P{pagina['n']}-{i}", "url": f"https://s{pagina['n']}x{i}.com/a",
+                 "content": ""} for i in range(n)]
+
+    monkeypatch.setattr(pesquisa.web, "buscar", buscar)
+    est = _rodar(**_base(profundidade="funda", teto=1))
+    assert est["status"] == "pronto" and "Tempo esgotado" in est["aviso"]
+    assert est["relatorio"]      # o parcial vira relatório, não vai para o lixo
+
+
 def test_contadores_de_token_e_tempo(monkeypatch):
     _fake_llm(monkeypatch)
     _fake_web(monkeypatch)

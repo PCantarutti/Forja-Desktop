@@ -32,6 +32,7 @@ from .tools import ToolError
 
 # rodadas, fontes por rodada, buscas por rodada, teto de segundos
 PRESETS = {"rapida": (1, 3, 3, 300), "normal": (2, 4, 3, 600), "funda": (4, 4, 3, 900)}
+TETO_MIN, TETO_MAX = 60, 7200  # limites do tempo máximo escolhido na tela (1 min a 2 h)
 RESULTADOS_POR_BUSCA = 6
 TETO_PAGINA = 6_000      # caracteres da página que vão para o extrator
 LEITURAS_PARALELAS = 3
@@ -460,7 +461,7 @@ def _resumo(relatorio: str) -> str:
 
 def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: str = "normal",
           contexto: str = "", continuar_de: int = 0, ex_provider: str = "", ex_model: str = "",
-          formato: str = "auto") -> dict:
+          formato: str = "auto", teto: int = 0) -> dict:
     """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente."""
     pergunta = (pergunta or "").strip()
     if not pergunta:
@@ -471,7 +472,9 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         raise ToolError(f"formato deve ser {', '.join(FORMATOS)}.")
     if not (provider and model):
         raise ToolError("Escolha um modelo antes de pesquisar.")
-    rodadas, fontes_por_rodada, n_buscas, teto = PRESETS[profundidade]
+    rodadas, fontes_por_rodada, n_buscas, padrao = PRESETS[profundidade]
+    # 0 = o tempo do preset. O teto existe para a pesquisa não rodar a noite inteira num modelo lento.
+    teto = max(TETO_MIN, min(int(teto), TETO_MAX)) if teto else padrao
     extrator, escritor = _modelos(provider, model, ex_provider, ex_model)
 
     anterior, lidas = "", set()
@@ -495,6 +498,7 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         "contexto": contexto, "plano": {"perguntas": [], "buscas": []}, "rodada": 0, "rodadas": [],
         "fontes": [], "resumo": "", "aviso": "", "relatorio": "",
         "formato": formato, "formato_usado": "" if formato == "auto" else formato,
+        "teto_segundos": teto,
         "stats": {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0, "tokens": 0,
                   "tokens_entrada": 0, "gerando": 0.0, "chamadas": 0, "estimado": False,
                   "extrator": extrator["model"], "escritor": escritor["model"],
@@ -520,7 +524,10 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, rodadas: int, fontes
             1 if config.PROVIDERS.get(extrator["provider"], {}).get("type") == "llamacpp" else 3)
 
         for n in range(1, rodadas + 1):
-            if _acabou(run) or not consultas:
+            if _acabou(run):
+                break
+            if not consultas:  # o modelo não achou o que perguntar a mais: fecha com o que tem
+                run["aviso"] = run["aviso"] or f"Sem novas buscas depois da rodada {n - 1}."
                 break
             run["rodada"] = n
             resultados = await _buscar(run, consultas)
@@ -553,7 +560,7 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, rodadas: int, fontes
         if run["cancelar"]:
             run["status"] = "cancelado"
             run["aviso"] = "Pesquisa interrompida; as fontes já lidas ficaram salvas."
-        elif not any(f["status"] == "util" for f in run["fontes"]):
+        elif not any(f["status"] == "util" for f in run["fontes"]):  # nada aproveitável
             run["status"] = "erro"
             run["aviso"] = run["aviso"] or (
                 f"Nenhuma das {len(run['fontes'])} páginas lidas tinha informação sobre a pergunta. "

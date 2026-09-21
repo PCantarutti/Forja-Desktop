@@ -19,10 +19,12 @@ const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg
 const KEY_MODELOS = "forja.pesquisa.modelos";
 
 const PROFUNDIDADES = [
-  { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas — resposta em minutos" },
-  { id: "normal" as const, label: "Normal", hint: "2 rodadas, até 8 páginas" },
-  { id: "funda" as const, label: "Funda", hint: "4 rodadas, até 16 páginas — pode levar 10 min" },
+  { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas", minutos: 5 },
+  { id: "normal" as const, label: "Normal", hint: "2 rodadas, até 8 páginas", minutos: 10 },
+  { id: "funda" as const, label: "Funda", hint: "4 rodadas, até 16 páginas", minutos: 15 },
 ];
+const MIN_MINUTOS = 1;
+const MAX_MINUTOS = 120;   // mesmos limites do backend (TETO_MIN/TETO_MAX)
 
 const FORMATOS: { id: PesquisaFormato; label: string; hint: string }[] = [
   { id: "auto", label: "Auto", hint: "O modelo decide o feitio do relatório pela pergunta" },
@@ -102,6 +104,8 @@ export default function PesquisaView(props: {
     return { escritor: { provider: props.provider, model: props.model }, extrator: null } as Modelos;
   });
   const [formato, setFormato] = useState<PesquisaFormato>("auto");
+  // Tempo máximo: começa no do preset e acompanha a troca de preset até você digitar o seu.
+  const [minutos, setMinutos] = useState(10);
   const [perguntarAntes, setPerguntarAntes] = useState(false);
   const [esclarecer, setEsclarecer] =
     useState<{ pergunta: string; perguntas: string[]; respostas: string[] } | null>(null);
@@ -152,6 +156,7 @@ export default function PesquisaView(props: {
         const p = (m.meta as any).pesquisa as PesquisaEstado;
         setProfundidade(p.profundidade);
         setFormato(p.formato || "auto");
+        if (p.teto_segundos) setMinutos(Math.round(p.teto_segundos / 60));
         setEstado({ ...p, message_id: m.id, status: situacao(m.status), relatorio: m.content || "" });
         if (situacao(m.status) === "rodando") ouvir(m.id);
       } catch (e: any) {
@@ -186,7 +191,8 @@ export default function PesquisaView(props: {
         { method: "POST", signal: ctl.signal, body: JSON.stringify({
             pergunta, profundidade, formato, contexto, continuar_de,
             provider: modelos.escritor.provider, model: modelos.escritor.model,
-            ex_provider: modelos.extrator?.provider ?? "", ex_model: modelos.extrator?.model ?? "" }) },
+            ex_provider: modelos.extrator?.provider ?? "", ex_model: modelos.extrator?.model ?? "",
+            teto: Math.min(Math.max(minutos, MIN_MINUTOS), MAX_MINUTOS) * 60 }) },
         (ev) => {
           if (ctl.signal.aborted) return;   // trocou de conversa no meio: não pinta a tela nova
           if (ev.erro) props.onError(ev.erro);
@@ -419,12 +425,21 @@ export default function PesquisaView(props: {
               <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Profundidade">
                 {PROFUNDIDADES.map((p) => (
                   <button key={p.id} role="radio" aria-checked={profundidade === p.id} title={p.hint}
-                          onClick={() => setProfundidade(p.id)}
+                          onClick={() => {
+                            setProfundidade(p.id);
+                            setMinutos(p.minutos);
+                          }}
                           className={`rounded-full px-2.5 py-0.5 ${profundidade === p.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
                     {p.label}
                   </button>
                 ))}
               </div>
+              <label className="flex items-center gap-1 text-muted" title="Tempo máximo da pesquisa">
+                <input type="number" min={MIN_MINUTOS} max={MAX_MINUTOS} value={minutos}
+                       onChange={(e) => setMinutos(Number(e.target.value) || MIN_MINUTOS)}
+                       className={`${campo} w-14`} />
+                min
+              </label>
               <select className={campo} value={formato} title="Feitio do relatório"
                       onChange={(e) => setFormato(e.target.value as PesquisaFormato)}>
                 {FORMATOS.map((f) => <option key={f.id} value={f.id} title={f.hint}>{f.label}</option>)}

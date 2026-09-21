@@ -788,6 +788,7 @@ class PesquisaBody(BaseModel):
     ex_provider: str = ""           # modelo que lê as páginas; vazio = slot "rapido" dos subagentes
     ex_model: str = ""
     formato: str = "auto"           # auto | produto | comparar | guia | checagem
+    teto: int = 0                   # tempo máximo em segundos; 0 = o do preset
 
 
 class PerguntasBody(BaseModel):
@@ -819,7 +820,7 @@ async def pesquisa_rodar(conv_id: int, body: PesquisaBody):
     try:
         msg = pesquisa.start(conv_id, body.pergunta, body.provider, body.model, body.profundidade,
                              body.contexto, body.continuar_de, body.ex_provider, body.ex_model,
-                             body.formato)
+                             body.formato, body.teto)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_pesquisa(msg["id"])
