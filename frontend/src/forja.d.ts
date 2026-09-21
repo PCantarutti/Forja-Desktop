@@ -38,6 +38,8 @@ interface ForjaBridge {
     download(): Promise<UpdateState>;
     install(): Promise<UpdateState>;
   };
+  /** Ícone do programa padrão do sistema para uma extensão (".docx"). Vazio se não houver. */
+  icon(ext: string): Promise<string>;
   /** Navegador nativo: onde o painel da conversa `key` está (px de CSS), ou bounds null quando não está visível. */
   browser: {
     view(shown: { key: string; bounds: { x: number; y: number; width: number; height: number } | null }): void;

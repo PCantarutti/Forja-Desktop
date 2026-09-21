@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("forja", {
     download: () => ipcRenderer.invoke("forja:update:download"),
     install: () => ipcRenderer.invoke("forja:update:install"),
   },
+  /** Ícone do programa padrão do sistema para uma extensão (".docx"), como data URL. */
+  icon: (ext) => ipcRenderer.invoke("forja:icon", ext),
   browser: {
     // Onde o painel Navegador está (px de CSS) e de qual conversa; bounds null = não mostrar view nenhuma.
     view: (shown) => ipcRenderer.send("forja:browser:view", shown),

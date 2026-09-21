@@ -390,6 +390,39 @@ function createWindow({ hidden = false } = {}) {
   return win;
 }
 
+// ------------------------------------------------------------------ ícone do tipo de arquivo
+
+/**
+ * Ícone que o Windows usa para aquele tipo de arquivo — o do programa padrão, o mesmo que aparece
+ * no Explorer. É assim que um .docx no chat fica com a cara do Word.
+ *
+ * `app.getFileIcon` exige um arquivo que exista, e nós queremos o ícone da EXTENSÃO, não de um
+ * arquivo específico: um vazio no temp resolve, e o resultado fica em cache — a associação não
+ * muda no meio da sessão, e a lista do chat pediria o mesmo ícone dezenas de vezes.
+ */
+const icones = new Map();
+
+async function iconeDe(ext) {
+  const limpa = String(ext || "").toLowerCase().replace(/[^a-z0-9.]/g, "");
+  if (!limpa.startsWith(".") || limpa.length > 8) return "";
+  if (icones.has(limpa)) return icones.get(limpa);
+  let url = "";
+  try {
+    const pasta = path.join(app.getPath("temp"), "forja-icones");
+    fs.mkdirSync(pasta, { recursive: true });
+    const molde = path.join(pasta, "molde" + limpa);
+    if (!fs.existsSync(molde)) fs.writeFileSync(molde, "");
+    const img = await app.getFileIcon(molde, { size: "normal" });
+    url = img.isEmpty() ? "" : img.toDataURL();
+  } catch {
+    /* sem associação para essa extensão, ou o Windows recusou: a interface usa o desenho dela */
+  }
+  icones.set(limpa, url);
+  return url;
+}
+
+ipcMain.handle("forja:icon", (_e, ext) => iconeDe(ext));
+
 // ------------------------------------------------------------------ atualização
 
 /**

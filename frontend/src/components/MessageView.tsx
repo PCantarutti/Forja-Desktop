@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
-import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Download, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
 function CodeBlock(props: React.ComponentProps<"pre">) {
@@ -114,12 +114,56 @@ export function ToolImages({ list, bare }: { list: Attachment[]; bare?: boolean 
   );
 }
 
-const ICONE_POR_TIPO: { casa: RegExp; rotulo: string }[] = [
+const ROTULO_POR_TIPO: { casa: RegExp; rotulo: string }[] = [
   { casa: /sheet|excel|csv/, rotulo: "Planilha" },
   { casa: /word|document$/, rotulo: "Documento" },
   { casa: /presentation/, rotulo: "Apresentação" },
   { casa: /pdf/, rotulo: "PDF" },
+  { casa: /zip|compress/, rotulo: "Compactado" },
+  { casa: /^text\//, rotulo: "Texto" },
 ];
+
+export const rotuloDe = (mime: string) => ROTULO_POR_TIPO.find((t) => t.casa.test(mime))?.rotulo ?? "Arquivo";
+
+// Um ícone por extensão, buscado uma vez e guardado: a ponte devolve sempre o mesmo, e uma
+// conversa longa pediria o mesmo .docx dezenas de vezes.
+const cacheIcones = new Map<string, string>();
+
+/**
+ * Quadrado com o ícone do programa que abre esse arquivo — o mesmo que você vê no Explorer,
+ * porque vem do próprio Windows (`app.getFileIcon`, pela ponte do Electron).
+ *
+ * Fora do app instalado (dev com Vite, ou a versão web) não há essa ponte: aí o quadrado mostra a
+ * extensão, que já diz o que é sem depender de nada.
+ */
+export function IconeArquivo({ nome, className = "size-9" }: { nome: string; className?: string }) {
+  const ext = ("." + (nome.split(".").pop() || "")).toLowerCase();
+  const [url, setUrl] = useState(() => cacheIcones.get(ext) ?? "");
+
+  useEffect(() => {
+    if (cacheIcones.has(ext) || !window.forja?.icon) return;
+    let vivo = true;
+    window.forja
+      .icon(ext)
+      .then((u) => {
+        cacheIcones.set(ext, u || "");
+        if (vivo && u) setUrl(u);
+      })
+      .catch(() => cacheIcones.set(ext, ""));
+    return () => {
+      vivo = false;
+    };
+  }, [ext]);
+
+  if (url) return <img src={url} alt="" className={`${className} shrink-0 object-contain`} />;
+  return (
+    <span
+      className={`${className} grid shrink-0 place-items-center rounded-md border border-line bg-raised text-[9px] font-medium tracking-wide text-muted uppercase`}
+    >
+      {ext.slice(1, 5) || "?"}
+    </span>
+  );
+}
 
 /**
  * Arquivo que o agente gerou: .docx, .xlsx, .pdf, .pptx.
@@ -130,15 +174,18 @@ const ICONE_POR_TIPO: { casa: RegExp; rotulo: string }[] = [
  * com um arquivo desses.
  */
 export function ToolFiles({ list, onOpen }: { list: Attachment[]; onOpen?: (path: string, mode: "editor" | "reveal") => void }) {
-  const arquivos = list.filter((a) => a.kind !== "image");
+  // Um card por arquivo, não por chamada: o agente mexe no mesmo documento várias vezes seguidas
+  // (gerar, acrescentar, corrigir) e o grupo juntava todas, repetindo o mesmo card três vezes.
+  // A última vale, porque é o tamanho depois da última alteração.
+  const arquivos = [...new Map(list.filter((a) => a.kind !== "image").map((a) => [a.path, a])).values()];
   if (!arquivos.length) return null;
   return (
     <div className="my-2 space-y-2">
       {arquivos.map((a) => {
-        const rotulo = ICONE_POR_TIPO.find((t) => t.casa.test(a.mime))?.rotulo ?? "Arquivo";
+        const rotulo = rotuloDe(a.mime);
         return (
           <div key={a.path} className="flex max-w-md items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5">
-            <Download className="size-4 shrink-0 text-muted" />
+            <IconeArquivo nome={a.name} />
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm text-fg" title={a.path}>
                 {a.name}
@@ -189,9 +236,17 @@ export function Attachments({ list, onRemove }: { list: Attachment[]; onRemove?:
               className="max-h-40 cursor-zoom-in rounded-xl border border-line object-cover"
             />
           ) : (
-            <span className="inline-flex max-w-60 items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-xs text-muted">
-              <span className="truncate">{a.name}</span>
-              <span className="text-faint">{Math.round(a.size / 1024)} KB</span>
+            <span
+              title={a.name}
+              className="inline-flex max-w-60 items-center gap-2 rounded-lg border border-line bg-surface px-2 py-1.5"
+            >
+              <IconeArquivo nome={a.name} className="size-7" />
+              <span className="min-w-0">
+                <span className="block truncate text-xs text-fg">{a.name}</span>
+                <span className="block text-[11px] text-faint">
+                  {rotuloDe(a.mime)} · {Math.max(1, Math.round(a.size / 1024))} KB
+                </span>
+              </span>
             </span>
           )}
           {onRemove && (
