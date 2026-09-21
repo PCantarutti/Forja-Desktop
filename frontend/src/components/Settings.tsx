@@ -26,6 +26,7 @@ export type AppSettings = {
   custom_instructions: string;
   auto_approve_tools: string[];
   auto_approve_commands: string[];
+  trusted_hooks: string[];
   personal_memory: boolean;
   project_memory: boolean;
   project_memory_file: string;
@@ -1094,6 +1095,13 @@ function Permissions({ s, save }: { s: AppSettings; save: (patch: Partial<AppSet
         placeholder="mcp__memoria__*"
         value={s.auto_approve_tools}
         onChange={(v) => save({ auto_approve_tools: v })}
+      />
+      <ListEditor
+        title="Pastas confiáveis (hooks)"
+        hint="Onde .forja/hooks.json pode rodar. O arquivo vem junto num git clone, então só a pasta que você liberar aqui executa os comandos dele — subpastas incluídas."
+        placeholder="C:/Projetos/meu-app"
+        value={s.trusted_hooks}
+        onChange={(v) => save({ trusted_hooks: v })}
       />
     </div>
   );

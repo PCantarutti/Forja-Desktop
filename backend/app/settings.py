@@ -25,6 +25,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "custom_instructions": "",
     "auto_approve_tools": [],
     "auto_approve_commands": [],
+    "trusted_hooks": [],  # pastas onde .forja/hooks.json pode rodar
     "personal_memory": config.PERSONAL_MEMORY,
     "project_memory": True,
     "project_memory_file": "FORJA.md",
@@ -37,7 +38,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "subagent_max_iterations": 15,
 }
 
-LISTS = ("disabled_tools", "auto_approve_tools", "auto_approve_commands")
+LISTS = ("disabled_tools", "auto_approve_tools", "auto_approve_commands", "trusted_hooks")
 
 NUMBERS = {  # chave: (tipo, mínimo, máximo)
     "num_ctx": (int, 1024, 4_194_304),
@@ -83,6 +84,7 @@ def apply(values: dict | None = None) -> dict:
     config.CUSTOM_INSTRUCTIONS = values["custom_instructions"]
     config.AUTO_APPROVE_TOOLS = list(values["auto_approve_tools"])
     config.AUTO_APPROVE_COMMANDS = list(values["auto_approve_commands"])
+    config.TRUSTED_HOOKS = list(values["trusted_hooks"])
     config.PERSONAL_MEMORY = bool(values["personal_memory"])
     config.PROJECT_MEMORY = bool(values["project_memory"])
     config.PROJECT_MEMORY_FILE = values["project_memory_file"]

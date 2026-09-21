@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from app import gitops, hooks, shell, skills, tasks
+from app import config, gitops, hooks, shell, skills, tasks
 from app.agent import Run, _flush_queue
 from app.tools import ToolError
 
@@ -26,6 +26,7 @@ def test_skills_builtin_and_project(tmp_path):
 # ------------------------------------------------ hooks
 
 def test_hooks_run_matching_entries(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "TRUSTED_HOOKS", [str(tmp_path)])  # hook só roda em pasta liberada
     (tmp_path / ".forja").mkdir()
     (tmp_path / ".forja/hooks.json").write_text(
         '{"post_tool": [{"tools": ["write_file", "edit_file"], "command": "fmt {path}"}, {"tools": "run_*", "command": "x {tool}"}]}',

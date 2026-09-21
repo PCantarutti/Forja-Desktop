@@ -8,6 +8,11 @@
 `{path}` e `{tool}` são substituídos. O comando roda como o run_command, na
 pasta da conversa, com timeout curto; a saída (resumida) é anexada ao resultado da ferramenta para o
 modelo ver (ex.: erro de lint). Só ferramentas que terminaram com sucesso disparam hooks.
+
+**A pasta precisa ser confiável.** O arquivo vem da pasta de trabalho, então ele pode ter vindo junto
+num `git clone`: sem essa trava, abrir um repositório de terceiros e pedir um `read_file` já rodaria o
+comando que o repositório escolheu, sem card e sem política — o caminho mais curto para fora do
+modelo de aprovação do Forja. A pasta é liberada em Configurações › Permissões, uma vez.
 """
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ import json
 from fnmatch import fnmatch
 from pathlib import Path
 
-from . import shell
+from . import config, shell, workspace
 
 FILE = ".forja/hooks.json"
 TIMEOUT = 60
@@ -40,8 +45,27 @@ def _matches(entry: dict, tool: str) -> bool:
     return any(fnmatch(tool, str(t)) for t in tools)
 
 
+def trusted(root: Path) -> bool:
+    """A pasta (ou uma acima dela) foi liberada em Configurações › Permissões?"""
+    alvo = workspace.normalize(str(root))
+    return any(alvo == liberada or alvo.startswith(liberada.rstrip("/") + "/")
+               for liberada in (workspace.normalize(p) for p in config.TRUSTED_HOOKS if p.strip()))
+
+
+def aviso(root: Path) -> str | None:
+    """Texto para a conversa quando a pasta tem hooks e ainda não foi liberada."""
+    if not (root / FILE).is_file() or trusted(root):
+        return None
+    caminho = workspace.normalize(str(root))
+    return (f"Esta pasta tem `{FILE}`, que roda comandos automaticamente depois das ferramentas. "
+            "Nenhum deles vai rodar enquanto você não liberar a pasta em Configurações › "
+            "Permissões › Pastas confiáveis:" + chr(10) + chr(10) + f"`{caminho}`")
+
+
 def run_post(tool: str, args: dict, root: Path) -> str | None:
     """Roda os hooks post_tool que casam com `tool`; devolve texto para anexar ao resultado (ou None)."""
+    if not trusted(root):
+        return None  # pasta não liberada: quem avisa o usuário é o agente, uma vez por execução
     entries = [e for e in load(root).get("post_tool", []) if isinstance(e, dict) and e.get("command") and _matches(e, tool)]
     if not entries:
         return None
