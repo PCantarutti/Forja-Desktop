@@ -3,6 +3,8 @@ import { api, streamSSE } from "../api";
 import type { Message, PesquisaEstado, PesquisaFonte } from "../types";
 import { ArrowUp, Check, Copy, ExternalLink, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
+import ModelPicker from "./ModelPicker";
+import Sinapse from "./Sinapse";
 
 // Estas classes moram no LocalPanel.tsx, que é só do desktop. Repetidas aqui para esta aba viajar
 // inteira num cherry-pick para o forja-web. ponytail: 4 linhas custam menos que um módulo de estilo.
@@ -10,6 +12,10 @@ const card = "rounded-2xl border border-line bg-surface p-3.5";
 const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
 const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
 const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+
+// Os dois modelos da pesquisa são escolha desta aba, não do Chat: quem lê 12 páginas costuma
+// querer um modelo pequeno na extração e o bom só no relatório.
+const KEY_MODELOS = "forja.pesquisa.modelos";
 
 const PROFUNDIDADES = [
   { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas — resposta em minutos" },
@@ -52,6 +58,9 @@ function comoMarkdown(e: PesquisaEstado): string {
     ...uteis.map((f) => `- [${f.titulo}](${f.url})`), ""].join("\n");
 }
 
+type Par = { provider: string; model: string };
+type Modelos = { escritor: Par; extrator: Par | null };  // extrator null = slot "rapido" dos subagentes
+
 export default function PesquisaView(props: {
   conv: number | null;
   ensureConversation: () => Promise<number>;
@@ -61,10 +70,20 @@ export default function PesquisaView(props: {
   onConversationChanged: () => void;
   onAbrirChat: (conv: number) => void;
 }) {
-  const [pergunta, setPergunta] = useState("");
+  const [texto, setTexto] = useState("");   // o que está no campo; a pergunta da corrida vive no estado
   const [profundidade, setProfundidade] = useState<"rapida" | "normal" | "funda">("normal");
+  const [modelos, setModelos] = useState(() => {
+    try {
+      const salvo = JSON.parse(localStorage.getItem(KEY_MODELOS) ?? "null");
+      if (salvo?.escritor?.model) return salvo as Modelos;
+    } catch {
+      /* localStorage corrompido: cai no par do Chat */
+    }
+    return { escritor: { provider: props.provider, model: props.model }, extrator: null } as Modelos;
+  });
   const [perguntarAntes, setPerguntarAntes] = useState(false);
-  const [esclarecer, setEsclarecer] = useState<{ perguntas: string[]; respostas: string[] } | null>(null);
+  const [esclarecer, setEsclarecer] =
+    useState<{ pergunta: string; perguntas: string[]; respostas: string[] } | null>(null);
   const [preparando, setPreparando] = useState(false);
   const [estado, setEstado] = useState<PesquisaEstado | null>(null);
   const [aberta, setAberta] = useState<string>("");   // fonte expandida
@@ -101,7 +120,6 @@ export default function PesquisaView(props: {
         if (i < 0) return setEstado(null);
         const m = c.messages[i];
         const p = (m.meta as any).pesquisa as PesquisaEstado;
-        setPergunta(p.pergunta);
         setProfundidade(p.profundidade);
         setEstado({ ...p, message_id: m.id, status: situacao(m.status), relatorio: m.content || "" });
         if (situacao(m.status) === "rodando") ouvir(m.id);
@@ -116,15 +134,22 @@ export default function PesquisaView(props: {
     carregarConversa();
   }, [carregarConversa]);
 
-  async function rodar(contexto = "", continuar_de = 0) {
+  useEffect(() => {
+    localStorage.setItem(KEY_MODELOS, JSON.stringify(modelos));
+  }, [modelos]);
+
+  async function rodar(pergunta: string, contexto = "", continuar_de = 0) {
     if (!pergunta.trim()) return;
     try {
       const id = await props.ensureConversation();
       setEsclarecer(null);
       setEstado(null);
+      setTexto("");   // a pergunta agora vive na corrida; o campo fica livre para a próxima
       await streamSSE(`/pesquisa/${id}/rodar`,
-        { method: "POST", body: JSON.stringify({ pergunta, profundidade, contexto, continuar_de,
-                                                 provider: props.provider, model: props.model }) },
+        { method: "POST", body: JSON.stringify({
+            pergunta, profundidade, contexto, continuar_de,
+            provider: modelos.escritor.provider, model: modelos.escritor.model,
+            ex_provider: modelos.extrator?.provider ?? "", ex_model: modelos.extrator?.model ?? "" }) },
         (ev) => (ev.erro ? props.onError(ev.erro) : setEstado(ev)));
       props.onConversationChanged();
       carregarConversa(id);
@@ -135,14 +160,15 @@ export default function PesquisaView(props: {
 
   /** Com "Perguntar antes" ligado, o primeiro envio vira esclarecimento; o segundo pesquisa. */
   async function enviar() {
-    if (!pergunta.trim() || rodando) return;
-    if (!perguntarAntes) return rodar();
+    const pergunta = texto.trim();
+    if (!pergunta || rodando) return;
+    if (!perguntarAntes) return rodar(pergunta);
     setPreparando(true);
     try {
       const r = await api.post<{ perguntas: string[] }>("/pesquisa/perguntas",
-        { pergunta, provider: props.provider, model: props.model });
-      if (!r.perguntas.length) return rodar();
-      setEsclarecer({ perguntas: r.perguntas, respostas: r.perguntas.map(() => "") });
+        { pergunta, provider: modelos.escritor.provider, model: modelos.escritor.model });
+      if (!r.perguntas.length) return rodar(pergunta);
+      setEsclarecer({ pergunta, perguntas: r.perguntas, respostas: r.perguntas.map(() => "") });
     } catch (e: any) {
       props.onError(e.message);
     } finally {
@@ -151,10 +177,11 @@ export default function PesquisaView(props: {
   }
 
   function comRespostas() {
-    const contexto = (esclarecer?.perguntas ?? [])
-      .map((q, i) => (esclarecer!.respostas[i].trim() ? `${q} ${esclarecer!.respostas[i].trim()}` : ""))
+    if (!esclarecer) return;
+    const contexto = esclarecer.perguntas
+      .map((q, i) => (esclarecer.respostas[i].trim() ? `${q} ${esclarecer.respostas[i].trim()}` : ""))
       .filter(Boolean).join("\n");
-    rodar(contexto);
+    rodar(esclarecer.pergunta, contexto);
   }
 
   async function parar() {
@@ -207,6 +234,8 @@ export default function PesquisaView(props: {
             </div>
           )}
 
+          {estado && rodando && <Sinapse estado={estado} />}
+
           {estado && (
             <>
               <div className={card}>
@@ -222,6 +251,7 @@ export default function PesquisaView(props: {
                     {estado.stats.uteis} úteis de {estado.stats.fontes} · {relogio(estado.stats.segundos)}
                   </span>
                 </div>
+                <p className="mt-2 text-sm text-fg">{estado.pergunta}</p>
                 {estado.aviso && <p className="mt-2 text-xs text-amber-300">{estado.aviso}</p>}
                 {!!estado.plano.perguntas.length && (
                   <details className="mt-2 text-xs text-muted">
@@ -282,7 +312,10 @@ export default function PesquisaView(props: {
                     </button>
                   )}
                   {estado.relatorio && (
-                    <button className={btn} onClick={() => rodar("", estado.message_id)}>Continuar pesquisa</button>
+                    <button className={btn}
+                            onClick={() => rodar(estado.pergunta, "", estado.message_id)}>
+                      Continuar pesquisa
+                    </button>
                   )}
                   {estado.relatorio && <button className={btn} onClick={discutir}>Discutir no chat</button>}
                   <button className={btn} onClick={copiar}>
@@ -320,7 +353,7 @@ export default function PesquisaView(props: {
               ))}
               <div className="flex gap-2">
                 <button className={btnPrimary} onClick={comRespostas}>Pesquisar</button>
-                <button className={btn} onClick={() => rodar()}>Pular</button>
+                <button className={btn} onClick={() => rodar(esclarecer.pergunta)}>Pular</button>
               </div>
             </div>
           )}
@@ -341,14 +374,40 @@ export default function PesquisaView(props: {
                        onChange={(e) => setPerguntarAntes(e.target.checked)} />
                 Perguntar antes
               </label>
-              <span className="text-faint">{props.model || "escolha um modelo no Chat"}</span>
+              {/* Div à parte: o ModelPicker traz ml-auto, que jogaria o resto da linha para a direita. */}
+              <div className="ml-auto flex items-center gap-1" title="Modelo que escreve o relatório">
+                <span className="text-faint">relatório</span>
+                <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
+                             onChange={(provider, model) =>
+                               setModelos((m) => ({ ...m, escritor: { provider, model } }))} />
+              </div>
+              <div className="flex items-center gap-1" title="Modelo que lê e resume cada página">
+                <span className="text-faint">extração</span>
+                {modelos.extrator ? (
+                  <>
+                    <ModelPicker provider={modelos.extrator.provider} model={modelos.extrator.model}
+                                 onChange={(provider, model) =>
+                                   setModelos((m) => ({ ...m, extrator: { provider, model } }))} />
+                    <button className="text-faint hover:text-fg" title="Voltar ao automático"
+                            onClick={() => setModelos((m) => ({ ...m, extrator: null }))}>
+                      <X className="size-3" />
+                    </button>
+                  </>
+                ) : (
+                  <button className={campo}
+                          title="Automático: usa o subagente Rápido, ou o mesmo modelo do relatório"
+                          onClick={() => setModelos((m) => ({ ...m, extrator: { ...m.escritor } }))}>
+                    automático
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="flex items-end gap-2">
               <textarea
                 rows={2}
-                value={pergunta}
-                onChange={(e) => setPergunta(e.target.value)}
+                value={texto}
+                onChange={(e) => setTexto(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -363,7 +422,7 @@ export default function PesquisaView(props: {
                   <Square className="size-3.5" />
                 </button>
               ) : (
-                <button className={btnPrimary} disabled={!pergunta.trim() || preparando}
+                <button className={btnPrimary} disabled={!texto.trim() || preparando}
                         onClick={enviar} title="Pesquisar">
                   {preparando ? <Search className="size-4 animate-pulse" /> : <ArrowUp className="size-4" />}
                 </button>

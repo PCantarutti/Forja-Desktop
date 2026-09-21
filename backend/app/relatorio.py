@@ -33,8 +33,20 @@ def _inline(texto: str) -> str:
     return CODIGO.sub(r"<code>\1</code>", s)
 
 
-def _md(texto: str) -> tuple[str, list[tuple[str, str, int]]]:
-    """Markdown -> (HTML, [(id, título, nível) do sumário]). O resto vira parágrafo."""
+def _figura(img: dict, classe: str) -> str:
+    """Imagem de uma fonte, creditada. onerror some com a figura: link quebrado não vira buraco."""
+    return (f'<figure class="{classe}">'
+            f'<img src="{html.escape(img["url"], quote=True)}" alt="" loading="lazy" '
+            f'onerror="this.closest(\'figure\').remove()">'
+            f'<figcaption>{html.escape(img["credito"])}</figcaption></figure>')
+
+
+def _md(texto: str, imagens: list[dict] | None = None) -> tuple[str, list[tuple[str, str, int]]]:
+    """Markdown -> (HTML, [(id, título, nível) do sumário]). O resto vira parágrafo.
+
+    As imagens das fontes entram antes das seções ## (da segunda em diante), uma por seção.
+    """
+    fila = list(imagens or [])
     out: list[str] = []
     secoes: list[tuple[str, str, int]] = []
     lista: str | None = None
@@ -55,6 +67,8 @@ def _md(texto: str) -> tuple[str, list[tuple[str, str, int]]]:
             corpo = _inline(m.group(2).strip())
             if nivel <= 3:  # h2 e h3 entram no sumário lateral e ganham âncora
                 alvo = f"s{len(secoes) + 1}"
+                if nivel == 2 and secoes and fila:
+                    out.append(_figura(fila.pop(0), "section-image"))
                 secoes.append((alvo, m.group(2).strip(), nivel))
                 out.append(f'<h{nivel} id="{alvo}">{corpo}</h{nivel}>')
             else:
@@ -104,9 +118,23 @@ def _stats(pesquisa: dict) -> str:
                        f'{html.escape(r)}</div>' for v, r in itens)
 
 
+def _imagens(pesquisa: dict) -> list[dict]:
+    """As og:image das fontes úteis, uma por domínio: a primeira vira capa, o resto ilustra."""
+    out, vistos = [], set()
+    for f in pesquisa.get("fontes", []):
+        url = (f.get("imagem") or "").strip()
+        if f.get("status") != "util" or not url.startswith("http") or url in vistos:
+            continue
+        vistos.add(url)
+        out.append({"url": url, "credito": f.get("dominio") or f.get("titulo") or ""})
+    return out
+
+
 def html_do(pesquisa: dict, markdown: str) -> str:
-    """A página inteira, pronta para abrir no navegador (CSS embutido, sem rede)."""
-    corpo, secoes = _md(markdown or pesquisa.get("resumo") or pesquisa.get("aviso") or "")
+    """A página inteira, pronta para abrir no navegador (CSS embutido, sem rede além das imagens)."""
+    imagens = _imagens(pesquisa)
+    capa = _figura(imagens[0], "hero-image") if imagens else ""
+    corpo, secoes = _md(markdown or pesquisa.get("resumo") or pesquisa.get("aviso") or "", imagens[1:])
     sumario = "\n      ".join(f'<a href="#{i}" class="depth-{n}">{html.escape(t)}</a>'
                               for i, t, n in secoes)
     aviso = pesquisa.get("aviso") or ""
@@ -114,6 +142,7 @@ def html_do(pesquisa: dict, markdown: str) -> str:
             .replace("{{TITULO}}", html.escape(pesquisa.get("pergunta") or "Pesquisa"))
             .replace("{{DATA}}", datetime.now().strftime("%d/%m/%Y %H:%M"))
             .replace("{{AVISO}}", f'<div class="aviso">{html.escape(aviso)}</div>' if aviso else "")
+            .replace("{{CAPA}}", capa)
             .replace("{{SUMARIO}}", sumario)
             .replace("{{CORPO}}", corpo)
             .replace("{{FONTES}}", _fontes(pesquisa))

@@ -175,10 +175,12 @@ async def _perguntar(spec: dict, system: str, user: str, run: dict | None = None
     return out
 
 
-def _modelos(provider: str, model: str) -> tuple[dict, dict]:
-    """(extrator, escritor). O extrator sai do slot 'rapido' quando existir um que rode agora;
-    sem slot, é o mesmo modelo do chat — a pesquisa nunca depende de configuração extra."""
+def _modelos(provider: str, model: str, ex_provider: str = "", ex_model: str = "") -> tuple[dict, dict]:
+    """(extrator, escritor). O extrator é o escolhido na tela; sem escolha, o slot 'rapido' dos
+    subagentes; sem slot, o mesmo modelo do chat — a pesquisa nunca depende de configuração extra."""
     escritor = {"provider": provider, "model": model}
+    if ex_provider and ex_model:
+        return {"provider": ex_provider, "model": ex_model}, escritor
     extrator = next((spec for _, spec in subagents.chain("rapido")), escritor)
     return {"provider": extrator["provider"], "model": extrator["model"]}, escritor
 
@@ -300,7 +302,8 @@ def _escolher(run: dict, resultados: list[dict], quantas: int) -> list[dict]:
         run["lidas"].add(url)
         escolhidas.append({"id": str(len(run["fontes"]) + len(escolhidas)), "rodada": run["rodada"],
                            "url": url, "titulo": (r.get("title") or "").strip() or url,
-                           "dominio": host, "status": "fila", "erro": "", "resumo": "", "trecho": ""})
+                           "dominio": host, "status": "fila", "erro": "", "resumo": "", "trecho": "",
+                           "imagem": ""})
         if len(escolhidas) >= quantas:
             break
     return escolhidas
@@ -321,6 +324,7 @@ async def _extrair(run: dict, fonte: dict, spec: dict) -> None:
         _persistir(run)
         return
     fonte["titulo"] = pagina["title"] or fonte["titulo"]
+    fonte["imagem"] = pagina.get("imagem") or ""  # og:image: vira capa e ilustração do relatório
     if _acabou(run):
         fonte["status"] = "fila"
         return
@@ -392,7 +396,7 @@ def _resumo(relatorio: str) -> str:
 # ------------------------------------------------------------------ orquestração
 
 def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: str = "normal",
-          contexto: str = "", continuar_de: int = 0) -> dict:
+          contexto: str = "", continuar_de: int = 0, ex_provider: str = "", ex_model: str = "") -> dict:
     """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente."""
     pergunta = (pergunta or "").strip()
     if not pergunta:
@@ -402,7 +406,7 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
     if not (provider and model):
         raise ToolError("Escolha um modelo antes de pesquisar.")
     rodadas, fontes_por_rodada, n_buscas, teto = PRESETS[profundidade]
-    extrator, escritor = _modelos(provider, model)
+    extrator, escritor = _modelos(provider, model, ex_provider, ex_model)
 
     anterior, lidas = "", set()
     if continuar_de:  # continuar: não relê o que já foi lido e escreve por cima do relatório
@@ -425,7 +429,8 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         "contexto": contexto, "plano": {"perguntas": [], "buscas": []}, "rodada": 0, "rodadas": [],
         "fontes": [], "resumo": "", "aviso": "", "relatorio": "",
         "stats": {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0,
-                  "extrator": extrator["model"], "escritor": escritor["model"]},
+                  "extrator": extrator["model"], "escritor": escritor["model"],
+                  "extrator_provider": extrator["provider"], "escritor_provider": escritor["provider"]},
     }
     msg = _save(conv_id, role="assistant", content="", status="running", meta={"pesquisa": publico})
     run = _RUNS[msg.id] = {**publico, "message_id": msg.id, "conv_id": conv_id, "cancelar": False,

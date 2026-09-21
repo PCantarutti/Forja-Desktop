@@ -785,6 +785,8 @@ class PesquisaBody(BaseModel):
     model: str = ""
     contexto: str = ""              # respostas das perguntas de esclarecimento
     continuar_de: int = 0           # message_id de uma pesquisa anterior
+    ex_provider: str = ""           # modelo que lê as páginas; vazio = slot "rapido" dos subagentes
+    ex_model: str = ""
 
 
 class PerguntasBody(BaseModel):
@@ -815,7 +817,7 @@ def _sse_pesquisa(message_id: int) -> StreamingResponse:
 async def pesquisa_rodar(conv_id: int, body: PesquisaBody):
     try:
         msg = pesquisa.start(conv_id, body.pergunta, body.provider, body.model, body.profundidade,
-                             body.contexto, body.continuar_de)
+                             body.contexto, body.continuar_de, body.ex_provider, body.ex_model)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_pesquisa(msg["id"])

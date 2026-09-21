@@ -82,7 +82,8 @@ def _fake_web(monkeypatch, resultados=None, falhar=(), texto="Conteúdo da pági
         lidas.append(url)
         if url in falhar:
             raise ToolError(f"{url} respondeu HTTP 404.")
-        return {"url": url, "title": f"Título de {url}", "text": texto, "chars": len(texto)}
+        return {"url": url, "title": f"Título de {url}", "text": texto, "chars": len(texto),
+                "imagem": f"{url}/capa.jpg"}
 
     monkeypatch.setattr(pesquisa.web, "buscar", buscar)
     monkeypatch.setattr(pesquisa.web, "ler", ler)
@@ -276,6 +277,34 @@ def test_mirror_exporta_a_pesquisa(monkeypatch):
 
 
 # ------------------------------------------------------------------ relatório HTML
+
+def test_extrator_escolhido_na_tela_vence_o_slot(monkeypatch):
+    monkeypatch.setattr(config, "SUBAGENTS", {"rapido": {"provider": "ollama", "model": "qwen3:1.7b"}})
+    chamados = _fake_llm(monkeypatch)
+    _fake_web(monkeypatch)
+    est = _rodar(**_base(ex_provider="lmstudio", ex_model="gemma-3-4b"))
+    assert est["stats"]["extrator"] == "gemma-3-4b" and est["stats"]["extrator_provider"] == "lmstudio"
+    assert {m for tipo, m in chamados if tipo == "extracao"} == {"gemma-3-4b"}
+
+
+def test_relatorio_usa_as_imagens_das_fontes(monkeypatch):
+    _fake_llm(monkeypatch)
+    _fake_web(monkeypatch)
+    est = _rodar(**_base())
+    assert all(f["imagem"] for f in est["fontes"])
+    pagina = relatorio.html_do(est, est["relatorio"])
+    assert '<figure class="hero-image">' in pagina          # a primeira vira capa
+    assert '<figure class="section-image">' in pagina       # as outras ilustram as seções
+    assert est["fontes"][0]["imagem"] in pagina
+
+
+def test_relatorio_sem_imagem_nao_deixa_buraco():
+    pes = {"pergunta": "p", "aviso": "", "stats": {},
+           "fontes": [{"status": "util", "url": "https://a.com/x", "titulo": "A", "dominio": "a.com",
+                       "resumo": "r", "imagem": ""}]}
+    pagina = relatorio.html_do(pes, "## Um\n\ntexto\n\n## Dois\n\ntexto")
+    assert "<figure" not in pagina
+
 
 def test_html_escapa_o_que_veio_da_web():
     pes = {"pergunta": "<script>alert(1)</script>", "aviso": "", "stats": {},

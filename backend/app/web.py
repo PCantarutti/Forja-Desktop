@@ -4,9 +4,10 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import httpx
 
@@ -157,6 +158,24 @@ class _Text(HTMLParser):
             self.parts.append(data)
 
 
+META = re.compile(r"<meta\s+[^>]*>", re.I)
+ATTR = re.compile(r"""(\w[\w:-]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s">]+))""")
+IMAGEM = ("og:image", "og:image:url", "twitter:image", "twitter:image:src")
+
+
+def og_image(html: str, base: str) -> str:
+    """A imagem que a página anuncia para redes sociais. Vazio quando não há uma utilizável."""
+    for tag in META.findall(html[:200_000]):  # og:* vive no <head>; varrer o resto é desperdício
+        attrs = {m.group(1).lower(): (m.group(3) or m.group(4) or m.group(5) or "")
+                 for m in ATTR.finditer(tag)}
+        if attrs.get("property", attrs.get("name", "")).lower() not in IMAGEM:
+            continue
+        url = urljoin(base, unescape(attrs.get("content", "")).strip())
+        if url.startswith(("http://", "https://")) and not url.lower().endswith((".svg", ".ico")):
+            return url
+    return ""
+
+
 def html_to_text(html: str) -> tuple[str, str]:
     p = _Text()
     p.feed(html)
@@ -166,7 +185,7 @@ def html_to_text(html: str) -> tuple[str, str]:
 
 
 def ler(url: str, max_chars: int = 20_000) -> dict:
-    """Baixa uma página e extrai o texto. {"url" (final), "title", "text", "chars"}.
+    """Baixa uma página e extrai o texto. {"url" (final), "title", "text", "chars", "imagem"}.
 
     `chars` é o tamanho antes do corte. A checagem anti-SSRF roda a cada redirect.
     """
@@ -184,13 +203,16 @@ def ler(url: str, max_chars: int = 20_000) -> dict:
     if r.status_code >= 400:
         raise ToolError(f"{url} respondeu HTTP {r.status_code}.")
     ctype = r.headers.get("content-type", "")
+    imagem = ""
     if "html" in ctype:
         title, text = html_to_text(r.text)
+        imagem = og_image(r.text, url)
     elif ctype.startswith("text/") or "json" in ctype or "xml" in ctype:
         title, text = "", r.text
     else:
         raise ToolError(f"Tipo de conteúdo não suportado: {ctype or 'desconhecido'}.")
-    return {"url": url, "title": title.strip(), "text": text[:max_chars], "chars": len(text)}
+    return {"url": url, "title": title.strip(), "text": text[:max_chars], "chars": len(text),
+            "imagem": imagem}
 
 
 def fetch_url(_root: Path, args: dict) -> str:
