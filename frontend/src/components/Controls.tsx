@@ -154,7 +154,7 @@ export function SectionTabs(props: {
       </button>
       <div className="flex rounded-lg border border-line p-0.5" role="radiogroup" aria-label="Seção">
         {([
-          { id: "chat" as const, icon: <Bubble className="size-4" />, title: "Chat (sem ferramentas)" },
+          { id: "chat" as const, icon: <Bubble className="size-4" />, title: "Chat (busca na web)" },
           { id: "agent" as const, icon: <Code className="size-4" />, title: "Agente (ferramentas)" },
           { id: "imagem" as const, icon: <Image className="size-4" />, title: "Imagens (Stable Diffusion)" },
           { id: "comparar" as const, icon: <Balanca className="size-4" />, title: "Comparar modelos" },

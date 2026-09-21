@@ -207,9 +207,12 @@ def test_conversation_kind_defaults_to_agent():
         assert c.kind == "agent"
 
 
-def test_chat_mode_sends_no_tools(monkeypatch):
+def test_chat_mode_sends_only_web_tools(monkeypatch):
+    """O Chat não mexe em arquivos nem no shell, mas busca na web quando precisa."""
+
     async def fake_stream(provider, model, messages, tools, num_ctx, effort=None):
-        assert tools is None
+        assert [t["function"]["name"] for t in tools] == ["web_search", "fetch_url"]
+        assert "web_search" in messages[0]["content"]
         yield "content", "oi"
         yield "done", {"tool_calls": []}
 
@@ -232,7 +235,8 @@ def test_chat_mode_sends_no_tools(monkeypatch):
 
     events = asyncio.run(scenario())
     sent = next(e for e in events if e["type"] == "tools_sent")
-    assert sent["tools"] == []
+    assert [t["name"] for t in sent["tools"]] == ["web_search", "fetch_url"]
+    assert all(not t["mutating"] for t in sent["tools"])  # nada no Chat pede aprovação
 
 
 # ------------------------------------------------ comandos destrutivos (nem o bypass libera)

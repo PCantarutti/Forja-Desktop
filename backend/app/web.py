@@ -95,15 +95,27 @@ def buscar(query: str, n: int = 6) -> list[dict]:
     return _searxng(query, n) if config.SEARXNG_URL else _duckduckgo(query, n)
 
 
-def web_search(_root: Path, args: dict) -> str:
+def dominio(url: str) -> str:
+    return (urlparse(url).hostname or "").removeprefix("www.")
+
+
+def _fonte(url: str, titulo: str, trecho: str = "") -> dict:
+    """Uma fonte para a UI: o chat desenha favicon + título + domínio e linka para cá."""
+    return {"url": url, "titulo": titulo.strip() or dominio(url), "dominio": dominio(url),
+            "trecho": trecho.strip()[:300]}
+
+
+def web_search(_root: Path, args: dict) -> dict:
     query = args["query"].strip()
     n = max(1, min(int(args.get("max_results") or 5), 10))
     results = buscar(query, n)
     if not results:
-        return f"Nenhum resultado para: {query}"
+        return {"text": f"Nenhum resultado para: {query}", "sources": []}
     lines = [f"{i}. {x.get('title', '').strip()}\n   {x.get('url')}\n   {(x.get('content') or '').strip()[:300]}"
              for i, x in enumerate(results, 1)]
-    return UNTRUSTED + "\n".join(lines)
+    fontes = [_fonte(x.get("url") or "", x.get("title") or "", x.get("content") or "")
+              for x in results if (x.get("url") or "").startswith("http")]
+    return {"text": UNTRUSTED + "\n".join(lines), "sources": fontes}
 
 
 # ------------------------------------------------------------------ fetch_url
@@ -215,11 +227,12 @@ def ler(url: str, max_chars: int = 20_000) -> dict:
             "imagem": imagem}
 
 
-def fetch_url(_root: Path, args: dict) -> str:
+def fetch_url(_root: Path, args: dict) -> dict:
     p = ler(args["url"].strip(), max(1000, min(int(args.get("max_chars") or 20_000), 100_000)))
     more = (f"\n\n(truncado em {len(p['text'])} de {p['chars']} caracteres)"
             if p["chars"] > len(p["text"]) else "")
-    return f"{UNTRUSTED}URL: {p['url']}\nTítulo: {p['title']}\n\n{p['text']}{more}"
+    return {"text": f"{UNTRUSTED}URL: {p['url']}\nTítulo: {p['title']}\n\n{p['text']}{more}",
+            "sources": [_fonte(p["url"], p["title"], p["text"])]}
 
 
 register(Tool(

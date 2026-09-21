@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
+import { SourceChip, SourceList } from "./Sources";
 import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
@@ -28,7 +29,18 @@ function Table(props: React.ComponentProps<"table">) {
   );
 }
 
-const MD_COMPONENTS = { pre: CodeBlock, table: Table };
+/** Link http(s) na resposta é sempre fonte: vira pílula clicável e abre fora, não no lugar do app. */
+function Link({ href, children, ...rest }: React.ComponentProps<"a">) {
+  return href && /^https?:\/\//.test(href) ? (
+    <SourceChip href={href}>{children}</SourceChip>
+  ) : (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  );
+}
+
+const MD_COMPONENTS = { pre: CodeBlock, table: Table, a: Link };
 
 /**
  * Memoizado, e é o `memo` que mais paga no app inteiro.
@@ -463,6 +475,7 @@ export function ToolBlock(props: {
           {props.live}
         </pre>
       )}
+      {result?.meta?.sources && <SourceList items={result.meta.sources} />}
       {!props.hideImages && result?.meta?.attachments && <ToolImages list={result.meta.attachments} />}
       {!props.hideImages && result?.meta?.attachments && (
         <div className="border-t border-line px-3 py-1">
@@ -636,7 +649,11 @@ export function ActivityGroup(props: {
     const st = props.results.get(c.id)?.status;
     return st === "erro" || st === "rejeitada";
   }).length;
-  const head = tools.length ? (ACTION[tools[0].name] ?? `Usou ${tools[0].name}`) : "Raciocinou";
+  // A busca aparece na linha fechada: "o que ele pesquisou" é a informação, não "pesquisou".
+  const alvo = tools.length ? (tools[0].arguments.query ?? tools[0].arguments.url) : null;
+  const head =
+    (tools.length ? (ACTION[tools[0].name] ?? `Usou ${tools[0].name}`) : "Raciocinou") +
+    (typeof alvo === "string" ? ` \u2014 ${alvo}` : "");
   // Screenshot e arquivo gerado são resposta, não detalhe de execução: saem do grupo e ficam
   // visíveis mesmo com ele colapsado.
   const shots = tools.flatMap((c) => props.results.get(c.id)?.meta?.attachments ?? []);

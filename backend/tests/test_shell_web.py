@@ -41,6 +41,62 @@ def test_html_to_text():
     assert text == "Oi\n\num texto\n\ndois"
 
 
+# ------------------------------------------------ fontes para a UI
+
+RESULTADOS = [
+    {"title": "Manchetes do dia", "url": "https://www.blogdolago.com.br/manchetes", "content": "  resumo  "},
+    {"title": "", "url": "https://g1.globo.com/noticia", "content": "outro"},
+    {"title": "sem url", "url": "", "content": "ignorado"},  # SearXNG às vezes devolve entrada sem url
+]
+
+
+def test_web_search_devolve_texto_e_fontes(monkeypatch):
+    """O texto que vai ao modelo não muda; `sources` é o que o chat desenha (favicon, título, domínio)."""
+    from app import web
+
+    monkeypatch.setattr(web, "buscar", lambda q, n=6: RESULTADOS)
+    out = run_tool("web_search", {"query": "noticias de hoje"})
+    assert out["text"].startswith(web.UNTRUSTED) and "Manchetes do dia" in out["text"]
+    assert [f["dominio"] for f in out["sources"]] == ["blogdolago.com.br", "g1.globo.com"]
+    assert out["sources"][0]["titulo"] == "Manchetes do dia"
+    assert out["sources"][0]["trecho"] == "resumo"
+    assert out["sources"][1]["titulo"] == "g1.globo.com"  # sem título, o domínio serve de rótulo
+
+
+def test_web_search_sem_resultado_nao_inventa_fonte(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(web, "buscar", lambda q, n=6: [])
+    out = run_tool("web_search", {"query": "xyzzy"})
+    assert out["sources"] == [] and "Nenhum resultado" in out["text"]
+
+
+def test_fetch_url_devolve_a_pagina_como_fonte(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(web, "ler", lambda url, n: {
+        "url": "https://www.blogdolago.com.br/final", "title": "Manchetes", "text": "corpo",
+        "chars": 5, "imagem": ""})
+    out = run_tool("fetch_url", {"url": "https://blogdolago.com.br/curta"})
+    assert out["sources"] == [{"url": "https://www.blogdolago.com.br/final", "titulo": "Manchetes",
+                               "dominio": "blogdolago.com.br", "trecho": "corpo"}]
+
+
+# ------------------------------------------------ o modo Chat so leva a web
+
+def test_chat_leva_so_as_ferramentas_de_web():
+    from app import agent
+
+    assert [t.name for t in agent.chat_tools()] == ["web_search", "fetch_url"]
+
+
+def test_chat_respeita_ferramenta_desligada(monkeypatch):
+    from app import agent, config
+
+    monkeypatch.setattr(config, "DISABLED_TOOLS", ["web_search"])
+    assert [t.name for t in agent.chat_tools()] == ["fetch_url"]
+
+
 # ------------------------------------------------ run_command em background
 
 def test_run_command_background_becomes_a_process(tmp_path, monkeypatch):

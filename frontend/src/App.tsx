@@ -127,6 +127,19 @@ function aggregate(list: Stats[]): TurnStats {
   };
 }
 
+/** Frase da espera por ferramenta: "Buscando X" diz mais que "Usando web_search". */
+const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> = {
+  web_search: (a) => (typeof a.query === "string" ? `Buscando \u201c${a.query}\u201d` : undefined),
+  fetch_url: (a) => {
+    if (typeof a.url !== "string") return undefined;
+    try {
+      return `Lendo ${new URL(a.url).hostname.replace(/^www\./, "")}`;
+    } catch {
+      return undefined;
+    }
+  },
+};
+
 export default function App() {
   const [config, setConfig] = useState<Config>({ providers: [], num_ctx: 32768 });
   const [showSettings, setShowSettings] = useState(false);
@@ -1023,7 +1036,7 @@ export default function App() {
       .slice(lastUserIndex + 1)
       .flatMap((m) => m.tool_calls ?? [])
       .find((c) => !results.has(c.id));
-    if (chamando) return `Usando ${chamando.name}`;
+    if (chamando) return FASE[chamando.name]?.(chamando.arguments) ?? `Usando ${chamando.name}`;
     if (draft?.content) return "Escrevendo a resposta";
     if (draft?.thinking) return (liveStats?.seconds ?? 0) > 30 ? "Ainda pensando…" : "Pensando…";
     return status ?? ""; // sem sinal de atividade, nada de spinner girando à toa
@@ -1212,7 +1225,7 @@ export default function App() {
                       Agente: lê e escreve em <span className="font-mono text-fg">{wsLabel}</span>
                     </>
                   ) : (
-                    "Chat: conversa sem ferramentas e sem acesso a arquivos."
+                    "Chat: conversa com busca na web, sem acesso a arquivos."
                   )}
                 </div>
               </div>

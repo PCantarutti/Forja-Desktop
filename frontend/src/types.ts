@@ -1,5 +1,8 @@
 export type ToolCall = { id: string; name: string; arguments: Record<string, unknown> };
 
+/** Página trazida por web_search/fetch_url: vem em `meta.sources` do resultado da ferramenta. */
+export type Source = { url: string; titulo: string; dominio: string; trecho?: string };
+
 export type Preview = { kind: "diff" | "new" | "command"; path: string; text: string };
 
 /** Aprovação pendente: preview é null para ferramentas sem preview (ex.: MCP); sent = decisão já enviada. */
