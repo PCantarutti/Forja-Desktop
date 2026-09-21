@@ -117,7 +117,7 @@ async function perguntar(rl, atual) {
   if (versao === atual) parar("a versão precisa ser diferente da atual: o updater compara número.");
 
   passo("o que mudou nesta versão");
-  console.log(cor(90, "  Uma linha por item. Linha vazia encerra. Isto vira o texto da release no GitHub."));
+  console.log(cor(90, "  Uma linha por item. Linha vazia encerra. É o que o app mostra ao avisar da atualização."));
   const linhas = [];
   for (;;) {
     const linha = await rl.question("  - ");
@@ -138,8 +138,9 @@ function subirVersao(versao, notas) {
     pkg.version = versao;
     fs.writeFileSync(arq, JSON.stringify(pkg, null, 2) + NL);
   }
-  // O electron-builder lê este arquivo sozinho (releaseInfo.releaseNotesFile tem esse padrão).
-  // Não entra no git: build/ é gerado e está no .gitignore. O texto fica na release do GitHub.
+  // O electron-builder lê este arquivo sozinho: getResource() procura "release-notes.md" em
+  // buildResources (= build/), e o conteúdo vai para o latest.yml — é o texto que o app mostra
+  // ao avisar da atualização. Não entra no git: build/ é gerado e está no .gitignore.
   fs.mkdirSync(path.join(ROOT, "build"), { recursive: true });
   fs.writeFileSync(path.join(ROOT, "build", "release-notes.md"), notas + NL);
   ok("versão e notas gravadas");
@@ -174,7 +175,8 @@ try {
   const { owner, repo } = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).build.publish[0];
   console.log(NL + cor(32, `Pronto: ${versao} empacotada e enviada.`));
   console.log(cor(33, "Falta um passo manual:") + " a release nasce como RASCUNHO e o updater não");
-  console.log("enxerga rascunho. Abra e clique em Publish release:");
+  console.log("enxerga rascunho. Abra e clique em Publish release (a descrição vem vazia; o texto");
+  console.log("que você escreveu está no latest.yml, que é de onde o app tira o aviso):");
   console.log("  " + cor(36, `https://github.com/${owner}/${repo}/releases`));
 } finally {
   rl.close();
