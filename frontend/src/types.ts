@@ -225,9 +225,16 @@ export type PesquisaEstado = {
   resumo: string;   // primeiro parágrafo do relatório: é o que a aba mostra
   aviso: string;
   relatorio: string;  // markdown completo; a aba não renderiza, o HTML abre fora
-  stats: { fontes: number; uteis: number; segundos: number; rodadas: number;
-           extrator: string; escritor: string };
+  formato: PesquisaFormato;
+  formato_usado: string;  // o que o "auto" decidiu; vazio enquanto não decidiu
+  stats: {
+    fontes: number; uteis: number; segundos: number; rodadas: number;
+    tokens: number; tokens_entrada: number; gerando: number; chamadas: number; estimado: boolean;
+    extrator: string; escritor: string; extrator_provider: string; escritor_provider: string;
+  };
 };
+
+export type PesquisaFormato = "auto" | "produto" | "comparar" | "guia" | "checagem";
 
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
 

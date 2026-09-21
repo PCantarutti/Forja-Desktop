@@ -52,6 +52,20 @@
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.05); --shadow-md: 0 4px 24px rgba(0,0,0,0.07);
 }
 
+/* Cada formato de relatório retinge o acento e a aurora, para dar identidade visual ao tipo. */
+body.formato-produto { --accent: #5cc8cb; --accent-light: #8fdde0; --accent-bg: rgba(92,200,203,0.10);
+  --aurora-a: rgba(92,200,203,0.13); --aurora-b: rgba(232,192,90,0.07); }
+body.formato-comparar { --accent: #b896e8; --accent-light: #d0b8f0; --accent-bg: rgba(184,150,232,0.10);
+  --aurora-a: rgba(184,150,232,0.13); --aurora-b: rgba(232,143,115,0.06); }
+body.formato-guia { --accent: #82c882; --accent-light: #a8dba8; --accent-bg: rgba(130,200,130,0.09);
+  --aurora-a: rgba(130,200,130,0.12); --aurora-b: rgba(232,192,90,0.07); }
+body.formato-checagem { --accent: #e6c069; --accent-light: #f0d390; --accent-bg: rgba(230,192,105,0.10);
+  --aurora-a: rgba(230,192,105,0.15); --aurora-b: rgba(232,143,115,0.07); }
+:root[data-tema="claro"] body.formato-produto { --accent: #2a8a8c; --accent-light: #4ab0b2; }
+:root[data-tema="claro"] body.formato-comparar { --accent: #7a4cb8; --accent-light: #9d76d0; }
+:root[data-tema="claro"] body.formato-guia { --accent: #3d8a3d; --accent-light: #62b162; }
+:root[data-tema="claro"] body.formato-checagem { --accent: #b88a2e; --accent-light: #d4a955; }
+
 .icone-claro { display: none; }
 :root[data-tema="claro"] .icone-claro { display: inline; }
 :root[data-tema="claro"] .icone-escuro { display: none; }
@@ -502,7 +516,7 @@ figure figcaption {
 }
 </style>
 </head>
-<body>
+<body class="{{FORMATO}}">
 
 <div class="toolbar">
   <button id="btn-tema" title="Alternar claro/escuro">

@@ -85,6 +85,39 @@ Se os achados se contradizem, diga isso em vez de escolher um lado. O que ficou 
 escreva "não encontrado nas fontes".
 Entre 600 e 1000 palavras. Não repita a mesma frase. Não escreva nada fora do relatório."""
 
+FORMATOS = ("auto", "produto", "comparar", "guia", "checagem")
+
+FORMATO_PROMPT = {
+    "produto": """FORMATO OBRIGATÓRIO — relatório de PRODUTO:
+- Organize como uma lista ordenada do melhor para o pior.
+- Para cada um: "### Nome", preço aproximado, 2-3 frases de resumo, "**Prós:**" em lista,
+  "**Contras:**" em lista e "**Onde comprar:**" com o link.
+- Comece por uma tabela de comparação rápida (colunas: Nome, Preço, Melhor para).
+- Termine com "## Veredito", escolhendo o melhor no geral e o melhor custo-benefício.""",
+    "comparar": """FORMATO OBRIGATÓRIO — relatório de COMPARAÇÃO:
+- Comece por "## Tabela comparativa": uma tabela com as opções nas colunas e os critérios nas linhas.
+- Depois uma seção "##" por opção, com forças, fraquezas e para quem serve.
+- Termine com "## Melhor para", uma linha por perfil ("**Para equipe pequena:** A, porque…").""",
+    "guia": """FORMATO OBRIGATÓRIO — GUIA PASSO A PASSO:
+- Comece por "## Resumo rápido": lista numerada, uma linha por passo, só a ação.
+- Depois "## Antes de começar" com o que é preciso ter.
+- Depois os passos detalhados, um "## Passo N: …" cada.
+- Use citação (> ) para dicas e avisos: "> **Dica:** …", "> **Cuidado:** …".
+- Termine com "## Erros comuns".""",
+    "checagem": """FORMATO OBRIGATÓRIO — CHECAGEM DE FATO:
+- Comece por "## A afirmação", repetindo o que está sendo checado.
+- Depois "## Evidências a favor" e "## Evidências contra", cada evidência num "###" com a fonte e
+  o quanto ela é forte.
+- Depois "## Veredito": **Confirmado**, **Parcial** ou **Não confirmado**.
+- Termine com "## Ressalvas" com o contexto que falta.""",
+}
+
+CLASSIFICAR_PROMPT = """Classifique a pergunta do usuário em UMA categoria:
+produto (quer comprar ou escolher um produto), comparar (quer confrontar opções),
+guia (quer aprender a fazer), checagem (quer saber se algo é verdade).
+Se nenhuma servir, responda: geral
+Responda com a palavra da categoria e nada mais."""
+
 PERGUNTAS_PROMPT = """O usuário quer uma pesquisa na web. Antes de buscar, você faz perguntas curtas
 para focar a pesquisa. Responda SÓ com um array JSON de no máximo {n} perguntas: ["...", "..."]
 Cada pergunta: uma linha, direta, sobre escopo, período, região, uso pretendido ou nível de detalhe.
@@ -162,16 +195,30 @@ def _lixo(resumo: str) -> bool:
 
 async def _perguntar(spec: dict, system: str, user: str, run: dict | None = None,
                      effort: str = "baixo") -> str:
-    """Uma chamada, sem ferramentas. Cancelar fecha o gerador e o servidor para de gerar."""
+    """Uma chamada, sem ferramentas. Cancelar fecha o gerador e o servidor para de gerar.
+
+    Contabiliza tokens e tempo de geração na corrida: é o que vira "N tokens · X tok/s" na tela.
+    """
     mensagens = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    out = ""
+    out, t0, t_first, saida = "", time.monotonic(), 0.0, 0
     async with aclosing(llm.chat_stream(spec["provider"], spec["model"], mensagens, None,
                                         config.NUM_CTX, effort)) as fluxo:
         async for kind, val in fluxo:
             if run is not None and _acabou(run):
                 break
             if kind == "content":
+                t_first = t_first or time.monotonic()
                 out += val
+            elif kind == "done":
+                saida = (val or {}).get("completion_tokens") or 0
+                if run is not None:
+                    run["stats"]["tokens_entrada"] += (val or {}).get("prompt_tokens") or 0
+    if run is not None:
+        # sem contagem do provedor, a estimativa de sempre: 4 caracteres por token
+        run["stats"]["tokens"] += saida or len(out) // 4
+        run["stats"]["estimado"] = run["stats"]["estimado"] or not saida
+        run["stats"]["gerando"] = round(run["stats"]["gerando"] + time.monotonic() - (t_first or t0), 1)
+        run["stats"]["chamadas"] += 1
     return out
 
 
@@ -229,6 +276,7 @@ def _persistir(run: dict) -> None:
 def estado(message_id: int) -> dict:
     """Retrato da corrida viva ou, se já acabou, o que está no banco. É o payload do SSE."""
     if run := _RUNS.get(message_id):
+        run["stats"]["segundos"] = round(time.monotonic() - run["t0"], 1)  # relógio da tela
         return {"message_id": message_id, **_publico(run)}
     m = _mensagem(message_id)
     p = dict(m["meta"]["pesquisa"])
@@ -372,15 +420,30 @@ def _achados(run: dict) -> str:
     return "\n\n".join(linhas)
 
 
+async def _classificar(run: dict, spec: dict) -> str:
+    """Descobre o feitio do relatório quando o formato é 'auto'. Erro aqui vira 'geral'."""
+    try:
+        texto = await _perguntar(spec, CLASSIFICAR_PROMPT, run["pergunta"], run)
+    except Exception:
+        return "geral"
+    palavra = split_think(texto)[1].strip().lower()
+    return next((f for f in FORMATO_PROMPT if f in palavra), "geral")
+
+
 async def _relatorio(run: dict, spec: dict) -> str:
     run["fase"] = "escrevendo"
+    if run["formato"] == "auto":
+        run["formato_usado"] = await _classificar(run, spec)
     _persistir(run)
     user = (f"Pergunta: {run['pergunta']}\n"
             + (f"Contexto do usuário: {run['contexto']}\n" if run["contexto"] else "")
             + f"\nAchados:\n\n{_achados(run)}")
     if run["anterior"]:
         user += f"\n\nRelatório anterior desta pesquisa (atualize e amplie):\n\n{run['anterior']}"
-    texto = await _perguntar(spec, RELATORIO_PROMPT, user, run, effort="medio")
+    system = RELATORIO_PROMPT
+    if extra := FORMATO_PROMPT.get(run["formato_usado"]):
+        system += "\n\n" + extra
+    texto = await _perguntar(spec, system, user, run, effort="medio")
     return split_think(texto)[1].strip()
 
 
@@ -396,13 +459,16 @@ def _resumo(relatorio: str) -> str:
 # ------------------------------------------------------------------ orquestração
 
 def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: str = "normal",
-          contexto: str = "", continuar_de: int = 0, ex_provider: str = "", ex_model: str = "") -> dict:
+          contexto: str = "", continuar_de: int = 0, ex_provider: str = "", ex_model: str = "",
+          formato: str = "auto") -> dict:
     """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente."""
     pergunta = (pergunta or "").strip()
     if not pergunta:
         raise ToolError("Escreva a pergunta da pesquisa.")
     if profundidade not in PRESETS:
         raise ToolError(f"profundidade deve ser {', '.join(PRESETS)}.")
+    if formato not in FORMATOS:
+        raise ToolError(f"formato deve ser {', '.join(FORMATOS)}.")
     if not (provider and model):
         raise ToolError("Escolha um modelo antes de pesquisar.")
     rodadas, fontes_por_rodada, n_buscas, teto = PRESETS[profundidade]
@@ -428,7 +494,9 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         "pergunta": pergunta, "profundidade": profundidade, "status": "rodando", "fase": "planejando",
         "contexto": contexto, "plano": {"perguntas": [], "buscas": []}, "rodada": 0, "rodadas": [],
         "fontes": [], "resumo": "", "aviso": "", "relatorio": "",
-        "stats": {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0,
+        "formato": formato, "formato_usado": "" if formato == "auto" else formato,
+        "stats": {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0, "tokens": 0,
+                  "tokens_entrada": 0, "gerando": 0.0, "chamadas": 0, "estimado": False,
                   "extrator": extrator["model"], "escritor": escritor["model"],
                   "extrator_provider": extrator["provider"], "escritor_provider": escritor["provider"]},
     }

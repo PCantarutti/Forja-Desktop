@@ -38,6 +38,8 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
             return "extracao"
         if system.startswith("O usuário quer uma pesquisa"):
             return "perguntas"
+        if system.startswith("Classifique a pergunta"):
+            return "classificar"
         return "relatorio"
 
     padrao = {
@@ -49,6 +51,7 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
         "relatorio": ("Resposta curta: o preço caiu e o lançamento é em março.\n\n"
                       "## Preços\nCaiu 12% [fonte](https://a.com/x).\n\n## Conclusão\nMarço."),
         "perguntas": '["Qual período?", "Qual região?"]',
+        "classificar": "comparar",
     }
 
     async def chat_stream(provider, model, messages, tools, num_ctx, effort=None):
@@ -88,6 +91,14 @@ def _fake_web(monkeypatch, resultados=None, falhar=(), texto="Conteúdo da pági
     monkeypatch.setattr(pesquisa.web, "buscar", buscar)
     monkeypatch.setattr(pesquisa.web, "ler", ler)
     return lidas
+
+
+def _sem_contagem(original):
+    """Provedor que não devolve usage: o 'done' vem sem os campos de token."""
+    async def chat_stream(*a, **k):
+        async for kind, val in original(*a, **k):
+            yield (kind, {} if kind == "done" else val)
+    return chat_stream
 
 
 def _rodar(**kw) -> dict:
@@ -304,6 +315,52 @@ def test_relatorio_sem_imagem_nao_deixa_buraco():
                        "resumo": "r", "imagem": ""}]}
     pagina = relatorio.html_do(pes, "## Um\n\ntexto\n\n## Dois\n\ntexto")
     assert "<figure" not in pagina
+
+
+def test_formato_auto_classifica_e_muda_o_prompt(monkeypatch):
+    vistos: list[str] = []
+    _fake_llm(monkeypatch)
+    original = pesquisa.llm.chat_stream
+
+    async def espiao(provider, model, messages, tools, num_ctx, effort=None):
+        vistos.append(messages[0]["content"])
+        async for ev in original(provider, model, messages, tools, num_ctx, effort):
+            yield ev
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", espiao)
+    _fake_web(monkeypatch)
+    est = _rodar(**_base())
+    assert est["formato"] == "auto" and est["formato_usado"] == "comparar"
+    assert any("FORMATO OBRIGATÓRIO" in v and "COMPARAÇÃO" in v for v in vistos)
+
+
+def test_formato_escolhido_pula_a_classificacao(monkeypatch):
+    chamados = _fake_llm(monkeypatch)
+    _fake_web(monkeypatch)
+    est = _rodar(**_base(formato="guia"))
+    assert est["formato_usado"] == "guia"
+    assert not [t for t, _ in chamados if t == "classificar"]  # nada de chamada extra
+    with pytest.raises(ToolError):
+        pesquisa.start(**_base(formato="inventado"))
+
+
+def test_contadores_de_token_e_tempo(monkeypatch):
+    _fake_llm(monkeypatch)
+    _fake_web(monkeypatch)
+    est = _rodar(**_base())
+    s = est["stats"]
+    assert s["tokens"] == 20 * s["chamadas"] and s["chamadas"] >= 5   # plano + 3 páginas + relatório
+    assert s["tokens_entrada"] == 10 * s["chamadas"]
+    # com LLM e web falsos a corrida inteira leva milissegundos: o que importa é que conta
+    assert s["segundos"] >= 0 and s["gerando"] >= 0 and s["estimado"] is False
+
+
+def test_tokens_estimados_quando_o_provedor_nao_conta(monkeypatch):
+    _fake_llm(monkeypatch, {"relatorio": "curto"})
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", _sem_contagem(pesquisa.llm.chat_stream))
+    _fake_web(monkeypatch)
+    est = _rodar(**_base())
+    assert est["stats"]["estimado"] is True and est["stats"]["tokens"] > 0
 
 
 def test_html_escapa_o_que_veio_da_web():

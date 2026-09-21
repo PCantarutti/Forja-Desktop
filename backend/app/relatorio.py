@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 TEMPLATE = Path(__file__).with_name("relatorio.html")
+FORMATOS_CSS = ("produto", "comparar", "guia", "checagem")  # cada um retinge o acento
 
 LINK = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
 NEGRITO = re.compile(r"\*\*([^*\n]+)\*\*")
@@ -108,10 +109,14 @@ def _fontes(pesquisa: dict) -> str:
 def _stats(pesquisa: dict) -> str:
     s = pesquisa.get("stats", {})
     segundos = int(s.get("segundos") or 0)
+    tokens = int(s.get("tokens") or 0)
+    gerando = float(s.get("gerando") or 0)
     itens = [(f"{segundos // 60}m{segundos % 60:02d}s", "de pesquisa"),
              (str(s.get("rodadas") or 0), "rodadas"),
              (str(s.get("fontes") or 0), "páginas lidas"),
              (str(s.get("uteis") or 0), "fontes úteis"),
+             (f"{tokens:,}".replace(",", "."), "tokens" + (" (estim.)" if s.get("estimado") else "")),
+             (f"{tokens / gerando:.0f}" if gerando > 0.5 else "—", "tok/s"),
              (s.get("extrator") or "—", "extração"),
              (s.get("escritor") or "—", "relatório")]
     return "\n  ".join(f'<div class="stat"><span class="stat-value">{html.escape(str(v))}</span> '
@@ -138,7 +143,9 @@ def html_do(pesquisa: dict, markdown: str) -> str:
     sumario = "\n      ".join(f'<a href="#{i}" class="depth-{n}">{html.escape(t)}</a>'
                               for i, t, n in secoes)
     aviso = pesquisa.get("aviso") or ""
+    formato = pesquisa.get("formato_usado") or ""
     return (TEMPLATE.read_text("utf-8")
+            .replace("{{FORMATO}}", f"formato-{formato}" if formato in FORMATOS_CSS else "")
             .replace("{{TITULO}}", html.escape(pesquisa.get("pergunta") or "Pesquisa"))
             .replace("{{DATA}}", datetime.now().strftime("%d/%m/%Y %H:%M"))
             .replace("{{AVISO}}", f'<div class="aviso">{html.escape(aviso)}</div>' if aviso else "")

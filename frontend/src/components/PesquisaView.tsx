@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
-import type { Message, PesquisaEstado, PesquisaFonte } from "../types";
+import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato } from "../types";
+import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { ArrowUp, Check, Copy, ExternalLink, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -21,6 +22,14 @@ const PROFUNDIDADES = [
   { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas — resposta em minutos" },
   { id: "normal" as const, label: "Normal", hint: "2 rodadas, até 8 páginas" },
   { id: "funda" as const, label: "Funda", hint: "4 rodadas, até 16 páginas — pode levar 10 min" },
+];
+
+const FORMATOS: { id: PesquisaFormato; label: string; hint: string }[] = [
+  { id: "auto", label: "Auto", hint: "O modelo decide o feitio do relatório pela pergunta" },
+  { id: "produto", label: "Produto", hint: "Lista ordenada com preço, prós, contras e veredito" },
+  { id: "comparar", label: "Comparar", hint: "Tabela comparativa e uma seção por opção" },
+  { id: "guia", label: "Guia", hint: "Resumo rápido, pré-requisitos e passo a passo" },
+  { id: "checagem", label: "Checagem", hint: "A afirmação, evidências dos dois lados e veredito" },
 ];
 
 /** As 4 etapas fixas, na ordem em que o backend passa por elas. */
@@ -52,6 +61,17 @@ const situacao = (s: string | null | undefined): PesquisaEstado["status"] =>
 
 const relogio = (seg: number) => `${Math.floor(seg / 60)}:${String(Math.floor(seg % 60)).padStart(2, "0")}`;
 
+/** "1.234 tokens · 38 tok/s · 03:12" — o que dá para dizer com o que o provedor devolveu. */
+function numeros(e: PesquisaEstado): string {
+  const s = e.stats;
+  const tps = s.gerando > 0.5 ? Math.round(s.tokens / s.gerando) : 0;
+  return [
+    s.tokens ? `${s.tokens.toLocaleString("pt-BR")} tokens${s.estimado ? " (estim.)" : ""}` : "",
+    tps ? `${tps} tok/s` : "",
+    relogio(s.segundos),
+  ].filter(Boolean).join(" · ");
+}
+
 function comoMarkdown(e: PesquisaEstado): string {
   const uteis = e.fontes.filter((f) => f.status === "util");
   return [`# ${e.pergunta}`, "", e.relatorio || e.resumo || e.aviso, "", "## Fontes", "",
@@ -81,6 +101,7 @@ export default function PesquisaView(props: {
     }
     return { escritor: { provider: props.provider, model: props.model }, extrator: null } as Modelos;
   });
+  const [formato, setFormato] = useState<PesquisaFormato>("auto");
   const [perguntarAntes, setPerguntarAntes] = useState(false);
   const [esclarecer, setEsclarecer] =
     useState<{ pergunta: string; perguntas: string[]; respostas: string[] } | null>(null);
@@ -88,20 +109,27 @@ export default function PesquisaView(props: {
   const [estado, setEstado] = useState<PesquisaEstado | null>(null);
   const [aberta, setAberta] = useState<string>("");   // fonte expandida
   const [copiado, setCopiado] = useState(false);
-  const acompanhando = useRef(0);
+  const acompanhando = useRef(0);   // message_id sendo ouvido: não abre dois SSE para o mesmo
+  const corte = useRef<AbortController | null>(null);
 
   const rodando = estado?.status === "rodando";
 
+  /** Acompanha UMA pesquisa. Trocar de conversa aborta o stream anterior: sem isso, o evento da
+   *  pesquisa em andamento pintava a tela da conversa recém-aberta. */
   const ouvir = useCallback(
     async (messageId: number) => {
       if (acompanhando.current === messageId) return;
+      corte.current?.abort();
+      const ctl = new AbortController();
+      corte.current = ctl;
       acompanhando.current = messageId;
       try {
-        await streamSSE(`/pesquisa/${messageId}/stream`, {}, (ev) => !ev.erro && setEstado(ev));
+        await streamSSE(`/pesquisa/${messageId}/stream`, { signal: ctl.signal },
+          (ev) => !ev.erro && !ctl.signal.aborted && setEstado(ev));
       } catch (e: any) {
-        props.onError(e.message);
+        if (!ctl.signal.aborted) props.onError(e.message);
       } finally {
-        acompanhando.current = 0;
+        if (acompanhando.current === messageId) acompanhando.current = 0;
       }
     },
     [props.onError],
@@ -110,6 +138,8 @@ export default function PesquisaView(props: {
   /** Reabre a última pesquisa da conversa (e volta a ouvir, se ainda estiver rodando). */
   const carregarConversa = useCallback(
     async (id: number | null = props.conv) => {
+      corte.current?.abort();   // o stream da conversa anterior morre aqui
+      acompanhando.current = 0;
       if (id === null) {
         setEstado(null);
         return;
@@ -121,6 +151,7 @@ export default function PesquisaView(props: {
         const m = c.messages[i];
         const p = (m.meta as any).pesquisa as PesquisaEstado;
         setProfundidade(p.profundidade);
+        setFormato(p.formato || "auto");
         setEstado({ ...p, message_id: m.id, status: situacao(m.status), relatorio: m.content || "" });
         if (situacao(m.status) === "rodando") ouvir(m.id);
       } catch (e: any) {
@@ -138,21 +169,31 @@ export default function PesquisaView(props: {
     localStorage.setItem(KEY_MODELOS, JSON.stringify(modelos));
   }, [modelos]);
 
+  useEffect(() => () => corte.current?.abort(), []);   // sair da aba encerra o stream
+
   async function rodar(pergunta: string, contexto = "", continuar_de = 0) {
     if (!pergunta.trim()) return;
     try {
       const id = await props.ensureConversation();
+      corte.current?.abort();   // pesquisa nova: o stream da anterior não escreve mais aqui
+      acompanhando.current = 0;
+      const ctl = new AbortController();
+      corte.current = ctl;
       setEsclarecer(null);
       setEstado(null);
       setTexto("");   // a pergunta agora vive na corrida; o campo fica livre para a próxima
       await streamSSE(`/pesquisa/${id}/rodar`,
-        { method: "POST", body: JSON.stringify({
-            pergunta, profundidade, contexto, continuar_de,
+        { method: "POST", signal: ctl.signal, body: JSON.stringify({
+            pergunta, profundidade, formato, contexto, continuar_de,
             provider: modelos.escritor.provider, model: modelos.escritor.model,
             ex_provider: modelos.extrator?.provider ?? "", ex_model: modelos.extrator?.model ?? "" }) },
-        (ev) => (ev.erro ? props.onError(ev.erro) : setEstado(ev)));
+        (ev) => {
+          if (ctl.signal.aborted) return;   // trocou de conversa no meio: não pinta a tela nova
+          if (ev.erro) props.onError(ev.erro);
+          else setEstado(ev);
+        });
       props.onConversationChanged();
-      carregarConversa(id);
+      if (!ctl.signal.aborted) carregarConversa(id);
     } catch (e: any) {
       props.onError(e.message);
     }
@@ -216,6 +257,11 @@ export default function PesquisaView(props: {
     URL.revokeObjectURL(url);
   }
 
+  // Cota do Ollama Cloud: só consulta quando um dos dois modelos é de um provedor da nuvem.
+  const nuvem = useCloudUsage(true).filter(
+    (u) => u.provider === modelos.escritor.provider || u.provider === modelos.extrator?.provider ||
+      u.provider === estado?.stats.escritor_provider || u.provider === estado?.stats.extrator_provider);
+
   const feita = FASES.findIndex((f) => f.id === estado?.fase);
   const atual = estado?.fase === "pronto" ? FASES.length : feita;
 
@@ -248,7 +294,7 @@ export default function PesquisaView(props: {
                   ))}
                   <span className="ml-auto text-faint">
                     {estado.rodada > 0 && `rodada ${estado.rodada} · `}
-                    {estado.stats.uteis} úteis de {estado.stats.fontes} · {relogio(estado.stats.segundos)}
+                    {estado.stats.uteis} úteis de {estado.stats.fontes} · {numeros(estado)}
                   </span>
                 </div>
                 <p className="mt-2 text-sm text-fg">{estado.pergunta}</p>
@@ -293,6 +339,15 @@ export default function PesquisaView(props: {
                 </div>
               )}
 
+              {!!nuvem.length && (
+                <div className={card}>
+                  <p className="mb-1.5 text-[11px] uppercase tracking-wider text-faint">
+                    Uso do plano · {nuvem.map((u) => u.name).join(", ")}
+                  </p>
+                  {nuvem.map((u) => <UsageBars key={u.provider} data={u} />)}
+                </div>
+              )}
+
               {estado.resumo && (
                 <div className={card}>
                   <p className="text-[11px] uppercase tracking-wider text-faint">Resumo</p>
@@ -325,6 +380,7 @@ export default function PesquisaView(props: {
                   <button className={btn} onClick={baixar}>Baixar .md</button>
                   <span className="text-faint">
                     extração: {estado.stats.extrator} · relatório: {estado.stats.escritor}
+                    {estado.formato_usado && ` · formato: ${estado.formato_usado}`} · {numeros(estado)}
                   </span>
                 </div>
               )}
@@ -369,6 +425,10 @@ export default function PesquisaView(props: {
                   </button>
                 ))}
               </div>
+              <select className={campo} value={formato} title="Feitio do relatório"
+                      onChange={(e) => setFormato(e.target.value as PesquisaFormato)}>
+                {FORMATOS.map((f) => <option key={f.id} value={f.id} title={f.hint}>{f.label}</option>)}
+              </select>
               <label className="flex items-center gap-1.5 text-muted">
                 <input type="checkbox" checked={perguntarAntes}
                        onChange={(e) => setPerguntarAntes(e.target.checked)} />
