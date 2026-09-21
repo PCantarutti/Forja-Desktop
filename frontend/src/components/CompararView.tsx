@@ -131,7 +131,7 @@ export default function CompararView(props: {
           modo: meta.modo || "paralelo", cego: !!meta.cego, revelado: !!meta.revelado,
           voto: meta.voto || "", itens: meta.itens,
         });
-        if (m.status === "running") ouvir(m.id);
+        if (situacao(m.status) === "rodando") ouvir(m.id);
       } catch (e: any) {
         props.onError(e.message);
       }

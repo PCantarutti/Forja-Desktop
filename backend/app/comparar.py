@@ -33,6 +33,7 @@ except ImportError:  # forja-web não tem IA local: comparação só entre prove
     localai = None
 
 MAX_MODELOS = 6
+PROVIDER_LOCAL = "local"  # id do provedor do llama-server que o Forja sobe (config.LOCAL_PROVIDER)
 MODOS = ("paralelo", "sequencial")
 TICK = 0.2  # segundos entre retratos do SSE; abaixo disso ninguém percebe a diferença
 
@@ -97,7 +98,7 @@ def _preparar(itens: list[dict] | None, modo: str) -> list[dict]:
                                 "llama-server por vez.")
             if not Path(path).is_file():
                 raise ToolError(f"Modelo não encontrado: {path}")
-            provider, model = config.LOCAL_PROVIDER["id"], localai.alias_of(path)
+            provider, model = PROVIDER_LOCAL, localai.alias_of(path)
         elif not (provider and model):
             raise ToolError("Escolha um provedor e um modelo, ou um arquivo .gguf.")
         chave = (provider, model, path)
@@ -107,8 +108,7 @@ def _preparar(itens: list[dict] | None, modo: str) -> list[dict]:
         out.append({"id": str(i), "rotulo": chr(ord("A") + i), "provider": provider, "model": model,
                     "path": path, "nome": model, "status": "pendente", "content": "", "reasoning": "",
                     "stats": None, "error": ""})
-    if any(x["path"] for x in out) and any(x["provider"] == config.LOCAL_PROVIDER["id"] and not x["path"]
-                                           for x in out):
+    if any(x["path"] for x in out) and any(x["provider"] == PROVIDER_LOCAL and not x["path"] for x in out):
         raise ToolError("Não dá para comparar o modelo local já carregado com um .gguf: a carga o substitui.")
     return out
 
