@@ -597,3 +597,59 @@ def test_o_agente_e_mandado_conferir_o_que_gerou(ws):
     prompt = agent.system_prompt("native")
     assert "read_file e confira" in prompt
     assert "write_document gera do zero e não escreve por cima" in prompt
+
+
+def test_titulo_sem_estilo_nao_sai_duplicado(ws):
+    """`add_paragraph(texto, style=...)` cria o parágrafo e SÓ DEPOIS aplica o estilo: o KeyError
+    chegava com ele já no documento, e o caminho alternativo escrevia um segundo. O título aparecia
+    duas vezes. Foi o preview_document que mostrou — o texto lido de volta não denunciava."""
+    import docx
+
+    _sem_estilos(ws / "externo.docx")
+    roda("edit_document", {"path": "externo.docx", "operations": [
+        {"tipo": "acrescentar", "conteudo": "### CALENDARIO" + chr(10) * 2 + "- um"}]}, ws)
+    textos = [p.text for p in docx.Document(str(ws / "externo.docx")).paragraphs]
+    assert textos.count("CALENDARIO") == 1
+    assert not [t for t in textos if t.strip() == "" and textos.index(t) > 0][1:], "sem parágrafos órfãos"
+    assert any(t.startswith("• um") for t in textos)  # o marcador entrou no lugar do estilo
+
+
+# ------------------------------------------------ prévia em imagem
+
+@precisa_chromium
+def test_previa_sai_do_arquivo_salvo(ws):
+    """A prévia extrai do arquivo que está no disco: é o que a torna verificação, e não maquete."""
+    roda("write_document", {"path": "d.docx", "content": "# RELATORIO" + chr(10) * 2
+                            + "| A | B |" + chr(10) + "| --- | --- |" + chr(10) + "| 1 | 2 |"}, ws)
+    r = asyncio.run(execute("preview_document", {"path": "documentos/d.docx"}, ws))
+    anexo = r["attachments"][0]
+    assert anexo["kind"] == "image" and anexo["mime"] == "image/jpeg"
+    assert (ws / anexo["path"]).stat().st_size > 1000
+    assert "diagramação exata do Word não é reproduzida" in r["text"]
+
+
+@precisa_chromium
+def test_previa_de_planilha_tambem(ws):
+    roda("write_spreadsheet", {"path": "v.xlsx", "sheets": [{"nome": "Dados", "linhas": [["Produto"], ["Cafe"]]}]}, ws)
+    r = asyncio.run(execute("preview_document", {"path": "documentos/v.xlsx"}, ws))
+    assert r["attachments"][0]["kind"] == "image"
+
+
+def test_previa_de_arquivo_sem_texto_avisa(ws):
+    (ws / "vazio.pdf").write_bytes(b"%PDF-1.4 nao e um pdf de verdade")
+    with pytest.raises(ToolError, match="prévia"):
+        asyncio.run(execute("preview_document", {"path": "vazio.pdf"}, ws))
+
+
+def test_previa_confinada_a_pasta_da_conversa(ws):
+    with pytest.raises(ToolError):
+        asyncio.run(execute("preview_document", {"path": "../fora.docx"}, ws))
+
+
+def test_a_regra_da_previa_depende_de_o_modelo_ter_visao(ws):
+    from app import agent
+
+    com = agent.system_prompt("native", caps={"vision"})
+    sem = agent.system_prompt("native", caps=set())
+    assert "você a recebe" in com and "não recebe a imagem" not in com.split("preview_document")[1][:400]
+    assert "Você não tem visão e não recebe a imagem" in sem

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+from contextlib import asynccontextmanager
 import io
 import re
 from pathlib import Path
@@ -332,28 +333,42 @@ def _bordas_docx(tabela) -> None:
     tabela._tbl.tblPr.append(bordas)
 
 
+def _tem_estilo(doc, nome: str) -> bool:
+    """Perguntar antes, em vez de tentar e cair no except.
+
+    `add_paragraph(texto, style=...)` cria o parágrafo e SÓ DEPOIS aplica o estilo. Quando o estilo
+    não existe, o KeyError chega com o parágrafo já no documento — e o caminho alternativo escrevia
+    um segundo, com o título aparecendo duas vezes. Achado pelo preview_document.
+    """
+    try:
+        doc.styles[nome]
+        return True
+    except KeyError:
+        return False
+
+
 def _titulo_docx(doc, texto: str, nivel: int):
     """Título do jeito certo; e, se o documento não tiver o estilo, negrito e corpo maior."""
     from docx.shared import Pt
 
-    try:
-        return doc.add_heading(texto, level=min(nivel, 9))
-    except KeyError:
-        p = doc.add_paragraph()
-        run = p.add_run(texto)
-        run.bold = True
-        run.font.size = Pt(max(18 - 2 * min(nivel, 5), 11))
-        return p
+    nivel = min(nivel, 9)
+    if _tem_estilo(doc, f"Heading {nivel}"):
+        return doc.add_heading(texto, level=nivel)
+    p = doc.add_paragraph()
+    run = p.add_run(texto)
+    run.bold = True
+    run.font.size = Pt(max(18 - 2 * min(nivel, 5), 11))
+    return p
 
 
 def _item_docx(doc, ordenada: bool, indice: int):
     """Item de lista; sem o estilo, o marcador entra como texto — feio, mas legível."""
-    try:
-        return doc.add_paragraph(style="List Number" if ordenada else "List Bullet")
-    except KeyError:
-        p = doc.add_paragraph()
-        p.add_run(f"{indice}. " if ordenada else "• ")
-        return p
+    estilo = "List Number" if ordenada else "List Bullet"
+    if _tem_estilo(doc, estilo):
+        return doc.add_paragraph(style=estilo)
+    p = doc.add_paragraph()
+    p.add_run(f"{indice}. " if ordenada else "• ")
+    return p
 
 
 def _tabela_docx(doc, linhas: list[list[str]]):
@@ -532,6 +547,34 @@ def para_pptx(bs: list[dict], destino: Path) -> None:
     prs.save(str(destino))
 
 
+@asynccontextmanager
+async def _pagina_chromium(html: str, base: Path, para_que: str):
+    """Uma página headless com esse HTML carregado, e o Chromium fechado no fim.
+
+    Instância própria de propósito: no Desktop o `browser.MANAGER` está ligado por CDP ao Electron,
+    que é headed, e `page.pdf()` só existe em Chromium headless. A página é montada aqui e entra por
+    `set_content`, então nunca vai à rede.
+    """
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as pw:
+        try:
+            navegador = await pw.chromium.launch(headless=True)
+        except Exception as e:
+            raise ToolError(
+                f"Não consegui abrir o Chromium para {para_que}. Ele vem com o Forja instalado; em "
+                "desenvolvimento, rode `python -m playwright install --only-shell chromium`. "
+                f"({e.__class__.__name__}) Gerar .docx ou .html não depende dele.") from e
+        try:
+            pagina = await navegador.new_page()
+            # `file://` da pasta: é o que faz ![](imagem.png) relativo funcionar.
+            await pagina.goto(base.resolve().as_uri() + "/")
+            await pagina.set_content(html, wait_until="load")
+            yield pagina
+        finally:
+            await navegador.close()
+
+
 async def para_pdf(bs: list[dict], destino: Path, titulo: str = "") -> None:
     """HTML -> PDF pelo Chromium que o app já empacota. Nenhuma biblioteca de PDF no meio.
 
@@ -539,30 +582,14 @@ async def para_pdf(bs: list[dict], destino: Path, titulo: str = "") -> None:
     CDP ao Electron, que é headed, e `page.pdf()` só existe em Chromium headless. Como a página é
     montada aqui e carregada por `set_content`, ela nunca vai à rede.
     """
-    from playwright.async_api import async_playwright
-
     html = para_html(bs, titulo)
-    async with async_playwright() as pw:
-        try:
-            navegador = await pw.chromium.launch(headless=True)
-        except Exception as e:
-            raise ToolError(
-                "Não consegui abrir o Chromium para gerar o PDF. Ele vem com o Forja instalado; em "
-                "desenvolvimento, rode `python -m playwright install --only-shell chromium`. "
-                f"({e.__class__.__name__}) Gerar .docx ou .html não depende dele.") from e
-        try:
-            pagina = await navegador.new_page()
-            # `file://` da pasta de destino: é o que faz ![](imagem.png) relativo funcionar.
-            await pagina.goto((destino.parent.resolve().as_uri() + "/"))
-            await pagina.set_content(html, wait_until="load")
-            dados = await pagina.pdf(format="A4", print_background=True,
+    async with _pagina_chromium(html, destino.parent, "gerar o PDF") as pagina:
+        dados = await pagina.pdf(format="A4", print_background=True,
                                      margin={"top": "2cm", "bottom": "2cm", "left": "2cm", "right": "2cm"},
                                      display_header_footer=True, header_template="<div></div>",
                                      footer_template='<div style="width:100%;font-size:8pt;color:#777;'
                                                      'text-align:center"><span class="pageNumber"></span>'
                                                      '/<span class="totalPages"></span></div>')
-        finally:
-            await navegador.close()
     destino.write_bytes(dados)
 
 
@@ -695,6 +722,45 @@ async def write_document(root: Path, args: dict) -> dict:
     else:  # .md
         destino.write_text(conteudo, encoding="utf-8")
     return _resultado(root, destino, "Documento gerado")
+
+
+MAX_PREVIA_CHARS = 20_000  # o suficiente para umas 15 páginas; acima disso a imagem só engorda
+LARGURA_PREVIA = 820          # ~A4 a 96dpi, que é a largura do CSS do para_html
+
+
+async def preview_document(root: Path, args: dict) -> dict:
+    """Uma imagem do arquivo, para quem tem olhos — o modelo, se tiver visão, e sempre o usuário.
+
+    A prévia sai do arquivo SALVO: extrai o conteúdo dele e monta a página com o mesmo HTML do PDF.
+    É isso que faz dela uma verificação de verdade — se o renderizador escreveu `|` como texto em
+    vez de montar a tabela, é `|` como texto que aparece aqui.
+
+    O que ela NÃO é: uma foto do que o Word mostra. Não empacotamos Word nem LibreOffice, então
+    paginação e estilo do Office ficam de fora. Para o PDF, que sai deste mesmo HTML, ela é fiel.
+    """
+    from . import uploads  # tardio: uploads importa documentos, e o contrário fecharia o ciclo
+
+    alvo = _existente(root, str(args.get("path") or ""), LEITURA | {".md", ".html"})
+    if alvo.suffix.lower() in (".md", ".html"):
+        texto = alvo.read_text(encoding="utf-8", errors="replace")
+    else:
+        texto = await asyncio.to_thread(extrair, alvo)
+    if not texto or not texto.strip():
+        raise ToolError(f"Não consegui extrair conteúdo de '{alvo.name}' para montar a prévia. "
+                        "PDF escaneado e arquivo protegido caem aqui.")
+    cortado = len(texto) > MAX_PREVIA_CHARS
+    html = (alvo.read_text(encoding="utf-8", errors="replace") if alvo.suffix.lower() == ".html"
+            else para_html(blocos(texto[:MAX_PREVIA_CHARS]), alvo.stem))
+
+    async with _pagina_chromium(html, alvo.parent, "montar a prévia") as pagina:
+        await pagina.set_viewport_size({"width": LARGURA_PREVIA, "height": 1160})
+        dados = await pagina.screenshot(type="jpeg", quality=75, full_page=True, scale="css")
+
+    anexo = uploads.save(f"previa-{alvo.stem}.jpg", dados, "image/jpeg", root)
+    aviso = f" (só o começo: o arquivo passa de {MAX_PREVIA_CHARS} caracteres)" if cortado else ""
+    return {"text": f"Prévia de {alvo.name} anexada{aviso}. Ela mostra o conteúdo como o Forja lê o "
+                    "arquivo salvo; a diagramação exata do Word não é reproduzida.",
+            "attachments": [anexo]}
 
 
 def normalizar_abas(bruto) -> list[dict]:
@@ -1138,6 +1204,15 @@ register(Tool(
     _obj({"path": {"type": "string"},
           "changes": {"type": "array", "items": {"type": "object"}}}, ["path", "changes"]),
     edit_spreadsheet, mutating=True, preview=_preview_edicao))
+
+register(Tool(
+    "preview_document",
+    "Gera uma imagem do documento ou planilha para conferir o resultado. A imagem aparece no chat "
+    "para o usuário; se você tiver visão, também chega a você. Sai do arquivo salvo, então pega "
+    "tabela que virou texto, conteúdo que sumiu e caixa alta que não pegou. Não reproduz a "
+    "diagramação do Word — para .pdf, que o Forja gera desta mesma página, é fiel.",
+    _obj({"path": {"type": "string", "description": "O arquivo a pré-visualizar"}}, ["path"]),
+    preview_document))
 
 register(Tool(
     "edit_document",

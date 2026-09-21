@@ -289,6 +289,15 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                      "texto com `|`, conteúdo que sumiu, caixa alta que não pegou aparecem aí.")
         rules.append("- Para mexer num documento que já existe, inclusive um que o usuário anexou: leia primeiro, "
                      "escolha onde entra e use edit_document. write_document gera do zero e não escreve por cima.")
+        if "preview_document" in names:
+            if caps is not None and "vision" in caps:
+                rules.append("- preview_document devolve uma imagem do arquivo e você a recebe: use para conferir "
+                             "espaçamento, alinhamento e coluna espremida, que o read_file não mostra. Ela sai do "
+                             "arquivo salvo, mas não reproduz a diagramação do Word — para .pdf é fiel.")
+            else:
+                rules.append("- preview_document gera uma imagem do arquivo para o usuário ver no chat; peça quando "
+                             "ele quiser olhar o resultado. Você não tem visão e não recebe a imagem, então confira "
+                             "pelo read_file.")
     if "write_file" in names or "edit_file" in names:
         rules.append(f"- Memória do projeto: {config.PROJECT_MEMORY_FILE} na raiz da pasta de trabalho. Quando aprender "
                      "algo duradouro (decisões, convenções, comandos do projeto), atualize esse arquivo. Não guarde "
