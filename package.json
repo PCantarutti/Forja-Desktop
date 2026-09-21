@@ -9,7 +9,8 @@
     "dev": "node scripts/dev.mjs",
     "prepare-resources": "node scripts/prepare.mjs",
     "dist": "npm run prepare-resources && electron-builder --win nsis",
-    "release": "npm run prepare-resources && electron-builder --win nsis --publish always"
+    "release": "node scripts/release.mjs",
+    "publish-only": "npm run prepare-resources && electron-builder --win nsis --publish always"
   },
   "devDependencies": {
     "electron": "^33.0.0",
