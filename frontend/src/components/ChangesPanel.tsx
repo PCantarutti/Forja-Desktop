@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ChangeFile, GitStatus } from "../types";
 import { DiffView } from "./MessageView";
@@ -42,8 +42,12 @@ export default function ChangesPanel(props: {
   const [prUrl, setPrUrl] = useState("");
   const [branch, setBranch] = useState<string | null>(null);
   const [lastCommit, setLastCommit] = useState("");
+  const pedido = useRef(0); // carga mais nova vence: resposta atrasada não pinta a tela
 
   async function load() {
+    // Duas cargas em voo (troca de conversa, ou um refreshKey chegando no meio) e a mais lenta
+    // sobrescrevia a mais nova — inclusive o onCount, que pinta o contador no cabeçalho do chat.
+    const meu = ++pedido.current;
     if (conv === null) {
       setFiles([]);
       setGit(null);
@@ -55,13 +59,14 @@ export default function ChangesPanel(props: {
         api.get<{ files: ChangeFile[] }>(`/conversations/${conv}/changes`),
         api.get<GitStatus>(`/conversations/${conv}/git`),
       ]);
+      if (meu !== pedido.current) return;
       const changed = c.files.filter((f) => f.status !== "unchanged");
       setFiles(changed);
       props.onCount(changed.length);
       setGit(g);
       setError("");
     } catch (e: any) {
-      setError(e.message);
+      if (meu === pedido.current) setError(e.message);
     }
   }
 

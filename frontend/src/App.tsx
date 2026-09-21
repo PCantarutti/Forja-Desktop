@@ -86,6 +86,15 @@ function loadSettings(): Settings {
 
 const COMPOSER_MAX = 420; // altura máxima do campo de mensagem; a partir daí o texto rola por dentro
 
+// Fila de um: serializa quem lê o estado do servidor, mexe nele e grava de volta. Duas dessas em
+// paralelo leem a mesma coisa e a segunda salva por cima da primeira.
+let filaSettings: Promise<unknown> = Promise.resolve();
+function enfileirar<T>(fn: () => Promise<T>): Promise<T> {
+  const proxima = filaSettings.then(fn, fn);
+  filaSettings = proxima.catch(() => {});
+  return proxima;
+}
+
 type RightState = { tab: RightTab; collapsed: boolean };
 
 /** Coluna direita: nova conversa sempre recolhida; cada conversa lembra se estava aberta e em qual aba. */
@@ -324,6 +333,7 @@ export default function App() {
   // Trocar de seção dispara uma busca nova; a anterior pode chegar depois e repor a lista errada
   // (era o que fazia a aba de pesquisa abrir com as conversas do chat até trocar de página).
   const pedidoConversas = useRef(0);
+  const pedidoAbertura = useRef(0);  // idem para abrir conversa: dois cliques rápidos na lista
   // A seção de agora, legível de dentro de função assíncrona antiga (closure não vê o estado novo).
   const secaoRef = useRef(section);
   const secaoEscolhida = useRef(false);  // true depois que a pessoa clica numa aba
@@ -458,6 +468,9 @@ export default function App() {
   }
 
   async function openConversation(id: number) {
+    // Mesma guarda do refreshConversations: dois cliques rápidos na barra lateral e a resposta
+    // mais lenta da conversa A chegava depois da B, sobrescrevendo as mensagens que estão na tela.
+    const meu = ++pedidoAbertura.current;
     if (running && currentId !== null && currentId !== id) watchUntilDone(currentId);
     streamCtl.current?.abort();
     setRunning(false);
@@ -472,10 +485,12 @@ export default function App() {
       return n;
     });
     const live = await api.get<Live>(`/conversations/${id}/live`);
+    if (meu !== pedidoAbertura.current) return;  // outra conversa foi aberta enquanto isto vinha
     setMessages(live.messages);
     loadCheckpoints(id);
     loadChangesCount(id);
     const kind = (await api.get<{ kind?: string }>(`/conversations/${id}`).catch(() => null))?.kind;
+    if (meu !== pedidoAbertura.current) return;
     // Só troca de aba se a pessoa ainda não escolheu uma: na abertura do app esta busca demora e
     // chegava depois do clique, arrastando a seção (e a lista) de volta para a da conversa salva.
     if (kind && kind !== secaoRef.current && !secaoEscolhida.current) setSection(kind as Section);
@@ -853,8 +868,14 @@ export default function App() {
       // Cria a regra em Configurações › Permissões antes de aprovar.
       // Só o run_command tem regra por comando; as demais (inclusive browser_eval) são por nome de ferramenta.
       const field = approvals[callId]?.tool === "run_command" ? "auto_approve_commands" : "auto_approve_tools";
-      const s = await api.get<any>("/settings");
-      await api.put("/settings", { [field]: [...s[field], rule] }).catch((e) => setError(e.message));
+      // Ler-e-escrever em fila: dois "sempre permitir" seguidos liam a mesma lista e o segundo
+      // salvava por cima, perdendo a regra do primeiro sem avisar ninguém.
+      await enfileirar(async () => {
+        const s = await api.get<any>("/settings");
+        const atuais: string[] = s[field] ?? [];
+        if (atuais.includes(rule)) return;
+        await api.put("/settings", { [field]: [...atuais, rule] });
+      }).catch((e) => setError(e.message));
     }
     setApprovals((a) => ({ ...a, [callId]: { ...a[callId], sent: true } })); // evita clique duplo
     await api.post(`/runs/${runId.current}/approve`, { call_id: callId, approved }).catch((e) => setError(e.message));

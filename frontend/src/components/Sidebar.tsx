@@ -109,10 +109,17 @@ export default function Sidebar(props: {
   useEffect(() => {
     const term = q.trim();
     if (term.length < 2) return setHits(null);
+    let atual = true;  // digitar de novo antes da resposta chegar: a antiga não pinta a lista
     const t = setTimeout(() => {
-      api.get<Conversation[]>(`/conversations/search?q=${encodeURIComponent(term)}&kind=${props.section}`).then(setHits).catch(() => setHits(null));
+      api
+        .get<Conversation[]>(`/conversations/search?q=${encodeURIComponent(term)}&kind=${props.section}`)
+        .then((r) => atual && setHits(r))
+        .catch(() => atual && setHits(null));
     }, 300);
-    return () => clearTimeout(t);
+    return () => {
+      atual = false;
+      clearTimeout(t);
+    };
   }, [q, props.section]);
 
   useEffect(() => {
