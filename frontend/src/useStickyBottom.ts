@@ -26,20 +26,29 @@ export function useStickyBottom<T extends HTMLElement>(deps: unknown[]) {
   const colado = useRef(true);
   const ultimo = useRef(0);
   const quadro = useRef(0);
+  const olho = useRef<IntersectionObserver | null>(null);
+  const observado = useRef<Element | null>(null);
 
+  // Sem lista de dependências de propósito: a sentinela nem sempre existe na montagem — a caixa de
+  // raciocínio só desenha o corpo depois que chega o primeiro texto. Com `[]`, o observer nunca era
+  // criado e a caixa acompanhava até a primeira rolagem e nunca mais colava. Aqui a cada render se
+  // pergunta se já dá para observar, e só se cria quando o nó é outro.
   useEffect(() => {
-    const alvo = fim.current;
     const raiz = ref.current;
-    if (!alvo || !raiz) return;
-    const io = new IntersectionObserver(
+    const alvo = fim.current;
+    if (!raiz || !alvo || observado.current === alvo) return;
+    olho.current?.disconnect();
+    observado.current = alvo;
+    olho.current = new IntersectionObserver(
       ([e]) => {
         if (e.isIntersecting) colado.current = true; // só cola; soltar é decisão do onScroll
       },
       { root: raiz },
     );
-    io.observe(alvo);
-    return () => io.disconnect();
-  }, []);
+    olho.current.observe(alvo);
+  });
+
+  useEffect(() => () => olho.current?.disconnect(), []);
 
   useEffect(() => {
     if (!ref.current || !colado.current || quadro.current) return;
