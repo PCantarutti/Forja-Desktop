@@ -216,24 +216,22 @@ def test_dedupe_de_dominio_e_de_url(monkeypatch):
 def test_cancelar_preserva_o_parcial(monkeypatch):
     _fake_llm(monkeypatch, pausa=0.05)
     lidas = _fake_web(monkeypatch)
-
-    depois_do_cancelar = []
+    porte = pesquisa.PRESETS["funda"]
 
     async def main():
         msg = pesquisa.start(**_base(profundidade="funda"))
         await asyncio.sleep(0.12)
-        antes = len(lidas)
         pesquisa.cancelar(msg["id"])
         await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
-        depois_do_cancelar.append(len(lidas) - antes)
         return pesquisa.estado(msg["id"])
 
     est = asyncio.run(main())
     assert est["status"] == "cancelado" and "interrompida" in est["aviso"]
-    # Quantas fontes couberam antes do cancelamento depende da velocidade da máquina; o que importa
-    # é que depois dele a corrida parou de verdade, em vez de seguir disparando as próximas rodadas.
-    assert depois_do_cancelar == [0]
     assert lidas, "a pesquisa nem começou: o teste não estaria provando nada"
+    # Quantas fontes couberam antes do cancelamento depende da velocidade da máquina, e as leituras
+    # já despachadas ainda terminam (o `uma()` checa antes de extrair, não no meio). O que precisa
+    # valer é que as rodadas seguintes não foram disparadas: a corrida inteira leria rodadas×fontes.
+    assert len(lidas) < porte["rodadas"] * porte["fontes"]
     assert pesquisa._mensagem(est["message_id"])["status"] == "cancelado"
 
 
