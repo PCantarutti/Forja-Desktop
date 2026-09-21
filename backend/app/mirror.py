@@ -19,7 +19,7 @@ from . import config, db, workspace
 
 ROOT = config.DATA_DIR / "conversas"
 DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens",
-        "comparar": "forja-comparacoes"}
+        "comparar": "forja-comparacoes", "pesquisa": "forja-pesquisas"}
 
 # Proibidos em nome de arquivo no Windows, mais os de controle.
 _PROIBIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -50,6 +50,11 @@ def markdown(c) -> str:
             for img in m.meta["images"]:
                 etiqueta = f"semente {img['seed']} · {img.get('model_name') or '?'} · {img['status']}"
                 linhas += [f"- {etiqueta}", f"  ![{etiqueta}]({img['path']})"]
+            linhas.append("")
+        elif m.role == "assistant" and (m.meta or {}).get("pesquisa"):  # pesquisa profunda
+            p = m.meta["pesquisa"]
+            linhas += ["## Relatório", "", m.content or p.get("aviso") or "", "", "### Fontes lidas", ""]
+            linhas += [f"- [{f['titulo'] or f['url']}]({f['url']}) — {f['status']}" for f in p["fontes"]]
             linhas.append("")
         elif m.role == "assistant" and (m.meta or {}).get("itens"):  # comparação de modelos
             for item in m.meta["itens"]:

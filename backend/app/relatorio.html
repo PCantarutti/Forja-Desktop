@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITULO}} · Forja</title>
+<style>
+  :root {
+    --bg: #101013; --surface: #17171b; --line: #2a2a31; --fg: #ececf1;
+    --muted: #b4b4bd; --faint: #7c7c88; --accent: #7aa2f7;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f7f7f8; --surface: #fff; --line: #e3e3e8; --fg: #1b1b1f;
+            --muted: #4a4a55; --faint: #7c7c88; --accent: #2f5fd0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.65 -apple-system,
+         "Segoe UI", Roboto, system-ui, sans-serif; }
+  .capa { border-bottom: 1px solid var(--line); background: var(--surface); }
+  .dentro { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+  .capa .dentro { padding-top: 40px; padding-bottom: 28px; }
+  .selo { color: var(--faint); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  h1 { font-size: 30px; line-height: 1.25; margin: 10px 0 6px; }
+  .data { color: var(--faint); font-size: 13px; }
+  .stats { display: flex; flex-wrap: wrap; gap: 20px 32px; margin-top: 22px; }
+  .stats div { display: flex; flex-direction: column; gap: 2px; }
+  .stats span { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  .stats strong { font-size: 14px; font-weight: 600; }
+  .aviso { margin: 18px 0 0; padding: 10px 12px; border: 1px solid #8a6d3b; border-radius: 10px;
+           background: rgba(138, 109, 59, .15); color: #e0c08a; font-size: 14px; }
+  .corpo { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 48px;
+           max-width: 1060px; margin: 0 auto; padding: 36px 24px 72px; }
+  nav { position: sticky; top: 28px; align-self: start; font-size: 14px; }
+  nav p { color: var(--faint); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; margin: 0 0 8px; }
+  nav ol { list-style: none; margin: 0; padding: 0; counter-reset: s; }
+  nav li { counter-increment: s; margin: 0 0 6px; }
+  nav li::before { content: counter(s) ". "; color: var(--faint); }
+  nav a, article a { color: var(--accent); text-decoration: none; }
+  nav a:hover, article a:hover { text-decoration: underline; }
+  article h2 { font-size: 22px; margin: 34px 0 10px; scroll-margin-top: 20px; }
+  article h3, article h4 { font-size: 17px; margin: 22px 0 8px; }
+  article p { margin: 0 0 14px; }
+  article li { margin: 0 0 6px; }
+  article code { background: var(--surface); border: 1px solid var(--line); border-radius: 5px;
+                 padding: 1px 5px; font-size: 14px; }
+  .fontes { margin: 0; padding-left: 22px; }
+  .fontes li { margin: 0 0 14px; }
+  .fontes p { color: var(--muted); font-size: 14px; margin: 4px 0 0; }
+  .dominio { color: var(--faint); font-size: 12px; margin-left: 8px; }
+  footer { border-top: 1px solid var(--line); margin-top: 40px; padding-top: 24px; }
+  footer h2 { margin-top: 0; }
+  @media (max-width: 860px) {
+    .corpo { grid-template-columns: 1fr; gap: 24px; padding-top: 24px; }
+    nav { position: static; }
+  }
+  @media print {
+    :root { --bg: #fff; --surface: #fff; --fg: #000; --muted: #333; --faint: #666; --accent: #0033aa; }
+    nav { display: none; }
+    .corpo { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <header class="capa">
+    <div class="dentro">
+      <p class="selo">Pesquisa profunda · Forja</p>
+      <h1>{{TITULO}}</h1>
+      <p class="data">{{DATA}}</p>
+      <div class="stats">{{STATS}}</div>
+      {{AVISO}}
+    </div>
+  </header>
+
+  <main class="corpo">
+    <nav>
+      <p>Neste relatório</p>
+      {{SUMARIO}}
+    </nav>
+    <div>
+      <article>{{CORPO}}</article>
+      <footer>
+        <h2>Fontes</h2>
+        {{FONTES}}
+      </footer>
+    </div>
+  </main>
+</body>
+</html>

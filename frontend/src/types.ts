@@ -197,6 +197,38 @@ export type CompararEstado = {
 
 export type PlacarLinha = { nome: string; rodadas: number; vitorias: number; erros: number; tps: number | null };
 
+// ------------------------------------------------------------------ pesquisa profunda
+
+export type PesquisaFonte = {
+  id: string;
+  rodada: number;
+  url: string;
+  titulo: string;
+  dominio: string;
+  status: "fila" | "lendo" | "util" | "vazia" | "erro";
+  erro: string;
+  resumo: string;
+  trecho: string;
+};
+
+export type PesquisaEstado = {
+  message_id: number;
+  pergunta: string;
+  profundidade: "rapida" | "normal" | "funda";
+  status: "rodando" | "pronto" | "erro" | "cancelado";
+  fase: "planejando" | "buscando" | "lendo" | "escrevendo" | "pronto";
+  contexto: string;
+  plano: { perguntas: string[]; buscas: string[] };
+  rodada: number;
+  rodadas: { n: number; buscas: string[] }[];
+  fontes: PesquisaFonte[];
+  resumo: string;   // primeiro parágrafo do relatório: é o que a aba mostra
+  aviso: string;
+  relatorio: string;  // markdown completo; a aba não renderiza, o HTML abre fora
+  stats: { fontes: number; uteis: number; segundos: number; rodadas: number;
+           extrator: string; escritor: string };
+};
+
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
 
 /** Parâmetros de carga do llama-server. Zero/padrão = deixa o llama.cpp decidir. */

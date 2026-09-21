@@ -6,15 +6,15 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
 from . import (checkpoints, compact, comparar, config, db, downloads, gitops, imagegen, llm, localai, lotes,
-               mcp_client, memory, mirror, native, policy, settings, shell, skills, subagents, terminal, uploads,
-               workspace)
+               mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
+               terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
@@ -775,6 +775,90 @@ def comparar_placar():
     return comparar.placar()
 
 
+# ------------------------------------------------------------------ pesquisa profunda
+
+
+class PesquisaBody(BaseModel):
+    pergunta: str = ""
+    profundidade: str = "normal"    # rapida | normal | funda
+    provider: str = ""
+    model: str = ""
+    contexto: str = ""              # respostas das perguntas de esclarecimento
+    continuar_de: int = 0           # message_id de uma pesquisa anterior
+
+
+class PerguntasBody(BaseModel):
+    pergunta: str = ""
+    provider: str = ""
+    model: str = ""
+
+
+def _sse_pesquisa(message_id: int) -> StreamingResponse:
+    """Mesmo desenho do comparar: retrato inteiro por tick em vez de evento por token."""
+    async def stream():
+        while True:
+            try:
+                estado = pesquisa.estado(message_id)
+            except ToolError as e:
+                yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+                return
+            yield f"data: {json.dumps(estado, ensure_ascii=False, default=str)}\n\n"
+            if estado["status"] != "rodando":
+                return
+            await asyncio.sleep(pesquisa.TICK)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/pesquisa/{conv_id}/rodar")
+async def pesquisa_rodar(conv_id: int, body: PesquisaBody):
+    try:
+        msg = pesquisa.start(conv_id, body.pergunta, body.provider, body.model, body.profundidade,
+                             body.contexto, body.continuar_de)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_pesquisa(msg["id"])
+
+
+@app.get("/api/pesquisa/{message_id}/stream")
+def pesquisa_stream(message_id: int):
+    """Reconexão: acompanhar uma pesquisa em andamento ou reabrir uma do histórico."""
+    return _sse_pesquisa(message_id)
+
+
+@app.post("/api/pesquisa/{message_id}/cancelar")
+def pesquisa_cancelar(message_id: int):
+    return pesquisa.cancelar(message_id)
+
+
+@app.post("/api/pesquisa/perguntas")
+async def pesquisa_perguntas(body: PerguntasBody):
+    """Perguntas de esclarecimento antes de sair buscando."""
+    try:
+        return {"perguntas": await pesquisa.perguntas(body.pergunta, body.provider, body.model)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/pesquisa/{message_id}/relatorio")
+def pesquisa_relatorio(message_id: int):
+    """A página do relatório. O botão da aba abre isto numa janela do navegador do usuário."""
+    try:
+        est = pesquisa.estado(message_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+    return HTMLResponse(relatorio.html_do(est, est.get("relatorio") or ""))
+
+
+@app.post("/api/pesquisa/{message_id}/discutir")
+def pesquisa_discutir(message_id: int):
+    try:
+        return pesquisa.discutir(message_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 # ------------------------------------------------------------------ navegador integrado
 # Uma sessão por conversa: `conv` é o id da conversa ("0" = rascunho da tela inicial).
 
@@ -966,8 +1050,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "imagem", "comparar"):
-        raise HTTPException(400, "kind deve ser chat, agent, imagem ou comparar")
+    if kind not in ("chat", "agent", "imagem", "comparar", "pesquisa"):
+        raise HTTPException(400, "kind deve ser chat, agent, imagem, comparar ou pesquisa")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)
