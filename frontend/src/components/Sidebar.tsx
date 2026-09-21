@@ -74,6 +74,7 @@ export default function Sidebar(props: {
   conversations: Conversation[];
   current: number | null;
   unread: Set<number>;
+  busy: { id: number; running: boolean; subagents: number }[]; // turno ou delegação rodando agora
   onSelect: (id: number) => void;
   onNew: () => void;
   onNewIn: (workspace: string | null) => void; // nova conversa numa pasta específica (grupo)
@@ -192,7 +193,16 @@ export default function Sidebar(props: {
         {selecting && (
           <input type="checkbox" checked={checked} onChange={() => toggleSelect(c.id)} onClick={(e) => e.stopPropagation()} className="size-3.5 shrink-0 accent-sky-500" />
         )}
-        {props.unread.has(c.id) && <span className="size-1.5 shrink-0 rounded-full bg-sky-400" title="terminou em segundo plano" />}
+        {(() => {
+          const b = props.busy.find((x) => x.id === c.id);
+          if (!b) return props.unread.has(c.id) && <span className="size-1.5 shrink-0 rounded-full bg-sky-400" title="terminou em segundo plano" />;
+          return (
+            <span
+              className={`size-1.5 shrink-0 animate-pulse rounded-full ${b.subagents ? "bg-violet-400" : "bg-emerald-400"}`}
+              title={b.subagents ? `${b.subagents} subagente(s) trabalhando` : "turno em andamento"}
+            />
+          );
+        })()}
         {c.pinned && !dim && <Pin className="size-3 shrink-0 text-faint" />}
         {renaming?.id === c.id ? (
           <input

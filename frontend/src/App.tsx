@@ -44,7 +44,7 @@ import {
   type TurnStats,
 } from "./components/MessageView";
 import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip, Refresh, Square, Undo } from "./components/icons";
-import type { Approval, Attachment, BrowserState, Conversation, Message, Settings, Skill, Stats, Task, ToolCall, ToolsSent } from "./types";
+import type { Activity, Approval, Attachment, BrowserState, Conversation, Message, Settings, Skill, Stats, Task, ToolCall, ToolsSent } from "./types";
 
 /** Notificação do sistema quando a aba não está em foco (execução terminou, aprovação pendente). */
 function notify(title: string, body: string, force = false) {
@@ -140,6 +140,7 @@ export default function App() {
   const [toolMode, setToolMode] = useState("auto");
   const [vision, setVision] = useState("auto");
   const [right, setRight] = useState<RightState>(RIGHT_DEFAULT);
+  const [activity, setActivity] = useState<Activity>({ conversations: [], servers: 0 });
   const prevConv = useRef<number | null | undefined>(undefined);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [serversRunning, setServersRunning] = useState(0);
@@ -299,6 +300,18 @@ export default function App() {
   useEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: "end" });
   }, [messages, draft, approvals]);
+
+  // O que está rodando agora (subagentes por conversa e processos vivos): bolinha na lista e chip no chat.
+  useEffect(() => {
+    const carrega = () =>
+      api
+        .get<Activity>("/activity")
+        .then(setActivity)
+        .catch(() => {});
+    carrega();
+    const t = setInterval(carrega, 4000);
+    return () => clearInterval(t);
+  }, []);
 
   // Abrir outra conversa volta a colar no fim.
   useEffect(() => {
@@ -856,6 +869,11 @@ export default function App() {
 
   const segments = useMemo(() => groupActivity(messages), [messages]);
 
+  // Instâncias desta conversa (delegações) + processos vivos, para o indicador embaixo da resposta.
+  const instancias =
+    (activity.conversations.find((c) => c.id === currentId)?.subagents ?? 0) + activity.servers;
+  const lastAssistantIndex = messages.reduce((acc, m, i) => (m.role === "assistant" ? i : acc), -1);
+
   // Planos do modo Plano nesta conversa (chamadas exit_plan_mode), para a aba Planos.
   const plans = useMemo<PlanEntry[]>(() => {
     const out: PlanEntry[] = [];
@@ -971,6 +989,7 @@ export default function App() {
         conversations={conversations}
         current={currentId}
         unread={unread}
+        busy={activity.conversations}
         onSelect={openConversation}
         onNew={newConversation}
         onNewIn={(ws) => {
@@ -1229,7 +1248,13 @@ export default function App() {
                   )}
                   {showTurn && (
                     <div className="mt-4 space-y-1.5">
-                      {turn.stats && <StatsRow s={turn.stats} />}
+                      {turn.stats && (
+                        <StatsRow
+                          s={turn.stats}
+                          instances={i === lastAssistantIndex ? instancias : 0}
+                          onInstances={() => setRight({ tab: "servers", collapsed: false })}
+                        />
+                      )}
                       <div className="flex items-center">
                         <CopyButton text={turn.text} />
                         {turn.userId !== null && checkpoints[String(turn.userId)] && (

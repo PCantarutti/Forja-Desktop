@@ -20,6 +20,12 @@ export type Approval = {
   sent?: boolean;
 };
 
+/** O que está rodando agora: turno do agente e delegações por conversa, e processos vivos. */
+export type Activity = {
+  conversations: { id: number; running: boolean; subagents: number }[];
+  servers: number;
+};
+
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" };
 
 export type Message = {

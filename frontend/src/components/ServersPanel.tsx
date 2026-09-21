@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { ServerInfo, SubagentActive } from "../types";
-import { Split, Square } from "./icons";
+import { Chevron, Split, Square } from "./icons";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 
 const NIVEIS: Record<string, string> = { rapido: "Rápido", capaz: "Capaz", nuvem: "Nuvem" };
 
 const POLL_MS = 4000;
+
+/** Mais recente primeiro: quem está no ar há menos tempo nasceu por último. */
+function recentes<T>(itens: T[], idade: (t: T) => number | undefined): T[] {
+  return [...itens].sort((a, b) => (idade(a) ?? 0) - (idade(b) ?? 0));
+}
 
 function uptime(s?: number) {
   if (s == null) return "";
@@ -24,6 +29,7 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
   const [environment, setEnvironment] = useState("");
   const [error, setError] = useState("");
   const [openLog, setOpenLog] = useState<string | null>(null);
+  const [aberto, setAberto] = useState<string | null>(null); // um cartão expandido por vez: a lista fica legível
   const [log, setLog] = useState("");
 
   async function refresh() {
@@ -87,16 +93,21 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
         {environment || "…"}.
       </div>
       {error && <div className="text-red-300">{error}</div>}
-      {subs.map((s) => (
-        <section key={s.id} className="rounded-2xl border border-sky-500/30 bg-sky-500/5 p-3.5">
-          <div className="flex items-center gap-2">
+      {recentes(subs, (s) => s.seconds).map((s) => (
+        <section key={s.id} className="overflow-hidden rounded-2xl border border-sky-500/30 bg-sky-500/5">
+          <button
+            onClick={() => setAberto(aberto === s.id ? null : s.id)}
+            className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left hover:bg-sky-500/10"
+          >
             <Split className="size-3.5 shrink-0 text-sky-300" />
             <span className="truncate font-medium text-fg">
               subagente {NIVEIS[s.level] ?? s.level} · {s.model}
             </span>
             <span className="ml-auto shrink-0 text-faint">{uptime(s.seconds)}</span>
-          </div>
-          <div className="mt-1.5 truncate text-muted" title={s.task}>
+            <Chevron className={`size-3.5 shrink-0 text-faint ${aberto === s.id ? "rotate-180" : ""}`} />
+          </button>
+          <div className={`px-3.5 pb-3.5 ${aberto === s.id ? "" : "hidden"}`}>
+          <div className="truncate text-muted" title={s.task}>
             {s.task}
           </div>
           <div className="truncate text-faint" title={s.conversation}>
@@ -130,6 +141,7 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
               <Square className="size-3" /> Parar turno
             </button>
           </div>
+          </div>
         </section>
       ))}
       {servers && !list.length && !subs.length && (
@@ -138,9 +150,12 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
           aparece aqui — e você pode parar.
         </div>
       )}
-      {list.map((s) => (
-        <section key={`${s.where}-${s.name}`} className="rounded-2xl border border-line bg-surface p-3.5">
-          <div className="flex items-center gap-2">
+      {recentes(list, (s) => s.uptime).map((s) => (
+        <section key={`${s.where}-${s.name}`} className="overflow-hidden rounded-2xl border border-line bg-surface">
+          <button
+            onClick={() => setAberto(aberto === s.name ? null : s.name)}
+            className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left hover:bg-raised/50"
+          >
             <span className={s.alive ? "text-emerald-400" : "text-faint"}>●</span>
             <span className="truncate font-mono font-medium text-fg" title={s.name}>
               {s.name}
@@ -149,8 +164,10 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
             <span className="ml-auto shrink-0 text-faint">
               {s.alive ? `rodando · ${uptime(s.uptime)}` : s.error ? "erro" : `parado (exit ${s.exit_code ?? "?"})`}
             </span>
-          </div>
-          <div className="mt-1.5 truncate font-mono text-muted" title={s.command}>
+            <Chevron className={`size-3.5 shrink-0 text-faint ${aberto === s.name ? "rotate-180" : ""}`} />
+          </button>
+          <div className={`px-3.5 pb-3.5 ${aberto === s.name ? "" : "hidden"}`}>
+          <div className="truncate font-mono text-muted" title={s.command}>
             $ {s.command || s.error}
           </div>
           {s.cwd && (
@@ -182,6 +199,7 @@ export default function ServersPanel(props: { onCount: (alive: number) => void; 
               {log}
             </pre>
           )}
+          </div>
         </section>
       ))}
     </div>

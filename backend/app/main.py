@@ -303,6 +303,29 @@ def get_active_subagents():
     return {"subagents": ativas}
 
 
+@app.get("/api/activity")
+async def get_activity():
+    """Quem está ocupado agora: turno do agente e delegações por conversa, mais processos vivos.
+
+    A lista de conversas usa isto para a bolinha, e o chat para o indicador de instância rodando.
+    """
+    por_conversa: dict[int, dict] = {}
+
+    def entrada(conv_id: int) -> dict:
+        return por_conversa.setdefault(int(conv_id), {"id": int(conv_id), "running": False, "subagents": 0})
+
+    for r in RUNS.values():
+        if not r.finished:
+            entrada(r.conv_id)["running"] = True
+    for a in subagents.ativas():
+        entrada(a["conversation_id"])["subagents"] += 1
+    try:
+        vivos = sum(1 for s in await asyncio.to_thread(shell.list_servers) if s.get("alive"))
+    except Exception:  # runner fora do ar não pode derrubar a barra lateral
+        vivos = 0
+    return {"conversations": list(por_conversa.values()), "servers": vivos}
+
+
 @app.get("/api/servers/{name}/log")
 async def get_server_log(name: str, tail: int = 80):
     try:

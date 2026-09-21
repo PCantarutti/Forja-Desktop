@@ -170,9 +170,19 @@ function Chip({ children }: { children: React.ReactNode }) {
 
 export type TurnStats = { model: string; tokens: number; seconds: number; tps: number | null; estimated: boolean };
 
-export function StatsRow({ s, live }: { s: TurnStats; live?: boolean }) {
+export function StatsRow({ s, live, instances, onInstances }: { s: TurnStats; live?: boolean; instances?: number; onInstances?: () => void }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
+      {!!instances && (
+        <button
+          onClick={onInstances}
+          title="Subagentes e processos rodando agora — clique para abrir a aba Instâncias"
+          className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-0.5 text-sky-300 hover:bg-sky-500/20"
+        >
+          <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
+          {instances} rodando
+        </button>
+      )}
       <Chip>
         <Cube className="size-3.5" /> {s.model}
       </Chip>
