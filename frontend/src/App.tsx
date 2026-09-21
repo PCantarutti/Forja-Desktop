@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, streamSSE, uploadFile } from "./api";
+import { useStickyBottom } from "./useStickyBottom";
 import Sidebar from "./components/Sidebar";
 import BrowserPanel from "./components/BrowserPanel";
 import ServersPanel from "./components/ServersPanel";
@@ -227,9 +228,8 @@ export default function App() {
   const [uploading, setUploading] = useState(false);
   const runId = useRef<string | null>(null);
   const streamCtl = useRef<AbortController | null>(null);
-  const bottom = useRef<HTMLDivElement>(null);
   // Só acompanha o fim da conversa enquanto o usuário estiver no fim: se ele subir, a rolagem fica onde está.
-  const stick = useRef(true);
+  const { ref: scroller, fim: fimDoChat, onScroll: seguirFim, colar } = useStickyBottom<HTMLDivElement>([messages, draft, approvals]);
 
   const update = (p: Partial<Settings>) => setSettings((s) => ({ ...s, ...p }));
 
@@ -318,14 +318,6 @@ export default function App() {
       .catch(() => {});
   }, [settings.model]);
 
-  // `draft` muda a cada token: sem o quadro, isto era um scroll forçado (com layout junto) a cada
-  // token recebido. Um por quadro basta — o olho não vê mais do que isso mesmo.
-  useEffect(() => {
-    if (!stick.current) return;
-    const q = requestAnimationFrame(() => bottom.current?.scrollIntoView({ block: "end" }));
-    return () => cancelAnimationFrame(q);
-  }, [messages, draft, approvals]);
-
   // O que está rodando agora (subagentes por conversa e processos vivos): bolinha na lista e chip no chat.
   useEffect(() => {
     const carrega = () =>
@@ -340,8 +332,8 @@ export default function App() {
 
   // Abrir outra conversa volta a colar no fim.
   useEffect(() => {
-    stick.current = true;
-  }, [currentId]);
+    colar();
+  }, [currentId, colar]);
 
   // Trocar de seção dispara uma busca nova; a anterior pode chegar depois e repor a lista errada
   // (era o que fazia a aba de pesquisa abrir com as conversas do chat até trocar de página).
@@ -1202,11 +1194,9 @@ export default function App() {
         )}
 
         <div
+          ref={scroller}
           className="flex-1 overflow-y-auto"
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          }}
+          onScroll={seguirFim}
           onDragOver={(e) => e.preventDefault()}
           onDrop={(e) => {
             e.preventDefault();
@@ -1409,7 +1399,7 @@ export default function App() {
               </div>
             )}
             {running && liveTasks && <TasksCard tasks={liveTasks} live />}
-            <div ref={bottom} />
+            <div ref={fimDoChat} />
           </div>
         </div>
 

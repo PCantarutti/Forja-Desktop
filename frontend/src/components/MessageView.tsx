@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
 import { SourceChip, SourceList } from "./Sources";
+import { useStickyBottom } from "../useStickyBottom";
 import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
@@ -62,8 +63,10 @@ export const Markdown = memo(function Markdown({ text }: { text: string }) {
 
 export function Thinking({ text, live }: { text: string; live?: boolean }) {
   const [open, setOpen] = useState<boolean | null>(null);
-  if (!text) return null;
+  // Acompanha o texto sendo gerado; rolar para cima solta, voltar ao fim cola de novo.
+  const { ref: caixa, fim: fimDoTexto, onScroll: seguirTexto } = useStickyBottom<HTMLDivElement>([text]);
   const isOpen = open ?? !!live;
+  if (!text) return null;
   return (
     <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
       <button
@@ -75,8 +78,13 @@ export function Thinking({ text, live }: { text: string; live?: boolean }) {
         <Chevron className="ml-auto size-4" />
       </button>
       {isOpen && (
-        <div className="max-h-80 overflow-y-auto border-t border-line px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap text-fg/85">
+        <div
+          ref={caixa}
+          onScroll={seguirTexto}
+          className="max-h-80 overflow-y-auto border-t border-line px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap text-fg/85"
+        >
           {text}
+          <div ref={fimDoTexto} />
         </div>
       )}
     </div>
