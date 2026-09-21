@@ -24,7 +24,8 @@
     "copyright": "Copyright © 2026 DRUVE",
     "files": [
       "electron/**",
-      "package.json"
+      "package.json",
+      "node_modules/**/*"
     ],
     "extraResources": [
       {
