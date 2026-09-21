@@ -31,8 +31,10 @@ from .parsing import split_think
 from .tools import ToolError
 
 # rodadas, fontes por rodada, buscas por rodada, teto de segundos
-PRESETS = {"rapida": (1, 3, 3, 300), "normal": (2, 4, 3, 600), "funda": (4, 4, 3, 900)}
-TETO_MIN, TETO_MAX = 60, 7200  # limites do tempo máximo escolhido na tela (1 min a 2 h)
+PRESETS = {"rapida": (1, 3, 3, 300), "normal": (2, 4, 3, 600), "funda": (4, 4, 3, 900),
+           "personalizado": (2, 4, 3, 600)}  # aqui rodadas e tempo vêm da tela
+TETO_MIN, TETO_MAX = 60, 7200   # limites do tempo máximo escolhido na tela (1 min a 2 h)
+RODADAS_MAX = 8                 # teto do modo personalizado; acima disso é madrugada de spinner
 RESULTADOS_POR_BUSCA = 6
 TETO_PAGINA = 6_000      # caracteres da página que vão para o extrator
 LEITURAS_PARALELAS = 3
@@ -461,7 +463,7 @@ def _resumo(relatorio: str) -> str:
 
 def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: str = "normal",
           contexto: str = "", continuar_de: int = 0, ex_provider: str = "", ex_model: str = "",
-          formato: str = "auto", teto: int = 0) -> dict:
+          formato: str = "auto", teto: int = 0, rodadas: int = 0) -> dict:
     """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente."""
     pergunta = (pergunta or "").strip()
     if not pergunta:
@@ -472,9 +474,11 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         raise ToolError(f"formato deve ser {', '.join(FORMATOS)}.")
     if not (provider and model):
         raise ToolError("Escolha um modelo antes de pesquisar.")
-    rodadas, fontes_por_rodada, n_buscas, padrao = PRESETS[profundidade]
-    # 0 = o tempo do preset. O teto existe para a pesquisa não rodar a noite inteira num modelo lento.
-    teto = max(TETO_MIN, min(int(teto), TETO_MAX)) if teto else padrao
+    padrao_rodadas, fontes_por_rodada, n_buscas, padrao_teto = PRESETS[profundidade]
+    # 0 = o valor do preset. Os tetos existem para a pesquisa não rodar a noite inteira num modelo lento.
+    teto = max(TETO_MIN, min(int(teto), TETO_MAX)) if teto else padrao_teto
+    rodadas = (max(1, min(int(rodadas), RODADAS_MAX)) if rodadas and profundidade == "personalizado"
+               else padrao_rodadas)
     extrator, escritor = _modelos(provider, model, ex_provider, ex_model)
 
     anterior, lidas = "", set()
@@ -498,7 +502,7 @@ def start(conv_id: int, pergunta: str, provider: str, model: str, profundidade: 
         "contexto": contexto, "plano": {"perguntas": [], "buscas": []}, "rodada": 0, "rodadas": [],
         "fontes": [], "resumo": "", "aviso": "", "relatorio": "",
         "formato": formato, "formato_usado": "" if formato == "auto" else formato,
-        "teto_segundos": teto,
+        "teto_segundos": teto, "rodadas_total": rodadas,
         "stats": {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0, "tokens": 0,
                   "tokens_entrada": 0, "gerando": 0.0, "chamadas": 0, "estimado": False,
                   "extrator": extrator["model"], "escritor": escritor["model"],

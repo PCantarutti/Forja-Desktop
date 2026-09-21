@@ -214,7 +214,7 @@ export type PesquisaFonte = {
 export type PesquisaEstado = {
   message_id: number;
   pergunta: string;
-  profundidade: "rapida" | "normal" | "funda";
+  profundidade: PesquisaProfundidade;
   status: "rodando" | "pronto" | "erro" | "cancelado";
   fase: "planejando" | "buscando" | "lendo" | "escrevendo" | "pronto";
   contexto: string;
@@ -228,6 +228,7 @@ export type PesquisaEstado = {
   formato: PesquisaFormato;
   formato_usado: string;  // o que o "auto" decidiu; vazio enquanto não decidiu
   teto_segundos: number;  // tempo máximo desta corrida
+  rodadas_total: number;  // quantas rodadas esta corrida pode fazer
   stats: {
     fontes: number; uteis: number; segundos: number; rodadas: number;
     tokens: number; tokens_entrada: number; gerando: number; chamadas: number; estimado: boolean;
@@ -236,6 +237,7 @@ export type PesquisaEstado = {
 };
 
 export type PesquisaFormato = "auto" | "produto" | "comparar" | "guia" | "checagem";
+export type PesquisaProfundidade = "rapida" | "normal" | "funda" | "personalizado";
 
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
 

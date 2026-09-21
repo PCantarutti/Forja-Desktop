@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
-import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato } from "../types";
+import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato, PesquisaProfundidade }
+  from "../types";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { ArrowUp, Check, Copy, ExternalLink, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
@@ -19,12 +20,15 @@ const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg
 const KEY_MODELOS = "forja.pesquisa.modelos";
 
 const PROFUNDIDADES = [
-  { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas", minutos: 5 },
-  { id: "normal" as const, label: "Normal", hint: "2 rodadas, até 8 páginas", minutos: 10 },
-  { id: "funda" as const, label: "Funda", hint: "4 rodadas, até 16 páginas", minutos: 15 },
+  { id: "rapida" as const, label: "Rápida", hint: "1 rodada, 3 páginas", minutos: 5, rodadas: 1 },
+  { id: "normal" as const, label: "Normal", hint: "2 rodadas, até 8 páginas", minutos: 10, rodadas: 2 },
+  { id: "funda" as const, label: "Funda", hint: "4 rodadas, até 16 páginas", minutos: 15, rodadas: 4 },
+  { id: "personalizado" as const, label: "Personalizado", hint: "Você escolhe rodadas e tempo",
+    minutos: 10, rodadas: 2 },
 ];
 const MIN_MINUTOS = 1;
 const MAX_MINUTOS = 120;   // mesmos limites do backend (TETO_MIN/TETO_MAX)
+const MAX_RODADAS = 8;     // RODADAS_MAX do backend
 
 const FORMATOS: { id: PesquisaFormato; label: string; hint: string }[] = [
   { id: "auto", label: "Auto", hint: "O modelo decide o feitio do relatório pela pergunta" },
@@ -93,7 +97,8 @@ export default function PesquisaView(props: {
   onAbrirChat: (conv: number) => void;
 }) {
   const [texto, setTexto] = useState("");   // o que está no campo; a pergunta da corrida vive no estado
-  const [profundidade, setProfundidade] = useState<"rapida" | "normal" | "funda">("normal");
+  const [profundidade, setProfundidade] = useState<PesquisaProfundidade>("normal");
+  const [rodadas, setRodadas] = useState(2);   // só vale no modo personalizado
   const [modelos, setModelos] = useState(() => {
     try {
       const salvo = JSON.parse(localStorage.getItem(KEY_MODELOS) ?? "null");
@@ -157,6 +162,7 @@ export default function PesquisaView(props: {
         setProfundidade(p.profundidade);
         setFormato(p.formato || "auto");
         if (p.teto_segundos) setMinutos(Math.round(p.teto_segundos / 60));
+        if (p.rodadas_total) setRodadas(p.rodadas_total);
         setEstado({ ...p, message_id: m.id, status: situacao(m.status), relatorio: m.content || "" });
         if (situacao(m.status) === "rodando") ouvir(m.id);
       } catch (e: any) {
@@ -192,7 +198,8 @@ export default function PesquisaView(props: {
             pergunta, profundidade, formato, contexto, continuar_de,
             provider: modelos.escritor.provider, model: modelos.escritor.model,
             ex_provider: modelos.extrator?.provider ?? "", ex_model: modelos.extrator?.model ?? "",
-            teto: Math.min(Math.max(minutos, MIN_MINUTOS), MAX_MINUTOS) * 60 }) },
+            teto: Math.min(Math.max(minutos, MIN_MINUTOS), MAX_MINUTOS) * 60,
+            rodadas: Math.min(Math.max(rodadas, 1), MAX_RODADAS) }) },
         (ev) => {
           if (ctl.signal.aborted) return;   // trocou de conversa no meio: não pinta a tela nova
           if (ev.erro) props.onError(ev.erro);
@@ -427,13 +434,24 @@ export default function PesquisaView(props: {
                   <button key={p.id} role="radio" aria-checked={profundidade === p.id} title={p.hint}
                           onClick={() => {
                             setProfundidade(p.id);
-                            setMinutos(p.minutos);
+                            if (p.id !== "personalizado") {
+                              setMinutos(p.minutos);
+                              setRodadas(p.rodadas);
+                            }
                           }}
                           className={`rounded-full px-2.5 py-0.5 ${profundidade === p.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
                     {p.label}
                   </button>
                 ))}
               </div>
+              {profundidade === "personalizado" && (
+                <label className="flex items-center gap-1 text-muted" title="Quantas rodadas de busca">
+                  <input type="number" min={1} max={MAX_RODADAS} value={rodadas}
+                         onChange={(e) => setRodadas(Number(e.target.value) || 1)}
+                         className={`${campo} w-14`} />
+                  rodadas
+                </label>
+              )}
               <label className="flex items-center gap-1 text-muted" title="Tempo máximo da pesquisa">
                 <input type="number" min={MIN_MINUTOS} max={MAX_MINUTOS} value={minutos}
                        onChange={(e) => setMinutos(Number(e.target.value) || MIN_MINUTOS)}

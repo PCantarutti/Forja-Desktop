@@ -42,9 +42,10 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
             return "classificar"
         return "relatorio"
 
+    vez = {"n": 0}
     padrao = {
         "plano": '{"perguntas": ["p1", "p2", "p3"], "buscas": ["termo um", "termo dois", "termo três"]}',
-        "buscas": '["termo quatro", "termo cinco", "termo seis"]',
+        "buscas": None,   # gerado por rodada, logo abaixo
         "extracao": ("RELEVANTE: sim\nRESUMO: A página diz que o preço caiu 12% em 2026 e que a "
                      "fabricante confirmou o lançamento para março, segundo o comunicado oficial.\n"
                      "TRECHO: o preço caiu 12%"),
@@ -59,7 +60,11 @@ def _fake_llm(monkeypatch, respostas: dict | None = None, pausa=0.0):
         chamados.append((tipo, model))
         if pausa:
             await asyncio.sleep(pausa)
-        texto = respostas.get(tipo, padrao[tipo])
+        if tipo == "buscas" and "buscas" not in respostas:
+            vez["n"] += 1
+            texto = f'["termo {vez["n"]}a", "termo {vez["n"]}b", "termo {vez["n"]}c"]'
+        else:
+            texto = respostas.get(tipo, padrao[tipo])
         if isinstance(texto, Exception):
             raise texto
         yield ("content", texto)
@@ -342,6 +347,26 @@ def test_formato_escolhido_pula_a_classificacao(monkeypatch):
     assert not [t for t, _ in chamados if t == "classificar"]  # nada de chamada extra
     with pytest.raises(ToolError):
         pesquisa.start(**_base(formato="inventado"))
+
+
+def test_personalizado_escolhe_as_rodadas(monkeypatch):
+    _fake_llm(monkeypatch)
+    pagina = {"n": 0}
+
+    def buscar(query, n=6):   # domínios inéditos a cada busca: as rodadas não param por falta de página
+        pagina["n"] += 1
+        return [{"title": f"P{pagina['n']}-{i}", "url": f"https://s{pagina['n']}x{i}.com/a",
+                 "content": ""} for i in range(n)]
+
+    _fake_web(monkeypatch)
+    monkeypatch.setattr(pesquisa.web, "buscar", buscar)
+    est = _rodar(**_base(profundidade="personalizado", rodadas=3, teto=600))
+    assert est["rodadas_total"] == 3 and est["stats"]["rodadas"] == 3
+    assert len(est["rodadas"]) == 3 and est["teto_segundos"] == 600
+
+    # limites, e o número só vale no modo personalizado
+    assert _rodar(**_base(profundidade="personalizado", rodadas=99))["rodadas_total"] == pesquisa.RODADAS_MAX
+    assert _rodar(**_base(profundidade="rapida", rodadas=7))["rodadas_total"] == 1
 
 
 def test_tempo_maximo_configuravel(monkeypatch):

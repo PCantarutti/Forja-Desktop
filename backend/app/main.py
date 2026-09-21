@@ -789,6 +789,7 @@ class PesquisaBody(BaseModel):
     ex_model: str = ""
     formato: str = "auto"           # auto | produto | comparar | guia | checagem
     teto: int = 0                   # tempo máximo em segundos; 0 = o do preset
+    rodadas: int = 0                # nº de rodadas; só vale com profundidade "personalizado"
 
 
 class PerguntasBody(BaseModel):
@@ -820,7 +821,7 @@ async def pesquisa_rodar(conv_id: int, body: PesquisaBody):
     try:
         msg = pesquisa.start(conv_id, body.pergunta, body.provider, body.model, body.profundidade,
                              body.contexto, body.continuar_de, body.ex_provider, body.ex_model,
-                             body.formato, body.teto)
+                             body.formato, body.teto, body.rodadas)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_pesquisa(msg["id"])

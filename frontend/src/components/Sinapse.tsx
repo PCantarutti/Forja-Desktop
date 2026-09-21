@@ -12,7 +12,6 @@ const CX = W / 2;
 const CY = H / 2;
 const RAIO_SUB = 78;
 const MAX_SUBS = 10;
-const TOTAL_RODADAS: Record<PesquisaEstado["profundidade"], number> = { rapida: 1, normal: 2, funda: 4 };
 
 const FASES: Record<PesquisaEstado["fase"], string> = {
   planejando: "montando o plano",
@@ -110,7 +109,7 @@ export default function Sinapse({ estado }: { estado: PesquisaEstado }) {
       <div className="sin-meta">
         <span className="sin-fase">{FASES[estado.fase] ?? estado.fase}</span>
         <span className="sin-sep">·</span>
-        <span>rodada <b>{estado.rodada || 0}</b> de {TOTAL_RODADAS[estado.profundidade] ?? "?"}</span>
+        <span>rodada <b>{estado.rodada || 0}</b> de {estado.rodadas_total || "?"}</span>
         <span className="sin-sep">·</span>
         <span><b>{estado.stats.uteis}</b> fontes úteis de {estado.stats.fontes}</span>
         <span className="sin-sep">·</span>
