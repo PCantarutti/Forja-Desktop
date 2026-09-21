@@ -13,6 +13,7 @@ const net = require("net");
 const path = require("path");
 const { ZOOM_STEPS, nextZoom } = require("./zoom");
 const { BrowserHost } = require("./browserHost");
+const { isSafeExternal, sameOrigin } = require("./links");
 
 const DEV = !app.isPackaged;
 const ROOT = DEV ? path.join(__dirname, "..") : process.resourcesPath;
@@ -304,15 +305,15 @@ function createWindow({ hidden = false } = {}) {
   host.start();
 
   // Links para fora do app abrem no navegador do usuário, não dentro da janela.
+  const nossa = `http://127.0.0.1:${port}`;
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isSafeExternal(url)) shell.openExternal(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (e, url) => {
-    if (!url.startsWith(`http://127.0.0.1:${port}`)) {
-      e.preventDefault();
-      shell.openExternal(url);
-    }
+    if (sameOrigin(url, nossa)) return;
+    e.preventDefault();
+    if (isSafeExternal(url)) shell.openExternal(url);
   });
 
   win.on("resize", saveBounds);
