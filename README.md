@@ -244,6 +244,11 @@ Em **Configurações › Permissões**, regras com `*` dispensam o card de aprov
 - **Comandos** (`run_command`): comparados com o comando inteiro. Ex.: `pytest*`, `git status`, `npm run build`.
 - **Ferramentas**: comparadas com o nome. Ex.: `write_file`, `browser_*`, `mcp__memoria__*`.
 
+Duas coisas uma regra **não** faz, porque o glob casa prefixo e o resto da linha viajaria de carona:
+
+- **Comando encadeado não passa.** `pytest*` libera `pytest -q`, mas não `pytest -q; Remove-Item -Recurse C:\`. Vale para `;`, `&&`, `||`, `|`, quebra de linha, crase e `$(...)`.
+- **Regra com curinga não cobre comando destrutivo.** `git push*` não dispensa o card de `git push --force`, e regra de *ferramenta* (`run_command`) nunca dispensa. Só uma regra de comando **exata** — `rm -rf build`, escrita por você — passa, em qualquer modo.
+
 O card de aprovação tem **Sempre permitir** com uma sugestão pronta (ex.: `ls*`, `git status*`, `browser_eval`): cria a regra e aprova na hora. Toda execução liberada por regra mostra, no bloco da ferramenta, qual regra liberou — não existe aprovação invisível. Evite regras largas como `*`.
 
 ## MCP

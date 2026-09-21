@@ -68,6 +68,16 @@ DESTRUCTIVE_EXTRA = re.compile(
 SPLIT = re.compile(r"&&|\|\||;|\|")
 
 
+def chained(command: str) -> bool:
+    """Mais de um comando na mesma string: separador, subshell, crase ou quebra de linha.
+
+    Uma regra de auto-aprovação vale para UM comando, não para o que vier grudado nele:
+    o glob casa prefixo, então `pytest*` sozinho liberaria `pytest -q; Remove-Item -Recurse C:/`.
+    """
+    return (len(command.splitlines()) > 1 or len(SPLIT.split(command)) > 1
+            or "$(" in command or "`" in command)
+
+
 def destructive_command(command: str) -> bool:
     """True se o comando apaga dados, mexe no sistema ou publica algo: pergunta mesmo no bypass."""
     c = command or ""
@@ -106,17 +116,33 @@ def safe_command(command: str) -> bool:
     return True
 
 
-def auto_rule(name: str, args: dict) -> str | None:
-    """Regra de Configurações › Permissões que libera esta chamada (ou None)."""
+WILDCARD = re.compile("[*?[]")
+
+
+def _rule(name: str, args: dict) -> tuple[str, bool] | None:
+    """(motivo, cobre destrutivo?) da regra de Permissões que libera esta chamada.
+
+    Só uma regra de comando **exata** cobre um comando destrutivo: `rm -rf build` escrito à mão é
+    escolha consciente, `git push*` casando com `git push --force` é acidente. Regra de ferramenta
+    (`run_command`, `browser_*`) nunca cobre — ela vale para a ferramenta toda, não para o comando.
+    """
     for pattern in config.AUTO_APPROVE_TOOLS:
         if fnmatch(name, pattern):
-            return f"ferramenta {pattern}"
+            return f"ferramenta {pattern}", False
     if name == "run_command":
         command = str(args.get("command") or "").strip()
+        if chained(command):  # regra libera um comando, não o que vier grudado nele
+            return None
         for pattern in config.AUTO_APPROVE_COMMANDS:
             if fnmatch(command, pattern):
-                return f"comando {pattern}"
+                return f"comando {pattern}", not WILDCARD.search(pattern)
     return None
+
+
+def auto_rule(name: str, args: dict) -> str | None:
+    """Regra de Configurações › Permissões que libera esta chamada (ou None)."""
+    achada = _rule(name, args)
+    return achada[0] if achada else None
 
 
 def decide(tool, args: dict, mode: str) -> tuple[bool, str | None]:
@@ -125,12 +151,13 @@ def decide(tool, args: dict, mode: str) -> tuple[bool, str | None]:
         return False, None
     if mode == "plan":  # nem deveria chegar aqui: no modo Plano essas ferramentas não são enviadas
         return True, None
-    rule = auto_rule(tool.name, args)
-    if rule:
-        return False, rule
+    achada = _rule(tool.name, args)
+    # Apagar/formatar/desligar/sudo pergunta em qualquer modo — só uma regra exata dispensa o card.
+    if destructive_args(args):
+        return (False, achada[0]) if achada and achada[1] else (True, None)
+    if achada:
+        return False, achada[0]
     if mode == "bypass":
-        if destructive_args(args):  # apagar/formatar/desligar/sudo: pergunta mesmo aqui
-            return True, None
         return False, "modo Ignorar permissões"
     if tool.always_ask:  # shell e browser_eval só passam por regra explícita ou bypass
         return True, None

@@ -6,6 +6,7 @@ import pytest
 from app import config, memory, policy, settings, uploads
 from app.agent import build_history, system_prompt
 from app.db import Message
+from app.tools import REGISTRY
 
 
 @pytest.fixture(autouse=True)
@@ -29,6 +30,24 @@ def test_command_glob_matches():
     assert policy.auto_rule("run_command", {"command": "  git status  "}) == "comando git status"
     assert policy.auto_rule("run_command", {"command": "git push"}) is None
     assert policy.auto_rule("run_command", {"command": "rm -rf /"}) is None
+
+
+def test_rule_does_not_cover_a_chained_command():
+    """O glob casa prefixo: sem esta guarda, `pytest*` liberaria o que viesse depois do `;`."""
+    settings.update({"auto_approve_commands": ["pytest*"]})
+    assert policy.auto_rule("run_command", {"command": "pytest -q"}) == "comando pytest*"
+    encadeados = ["pytest -q; Remove-Item -Recurse C:/x", "pytest -q && rm -rf x",
+                  "pytest -q | tee out", "pytest -q" + chr(10) + "rm -rf x", "pytest $(whoami)"]
+    for encadeado in encadeados:
+        assert policy.auto_rule("run_command", {"command": encadeado}) is None
+
+
+def test_destructive_asks_even_with_a_rule():
+    """Regra é atalho para o que se repete, não cheque em branco: apagar sempre mostra o card."""
+    settings.update({"auto_approve_commands": ["git push*"]})
+    shell_tool = REGISTRY["run_command"]
+    assert policy.decide(shell_tool, {"command": "git push --force"}, "bypass") == (True, None)
+    assert policy.decide(shell_tool, {"command": "git push"}, "manual") == (False, "comando git push*")
 
 
 def test_tool_glob_matches_mcp_prefix():
