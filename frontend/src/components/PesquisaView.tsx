@@ -88,6 +88,21 @@ function comoMarkdown(e: PesquisaEstado): string {
 type Par = { provider: string; model: string };
 type Modelos = { escritor: Par; extrator: Par | null };  // extrator null = slot "rapido" dos subagentes
 
+/** Número com a unidade dentro da mesma pílula, para a linha não virar caixinha solta + texto solto. */
+function Numero(props: { valor: number; min: number; max: number; unidade: string; dica: string;
+                         onChange: (v: number) => void }) {
+  return (
+    <label title={props.dica}
+           className="flex items-center gap-1 rounded-full border border-line bg-raised px-2 py-0.5
+                      text-muted focus-within:border-[#555]">
+      <input type="number" min={props.min} max={props.max} value={props.valor}
+             onChange={(e) => props.onChange(Number(e.target.value) || props.min)}
+             className="w-8 bg-transparent text-right text-fg outline-none" />
+      {props.unidade}
+    </label>
+  );
+}
+
 /** Anel da cota do plano, irmão do anel de contexto do chat: preenche com a janela mais apertada. */
 function AnelCota({ dados }: { dados: CloudUsage[] }) {
   const [aberto, setAberto] = useState(false);
@@ -463,8 +478,11 @@ export default function PesquisaView(props: {
           )}
 
           <div className={`${card} flex flex-col gap-2.5`}>
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Profundidade">
+            {/* Duas linhas com papéis distintos: "como pesquisar" em cima, "com quais modelos"
+                embaixo. Numa linha só isso quebrava em qualquer largura e virava salada. */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+              <div className="flex shrink-0 rounded-full border border-line p-0.5" role="radiogroup"
+                   aria-label="Profundidade">
                 {PROFUNDIDADES.map((p) => (
                   <button key={p.id} role="radio" aria-checked={profundidade === p.id} title={p.hint}
                           onClick={() => {
@@ -479,43 +497,46 @@ export default function PesquisaView(props: {
                   </button>
                 ))}
               </div>
-              {profundidade === "personalizado" && (
-                <label className="flex items-center gap-1 text-muted" title="Quantas rodadas de busca">
-                  <input type="number" min={1} max={MAX_RODADAS} value={rodadas}
-                         onChange={(e) => setRodadas(Number(e.target.value) || 1)}
-                         className={`${campo} w-14`} />
-                  rodadas
-                </label>
-              )}
-              <label className="flex items-center gap-1 text-muted" title="Tempo máximo da pesquisa">
-                <input type="number" min={MIN_MINUTOS} max={MAX_MINUTOS} value={minutos}
-                       onChange={(e) => setMinutos(Number(e.target.value) || MIN_MINUTOS)}
-                       className={`${campo} w-14`} />
-                min
+
+              <div className="flex shrink-0 items-center gap-2">
+                {profundidade === "personalizado" && (
+                  <Numero valor={rodadas} min={1} max={MAX_RODADAS} unidade="rodadas"
+                          dica="Quantas rodadas de busca" onChange={setRodadas} />
+                )}
+                <Numero valor={minutos} min={MIN_MINUTOS} max={MAX_MINUTOS} unidade="min"
+                        dica="Tempo máximo da pesquisa" onChange={setMinutos} />
+              </div>
+
+              <span className="h-4 w-px shrink-0 bg-line" />
+
+              <label className="flex shrink-0 items-center gap-1.5 text-faint" title="Feitio do relatório">
+                formato
+                <select className={campo} value={formato}
+                        onChange={(e) => setFormato(e.target.value as PesquisaFormato)}>
+                  {FORMATOS.map((f) => <option key={f.id} value={f.id} title={f.hint}>{f.label}</option>)}
+                </select>
               </label>
-              <select className={campo} value={formato} title="Feitio do relatório"
-                      onChange={(e) => setFormato(e.target.value as PesquisaFormato)}>
-                {FORMATOS.map((f) => <option key={f.id} value={f.id} title={f.hint}>{f.label}</option>)}
-              </select>
-              <label className="flex items-center gap-1.5 text-muted">
+
+              <label className="flex shrink-0 items-center gap-1.5 text-muted"
+                     title="O modelo faz 2 ou 3 perguntas curtas antes de sair buscando">
                 <input type="checkbox" checked={perguntarAntes}
                        onChange={(e) => setPerguntarAntes(e.target.checked)} />
                 Perguntar antes
               </label>
-              {!!nuvem.length && (
-                <div className="ml-auto">
-                  <AnelCota dados={nuvem} />
-                </div>
-              )}
-              {/* Div à parte: o ModelPicker traz ml-auto, que jogaria o resto da linha para a direita. */}
-              <div className={`${nuvem.length ? "" : "ml-auto"} flex items-center gap-1`}
-                   title="Modelo que escreve o relatório">
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+              {/* Div à parte em cada um: o ModelPicker traz ml-auto por dentro. */}
+              <div className="flex shrink-0 items-center gap-1.5" title="Modelo que escreve o relatório">
                 <span className="text-faint">relatório</span>
                 <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
                              onChange={(provider, model) =>
                                setModelos((m) => ({ ...m, escritor: { provider, model } }))} />
               </div>
-              <div className="flex items-center gap-1" title="Modelo que lê e resume cada página">
+
+              <span className="h-4 w-px shrink-0 bg-line" />
+
+              <div className="flex shrink-0 items-center gap-1.5" title="Modelo que lê e resume cada página">
                 <span className="text-faint">extração</span>
                 {modelos.extrator ? (
                   <>
@@ -528,13 +549,19 @@ export default function PesquisaView(props: {
                     </button>
                   </>
                 ) : (
-                  <button className={campo}
+                  <button className={`${campo} text-muted`}
                           title="Automático: usa o subagente Rápido, ou o mesmo modelo do relatório"
                           onClick={() => setModelos((m) => ({ ...m, extrator: { ...m.escritor } }))}>
                     automático
                   </button>
                 )}
               </div>
+
+              {!!nuvem.length && (
+                <div className="ml-auto shrink-0">
+                  <AnelCota dados={nuvem} />
+                </div>
+              )}
             </div>
 
             <div className="flex items-end gap-2">

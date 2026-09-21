@@ -270,7 +270,7 @@ export default function App() {
   useEffect(() => {
     api.get<Config>("/config").then(setConfig).catch(() => {});
     refreshTools();
-    refreshConversations();
+    // a lista vem do efeito de [section], que também roda na montagem
     // F5: volta para a conversa aberta e reconecta à execução, se houver.
     const saved = Number(localStorage.getItem("forja.current"));
     if (saved) openConversation(saved).catch(() => localStorage.removeItem("forja.current"));
@@ -320,14 +320,24 @@ export default function App() {
     stick.current = true;
   }, [currentId]);
 
+  // Trocar de seção dispara uma busca nova; a anterior pode chegar depois e repor a lista errada
+  // (era o que fazia a aba de pesquisa abrir com as conversas do chat até trocar de página).
+  const pedidoConversas = useRef(0);
+  // A seção de agora, legível de dentro de função assíncrona antiga (closure não vê o estado novo).
+  const secaoRef = useRef(section);
+  const secaoEscolhida = useRef(false);  // true depois que a pessoa clica numa aba
+  secaoRef.current = section;
+
   function refreshConversations(kind: Section = section) {
+    const meu = ++pedidoConversas.current;
     api
       .get<Conversation[]>(`/conversations?kind=${kind}`)
       .then((list) => {
+        if (meu !== pedidoConversas.current) return;  // resposta atrasada de outra seção
         conversationsRef.current = list;
         setConversations(list);
       })
-      .catch((e) => setError(e.message));
+      .catch((e) => meu === pedidoConversas.current && setError(e.message));
   }
 
   function loadCheckpoints(id: number | null) {
@@ -465,7 +475,9 @@ export default function App() {
     loadCheckpoints(id);
     loadChangesCount(id);
     const kind = (await api.get<{ kind?: string }>(`/conversations/${id}`).catch(() => null))?.kind;
-    if (kind && kind !== section) setSection(kind as Section);
+    // Só troca de aba se a pessoa ainda não escolheu uma: na abertura do app esta busca demora e
+    // chegava depois do clique, arrastando a seção (e a lista) de volta para a da conversa salva.
+    if (kind && kind !== secaoRef.current && !secaoEscolhida.current) setSection(kind as Section);
     const run = live.run;
     if (run) {
       runId.current = run.run_id;
@@ -941,6 +953,7 @@ export default function App() {
   }, [messages, turns, ctx]);
 
   function changeSection(next: Section) {
+    secaoEscolhida.current = true;
     if (next === section) return;
     newConversation();
     setSection(next);
