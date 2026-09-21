@@ -16,14 +16,20 @@ def cliente():
         yield c
 
 
-def test_origem_de_fora_e_recusada(cliente):
-    r = cliente.get("/api/config", headers={"Origin": "https://evil.example"})
+@pytest.mark.parametrize("origin", [
+    "https://evil.example",
+    "http://localhost:5173",      # outro servidor de desenvolvimento na mesma máquina não é o Forja
+    "http://127.0.0.1:9999",      # nem outra porta do loopback
+    "null",                       # iframe sandbox / file://
+])
+def test_origem_de_fora_e_recusada(cliente, origin):
+    r = cliente.get("/api/config", headers={"Origin": origin, "Host": "127.0.0.1:53211"})
     assert r.status_code == 403
 
 
-@pytest.mark.parametrize("origin", ["http://127.0.0.1:53211", "http://localhost:5173"])
-def test_origem_loopback_passa(cliente, origin):
-    assert cliente.get("/api/config", headers={"Origin": origin}).status_code == 200
+def test_a_propria_interface_passa(cliente):
+    r = cliente.get("/api/config", headers={"Origin": "http://127.0.0.1:53211", "Host": "127.0.0.1:53211"})
+    assert r.status_code == 200
 
 
 def test_sem_origin_passa(cliente):

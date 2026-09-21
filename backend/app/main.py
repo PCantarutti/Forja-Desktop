@@ -64,8 +64,10 @@ app = FastAPI(title="Forja", lifespan=lifespan)
 # a resposta —, e outro usuário da mesma máquina alcança a porta direto. Como daqui saem execução de
 # shell (/api/term) e abrir arquivo (/api/open), duas checagens:
 #
-# - `Origin` que não seja loopback é recusado. É o que mata o vetor da página web: o navegador sempre
-#   manda esse header, e nenhuma página de fora vai ter origem 127.0.0.1/localhost.
+# - `Origin` diferente do `Host` da própria requisição é recusado. É o que mata o vetor da página web:
+#   o navegador sempre manda esse header e nunca deixa a página mentir nele. Comparar com "é
+#   loopback?" seria frouxo demais — um servidor de desenvolvimento em localhost:5173 é loopback e
+#   não é o Forja.
 # - `X-Forja-Token`, gerado pelo Electron a cada execução, é exigido no resto das rotas /api. É o que
 #   mata o vetor do processo local. Vazio (dev com Vite, repo Docker atrás do nginx) desliga a parte.
 #
@@ -74,14 +76,16 @@ app = FastAPI(title="Forja", lifespan=lifespan)
 SEM_TOKEN = ("/api/files", "/api/local/image/file")
 
 
-def _loopback(origin: str) -> bool:
-    return urlparse(origin).hostname in ("127.0.0.1", "localhost", "::1")
+def mesma_origem(origin: str, host: str) -> bool:
+    """A requisição saiu da própria interface do Forja, e não de outra página aberta no navegador."""
+    alvo = urlparse(origin)
+    return bool(host) and alvo.scheme in ("http", "https") and alvo.netloc == host
 
 
 @app.middleware("http")
 async def fronteira(request, call_next):
     origin = request.headers.get("origin")
-    if origin and not _loopback(origin):
+    if origin and not mesma_origem(origin, request.headers.get("host", "")):
         return JSONResponse({"detail": "Origem não autorizada"}, status_code=403)
     path = request.url.path
     if (config.API_TOKEN and path.startswith("/api/") and not path.startswith(SEM_TOKEN)
