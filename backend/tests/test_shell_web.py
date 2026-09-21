@@ -82,6 +82,43 @@ def test_fetch_url_devolve_a_pagina_como_fonte(monkeypatch):
                                "dominio": "blogdolago.com.br", "trecho": "corpo"}]
 
 
+# ------------------------------------------------ pagina que e' so menu
+
+MENU = ("<html><body><nav><a href='/a'>x</a></nav>"
+        "<div><a href='/1'>Início</a> <a href='/2'>Mundo</a> <a href='/3'>Economia</a> "
+        "<a href='/4'>Cultura</a> <a href='/5'>Viagens</a></div></body></html>")
+ARTIGO = ("<html><body><p>O Uruguai cedeu parte da cota de exportação de carne bovina à China, "
+          "medida defendida pelo governo brasileiro nesta segunda-feira.</p>"
+          "<p>Leia também: <a href='/outra'>outra matéria</a></p></body></html>")
+
+
+def test_densidade_de_link_separa_menu_de_artigo():
+    """O modelo precisa saber quando a página veio só com menu — foi assim que ele inventou manchete."""
+    from app.web import LINK_ALTO, _extrair
+
+    assert _extrair(MENU)[2] >= LINK_ALTO
+    assert _extrair(ARTIGO)[2] < LINK_ALTO
+
+
+def test_fetch_url_avisa_quando_a_pagina_e_so_menu(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(web, "ler", lambda url, n: {
+        "url": url, "title": "Arquivo", "text": "Início Mundo Economia", "chars": 21,
+        "imagem": "", "links": 0.97})
+    out = run_tool("fetch_url", {"url": "https://exemplo.com/arquivo"})
+    assert "97% do texto desta página são links" in out["text"]
+    assert "não complete de memória" in out["text"]
+
+
+def test_fetch_url_nao_avisa_em_artigo(monkeypatch):
+    from app import web
+
+    monkeypatch.setattr(web, "ler", lambda url, n: {
+        "url": url, "title": "Matéria", "text": "corpo", "chars": 5, "imagem": "", "links": 0.30})
+    assert "Aviso:" not in run_tool("fetch_url", {"url": "https://exemplo.com/materia"})["text"]
+
+
 # ------------------------------------------------ o modo Chat so leva a web
 
 def test_chat_leva_so_as_ferramentas_de_web():

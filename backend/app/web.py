@@ -146,10 +146,15 @@ class _Text(HTMLParser):
         self.skip = 0
         self.title = ""
         self._in_title = False
+        self.chars = 0  # texto útil (sem espaços) e quanto dele está dentro de <a>
+        self.link = 0
+        self._a = 0
 
     def handle_starttag(self, tag, attrs):
         if tag == "title":
             self._in_title = True
+        if tag == "a":
+            self._a += 1
         if tag in SKIP:
             self.skip += 1
         elif tag in BLOCK:
@@ -158,6 +163,8 @@ class _Text(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "title":
             self._in_title = False
+        if tag == "a" and self._a:
+            self._a -= 1
         if tag in SKIP and self.skip:
             self.skip -= 1
         elif tag in BLOCK:
@@ -168,6 +175,10 @@ class _Text(HTMLParser):
             self.title += data
         elif not self.skip:
             self.parts.append(data)
+            n = len("".join(data.split()))
+            self.chars += n
+            if self._a:
+                self.link += n
 
 
 META = re.compile(r"<meta\s+[^>]*>", re.I)
@@ -188,12 +199,27 @@ def og_image(html: str, base: str) -> str:
     return ""
 
 
-def html_to_text(html: str) -> tuple[str, str]:
+# Menu e índice são texto dentro de <a>; artigo é texto solto. Acima deste corte a página é uma
+# lista de links, e o modelo precisa saber disso antes de afirmar que "leu" a notícia.
+# Medido em páginas reais: euronews 1.14, índice da CNN 0.96, índice do nodejs 0.91 (avísa);
+# g1 0.42, gpuprix 0.48, release do nodejs 0.21 (não avísa).
+# ponytail: densidade de link é heurística rasa; se errar muito, o passo seguinte é extrair o
+# maior bloco de texto da página (readability) em vez de afinar este número.
+LINK_ALTO = 0.85
+
+
+def _extrair(html: str) -> tuple[str, str, float]:
+    """(título, texto, densidade de link). Densidade = fração do texto que está dentro de <a>."""
     p = _Text()
     p.feed(html)
     text = re.sub(r"[ \t\r\f\v]+", " ", "".join(p.parts))
     text = re.sub(r"\n\s*\n+", "\n\n", text)
-    return p.title.strip(), text.strip()
+    return p.title.strip(), text.strip(), (p.link / p.chars if p.chars else 0.0)
+
+
+def html_to_text(html: str) -> tuple[str, str]:
+    title, text, _ = _extrair(html)
+    return title, text
 
 
 def ler(url: str, max_chars: int = 20_000) -> dict:
@@ -216,22 +242,27 @@ def ler(url: str, max_chars: int = 20_000) -> dict:
         raise ToolError(f"{url} respondeu HTTP {r.status_code}.")
     ctype = r.headers.get("content-type", "")
     imagem = ""
+    links = 0.0
     if "html" in ctype:
-        title, text = html_to_text(r.text)
+        title, text, links = _extrair(r.text)
         imagem = og_image(r.text, url)
     elif ctype.startswith("text/") or "json" in ctype or "xml" in ctype:
         title, text = "", r.text
     else:
         raise ToolError(f"Tipo de conteúdo não suportado: {ctype or 'desconhecido'}.")
     return {"url": url, "title": title.strip(), "text": text[:max_chars], "chars": len(text),
-            "imagem": imagem}
+            "imagem": imagem, "links": links}
 
 
 def fetch_url(_root: Path, args: dict) -> dict:
     p = ler(args["url"].strip(), max(1000, min(int(args.get("max_chars") or 20_000), 100_000)))
     more = (f"\n\n(truncado em {len(p['text'])} de {p['chars']} caracteres)"
             if p["chars"] > len(p["text"]) else "")
-    return {"text": f"{UNTRUSTED}URL: {p['url']}\nTítulo: {p['title']}\n\n{p['text']}{more}",
+    aviso = (f"[Aviso: {p['links']:.0%} do texto desta página são links — é menu ou índice, não um "
+             "artigo. Se o que você procura não estiver abaixo, abra uma página específica ou outra "
+             "fonte, e diga ao usuário que não conseguiu ler — não complete de memória.]\n"
+             if p.get("links", 0) >= LINK_ALTO else "")
+    return {"text": f"{UNTRUSTED}{aviso}URL: {p['url']}\nTítulo: {p['title']}\n\n{p['text']}{more}",
             "sources": [_fonte(p["url"], p["title"], p["text"])]}
 
 
