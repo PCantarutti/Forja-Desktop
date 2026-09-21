@@ -38,19 +38,26 @@ BUILTIN = [
 FRONT = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
 
 
+def frontmatter(text: str) -> tuple[dict, str]:
+    """(campos do cabeçalho `---`, resto do arquivo). Usado pelas skills e pelas personas de subagente."""
+    campos: dict[str, str] = {}
+    m = FRONT.match(text)
+    if m:
+        for line in m.group(1).splitlines():
+            k, _, v = line.partition(":")
+            if k.strip():
+                campos[k.strip().lower()] = v.strip().strip('"').strip("'")
+        text = text[m.end():]
+    return campos, text
+
+
 def _parse(path: Path) -> dict | None:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    description = ""
-    m = FRONT.match(text)
-    if m:
-        for line in m.group(1).splitlines():
-            k, _, v = line.partition(":")
-            if k.strip().lower() == "description":
-                description = v.strip().strip('"').strip("'")
-        text = text[m.end():]
+    campos, text = frontmatter(text)
+    description = campos.get("description", "")
     prompt = text.strip()
     if not prompt:
         return None

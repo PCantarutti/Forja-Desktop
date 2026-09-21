@@ -295,6 +295,10 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     if "update_tasks" in names:
         rules.append("- Trabalho com 3 ou mais passos: crie a lista com update_tasks no início e atualize a cada "
                      "passo (doing ao começar, done ao terminar). O usuário acompanha essa lista.")
+    if "delegate_task" in names and (personas := subagents.agents_for(workspace.root())):
+        lista = "; ".join(f"{a['name']} ({a['description']})" for a in personas.values())
+        rules.append(f"- Subagentes prontos deste projeto: {lista}. Chame delegate_task(agent='NOME', task=...) "
+                     "para usar um deles em vez de escolher o level na mão.")
     if "delegate_task" in names and effort == "extremo":
         # primeira regra da lista: modelo pequeno obedece o que lê cedo e esquece o que lê no meio
         rules.insert(0, "- ESFORÇO EXTREMO: quem resolve é o subagente, você é o maestro. NÃO projete a solução, não "

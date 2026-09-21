@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import config, db, gitops, llm, workspace
+from . import config, db, gitops, llm, skills, workspace
 from .parsing import parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, register, resolve_path, vision_caps
 
@@ -49,7 +49,35 @@ REVIEW_PROMPT = (
     "(bug, caso não tratado, algo que contradiz a tarefa). Sem elogio, sem estilo, sem reescrever código.")
 
 
+AGENTS_DIR = ".forja/agents"   # personas do projeto, no formato das skills
+MAX_AGENTS = 20
+
 ATIVAS: dict[str, dict] = {}   # delegações rodando agora, para a aba Instâncias
+
+
+def agents_for(root: Path) -> dict[str, dict]:
+    """Personas de `.forja/agents/*.md`: cabeçalho diz o nível e as ferramentas, o corpo são as instruções.
+
+    Sem persona o delegate_task só escolhe o tamanho do modelo; com ela o projeto versiona especialistas
+    ("revisor que não edita nada") junto com o código, do mesmo jeito que já faz com as skills.
+    """
+    out: dict[str, dict] = {}
+    folder = root / AGENTS_DIR
+    if not folder.is_dir():
+        return out
+    for p in sorted(folder.glob("*.md"))[:MAX_AGENTS]:
+        try:
+            campos, corpo = skills.frontmatter(p.read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not (prompt := corpo.strip()):
+            continue
+        level = campos.get("level", "").lower()
+        ferramentas = [t for t in campos.get("tools", "").replace(",", " ").split() if t]
+        out[p.stem] = {"name": p.stem, "description": campos.get("description", "") or prompt.splitlines()[0][:80],
+                       "level": level if level in DELEGABLE else "rapido", "tools": ferramentas,
+                       "prompt": prompt, "source": f"{AGENTS_DIR}/{p.name}"}
+    return out
 
 
 def slot(level: str) -> dict | None:
@@ -133,18 +161,22 @@ def _unused(_root: Path, _args: dict) -> str:  # a execução real é o run() ab
 register(Tool(
     "delegate_task",
     "Delega uma subtarefa autocontida a um subagente e devolve o relatório dele. level='rapido' para tarefas "
-    "simples (modelo mais rápido), level='capaz' para tarefas difíceis (modelo mais forte e lento). "
+    "simples (modelo mais rápido), level='capaz' para tarefas difíceis (modelo mais forte e lento); com "
+    "'agent' o subagente vem pronto do projeto (nível e ferramentas saem do arquivo dele). "
     "Descreva tudo o que ele precisa saber: ele não vê esta conversa.",
     {"type": "object", "properties": {
         "task": {"type": "string", "description": "Tarefa completa, com contexto, arquivos e critério de pronto"},
         "level": {"type": "string", "enum": list(DELEGABLE), "description": "rapido ou capaz"},
+        "agent": {"type": "string",
+                  "description": "Nome de um subagente do projeto (.forja/agents/*.md), quando houver. "
+                                 "Substitui o level."},
         "files": {"type": "array", "items": {"type": "string"},
                   "description": "Arquivos que ele precisa ler (caminhos da pasta de trabalho). O conteúdo vai "
                                  "junto com a tarefa, ele não precisa procurar."},
         "done_when": {"type": "string",
                       "description": "Comando que prova que ficou pronto (ex.: pytest -q tests/test_x.py). É "
                                      "executado depois que ele termina e o resultado entra no relatório."}},
-     "required": ["task", "level"]},
+     "required": ["task"]},
     _unused, available=lambda: bool(configured())))
 
 
@@ -178,7 +210,7 @@ def _context(root: Path, files: list[str]) -> str:
     return "\n".join(partes)
 
 
-async def _setup(spec: dict, run_obj, sub_effort: str) -> tuple:
+async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = None) -> tuple:
     """(via, auto, caps, tools, schemas, mensagem de sistema) de um slot. Serve à primeira tentativa e
     ao fallback: trocar de modelo troca ferramentas, capacidades e formato de tool call junto."""
     from .agent import available_tools, system_prompt  # import tardio: agent importa este módulo
@@ -187,12 +219,21 @@ async def _setup(spec: dict, run_obj, sub_effort: str) -> tuple:
     setting = db.get_model_setting(model)
     via = "prompt" if setting["tool_mode"] == "text" else "native"
     caps = vision_caps(await llm.capabilities(provider, model), setting["vision"])
-    tools = available_tools(caps, run_obj.permission, exclude={"delegate_task"})
-    schemas = [t.openai_schema() for t in tools] if via == "native" else None
-    system = {"role": "system", "content": system_prompt(via, caps, exclude={"delegate_task"},
-                                                         permission=run_obj.permission,
-                                                         effort=sub_effort) + SUB_PROMPT}
-    return via, setting["tool_mode"] == "auto", caps, tools, schemas, system
+    excluir = {"delegate_task"}
+    if persona and persona["tools"]:  # persona com lista de ferramentas: o resto nem aparece para ela
+        permitidas = set(persona["tools"])
+        excluir |= {t.name for t in available_tools(caps, run_obj.permission) if t.name not in permitidas}
+    tools = available_tools(caps, run_obj.permission, exclude=excluir)
+    conteudo = system_prompt(via, caps, exclude=excluir, permission=run_obj.permission,
+                             effort=sub_effort) + SUB_PROMPT
+    if persona:
+        conteudo += f"\nVocê é o subagente '{persona['name']}' deste projeto. Instruções dele:\n{persona['prompt']}"
+    return via, setting["tool_mode"] == "auto", caps, tools, schemas_de(tools, via), {"role": "system",
+                                                                                      "content": conteudo}
+
+
+def schemas_de(tools: list, via: str) -> list | None:
+    return [t.openai_schema() for t in tools] if via == "native" else None
 
 
 async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
@@ -224,7 +265,9 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                run_call: Callable) -> AsyncIterator[dict]:
     args = call["arguments"]
     pid = call["id"]
-    level = str(args.get("level") or "rapido").lower()
+    root_persona = workspace.root()
+    persona = agents_for(root_persona).get(str(args.get("agent") or "").strip()) if args.get("agent") else None
+    level = persona["level"] if persona else str(args.get("level") or "rapido").lower()
     task = str(args.get("task") or "").strip()
     files = _files(args.get("files"))
     done_when = str(args.get("done_when") or "").strip()
@@ -253,7 +296,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     used_level, spec = cadeia[0]
     tentados = {used_level}
     provider, model = spec["provider"], spec["model"]
-    via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort)
+    via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona)
     brief = [task]
     if ctx := _context(root, files):
         brief.append("Arquivos relevantes (já lidos para você):\n" + ctx)
@@ -263,6 +306,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
     info = {"level": used_level, "provider": provider, "model": model, "steps": [], "tokens": 0,
             "iterations": 0, "chain": [lvl for lvl, _ in cadeia]}
+    if persona:
+        info["agent"] = persona["name"]
     if used_level != level:
         info["fallback"] = f"Nível '{level}' indisponível; usei '{used_level}'."
     meta["sub"] = info
@@ -302,7 +347,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 used_level, spec = proximo
                 tentados.add(used_level)
                 provider, model = spec["provider"], spec["model"]
-                via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort)
+                via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort, persona)
                 info.update(level=used_level, provider=provider, model=model)
                 info["fallback"] = f"O slot anterior falhou ({e}); segui com {LEVELS[used_level]} · {model}."
                 yield estado(info["fallback"])
