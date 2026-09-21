@@ -46,6 +46,8 @@ TETO_MIN, TETO_MAX = 60, 7200   # limites do tempo máximo escolhido na tela (1 
 RODADAS_MAX = 8                 # teto do modo personalizado; acima disso é madrugada de spinner
 RESULTADOS_POR_BUSCA = 10       # o excedente é descartado na escolha, mas dá margem ao dedupe
 SINTESE_A_PARTIR_DE = 3         # com 3+ rodadas o relatório passa a crescer a cada rodada
+TETO_RELATORIO = 600            # segundos a mais, além do tempo da pesquisa, para escrever o relatório
+MIN_CHAMADA = 15                # nenhuma chamada morre com menos que isto, nem no fim do tempo
 LEITURAS_PARALELAS = 3
 TIMEOUT_LEITURA = 25     # o httpx já corta em 20; isto cobre DNS travado
 MIN_RESUMO = 60          # abaixo disso o "achado" é ruído
@@ -224,18 +226,29 @@ async def _perguntar(spec: dict, system: str, user: str, run: dict | None = None
     """
     mensagens = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     out, t0, t_first, saida = "", time.monotonic(), 0.0, 0
-    async with aclosing(llm.chat_stream(spec["provider"], spec["model"], mensagens, None,
-                                        config.NUM_CTX, effort)) as fluxo:
-        async for kind, val in fluxo:
-            if run is not None and _acabou(run):
-                break
-            if kind == "content":
-                t_first = t_first or time.monotonic()
-                out += val
-            elif kind == "done":
-                saida = (val or {}).get("completion_tokens") or 0
-                if run is not None:
-                    run["stats"]["tokens_entrada"] += (val or {}).get("prompt_tokens") or 0
+
+    async def coletar() -> None:
+        nonlocal out, t_first, saida
+        async with aclosing(llm.chat_stream(spec["provider"], spec["model"], mensagens, None,
+                                            config.NUM_CTX, effort)) as fluxo:
+            async for kind, val in fluxo:
+                if run is not None and _acabou(run):
+                    break
+                if kind == "content":
+                    t_first = t_first or time.monotonic()
+                    out += val
+                elif kind == "done":
+                    saida = (val or {}).get("completion_tokens") or 0
+                    if run is not None:
+                        run["stats"]["tokens_entrada"] += (val or {}).get("prompt_tokens") or 0
+
+    # O `_acabou` só é consultado entre pedaços: provedor que trava sem responder nada ignoraria o
+    # tempo máximo e só morreria no read timeout do httpx (10 min). O wait_for é o corte de verdade.
+    sobra = None if run is None else max(MIN_CHAMADA, run["teto"] - (time.monotonic() - run["t0"]))
+    try:
+        await asyncio.wait_for(coletar(), sobra)
+    except asyncio.TimeoutError:
+        pass   # devolve o que chegou; quem chamou vê o tempo estourado e fecha a pesquisa
     if run is not None:
         # sem contagem do provedor, a estimativa de sempre: 4 caracteres por token
         run["stats"]["tokens"] += saida or len(out) // 4
@@ -622,7 +635,9 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, rodadas: int, fontes
         else:
             if estourou:
                 run["aviso"] = f"Tempo esgotado; relatório escrito com {run['stats']['uteis']} fontes."
-            run["teto"] = float("inf")  # o relatório do parcial não pode ser cortado pelo mesmo teto
+            # O relatório não pode morrer no mesmo relógio da coleta, mas também não pode ficar
+            # pendurado para sempre: ganha um tempo próprio.
+            run["teto"] = (time.monotonic() - run["t0"]) + TETO_RELATORIO
             relatorio = await _relatorio(run, escritor)
             run["status"] = "pronto" if relatorio else "erro"
             run["aviso"] = run["aviso"] or ("" if relatorio else "O modelo não devolveu o relatório.")

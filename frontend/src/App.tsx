@@ -1125,6 +1125,10 @@ export default function App() {
               setCurrentId(id);
               refreshConversations();
             }}
+            onTerminou={(titulo, corpo) => {
+              notify(titulo, corpo, true);   // force: a pesquisa é longa, o aviso vale mesmo em foco
+              if (currentId !== null) setUnread((u) => new Set(u).add(currentId));
+            }}
           />
         ) : section === "comparar" ? (
           <CompararView

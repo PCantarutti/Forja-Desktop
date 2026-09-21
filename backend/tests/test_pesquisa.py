@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -460,6 +461,23 @@ def test_sintese_so_nas_pesquisas_longas(monkeypatch):
     est, com = rodar(3)
     assert len(com) == 3                   # 3 rodadas: o relatório cresce a cada uma
     assert est["status"] == "pronto" and est["relatorio"]
+
+
+def test_provedor_pendurado_nao_ignora_o_tempo(monkeypatch):
+    """Sem o wait_for, uma chamada que nunca responde segurava a pesquisa até o timeout do httpx."""
+    monkeypatch.setattr(pesquisa, "TETO_MIN", 0)
+    monkeypatch.setattr(pesquisa, "MIN_CHAMADA", 1)
+    _fake_web(monkeypatch)
+
+    async def pendurado(*a, **k):
+        await asyncio.sleep(30)
+        yield ("content", "tarde demais")
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", pendurado)
+    inicio = time.monotonic()
+    est = _rodar(**_base(teto=1))
+    assert time.monotonic() - inicio < 10          # morreu no tempo, não no read timeout
+    assert est["status"] == "erro" and est["aviso"]
 
 
 def test_contadores_de_token_e_tempo(monkeypatch):

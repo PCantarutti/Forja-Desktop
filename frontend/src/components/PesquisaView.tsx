@@ -160,6 +160,7 @@ export default function PesquisaView(props: {
   onError: (e: string) => void;
   onConversationChanged: () => void;
   onAbrirChat: (conv: number) => void;
+  onTerminou: (titulo: string, corpo: string) => void;   // badge na barra lateral + notificação
 }) {
   const [texto, setTexto] = useState("");   // o que está no campo; a pergunta da corrida vive no estado
   const [profundidade, setProfundidade] = useState<PesquisaProfundidade>("normal");
@@ -183,10 +184,32 @@ export default function PesquisaView(props: {
   const [estado, setEstado] = useState<PesquisaEstado | null>(null);
   const [aberta, setAberta] = useState<string>("");   // fonte expandida
   const [copiado, setCopiado] = useState(false);
+  const [terminou, setTerminou] = useState<PesquisaEstado | null>(null);   // faixa de "acabou"
+  const statusAnterior = useRef<string>("");
   const acompanhando = useRef(0);   // message_id sendo ouvido: não abre dois SSE para o mesmo
   const corte = useRef<AbortController | null>(null);
+  // Os callbacks do App chegam recriados a cada render dele. Guardados em ref, as funções abaixo
+  // ficam estáveis — senão o efeito que carrega a conversa reentra em laço a cada render.
+  const aoErro = useRef(props.onError);
+  const aoTerminar = useRef(props.onTerminou);
+  aoErro.current = props.onError;
+  aoTerminar.current = props.onTerminou;
 
   const rodando = estado?.status === "rodando";
+
+  /** Todo evento passa por aqui: é onde a corrida que acaba vira faixa na tela e notificação. */
+  const receber = useCallback((novo: PesquisaEstado) => {
+    setEstado(novo);
+    const antes = statusAnterior.current;
+    statusAnterior.current = novo.status;
+    if (antes !== "rodando" || novo.status === "rodando") return;
+    setTerminou(novo);
+    const fim = novo.status === "pronto"
+      ? `${novo.stats.uteis} fontes úteis em ${relogio(novo.stats.segundos)}`
+      : novo.aviso || novo.status;
+    aoTerminar.current(novo.status === "pronto" ? "Pesquisa concluída" : "Pesquisa encerrada",
+                       `${novo.pergunta} — ${fim}`);
+  }, []);
 
   /** Acompanha UMA pesquisa. Trocar de conversa aborta o stream anterior: sem isso, o evento da
    *  pesquisa em andamento pintava a tela da conversa recém-aberta. */
@@ -199,14 +222,14 @@ export default function PesquisaView(props: {
       acompanhando.current = messageId;
       try {
         await streamSSE(`/pesquisa/${messageId}/stream`, { signal: ctl.signal },
-          (ev) => !ev.erro && !ctl.signal.aborted && setEstado(ev));
+          (ev) => !ev.erro && !ctl.signal.aborted && receber(ev));
       } catch (e: any) {
-        if (!ctl.signal.aborted) props.onError(e.message);
+        if (!ctl.signal.aborted) aoErro.current(e.message);
       } finally {
         if (acompanhando.current === messageId) acompanhando.current = 0;
       }
     },
-    [props.onError],
+    [receber],
   );
 
   /** Reabre a última pesquisa da conversa (e volta a ouvir, se ainda estiver rodando). */
@@ -228,13 +251,15 @@ export default function PesquisaView(props: {
         setFormato(p.formato || "auto");
         if (p.teto_segundos) setMinutos(Math.round(p.teto_segundos / 60));
         if (p.rodadas_total) setRodadas(p.rodadas_total);
+        statusAnterior.current = situacao(m.status);
+        setTerminou(null);
         setEstado({ ...p, message_id: m.id, status: situacao(m.status), relatorio: m.content || "" });
         if (situacao(m.status) === "rodando") ouvir(m.id);
       } catch (e: any) {
-        props.onError(e.message);
+        aoErro.current(e.message);
       }
     },
-    [props.conv, props.onError, ouvir],
+    [props.conv, ouvir],
   );
 
   useEffect(() => {
@@ -249,10 +274,15 @@ export default function PesquisaView(props: {
 
   async function rodar(pergunta: string, contexto = "", continuar_de = 0) {
     if (!pergunta.trim()) return;
+    // A permissão é pedida aqui porque a pesquisa é justamente o que a pessoa deixa rodando de lado.
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
     try {
       const id = await props.ensureConversation();
       corte.current?.abort();   // pesquisa nova: o stream da anterior não escreve mais aqui
       acompanhando.current = 0;
+      setTerminou(null);
       const ctl = new AbortController();
       corte.current = ctl;
       setEsclarecer(null);
@@ -268,7 +298,7 @@ export default function PesquisaView(props: {
         (ev) => {
           if (ctl.signal.aborted) return;   // trocou de conversa no meio: não pinta a tela nova
           if (ev.erro) props.onError(ev.erro);
-          else setEstado(ev);
+          else receber(ev);
         });
       props.onConversationChanged();
       if (!ctl.signal.aborted) carregarConversa(id);
@@ -390,32 +420,28 @@ export default function PesquisaView(props: {
                 )}
               </div>
 
-              {!!estado.fontes.length && (
-                <div className={card}>
-                  {estado.fontes.map((f) => (
-                    <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
-                      <div className="flex items-center gap-2">
-                        <button className="min-w-0 flex-1 truncate text-left text-fg hover:underline"
-                                onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
-                          {f.titulo}
-                        </button>
-                        <span className="shrink-0 text-faint">{f.dominio}</span>
-                        <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
-                        <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
-                           className="shrink-0 text-faint hover:text-fg">
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                      </div>
-                      {aberta === f.id && (
-                        <div className="mt-1 border-l border-line pl-3 text-muted">
-                          <p>{f.resumo || f.erro || "Sem resumo."}</p>
-                          {f.trecho && <p className="mt-1 italic text-faint">“{f.trecho}”</p>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+          {terminou && (
+            <div className={`flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-sm ${
+              terminou.status === "pronto"
+                ? "border-emerald-800/70 bg-emerald-950/30 text-emerald-200"
+                : "border-amber-800/70 bg-amber-950/30 text-amber-200"}`}>
+              <Check className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                {terminou.status === "pronto"
+                  ? `Pesquisa concluída · ${terminou.stats.uteis} fontes úteis · ${relogio(terminou.stats.segundos)}`
+                  : `Pesquisa ${terminou.status} · ${terminou.aviso}`}
+              </span>
+              {terminou.relatorio && (
+                <button className={btn}
+                        onClick={() => window.open(`/api/pesquisa/${terminou.message_id}/relatorio`)}>
+                  Abrir relatório
+                </button>
               )}
+              <button className="text-faint hover:text-fg" title="Dispensar" onClick={() => setTerminou(null)}>
+                <X className="size-4" />
+              </button>
+            </div>
+          )}
 
               {estado.resumo && (
                 <div className={card}>
@@ -453,6 +479,33 @@ export default function PesquisaView(props: {
                   </span>
                 </div>
               )}
+              {!!estado.fontes.length && (
+                <div className={card}>
+                  {estado.fontes.map((f) => (
+                    <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
+                      <div className="flex items-center gap-2">
+                        <button className="min-w-0 flex-1 truncate text-left text-fg hover:underline"
+                                onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
+                          {f.titulo}
+                        </button>
+                        <span className="shrink-0 text-faint">{f.dominio}</span>
+                        <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
+                        <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
+                           className="shrink-0 text-faint hover:text-fg">
+                          <ExternalLink className="size-3.5" />
+                        </a>
+                      </div>
+                      {aberta === f.id && (
+                        <div className="mt-1 border-l border-line pl-3 text-muted">
+                          <p>{f.resumo || f.erro || "Sem resumo."}</p>
+                          {f.trecho && <p className="mt-1 italic text-faint">“{f.trecho}”</p>}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
             </>
           )}
         </div>
