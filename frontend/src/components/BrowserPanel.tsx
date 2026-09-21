@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, streamSSE } from "../api";
 import type { BrowserState } from "../types";
 import { ArrowLeft, ArrowRight, Refresh, X } from "./icons";
 
@@ -57,53 +57,52 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     setUrlInput("");
     setError("");
     wanted.current = null;
-    // O EventSource se reconecta sozinho quando a conexão cai, mas NÃO quando o servidor responde
-    // fora da faixa 2xx: aí ele fecha de vez e o painel ficava preso em "Conectando ao navegador…"
-    // até alguém trocar de aba. Backend reiniciando é exatamente esse caso.
-    let es: EventSource | null = null;
+    // streamSSE, e não EventSource: o EventSource não manda header nenhum, e o backend do Desktop
+    // exige X-Forja-Token em /api. O stream de frames levava 403 e o painel ficava eternamente em
+    // "Aguardando a primeira tela…" — o estado ainda chegava, porque vem dos POST, que passam pelo
+    // api.ts. Reconectar também passa a ser nosso: o fetch não tenta de novo sozinho, e backend
+    // reiniciando é rotina.
+    let parar: AbortController | null = null;
     let retentar: ReturnType<typeof setTimeout> | undefined;
     let vivo = true;
 
-    const conectar = () => {
+    const aplicar = (ev: any) => {
+      setConnected(true);
+      if (ev.type === "frame") {
+        setFrame(`data:${ev.mime ?? "image/jpeg"};base64,${ev.data}`);
+        if (!editing.current) setUrlInput(ev.url);
+      } else if (ev.type === "state") {
+        setState(ev);
+        onState.current(ev);
+        if (!editing.current) setUrlInput(ev.url);
+        if (!ev.open) setFrame(null);
+        // Sessão (re)aberta com outro tamanho: manda o tamanho do painel.
+        if (ev.open && (!wanted.current || ev.width !== wanted.current.width || ev.height !== wanted.current.height)) {
+          wanted.current = null;
+          syncViewport();
+        }
+      }
+    };
+
+    const conectar = async () => {
       if (!vivo) return;
-      es = new EventSource(`/api/browser/stream${q}`);
-      es.onopen = () => setConnected(true);
-      es.onerror = () => {
-        setConnected(false);
-        if (es?.readyState !== EventSource.CLOSED) return; // ele mesmo vai tentar de novo
-        es.close();
-        clearTimeout(retentar);
-        retentar = setTimeout(conectar, 1500);
-      };
-      es.onmessage = (e) => {
-        let ev: any;
-        try {
-          ev = JSON.parse(e.data);
-        } catch {
-          return; // frame quebrado: ignora e espera o próximo
-        }
-        if (ev.type === "frame") {
-          setFrame(`data:${ev.mime ?? "image/jpeg"};base64,${ev.data}`);
-          if (!editing.current) setUrlInput(ev.url);
-        } else if (ev.type === "state") {
-          setState(ev);
-          onState.current(ev);
-          if (!editing.current) setUrlInput(ev.url);
-          if (!ev.open) setFrame(null);
-          // Sessão (re)aberta com outro tamanho: manda o tamanho do painel.
-          if (ev.open && (!wanted.current || ev.width !== wanted.current.width || ev.height !== wanted.current.height)) {
-            wanted.current = null;
-            syncViewport();
-          }
-        }
-      };
+      parar = new AbortController();
+      try {
+        await streamSSE(`/browser/stream${q}`, { method: "GET", signal: parar.signal }, aplicar);
+      } catch {
+        /* caiu, ou foi recusado: a reconexão abaixo cuida */
+      }
+      if (!vivo) return;
+      setConnected(false);
+      clearTimeout(retentar);
+      retentar = setTimeout(conectar, 1500);
     };
 
     conectar();
     return () => {
       vivo = false;
       clearTimeout(retentar);
-      es?.close();
+      parar?.abort();
     };
   }, [conv, q]);
 
