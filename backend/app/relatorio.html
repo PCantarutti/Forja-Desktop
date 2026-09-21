@@ -1,54 +1,60 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-tema="escuro">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{TITULO}}</title>
-<meta name="theme-color" content="#b8543a" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#131214" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#131214">
+<!-- Antes de qualquer pintura: sem isto a página pisca em escuro antes de virar clara. -->
+<script>try { var t = localStorage.getItem("forja.relatorio.tema"); if (t) document.documentElement.dataset.tema = t; } catch (e) {}</script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>F</text></svg>">
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Escuro é o padrão; o claro entra por data-tema="claro" no <html>, que o botão da barra
+   de ferramentas troca e o localStorage lembra. Sem prefers-color-scheme: o padrão é decisão
+   do relatório, não do sistema. */
 :root {
   --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
   --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --bg: #fbf9f4;
-  --bg-surface: #ffffff;
-  --bg-surface-alt: #f1ede4;
-  --border: rgba(0,0,0,0.08);
-  --border-strong: rgba(0,0,0,0.16);
-  --text: #1a1817;
-  --text-dim: #5a5651;
-  --text-muted: #8a8580;
-  --accent: #b8543a;
-  --accent-light: #d97a5e;
-  --accent-bg: rgba(184,84,58,0.06);
-  --gold: #c9952e;
-  --gold-bg: rgba(201,149,46,0.09);
-  --aurora-a: rgba(184,84,58,0.10);
-  --aurora-b: rgba(201,149,46,0.08);
-  --aurora-c: rgba(64,98,128,0.07);
+  --bg: #131214;
+  --bg-surface: #1c1a1e;
+  --bg-surface-alt: #25232a;
+  --border: rgba(255,255,255,0.07);
+  --border-strong: rgba(255,255,255,0.16);
+  --text: #ece8e2;
+  --text-dim: #a8a39c;
+  --text-muted: #6f6b66;
+  --accent: #e88f73;
+  --accent-light: #f4ad95;
+  --accent-bg: rgba(232,143,115,0.09);
+  --gold: #e8c05a;
+  --gold-bg: rgba(232,192,90,0.09);
+  --aurora-a: rgba(232,143,115,0.13);
+  --aurora-b: rgba(232,192,90,0.09);
+  --aurora-c: rgba(125,180,224,0.10);
   --radius: 12px;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.05);
-  --shadow-md: 0 4px 24px rgba(0,0,0,0.07);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+  --shadow-md: 0 4px 28px rgba(0,0,0,0.55);
   --max-w: 760px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #131214; --bg-surface: #1c1a1e; --bg-surface-alt: #25232a;
-    --border: rgba(255,255,255,0.07); --border-strong: rgba(255,255,255,0.16);
-    --text: #ece8e2; --text-dim: #a8a39c; --text-muted: #6f6b66;
-    --accent: #e88f73; --accent-light: #f4ad95; --accent-bg: rgba(232,143,115,0.09);
-    --gold: #e8c05a; --gold-bg: rgba(232,192,90,0.09);
-    --aurora-a: rgba(232,143,115,0.13);
-    --aurora-b: rgba(232,192,90,0.09);
-    --aurora-c: rgba(125,180,224,0.10);
-    --shadow-sm: 0 1px 3px rgba(0,0,0,0.4); --shadow-md: 0 4px 28px rgba(0,0,0,0.55);
-  }
+:root[data-tema="claro"] {
+  --bg: #fbf9f4; --bg-surface: #ffffff; --bg-surface-alt: #f1ede4;
+  --border: rgba(0,0,0,0.08); --border-strong: rgba(0,0,0,0.16);
+  --text: #1a1817; --text-dim: #5a5651; --text-muted: #8a8580;
+  --accent: #b8543a; --accent-light: #d97a5e; --accent-bg: rgba(184,84,58,0.06);
+  --gold: #c9952e; --gold-bg: rgba(201,149,46,0.09);
+  --aurora-a: rgba(184,84,58,0.10);
+  --aurora-b: rgba(201,149,46,0.08);
+  --aurora-c: rgba(64,98,128,0.07);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.05); --shadow-md: 0 4px 24px rgba(0,0,0,0.07);
 }
+
+.icone-claro { display: none; }
+:root[data-tema="claro"] .icone-claro { display: inline; }
+:root[data-tema="claro"] .icone-escuro { display: none; }
 
 html {
   scroll-behavior: smooth;
@@ -449,6 +455,15 @@ body::after {
 
 /* ── Impressão ─────────────────────────────────────── */
 @media print {
+  /* Imprimir no escuro gasta tinta e fica ilegível: o papel é sempre claro. */
+  :root, :root[data-tema="escuro"] {
+    --bg: #fff; --bg-surface: #fff; --bg-surface-alt: #f1ede4;
+    --border: rgba(0,0,0,0.12); --border-strong: rgba(0,0,0,0.22);
+    --text: #111; --text-dim: #444; --text-muted: #666;
+    --accent: #a8462f; --accent-light: #a8462f; --accent-bg: rgba(168,70,47,0.06);
+    --gold: #9a7320; --gold-bg: rgba(154,115,32,0.08);
+  }
+  body::before, body::after { display: none; }
   .toc-sidebar, .toolbar { display: none !important; }
   .layout { grid-template-columns: 1fr; }
   .hero { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -458,6 +473,11 @@ body::after {
 <body>
 
 <div class="toolbar">
+  <button id="btn-tema" title="Alternar claro/escuro">
+    <svg class="icone-escuro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    <svg class="icone-claro" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    <span id="rotulo-tema">Escuro</span>
+  </button>
   <div class="dropdown">
     <button id="btn-export" title="Exportar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
@@ -500,6 +520,20 @@ body::after {
 
 <script>
 (function() {
+  // Tema: escuro por padrão, escolha guardada por relatório aberto (mesma origem).
+  var temaBtn = document.getElementById('btn-tema');
+  var temaRotulo = document.getElementById('rotulo-tema');
+  function pintaRotulo() {
+    temaRotulo.textContent = document.documentElement.dataset.tema === 'claro' ? 'Claro' : 'Escuro';
+  }
+  pintaRotulo();
+  temaBtn.addEventListener('click', function() {
+    var novo = document.documentElement.dataset.tema === 'claro' ? 'escuro' : 'claro';
+    document.documentElement.dataset.tema = novo;
+    pintaRotulo();
+    try { localStorage.setItem('forja.relatorio.tema', novo); } catch (e) {}
+  });
+
   // ESC fecha a aba quando ela foi aberta por window.open (é como o app abre).
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape' || e.defaultPrevented) return;
