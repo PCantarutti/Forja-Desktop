@@ -643,6 +643,7 @@ def test_previa_de_arquivo_quebrado_avisa(ws):
         asyncio.run(execute("preview_document", {"path": "vazio.pdf"}, ws))
 
 
+@precisa_chromium
 def test_previa_de_docx_sem_word_cai_no_html(ws, monkeypatch):
     """O caminho fiel depende de Word instalado. Sem ele — Linux, Docker, máquina sem Office — a
     prévia continua saindo, pelo nosso HTML, e o texto diz que a diagramação não é a do Word."""
