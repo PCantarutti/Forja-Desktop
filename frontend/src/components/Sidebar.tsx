@@ -5,52 +5,7 @@ import { folderName } from "./FolderPicker";
 import { LogoMark, LogoText } from "./Logo";
 import { SectionTabs, type Section } from "./Controls";
 import { Archive, Chevron, Download, Edit, Gear, More, Pin, Search, Trash } from "./icons";
-
-/** O que a ponte do Electron devolve. Tipado aqui de propósito: o `forja.d.ts` só existe no
- *  desktop, e assim este arquivo continua valendo nos dois repositórios. */
-type Atualizacao = { state: string; version: string; percent: number };
-
-const AVISOS: Record<string, string> = {
-  available: "Atualização disponível",
-  downloading: "Baixando atualização",
-  ready: "Atualização pronta para instalar",
-};
-
-/**
- * Fica no rodapé enquanto houver versão nova — e só some quando o app reabrir já atualizado, que
- * é quando o estado vira "current". O painel em Configurações › Aplicativo não avisa ninguém que
- * não for olhar, e ninguém vai olhar.
- */
-function AvisoAtualizacao(props: { onAbrir: () => void }) {
-  const ponte = (window as { forja?: { update?: { get: () => Promise<Atualizacao> } } }).forja?.update;
-  const [u, setU] = useState<Atualizacao | null>(null);
-
-  useEffect(() => {
-    if (!ponte) return;
-    const ler = () => ponte.get().then(setU).catch(() => {});
-    ler();
-    // ponytail: poll bobo. O handler do main só devolve um objeto que já está na memória dele.
-    const t = setInterval(ler, 2000);
-    return () => clearInterval(t);
-  }, [ponte]);
-
-  const aviso = u && AVISOS[u.state];
-  if (!aviso) return null;
-
-  return (
-    <button
-      onClick={props.onAbrir}
-      title="Abre Configurações › Aplicativo"
-      className="mx-2 mt-2 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-left text-sm text-amber-200 hover:bg-amber-500/20"
-    >
-      <Download />
-      <span className="truncate">
-        {aviso}
-        {u.state === "downloading" ? ` ${u.percent}%` : u.version ? ` ${u.version}` : ""}
-      </span>
-    </button>
-  );
-}
+import { AvisoAtualizacao } from "./Atualizacao";
 
 export type BulkAction = "archive" | "unarchive" | "pin" | "unpin" | "delete";
 
@@ -129,7 +84,7 @@ export default function Sidebar(props: {
   onPin: (id: number, pinned: boolean) => void;
   onArchive: (id: number, archived: boolean) => void;
   onBulk: (ids: number[], action: BulkAction) => Promise<void>;
-  onSettings: (aba?: "Aplicativo") => void;
+  onSettings: () => void;
   section: Section;
   onSection: (s: Section) => void;
   onHide: () => void;
@@ -420,9 +375,9 @@ export default function Sidebar(props: {
           )}
         </div>
       )}
-      <AvisoAtualizacao onAbrir={() => props.onSettings("Aplicativo")} />
+      <AvisoAtualizacao />
       <button
-        onClick={() => props.onSettings()}
+        onClick={props.onSettings}
         className="m-2 flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface hover:text-fg"
       >
         <Gear /> Configurações

@@ -129,7 +129,7 @@ function aggregate(list: Stats[]): TurnStats {
 
 export default function App() {
   const [config, setConfig] = useState<Config>({ providers: [], num_ctx: 32768 });
-  const [showSettings, setShowSettings] = useState<false | "Geral" | "Aplicativo">(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [settings, setSettings] = useState<Settings>(loadSettings);
@@ -1076,11 +1076,11 @@ export default function App() {
           patchConversation(id, { archived });
           if (archived && id === currentId) newConversation();
         }}
-        onSettings={(aba) => setShowSettings(aba ?? "Geral")}
+        onSettings={() => setShowSettings(true)}
       />
       )}
       {showSettings && (
-        <SettingsDialog aba={showSettings} onClose={() => setShowSettings(false)} tools={allTools} mcp={mcp} onChanged={refreshTools} />
+        <SettingsDialog onClose={() => setShowSettings(false)} tools={allTools} mcp={mcp} onChanged={refreshTools} />
       )}
 
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
