@@ -139,12 +139,13 @@ function subirVersao(versao, notas) {
     fs.writeFileSync(arq, JSON.stringify(pkg, null, 2) + NL);
   }
   // O electron-builder lê este arquivo sozinho (releaseInfo.releaseNotesFile tem esse padrão).
+  // Não entra no git: build/ é gerado e está no .gitignore. O texto fica na release do GitHub.
   fs.mkdirSync(path.join(ROOT, "build"), { recursive: true });
   fs.writeFileSync(path.join(ROOT, "build", "release-notes.md"), notas + NL);
   ok("versão e notas gravadas");
 
   if (SECO) return aviso("--seco: não vou commitar nem publicar");
-  git(["add", "package.json", "frontend/package.json", "build/release-notes.md"]);
+  git(["add", "package.json", "frontend/package.json"]);
   execSync(`git commit -q -m "chore: versão ${versao}"`, { cwd: ROOT });
   git(["push", "origin", "main"]);
   ok(`commit da versão enviado`);
