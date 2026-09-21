@@ -90,6 +90,7 @@ class Session:
         self.last_used = time.monotonic()
         self.file_chooser = None  # a página pediu um arquivo; a UI oferece o upload
         self.markers: dict[int, str] = {}  # id(page) -> marcador (modo nativo)
+        self._nocache: dict[int, object] = {}  # id(page) -> sessão CDP que mantém o cache desligado
 
     def touch(self) -> None:
         self.last_used = time.monotonic()
@@ -158,7 +159,25 @@ class Session:
             page.on("filechooser", lambda fc: asyncio.ensure_future(self._on_filechooser(fc)))
         page.on("framenavigated", lambda f: f == page.main_frame and asyncio.ensure_future(self._publish_state()))
         page.on("close", lambda _: asyncio.ensure_future(self._on_page_close(page)))
+        await self._disable_cache(page)
         await self._activate(page)
+
+    async def _disable_cache(self, page) -> None:
+        """Cache HTTP desligado nesta aba, como o "Disable cache" do DevTools.
+
+        Servidor de dev sem Cache-Control (python -m http.server, serve_start) só manda Last-Modified, e o
+        Chromium aplica frescor heurístico: 10% da idade do arquivo. Arquivo criado há uma hora e carregado
+        agora fica 6 min "fresco" — o agente edita, chama browser_navigate na mesma URL, e a página (ou o
+        script.js) volta do cache: o print não muda e ele entra em loop editando. `reload` só revalida o
+        documento; isto cobre os sub-recursos também. A sessão CDP fica referenciada: ao soltar, o efeito some.
+        """
+        try:
+            cdp = await self._ctx.new_cdp_session(page)
+            await cdp.send("Network.enable")  # setCacheDisabled sozinho não vale nada
+            await cdp.send("Network.setCacheDisabled", {"cacheDisabled": True})
+            self._nocache[id(page)] = cdp
+        except Exception:
+            pass  # aba já fechou ou CDP indisponível: segue com cache, que é o comportamento antigo
 
     def _tab_index(self, page) -> int:
         return self.pages.index(page) + 1 if page in self.pages else 0
@@ -185,6 +204,7 @@ class Session:
     async def _on_page_close(self, page) -> None:
         was_active = page is self.active
         self.markers.pop(id(page), None)
+        self._nocache.pop(id(page), None)
         if page in self.pages:
             self.pages.remove(page)
         if was_active:

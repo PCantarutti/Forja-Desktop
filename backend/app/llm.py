@@ -330,11 +330,24 @@ def _split_parts(content) -> tuple[str, list[str]]:
     return "\n".join(text), images
 
 
+LOCAL_TYPES = ("ollama", "lmstudio", "llamacpp")
+
+
+def is_local(provider: str) -> bool:
+    """Servidor local (aceita `reasoning_content`/`thinking` de volta nas mensagens do assistente)."""
+    try:
+        return spec(provider)["type"] in LOCAL_TYPES
+    except Exception:
+        return False
+
+
 def _to_ollama(messages: list[dict]) -> list[dict]:
     names: dict[str, str] = {}
     out = []
     for m in messages:
         m = dict(m)
+        if m.get("reasoning_content"):  # no /api/chat o campo chama `thinking`
+            m["thinking"] = m.pop("reasoning_content")
         if not isinstance(m.get("content"), str):
             m["content"], images = _split_parts(m["content"])
             if images:

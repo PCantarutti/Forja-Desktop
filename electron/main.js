@@ -96,6 +96,12 @@ function iconPath() {
 function pythonExe() {
   const packaged = path.join(ROOT, "python", "python.exe");
   if (fs.existsSync(packaged)) return packaged;
+  // Dev: o Python portátil de resources/ (npm run prepare-resources) vem antes do venv. Um venv sobre o
+  // Python da Microsoft Store tem as escritas em %APPDATA% virtualizadas para LocalCache: o backend
+  // passa a ver um forja.db de lá misturado com o -wal da pasta real, e o SQLite acusa
+  // "database disk image is malformed" no startup.
+  const portable = path.join(ROOT, "resources", "python", "python.exe");
+  if (fs.existsSync(portable)) return portable;
   const venv = path.join(ROOT, "backend", ".venv", "Scripts", "python.exe"); // dev no Windows
   return fs.existsSync(venv) ? venv : path.join(ROOT, "backend", ".venv", "bin", "python");
 }
@@ -125,18 +131,22 @@ function freePort() {
  * Por isso ele é apagado antes de esperar: o que vier depois é desta execução.
  */
 async function cdpEndpoint() {
+  // O Chromium escreve este arquivo UMA vez, antes do `ready`; apagá-lo aqui deixaria o app sem CDP
+  // (e o backend cairia no espelho headless sem avisar). Contra arquivo velho de uma execução que
+  // morreu suja, a defesa é outra: a 2ª linha traz o GUID do browser, e /json/version da porta tem
+  // de devolver o mesmo GUID — um endpoint morto não responde, e outro Chromium responde outro GUID.
   const file = path.join(USER_DATA, "DevToolsActivePort");
-  try {
-    fs.rmSync(file, { force: true });
-  } catch {
-    /* em uso: a espera abaixo ainda pode pegar o valor novo */
-  }
   for (let i = 0; i < 30; i++) {
     try {
-      const p = Number(fs.readFileSync(file, "utf8").split(String.fromCharCode(10))[0]);
-      if (p > 0) return `http://127.0.0.1:${p}`;
+      const [porta, guid] = fs.readFileSync(file, "utf8").split(/\r?\n/);
+      const p = Number(porta);
+      if (p > 0) {
+        const r = await fetch(`http://127.0.0.1:${p}/json/version`, { signal: AbortSignal.timeout(1000) });
+        const ws = (await r.json()).webSocketDebuggerUrl ?? "";
+        if (guid && ws.endsWith(guid)) return `http://127.0.0.1:${p}`;
+      }
     } catch {
-      /* ainda não escreveu */
+      /* ainda não escreveu, ou porta de outra execução: espera o arquivo desta */
     }
     await new Promise((r) => setTimeout(r, 100));
   }

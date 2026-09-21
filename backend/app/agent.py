@@ -501,7 +501,15 @@ def _join_user(a, b):
 
 def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
-                  chat: bool = False) -> list[dict]:
+                  chat: bool = False, reasoning_back: bool = False) -> list[dict]:
+    """Histórico no formato do provider.
+
+    `reasoning_back`: devolve ao modelo, em `reasoning_content`, o raciocínio dos passos do turno atual
+    (mensagens do assistente depois da última do usuário). Sem isso, um modelo pensante (Qwen3.6, GLM)
+    recomeça o raciocínio do zero a cada ferramenta — "o usuário está reclamando que..." repetido a cada
+    passo — porque o template dele só enxerga o que mandamos. Turnos anteriores ficam sem, que é o que o
+    próprio template do Qwen faria. Só para providers locais: os de nuvem podem rejeitar o campo.
+    """
     native = via == "native"
     out: list[dict] = [{"role": "system",
                         "content": system_prompt(via, caps, permission=permission, effort=effort, plan=plan,
@@ -514,6 +522,7 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
     # depois do bloco de resultados: é o único formato que OpenAI-compatível e Ollama aceitam.
     # Só as últimas MAX_TOOL_IMAGES vão como imagem; cada uma custa ~1k tokens.
     with_images = [m.id for m in msgs if m.role == "tool" and _images(m)]
+    last_user = max((m.id for m in msgs if m.role == "user"), default=-1)
     recent = set(with_images[-MAX_TOOL_IMAGES:])
     pending: list[dict] = []
     omitted = 0
@@ -541,6 +550,8 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
                     {"id": c["id"], "type": "function",
                      "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
                     for c in calls]})
+                if reasoning_back and m.thinking and m.id > last_user:
+                    out[-1]["reasoning_content"] = m.thinking
             else:
                 text = m.content + "".join(
                     "\n<tool_call>\n" + json.dumps({"name": c["name"], "arguments": c["arguments"]},
@@ -737,12 +748,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         mode_at_start = run.permission
         if run.plan is None:
             run.plan = last_plan(msgs)
-        messages = build_history(msgs, via, caps, run.permission, req.effort, run.plan, chat)
+        messages = build_history(msgs, via, caps, run.permission, req.effort, run.plan, chat,
+                                 reasoning_back=llm.is_local(req.provider))
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
         if _estimate(messages, tools) > config.COMPACT_AT * teto:
             async for ev in _compact(conv_id, msgs, req, teto):
                 yield ev
-            messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan, chat)
+            messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan, chat,
+                                     reasoning_back=llm.is_local(req.provider))
 
         content = reasoning = ""
         done: dict = {"tool_calls": [], "prompt_tokens": None, "completion_tokens": None}

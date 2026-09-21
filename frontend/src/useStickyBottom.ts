@@ -29,6 +29,18 @@ export function useStickyBottom<T extends HTMLElement>(deps: unknown[]) {
   const olho = useRef<IntersectionObserver | null>(null);
   const observado = useRef<Element | null>(null);
 
+  /** Desce até o fim no próximo quadro. Um por quadro: a 160 t/s chega token a cada ~6ms. */
+  const agendar = useCallback(() => {
+    if (!ref.current || !colado.current || quadro.current) return;
+    quadro.current = requestAnimationFrame(() => {
+      quadro.current = 0;
+      const el = ref.current;
+      if (!el || !colado.current) return;
+      el.scrollTop = el.scrollHeight;
+      ultimo.current = el.scrollTop;
+    });
+  }, []);
+
   // Sem lista de dependências de propósito: a sentinela nem sempre existe na montagem — a caixa de
   // raciocínio só desenha o corpo depois que chega o primeiro texto. Com `[]`, o observer nunca era
   // criado e a caixa acompanhava até a primeira rolagem e nunca mais colava. Aqui a cada render se
@@ -41,7 +53,14 @@ export function useStickyBottom<T extends HTMLElement>(deps: unknown[]) {
     observado.current = alvo;
     olho.current = new IntersectionObserver(
       ([e]) => {
-        if (e.isIntersecting) colado.current = true; // só cola; soltar é decisão do onScroll
+        if (e.isIntersecting) {
+          colado.current = true; // só cola; soltar é decisão do onScroll
+        } else if (colado.current) {
+          // A sentinela saiu de vista e nós ainda estamos acompanhando: alguma coisa cresceu sem
+          // passar por um render nosso — imagem que só ganha altura ao carregar, favicon, fonte.
+          // O efeito abaixo não roda nesse caso, então quem desce atrás dela é o observer.
+          agendar();
+        }
       },
       { root: raiz },
     );
@@ -51,14 +70,7 @@ export function useStickyBottom<T extends HTMLElement>(deps: unknown[]) {
   useEffect(() => () => olho.current?.disconnect(), []);
 
   useEffect(() => {
-    if (!ref.current || !colado.current || quadro.current) return;
-    quadro.current = requestAnimationFrame(() => {
-      quadro.current = 0;
-      const el = ref.current;
-      if (!el || !colado.current) return;
-      el.scrollTop = el.scrollHeight;
-      ultimo.current = el.scrollTop;
-    });
+    agendar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
