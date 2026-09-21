@@ -12,7 +12,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     // O status vai junto: alguns erros são perguntas (409 = precisa de confirmação), não falhas.
     throw Object.assign(new Error(body.detail ?? `HTTP ${r.status}`), { status: r.status });
   }
-  return r.json();
+  // Resposta sem corpo (204, ou um DELETE que não devolve nada) fazia o r.json() estourar com um
+  // "Unexpected end of JSON input" que não dizia nada sobre a chamada que falhou.
+  const texto = await r.text();
+  return (texto ? JSON.parse(texto) : null) as T;
 }
 
 export const api = {
@@ -42,18 +45,31 @@ export async function streamSSE(path: string, init: RequestInit, onEvent: (ev: a
     throw Object.assign(new Error(b.detail ?? `HTTP ${r.status}`), { status: r.status });
   }
   const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  const SEPARADOR = String.fromCharCode(10, 10);
   let buf = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    let i;
-    while ((i = buf.indexOf("\n\n")) >= 0) {
-      const chunk = buf.slice(0, i);
-      buf = buf.slice(i + 2);
-      for (const line of chunk.split("\n")) {
-        if (line.startsWith("data: ")) onEvent(JSON.parse(line.slice(6)));
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i;
+      while ((i = buf.indexOf(SEPARADOR)) >= 0) {
+        const chunk = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        for (const line of chunk.split(String.fromCharCode(10))) {
+          if (!line.startsWith("data: ")) continue;
+          // Um frame quebrado não pode derrubar a execução inteira: a UI cairia no finally,
+          // recarregaria do banco e mostraria o turno como terminado enquanto ele segue vivo
+          // no servidor — o pior dos dois mundos, porque some sem dizer que sumiu.
+          try {
+            onEvent(JSON.parse(line.slice(6)));
+          } catch {
+            /* frame quebrado: segue lendo os próximos */
+          }
+        }
       }
     }
+  } finally {
+    reader.cancel().catch(() => {}); // solta o corpo da resposta mesmo se onEvent estourar
   }
 }

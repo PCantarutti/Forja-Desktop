@@ -83,6 +83,7 @@ export default function CompararView(props: {
   const [placar, setPlacar] = useState<PlacarLinha[] | null>(null);
   const [copiado, setCopiado] = useState(false);
   const acompanhando = useRef(0); // message_id que já está sendo ouvido: não abrir dois SSE
+  const corte = useRef<AbortController | null>(null); // aborta o stream da conversa anterior
 
   const rodando = estado?.status === "rodando";
   const temGguf = itens.some((i) => i.path);
@@ -97,20 +98,29 @@ export default function CompararView(props: {
     if (temGguf) setModo("sequencial");
   }, [temGguf]);
 
+  /** Acompanha UMA comparação. Trocar de conversa aborta o stream anterior: sem isso, o evento da
+   *  comparação em andamento pintava a tela da conversa recém-aberta — o mesmo bug que a aba
+   *  Pesquisa já tinha corrigido. */
   const ouvir = useCallback(
     async (messageId: number) => {
       if (acompanhando.current === messageId) return;
+      corte.current?.abort();
+      const ctl = new AbortController();
+      corte.current = ctl;
       acompanhando.current = messageId;
       try {
-        await streamSSE(`/comparar/${messageId}/stream`, {}, (ev) => !ev.erro && setEstado(ev));
+        await streamSSE(`/comparar/${messageId}/stream`, { signal: ctl.signal },
+          (ev) => !ev.erro && !ctl.signal.aborted && setEstado(ev));
       } catch (e: any) {
-        props.onError(e.message);
+        if (!ctl.signal.aborted) props.onError(e.message);
       } finally {
-        acompanhando.current = 0;
+        if (acompanhando.current === messageId) acompanhando.current = 0;
       }
     },
     [props.onError],
   );
+
+  useEffect(() => () => corte.current?.abort(), []);   // sair da aba encerra o stream
 
   /** Reabre a última comparação da conversa (e volta a ouvir, se ainda estiver rodando). */
   const carregarConversa = useCallback(

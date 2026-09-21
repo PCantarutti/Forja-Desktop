@@ -57,28 +57,55 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     setUrlInput("");
     setError("");
     wanted.current = null;
-    const es = new EventSource(`/api/browser/stream${q}`);
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
-    es.onmessage = (e) => {
-      const ev = JSON.parse(e.data);
-      if (ev.type === "frame") {
-        setFrame(`data:${ev.mime ?? "image/jpeg"};base64,${ev.data}`);
-        if (!editing.current) setUrlInput(ev.url);
-      } else if (ev.type === "state") {
-        setState(ev);
-        onState.current(ev);
-        if (!editing.current) setUrlInput(ev.url);
-        if (!ev.open) setFrame(null);
-        // Sessão (re)aberta com outro tamanho: manda o tamanho do painel.
-        if (ev.open && (!wanted.current || ev.width !== wanted.current.width || ev.height !== wanted.current.height)) {
-          wanted.current = null;
-          syncViewport();
+    // O EventSource se reconecta sozinho quando a conexão cai, mas NÃO quando o servidor responde
+    // fora da faixa 2xx: aí ele fecha de vez e o painel ficava preso em "Conectando ao navegador…"
+    // até alguém trocar de aba. Backend reiniciando é exatamente esse caso.
+    let es: EventSource | null = null;
+    let retentar: ReturnType<typeof setTimeout> | undefined;
+    let vivo = true;
+
+    const conectar = () => {
+      if (!vivo) return;
+      es = new EventSource(`/api/browser/stream${q}`);
+      es.onopen = () => setConnected(true);
+      es.onerror = () => {
+        setConnected(false);
+        if (es?.readyState !== EventSource.CLOSED) return; // ele mesmo vai tentar de novo
+        es.close();
+        clearTimeout(retentar);
+        retentar = setTimeout(conectar, 1500);
+      };
+      es.onmessage = (e) => {
+        let ev: any;
+        try {
+          ev = JSON.parse(e.data);
+        } catch {
+          return; // frame quebrado: ignora e espera o próximo
         }
-      }
+        if (ev.type === "frame") {
+          setFrame(`data:${ev.mime ?? "image/jpeg"};base64,${ev.data}`);
+          if (!editing.current) setUrlInput(ev.url);
+        } else if (ev.type === "state") {
+          setState(ev);
+          onState.current(ev);
+          if (!editing.current) setUrlInput(ev.url);
+          if (!ev.open) setFrame(null);
+          // Sessão (re)aberta com outro tamanho: manda o tamanho do painel.
+          if (ev.open && (!wanted.current || ev.width !== wanted.current.width || ev.height !== wanted.current.height)) {
+            wanted.current = null;
+            syncViewport();
+          }
+        }
+      };
     };
-    return () => es.close();
-  }, [conv]);
+
+    conectar();
+    return () => {
+      vivo = false;
+      clearTimeout(retentar);
+      es?.close();
+    };
+  }, [conv, q]);
 
   useEffect(() => {
     const el = box.current;
@@ -122,6 +149,8 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
   }, [native, conv]);
 
   // React registra "wheel" como passive: preventDefault só funciona com listener nativo.
+  // Com as dependências certas: sem elas o listener era removido e registrado de novo a cada
+  // quadro do espelho, porque cada frame re-renderiza este componente.
   useEffect(() => {
     const el = box.current;
     if (!el || native) return;
@@ -132,7 +161,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  });
+  }, [native, q]);
 
   async function send(body: Record<string, unknown>) {
     try {
