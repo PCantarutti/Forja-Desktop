@@ -141,7 +141,7 @@ export function IconeArquivo({ nome, className = "size-9" }: { nome: string; cla
   const [url, setUrl] = useState(() => cacheIcones.get(ext) ?? "");
 
   useEffect(() => {
-    // A ponte é tipada só neste repo (forja.d.ts), e este arquivo é comum aos dois: o tipo
+    // A ponte é tipada só no repo Desktop (forja.d.ts), e este arquivo é comum aos dois: o tipo
     // estreito aqui deixa o componente compilar dos dois lados sem depender do global.
     const ponte = (window as { forja?: { icon?: (e: string) => Promise<string> } }).forja;
     if (cacheIcones.has(ext) || !ponte?.icon) return;
