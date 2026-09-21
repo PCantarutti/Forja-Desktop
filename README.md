@@ -100,7 +100,7 @@ No modo **web/Docker** (sem Electron) vale o esquema antigo: um Chromium headles
 - **Endereços**: um servidor subido por `run_command` ou `serve_start` fica em `http://localhost:PORTA` — o mesmo endereço para você e para o navegador integrado. Só `http(s)`; `file:` e afins são bloqueados.
 - **Visão**: `browser_screenshot` sempre funciona (o print aparece no chat para você), mas a imagem só entra no contexto do modelo se ele tiver visão; sem visão ele recebe um aviso e valida pelo `browser_read`. O Forja detecta no Ollama (`/api/show` → `capabilities`) e no LM Studio (`type: vlm`); para outros providers, ou para forçar, use **Visão do modelo** (auto/sim/não) no painel Info. A imagem entra no contexto como mensagem do usuário; só as 2 últimas ficam como imagem, as anteriores viram texto.
 - **Permissões**: `browser_click`/`browser_type` seguem o modo de permissão e aceitam regras em *Permissões* (ex.: `browser_*`). `browser_eval` sempre pergunta. Conteúdo lido da página chega ao modelo marcado como dado não confiável.
-- O perfil do navegador é limpo e some ao fechar a sessão. Não peça ao agente para entrar em contas pessoais.
+- O perfil do navegador é limpo e some ao fechar a sessão: ele vive em memória, nada é gravado em disco. A página também não recebe permissão nenhuma — câmera, microfone, localização e notificação são recusadas sem perguntar, porque quem escolheu a página foi o agente. Não peça ao agente para entrar em contas pessoais.
 
 ## Seções: Chat e Agente
 

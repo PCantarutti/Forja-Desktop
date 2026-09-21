@@ -82,10 +82,18 @@ class BrowserHost {
 
   create(key, marker) {
     if (this.views.has(marker) || this.win.isDestroyed()) return;
-    const partition = `persist:forja-browser-${key}`; // cookies e storage por conversa, como no espelho
+    // Sem `persist:`: o perfil vive em memória e some com a sessão, como o README promete. Com ele,
+    // cookie e storage de toda conversa já aberta ficavam em userData/Partitions para sempre — e a
+    // desinstalação não apaga %APPDATA%. A chave vai sanitizada: ela vem da API, não daqui.
+    const partition = `forja-browser-${String(key).replace(/[^0-9a-z-]/gi, "-").slice(0, 40)}`;
     if (!this.partitions.has(partition)) {
       this.partitions.add(partition);
-      session.fromPartition(partition).on("will-download", (e) => e.preventDefault()); // sem downloads
+      const ses = session.fromPartition(partition);
+      ses.on("will-download", (e) => e.preventDefault()); // sem downloads
+      // Quem escolhe a página aqui é o agente, não o usuário: nada de câmera, microfone,
+      // localização, notificação ou área de transferência sem ninguém ter pedido.
+      ses.setPermissionRequestHandler((_wc, _perm, done) => done(false));
+      ses.setPermissionCheckHandler(() => false);
     }
     const view = new WebContentsView({
       webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },

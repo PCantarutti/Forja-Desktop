@@ -68,6 +68,24 @@ function savePrefs() {
   }
 }
 
+/**
+ * Perfis do navegador integrado que versões anteriores gravaram em disco.
+ *
+ * Até a 0.3.0 cada conversa usava uma partição `persist:`, então cookie e storage de tudo o que o
+ * agente abriu ficaram em userData/Partitions — e desinstalar não apaga %APPDATA%. Hoje a partição
+ * é em memória; isto varre o que ficou para trás, uma vez.
+ */
+function dropOldBrowserProfiles() {
+  const dir = path.join(USER_DATA, "Partitions");
+  try {
+    for (const nome of fs.readdirSync(dir)) {
+      if (nome.startsWith("forja-browser-")) fs.rmSync(path.join(dir, nome), { recursive: true, force: true });
+    }
+  } catch {
+    /* pasta não existe (instalação nova) ou arquivo em uso: não vale segurar a abertura por isso */
+  }
+}
+
 function iconPath() {
   return [path.join(ROOT, "icon.png"), path.join(ROOT, "build", "icon.png")].find((p) => fs.existsSync(p)) ?? null;
 }
@@ -406,6 +424,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     loadPrefs();
+    dropOldBrowserProfiles();
     app.setAppUserModelId("dev.forja.desktop"); // agrupamento na barra de tarefas e notificações
     syncTray();
     syncAutoStart();
