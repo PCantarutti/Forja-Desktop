@@ -81,6 +81,8 @@ type Live = {
     draft: Draft | null;
     sent: ToolsSent | null;
     approvals: { call: { id: string; name: string; arguments?: any }; preview: any; suggest?: string; parent?: string }[];
+    /** Geração em curso, em segundos decorridos — para remontar o contador de t/s ao reabrir. */
+    geracao: { segundos: number; segundos_gerando: number; tokens: number } | null;
   } | null;
 };
 
@@ -515,6 +517,14 @@ export default function App() {
     const run = live.run;
     if (run) {
       runId.current = run.run_id;
+      // Reconstrói o cronômetro da geração em curso. Ele nasce no `assistant_start`, que já passou
+      // para quem está reabrindo, e sem isto a linha de t/s voltava zerada e parada enquanto a
+      // resposta continuava chegando. O servidor manda segundos decorridos, não instantes.
+      const g = run.geracao;
+      liveGen.current = g
+        ? { t0: Date.now() - g.segundos * 1000, tokens: g.tokens,
+            tFirst: g.segundos_gerando ? Date.now() - g.segundos_gerando * 1000 : null }
+        : null;
       setDraft(run.draft);
       setSent(run.sent);
       setApprovals(Object.fromEntries(run.approvals.map((a) => [a.call.id, { preview: a.preview, suggest: a.suggest, tool: a.call.name }])));
@@ -862,6 +872,7 @@ export default function App() {
     const content = input.trim();
     if (slashQuery !== null && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
     if (!content && !attachments.length) return;
+    colar();  // mandar mensagem é dizer "quero ver o que vem agora": volta para o fim da conversa
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
     if (running) {
       // Execução em andamento: a mensagem entra na fila e o agente a recebe no próximo passo.

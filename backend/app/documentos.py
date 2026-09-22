@@ -727,6 +727,9 @@ async def write_document(root: Path, args: dict) -> dict:
 
 MAX_PREVIA_CHARS = 20_000  # o suficiente para umas 15 páginas; acima disso a imagem só engorda
 LARGURA_PREVIA = 820          # ~A4 a 96dpi, que é a largura do CSS do para_html
+LARGURA_NAVEGADOR = 1280      # .html é página: renderiza em largura de desktop, não de folha A4
+ALTURA_PREVIA = 1160
+ALTURA_MAX_PREVIA = 3000      # teto da imagem; sem ele uma landing page virava uma tira de 15000px
 PAGINAS_PREVIA = 3            # quantas páginas viram imagem quando dá para paginar de verdade
 MAX_PAGINAS_OCR = 30          # OCR é ~1s por página: acima disso a leitura deixa de ser interativa
 ESCALA_OCR = 2.6              # ~200 DPI; abaixo disso o reconhecimento cai bastante
@@ -892,17 +895,38 @@ async def preview_document(root: Path, args: dict) -> dict:
     if not texto or not texto.strip():
         raise ToolError(f"Não consegui extrair conteúdo de '{alvo.name}' para montar a prévia. "
                         "PDF escaneado e arquivo protegido caem aqui.")
-    cortado = len(texto) > MAX_PREVIA_CHARS
-    html = (alvo.read_text(encoding="utf-8", errors="replace") if ext == ".html"
+    pagina_web = ext == ".html"
+    # .html é página, não documento: renderiza o arquivo como ele é, numa janela de navegador.
+    # Nos outros, o que vale é o texto extraído, e aí o corte em MAX_PREVIA_CHARS é real.
+    cortado = not pagina_web and len(texto) > MAX_PREVIA_CHARS
+    html = (alvo.read_text(encoding="utf-8", errors="replace") if pagina_web
             else para_html(blocos(texto[:MAX_PREVIA_CHARS]), alvo.stem))
+    largura = LARGURA_NAVEGADOR if pagina_web else LARGURA_PREVIA
 
     async with _pagina_chromium(html, alvo.parent, "montar a prévia") as pagina:
-        await pagina.set_viewport_size({"width": LARGURA_PREVIA, "height": 1160})
-        dados = await pagina.screenshot(type="jpeg", quality=75, full_page=True, scale="css")
+        await pagina.set_viewport_size({"width": largura, "height": ALTURA_PREVIA})
+        # `full_page` sem teto era o problema: uma landing page vira uma tira de 13 mil pixels de
+        # altura, ilegível como imagem e cara como visão — um modelo local engasgou nela por minutos.
+        # Acima do teto, o recorte sai esticando a JANELA até o teto, e não pelo `clip`: o clip é
+        # limitado pela viewport, então ele devolvia 1160px enquanto a resposta prometia 3000.
+        altura = await pagina.evaluate("document.documentElement.scrollHeight")
+        alta = altura > ALTURA_MAX_PREVIA
+        if alta:
+            await pagina.set_viewport_size({"width": largura, "height": ALTURA_MAX_PREVIA})
+        dados = await pagina.screenshot(type="jpeg", quality=75, scale="css", full_page=not alta)
 
-    corte = f" Só o começo: o arquivo passa de {MAX_PREVIA_CHARS} caracteres." if cortado else ""
-    return _resposta_previa(root, alvo, [dados],
-                            "como o Forja lê o arquivo salvo, sem a diagramação do Word" + corte)
+    if pagina_web:
+        o_que = "a página renderizada num navegador de " + str(largura) + "px"
+        if alta:
+            o_que += (f", só os primeiros {ALTURA_MAX_PREVIA}px de {altura}px — para ver o resto, "
+                      "ou conferir rolagem, responsividade e erros de console, abra no navegador integrado")
+    else:
+        o_que = "como o Forja lê o arquivo salvo, sem a diagramação do Word"
+        if cortado:
+            o_que += f". Só o começo: o arquivo passa de {MAX_PREVIA_CHARS} caracteres"
+        elif alta:
+            o_que += f". Só os primeiros {ALTURA_MAX_PREVIA}px de {altura}px"
+    return _resposta_previa(root, alvo, [dados], o_que)
 
 
 def _resposta_previa(root: Path, alvo: Path, imagens: list[bytes], o_que_mostra: str) -> dict:
@@ -1367,7 +1391,9 @@ register(Tool(
     "verdade; num .docx, o Word da máquina renderiza quando está instalado (o texto da resposta diz "
     "qual caminho foi usado). Planilha e apresentação saem pela leitura, sem a diagramação do Office. "
     "É TAMBÉM a saída para PDF escaneado, em que read_file não devolve texto: as páginas chegam a "
-    "você como imagem e você transcreve o que vê, em vez de dizer ao usuário que o arquivo é ilegível.",
+    "você como imagem e você transcreve o que vê, em vez de dizer ao usuário que o arquivo é ilegível. "
+    "NÃO é o jeito de conferir um site que você escreveu: um .html sai como foto única, sem rolagem, "
+    "sem interação e sem console — para isso é o navegador (browser_navigate).",
     _obj({"path": {"type": "string", "description": "O arquivo a pré-visualizar"},
           "pagina": {"type": "integer",
                      "description": f"Só .pdf: primeira página da janela de {PAGINAS_PREVIA} "

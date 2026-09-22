@@ -202,3 +202,17 @@ def test_snapshot_refs_click_and_tabs_work():
     snap, out, typed, value = asyncio.run(go())
     assert "[ref=" in snap and "button" in snap
     assert "Título: ok" in out and value == "abc" and "URL:" in typed
+
+
+def test_print_sai_em_desktop_e_nao_no_tamanho_do_painel():
+    """Aconteceu em uso: o print que ia ao modelo saía com o site em largura de celular.
+
+    O viewport do navegador segue o painel da UI, que é uma coluna estreita — então validar o
+    layout de um site desktop era impossível. O print agora fixa o viewport por CDP só enquanto
+    tira a foto, sem mexer no painel.
+    """
+    assert browser.PRINT_VIEWPORT == {"width": 1920, "height": 1080}
+    from app.tools import REGISTRY
+    esquema = REGISTRY["browser_screenshot"].parameters["properties"]
+    assert set(esquema) == {"full_page", "largura", "altura"}  # a medida é opção, não obrigação
+    assert not REGISTRY["browser_screenshot"].parameters["required"]

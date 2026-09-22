@@ -231,3 +231,107 @@ def test_compacta_mesmo_sem_o_provider_informar_a_janela(monkeypatch):
               if e.get("type") == "event" and (e["message"].get("meta") or {}).get("kind") == "summary"]
     assert resumos, "o modelo nem foi chamado para resumir"
     assert resumo, "a conversa estourou o teto e mesmo assim nada foi compactado"
+
+
+def test_planilha_pedida_vai_pela_ferramenta_e_nao_por_script():
+    """Aconteceu em uso: pediram a tabela de um PDF em Excel e o modelo escreveu scripts Python,
+    gerou um .csv e tentou `pip install openpyxl` — recusado — e desistiu. write_spreadsheet faria
+    em uma chamada, com o openpyxl que já está instalado."""
+    p = agent_mod.system_prompt("agent")
+    regra = next(l for l in p.splitlines() if l.startswith("- Planilha (.xlsx"))
+    assert "write_spreadsheet" in regra and "NUNCA gere esses arquivos por script" in regra
+    # O nome da ferramenta de shell só entra quando ela está ligada: citar desligada confunde o modelo.
+    assert "run_command" in regra
+
+
+def test_tabela_na_resposta_sai_em_markdown():
+    p = agent_mod.system_prompt("agent")
+    assert any("Tabela na resposta vai em Markdown" in l for l in p.splitlines())
+
+
+def test_geracao_em_curso_sobrevive_a_reabertura():
+    """Reabrir uma conversa que ficou rodando zerava o contador de t/s: ele nasce no
+    `assistant_start`, que já passou. O snapshot agora carrega a geração em andamento."""
+    run = Run(conv_id=1)
+    asyncio.run(run.publish({"type": "assistant_start"}))
+    for _ in range(7):
+        asyncio.run(run.publish({"type": "token", "text": "a"}))
+
+    g = run.snapshot()["geracao"]
+    assert g["tokens"] == 7
+    assert g["segundos"] >= 0 and g["segundos_gerando"] >= 0  # decorridos, não instantes
+
+    asyncio.run(run.publish({"type": "assistant_end", "message": {"role": "assistant"}}))
+    assert run.snapshot()["geracao"] is None  # terminou: vale o meta.stats da mensagem
+
+
+def test_parar_nao_espera_o_modelo_falar():
+    """Aconteceu em uso: clicar em parar não fazia nada, ou demorava demais.
+
+    O laço só olhava o cancelamento quando chegava um pedaço; com o modelo calado (prompt grande,
+    imagem enorme, travado) ficava tudo preso no `__anext__`. Aqui o stream nunca entrega nada e o
+    cancelamento tem que vencer mesmo assim — e o gerador precisa ser fechado, que é o que derruba
+    a conexão com o provedor.
+    """
+    fechado = []
+
+    async def stream_mudo():
+        try:
+            await asyncio.Event().wait()  # nunca fala
+            yield ("content", "nunca chega")
+        finally:
+            fechado.append(True)
+
+    async def cenario():
+        cancelamento = asyncio.Event()
+        recebidos = []
+
+        async def consumir():
+            async for ev in agent_mod.ate_cancelar(stream_mudo(), cancelamento):
+                recebidos.append(ev)
+
+        tarefa = asyncio.create_task(consumir())
+        await asyncio.sleep(0.05)
+        assert not tarefa.done()  # de fato preso, como na vida real
+        cancelamento.set()
+        await asyncio.wait_for(tarefa, timeout=2)  # sem a corrida, isto estoura o timeout
+        return recebidos
+
+    assert asyncio.run(cenario()) == []
+    assert fechado == [True], "o gerador tem que ser fechado: é o que derruba a conexão do provedor"
+
+
+def test_parar_no_meio_entrega_o_que_ja_veio():
+    """Cancelar não pode perder o que o modelo já escreveu — o texto parcial fica na tela."""
+    async def stream():
+        yield ("content", "um")
+        yield ("content", "dois")
+        await asyncio.Event().wait()
+        yield ("content", "nunca")
+
+    async def cenario():
+        cancelamento = asyncio.Event()
+        recebidos = []
+        async for ev in agent_mod.ate_cancelar(stream(), cancelamento):
+            recebidos.append(ev)
+            if len(recebidos) == 2:
+                cancelamento.set()
+        return recebidos
+
+    assert asyncio.run(asyncio.wait_for(cenario(), timeout=2)) == [("content", "um"), ("content", "dois")]
+
+
+def test_marca_se_o_modelo_enxerga_a_imagem():
+    """Quem manda validar um layout precisa saber se o modelo olhou o print ou chutou pelo texto.
+
+    O backend já sabia (é o que decide mandar a imagem ou um aviso em texto), mas só gravava o caso
+    negativo, e a UI não tinha o que mostrar.
+    """
+    from app.agent import _images
+
+    class Msg:
+        def __init__(self, meta): self.meta = meta
+
+    anexo = {"kind": "image", "path": "a.jpg"}
+    assert _images(Msg({"attachments": [anexo], "model_sees": True})) == [anexo]
+    assert _images(Msg({"attachments": [anexo], "model_sees": False})) == []

@@ -7,6 +7,7 @@ qualquer um dos três quebrar.
 Nenhum binário fica versionado: todo arquivo de entrada é produzido pelas próprias ferramentas.
 """
 import asyncio
+import io
 import pathlib
 import zipfile
 
@@ -711,3 +712,36 @@ def test_texto_comum_segue_pelo_caminho_de_sempre(ws):
 
     (ws / "a.txt").write_text("linha", encoding="utf-8")
     assert _legivel(ws / "a.txt", (ws / "a.txt").read_bytes()) == ("linha", False)
+
+
+@precisa_chromium
+def test_previa_de_html_longo_nao_vira_tira_gigante(tmp_path):
+    """Aconteceu em uso: o modelo escreveu um site, pediu a prévia, e `full_page` sem teto gerou uma
+    imagem de milhares de pixels de altura — ilegível, cara como visão, e o modelo local ficou
+    minutos engasgado nela. Agora a imagem tem teto e a resposta diz o que ficou de fora."""
+    from PIL import Image
+
+    alvo = tmp_path / "site.html"
+    blocos = "".join(f"<section style='height:900px'>bloco {i}</section>" for i in range(12))
+    alvo.write_text(f"<html><body style='margin:0'>{blocos}</body></html>", encoding="utf-8")
+
+    r = asyncio.run(documentos.preview_document(tmp_path, {"path": "site.html"}))
+    imagem = Image.open(io.BytesIO((tmp_path / r["attachments"][0]["path"]).read_bytes()))
+    assert imagem.height <= documentos.ALTURA_MAX_PREVIA, imagem.height
+    assert imagem.width == documentos.LARGURA_NAVEGADOR  # página é desktop, não folha A4
+    assert "navegador integrado" in r["text"]  # manda abrir de verdade para ver o resto
+    assert "Word" not in r["text"]  # .html não passa perto do Word
+    assert ".." not in r["text"]
+
+
+@precisa_chromium
+def test_previa_de_html_curto_sai_inteira(tmp_path):
+    from PIL import Image
+
+    alvo = tmp_path / "curto.html"
+    alvo.write_text("<html><body style='margin:0'><p style='height:300px'>oi</p></body></html>", encoding="utf-8")
+
+    r = asyncio.run(documentos.preview_document(tmp_path, {"path": "curto.html"}))
+    imagem = Image.open(io.BytesIO((tmp_path / r["attachments"][0]["path"]).read_bytes()))
+    assert imagem.height < documentos.ALTURA_MAX_PREVIA
+    assert "só os primeiros" not in r["text"].lower()

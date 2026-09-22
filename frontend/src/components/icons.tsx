@@ -20,6 +20,8 @@ export const Clock = base(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2
 export const Balanca = base(<><path d="M12 4v16M8 20h8M4 8h16" /><path d="m4 8-2.5 5a3 3 0 0 0 5 0z" /><path d="m20 8-2.5 5a3 3 0 0 0 5 0z" /></>);
 export const Gauge = base(<><path d="M4 16a8 8 0 1 1 16 0" /><path d="m12 16 4-5" /></>);
 export const ArrowUp = base(<path d="M12 19V5m-6 6 6-6 6 6" />);
+export const Eye = base(<><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z" /><circle cx="12" cy="12" r="2.8" /></>);
+export const EyeOff = base(<><path d="M3 3l18 18" /><path d="M10.6 6.2A9.9 9.9 0 0 1 12 6c6.4 0 10 6 10 6a17 17 0 0 1-3.3 3.8" /><path d="M6.3 8.2A17 17 0 0 0 2 12s3.6 6 10 6a9.8 9.8 0 0 0 3.5-.6" /></>);
 export const Square = ({ className = "size-3.5" }: P) => (
   <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
     <rect x="5" y="5" width="14" height="14" rx="2.5" />

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import contextvars
 import json
 import math
@@ -37,6 +38,7 @@ import re
 import time
 import uuid
 from collections import deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 from urllib.parse import urlparse
@@ -50,6 +52,10 @@ MIN_VIEWPORT, MAX_VIEWPORT = (320, 240), (3840, 2400)
 NAV_TIMEOUT = 15_000
 ACT_TIMEOUT = 5_000
 JPEG_QUALITY = 75  # screenshot que vai ao modelo
+# O print sai em tela de desktop, e não no tamanho do painel. O painel é uma coluna estreita, o
+# viewport do navegador segue o painel, e o print que chegava ao modelo mostrava o site em largura
+# de celular — uma tira alta, sem relação com o que se quer validar num site.
+PRINT_VIEWPORT = {"width": 1920, "height": 1080}
 CAST_JPEG_QUALITY = 85  # espelho ao vivo: texto ainda nítido, frame 3-5x menor que PNG
 MAX_TABS = 8
 SCRATCH = "0"  # sessão do painel quando nenhuma conversa está aberta
@@ -724,20 +730,71 @@ def eval_preview(_root: Path, args: dict) -> dict:
             "text": str(args.get("script", ""))}
 
 
+@asynccontextmanager
+async def _viewport_do_print(page, largura: int, altura: int):
+    """Renderiza a página num viewport dado, só enquanto o print é tirado, e devolve a MEDIDA REAL.
+
+    Quem troca é o `set_viewport_size` do Playwright, não um `Emulation.setDeviceMetricsOverride`
+    solto: o próprio `screenshot()` mexe nessa emulação e restaura pelo viewport que ELE conhece,
+    então o override cru era desfeito e a foto saía no tamanho do painel enquanto a resposta jurava
+    1920x1080. No modo nativo a aba é uma view do Electron sem viewport de Playwright, e aí não há
+    o que trocar — daí medir em vez de prometer.
+    """
+    anterior, sessao = page.viewport_size, None
+    with contextlib.suppress(Exception):
+        if anterior:
+            # Espelho: o contexto tem viewport próprio. Tem que ser o `set_viewport_size`, porque o
+            # `screenshot()` do Playwright mexe na emulação e a restaura pelo viewport que ELE
+            # conhece — um override cru era desfeito antes da foto sair.
+            await page.set_viewport_size({"width": largura, "height": altura})
+        else:
+            # Nativo: a aba é uma view do Electron, o contexto veio do CDP e não tem viewport, então
+            # `viewport_size` é None e não haveria tamanho para repor depois. Aqui o override é cru e
+            # a MESMA sessão o desfaz no fim — sem isso, tirar um print deixava o navegador do
+            # usuário preso em 1920x1080.
+            sessao = await page.context.new_cdp_session(page)
+            await sessao.send("Emulation.setDeviceMetricsOverride",
+                              {"width": largura, "height": altura, "deviceScaleFactor": 1, "mobile": False})
+    try:
+        medido = await page.evaluate("[innerWidth, innerHeight]")
+    except Exception:
+        medido = [largura, altura]
+    try:
+        yield {"width": int(medido[0]), "height": int(medido[1])}
+    finally:
+        with contextlib.suppress(Exception):
+            if sessao is not None:
+                try:
+                    await sessao.send("Emulation.clearDeviceMetricsOverride")
+                finally:
+                    await sessao.detach()
+            elif anterior:
+                await page.set_viewport_size(anterior)
+
+
 async def screenshot(_root: Path, args: dict) -> dict:
     s = current()
     page = await s.ensure()
+    inteira = bool(args.get("full_page"))
+    largura = max(MIN_VIEWPORT[0], min(MAX_VIEWPORT[0], int(args.get("largura") or PRINT_VIEWPORT["width"])))
+    altura = max(MIN_VIEWPORT[1], min(MAX_VIEWPORT[1], int(args.get("altura") or PRINT_VIEWPORT["height"])))
     try:
-        # scale="css": 1 pixel por px de CSS, senão o render 2x dobra o tamanho da imagem (e os tokens).
-        jpg = await page.screenshot(type="jpeg", quality=JPEG_QUALITY, full_page=bool(args.get("full_page")),
-                                    scale="css", timeout=ACT_TIMEOUT)
+        async with _viewport_do_print(page, largura, altura) as real:
+            # scale="css": 1 pixel por px de CSS, senão o render 2x dobra o tamanho da imagem (e os tokens).
+            jpg = await page.screenshot(type="jpeg", quality=JPEG_QUALITY, full_page=inteira,
+                                        scale="css", timeout=ACT_TIMEOUT)
     except Exception as e:
         raise ToolError(f"Falha no screenshot: {_err(e)}") from e
     try:
         att = uploads.save("browser.jpg", jpg, "image/jpeg")
     except ValueError as e:
         raise ToolError(str(e)) from e
-    size = "página inteira" if args.get("full_page") else f"{s.viewport['width']}x{s.viewport['height']}"
+    # A medida sai do que a página realmente tinha na hora da foto: prometer 1920 e entregar 380
+    # é pior que entregar 380 e dizer.
+    medida = f"{real['width']}x{real['height']}"
+    if (real["width"], real["height"]) != (largura, altura):
+        medida += " — o navegador não aceitou outra medida; é o tamanho do painel"
+    size = f"página inteira, largura {real['width']}" if inteira else medida
     return {"text": f"{await _summary(page)}\nScreenshot anexado ({size}).", "attachments": [att]}
 
 
@@ -794,6 +851,10 @@ register(Tool(
 register(Tool(
     "browser_screenshot",
     "Tira um screenshot da aba ativa. Ele aparece no chat para o usuário; se você tiver visão, também "
-    "chega a você como imagem. Use quando o usuário pedir um print ou para validar layout.",
-    _obj({"full_page": {"type": "boolean", "description": "Página inteira em vez do viewport. Padrão: false"}}, []),
+    "chega a você como imagem. Use quando o usuário pedir um print ou para validar layout. Sai em tela "
+    "de desktop (1920x1080) seja qual for o tamanho do painel; para conferir responsividade, peça outra "
+    "medida (ex.: largura 390, altura 844 de celular).",
+    _obj({"full_page": {"type": "boolean", "description": "Página inteira em vez do viewport. Padrão: false"},
+          "largura": {"type": "integer", "description": "Largura do viewport em px de CSS. Padrão: 1920"},
+          "altura": {"type": "integer", "description": "Altura do viewport em px de CSS. Padrão: 1080"}}, []),
     screenshot))

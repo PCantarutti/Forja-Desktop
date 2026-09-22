@@ -7,6 +7,7 @@ texto) → sem calls: checa promessa sem ação (reinjeta até 2x) → com calls
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 import uuid
@@ -150,6 +151,7 @@ class Run:
         self.finished = False
         self._changed = asyncio.Condition()
         # Estado derivado dos eventos, para reconexão:
+        self.geracao: dict | None = None  # geração em curso: início, 1º token e quantos já saíram
         self.draft: dict | None = None
         self.approvals: dict[str, dict] = {}
         self.sent: dict | None = None
@@ -158,6 +160,7 @@ class Run:
         t = ev["type"]
         if t == "assistant_start":
             self.draft = {"content": "", "thinking": "", "tool": None}
+            self.geracao = {"t0": time.monotonic(), "t_primeiro": None, "tokens": 0}
         elif t == "token" and self.draft is not None:
             self.draft["content"] += ev["text"]
         elif t == "thinking" and self.draft is not None:
@@ -168,6 +171,7 @@ class Run:
             self.draft["tool"] = {"name": ev["name"] or tool["name"], "text": (tool["text"] + ev["text"])[-TOOL_TAIL:]}
         elif t == "assistant_end":
             self.draft = None
+            self.geracao = None  # daqui em diante valem as estatísticas reais da mensagem (meta.stats)
         elif t == "approval_request":
             self.approvals[ev["call"]["id"]] = {"call": ev["call"], "preview": ev["preview"],
                                                 "suggest": ev.get("suggest"), "parent": ev.get("parent")}
@@ -177,6 +181,9 @@ class Run:
             self.approvals.pop(ev["message"]["tool_call_id"], None)
         elif t == "tools_sent":
             self.sent = ev
+        if t in ("token", "thinking", "tool_token") and self.geracao is not None:
+            self.geracao["t_primeiro"] = self.geracao["t_primeiro"] or time.monotonic()
+            self.geracao["tokens"] += 1  # provedores locais mandam um chunk por token
         async with self._changed:
             self.events.append(ev)
             self._changed.notify_all()
@@ -195,7 +202,22 @@ class Run:
 
     def snapshot(self) -> dict:
         return {"run_id": self.id, "cursor": len(self.events), "draft": self.draft, "sent": self.sent,
-                "approvals": list(self.approvals.values())}
+                "approvals": list(self.approvals.values()), "geracao": self._geracao_agora()}
+
+    def _geracao_agora(self) -> dict | None:
+        """Quanto já dura a geração em curso, em segundos — não o instante em que começou.
+
+        Quem reabre uma conversa que ficou rodando em outra aba precisa disso: o contador de t/s da
+        UI nasce no `assistant_start`, que já passou, e sem ele a linha voltava zerada e parada no
+        meio de uma resposta viva. Segundos decorridos em vez de timestamp porque o relógio do
+        cliente não é o mesmo daqui, e a diferença entre os dois apareceria direto no t/s.
+        """
+        g = self.geracao
+        if not g:
+            return None
+        agora = time.monotonic()
+        return {"segundos": agora - g["t0"], "tokens": g["tokens"],
+                "segundos_gerando": (agora - g["t_primeiro"]) if g["t_primeiro"] else 0.0}
 
     def start(self, req: "RunRequest") -> None:
         async def main():
@@ -239,6 +261,41 @@ class Run:
         for fut in self.pending.values():
             if not fut.done():
                 fut.set_result(False)
+
+
+async def ate_cancelar(fluxo, cancelamento: asyncio.Event):
+    """Repassa o stream do modelo e desiste no instante em que o cancelamento chega.
+
+    `async for` só volta a rodar quando chega um pedaço, então checar `cancel.is_set()` dentro do
+    laço só funciona enquanto o modelo está falando. Com ele calado — processando um prompt grande,
+    engasgado numa imagem enorme, ou travado de vez — o botão de parar não tinha efeito nenhum:
+    ficava tudo preso no `__anext__` até o próximo token, que às vezes não vinha. Aqui corre uma
+    disputa entre o próximo pedaço e o evento, e quem chegar primeiro decide.
+
+    Fechar o gerador no fim é o que realmente para: o `GeneratorExit` sai pelo `async with` do httpx
+    e derruba a conexão. Sem isso, parar na tela deixava o provedor gerando do outro lado.
+    """
+    it = fluxo.__aiter__()
+    esperando = asyncio.ensure_future(cancelamento.wait())
+    try:
+        while True:
+            proximo = asyncio.ensure_future(it.__anext__())
+            feitos, _ = await asyncio.wait({proximo, esperando}, return_when=asyncio.FIRST_COMPLETED)
+            if proximo not in feitos:
+                proximo.cancel()
+                # Espera a tarefa morrer antes de mexer no gerador: fechar um gerador que ainda tem
+                # um `__anext__` em voo levanta "athrow(): asynchronous generator is already running".
+                with contextlib.suppress(asyncio.CancelledError):
+                    await proximo
+                return
+            try:
+                yield proximo.result()
+            except StopAsyncIteration:
+                return
+    finally:
+        esperando.cancel()
+        with contextlib.suppress(Exception):
+            await fluxo.aclose()
 
 
 RUNS: dict[str, Run] = {}
@@ -308,6 +365,9 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     if "edit_file" in names or "write_file" in names:
         rules.append("- Leia o arquivo antes de editar. Use edit_file para mudanças pontuais (old_str exato e único, "
                      "sem números de linha) e write_file para arquivos novos ou reescritas completas.")
+    rules.append("- Tabela na resposta vai em Markdown (`| coluna | coluna |` com a linha de `---` embaixo do "
+                 "cabeçalho), nunca em colunas alinhadas com espaço: a interface renderiza a de Markdown como "
+                 "tabela de verdade, com botão de copiar para o Excel, e a de espaços como texto torto.")
     rules.append("- Se uma ferramenta devolver erro, leia a mensagem e corrija a chamada.")
     rules.append("- " + NO_COUNTING)
     if "run_command" in names:
@@ -327,6 +387,13 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
         rules.append("- Navegador: browser_navigate abre uma URL e o usuário vê ao vivo no painel. Depois de navegar "
                      "ou agir, chame browser_read para ver a página; os refs eN servem em browser_click/browser_type. "
                      "A URL de um servidor depende de onde ele roda (veja Ambiente).")
+        # Aconteceu em uso: pediram um site, o modelo escreveu o .html e foi conferir pelo
+        # preview_document. A prévia é uma foto única e sem interação — e numa landing page longa
+        # vira uma tira de milhares de pixels, que o modelo local passou minutos tentando digerir.
+        rules.append("- Página que você escreveu (.html) se confere no navegador, não no preview_document: "
+                     "browser_navigate no arquivo (file:///CAMINHO) ou no servidor, e daí browser_read e "
+                     "browser_console. É o único jeito de ver rolagem, responsividade, JavaScript e erro de "
+                     "console. O preview_document é para documento — .docx, .pdf, .xlsx, .pptx.")
         if caps is not None and "vision" in caps:
             rules.append("- Valide layout com browser_screenshot (você recebe a imagem); estrutura e erros com "
                          "browser_read e browser_console.")
@@ -335,6 +402,15 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                          "Você não tem visão e não recebe a imagem, então valide layout pelo browser_read "
                          "(estrutura) e browser_console (erros).")
     if "write_document" in names or "write_spreadsheet" in names:
+        # Aconteceu em uso: pediram "a tabela deste PDF em Excel" e o modelo escreveu dois scripts
+        # Python, gerou um .csv e tentou `pip install openpyxl` — que o usuário recusou, e aí desistiu.
+        # O openpyxl já está instalado e write_spreadsheet resolveria em UMA chamada. Ele não sabia
+        # que a ferramenta existia para isso, porque nada dizia.
+        rules.append("- Planilha (.xlsx, .csv) pedida pelo usuário é write_spreadsheet; documento (.docx, .pdf, "
+                     ".pptx) é write_document. NUNCA gere esses arquivos por script: as bibliotecas já estão "
+                     "aqui, e o script só leva a uma instalação que o usuário vai recusar."
+                     # Citar uma ferramenta desligada confunde o modelo, então o nome só entra se ela existir.
+                     + (" Vale para o run_command também." if "run_command" in names else ""))
         rules.append("- Documento e planilha: depois de gerar ou editar, abra o arquivo com read_file e confira o "
                      "que saiu antes de dizer que está pronto. É o arquivo salvo, lido de volta — tabela que virou "
                      "texto com `|`, conteúdo que sumiu, caixa alta que não pegou aparecem aí.")
@@ -780,10 +856,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         t0 = time.monotonic()
         t_first = None
         try:
-            async for kind, val in llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX,
-                                                   req.effort):
-                if run.cancel.is_set():
-                    break
+            async for kind, val in ate_cancelar(
+                    llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort),
+                    run.cancel):
                 if kind != "done" and t_first is None:
                     t_first = time.monotonic()
                 if kind == "content":
@@ -1168,11 +1243,14 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
                 meta["sources"] = res["sources"]
             res = res.get("text", "")
             images = [a for a in meta["attachments"] if a.get("kind") == "image"]
-            if images and caps is not None and "vision" not in caps:
-                # O print aparece no chat para o usuário; o modelo sem visão só recebe este aviso.
-                meta["model_sees"] = False
-                res += ("\n[A imagem foi exibida ao usuário no chat. Você não tem visão e não a recebe; "
-                        "para checar a página use browser_read e browser_console.]")
+            if images:
+                # Gravado dos dois jeitos de propósito: a UI marca no card se o modelo olhou a
+                # imagem ou só o usuário. Sem isso não havia como saber — a pessoa mandava validar
+                # um layout e não tinha ideia se o modelo estava vendo ou chutando pelo texto.
+                meta["model_sees"] = caps is None or "vision" in caps
+                if not meta["model_sees"]:
+                    res += ("\n[A imagem foi exibida ao usuário no chat. Você não tem visão e não a recebe; "
+                            "para checar a página use browser_read e browser_console.]")
         hook_out = await asyncio.to_thread(hooks.run_post, name, args, workspace.root())  # .forja/hooks.json
         if hook_out:
             res = f"{res}\n\n{hook_out}"

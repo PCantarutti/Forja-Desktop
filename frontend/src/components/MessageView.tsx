@@ -5,7 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
-import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
 function CodeBlock(props: React.ComponentProps<"pre">) {
@@ -13,21 +13,65 @@ function CodeBlock(props: React.ComponentProps<"pre">) {
   // ponytail: o texto vem do DOM já renderizado, sem remontar o AST do markdown
   return (
     <div className="group relative">
-      <pre ref={ref} {...props} />
-      <div className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <BotaoDeCanto>
         <CopyButton text={() => ref.current?.textContent ?? ""} bg />
+      </BotaoDeCanto>
+      <pre ref={ref} {...props} />
+    </div>
+  );
+}
+
+/**
+ * O botão no canto superior direito do bloco, que ACOMPANHA a rolagem enquanto o bloco está na tela.
+ *
+ * Era `absolute` no topo: num arquivo de 400 linhas o botão ficava lá em cima e, para copiar, a
+ * pessoa tinha que rolar até o começo do bloco. `sticky` gruda ele no alto da área visível e o
+ * solta na borda de baixo do bloco, que é onde ele deixa de fazer sentido.
+ *
+ * A caixa tem altura zero e vem ANTES do conteúdo: assim o botão flutua por cima sem empurrar nada
+ * e sem precisar de `absolute`, que é justamente o que o tirava do fluxo e impedia o `sticky`.
+ */
+function BotaoDeCanto({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="pointer-events-none sticky top-1.5 z-10 h-0 text-right">
+      <div className="pointer-events-auto mr-1.5 inline-block opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        {children}
       </div>
     </div>
   );
 }
 
-/** Tabela larga rola dentro do card em vez de estourar (o painel de planos e chato de estreito). */
+/**
+ * Tabela larga rola dentro do card em vez de estourar (o painel de planos e chato de estreito),
+ * com botão de copiar no canto igual ao do bloco de código.
+ *
+ * O que vai para a área de transferência são DOIS formatos do mesmo conteúdo: `text/html` com a
+ * tabela e `text/plain` em TSV. Excel, Sheets e Word leem o HTML e colam uma grade de verdade,
+ * célula por célula; editor de texto e terminal ficam com o TSV. Só o texto puro não bastava —
+ * colar no Excel jogava a linha inteira numa célula só.
+ */
 function Table(props: React.ComponentProps<"table">) {
+  const ref = useRef<HTMLTableElement>(null);
   return (
-    <div className="md-table">
-      <table {...props} />
+    <div className="group relative">
+      <BotaoDeCanto>
+        <CopyButton text={() => tabelaEmTsv(ref.current)} html={() => ref.current?.outerHTML ?? ""} bg />
+      </BotaoDeCanto>
+      <div className="md-table">
+        <table ref={ref} {...props} />
+      </div>
     </div>
   );
+}
+
+/** A tabela como TSV: uma linha por `tr`, células separadas por tab — o que o Excel espera colado. */
+function tabelaEmTsv(tabela: HTMLTableElement | null): string {
+  if (!tabela) return "";
+  const TAB = String.fromCharCode(9);
+  return [...tabela.rows]
+    // A quebra dentro da célula viraria uma linha nova na planilha e desalinharia tudo abaixo.
+    .map((linha) => [...linha.cells].map((c) => (c.textContent ?? "").trim().replace(/\s+/g, " ")).join(TAB))
+    .join("\n");
 }
 
 /** Link http(s) na resposta é sempre fonte: vira pílula clicável e abre fora, não no lugar do app. */
@@ -151,12 +195,20 @@ export function Lightbox({ src, onClose }: { src: string; onClose: () => void })
 }
 
 /** Screenshot devolvido por uma ferramenta: grande no chat, clique abre em tela cheia. */
-export function ToolImages({ list, bare }: { list: Attachment[]; bare?: boolean }) {
+export function ToolImages({ list, bare, modelSees }: { list: Attachment[]; bare?: boolean; modelSees?: boolean }) {
   const [zoom, setZoom] = useState<string | null>(null);
   const images = list.filter((a) => a.kind === "image");
   if (!images.length) return null;
   return (
     <div className={bare ? "my-2 space-y-2" : "space-y-2 border-t border-line p-3"}>
+      {/* Quem manda validar um layout precisa saber se o modelo olhou a imagem ou está chutando
+          pelo texto. Modelo sem visão recebe só um aviso em texto no lugar do print. */}
+      {modelSees !== undefined && (
+        <div className="flex items-center gap-1.5 text-xs text-faint">
+          {modelSees ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          {modelSees ? "o modelo vê esta imagem" : "o modelo NÃO vê esta imagem — modelo sem visão"}
+        </div>
+      )}
       {images.map((a) => (
         <img
           key={a.path}
@@ -325,13 +377,27 @@ export function Attachments({ list, onRemove }: { list: Attachment[]; onRemove?:
   );
 }
 
-export function CopyButton({ text, bg }: { text: string | (() => string); bg?: boolean }) {
+/**
+ * `html` é opcional e serve a quem vai colar num programa que entende formatação (Excel, Sheets,
+ * Word): eles preferem o `text/html` da área de transferência e montam a grade a partir dele. Quem
+ * só lê texto continua recebendo o `text`. Navegador sem `ClipboardItem` cai no texto puro.
+ */
+export function CopyButton({ text, html, bg }: { text: string | (() => string); html?: () => string; bg?: boolean }) {
   const [done, setDone] = useState(false);
   return (
     <button
       title={done ? "Copiado" : "Copiar"}
       onClick={() => {
-        navigator.clipboard?.writeText(typeof text === "function" ? text() : text);
+        const puro = typeof text === "function" ? text() : text;
+        const rico = html?.();
+        const tipo = (t: string, v: string) => new Blob([v], { type: t });
+        if (rico && typeof ClipboardItem !== "undefined") {
+          navigator.clipboard
+            ?.write([new ClipboardItem({ "text/html": tipo("text/html", rico), "text/plain": tipo("text/plain", puro) })])
+            .catch(() => navigator.clipboard?.writeText(puro));
+        } else {
+          navigator.clipboard?.writeText(puro);
+        }
         setDone(true);
         setTimeout(() => setDone(false), 1200);
       }}
@@ -522,7 +588,9 @@ export function ToolBlock(props: {
         </pre>
       )}
       {result?.meta?.sources && <SourceList items={result.meta.sources} />}
-      {!props.hideImages && result?.meta?.attachments && <ToolImages list={result.meta.attachments} />}
+      {!props.hideImages && result?.meta?.attachments && (
+        <ToolImages list={result.meta.attachments} modelSees={result.meta.model_sees} />
+      )}
       {!props.hideImages && result?.meta?.attachments && (
         <div className="border-t border-line px-3 py-1">
           <ToolFiles list={result.meta.attachments} onOpen={props.onOpen} />

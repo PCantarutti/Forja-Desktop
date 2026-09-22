@@ -79,14 +79,24 @@ export function useStickyBottom<T extends HTMLElement>(deps: unknown[]) {
   const onScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    if (el.scrollTop < ultimo.current - 1) colado.current = false;
+    // Nem toda descida de scrollTop é o usuário rolando: quando o conteúdo ENCOLHE, o navegador
+    // gruda o scrollTop no novo teto e dispara um `scroll` idêntico ao de quem rolou para cima.
+    // Era o que quebrava o acompanhamento quando aparecia um card de aprovação — o rascunho que
+    // estava sendo escrito some e vira a chamada já pronta, o conteúdo diminui por um quadro, e
+    // aqui isso passava por "o usuário quer ler mais acima". Depois disso a tela ficava parada no
+    // meio da conversa enquanto o resto era escrito embaixo. Se o teto é menor do que a posição de
+    // antes, a descida foi dele, não dela.
+    const teto = el.scrollHeight - el.clientHeight;
+    const encolheu = teto < ultimo.current - 1;
+    if (!encolheu && el.scrollTop < ultimo.current - 1) colado.current = false;
     ultimo.current = el.scrollTop;
   }, []);
 
-  /** Volta a acompanhar (trocar de conversa, mandar mensagem). */
+  /** Volta a acompanhar (trocar de conversa, mandar mensagem) e desce já, sem esperar conteúdo novo. */
   const colar = useCallback(() => {
     colado.current = true;
-  }, []);
+    agendar();  // só marcar não bastava: quem mandava mensagem lá de cima ficava lá até chegar o 1º token
+  }, [agendar]);
 
   return { ref, fim, onScroll, colar };
 }
