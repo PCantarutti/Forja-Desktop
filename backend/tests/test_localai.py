@@ -813,3 +813,24 @@ def test_seletor_lista_gguf_mesmo_sem_modelo_carregado(isolado, monkeypatch):
         catalogo = {p["id"]: p for p in c.get("/api/catalog").json()}
         assert catalogo["local"]["type"] == "llamacpp"
         assert catalogo["local"]["models"] == [] and "Nenhum modelo carregado" in catalogo["local"]["error"]
+
+
+def test_mmproj_vazio_nao_desliga_a_visao(tmp_path, monkeypatch):
+    """Aconteceu em uso: um Qwen3.6 com o mmproj-*.gguf na mesma pasta subia com vision=False.
+
+    O auto-detect do projetor chegou depois que a configuração já estava salva, e nela o campo
+    estava gravado como "" — override vazio que vence o padrão e desliga a visão calado. Todo print
+    que o agente tirasse ia para o lixo sem ninguém perceber.
+    """
+    modelo = tmp_path / "modelo.gguf"
+    modelo.write_bytes(b"gguf")
+    projetor = tmp_path / "mmproj-modelo-BF16.gguf"
+    projetor.write_bytes(b"gguf")
+
+    monkeypatch.setattr(localai, "defaults_for", lambda p: {"ctx": 4096, "mmproj": str(projetor)})
+    monkeypatch.setattr(localai, "read_config",
+                        lambda: {"models": {str(modelo): {"ctx": 8192, "mmproj": ""}}})
+
+    ov = localai.overrides(str(modelo))
+    assert ov == {"ctx": 8192}, "o mmproj vazio tem que ser descartado, o ctx não"
+    assert localai.params(str(modelo))["mmproj"] == str(projetor)

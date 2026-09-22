@@ -18,7 +18,7 @@ Dois modos, mesma API para o agente e para a UI:
 
 Ferramentas do modelo:
 
-- browser_navigate, browser_read, browser_console, browser_tabs, browser_screenshot: leitura
+- browser_navigate, browser_read, browser_console, browser_tabs, browser_scroll, browser_screenshot: leitura
 - browser_click, browser_type, browser_upload: `mutating` (seguem a política de escrita)
 - browser_eval: `mutating` + `always_ask` (JS arbitrário, como o run_command)
 
@@ -51,11 +51,21 @@ VIEWPORT = {"width": 1280, "height": 800}  # inicial; o painel da UI manda o tam
 MIN_VIEWPORT, MAX_VIEWPORT = (320, 240), (3840, 2400)
 NAV_TIMEOUT = 15_000
 ACT_TIMEOUT = 5_000
+# O print tem prazo próprio, bem maior que o de um clique: trocar o viewport obriga a página a
+# refazer o layout inteiro antes da captura, e numa página de 5000px isso não cabe nos 5s do
+# ACT_TIMEOUT. Medido em uso: 3 de 8 prints morriam com `Page.screenshot: Timeout 5000ms`, e os
+# dois seguintes saíam no tamanho errado, com a emulação largada pela metade.
+PRINT_TIMEOUT = 25_000
 JPEG_QUALITY = 75  # screenshot que vai ao modelo
 # O print sai em tela de desktop, e não no tamanho do painel. O painel é uma coluna estreita, o
 # viewport do navegador segue o painel, e o print que chegava ao modelo mostrava o site em largura
 # de celular — uma tira alta, sem relação com o que se quer validar num site.
 PRINT_VIEWPORT = {"width": 1920, "height": 1080}
+# Teto da altura do print. O que custa num modelo com visão é PIXEL: a página inteira virava
+# 1903x5327 (10 MP) e o encoder do llama.cpp passava mais de 100 segundos nela — o turno parecia
+# travado depois de cada print. Hoje não há print de página inteira (é browser_scroll + outro
+# print); o teto fica de guarda para quem pedir uma altura absurda.
+ALTURA_MAX_PRINT = 2200
 CAST_JPEG_QUALITY = 85  # espelho ao vivo: texto ainda nítido, frame 3-5x menor que PNG
 MAX_TABS = 8
 SCRATCH = "0"  # sessão do painel quando nenhuma conversa está aberta
@@ -755,6 +765,10 @@ async def _viewport_do_print(page, largura: int, altura: int):
             sessao = await page.context.new_cdp_session(page)
             await sessao.send("Emulation.setDeviceMetricsOverride",
                               {"width": largura, "height": altura, "deviceScaleFactor": 1, "mobile": False})
+    # Deixa o layout assentar antes de medir e fotografar: a troca de viewport é assíncrona e uma
+    # página longa leva um tempo para refluir.
+    with contextlib.suppress(Exception):
+        await page.wait_for_timeout(200)
     try:
         medido = await page.evaluate("[innerWidth, innerHeight]")
     except Exception:
@@ -772,30 +786,88 @@ async def _viewport_do_print(page, largura: int, altura: int):
                 await page.set_viewport_size(anterior)
 
 
-async def screenshot(_root: Path, args: dict) -> dict:
+async def scroll(_root: Path, args: dict) -> str:
+    """Rola a aba ativa, ou traz um elemento para a tela.
+
+    Existe porque sem ela o print era a única forma de ver o que está abaixo da dobra — e a saída
+    que sobrava era `full_page`, que devolvia uma tira de 5000px e travava o modelo com visão por
+    minutos. Com o scroll, cada print continua sendo uma tela de verdade e o modelo desce por ela.
+    """
     s = current()
     page = await s.ensure()
-    inteira = bool(args.get("full_page"))
+    alvo = str(args.get("selector") or "").strip()
+    try:
+        if alvo:
+            await _locator(page, alvo).scroll_into_view_if_needed(timeout=ACT_TIMEOUT)
+        else:
+            para = str(args.get("para") or "baixo").lower()
+            if para in ("topo", "inicio", "início"):
+                await page.evaluate("scrollTo({top: 0})")
+            elif para in ("fim", "fundo"):
+                await page.evaluate("scrollTo({top: document.documentElement.scrollHeight})")
+            else:
+                # Uma tela por vez, com uma faixa de sobreposição: sem ela o conteúdo que cai
+                # exatamente na emenda fica sem aparecer em print nenhum. O passo é limitado pela
+                # altura do PRINT, não pela da janela: num painel mais alto que 1080 a rolagem
+                # passaria além do que a foto seguinte mostra, e abriria um buraco.
+                sinal = -1 if para in ("cima", "acima") else 1
+                px = int(args.get("px") or 0)
+                tela = min(int(await page.evaluate("innerHeight")), ALTURA_MAX_PRINT, PRINT_VIEWPORT["height"])
+                await page.evaluate("d => scrollBy({top: d})", px * sinal if px else sinal * max(200, tela - 120))
+    except Exception as e:
+        raise ToolError(_act_err(alvo, e) if alvo else f"Falha ao rolar: {_err(e)}") from e
+    await page.wait_for_timeout(250)  # rolagem suave e conteúdo que carrega ao aparecer
+    pos = await page.evaluate("[Math.round(scrollY), Math.round(document.documentElement.scrollHeight), innerHeight]")
+    fim = pos[0] + pos[2] >= pos[1] - 2
+    return (f"Rolou para {pos[0]}px de {pos[1]}px de página ({pos[2]}px de tela)."
+            f"{' É o fim da página.' if fim else ''} Tire um browser_screenshot para ver esta parte.")
+
+
+async def screenshot(_root: Path, args: dict) -> dict:
+    """Uma tela, não a página inteira.
+
+    O que custa num modelo com visão é PIXEL. A página inteira virava 1903x5327 (10 MP) e o encoder
+    do llama.cpp passava mais de 100 segundos nela, com o turno parecendo travado — e ainda por cima
+    mostrava tudo pequeno demais para julgar qualquer coisa. Agora o print é sempre uma tela; para
+    ver o resto existe o browser_scroll, e para um detalhe existe o `selector`.
+    """
+    s = current()
+    page = await s.ensure()
     largura = max(MIN_VIEWPORT[0], min(MAX_VIEWPORT[0], int(args.get("largura") or PRINT_VIEWPORT["width"])))
     altura = max(MIN_VIEWPORT[1], min(MAX_VIEWPORT[1], int(args.get("altura") or PRINT_VIEWPORT["height"])))
+    altura = min(altura, ALTURA_MAX_PRINT)
+    alvo = str(args.get("selector") or "").strip()
+
     try:
         async with _viewport_do_print(page, largura, altura) as real:
             # scale="css": 1 pixel por px de CSS, senão o render 2x dobra o tamanho da imagem (e os tokens).
-            jpg = await page.screenshot(type="jpeg", quality=JPEG_QUALITY, full_page=inteira,
-                                        scale="css", timeout=ACT_TIMEOUT)
+            comum = {"type": "jpeg", "quality": JPEG_QUALITY, "scale": "css", "timeout": PRINT_TIMEOUT}
+            if alvo:
+                elemento = _locator(page, alvo)
+                await elemento.scroll_into_view_if_needed(timeout=PRINT_TIMEOUT)
+                jpg = await elemento.screenshot(**comum)
+            else:
+                jpg = await page.screenshot(**comum)
     except Exception as e:
-        raise ToolError(f"Falha no screenshot: {_err(e)}") from e
+        raise ToolError((_act_err(alvo, e) if alvo else f"Falha no screenshot: {_err(e)}")) from e
     try:
         att = uploads.save("browser.jpg", jpg, "image/jpeg")
     except ValueError as e:
         raise ToolError(str(e)) from e
+
+    if alvo:
+        return {"text": f"{await _summary(page)}\nScreenshot de '{alvo}' anexado.", "attachments": [att]}
     # A medida sai do que a página realmente tinha na hora da foto: prometer 1920 e entregar 380
     # é pior que entregar 380 e dizer.
-    medida = f"{real['width']}x{real['height']}"
+    size = f"{real['width']}x{real['height']}"
     if (real["width"], real["height"]) != (largura, altura):
-        medida += " — o navegador não aceitou outra medida; é o tamanho do painel"
-    size = f"página inteira, largura {real['width']}" if inteira else medida
-    return {"text": f"{await _summary(page)}\nScreenshot anexado ({size}).", "attachments": [att]}
+        size += " — o navegador não aceitou outra medida; é o tamanho do painel"
+    pos = await page.evaluate("[Math.round(scrollY), Math.round(document.documentElement.scrollHeight)]")
+    resto = ""
+    if pos[1] > real["height"] + 8:
+        resto = (f"; esta é a tela em {pos[0]}px de uma página de {pos[1]}px — browser_scroll desce "
+                 "para a próxima, e o conteúdo todo sai melhor no browser_read")
+    return {"text": f"{await _summary(page)}\nScreenshot anexado ({size}{resto}).", "attachments": [att]}
 
 
 def _obj(props: dict, required: list[str]) -> dict:
@@ -849,12 +921,26 @@ register(Tool(
     _obj({"script": {"type": "string"}}, ["script"]),
     evaluate, mutating=True, preview=eval_preview, always_ask=True))
 register(Tool(
+    "browser_scroll",
+    "Rola a aba ativa. É assim que se vê o que está abaixo da dobra: rola e tira outro "
+    "browser_screenshot, uma tela por vez. Sem argumentos desce uma tela (com sobreposição, para "
+    "nada ficar na emenda); `para` aceita cima, baixo, topo e fim; `selector` traz um elemento para "
+    "a tela. Para LER o conteúdo de baixo, porém, o browser_read é melhor e mais barato que descer "
+    "tirando print.",
+    _obj({"para": {"type": "string", "description": "baixo (padrão) | cima | topo | fim"},
+          "px": {"type": "integer", "description": "Quantos pixels rolar, em vez de uma tela"},
+          "selector": {"type": "string", "description": "Opcional: ref eN ou seletor a trazer para a tela"}}, []),
+    scroll))
+register(Tool(
     "browser_screenshot",
-    "Tira um screenshot da aba ativa. Ele aparece no chat para o usuário; se você tiver visão, também "
-    "chega a você como imagem. Use quando o usuário pedir um print ou para validar layout. Sai em tela "
-    "de desktop (1920x1080) seja qual for o tamanho do painel; para conferir responsividade, peça outra "
-    "medida (ex.: largura 390, altura 844 de celular).",
-    _obj({"full_page": {"type": "boolean", "description": "Página inteira em vez do viewport. Padrão: false"},
+    "Tira um screenshot de UMA TELA da aba ativa (1920x1080 por padrão, seja qual for o tamanho do "
+    "painel). Ele aparece no chat para o usuário; se você tiver visão, também chega a você como "
+    "imagem. Não existe print de página inteira: ele sairia com milhares de pixels de altura, "
+    "demoraria muito para você enxergar e mostraria tudo pequeno demais para julgar. Para ver o "
+    "resto da página, browser_scroll e outro print; para um detalhe (um card, um botão torto), "
+    "passe `selector` e o print sai só dele; para conferir responsividade, peça outra medida "
+    "(ex.: largura 390, altura 844 de celular).",
+    _obj({"selector": {"type": "string", "description": "Opcional: ref eN ou seletor — fotografa só esse elemento"},
           "largura": {"type": "integer", "description": "Largura do viewport em px de CSS. Padrão: 1920"},
           "altura": {"type": "integer", "description": "Altura do viewport em px de CSS. Padrão: 1080"}}, []),
     screenshot))

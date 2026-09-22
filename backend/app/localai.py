@@ -247,10 +247,19 @@ def set_defaults(patch: dict) -> dict:
 
 
 def overrides(path: str) -> dict:
-    """Só o que o usuário mudou em relação ao padrão (o resto acompanha o padrão se ele mudar)."""
+    """Só o que o usuário mudou em relação ao padrão (o resto acompanha o padrão se ele mudar).
+
+    `mmproj` vazio não é escolha, é sobra. O auto-detect do projetor (`projector_for`) chegou depois
+    que muita configuração já estava salva, e nelas o campo ficou gravado como "" — que vence o
+    padrão e desliga a visão sem dizer nada. Foi o que aconteceu com um Qwen3.6 que tinha o
+    mmproj-*.gguf na mesma pasta: o servidor subia com `vision: False` e todo print que o agente
+    tirava era jogado fora. Descartar esse override devolve a visão a quem já tem o arquivo; quem
+    não tem continua sem, porque aí o próprio padrão é vazio.
+    """
     d = defaults_for(path)
     salvo = read_config()["models"].get(str(path)) or {}
-    return {k: v for k, v in salvo.items() if k in d and v != d[k]}
+    return {k: v for k, v in salvo.items()
+            if k in d and v != d[k] and not (k == "mmproj" and not v)}
 
 
 def params(path: str) -> dict:
@@ -1046,8 +1055,11 @@ def reap_orphan() -> None:
         return  # o registro é de outra configuração (outra porta): não é nosso para matar
     PID_FILE.unlink(missing_ok=True)
     if native.WINDOWS:
+        # `encoding`/`errors` como nas outras chamadas do arquivo: o taskkill de um Windows pt-BR
+        # responde "ÊXITO: o processo ... foi finalizado" na página de código do console, não em
+        # UTF-8, e a thread que lê a saída morria com UnicodeDecodeError antes de entregar nada.
         r = subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid), "/FI", "IMAGENAME eq llama-server.exe"],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
         if r.returncode == 0:
             print(f"Forja: llama-server órfão (pid {pid}) encerrado.", flush=True)
     else:

@@ -1,5 +1,6 @@
 """Navegador integrado: bloqueio por capacidade (visão), imagens de ferramenta no histórico, estimativa."""
 import asyncio
+import pathlib
 import os
 import sys
 
@@ -214,5 +215,23 @@ def test_print_sai_em_desktop_e_nao_no_tamanho_do_painel():
     assert browser.PRINT_VIEWPORT == {"width": 1920, "height": 1080}
     from app.tools import REGISTRY
     esquema = REGISTRY["browser_screenshot"].parameters["properties"]
-    assert set(esquema) == {"full_page", "largura", "altura"}  # a medida é opção, não obrigação
+    # `full_page` saiu: a página inteira vira uma imagem de milhares de pixels, cara para o modelo
+    # com visão e pequena demais para julgar. Quem quer o resto usa browser_scroll.
+    assert set(esquema) == {"selector", "largura", "altura"}
+    assert "browser_scroll" in REGISTRY
     assert not REGISTRY["browser_screenshot"].parameters["required"]
+
+
+def test_scroll_nao_pula_mais_do_que_o_print_mostra():
+    """O passo da rolagem tem que caber no que a foto seguinte mostra.
+
+    A rolagem acontece na janela real (tamanho do painel) e o print sai em 1080px. Com um painel
+    mais alto que isso, rolar "uma tela" passava além do que a foto cobre e abria um buraco: uma
+    faixa da página que não aparecia em print nenhum.
+    """
+    from app.tools import REGISTRY
+
+    assert "browser_scroll" in REGISTRY
+    fonte = (pathlib.Path(__file__).resolve().parents[1] / "app" / "browser.py").read_text(encoding="utf-8")
+    passo = fonte[fonte.index("tela = min(int(await page.evaluate"):].splitlines()[0]
+    assert "ALTURA_MAX_PRINT" in passo and 'PRINT_VIEWPORT["height"]' in passo

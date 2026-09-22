@@ -144,16 +144,98 @@ const TOOL_TAIL = 4000; // cauda dos argumentos guardada na tela; o resto já ro
 /** Caminho do arquivo dentro do JSON ainda pela metade, para o cabeçalho do bloco ao vivo. */
 const alvoDaChamada = (bruto: string) => /"(?:path|file|caminho)"\s*:\s*"([^"]+)"/.exec(bruto)?.[1];
 
+/** Texto de um argumento, numa linha s\u00f3 e curto o bastante para caber na frase. */
+function trecho(v: unknown, max = 52): string | undefined {
+  if (typeof v !== "string") return undefined;
+  const limpo = v.trim().replace(/\s+/g, " ");
+  if (!limpo) return undefined;
+  return limpo.length > max ? limpo.slice(0, max - 1) + "\u2026" : limpo;
+}
+
+/** S\u00f3 o nome do arquivo: o caminho inteiro estoura a linha e o que importa \u00e9 QUAL arquivo \u00e9.
+ *  O nome sai ANTES do corte \u2014 cortando primeiro, `.../src/App.tsx` virava "Ap\u2026". */
+function arquivo(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  return trecho(v.split(/[\\/]/).filter(Boolean).pop(), 40);
+}
+
+/** Host e a \u00faltima parte do caminho: "localhost" sozinho n\u00e3o diz qual p\u00e1gina o agente abriu. */
+function endereco(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  try {
+    const u = new URL(v);
+    const host = u.host.replace(/^www\./, "");
+    const folha = u.pathname.split("/").filter(Boolean).pop();
+    return trecho(folha ? `${host}/${folha}` : host, 44);
+  } catch {
+    return trecho(v, 40);
+  }
+}
+
+/**
+ * O que cada ferramenta est\u00e1 fazendo, com o alvo concreto: "Lendo config.py", n\u00e3o "Usando read_file".
+ *
+ * Toda ferramenta registrada tem uma entrada aqui. O que sobrar \u2014 ferramenta de servidor MCP, ou uma
+ * nova que ainda n\u00e3o passou por aqui \u2014 cai no "Usando <nome>" de quem chama.
+ */
 const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> = {
-  web_search: (a) => (typeof a.query === "string" ? `Buscando \u201c${a.query}\u201d` : undefined),
-  fetch_url: (a) => {
-    if (typeof a.url !== "string") return undefined;
-    try {
-      return `Lendo ${new URL(a.url).hostname.replace(/^www\./, "")}`;
-    } catch {
-      return undefined;
-    }
-  },
+  // arquivos
+  read_file: (a) => `Lendo ${arquivo(a.path) ?? "um arquivo"}${a.ocr ? " com OCR" : ""}`,
+  write_file: (a) => `Escrevendo ${arquivo(a.path) ?? "um arquivo"}`,
+  edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
+  list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
+
+  // shell e servidores
+  run_command: (a) =>
+    a.background
+      ? `Subindo \u201c${trecho(a.name, 24) ?? trecho(a.command, 32) ?? "um processo"}\u201d em segundo plano`
+      : `Rodando ${trecho(a.command) ?? "um comando"}`,
+  serve_start: (a) => `Subindo o servidor ${trecho(a.name, 24) ?? ""}`.trim(),
+  serve_status: (a) => `Conferindo o servidor ${trecho(a.name, 24) ?? ""}`.trim(),
+  serve_stop: (a) => `Parando o servidor ${trecho(a.name, 24) ?? ""}`.trim(),
+
+  // web
+  web_search: (a) => (trecho(a.query) ? `Buscando \u201c${trecho(a.query)}\u201d` : "Buscando na web"),
+  fetch_url: (a) => `Lendo ${endereco(a.url) ?? "uma p\u00e1gina"}`,
+
+  // navegador
+  browser_navigate: (a) => `Abrindo ${endereco(a.url) ?? "uma p\u00e1gina"}`,
+  browser_read: () => "Lendo a p\u00e1gina",
+  browser_click: (a) => `Clicando em ${trecho(a.selector, 36) ?? "um elemento"}`,
+  browser_type: (a) => `Digitando em ${trecho(a.selector, 30) ?? "um campo"}`,
+  browser_upload: (a) => `Enviando ${arquivo(a.path) ?? "um arquivo"} para a p\u00e1gina`,
+  browser_screenshot: (a) => (a.selector ? `Fotografando ${trecho(a.selector, 30)}` : "Tirando um print da tela"),
+  browser_scroll: (a) =>
+    a.selector
+      ? `Trazendo ${trecho(a.selector, 30)} para a tela`
+      : a.para === "topo"
+        ? "Voltando ao topo da p\u00e1gina"
+        : a.para === "fim"
+          ? "Indo para o fim da p\u00e1gina"
+          : a.para === "cima"
+            ? "Subindo uma tela"
+            : "Descendo uma tela",
+  browser_console: () => "Lendo o console da p\u00e1gina",
+  browser_eval: () => "Rodando JavaScript na p\u00e1gina",
+  browser_tabs: (a) =>
+    a.action === "close" ? "Fechando uma aba" : a.action === "new" ? "Abrindo uma aba" : "Trocando de aba",
+
+  // documentos
+  preview_document: (a) => `Gerando a pr\u00e9via de ${arquivo(a.path) ?? "um documento"}`,
+  write_document: (a) => `Gerando ${arquivo(a.path) ?? "um documento"}`,
+  edit_document: (a) => `Alterando ${arquivo(a.path) ?? "um documento"}`,
+  write_spreadsheet: (a) => `Gerando a planilha ${arquivo(a.path) ?? ""}`.trim(),
+  edit_spreadsheet: (a) => `Alterando a planilha ${arquivo(a.path) ?? ""}`.trim(),
+
+  // mem\u00f3ria, plano e delega\u00e7\u00e3o
+  remember: (a) => `Guardando na mem\u00f3ria: ${trecho(a.description, 40) ?? trecho(a.name, 30) ?? ""}`.trim(),
+  recall: (a) => `Consultando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
+  forget: (a) => `Apagando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
+  update_tasks: () => "Atualizando a lista de tarefas",
+  image_generate: (a) => `Gerando a imagem “${trecho(a.prompt, 40) ?? "pedida"}”`,
+  delegate_task: (a) => `Delegando: ${trecho(a.task, 44) ?? "uma tarefa"}`,
+  exit_plan_mode: () => "Montando o plano",
+  ask_user: () => "Preparando perguntas para voc\u00ea",
 };
 
 export default function App() {
@@ -1063,20 +1145,44 @@ export default function App() {
     };
   })();
 
-  /** O que o agente está fazendo agora, em uma frase — o que o usuário lê enquanto espera. */
+  /** O que o agente está fazendo agora, em uma frase — o que o usuário lê enquanto espera.
+   *
+   *  A frase nomeia o ALVO, não a ferramenta: "Lendo config.py", "Rodando npm test". Quando várias
+   *  chamadas correm juntas, a primeira aparece e o resto vira contagem — senão a linha some e fica
+   *  parecendo que o agente empacou, quando na verdade são cinco leituras em paralelo.
+   */
   const fase = (() => {
     void tick; // acompanha o cronômetro
     if (!running) return "";
-    const pendente = Object.entries(approvals).find(([id]) => !results.has(id));
-    if (pendente) return "Esperando você decidir";
-    const chamando = messages
-      .slice(lastUserIndex + 1)
-      .flatMap((m) => m.tool_calls ?? [])
-      .find((c) => !results.has(c.id));
-    if (chamando) return FASE[chamando.name]?.(chamando.arguments) ?? `Usando ${chamando.name}`;
-    if (draft?.tool) return `Escrevendo ${draft.tool.path ?? "a chamada de " + (draft.tool.name || "ferramenta")}`;
+    const chamadas = messages.slice(lastUserIndex + 1).flatMap((m) => m.tool_calls ?? []);
+    const descreve = (c: ToolCall) => FASE[c.name]?.(c.arguments) ?? `Usando ${c.name}`;
+
+    const esperando = Object.keys(approvals).filter((id) => !results.has(id));
+    if (esperando.length) {
+      // Dizer O QUE está esperando aprovação: "Esperando você decidir" não dizia se era um comando
+      // de shell, uma escrita em arquivo ou um plano — e é isso que muda a resposta da pessoa.
+      const alvo = chamadas.find((c) => c.id === esperando[0]);
+      const oque = alvo ? descreve(alvo) : approvals[esperando[0]]?.tool;
+      const mais = esperando.length > 1 ? ` (+${esperando.length - 1} na fila)` : "";
+      return oque ? `Esperando você aprovar: ${oque.toLowerCase()}${mais}` : `Esperando você decidir${mais}`;
+    }
+
+    const rodando = chamadas.filter((c) => !results.has(c.id));
+    if (rodando.length) {
+      const extra = rodando.length > 1 ? ` (+${rodando.length - 1} em paralelo)` : "";
+      return descreve(rodando[0]) + extra;
+    }
+
+    if (draft?.tool) {
+      // O rascunho da chamada: a espera mais longa do turno num write_file grande. Mostrar o quanto
+      // já saiu é o que diferencia "escrevendo um arquivo enorme" de "travou".
+      const kb = (draft.tool.chars ?? draft.tool.text.length) / 1024;
+      const alvo = arquivo(draft.tool.path) ?? (draft.tool.name ? `a chamada de ${draft.tool.name}` : "a chamada");
+      return `Escrevendo ${alvo}${kb >= 1 ? ` · ${kb.toFixed(1)} KB` : ""}`;
+    }
     if (draft?.content) return "Escrevendo a resposta";
     if (draft?.thinking) return (liveStats?.seconds ?? 0) > 30 ? "Ainda pensando…" : "Pensando…";
+    if (sent) return "Esperando o modelo responder"; // requisição enviada e nenhum token de volta ainda
     return status ?? ""; // sem sinal de atividade, nada de spinner girando à toa
   })();
 
