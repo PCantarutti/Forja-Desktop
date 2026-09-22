@@ -41,10 +41,20 @@ class Tool:
 
 
 REGISTRY: dict[str, Tool] = {}
+# Ferramentas que só existem num modo específico (hoje: as do Maestro). Ficam fora do REGISTRY de
+# propósito — não devem aparecer nas Configurações, nem no modo Agente, nem em /api/tools — mas
+# precisam ser encontráveis por get_tool/execute na hora de rodar. Quem decide quando elas entram
+# no prompt é agent.available_tools().
+EXTRA: dict[str, Tool] = {}
 
 
 def register(tool: Tool) -> Tool:
     REGISTRY[tool.name] = tool
+    return tool
+
+
+def register_extra(tool: Tool) -> Tool:
+    EXTRA[tool.name] = tool
     return tool
 
 
@@ -77,7 +87,7 @@ def vision_caps(detected: set[str] | None, override: str) -> set[str]:
 def get_tool(name: str, caps: set[str] | None = None) -> Tool:
     if name in config.DISABLED_TOOLS:
         raise ToolError(f"A ferramenta '{name}' está desativada nas configurações do Forja.")
-    tool = REGISTRY.get(name)
+    tool = REGISTRY.get(name) or EXTRA.get(name)
     if not tool:
         raise ToolError(f"Ferramenta desconhecida: '{name}'. Disponíveis: {', '.join(REGISTRY)}")
     if caps is not None and not tool.requires <= caps:

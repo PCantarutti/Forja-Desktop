@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
-               terminal, uploads, workspace)
+               taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
@@ -36,7 +36,8 @@ async def lifespan(_app):
         print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
-    localai.reap_orphan()  # sobra de um backend que morreu sem descarregar o modelo
+    localai.reap_orphan()
+    taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
@@ -1105,8 +1106,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "imagem", "comparar", "pesquisa"):
-        raise HTTPException(400, "kind deve ser chat, agent, imagem, comparar ou pesquisa")
+    if kind not in ("chat", "agent", "maestro", "imagem", "comparar", "pesquisa"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, comparar ou pesquisa")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)
@@ -1649,6 +1650,67 @@ def change_permission(run_id: str, body: dict):
 def stop(run_id: str):
     _get_run(run_id).stop()
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ Maestro
+# Execução, cancelamento e aprovação continuam em /conversations/{id}/run e /runs/{id}/*: a Maestro
+# é um Run como qualquer outro. O que existe aqui é a leitura da árvore de tarefas e a intervenção
+# humana sobre ela (editar contrato, reenviar, assumir).
+
+
+@app.get("/api/maestro/{conv_id}/board")
+def maestro_board(conv_id: int):
+    """Árvore de funcionalidades, tarefas e tentativas. É o que o cockpit desenha."""
+    with db.session() as s:
+        _get_conv(s, conv_id)
+    return taskdb.board(conv_id)
+
+
+@app.get("/api/maestro/{conv_id}/task/{code}")
+def maestro_task(conv_id: int, code: str):
+    try:
+        return taskdb.detail(conv_id, code)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+class TaskPatch(BaseModel):
+    status: str | None = None
+    reason: str | None = None
+    contract: dict | None = None
+    model_slot: str | None = None
+    priority: int | None = None
+    max_attempts: int | None = None
+
+
+@app.post("/api/maestro/{conv_id}/task/{code}")
+def maestro_task_patch(conv_id: int, code: str, body: TaskPatch):
+    """Intervenção humana: corrigir o contrato, trocar o modelo, desbloquear, assumir a tarefa."""
+    if active_run(conv_id) and body.status in ("implementing", "testing"):
+        raise HTTPException(409, "A Maestro está executando; pare antes de mexer no estado da tarefa")
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not patch:
+        raise HTTPException(400, "Nada para mudar")
+    token = taskdb.CONV.set(conv_id)
+    try:
+        return {"ok": True, "text": taskdb._update_task(None, {"code": code, **patch}),
+                "task": taskdb.detail(conv_id, code)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        taskdb.CONV.reset(token)
+
+
+@app.get("/api/maestro/models")
+def maestro_models():
+    """Estado do ciclo de vida dos modelos, para o painel Modelo·VRAM do cockpit."""
+    estado = localai.status()
+    hw = localai.hardware()
+    return {"running": estado.get("running"), "alias": estado.get("alias"), "ctx": estado.get("ctx"),
+            "vram": hw.get("vram"), "vram_free": hw.get("vram_free"),
+            "ram": hw.get("ram"), "ram_free": hw.get("ram_free"),
+            "lifecycle": config.MODEL_LIFECYCLE, "max_workers": config.MAX_WORKERS,
+            "slots": subagents.configured(), "active": subagents.ativas()}
 
 
 # ------------------------------------------------------------------ interface (build do Vite)

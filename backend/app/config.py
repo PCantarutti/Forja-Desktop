@@ -106,3 +106,12 @@ PROJECT_MEMORY_FILE = "FORJA.md"
 ENABLED_MODELS: dict[str, list[str]] = {}  # provedor -> modelos visíveis nos chats (ausente = todos)
 SUBAGENTS: dict[str, dict] = {}            # "rapido"/"capaz" -> {"provider", "model"}
 SUBAGENT_MAX_ITERATIONS = 15
+
+# ------------------------------------------------------------------ Maestro
+# A Maestro planeja, delega e verifica; os Workers implementam. O estado do projeto fica no SQLite
+# (taskdb), nunca no contexto do modelo — é o que permite descarregar um modelo local e carregar
+# outro entre tarefas sem perder o trabalho.
+MAESTRO_MAX_ITERATIONS = int(os.getenv("MAESTRO_MAX_ITERATIONS", "500"))  # o freio real é max_attempts
+MAESTRO_MAX_ATTEMPTS = int(os.getenv("MAESTRO_MAX_ATTEMPTS", "5"))        # tentativas por tarefa
+MAX_WORKERS = 1                     # 1 = sequencial (Etapa 6 abre o paralelo)
+MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)

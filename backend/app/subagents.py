@@ -43,6 +43,17 @@ MAX_DIFF = 30_000         # diff mandado para a revisão
 VERIFY_TIMEOUT = 180      # teto do done_when (o run_command ainda corta em SHELL_TIMEOUT_MAX)
 SUB_BUDGET_MULT = 1.5     # quem resolve a tarefa é ele: pensa mais folgado que o maestro (ver llm._budget)
 WRITE_TOOLS = {"write_file", "edit_file"}
+# Ferramentas de um Worker que recebe Implementation Contract (maestro.run_task). O resto sai.
+#
+# Não é preferência de estilo, é orçamento de contexto: os schemas de TODAS as ferramentas custam
+# ~4900 tokens, contra ~1600 do system prompt. Num Ornith 9B com 8k de janela isso deixava ~1,6k
+# para o contrato, os arquivos e os resultados — e a janela batia em 7914/8192 no segundo passo,
+# antes de o Worker chegar a rodar o teste. Com esta lista o orçamento cabe. Quem precisar de mais
+# (gerar documento, navegar) declara uma persona em .forja/agents/*.md com o `tools:` que quiser.
+WORKER_TOOLS = frozenset({
+    "read_file", "write_file", "edit_file", "list_dir", "search",
+    "run_command", "serve_start", "serve_status", "serve_stop",
+})
 NUDGE_LINES = 12          # escrita maior que isto, no extremo, é trabalho de subagente
 REVIEW_PROMPT = (
     "Você revisa o diff abaixo, escrito por outro modelo para a tarefa dada. Responda em no máximo 8 linhas: "
@@ -232,7 +243,8 @@ def _falta(root: Path, task: str, files: list[str]) -> str:
     return ""
 
 
-async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = None) -> tuple:
+async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = None,
+                 focado: bool = False) -> tuple:
     """(via, auto, caps, tools, schemas, mensagem de sistema) de um slot. Serve à primeira tentativa e
     ao fallback: trocar de modelo troca ferramentas, capacidades e formato de tool call junto."""
     from .agent import available_tools, system_prompt  # import tardio: agent importa este módulo
@@ -242,9 +254,15 @@ async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = No
     via = "prompt" if setting["tool_mode"] == "text" else "native"
     caps = vision_caps(await llm.capabilities(provider, model), setting["vision"])
     excluir = {"delegate_task"}
-    if persona and persona["tools"]:  # persona com lista de ferramentas: o resto nem aparece para ela
-        permitidas = set(persona["tools"])
+    permitidas = set(persona["tools"]) if persona and persona["tools"] else (
+        set(WORKER_TOOLS) if focado else None)
+    if permitidas is not None:  # tudo o que não está na lista nem aparece para ele
         excluir |= {t.name for t in available_tools(caps, run_obj.permission) if t.name not in permitidas}
+    # Persona que lista ferramentas continua ganhando o ask_user de brinde (comportamento de sempre);
+    # o Worker de contrato não, porque _run_call recusa ask_user de subagente e o schema só ocuparia
+    # janela para devolver erro.
+    if not focado:
+        excluir.discard("ask_user")
     tools = available_tools(caps, run_obj.permission, exclude=excluir)
     conteudo = system_prompt(via, caps, exclude=excluir, permission=run_obj.permission,
                              effort=sub_effort) + SUB_PROMPT
@@ -284,7 +302,10 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
 
 
 async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
-               run_call: Callable) -> AsyncIterator[dict]:
+               run_call: Callable, structured: bool = False) -> AsyncIterator[dict]:
+    """`structured=True`: o brief veio de um Implementation Contract do Maestro (taskdb), nao de um
+    delegate_task escrito a maquina pelo modelo. Os freios de delegacao rasa (_falta) nao se aplicam:
+    o contrato ja foi validado na criacao da tarefa, e recusar aqui travaria o ciclo autonomo."""
     args = call["arguments"]
     pid = call["id"]
     root_persona = workspace.root()
@@ -300,7 +321,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     if not task:
         out.update(status="erro", text="Informe 'task' com a tarefa completa.", meta=meta)
         return
-    if effort == "extremo" and (motivo := _falta(root, task, files)) and "delegate_task" not in run_obj.nudged:
+    if effort == "extremo" and not structured and (motivo := _falta(root, task, files))             and "delegate_task" not in run_obj.nudged:
         run_obj.nudged.add("delegate_task")  # uma vez por turno: insistir é sinal de que não há mais contexto
         out.update(status="erro", meta=meta, text=(
             f"Delegação recusada (nada foi feito): {motivo}. Modelo de chamada boa: "
@@ -319,7 +340,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     used_level, spec = cadeia[0]
     tentados = {used_level}
     provider, model = spec["provider"], spec["model"]
-    via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona)
+    via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona, structured)
     brief = [task]
     if ctx := _context(root, files):
         brief.append("Arquivos relevantes (já lidos para você):\n" + ctx)
@@ -370,7 +391,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 used_level, spec = proximo
                 tentados.add(used_level)
                 provider, model = spec["provider"], spec["model"]
-                via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort, persona)
+                via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort,
+                                                                              persona, structured)
                 info.update(level=used_level, provider=provider, model=model)
                 info["fallback"] = f"O slot anterior falhou ({e}); segui com {LEVELS[used_level]} · {model}."
                 yield estado(info["fallback"])
@@ -456,11 +478,11 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                text=f"[Relatório do subagente {LEVELS[used_level]} ({model})]\n{final}")
 
 async def run(conv_id: int, call: dict, req, run_obj, out: dict,
-              run_call: Callable) -> AsyncIterator[dict]:
+              run_call: Callable, structured: bool = False) -> AsyncIterator[dict]:
     """Roda a delegação e garante que ela saia da lista de ativas. O finally vale também quando o
     usuário cancela o turno: o consumidor fecha o gerador e o finally corre."""
     try:
-        async for ev in _run(conv_id, call, req, run_obj, out, run_call):
+        async for ev in _run(conv_id, call, req, run_obj, out, run_call, structured):
             yield ev
     finally:
         ATIVAS.pop(call["id"], None)

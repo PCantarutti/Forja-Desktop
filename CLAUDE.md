@@ -29,6 +29,17 @@ Coisas que já enganaram:
 - Em dev, o backend deve rodar no Python portátil `resources/python` (o `main.js` já prefere). Um venv
   sobre Python da Microsoft Store virtualiza `%APPDATA%` e o SQLite acusa `database disk image is
   malformed` sem nenhum banco estar corrompido.
+- **Nunca** rodar script avulso contra o `forja.db` real com `backend/.venv` — ele está sobre o Python
+  da Store (veja `backend/.venv/pyvenv.cfg`). Vale inclusive para um `python -c "from app import db"`,
+  que executa `create_all`. Para qualquer script que toque o banco de verdade, use
+  `resources/python/python.exe`. O pytest é seguro: o `conftest.py` aponta `DB_PATH` para um temp.
+- Banco corrompido (`PRAGMA integrity_check` acusando `2nd reference to page N`, ou o backend morrendo
+  no `mirror.sync()` com `Invalid isoformat string`): linhas de `messages` aparecem como conversas,
+  porque a árvore de `conversations` passou a apontar para uma página de `messages`. Recuperar é
+  reconstruir, não reparar: cria um banco novo com o schema do `db.py` (importando `app.db` com
+  `DB_PATH` apontado para o arquivo novo) e copia as linhas sãs — conversas cujo `kind` está em
+  `chat|agent|maestro|imagem|comparar|pesquisa`, e só as mensagens/checkpoints cujo pai sobreviveu.
+  Copiar o `forja.db` antes de qualquer coisa.
 - `DevToolsActivePort` é escrito uma vez, antes do `ready`. Nunca apagar; validar a porta ao vivo.
 - O texto “Aguardando a primeira tela…” no painel Navegador significa modo espelho (headless), ou seja,
   o modo nativo NÃO está ativo: `FORJA_CDP` não chegou ao backend.

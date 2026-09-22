@@ -47,7 +47,8 @@ import {
   type TurnStats,
 } from "./components/MessageView";
 import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip, Refresh, Square, Undo } from "./components/icons";
-import type { Activity, Approval, Attachment, BrowserState, Conversation, Message, Settings, Skill, Stats, Task, ToolCall, ToolsSent } from "./types";
+import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
+import MaestroView from "./components/MaestroView";
 
 /** Notificação do sistema quando a aba não está em foco (execução terminou, aprovação pendente). */
 function notify(title: string, body: string, force = false) {
@@ -64,14 +65,6 @@ type Config = {
   providers: { id: string; name: string }[];
   num_ctx: number;
   default_workspace?: string;
-};
-type SubState = { status: string; steps: { call: any; result?: Message }[] };
-/** Resposta em andamento. `tool` são os argumentos de uma tool call ainda chegando (write_file de
- *  arquivo grande leva minutos e, sem isto, a tela fica parada como se o modelo tivesse travado). */
-type Draft = {
-  content: string;
-  thinking: string;
-  tool?: { name: string; path?: string; text: string; chars?: number } | null;
 };
 type Live = {
   messages: Message[];
@@ -255,6 +248,7 @@ export default function App() {
   // Pasta escolhida antes de a conversa existir (tela inicial); vira a pasta da conversa no 1º envio.
   const [pendingWs, setPendingWs] = useState<string | null>(() => localStorage.getItem("forja.workspace"));
   const [subSteps, setSubSteps] = useState<Record<string, SubState>>({});
+  const [board, setBoard] = useState<MaestroBoard | null>(null);  // árvore de tarefas do Maestro
   const [checkpoints, setCheckpoints] = useState<Record<string, string[]>>({});
   const [toolMode, setToolMode] = useState("auto");
   const [vision, setVision] = useState("auto");
@@ -695,6 +689,12 @@ export default function App() {
       case "tasks":
         setLiveTasks(ev.tasks);
         break;
+      case "board":
+        setBoard(ev.board);
+        break;
+      case "task_update":
+        // Só marca que mudou; o board inteiro vem no evento "board" ou no próximo polling.
+        break;
       case "title": // o modelo resumiu um título melhor no fim do turno
         refreshConversations();
         setStatus(null);
@@ -898,7 +898,7 @@ export default function App() {
         content,
         provider: settings.provider,
         model: settings.model,
-        permission: section === "agent" ? settings.permission : "manual",
+        permission: section === "agent" || section === "maestro" ? settings.permission : "manual",
         effort: settings.effort,
       }),
     });
@@ -950,8 +950,8 @@ export default function App() {
     if (s.action === "changes") setRight({ tab: "changes", collapsed: false });
   }
 
-  async function send() {
-    const content = input.trim();
+  async function send(texto?: string) {
+    const content = (texto ?? input).trim();
     if (slashQuery !== null && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
     if (!content && !attachments.length) return;
     colar();  // mandar mensagem é dizer "quero ver o que vem agora": volta para o fim da conversa
@@ -988,7 +988,7 @@ export default function App() {
         content,
         provider: settings.provider,
         model: settings.model,
-        permission: section === "agent" ? settings.permission : "manual",
+        permission: section === "agent" || section === "maestro" ? settings.permission : "manual",
         effort: settings.effort,
         attachments: files,
       }),
@@ -1296,7 +1296,7 @@ export default function App() {
           )}
           {picking && <span className="text-xs text-muted">Escolha a pasta na janela do sistema (pode estar atrás do navegador).</span>}
           </div>
-          <RightTabsBar
+          {section !== "maestro" && <RightTabsBar
             tab={right.tab}
             collapsed={right.collapsed}
             onSelect={(tab) => setRight((r) => (r.collapsed || r.tab !== tab ? { tab, collapsed: false } : { ...r, collapsed: true }))}
@@ -1306,11 +1306,27 @@ export default function App() {
             plansPending={plans.filter((p) => p.status === "pendente").length}
             plansTotal={plans.length}
             changesCount={changesCount}
-          />
+          />}
         </div>
         <div className="flex min-h-0 flex-1">
       <main className="flex min-w-0 flex-1 flex-col bg-bg">
-        {section === "pesquisa" ? (
+        {section === "maestro" ? (
+          <MaestroView
+            convId={currentId}
+            messages={messages}
+            draft={draft}
+            running={running}
+            approvals={approvals}
+            subSteps={subSteps}
+            board={board}
+            onBoard={setBoard}
+            provider={settings.provider}
+            model={settings.model}
+            onSend={send}
+            onStop={stop}
+            onDecide={decide}
+          />
+        ) : section === "pesquisa" ? (
           <PesquisaView
             conv={currentId}
             ensureConversation={ensureConversation}
@@ -1726,7 +1742,7 @@ export default function App() {
                   <>
                     {input.trim() && (
                       <button
-                        onClick={send}
+                        onClick={() => send()}
                         title="Enviar para a fila (o agente recebe no próximo passo)"
                         className="grid size-9 place-items-center rounded-full border border-line text-fg hover:bg-raised"
                       >
@@ -1739,7 +1755,7 @@ export default function App() {
                   </>
                 ) : (
                   <button
-                    onClick={send}
+                    onClick={() => send()}
                     disabled={!input.trim() && !attachments.length}
                     title="Enviar"
                     className="grid size-9 place-items-center rounded-full bg-fg text-black hover:bg-white disabled:bg-raised disabled:text-faint"
@@ -1757,7 +1773,7 @@ export default function App() {
 
       <LocalLoading />
 
-      <RightPanel tab={right.tab} collapsed={right.collapsed} onCollapse={(collapsed) => setRight((r) => ({ ...r, collapsed }))}>
+      {section !== "maestro" && <RightPanel tab={right.tab} collapsed={right.collapsed} onCollapse={(collapsed) => setRight((r) => ({ ...r, collapsed }))}>
         {right.tab === "browser" ? (
           <BrowserPanel conv={browserKey} onState={(s) => setBrowserOpen(s.open)} />
         ) : right.tab === "servers" ? (
@@ -1801,7 +1817,7 @@ export default function App() {
             usage={usage}
           />
         )}
-      </RightPanel>
+      </RightPanel>}
         </div>
       </div>
     </div>

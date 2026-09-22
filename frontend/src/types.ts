@@ -497,3 +497,115 @@ export type HfRepo = {
   readme: string;
 };
 export type HfFile = { path: string; size: number; quant: string; shards: number };
+
+// ------------------------------------------------------------------ Maestro
+// A Maestro planeja e verifica; os Workers implementam. O estado real vive no SQLite do backend
+// (taskdb) — a árvore aqui é leitura, vinda de /api/maestro/{conv}/board.
+
+export type Contract = {
+  context?: string;
+  goal: string;
+  relevant_files?: string[];
+  requirements?: string[];
+  constraints?: string[];
+  do_not?: string[];
+  acceptance_criteria?: string[];
+  verify_command?: string;
+  expected_result?: string;
+};
+
+export type TaskStatus =
+  | "pending" | "queued" | "loading_model" | "implementing" | "testing" | "reviewing"
+  | "completed" | "failed" | "blocked" | "needs_human" | "cancelled";
+
+/** Protocolo Worker → Maestro. `changes` e `tests` são medição (git + comando), não autoavaliação. */
+export type TaskResult = {
+  type: "task_result";
+  task_code: string;
+  attempt: number;
+  status: "completed" | "failed" | "unverified" | "error";
+  changes: { path: string; status: string; additions: number | null; deletions: number | null }[];
+  commands: { command: string; status: string }[];
+  tests: { command: string; status: string; output: string } | null;
+  errors: string[];
+  review: string | null;
+  summary: string;
+  model: string | null;
+  level: string | null;
+  agent?: string | null;
+  seconds: number | null;
+  tokens: number | null;
+  iterations: number | null;
+};
+
+export type TaskAttempt = {
+  n: number;
+  status: string;
+  worker: { level?: string; provider?: string; model?: string; agent?: string | null };
+  strategy: string | null;
+  error: string | null;
+  seconds: number;
+  tokens: number;
+  result: TaskResult | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+export type MaestroTask = {
+  code: string;
+  title: string;
+  status: TaskStatus;
+  feature_id: number;
+  priority: number;
+  depends_on: string[];
+  model_slot: string | null;
+  agent: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  blocked_reason: string | null;
+  contract: Contract;
+  result: TaskResult | null;
+  updated_at: string;
+  attempts?: TaskAttempt[];
+};
+
+export type MaestroFeature = {
+  id: number;
+  title: string;
+  goal: string;
+  status: "planning" | "active" | "done" | "cancelled";
+  tasks: MaestroTask[];
+};
+
+export type MaestroBoard = {
+  features: MaestroFeature[];
+  counts: Partial<Record<TaskStatus, number>>;
+  total: number;
+  done: number;
+  open: number;
+};
+
+export type MaestroModels = {
+  running: boolean;
+  alias: string | null;
+  ctx: number | null;
+  vram: number | null;
+  vram_free: number | null;
+  ram: number | null;
+  ram_free: number | null;
+  lifecycle: string;
+  max_workers: number;
+  slots: Record<string, { provider: string; model: string }>;
+  active: SubagentActive[];
+};
+
+/** Resposta em andamento. `tool` são os argumentos de uma tool call ainda chegando (write_file de
+ *  arquivo grande leva minutos e, sem isto, a tela fica parada como se o modelo tivesse travado). */
+export type Draft = {
+  content: string;
+  thinking: string;
+  tool?: { name: string; path?: string; text: string; chars?: number } | null;
+};
+
+/** Passos de um subagente/Worker, agrupados pelo id da chamada que o criou. */
+export type SubState = { status: string; steps: { call: any; result?: Message }[] };

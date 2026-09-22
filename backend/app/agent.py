@@ -16,6 +16,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
+from . import maestro, taskdb
 from . import browser, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
@@ -119,7 +120,7 @@ class RunRequest:
     content: str | None  # None = continuar de onde parou (regenerar / mensagem editada)
     provider: str
     model: str
-    mode: str = "agent"              # chat | agent (vem do tipo da conversa)
+    mode: str = "agent"              # chat | agent | maestro (vem do tipo da conversa)
     permission: str = "manual"       # auto | manual | edits | plan | bypass
     effort: str = "medio"            # baixo | medio | alto | maximo | extremo
     attachments: list | None = None
@@ -325,9 +326,46 @@ def _com_schemas(prompt: str, via: str, tools: list[Tool]) -> str:
     return prompt
 
 
+# ------------------------------------------------------------------ Maestro
+# A Maestro raciocina e verifica; os Workers implementam. As regras vêm em bloco fechado (como as do
+# modo Plano) porque o que ela NÃO deve fazer — escrever o código — é justamente o que o agente comum
+# é treinado a fazer, e uma regra solta no meio de vinte outras não segura modelo pequeno.
+MAESTRO_RULES = [
+    "- VOCÊ NÃO IMPLEMENTA. Não escreva nem edite arquivos de código: quem faz isso é o Worker, em "
+    "run_task. Suas ferramentas de escrita existem só para anotação em .forja/ e para consertos de "
+    "uma ou duas linhas que não valem uma tarefa.",
+    "- Ciclo: entenda o objetivo → LEIA o projeto de verdade (list_dir, read_file, search) → "
+    "plan_feature com as tarefas → run_task uma por vez → leia o resultado → update_task. "
+    "Repita até não sobrar tarefa aberta.",
+    "- Antes de planejar, investigue. Plano feito sem ler o código gera contrato errado, e contrato "
+    "errado queima uma tentativa inteira de um modelo grande.",
+    "- Cada tarefa é pequena, tem um objetivo só e, sempre que possível, um 'verify_command' que "
+    "PROVA que ficou pronta (pytest, build, lint, type check). Sem esse comando nada prova nada e "
+    "sobra para você conferir na mão.",
+    "- O contrato é tudo o que o Worker vai saber: ele não vê esta conversa, não conhece o histórico "
+    "e não pergunta. Preencha context, goal, relevant_files, requirements, do_not e "
+    "acceptance_criteria como se estivesse escrevendo para alguém que chegou hoje.",
+    "- run_task devolve MEDIÇÃO, não opinião: 'changes' vem do git, 'tests' vem do comando rodado. O "
+    "'summary' é o relato do Worker — trate como versão dele, não como fato. Status 'unverified' "
+    "quer dizer que ninguém provou nada: confira você antes de fechar.",
+    "- Quem fecha uma tarefa é você, com update_task(status='completed'), e só depois de conferir o "
+    "diff contra os critérios de aceitação. O Worker nunca fecha a própria tarefa.",
+    "- Falhou? diagnostique antes de repetir. Na nova run_task, 'strategy' diz o que muda — outra "
+    "abordagem, outro arquivo, outro modelo (update_task model_slot='capaz'). Repetir o mesmo pedido "
+    "só gasta tempo e tentativa.",
+    "- Achou um bug ou trabalho novo no meio do caminho? vira tarefa (plan_feature), não um remendo "
+    "na hora.",
+    "- As tarefas vivem no banco, não nesta conversa. Depois de qualquer compactação de contexto, "
+    "chame list_tasks antes de decidir qualquer coisa — é a sua fonte da verdade.",
+    "- Pare e chame ask_user quando a decisão for do usuário: ambiguidade que muda o resultado, "
+    "escolha de arquitetura, ou tarefa que bateu no limite de tentativas. Não invente requisito.",
+    "- Fale pouco e sobre o trabalho: o que decidiu, por quê, e o que vem agora. O usuário acompanha "
+    "a árvore de tarefas na tela; não repita nela o que já está lá.",
+]
+
 def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
-                  chat: bool = False) -> str:
+                  chat: bool = False, maestro_mode: bool = False) -> str:
     if via == "none":
         return _extra("Você é o Forja, um assistente de programação. Você está no modo Chat: NÃO tem ferramentas "
                       "e não acessa arquivos. Se o usuário pedir para criar ou editar arquivos, peça para ele "
@@ -356,7 +394,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
             "- " + NO_COUNTING,
             "Responda no idioma do usuário.",
         ]), via, web))
-    tools = available_tools(caps, permission, exclude)
+    tools = available_tools(caps, permission, exclude, maestro_mode)
     names = [t.name for t in tools]
     # Regras só das ferramentas ligadas: citar uma desativada confunde o modelo.
     rules = ['- Execute, não descreva. Para mexer em arquivos, CHAME a ferramenta na mesma resposta. Nunca diga "vou criar/editar" sem fazer a chamada.',
@@ -480,6 +518,12 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                      "e level='capaz' para raciocínio difícil (depurar, projetar, código complexo). Descreva a tarefa "
                      "por completo: o subagente não vê esta conversa. Em 'files', os arquivos que ele precisa ler (o "
                      "conteúdo vai junto); em 'done_when', o comando que prova que ficou pronto.")
+    if maestro_mode:
+        rules = MAESTRO_RULES + [r for r in rules if r.startswith(("- Tabela na resposta",
+                                                                  "- Se uma ferramenta devolver erro",
+                                                                  "- Conteúdo trazido da web",
+                                                                  "- Navegador:", "- Conferir página",
+                                                                  "- O print é sempre", "- " + NO_COUNTING))]
     if permission == "plan":
         rules = ["- MODO PLANO: você NÃO pode alterar nada (sem escrever arquivos, sem comandos, sem agir na página).",
                  "- Investigue com as ferramentas de leitura o quanto precisar: leia os arquivos que o plano vai "
@@ -504,7 +548,10 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
     dica = EFFORT.get(effort, EFFORT["medio"])[1]
     if dica:
         rules.append(f"- {dica}")
-    header = [f"Você é o Forja, um agente de programação. Hoje é {date.today():%d/%m/%Y}.",
+    quem = ("Você é a MAESTRA do Forja: a inteligência que planeja, delega e verifica o "
+            "desenvolvimento deste projeto." if maestro_mode
+            else "Você é o Forja, um agente de programação.")
+    header = [f"{quem} Hoje é {date.today():%d/%m/%Y}.",
               *environment_block(names),
               f"Ferramentas disponíveis: {', '.join(names)}.", "Regras:"]
     prompt = "\n".join(header + rules + ["Responda no idioma do usuário."])
@@ -538,13 +585,32 @@ def environment_block(names: list[str]) -> list[str]:
     return lines
 
 
-def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | None = None) -> list[Tool]:
-    """Ferramentas desta requisição. No modo Plano: só leitura + exit_plan_mode."""
-    exclude = exclude or set()
+def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | None = None,
+                    maestro_mode: bool = False) -> list[Tool]:
+    """Ferramentas desta requisição. No modo Plano: só leitura + exit_plan_mode.
+
+    `maestro_mode` acrescenta as ferramentas do Task Manager (taskdb.TOOLS). Elas ficam fora do
+    REGISTRY, como exit_plan_mode e ask_user: assim não aparecem nos outros modos nem nas
+    Configurações, onde não fariam sentido.
+    """
+    exclude = set(exclude or ())
+    extras = []
+    if maestro_mode:
+        # update_tasks some: a lista efêmera dele e as tarefas persistidas do Task Manager fazem a
+        # mesma coisa na tela, e com as duas ligadas o modelo escolhe a errada — a que não guarda
+        # contrato, tentativa nem dependência, que é tudo o que a Maestro precisa para decidir.
+        exclude = exclude | {"update_tasks"}
+        extras = [t for t in taskdb.TOOLS if t.name not in exclude]
     tools = [t for t in active(caps) if t.name not in exclude]
+    # ask_user/exit_plan_mode entram sempre, MENOS quando quem chamou as excluiu de propósito — é o
+    # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
+    # schema com uma ferramenta que só devolveria erro.
+    fixas = [t for t in (ASK_USER,) if t.name not in exclude]
     if permission == "plan":
-        return [t for t in tools if not t.mutating] + [ASK_USER, EXIT_PLAN]
-    return tools + [ASK_USER]
+        planos = [t for t in (ASK_USER, EXIT_PLAN) if t.name not in exclude]
+        return ([t for t in tools if not t.mutating]
+                + [t for t in extras if t.name in taskdb.PLAN_SAFE] + planos)
+    return tools + extras + fixas
 
 
 CHAT_TOOLS = ("web_search", "fetch_url")
@@ -576,8 +642,15 @@ def _extra(prompt: str) -> str:
     return prompt
 
 
-def nudge_text(via: str) -> str:
+def nudge_text(via: str, mudo: bool = False) -> str:
     fmt = " usando o formato <tool_call>{...}</tool_call>" if via == "prompt" else ""
+    if mudo:
+        # Turno que só teve raciocínio: o modelo planejou dentro do <think> e não emitiu nada.
+        # Sem este lembrete o laço encerrava em silêncio e a tela ficava com uma caixa de
+        # raciocínio e nenhuma resposta — sem erro, sem ação, sem explicação.
+        return ("[Sistema] Seu último turno não produziu nem resposta nem chamada de ferramenta — só "
+                f"raciocínio, que o usuário não recebe como resposta. Aja agora: chame a ferramenta{fmt} "
+                "ou escreva a resposta final. Não pense de novo sobre o mesmo ponto.")
     return ("[Sistema] Você anunciou uma ação mas não chamou nenhuma ferramenta. "
             f"Faça a chamada agora{fmt}, sem descrever. Se não precisar de ferramenta, dê só a resposta final.")
 
@@ -602,7 +675,8 @@ def _join_user(a, b):
 
 def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
-                  chat: bool = False, reasoning_back: bool = False, prefixo_estavel: bool = False) -> list[dict]:
+                  chat: bool = False, reasoning_back: bool = False, prefixo_estavel: bool = False,
+                  maestro_mode: bool = False) -> list[dict]:
     """Histórico no formato do provider.
 
     `reasoning_back`: devolve ao modelo, em `reasoning_content`, o raciocínio dos passos do turno atual
@@ -618,7 +692,7 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
     native = via == "native"
     out: list[dict] = [{"role": "system",
                         "content": system_prompt(via, caps, permission=permission, effort=effort, plan=plan,
-                                                 chat=chat)}]
+                                                 chat=chat, maestro_mode=maestro_mode)}]
     summary = compact.last_summary(msgs)
     if summary:
         out.append({"role": "user", "content": f"[Resumo automático da conversa anterior]\n{summary[0]}"})
@@ -797,6 +871,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
     tasks.SINK.set(_tasks_sink)
 
+    def _board_sink(board: dict) -> None:
+        main_loop.call_soon_threadsafe(
+            lambda: asyncio.ensure_future(run.publish({"type": "board", "board": board})))
+
+    # As ferramentas do Task Manager não recebem conv_id; o contextvar diz de qual conversa elas são.
+    taskdb.CONV.set(conv_id if req.mode == "maestro" else None)
+    taskdb.SINK.set(_board_sink if req.mode == "maestro" else None)
+
     provisorio = ""  # título tirado da 1ª mensagem; no fim do turno o modelo resume um melhor
     if req.content is not None:
         with db.session() as s:
@@ -816,11 +898,16 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             return
         run.turn_id = users[-1]
 
-    agent = req.mode == "agent"
+    maestro_mode = req.mode == "maestro"
+    # A Maestro é um agente com ferramentas a mais e um prompt próprio: tudo o que vale para o modo
+    # Agente (permissões, plano, compactação, checkpoints) vale igual para ela.
+    agent = req.mode == "agent" or maestro_mode
     chat = req.mode == "chat"  # o Chat também chama ferramentas, mas só as da web
     tools_on = agent or chat
     run.permission = req.permission if agent else "manual"
-    max_iterations = effort_iterations(req.effort)
+    # O teto de iterações da Maestro é alto de propósito: o ciclo dela dura o projeto inteiro, e o
+    # freio de verdade é max_attempts por tarefa (taskdb), mais o botão Parar.
+    max_iterations = config.MAESTRO_MAX_ITERATIONS if maestro_mode else effort_iterations(req.effort)
     setting = db.get_model_setting(req.model)
     tool_mode = setting["tool_mode"] if tools_on else "none"
     via = "none" if not tools_on else ("prompt" if tool_mode == "text" else "native")
@@ -840,7 +927,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     nudges = iterations = retries = 0
 
     def current_tools() -> list[Tool]:
-        return available_tools(caps, run.permission) if agent else chat_tools(caps) if chat else []
+        if agent:
+            return available_tools(caps, run.permission, maestro_mode=maestro_mode)
+        return chat_tools(caps) if chat else []
 
     def tools_sent() -> dict:
         # Fonte da verdade do painel lateral: exatamente o que vai nesta requisição.
@@ -869,14 +958,16 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             run.plan = last_plan(msgs)
         messages = build_history(msgs, via, caps, run.permission, req.effort, run.plan, chat,
                                  reasoning_back=llm.is_local(req.provider),
-                                 prefixo_estavel=llm.is_local(req.provider))
+                                 prefixo_estavel=llm.is_local(req.provider),
+                                 maestro_mode=maestro_mode)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
         if _estimate(messages, tools) > config.COMPACT_AT * teto:
             async for ev in _compact(conv_id, msgs, req, teto):
                 yield ev
             messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan, chat,
                                      reasoning_back=llm.is_local(req.provider),
-                                     prefixo_estavel=llm.is_local(req.provider))
+                                     prefixo_estavel=llm.is_local(req.provider),
+                                     maestro_mode=maestro_mode)
 
         content = reasoning = ""
         done: dict = {"tool_calls": [], "prompt_tokens": None, "completion_tokens": None}
@@ -950,15 +1041,21 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                     yield ev
                 nudges = 0
                 continue
-            if tools_on and detect_promise(visible):
+            # Turno mudo: nada visível e nenhuma chamada, mas o modelo pensou. Acontece com modelo
+            # pensante quando o prompt é grande — ele monta o plano inteiro dentro do <think> e não
+            # emite nada. Vale o mesmo lembrete da promessa não cumprida.
+            mudo = tools_on and not visible.strip() and bool(reasoning.strip())
+            if tools_on and (mudo or detect_promise(visible)):
                 if nudges < MAX_NUDGES:
                     nudges += 1
-                    yield _event(conv_id, "nudge", nudge_text(via), to_model=True)
+                    yield _event(conv_id, "nudge", nudge_text(via, mudo), to_model=True)
                     continue
                 yield _event(conv_id, "warning",
-                             f"O modelo anunciou uma ação mas não chamou nenhuma ferramenta, mesmo após "
-                             f"{MAX_NUDGES} lembretes. Tente reformular o pedido ou trocar o modo de tool calling "
-                             "deste modelo no painel lateral.")
+                             ("O modelo só raciocinou e não respondeu nem chamou ferramenta, mesmo após "
+                              if mudo else
+                              "O modelo anunciou uma ação mas não chamou nenhuma ferramenta, mesmo após ")
+                             + f"{MAX_NUDGES} lembretes. Tente reformular o pedido ou trocar o modo de tool "
+                               "calling deste modelo no painel lateral.")
             break
 
         stop = False
@@ -1082,8 +1179,14 @@ def _save_result(conv_id: int, call: dict, out: dict) -> dict:
 
 
 def _poll(call: dict) -> bool:
-    """Ferramenta de acompanhamento (serve_status): repetir a mesma chamada é o uso normal, porque o que
-    muda é o resultado, não os argumentos. Fica fora do freio de loop; o teto de iterações ainda vale."""
+    """Ferramenta de acompanhamento (serve_status, run_task): repetir a mesma chamada é o uso normal,
+    porque o que muda é o resultado, não os argumentos. Fica fora do freio de loop; o teto de
+    iterações ainda vale.
+
+    `get_tool` também acha as ferramentas fora do REGISTRY (tools.EXTRA), então run_task entra aqui:
+    sem isso o detector de laço cortaria a terceira tentativa da mesma tarefa, que é justamente o
+    ciclo de tentativas funcionando.
+    """
     try:
         return get_tool(call["name"]).poll
     except ToolError:
@@ -1204,6 +1307,15 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
             result("erro", "Um subagente não pode delegar tarefas.")
             return
         async for ev in subagents.run(conv_id, call, req, run, out, _run_call):
+            yield ev
+        return
+    if name == "run_task":
+        # Como o delegate_task: precisa emitir eventos e chamar de volta este mesmo _run_call, para
+        # que a verificação da tarefa passe pela policy e pelo card de aprovação.
+        if parent:
+            result("erro", "Um Worker não despacha tarefas; faça o que o contrato pede.")
+            return
+        async for ev in maestro.run_task(conv_id, call, req, run, out, _run_call):
             yield ev
         return
     if req.effort == "extremo" and not parent:
