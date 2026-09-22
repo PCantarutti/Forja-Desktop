@@ -72,9 +72,12 @@ app = FastAPI(title="Forja", lifespan=lifespan)
 # - `X-Forja-Token`, gerado pelo Electron a cada execução, é exigido no resto das rotas /api. É o que
 #   mata o vetor do processo local. Vazio (dev com Vite, repo Docker atrás do nginx) desliga a parte.
 #
-# Fora da exigência de token: os GET que o navegador busca como <img src> ou link de download, que não
-# têm como mandar header. São leitura confinada e, sem CORS, página nenhuma consegue ler a resposta.
+# Fora da exigência de token: os GET que o navegador busca sem passar pelo fetch() da interface e que,
+# por isso, não têm como mandar header — <img src>, link de download (`/export`) e a página do
+# relatório da pesquisa, que o botão abre no navegador do usuário via window.open (`/relatorio`). São
+# leitura confinada, sem efeito colateral, e sem CORS página nenhuma consegue ler a resposta.
 SEM_TOKEN = ("/api/files", "/api/local/image/file")
+SUFIXO_SEM_TOKEN = ("/export", "/relatorio")
 
 
 def mesma_origem(origin: str, host: str) -> bool:
@@ -90,7 +93,7 @@ async def fronteira(request, call_next):
         return JSONResponse({"detail": "Origem não autorizada"}, status_code=403)
     path = request.url.path
     if (config.API_TOKEN and path.startswith("/api/") and not path.startswith(SEM_TOKEN)
-            and not path.endswith("/export")
+            and not path.endswith(SUFIXO_SEM_TOKEN)
             and request.headers.get("x-forja-token") != config.API_TOKEN):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)

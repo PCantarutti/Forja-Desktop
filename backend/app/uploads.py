@@ -6,8 +6,9 @@ como visão (content parts `image_url` no formato OpenAI; a conversão para Olla
 
 Documento de escritório (PDF, Word, Excel, PowerPoint) não precisa de tratamento aqui: o
 `read_file` lê esses formatos direto, convertendo para Markdown — ver `documentos.py`. O que este
-módulo faz é conferir, na hora do upload, se há mesmo texto a extrair, para avisar o agente quando
-não há (PDF escaneado é imagem, e aqui não há OCR).
+módulo faz é conferir, na hora do upload, se há mesmo texto a extrair, e avisar o agente quando não
+há — com as duas saídas, na ordem: `preview_document`, que rende as páginas em JPEG e as entrega à
+visão do modelo, e o `read_file` com `ocr=true`, que passa o OCR do sistema (ver `ocr.py`).
 """
 from __future__ import annotations
 
@@ -87,9 +88,12 @@ def user_message(content: str, attachments: list | None) -> dict:
             "atual se perderia.]")
         for a in others:
             if a.get("sem_texto"):
-                text += NOVA_LINHA + (f"[De {a['name']} não dá para extrair texto (PDF escaneado, "
-                                      "arquivo protegido ou corrompido). Diga isso ao usuário em vez "
-                                      "de insistir no read_file.]")
+                text += NOVA_LINHA + (
+                    f"[De {a['name']} não sai texto direto (PDF escaneado, arquivo protegido ou "
+                    "corrompido). Não é motivo para desistir, e a ordem importa: se você recebe "
+                    "imagens, preview_document mostra as páginas e você transcreve o que vê, que é "
+                    "a leitura mais fiel; se não recebe, ou se a prévia não resolveu, read_file com "
+                    "ocr=true passa o OCR do sistema. Ilegível só depois das duas.]")
     if not images:
         return {"role": "user", "content": text}
     parts: list[dict] = [{"type": "text", "text": text}]

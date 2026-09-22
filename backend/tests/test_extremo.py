@@ -156,6 +156,41 @@ def test_extremo_recusa_delegacao_sem_contexto(monkeypatch):
     assert "files" in out["text"] and "done_when" in out["text"]
 
 
+def test_extremo_aceita_delegacao_sem_files_em_pasta_vazia(monkeypatch, clean):
+    """Projeto do zero não tem o que listar em 'files': exigir ali era pedido impossível e o modelo
+    repetia a mesma chamada até o laço ser interrompido."""
+    _slots(capaz=("lmstudio", "grande"))
+    fake, _ = _fala()
+    monkeypatch.setattr(llm, "chat_stream", fake)
+    out, _ = _delegate({"task": "t" * 200, "level": "capaz"}, effort="extremo")
+    assert out["status"] == "ok"
+
+
+def test_extremo_so_recusa_uma_vez_por_turno(monkeypatch, clean):
+    """Segunda tentativa passa: travar o turno num pedido que o modelo não consegue atender é pior."""
+    (clean / "alvo.py").write_text("x = 1\n", encoding="utf-8")
+    _slots(capaz=("lmstudio", "grande"))
+    fake, _ = _fala()
+    monkeypatch.setattr(llm, "chat_stream", fake)
+    run_obj = agent.Run(1)
+    req = agent.RunRequest(content="x", provider="lmstudio", model="main", mode="agent",
+                           permission="manual", effort="extremo")
+    args = {"task": "t" * 200, "level": "capaz"}
+
+    def roda():
+        out: dict = {}
+
+        async def cenario():
+            async for _ in subagents.run(1, {"id": "d1", "arguments": args}, req, run_obj, out, _ok_run_call):
+                pass
+
+        asyncio.run(cenario())
+        return out
+
+    assert roda()["status"] == "erro"
+    assert roda()["status"] == "ok"
+
+
 def test_conteudo_dos_arquivos_vai_junto_com_a_tarefa(monkeypatch, clean):
     (clean / "alvo.py").write_text("valor = 42\n", encoding="utf-8")
     _slots(capaz=("lmstudio", "grande"))
@@ -454,10 +489,10 @@ def test_usage_nao_levanta_quando_o_endpoint_some(monkeypatch):
     assert asyncio.run(llm.usage("nuvem2")) is None
 
 
-# ------------------------------------------------ teto de raciocínio
+# ------------------------------------------------ teto de pensamento
 
-CAP = llm.REASONING_CAP["medio"][0]   # 4000 caracteres; o teto de relógio fica frouxo nestes testes
-TETO = (CAP, 999)
+BUDGET = config.REASONING_BUDGET
+
 
 def _impl_falso(registro: list, raciocinio: int):
     """impl de mentira: gera `raciocinio` caracteres de pensamento e depois responde."""
@@ -481,74 +516,40 @@ def _consome(gen):
     return asyncio.run(tudo())
 
 
-def test_maestro_pensando_demais_e_cortado_e_refeito_sem_pensar(monkeypatch):
+def _lm(monkeypatch, kind="lmstudio"):
     monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    chamadas: list = []
-    impl = _impl_falso(chamadas, CAP * 2)
-    eventos = _consome(llm._capped(impl, "lm", "qwen", [], None, 8192, {}, TETO))
-    assert len(chamadas) == 2
-    assert chamadas[1]["chat_template_kwargs"] == {"enable_thinking": False}
-    assert ("content", "resposta 2") in eventos          # a resposta boa é a da segunda chamada
-    assert sum(len(v) for k, v in eventos if k == "reasoning") < CAP * 1.5
+                        {"id": "lm", "name": "LM", "type": kind, "url": "http://x/v1", "api_key": ""})
 
 
-def test_raciocinio_curto_passa_inteiro(monkeypatch):
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    chamadas: list = []
-    impl = _impl_falso(chamadas, 500)
-    eventos = _consome(llm._capped(impl, "lm", "qwen", [], None, 8192, {}, TETO))
-    assert len(chamadas) == 1 and ("content", "resposta 1") in eventos
-
-
-def test_o_corte_manda_todos_os_interruptores(monkeypatch):
-    """Não existe um interruptor só: o que a família do modelo não entende é ignorado sem erro."""
-    monkeypatch.setitem(config.PROVIDERS, "oll",
-                        {"id": "oll", "name": "O", "type": "ollama", "url": "http://x/v1", "api_key": ""})
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    sistema = [{"role": "system", "content": "regras"}]
-    assert llm._sem_pensar("oll", {}, sistema) == ({"think": False}, sistema)
-
-    corpo, msgs = llm._sem_pensar("lm", {}, sistema)
-    assert corpo == {"chat_template_kwargs": {"enable_thinking": False}, "reasoning_budget": 0}
-    assert msgs[0]["content"].endswith("/no_think") and sistema[0]["content"] == "regras"  # sem mutar o original
-
-
-def test_teto_pega_pensamento_que_vem_no_proprio_texto(monkeypatch):
-    """Servidor que não separa o canal manda <think> junto do conteúdo; o teto tem que valer igual."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    chamadas: list = []
-
-    async def impl(provider, model, messages, tools, num_ctx, extra):
-        chamadas.append(extra)
-        if (extra.get("chat_template_kwargs") or {}).get("enable_thinking", True):
-            yield "content", "<think>"
-            for _ in range(CAP // 100 + 2):
-                yield "content", "p" * 100
-        yield "content", "resposta final"
-        yield "done", {"tool_calls": []}
-
-    eventos = _consome(llm._capped(impl, "lm", "qwen", [{"role": "system", "content": "s"}], None, 8192, {}, TETO))
-    assert len(chamadas) == 2 and ("content", "resposta final") in eventos
-
-
-def test_teto_nativo_vai_no_corpo_da_requisicao(monkeypatch):
-    """O caminho bom: o servidor corta sozinho, na mesma geração. O `_capped` é só a rede."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+def test_teto_de_pensamento_vai_na_requisicao(monkeypatch):
+    """Quem corta é o servidor, na mesma geração. O Forja só diz de quanto é o teto."""
+    _lm(monkeypatch)
     corpo: dict = {}
     asyncio.run(llm._reasoning("lm", "qwen", "medio", corpo, []))
-    assert corpo["reasoning_budget"] == CAP // 4          # o mesmo teto, em tokens
+    # dois nomes: `reasoning_budget_tokens` é o que o llama-server lê por requisição, o outro é como
+    # a flag aparece em alguns forks. O que não for conhecido é ignorado sem erro.
+    assert corpo["reasoning_budget_tokens"] == BUDGET["medio"]
+    assert corpo["reasoning_budget"] == BUDGET["medio"]
 
-    folgado: dict = {}
-    asyncio.run(llm._reasoning("lm", "qwen", "medio", folgado, [], subagents.SUB_CAP_MULT))
-    assert folgado["reasoning_budget"] > corpo["reasoning_budget"]
+
+def test_teto_cresce_com_o_esforco():
+    assert BUDGET["baixo"] < BUDGET["medio"] < BUDGET["alto"] < BUDGET["maximo"]
+    assert llm._budget("baixo") == 0        # o esforço de ir direto ao ponto não pensa
+    assert llm._budget("maximo") > llm._budget("medio")
 
 
-def test_teto_nativo_nao_vai_para_quem_nao_entende(monkeypatch):
+def test_subagente_pensa_mais_folgado_que_o_maestro():
+    """Quem resolve a tarefa é ele; cortar no mesmo ponto do maestro devolveria relatório pela metade."""
+    assert llm._budget("medio", subagents.SUB_BUDGET_MULT) > llm._budget("medio")
+    assert llm._budget("baixo", subagents.SUB_BUDGET_MULT) == 0   # zero continua zero
+
+
+def test_knob_de_configuracao_afrouxa_o_teto(monkeypatch):
+    monkeypatch.setattr(config, "REASONING_BUDGET_MULT", 2.0)
+    assert llm._budget("medio") == BUDGET["medio"] * 2
+
+
+def test_teto_nao_vai_para_quem_nao_entende(monkeypatch):
     """`openai` genérico devolveria 400; no Ollama o interruptor é `think`, não um orçamento."""
     monkeypatch.setitem(config.PROVIDERS, "gen",
                         {"id": "gen", "name": "G", "type": "openai", "url": "http://x/v1", "api_key": ""})
@@ -558,14 +559,13 @@ def test_teto_nativo_nao_vai_para_quem_nao_entende(monkeypatch):
     for provider in ("gen", "oll"):
         corpo: dict = {}
         asyncio.run(llm._reasoning(provider, "qwen", "medio", corpo, []))
-        assert "reasoning_budget" not in corpo
+        assert "reasoning_budget_tokens" not in corpo and "reasoning_budget" not in corpo
 
 
 @pytest.mark.skipif(not hasattr(llm, "_inference"), reason="a tela Inferência existe só no desktop")
-def test_ajuste_salvo_do_modelo_manda_mais_que_o_teto_nativo(monkeypatch):
+def test_ajuste_salvo_do_modelo_manda_mais_que_o_teto_do_esforco(monkeypatch):
     """Quem mexeu na tela Inferência decidiu; o padrão do esforço não pode passar por cima."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    _lm(monkeypatch)
     monkeypatch.setattr(llm.db, "get_model_setting",
                         lambda m: {"inference": {"reasoning_budget": 99}, "tool_mode": "auto", "vision": "auto"})
     corpo: dict = {}
@@ -574,77 +574,37 @@ def test_ajuste_salvo_do_modelo_manda_mais_que_o_teto_nativo(monkeypatch):
     assert corpo["reasoning_budget"] == 99
 
 
-def test_raciocinio_cortado_nao_volta_como_entrada(monkeypatch):
-    """Re-prefillar o tratado que acabou de ser rejeitado gasta contexto e convida a continuar o loop."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    vistos: list = []
+def test_desligar_o_pensamento_manda_todos_os_interruptores(monkeypatch):
+    """Não existe um interruptor só: o que a família do modelo não entende é ignorado sem erro."""
+    monkeypatch.setitem(config.PROVIDERS, "oll",
+                        {"id": "oll", "name": "O", "type": "ollama", "url": "http://x/v1", "api_key": ""})
+    _lm(monkeypatch)
+    sistema = [{"role": "system", "content": "regras"}]
+    assert llm._sem_pensar("oll", {}, sistema) == ({"think": False}, sistema)
 
-    async def impl(provider, model, messages, tools, num_ctx, extra):
-        vistos.append(messages)
-        if (extra.get("chat_template_kwargs") or {}).get("enable_thinking", True):
-            for _ in range(CAP // 100 + 2):
-                yield "reasoning", "blá " * 25
-        yield "content", "resposta final"
-        yield "done", {"tool_calls": []}
-
-    original = [{"role": "system", "content": "s"}, {"role": "user", "content": "pergunta"}]
-    _consome(llm._capped(impl, "lm", "qwen", original, None, 8192, {}, TETO))
-    assert len(vistos) == 2
-    assert [m["role"] for m in vistos[1]] == ["system", "user"]   # nada foi acrescentado
-    assert not any("blá" in m["content"] for m in vistos[1])
-    assert len(original) == 2 and original[0]["content"] == "s"   # sem mutar a lista de quem chamou
-
-
-def test_teto_tambem_e_de_relogio(monkeypatch):
-    """Modelo local lento gasta minutos gerando poucos caracteres: quem segura é o cronômetro."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    chamadas: list = []
-
-    async def impl(provider, model, messages, tools, num_ctx, extra):
-        chamadas.append(extra)
-        if (extra.get("chat_template_kwargs") or {}).get("enable_thinking", True):
-            for _ in range(50):
-                await asyncio.sleep(0.01)
-                yield "reasoning", "p"      # devagar e curtinho: nunca chegaria no teto de caracteres
-        yield "content", "resposta final"
-        yield "done", {"tool_calls": []}
-
-    eventos = _consome(llm._capped(impl, "lm", "qwen", [], None, 8192, {}, (CAP, 0.05)))
-    assert len(chamadas) == 2 and ("content", "resposta final") in eventos
-    assert sum(len(v) for k, v in eventos if k == "reasoning") < CAP
-
-
-def test_teto_vale_em_todo_esforco_nao_so_no_extremo(monkeypatch):
-    """A regressão que motivou isto: no Médio o raciocínio não tinha limite nenhum."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
-    chamadas: list = []
-    monkeypatch.setattr(llm, "_openai_stream", _impl_falso(chamadas, CAP * 2))
-    eventos = _consome(llm.chat_stream("lm", "qwen", [], None, 8192, "medio"))
-    assert len(chamadas) == 2 and ("content", "resposta 2") in eventos
+    corpo, msgs = llm._sem_pensar("lm", {}, sistema)
+    assert corpo == {"chat_template_kwargs": {"enable_thinking": False},
+                     "reasoning_budget_tokens": 0, "reasoning_budget": 0}
+    assert msgs[0]["content"].endswith("/no_think") and sistema[0]["content"] == "regras"  # sem mutar
 
 
 def test_chamada_mecanica_nao_pensa(monkeypatch):
     """Compactar, titular e escrever mensagem de commit não precisam de raciocínio nenhum."""
-    monkeypatch.setitem(config.PROVIDERS, "lm",
-                        {"id": "lm", "name": "LM", "type": "lmstudio", "url": "http://x/v1", "api_key": ""})
+    _lm(monkeypatch)
     chamadas: list = []
-    monkeypatch.setattr(llm, "_openai_stream", _impl_falso(chamadas, CAP * 2))
+    monkeypatch.setattr(llm, "_openai_stream", _impl_falso(chamadas, 4000))
     eventos = _consome(llm.chat_stream("lm", "qwen", [{"role": "system", "content": "s"}], None, 8192,
                                        "baixo", think=False))
-    assert len(chamadas) == 1                            # uma chamada só: não pensou, não teve o que cortar
+    assert len(chamadas) == 1                            # uma requisição só, sempre
     assert chamadas[0]["chat_template_kwargs"] == {"enable_thinking": False}
     assert ("content", "resposta 1") in eventos
+    assert not [v for k, v in eventos if k == "reasoning"]
 
 
-def test_subagente_pensa_mais_folgado_que_o_maestro():
-    """Quem resolve a tarefa é ele; cortar o sub no mesmo ponto do maestro devolveria relatório vazio."""
-    assert llm._cap("medio", subagents.SUB_CAP_MULT) > llm._cap("medio", 1.0)
-    assert llm._cap("maximo", 1.0) > llm._cap("medio", 1.0)     # o teto cresce com o esforço
-
-
-def test_knob_de_configuracao_afrouxa_o_teto(monkeypatch):
-    monkeypatch.setattr(config, "REASONING_CAP_MULT", 2.0)
-    assert llm._cap("medio", 1.0) == (CAP * 2, llm.REASONING_CAP["medio"][1] * 2)
+def test_uma_requisicao_por_passo(monkeypatch):
+    """O Forja não interrompe nem refaz geração por conta própria: pensar demais é problema do teto."""
+    _lm(monkeypatch)
+    chamadas: list = []
+    monkeypatch.setattr(llm, "_openai_stream", _impl_falso(chamadas, 40_000))
+    eventos = _consome(llm.chat_stream("lm", "qwen", [], None, 8192, "medio"))
+    assert len(chamadas) == 1 and ("content", "resposta 1") in eventos

@@ -61,6 +61,17 @@ NOVO = frozenset(["-c", "-ngl", "-t", "-fa", "--cache-type-k", "--cache-type-v",
 ANTIGO = frozenset(["-c", "-ngl", "-t", "-fa", "--cache-type-k", "--cache-type-v", "--mlock", "--no-mmap"])
 
 
+def test_launch_limita_o_pensamento_do_modelo():
+    """Sem --reasoning-budget o llama.cpp usa INT_MAX e a fase de pensamento fica ilimitada."""
+    a = localai.argv(Path("llama-server"), "m.gguf", localai.DEFAULT_PARAMS)
+    teto = a[a.index("--reasoning-budget") + 1]
+    assert int(teto) == max(config.REASONING_BUDGET.values())
+
+    # build que não conhece a opção não pode receber ela: o llama-server sai com código 1
+    antigo = localai.argv(Path("llama-server"), "m.gguf", localai.DEFAULT_PARAMS, ANTIGO)
+    assert "--reasoning-budget" not in antigo
+
+
 def test_nao_manda_opcao_que_a_build_nao_conhece():
     """O llama.cpp trocou --mlock/--no-mmap por --load-mode; com o nome errado ele sai com código 1."""
     p = {**localai.DEFAULT_PARAMS, "mlock": True, "mmap": False, "ctx_checkpoints": 32, "n_cpu_moe": 30}

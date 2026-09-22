@@ -11,3 +11,14 @@ openpyxl==3.1.*
 python-docx==1.2.*
 python-pptx==1.0.*
 pypdfium2==5.13.*
+# OCR de PDF escaneado. Quem reconhece é o próprio Windows (Windows.Media.Ocr, com os idiomas que o
+# usuário já tem): são ~3 MB de binding e nenhum modelo para baixar. No container é o tesseract, e
+# lá estes pacotes não existem — ver forja-web/backend/requirements.txt.
+winrt-runtime==3.2.*; sys_platform == "win32"
+winrt-Windows.Media.Ocr==3.2.*; sys_platform == "win32"
+winrt-Windows.Graphics.Imaging==3.2.*; sys_platform == "win32"
+winrt-Windows.Storage.Streams==3.2.*; sys_platform == "win32"
+# Foundation e Foundation.Collections são carregados em tempo de execução pelos de cima e o pip NÃO
+# os traz sozinho: sem declarar, o app empacotado quebra com ModuleNotFoundError no primeiro OCR.
+winrt-Windows.Foundation==3.2.*; sys_platform == "win32"
+winrt-Windows.Foundation.Collections==3.2.*; sys_platform == "win32"

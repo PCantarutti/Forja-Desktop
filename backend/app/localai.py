@@ -94,7 +94,7 @@ INFERENCE_DEFAULTS = {
     "max_tokens": 0,        # 0 = sem limite
     "stop": [],
     "think": True,          # enable_thinking do template (modelos com raciocínio)
-    "reasoning_budget": -1,  # -1 = sem teto de tokens de raciocínio
+    "reasoning_budget": -1,  # -1 = usa o teto do esforço da conversa (config.REASONING_BUDGET)
 }
 GGUF_SAMPLING = {"temp": "temperature", "top_k": "top_k", "top_p": "top_p", "min_p": "min_p"}
 
@@ -941,6 +941,12 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
     a = [str(exe), "-m", str(path), "--host", "127.0.0.1", "--port", str(config.LOCAL_PORT),
          "--alias", alias_of(path), "--jinja"]  # --jinja: templates do gguf, necessário p/ tool calling
     a += ["-c", str(int(p["ctx"])), "-ngl", str(int(p["ngl"]))]
+    if ok("--reasoning-budget"):
+        # Sem isto o llama.cpp roda o sampler de reasoning com INT_MAX em modelo com tag de thinking:
+        # a fase de pensamento fica ilimitada, trava de forma não determinística e o KV cache enche
+        # até cair para a RAM. Este é o teto do servidor; cada requisição manda o do seu esforço, que
+        # é menor (ver llm._budget). Vale também no build velho, que ignora o campo por requisição.
+        a += ["--reasoning-budget", str(max(config.REASONING_BUDGET.values()))]
     if p.get("fit", True) and ok("--fit"):
         # Ele reduz sozinho o que não couber (e a nossa estimativa é estimativa).
         a += ["-fit", "on"]

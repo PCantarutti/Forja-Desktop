@@ -1,6 +1,7 @@
 import asyncio
 
 from app import compact
+from app import agent as agent_mod
 from app.agent import Run, build_history
 from app.db import Message
 
@@ -128,6 +129,53 @@ def test_retry_and_shell_always_asks(monkeypatch):
     types = asyncio.run(scenario())
     assert calls["n"] == 3
     assert "approval_request" in types and types[-1] == "done"
+
+
+
+def test_argumentos_de_tool_call_saem_ao_vivo(monkeypatch):
+    """Escrever um arquivo grande levava minutos sem um evento sequer: a tela ficava parada e nao
+    dava para saber se o modelo tinha travado. Agora cada pedaco dos argumentos vira 'tool_token'."""
+    from app import agent, db, llm
+
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        yield "tool_args", {"name": "write_file", "text": '{"path":"a.py",'}
+        yield "tool_args", {"name": "write_file", "text": '"content":"x = 1"}'}
+        yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
+
+    async def fake_limit(*a):
+        return 32768
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", fake_limit)
+
+    async def scenario():
+        with db.session() as s:
+            c = db.Conversation()
+            s.add(c)
+            s.commit()
+            conv_id = c.id
+        run = agent.Run(conv_id)
+        req = agent.RunRequest(content="escreva", provider="lmstudio", model="m", mode="agent", permission="auto")
+        return [ev async for ev in agent.run_agent(conv_id, req, run)]
+
+    eventos = asyncio.run(scenario())
+    vivos = [e for e in eventos if e["type"] == "tool_token"]
+    assert [e["text"] for e in vivos] == ['{"path":"a.py",', '"content":"x = 1"}']
+    assert all(e["name"] == "write_file" for e in vivos)
+
+
+def test_draft_guarda_a_cauda_do_que_esta_sendo_escrito():
+    """Quem recarrega a pagina no meio da escrita precisa reencontrar o fim dela, nao uma tela vazia."""
+    async def scenario():
+        run = Run(conv_id=1)
+        await run.publish({"type": "assistant_start"})
+        await run.publish({"type": "tool_token", "name": "write_file", "text": "a" * (agent_mod.TOOL_TAIL + 50)})
+        await run.publish({"type": "tool_token", "name": "", "text": "FIM"})
+        tool = run.snapshot()["draft"]["tool"]
+        assert tool["name"] == "write_file"
+        assert len(tool["text"]) == agent_mod.TOOL_TAIL and tool["text"].endswith("FIM")
+
+    asyncio.run(scenario())
 
 
 # ------------------------------------------------ compactação sem janela conhecida

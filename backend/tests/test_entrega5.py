@@ -90,9 +90,9 @@ def test_qwen_no_think_on_low_effort():
         body = {}
         settings.update({"providers": [{"id": "p", "name": "P", "type": "lmstudio", "url": "http://x/v1"}]})
         await llm._reasoning("p", "qwen/qwen3.6-35b", "baixo", body, messages)
-        # o teto nativo do servidor acompanha todo esforço agora; o resto do corpo segue vazio
+        # o teto de pensamento do esforço acompanha toda requisição; no Baixo ele é zero
         assert messages[0]["content"].endswith("/no_think")
-        assert body == {"reasoning_budget": llm._budget("baixo", 1.0)}
+        assert body == {"reasoning_budget_tokens": 0, "reasoning_budget": 0}
         messages2 = [{"role": "system", "content": "prompt"}]
         await llm._reasoning("p", "gpt-oss:20b", "alto", body, messages2)
         assert body["reasoning_effort"] == "high" and messages2[0]["content"] == "prompt"

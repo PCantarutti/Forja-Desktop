@@ -41,7 +41,7 @@ MAX_RESULT_IN_STEP = 2000
 MAX_FILES = 12            # arquivos anexados ao brief
 MAX_DIFF = 30_000         # diff mandado para a revisão
 VERIFY_TIMEOUT = 180      # teto do done_when (o run_command ainda corta em SHELL_TIMEOUT_MAX)
-SUB_CAP_MULT = 1.5        # quem resolve a tarefa é ele: pensa mais folgado que o maestro (ver llm._cap)
+SUB_BUDGET_MULT = 1.5     # quem resolve a tarefa é ele: pensa mais folgado que o maestro (ver llm._budget)
 WRITE_TOOLS = {"write_file", "edit_file"}
 NUDGE_LINES = 12          # escrita maior que isto, no extremo, é trabalho de subagente
 REVIEW_PROMPT = (
@@ -211,6 +211,27 @@ def _context(root: Path, files: list[str]) -> str:
     return "\n".join(partes)
 
 
+def _tem_arquivos(root: Path) -> bool:
+    """Pasta de trabalho com algo visível para listar em 'files'."""
+    try:
+        return any(not p.name.startswith(".") for p in root.iterdir())
+    except OSError:
+        return False
+
+
+def _falta(root: Path, task: str, files: list[str]) -> str:
+    """O que impede esta delegação de ser útil no esforço extremo; '' quando está boa. Projeto do zero
+    não tem arquivo para listar: exigir 'files' ali é pedido impossível e o modelo repete a mesma
+    chamada até o laço ser interrompido."""
+    if len(task) < 120:
+        return ("a 'task' está curta demais — o subagente não vê esta conversa, então repasse o enunciado "
+                "inteiro (requisitos, nomes de arquivo, o que conta como pronto)")
+    if not files and _tem_arquivos(root):
+        return ("faltou 'files' — liste os arquivos que ele precisa ler, que o conteúdo vai junto no pedido; "
+                "se nenhum serve (arquivo novo), mande a mesma chamada de novo sem 'files'")
+    return ""
+
+
 async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = None) -> tuple:
     """(via, auto, caps, tools, schemas, mensagem de sistema) de um slot. Serve à primeira tentativa e
     ao fallback: trocar de modelo troca ferramentas, capacidades e formato de tool call junto."""
@@ -254,7 +275,7 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
     texto = ""
     try:
         async for kind, val in llm.chat_stream(spec["provider"], spec["model"], messages, None,
-                                               config.NUM_CTX, "baixo", cap_mult=SUB_CAP_MULT):
+                                               config.NUM_CTX, "baixo", budget_mult=SUB_BUDGET_MULT):
             if kind == "content":
                 texto += val
     except llm.LLMError as e:
@@ -279,12 +300,13 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     if not task:
         out.update(status="erro", text="Informe 'task' com a tarefa completa.", meta=meta)
         return
-    if effort == "extremo" and (len(task) < 120 or not files):
+    if effort == "extremo" and (motivo := _falta(root, task, files)) and "delegate_task" not in run_obj.nudged:
+        run_obj.nudged.add("delegate_task")  # uma vez por turno: insistir é sinal de que não há mais contexto
         out.update(status="erro", meta=meta, text=(
-            "Delegação sem contexto suficiente. Refaça a chamada com 'task' explicando o que fazer e por quê, "
-            "'files' com os arquivos que ele precisa ler e 'done_when' com o comando que prova que ficou pronto. "
-            'Exemplo: {"task":"Corrija o cálculo de X em ... porque ...","level":"capaz",'
-            '"files":["backend/app/x.py","backend/tests/test_x.py"],"done_when":"pytest -q backend/tests/test_x.py"}'))
+            f"Delegação recusada (nada foi feito): {motivo}. Modelo de chamada boa: "
+            '{"task":"Corrija o cálculo de X em ... porque ...","level":"capaz",'
+            '"files":["backend/app/x.py","backend/tests/test_x.py"],"done_when":"pytest -q backend/tests/test_x.py"}'
+            ". Refaça a chamada agora — mesmo que só dê para melhorar a 'task', a próxima passa."))
         return
     cadeia = chain(level)
     if not cadeia:
@@ -334,7 +356,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
         done: dict = {"tool_calls": []}
         try:
             async for kind, val in llm.chat_stream(provider, model, messages, schemas, config.NUM_CTX,
-                                                   sub_effort, cap_mult=SUB_CAP_MULT):
+                                                   sub_effort, budget_mult=SUB_BUDGET_MULT):
                 if run_obj.cancel.is_set():
                     break
                 if kind == "content":

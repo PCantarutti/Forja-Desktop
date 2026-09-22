@@ -102,6 +102,7 @@ def effort_iterations(effort: str) -> int:
     return max(3, round(config.MAX_ITERATIONS * EFFORT.get(effort, EFFORT["medio"])[0]))
 MAX_RETRIES = 1
 RETRY_DELAY = 2.0
+TOOL_TAIL = 4000    # cauda dos argumentos guardada para quem reconectar no meio de uma escrita longa
 # Chamadas de leitura que o modelo pede juntas rodam juntas: a inferência já terminou, o que sobra é I/O.
 # Escrita, shell, aprovação e o resto do navegador continuam em fila, na ordem em que o modelo pediu.
 PARALLEL_OK = {"read_file", "list_dir", "search", "web_search", "fetch_url", "browser_read", "delegate_task"}
@@ -140,7 +141,8 @@ class Run:
         self.waiting: dict[str, tuple] = {}  # call_id -> (tool, args) das aprovações abertas
         self.queue: list[str] = []      # mensagens enviadas pelo usuário durante a execução (entram no próximo passo)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
-        self.nudged: set[str] = set()   # arquivos que já levaram o freio do esforço extremo (um aviso cada)
+        self.nudged: set[str] = set()   # já levaram o freio do esforço extremo (um aviso cada): caminhos
+                                       # de arquivo e "delegate_task" para a delegação rasa
         self.plan: str | None = None    # plano aprovado: fica preso no system prompt até outro substituí-lo
         self.cancel = asyncio.Event()
         self.pending: dict[str, asyncio.Future] = {}
@@ -155,11 +157,15 @@ class Run:
     async def publish(self, ev: dict) -> None:
         t = ev["type"]
         if t == "assistant_start":
-            self.draft = {"content": "", "thinking": ""}
+            self.draft = {"content": "", "thinking": "", "tool": None}
         elif t == "token" and self.draft is not None:
             self.draft["content"] += ev["text"]
         elif t == "thinking" and self.draft is not None:
             self.draft["thinking"] += ev["text"]
+        elif t == "tool_token" and self.draft is not None:
+            # Quem reconectar no meio de uma escrita longa vê de onde ela parou, não uma tela parada.
+            tool = self.draft.get("tool") or {"name": "", "text": ""}
+            self.draft["tool"] = {"name": ev["name"] or tool["name"], "text": (tool["text"] + ev["text"])[-TOOL_TAIL:]}
         elif t == "assistant_end":
             self.draft = None
         elif t == "approval_request":
@@ -339,10 +345,18 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                 rules.append("- preview_document devolve uma imagem do arquivo e você a recebe: use para conferir "
                              "espaçamento, alinhamento e coluna espremida, que o read_file não mostra. A resposta "
                              "diz se veio do Word da máquina (fiel) ou da nossa leitura (conteúdo e estrutura).")
+                rules.append("- PDF escaneado (o read_file volta vazio porque a página é imagem): olhe pelo "
+                             "preview_document e transcreva o que vê. Enxergar a página é mais fiel que OCR — "
+                             "pega tabela, carimbo, assinatura e coluna torta —, e `pagina` avança a janela até "
+                             "a última. Só se a prévia não resolver chame read_file com ocr=true, que é palpite "
+                             "de máquina. Nessa ordem.")
             else:
                 rules.append("- preview_document gera uma imagem do arquivo para o usuário ver no chat; peça quando "
                              "ele quiser olhar o resultado. Você não tem visão e não recebe a imagem, então confira "
                              "pelo read_file.")
+                rules.append("- PDF escaneado (o read_file volta vazio porque a página é imagem): chame read_file de "
+                             "novo com ocr=true e o OCR do sistema transcreve para você. É leitura de máquina, "
+                             "então confira número e código, e diga ao usuário que o conteúdo veio de OCR.")
     if "write_file" in names or "edit_file" in names:
         rules.append(f"- Memória do projeto: {config.PROJECT_MEMORY_FILE} na raiz da pasta de trabalho. Quando aprender "
                      "algo duradouro (decisões, convenções, comandos do projeto), atualize esse arquivo. Não guarde "
@@ -371,8 +385,11 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                         "e chame delegate_task(level='capaz') em poucos passos, com 'task' repassando o enunciado "
                         "por completo, 'files' com os arquivos relevantes e 'done_when' com o comando que prova "
                         "(teste, build, lint). O comando roda sozinho depois e o resultado volta no relatório. Você "
-                        "integra o que ele entregou e responde. Edite direto só o trivial (import, renomear, uma ou "
-                        "duas linhas). Se a verificação falhar, delegue de novo colando a saída do erro.")
+                        "integra o que ele entregou e responde. Arquivo que ainda não existe ou pasta vazia: mande "
+                        "'files' com o que servir de referência, ou nenhum — o que não pode faltar é a 'task' com o "
+                        "enunciado inteiro, requisito por requisito, porque ele não vê esta conversa. Edite direto só "
+                        "o trivial (import, renomear, uma ou duas linhas). Se a verificação falhar, delegue de novo "
+                        "colando a saída do erro.")
     elif "delegate_task" in names:
         rules.append("- delegate_task passa uma subtarefa autocontida para outro modelo e devolve só o relatório. "
                      "Use level='rapido' para tarefas simples e mecânicas (buscar, resumir, listar, editar algo óbvio) "
@@ -775,7 +792,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 elif kind == "reasoning":
                     reasoning += val
                     yield {"type": "thinking", "text": val}
-                else:
+                elif kind == "tool_args":
+                    yield {"type": "tool_token", "name": val["name"], "text": val["text"]}
+                elif kind == "done":
                     done = val
         except llm.LLMError as e:
             body = str(e).lower()

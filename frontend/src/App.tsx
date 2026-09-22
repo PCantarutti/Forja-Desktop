@@ -41,6 +41,7 @@ import {
   StatsRow,
   SubagentSteps,
   Thinking,
+  ToolDraft,
   ToolBlock,
   TasksCard,
   type TurnStats,
@@ -65,12 +66,19 @@ type Config = {
   default_workspace?: string;
 };
 type SubState = { status: string; steps: { call: any; result?: Message }[] };
+/** Resposta em andamento. `tool` são os argumentos de uma tool call ainda chegando (write_file de
+ *  arquivo grande leva minutos e, sem isto, a tela fica parada como se o modelo tivesse travado). */
+type Draft = {
+  content: string;
+  thinking: string;
+  tool?: { name: string; path?: string; text: string; chars?: number } | null;
+};
 type Live = {
   messages: Message[];
   run: {
     run_id: string;
     cursor: number;
-    draft: { content: string; thinking: string } | null;
+    draft: Draft | null;
     sent: ToolsSent | null;
     approvals: { call: { id: string; name: string; arguments?: any }; preview: any; suggest?: string; parent?: string }[];
   } | null;
@@ -129,6 +137,11 @@ function aggregate(list: Stats[]): TurnStats {
 }
 
 /** Frase da espera por ferramenta: "Buscando X" diz mais que "Usando web_search". */
+const TOOL_TAIL = 4000; // cauda dos argumentos guardada na tela; o resto já rolou para fora
+
+/** Caminho do arquivo dentro do JSON ainda pela metade, para o cabeçalho do bloco ao vivo. */
+const alvoDaChamada = (bruto: string) => /"(?:path|file|caminho)"\s*:\s*"([^"]+)"/.exec(bruto)?.[1];
+
 const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> = {
   web_search: (a) => (typeof a.query === "string" ? `Buscando \u201c${a.query}\u201d` : undefined),
   fetch_url: (a) => {
@@ -210,7 +223,7 @@ export default function App() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentId, setCurrentId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [draft, setDraft] = useState<{ content: string; thinking: string } | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   useEffect(() => {
@@ -612,7 +625,7 @@ export default function App() {
         break;
       case "assistant_start":
         setStatus(null);
-        setDraft({ content: "", thinking: "" });
+        setDraft({ content: "", thinking: "", tool: null });
         liveGen.current = { t0: Date.now(), tFirst: null, tokens: 0 };
         break;
       case "token":
@@ -624,6 +637,27 @@ export default function App() {
         }
         if (ev.type === "token") setDraft((d) => d && { ...d, content: d.content + ev.text });
         else setDraft((d) => d && { ...d, thinking: d.thinking + ev.text });
+        break;
+      }
+      case "tool_token": {
+        const g = liveGen.current;
+        if (g) {
+          g.tFirst ??= Date.now();
+          g.tokens += 1; // o contador também parava aqui: o turno parecia morto no meio da escrita
+        }
+        setDraft((d) => {
+          if (!d) return d;
+          const texto = (d.tool?.text ?? "") + ev.text;
+          return {
+            ...d,
+            tool: {
+              name: ev.name || d.tool?.name || "",
+              path: d.tool?.path ?? alvoDaChamada(texto),
+              text: texto.slice(-TOOL_TAIL),
+              chars: (d.tool?.chars ?? 0) + ev.text.length,
+            },
+          };
+        });
         break;
       }
       case "assistant_end":
@@ -1029,6 +1063,7 @@ export default function App() {
       .flatMap((m) => m.tool_calls ?? [])
       .find((c) => !results.has(c.id));
     if (chamando) return FASE[chamando.name]?.(chamando.arguments) ?? `Usando ${chamando.name}`;
+    if (draft?.tool) return `Escrevendo ${draft.tool.path ?? "a chamada de " + (draft.tool.name || "ferramenta")}`;
     if (draft?.content) return "Escrevendo a resposta";
     if (draft?.thinking) return (liveStats?.seconds ?? 0) > 30 ? "Ainda pensando…" : "Pensando…";
     return status ?? ""; // sem sinal de atividade, nada de spinner girando à toa
@@ -1378,11 +1413,12 @@ export default function App() {
 
             {draft && (
               <div className="my-4">
-                <Thinking text={draft.thinking} live={!draft.content} />
+                <Thinking text={draft.thinking} live={!draft.content && !draft.tool} />
+                {draft.tool && <ToolDraft tool={draft.tool} />}
                 {draft.content ? (
                   <Markdown text={draft.content} />
                 ) : (
-                  !draft.thinking && <div className="animate-pulse text-faint">●</div>
+                  !draft.thinking && !draft.tool && <div className="animate-pulse text-faint">●</div>
                 )}
               </div>
             )}

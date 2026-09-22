@@ -728,15 +728,23 @@ async def write_document(root: Path, args: dict) -> dict:
 MAX_PREVIA_CHARS = 20_000  # o suficiente para umas 15 páginas; acima disso a imagem só engorda
 LARGURA_PREVIA = 820          # ~A4 a 96dpi, que é a largura do CSS do para_html
 PAGINAS_PREVIA = 3            # quantas páginas viram imagem quando dá para paginar de verdade
+MAX_PAGINAS_OCR = 30          # OCR é ~1s por página: acima disso a leitura deixa de ser interativa
+ESCALA_OCR = 2.6              # ~200 DPI; abaixo disso o reconhecimento cai bastante
 ESCALA_PREVIA = 1.4           # legível sem virar um JPEG gigante
 VIRTUAL_PDF = "Microsoft Print to PDF"  # impressora que não existe fisicamente; ver _office_para_pdf
 
 
-def _pdf_para_imagens(pdf: Path, paginas: int = PAGINAS_PREVIA) -> list[bytes]:
-    """Páginas do PDF como JPEG, pelo PDFium — o mesmo motor do visualizador do Chrome.
+def _pdf_para_imagens(pdf: Path, paginas: int = PAGINAS_PREVIA, inicio: int = 1,
+                      escala: float = ESCALA_PREVIA) -> tuple[list[bytes], int]:
+    """Páginas do PDF como JPEG, e quantas o arquivo tem ao todo, pelo PDFium — o mesmo motor do
+    visualizador do Chrome.
 
     O Chromium que empacotamos é o `headless-shell`, que não traz o visualizador de PDF: apontar o
     navegador para o arquivo só dispara um download. Daí a biblioteca à parte.
+
+    `inicio` (1-based) existe porque num PDF escaneado a prévia é a ÚNICA leitura possível: com uma
+    janela fixa nas três primeiras páginas o modelo transcrevia só o começo e achava que tinha
+    terminado. Agora ele avança a janela até o fim.
     """
     import pypdfium2 as pdfium
 
@@ -746,14 +754,40 @@ def _pdf_para_imagens(pdf: Path, paginas: int = PAGINAS_PREVIA) -> list[bytes]:
         raise ToolError(f"Não consegui abrir '{pdf.name}' para montar a prévia: o arquivo está "
                         f"corrompido ou protegido por senha. ({type(e).__name__})") from e
     try:
+        total = len(doc)
+        if inicio > total:
+            raise ToolError(f"'{pdf.name}' tem {total} página(s); não existe a página {inicio}.")
         saida = []
-        for i in range(min(len(doc), paginas)):
+        for i in range(inicio - 1, min(total, inicio - 1 + paginas)):
             buf = io.BytesIO()
-            doc[i].render(scale=ESCALA_PREVIA).to_pil().convert("RGB").save(buf, "JPEG", quality=75)
+            doc[i].render(scale=escala).to_pil().convert("RGB").save(buf, "JPEG", quality=75)
             saida.append(buf.getvalue())
-        return saida
+        return saida, total
     finally:
         doc.close()
+
+
+def extrair_ocr(pdf: Path) -> str | None:
+    """Texto de um PDF escaneado, pelo OCR do sistema. None quando não há OCR aqui ou não saiu nada.
+
+    Não entra no `extrair()`: aquele é a leitura barata, chamada inclusive no upload só para saber
+    se há texto. Esta custa segundos por página e só vale a pena quando a barata já voltou vazia.
+    """
+    from . import ocr
+
+    if not ocr.disponivel():
+        return None
+    imagens, total = _pdf_para_imagens(pdf, MAX_PAGINAS_OCR, escala=ESCALA_OCR)
+    textos = ocr.de_imagens(imagens)
+    corpo = (NL * 2).join(f"--- página {i} ---{NL}{t}" for i, t in enumerate(textos, 1) if t)
+    if not corpo.strip():
+        return None
+    sobrou = f" (o OCR passou nas {MAX_PAGINAS_OCR} primeiras)" if total > MAX_PAGINAS_OCR else ""
+    # O aviso vai no texto porque quem lê é o modelo: OCR erra caractere e embaralha coluna, e ele
+    # precisa saber que está lendo um palpite de máquina, não o arquivo.
+    return (f"{total} página(s){sobrou}. Texto obtido por OCR, não extraído do arquivo: é leitura de "
+            f"imagem, então caractere trocado e coluna fora de ordem acontecem. Confira número e "
+            f"código antes de afirmar qualquer coisa, e diga ao usuário que veio de OCR.{NL * 2}{corpo}")
 
 
 def _office_para_pdf(origem: Path, destino: Path) -> bool:
@@ -837,13 +871,18 @@ async def preview_document(root: Path, args: dict) -> dict:
     # existe na máquina. O PDF intermediário mora numa pasta temporária e some ao fim da chamada —
     # ele serve só para virar imagem.
     if ext == ".pdf":
-        imagens = await asyncio.to_thread(_pdf_para_imagens, alvo)
-        return _resposta_previa(root, alvo, imagens, "como ele será aberto")
+        inicio = max(int(args.get("pagina") or 1), 1)
+        imagens, total = await asyncio.to_thread(_pdf_para_imagens, alvo, PAGINAS_PREVIA, inicio)
+        fim = inicio + len(imagens) - 1
+        # Dizer o que ficou de fora, senão o modelo transcreve três páginas e dá o trabalho por feito.
+        resto = ("" if fim >= total else
+                 f". São {total} páginas; chame de novo com pagina={fim + 1} para as demais")
+        return _resposta_previa(root, alvo, imagens, f"páginas {inicio}-{fim}, como ele será aberto{resto}")
     if ext == ".docx":
         with tempfile.TemporaryDirectory(prefix="forja-previa-") as tmp:
             pdf = Path(tmp) / "previa.pdf"
             if await asyncio.to_thread(_office_para_pdf, alvo, pdf):
-                imagens = await asyncio.to_thread(_pdf_para_imagens, pdf)
+                imagens, _ = await asyncio.to_thread(_pdf_para_imagens, pdf)
                 return _resposta_previa(root, alvo, imagens, "renderizado pelo Word desta máquina")
 
     if ext in (".md", ".html"):
@@ -1326,8 +1365,14 @@ register(Tool(
     "você tiver visão, também chega a você. Sai sempre do arquivo salvo, então pega tabela que "
     "virou texto, conteúdo que sumiu e caixa alta que não pegou. Num .pdf mostra as páginas de "
     "verdade; num .docx, o Word da máquina renderiza quando está instalado (o texto da resposta diz "
-    "qual caminho foi usado). Planilha e apresentação saem pela leitura, sem a diagramação do Office.",
-    _obj({"path": {"type": "string", "description": "O arquivo a pré-visualizar"}}, ["path"]),
+    "qual caminho foi usado). Planilha e apresentação saem pela leitura, sem a diagramação do Office. "
+    "É TAMBÉM a saída para PDF escaneado, em que read_file não devolve texto: as páginas chegam a "
+    "você como imagem e você transcreve o que vê, em vez de dizer ao usuário que o arquivo é ilegível.",
+    _obj({"path": {"type": "string", "description": "O arquivo a pré-visualizar"},
+          "pagina": {"type": "integer",
+                     "description": f"Só .pdf: primeira página da janela de {PAGINAS_PREVIA} "
+                                    "(padrão 1). A resposta diz quando há mais para pedir."}},
+         ["path"]),
     preview_document))
 
 register(Tool(

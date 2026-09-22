@@ -232,7 +232,7 @@ def list_dir(root: Path, args: dict) -> str:
 MAX_READ_LINES = 2000
 
 
-def _conteudo(p: Path) -> str:
+def _conteudo(p: Path, usar_ocr: bool = False) -> str:
     """Texto do arquivo. Documento de escritório vira Markdown; o resto é lido como texto.
 
     Sem este desvio, .pdf/.docx/.xlsx/.pptx batiam em "Arquivo binário" no `_read_text` — os três
@@ -249,17 +249,33 @@ def _conteudo(p: Path) -> str:
         raise ToolError(f"Documento grande demais ({tamanho // 1024} KB, limite "
                         f"{config.MAX_DOC_BYTES // 1024} KB). Ajuste MAX_DOC_BYTES se precisar.")
     texto = documentos.extrair(p)
+    if texto is None and usar_ocr and p.suffix.lower() == ".pdf":
+        texto = documentos.extrair_ocr(p)
     if texto is None:
+        if p.suffix.lower() == ".pdf":
+            # Duas saídas, e a ordem importa: quem enxerga lê a página de verdade pelo
+            # preview_document e transcreve melhor que qualquer OCR — layout, tabela, carimbo,
+            # coluna torta. O OCR é o que sobra para quem não enxerga, e por isso é opt-in: quando
+            # ele rodava sozinho aqui, o modelo com visão recebia o palpite do OCR e nem chegava a
+            # olhar o documento.
+            raise ToolError(
+                f"'{p.name}' não tem texto extraível: ou é um PDF escaneado (páginas são imagem), "
+                "ou está protegido por senha, ou corrompido. NÃO desista nem avise o usuário ainda. "
+                + ("Se você recebe imagens, chame preview_document neste mesmo caminho e transcreva "
+                   "o que vê — é a leitura mais fiel. Se não recebe, ou se a prévia não resolveu, "
+                   "chame read_file de novo com ocr=true."
+                   if not usar_ocr else
+                   "Nem o OCR achou texto aqui: chame preview_document neste mesmo caminho e olhe a "
+                   "página. Só se a prévia também falhar é que o arquivo é mesmo ilegível."))
         raise ToolError(
-            f"Não consegui extrair texto de '{p.name}'. Pode ser um PDF escaneado (imagem, e aqui "
-            "não há OCR), um arquivo protegido por senha, ou um arquivo corrompido. Diga isso ao "
-            "usuário em vez de tentar de novo.")
+            f"Não consegui extrair texto de '{p.name}'. Pode ser um arquivo protegido por senha ou "
+            "corrompido. Diga isso ao usuário em vez de tentar de novo.")
     return texto
 
 
 def read_file(root: Path, args: dict) -> str:
     p = resolve_path(root, args.get("path"))
-    lines = _conteudo(p).splitlines()
+    lines = _conteudo(p, bool(args.get("ocr"))).splitlines()
     start = max(int(args.get("start_line") or 1), 1)
     end = int(args.get("end_line") or len(lines))
     end = min(end, len(lines), start + MAX_READ_LINES - 1)
@@ -372,7 +388,12 @@ register(Tool(
     ".pdf, .docx, .xlsx, .pptx e .csv saem convertidos em Markdown (tabela vira tabela).",
     _obj({"path": {"type": "string"},
           "start_line": {"type": "integer", "description": "Primeira linha (1-based), opcional"},
-          "end_line": {"type": "integer", "description": "Última linha (inclusiva), opcional"}}, ["path"]),
+          "end_line": {"type": "integer", "description": "Última linha (inclusiva), opcional"},
+          "ocr": {"type": "boolean",
+                  "description": "Só para PDF escaneado, e só depois de a leitura normal voltar "
+                                 "vazia: passa o OCR do sistema nas páginas. Se você recebe "
+                                 "imagens, prefira preview_document — enxergar a página é mais "
+                                 "fiel que o OCR."}}, ["path"]),
     read_file))
 register(Tool(
     "write_file", "Cria ou sobrescreve um arquivo com o conteúdo completo. Cria diretórios intermediários.",

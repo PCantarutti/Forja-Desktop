@@ -38,8 +38,23 @@ MAX_DOC_BYTES = int(os.getenv("MAX_DOC_BYTES", "25000000"))
 SHELL_TIMEOUT_MAX = int(os.getenv("SHELL_TIMEOUT_MAX", "300"))
 SEARXNG_URL = os.getenv("SEARXNG_URL", "")  # vazio = web_search usa o DuckDuckGo
 COMPACT_AT = float(os.getenv("COMPACT_AT", "0.8"))  # fração da janela que dispara a compactação
-# Afrouxa (>1) ou aperta (<1) o teto de raciocínio por esforço do llm.py, sem mexer em código.
-REASONING_CAP_MULT = float(os.getenv("REASONING_CAP_MULT", "1.0"))
+# Teto de raciocínio por esforço, em tokens de pensamento. Quem corta é o servidor: ao estourar ele
+# fecha o <think> e o modelo responde na MESMA geração — uma requisição só, sem o raciocínio voltar
+# como entrada e sem o Forja adivinhar quando interromper.
+#
+# Isto não é afinação: sem teto, o llama.cpp roda o sampler de reasoning com INT_MAX em modelo com
+# tag de thinking, e a fase de pensamento fica ilimitada — trava não determinística e KV cache
+# enchendo até cair para a RAM. `localai.argv()` passa o maior valor daqui como --reasoning-budget no
+# launch, e cada requisição manda o do seu esforço.
+REASONING_BUDGET = {
+    "baixo": 0,        # nem pensa: é o esforço de ir direto ao ponto
+    "medio": 1024,
+    "alto": 2048,
+    "maximo": 4096,
+    "extremo": 1536,   # o maestro delega em vez de projetar: teto curto de propósito
+}
+# Afrouxa (>1) ou aperta (<1) todos os tetos acima, sem mexer em código.
+REASONING_BUDGET_MULT = float(os.getenv("REASONING_BUDGET_MULT", "1.0"))
 
 # Navegador integrado
 BROWSER_IDLE_MINUTES = int(os.getenv("BROWSER_IDLE_MINUTES", "30"))  # 0 = nunca fechar sessão ociosa

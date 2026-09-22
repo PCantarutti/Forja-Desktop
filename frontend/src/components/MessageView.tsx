@@ -5,7 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
-import { Brain, Check, Chevron, ChevronDown, Clipboard, Split, Clock, Copy, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
 function CodeBlock(props: React.ComponentProps<"pre">) {
@@ -89,6 +89,44 @@ export function Thinking({ text, live }: { text: string; live?: boolean }) {
       )}
     </div>
   );
+}
+
+/** Argumentos de uma tool call chegando em pedaços (write_file de arquivo grande é a espera mais
+ *  longa do turno). Sem isto a tela fica parada por minutos e não dá para saber se o modelo travou. */
+export function ToolDraft({ tool }: { tool: { name: string; path?: string; text: string; chars?: number } }) {
+  const { ref: caixa, fim: fimDoTexto, onScroll: seguirTexto } = useStickyBottom<HTMLDivElement>([tool.text]);
+  const kb = (tool.chars ?? tool.text.length) / 1024;
+  return (
+    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
+      <div className="flex w-full items-center gap-2 px-4 py-2.5 font-mono text-sm text-muted">
+        <Edit className="size-4 animate-pulse" />
+        <span className="truncate">
+          {tool.name || "tool"}
+          {tool.path ? ` · ${tool.path}` : ""}
+        </span>
+        <span className="ml-auto shrink-0 tabular-nums">{kb < 1 ? `${Math.round(kb * 1024)} B` : `${kb.toFixed(1)} KB`}</span>
+      </div>
+      <div
+        ref={caixa}
+        onScroll={seguirTexto}
+        className="max-h-48 overflow-y-auto border-t border-line px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap text-fg/70"
+      >
+        {decodificar(tool.text)}
+        <div ref={fimDoTexto} />
+      </div>
+    </div>
+  );
+}
+
+/** O que chega é JSON pela metade: mostra o corpo do arquivo, não as barras invertidas dele. */
+function decodificar(bruto: string): string {
+  const i = bruto.indexOf('"content":"');
+  const corpo = i >= 0 ? bruto.slice(i + 11) : bruto;
+  return corpo
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\");
 }
 
 // Anexos e screenshots ficam na pasta de trabalho DA CONVERSA; o App avisa qual está aberta.

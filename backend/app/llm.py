@@ -5,6 +5,7 @@
   `num_ctx` só é respeitado pela API nativa — era a causa do contexto de 4k truncando as ferramentas.
 
 `chat_stream` normaliza os dois para eventos: ("content", str), ("reasoning", str),
+("tool_args", {"name": str, "text": str}) enquanto os argumentos de uma tool call chegam em pedaços, e
 ("done", {"tool_calls": [...], "prompt_tokens": int|None, "completion_tokens": int|None}).
 Mensagens de entrada/saída ficam sempre no formato OpenAI.
 """
@@ -104,7 +105,7 @@ REASONING_MODELS = re.compile(r"gpt-oss|gpt-5|^o[1-4](-|$)|deepseek-r|grok|magis
 
 
 async def _reasoning(provider: str, model: str, effort: str | None, body: dict, messages: list[dict],
-                     cap_mult: float = 1.0) -> None:
+                     budget_mult: float = 1.0) -> None:
     """Acrescenta o controle de raciocínio conforme o provider e o modelo."""
     level = EFFORT_LEVEL.get(effort or "")
     if not level:
@@ -116,12 +117,12 @@ async def _reasoning(provider: str, model: str, effort: str | None, body: dict, 
             body["think"] = level if REASONING_MODELS.search(model) else (effort != "baixo")
         return
     if kind in ("llamacpp", "lmstudio"):
-        # Teto NATIVO do servidor, e é ele que a gente quer que valha: ao estourar, o servidor fecha
-        # o <think> e o modelo responde na MESMA geração — uma requisição só, sem o raciocínio voltar
-        # como entrada. O corte do `_capped` é só a rede para o build que ignora este campo (foi o
-        # caso do Qwen3.6 medido no llama.cpp). O ajuste salvo do modelo ainda manda mais: quem passa
-        # por último é o `_inference`.
-        body["reasoning_budget"] = _budget(effort, cap_mult)
+        # Teto de pensamento desta requisição. Dois nomes porque são coisas diferentes com o mesmo
+        # apelido: `reasoning_budget_tokens` é o campo que o llama-server lê por requisição (e só
+        # obedece de b9982 em diante); `reasoning_budget` é como a flag de linha de comando aparece
+        # em alguns forks e no LM Studio. O que o servidor não conhecer é ignorado sem erro.
+        # Quem garante o teto mesmo no build velho é o --reasoning-budget do launch (localai.argv).
+        body["reasoning_budget_tokens"] = body["reasoning_budget"] = _budget(effort, budget_mult)
     if REASONING_MODELS.search(model):
         body["reasoning_effort"] = level
     elif effort == "baixo" and re.search(r"qwen", model, re.I) and messages and messages[0]["role"] == "system":
@@ -163,105 +164,49 @@ def _inference(provider: str, model: str, extra: dict) -> None:
             extra["reasoning_budget"] = int(cfg["reasoning_budget"])
 
 
-# Teto de raciocínio, por esforço. Medido no Qwen3.6 via llama.cpp: um brief bom sai com ~2,3 mil
-# caracteres de raciocínio; o tratado que atrasa 13 minutos passa de 15 mil. O servidor ignora
-# `reasoning_budget` nesses modelos, então o corte é nosso. Vale também o relógio: modelo local
-# lento estoura os minutos muito antes dos caracteres, e é o tempo parado que o usuário sente.
-REASONING_CAP = {             # esforço -> (caracteres, segundos)
-    "baixo": (1500, 45),
-    "medio": (4000, 90),
-    "alto": (8000, 150),
-    "maximo": (12000, 240),
-    "extremo": (6000, 120),   # o maestro delega em vez de projetar: teto curto de propósito
-}
 NO_THINK = chr(10) + "/no_think"   # interruptor por texto do template do Qwen3
 
 
-def _cap(effort: str | None, mult: float) -> tuple[float, float]:
-    """Teto desta chamada. `mult` afrouxa para o subagente, que é quem de fato resolve a tarefa."""
-    chars, seg = REASONING_CAP.get(effort or "medio", REASONING_CAP["medio"])
-    fator = mult * config.REASONING_CAP_MULT
-    return chars * fator, seg * fator
+def _budget(effort: str | None, mult: float = 1.0) -> int:
+    """Teto de pensamento desta chamada, em tokens (ver config.REASONING_BUDGET).
 
-
-def _budget(effort: str | None, mult: float) -> int:
-    """O mesmo teto, em tokens, para o servidor cortar sozinho. Conta ~4 caracteres por token."""
-    return max(64, int(_cap(effort, mult)[0] // 4))
+    `mult` afrouxa para o subagente, que é quem de fato resolve a tarefa. Zero continua zero: o
+    esforço Baixo é para não pensar, e multiplicar isso não faria sentido.
+    """
+    base = config.REASONING_BUDGET.get(effort or "medio", config.REASONING_BUDGET["medio"])
+    return int(base * mult * config.REASONING_BUDGET_MULT) if base else 0
 
 
 def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict, list[dict]]:
     """Mesma chamada com o pensamento desligado. Não existe um interruptor só: cada família usa o seu
-    (`think` no Ollama, `enable_thinking` no template do Qwen3.6/GLM, `reasoning_budget` em alguns
-    builds do llama.cpp, `/no_think` no texto do Qwen3). Mandamos todos: o que não for entendido é
-    ignorado sem erro, e assim isto vale para o modelo que você trocar amanhã, não só para o de hoje."""
+    (`think` no Ollama, `enable_thinking` no template do Qwen3.6/GLM, `reasoning_budget_tokens` no
+    llama-server, `/no_think` no texto do Qwen3). Mandamos todos: o que não for entendido é ignorado
+    sem erro, e assim isto vale para o modelo que você trocar amanhã, não só para o de hoje."""
     saida, msgs = dict(extra), list(messages)
     if spec(provider)["type"] == "ollama":
         saida["think"] = False
         return saida, msgs
     saida["chat_template_kwargs"] = {**saida.get("chat_template_kwargs", {}), "enable_thinking": False}
-    saida["reasoning_budget"] = 0
+    saida["reasoning_budget_tokens"] = saida["reasoning_budget"] = 0
     if (msgs and msgs[0]["role"] == "system" and isinstance(msgs[0].get("content"), str)
             and not msgs[0]["content"].endswith(NO_THINK)):  # _reasoning já pode ter posto no esforço baixo
         msgs[0] = {**msgs[0], "content": msgs[0]["content"] + NO_THINK}
     return saida, msgs
 
 
-async def _capped(impl, provider, model, messages, tools, num_ctx, extra, cap):
-    """Rede para o servidor que ignora `reasoning_budget`. O caminho bom é o nativo (ver `_reasoning`):
-    o servidor fecha o <think> e o modelo responde na MESMA geração. Quem ignora o pedido precisa ser
-    cortado daqui: passou do teto — de texto ou de relógio — sem ter começado a responder, a geração
-    é descartada e refeita sem pensamento. O raciocínio cortado NÃO volta como entrada: re-prefillar
-    o tratado que acabou de ser rejeitado gasta contexto e convida o modelo a continuar o loop. O
-    prompt já está no cache do servidor, então a segunda chamada é barata.
-
-    O relógio conta do primeiro evento, não da chamada: processar um prompt grande demora, e essa
-    espera não é o modelo pensando."""
-    cap_chars, cap_seg = cap
-    gen = impl(provider, model, messages, tools, num_ctx, extra)
-    raciocinio, respondendo, cortou, bruto, t0 = 0, False, False, "", None
-    try:
-        async for kind, val in gen:
-            if t0 is None:
-                t0 = time.monotonic()
-            if kind == "content" and val:
-                # Servidor que não separa o canal de raciocínio manda o <think> dentro do próprio texto.
-                bruto += str(val)
-                if bruto.lstrip().startswith("<think") and "</think>" not in bruto:
-                    raciocinio += len(str(val))
-                else:
-                    respondendo = True   # já está entregando: deixa terminar
-            elif kind == "reasoning" and not respondendo:
-                raciocinio += len(str(val))
-            if not respondendo and (raciocinio > cap_chars or time.monotonic() - t0 > cap_seg):
-                cortou = True
-                break
-            yield kind, val
-    finally:
-        await gen.aclose()
-    if cortou:
-        yield "reasoning", "\n[teto de raciocínio atingido: refazendo sem pensar]\n"
-        sem, msgs = _sem_pensar(provider, extra, messages)
-        async for ev in impl(provider, model, msgs, tools, num_ctx, sem):
-            yield ev
-
-
 async def chat_stream(provider: str, model: str, messages: list[dict], tools: list[dict] | None,
                       num_ctx: int, effort: str | None = None, think: bool | None = None,
-                      cap_mult: float = 1.0) -> AsyncIterator[tuple[str, object]]:
+                      budget_mult: float = 1.0) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     messages = list(messages)
     extra: dict = {}
-    await _reasoning(provider, model, effort, extra, messages, cap_mult)
+    await _reasoning(provider, model, effort, extra, messages, budget_mult)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
+    if think is False:  # chamada mecânica (compactar, titular, commit): raciocinar aqui é desperdício
+        extra, messages = _sem_pensar(provider, extra, messages)
     try:
-        if think is False:  # chamada mecânica (compactar, titular, commit): não há raciocínio a cortar
-            extra, messages = _sem_pensar(provider, extra, messages)
-            async for ev in impl(provider, model, messages, tools, num_ctx, extra):
-                yield ev
-        else:
-            async for ev in _capped(impl, provider, model, messages, tools, num_ctx, extra,
-                                    _cap(effort, cap_mult)):
-                yield ev
+        async for ev in impl(provider, model, messages, tools, num_ctx, extra):
+            yield ev
     except httpx.HTTPError as e:
         raise _conn_error(provider, e) from e
 
@@ -304,6 +249,11 @@ async def _openai_stream(provider, model, messages, tools, num_ctx, extra: dict 
                         fn = tc.get("function") or {}
                         acc["name"] += fn.get("name") or ""
                         acc["arguments"] += fn.get("arguments") or ""
+                        # Escrever um arquivo grande é a maior espera do turno e nada disso aparecia:
+                        # os argumentos só viravam evento no fim. Repassar o pedaço deixa a UI mostrar
+                        # que o modelo continua escrevendo (e o contador de tokens continuar andando).
+                        if fn.get("arguments"):
+                            yield "tool_args", {"name": acc["name"], "text": fn["arguments"]}
     out = []
     for acc in calls.values():
         try:

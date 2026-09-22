@@ -4,10 +4,13 @@ Antes, o PDF anexado virava um `.txt` ao lado, porque o `read_file` recusava bin
 `read_file` lê PDF, Word, Excel e PowerPoint direto (ver `documentos.py`), então o upload não
 precisa mais preparar nada — só conferir se há texto a extrair, para avisar quando não há.
 """
+import asyncio
+import io
+
 import pytest
 
-from app import documentos, uploads
-from app.tools import run_tool
+from app import documentos, ocr, uploads
+from app.tools import ToolError, run_tool
 
 
 def pdf_com_texto(texto: str) -> bytes:
@@ -68,7 +71,7 @@ def test_documento_sem_texto_avisa_em_vez_de_mentir(raiz):
     """PDF escaneado é imagem: prometer que o read_file abre empurraria o modelo para o erro."""
     anexo = uploads.save("scan.pdf", b"%PDF-1.4 lixo que nao e pdf", "application/pdf", raiz)
     assert anexo.get("sem_texto")
-    assert "não dá para extrair texto" in uploads.user_message("leia", [anexo])["content"]
+    assert "não sai texto direto" in uploads.user_message("leia", [anexo])["content"]
 
 
 def test_planilha_anexada_tambem_e_lida(raiz):
@@ -109,3 +112,112 @@ def test_arquivo_de_texto_mantem_o_teto_menor(raiz, monkeypatch):
     monkeypatch.setattr(config, "MAX_FILE_BYTES", 100)
     with pytest.raises(ValueError, match="maior que o limite"):
         uploads.save("notas.txt", b"x" * 200, "text/plain", raiz)
+
+
+def pdf_escaneado(paginas: int = 1, linhas: list[str] | None = None) -> bytes:
+    """PDF em que a página é imagem, como sai de um scanner: não há texto a extrair, só pixels."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:  # fonte de verdade: a embutida do PIL é pequena demais para o OCR acertar
+        fonte = ImageFont.truetype("arial.ttf", 30)
+    except OSError:
+        fonte = ImageFont.load_default()
+    folhas = []
+    for i in range(1, paginas + 1):
+        img = Image.new("RGB", (1000, 800), "white")
+        desenho = ImageDraw.Draw(img)
+        for n, linha in enumerate([f"PAGINA {i}"] + (linhas or [])):
+            desenho.text((40, 40 + n * 60), linha, fill="black", font=fonte)
+        folhas.append(img)
+    buf = io.BytesIO()
+    folhas[0].save(buf, "PDF", save_all=True, append_images=folhas[1:])
+    return buf.getvalue()
+
+
+def test_previa_do_pdf_escaneado_devolve_as_paginas_como_imagem(raiz):
+    anexo = uploads.save("scan.pdf", pdf_escaneado(), "application/pdf", raiz)
+    r = asyncio.run(documentos.preview_document(raiz, {"path": anexo["path"]}))
+    assert len(r["attachments"]) == 1 and r["attachments"][0]["mime"] == "image/jpeg"
+
+
+def test_previa_avanca_a_janela_ate_a_ultima_pagina(raiz):
+    """Sem isto o modelo transcrevia as três primeiras páginas e dava o trabalho por terminado."""
+    anexo = uploads.save("scan.pdf", pdf_escaneado(5), "application/pdf", raiz)
+
+    inicio = asyncio.run(documentos.preview_document(raiz, {"path": anexo["path"]}))
+    assert len(inicio["attachments"]) == documentos.PAGINAS_PREVIA
+    assert "5 páginas" in inicio["text"] and "pagina=4" in inicio["text"]
+
+    resto = asyncio.run(documentos.preview_document(raiz, {"path": anexo["path"], "pagina": 4}))
+    assert len(resto["attachments"]) == 2 and "chame de novo" not in resto["text"]
+
+    with pytest.raises(ToolError, match="não existe a página"):
+        asyncio.run(documentos.preview_document(raiz, {"path": anexo["path"], "pagina": 9}))
+
+
+def test_ocr_nao_roda_sozinho_e_a_visao_vem_primeiro(raiz):
+    """Aconteceu em uso: modelo COM visão recebeu o palpite do OCR e nem olhou o documento.
+
+    Enxergar a página é mais fiel que OCR, então o read_file não pode decidir isso sozinho: ele
+    volta vazio apontando as duas saídas, na ordem, e o OCR só roda se pedirem.
+    """
+    anexo = uploads.save("scan.pdf", pdf_escaneado(), "application/pdf", raiz)
+    assert anexo.get("sem_texto")
+
+    aviso = uploads.user_message("transcreva", [anexo])["content"]
+    assert aviso.index("preview_document") < aviso.index("ocr=true")  # a ordem é a mensagem
+
+    with pytest.raises(ToolError) as erro:
+        run_tool("read_file", {"path": anexo["path"]}, raiz)
+    assert "preview_document" in str(erro.value) and "ocr=true" in str(erro.value)
+
+
+def test_pdf_escaneado_e_lido_pelo_ocr_quando_pedido(raiz):
+    """O pedido que gerou o OCR: modelo sem visão não tinha como ler PDF de imagem nenhum."""
+    if not ocr.disponivel():
+        pytest.skip("sem OCR nesta máquina")
+
+    anexo = uploads.save("scan.pdf", pdf_escaneado(linhas=["Inspecao concluida", "Total 2026"]),
+                         "application/pdf", raiz)
+    lido = run_tool("read_file", {"path": anexo["path"], "ocr": True}, raiz)
+    assert "2026" in lido
+    assert "OCR" in lido  # o modelo tem que saber que está lendo palpite de máquina, não o arquivo
+
+
+def test_sem_ocr_o_caminho_continua_sendo_a_visao(raiz, monkeypatch):
+    """Máquina sem motor de OCR: mesmo pedindo ocr=true, o que sobra é olhar a página."""
+    monkeypatch.setattr(ocr, "disponivel", lambda: False)
+
+    anexo = uploads.save("scan.pdf", pdf_escaneado(), "application/pdf", raiz)
+    with pytest.raises(ToolError, match="preview_document"):
+        run_tool("read_file", {"path": anexo["path"], "ocr": True}, raiz)
+
+
+def test_ocr_remonta_a_fileira_da_tabela(raiz):
+    """O OCR do Windows varre coluna a coluna: sem remontar, a tabela chega certa e trocada.
+
+    Que é o pior caso — reconhecimento perfeito e linhas pareadas erradas parecem corretos para
+    quem lê. Aqui cada fileira tem que voltar junta, na ordem da esquerda para a direita.
+    """
+    if not ocr.disponivel():
+        pytest.skip("sem OCR nesta máquina")
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    try:
+        fonte = ImageFont.truetype("arial.ttf", 28)
+    except OSError:
+        pytest.skip("sem fonte TrueType para desenhar a tabela")
+
+    img = Image.new("RGB", (1100, 400), "white")
+    desenho = ImageDraw.Draw(img)
+    for i, (codigo, situacao) in enumerate([("A-102", "Concluido"), ("B-317", "Pendencia")]):
+        desenho.text((60, 60 + i * 90), codigo, fill="black", font=fonte)
+        desenho.text((700, 60 + i * 90), situacao, fill="black", font=fonte)  # coluna bem afastada
+    buf = io.BytesIO()
+    img.save(buf, "PDF")
+
+    anexo = uploads.save("tabela.pdf", buf.getvalue(), "application/pdf", raiz)
+    lido = run_tool("read_file", {"path": anexo["path"], "ocr": True}, raiz)
+    assert "A-102 | Concluido" in lido, lido
+    assert "B-317 | Pendencia" in lido, lido

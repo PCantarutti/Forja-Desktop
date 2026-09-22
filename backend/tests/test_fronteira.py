@@ -48,3 +48,6 @@ def test_subrecurso_dispensa_token(cliente, monkeypatch):
     """<img src> e link de download não têm como mandar header; são leitura confinada."""
     monkeypatch.setattr(config, "API_TOKEN", "segredo")
     assert cliente.get("/api/files?path=nao-existe.png").status_code != 403
+    assert cliente.get("/api/conversations/999/export").status_code != 403
+    # O relatório da pesquisa abre no navegador do usuário (window.open), fora do fetch da interface.
+    assert cliente.get("/api/pesquisa/999/relatorio").status_code != 403
