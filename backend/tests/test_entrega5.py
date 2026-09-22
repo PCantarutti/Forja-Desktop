@@ -48,7 +48,17 @@ def tool(name):
     ("edits", "browser_click", {"selector": "e1"}, True),
     ("auto", "write_file", {"path": "a"}, False),
     ("auto", "browser_click", {"selector": "e1"}, False),
-    ("auto", "run_command", {"command": "pytest -q"}, True),   # shell é always_ask: nem no automático passa
+    # Comando só de leitura passa no Automático: parar em `ls`/`git status`/`pytest` era o que fazia
+    # uma execução longa ficar esperando clique. O que escreve, instala ou sobe servidor continua.
+    ("auto", "run_command", {"command": "pytest -q"}, False),
+    ("auto", "run_command", {"command": "git status"}, False),
+    ("auto", "run_command", {"command": "ls && grep -r foo ."}, False),
+    ("auto", "run_command", {"command": "npm install"}, True),
+    ("auto", "run_command", {"command": "python -m http.server 8000"}, True),
+    ("auto", "run_command", {"command": "git status > saida.txt"}, True),      # redireciona: escreve
+    ("auto", "run_command", {"command": "ls; rm -rf build"}, True),            # um trecho não é leitura
+    ("manual", "run_command", {"command": "git status"}, True),                # manual pergunta tudo
+    ("edits", "run_command", {"command": "git status"}, True),                 # edits é sobre arquivo, não shell
     ("auto", "browser_eval", {"script": "1"}, True),
     ("bypass", "run_command", {"command": "npm install"}, False),
     ("bypass", "run_command", {"command": "node server.js"}, False),

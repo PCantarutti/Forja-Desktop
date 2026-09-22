@@ -445,6 +445,8 @@ export type LocalState = {
     pid?: number;
     uptime?: number;
     vision?: boolean;
+    /** Projetor de visão incompatível com o runtime: o encoder cai na CPU e cada print leva minutos. */
+    vision_lenta?: string;
     // Carga em andamento (barra no topo da janela) e a falha da última tentativa, que fica até a próxima.
     loading?: { path: string; name: string; elapsed: number; eta: number; percent: number };
     error?: { when: number; path: string; message: string; log: string };

@@ -4,6 +4,7 @@ import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams
   from "../types";
 import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
 import ModelSearch from "./ModelSearch";
+import { useStickyBottom } from "../useStickyBottom";
 
 const POLL_MS = 3000;
 export const card = "rounded-2xl border border-line bg-surface p-3.5";
@@ -447,6 +448,27 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   const [adv, setAdv] = useState(false);
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
+  const [logAberto, setLogAberto] = useState(false);
+  // Acompanha a geração ao vivo e já abre na última linha, que é o que interessa num log.
+  // Rolar para cima solta; voltar ao fim cola de novo — mesmo comportamento do chat.
+  const { ref: caixaDoLog, fim: fimDoLog, onScroll: seguirLog, colar: colarLog } = useStickyBottom<HTMLPreElement>([log]);
+
+  useEffect(() => {
+    if (!logAberto) return;
+    let vivo = true;
+    const puxar = () =>
+      api
+        .get<{ log: string }>("/local/log?tail=400")
+        .then((r) => vivo && setLog(r.log))
+        .catch(() => {});
+    puxar();
+    colarLog();  // abrir sempre mostra o fim, não o começo
+    const t = setInterval(puxar, 1500);
+    return () => {
+      vivo = false;
+      clearInterval(t);
+    };
+  }, [logAberto, colarLog]);
   const pedido = useRef(0);
 
   /** Padrões + estimativa vêm do backend (ele lê o gguf e o --help do binário). */
@@ -535,27 +557,37 @@ Não dá para desfazer.`)) return;
             contexto {st.server.ctx?.toLocaleString("pt-BR")} · porta {st.server.port} · pid {st.server.pid} ·{" "}
             {Math.floor((st.server.uptime || 0) / 60)} min{st.server.vision ? " · com visão" : ""}
           </p>
+          {st.server.vision_lenta && (
+            <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-amber-200/90">
+              {st.server.vision_lenta}
+            </p>
+          )}
           <p className="mt-1 text-faint">Escolha o provedor "IA local" no seletor de modelo do chat.</p>
           <button
             className="mt-1 text-faint underline hover:text-fg"
-            onClick={() => api.get<{ log: string }>("/local/log?tail=60").then((r) => setLog(r.log))}
+            onClick={() => setLogAberto((v) => !v)}
           >
-            ver log
+            {logAberto ? "esconder log" : "ver log"}
           </button>
         </section>
       )}
 
-      {log && (
+      {logAberto && (
         <div className="relative">
           <button
             title="Apagar o log"
-            className="absolute top-1.5 right-1.5 text-faint hover:text-red-400"
+            className="absolute top-1.5 right-1.5 z-10 text-faint hover:text-red-400"
             onClick={() => api.post("/local/log/clear").then(() => { setLog(""); props.onDone(); })}
           >
             <Trash className="size-3.5" />
           </button>
-          <pre className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 pr-8 font-mono text-[11px] whitespace-pre-wrap text-muted">
-            {log}
+          <pre
+            ref={caixaDoLog}
+            onScroll={seguirLog}
+            className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 pr-8 font-mono text-[11px] whitespace-pre-wrap text-muted"
+          >
+            {log || "(vazio)"}
+            <div ref={fimDoLog} />
           </pre>
         </div>
       )}

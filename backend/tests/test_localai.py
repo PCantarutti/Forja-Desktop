@@ -834,3 +834,42 @@ def test_mmproj_vazio_nao_desliga_a_visao(tmp_path, monkeypatch):
     ov = localai.overrides(str(modelo))
     assert ov == {"ctx": 8192}, "o mmproj vazio tem que ser descartado, o ctx não"
     assert localai.params(str(modelo))["mmproj"] == str(projetor)
+
+
+def test_projetor_escolhe_o_formato_que_roda_melhor(tmp_path):
+    """`sorted()` puro punha `mmproj-BF16.gguf` na frente de `mmproj-F16.gguf` — B vem antes de F —
+    e o BF16 é exatamente o que o Vulkan não sabe rodar: cai na CPU e uma imagem de ~1700 tokens
+    passava de 6 minutos, com o texto indo a 265 tokens/s no mesmo servidor.
+    """
+    (tmp_path / "modelo.gguf").write_bytes(b"gguf")
+    for nome in ("mmproj-BF16.gguf", "mmproj-F32.gguf", "mmproj-F16.gguf"):
+        (tmp_path / nome).write_bytes(b"gguf")
+
+    assert Path(localai.projector_for(str(tmp_path / "modelo.gguf"))).name == "mmproj-F16.gguf"
+
+    # Só o BF16 disponível: usa ele mesmo, que é melhor do que ficar sem visão.
+    (tmp_path / "mmproj-F16.gguf").unlink()
+    (tmp_path / "mmproj-F32.gguf").unlink()
+    assert Path(localai.projector_for(str(tmp_path / "modelo.gguf"))).name == "mmproj-BF16.gguf"
+
+    # Sem projetor nenhum, sem visão — e sem inventar caminho.
+    (tmp_path / "mmproj-BF16.gguf").unlink()
+    assert localai.projector_for(str(tmp_path / "modelo.gguf")) == ""
+
+
+@pytest.mark.parametrize("mmproj,exe,avisa", [
+    ("mmproj-BF16.gguf", r"C:\runtimes\llama\vulkan\llama-server.exe", True),
+    ("mmproj-F16.gguf", r"C:\runtimes\llama\vulkan\llama-server.exe", False),   # F16 é o caminho nativo
+    ("mmproj-BF16.gguf", r"C:\runtimes\llama\cuda\llama-server.exe", False),    # CUDA roda BF16
+    ("", r"C:\runtimes\llama\vulkan\llama-server.exe", False),                  # sem visão, sem aviso
+])
+def test_avisa_projetor_incompativel_com_o_runtime(mmproj, exe, avisa):
+    """Vulkan não tem caminho nativo para BF16 e o encoder de visão cai na CPU: medido em uso, o
+    texto ia a 265 tokens/s no mesmo servidor e uma imagem de ~1700 tokens passava de 6 minutos.
+
+    O arquivo certo pesa o mesmo e está no mesmo repositório, então o aviso vale a pena.
+    """
+    msg = localai.visao_lenta(mmproj, exe)
+    assert bool(msg) is avisa
+    if avisa:
+        assert "mmproj-F16" in msg and "CUDA" in msg

@@ -212,7 +212,11 @@ def test_print_sai_em_desktop_e_nao_no_tamanho_do_painel():
     layout de um site desktop era impossível. O print agora fixa o viewport por CDP só enquanto
     tira a foto, sem mexer no painel.
     """
-    assert browser.PRINT_VIEWPORT == {"width": 1920, "height": 1080}
+    # 720p, e é número medido: o encoder de visão do modelo local desaba a 2 MP. Mesma imagem,
+    # mesmo servidor — 1280x720 custou 8.1s e 1920x1080 custou 68.1s, 4.6x o tempo do 1600x900
+    # por só 1.4x os pixels. Subir isto de volta reintroduz o travamento depois de cada print.
+    assert browser.PRINT_VIEWPORT == {"width": 1280, "height": 720}
+    assert browser.PRINT_VIEWPORT["width"] * browser.PRINT_VIEWPORT["height"] <= 1_600_000
     from app.tools import REGISTRY
     esquema = REGISTRY["browser_screenshot"].parameters["properties"]
     # `full_page` saiu: a página inteira vira uma imagem de milhares de pixels, cara para o modelo

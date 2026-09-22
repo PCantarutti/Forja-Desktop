@@ -1182,7 +1182,20 @@ export default function App() {
     }
     if (draft?.content) return "Escrevendo a resposta";
     if (draft?.thinking) return (liveStats?.seconds ?? 0) > 30 ? "Ainda pensando…" : "Pensando…";
-    if (sent) return "Esperando o modelo responder"; // requisição enviada e nenhum token de volta ainda
+    if (sent) {
+      // "Esperando o modelo responder" não dizia o que ele está digerindo — e a espera mais longa
+      // de todas é justamente a imagem, que num servidor local leva minutos enquanto o texto leva
+      // segundos. Dizer qual é faz a diferença entre "está trabalhando" e "travou".
+      const ultima = [...messages].reverse().find((m) => m.role === "tool" && !!m.meta);
+      const anexos = (ultima?.meta?.attachments ?? []) as Attachment[];
+      const imagens = anexos.filter((a) => a.kind === "image").length;
+      if (imagens && ultima?.meta?.model_sees !== false) {
+        return imagens > 1 ? `Olhando ${imagens} imagens` : "Olhando a imagem";
+      }
+      const lido = (ultima?.content ?? "").length;
+      if (lido > 4000) return `Lendo o resultado de ${ultima?.name ?? "uma ferramenta"} · ${Math.round(lido / 1024)} KB`;
+      return "Esperando o modelo responder";
+    }
     return status ?? ""; // sem sinal de atividade, nada de spinner girando à toa
   })();
 

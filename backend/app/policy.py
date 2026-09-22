@@ -159,6 +159,13 @@ def decide(tool, args: dict, mode: str) -> tuple[bool, str | None]:
         return False, achada[0]
     if mode == "bypass":
         return False, "modo Ignorar permissões"
+    # Comando só de leitura não para o agente no modo Automático. `ls`, `git status`, `grep`,
+    # `pytest` não alteram nada, e parar em cada um deles é o que fazia uma execução longa ficar
+    # esperando clique — uma sessão de teste passou 40 minutos travada num `python -m http.server`.
+    # `safe_command` exige que TODOS os trechos encadeados sejam leitura conhecida, e recusa
+    # redirecionamento e substituição de comando; escrita, rede e instalação seguem perguntando.
+    if mode == "auto" and tool.name == "run_command" and safe_command(str(args.get("command") or "")):
+        return False, "modo Automático: comando só de leitura"
     if tool.always_ask:  # shell e browser_eval só passam por regra explícita ou bypass
         return True, None
     if mode == "manual":

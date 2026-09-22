@@ -57,10 +57,21 @@ ACT_TIMEOUT = 5_000
 # dois seguintes saíam no tamanho errado, com a emulação largada pela metade.
 PRINT_TIMEOUT = 25_000
 JPEG_QUALITY = 75  # screenshot que vai ao modelo
-# O print sai em tela de desktop, e não no tamanho do painel. O painel é uma coluna estreita, o
-# viewport do navegador segue o painel, e o print que chegava ao modelo mostrava o site em largura
-# de celular — uma tira alta, sem relação com o que se quer validar num site.
-PRINT_VIEWPORT = {"width": 1920, "height": 1080}
+# O print sai em tela de desktop, e não no tamanho do painel — que é uma coluna estreita e fazia o
+# site chegar ao modelo em largura de celular.
+#
+# 1280x720 e não 1920x1080, e isto foi medido, não escolhido: o encoder de visão de um modelo local
+# degrada com o número de pixels, e a 2 MP ele desaba. No Qwen3.6-35B com projetor F16, uma única
+# imagem custou:
+#
+#     1280x720   0.92 MP    933 tokens     8.1 s
+#     1440x810   1.17 MP   1138 tokens    11.0 s
+#     1600x900   1.44 MP   1413 tokens    14.7 s
+#     1920x1080  2.07 MP   2053 tokens    68.1 s   <- 4.6x o tempo por 1.4x os pixels
+#
+# 720p é viewport de desktop de verdade, fica longe do despenhadeiro e é 8x mais rápido que 1080p.
+# Quem precisar de mais detalhe pede outra medida, ou fotografa um elemento com `selector`.
+PRINT_VIEWPORT = {"width": 1280, "height": 720}
 # Teto da altura do print. O que custa num modelo com visão é PIXEL: a página inteira virava
 # 1903x5327 (10 MP) e o encoder do llama.cpp passava mais de 100 segundos nela — o turno parecia
 # travado depois de cada print. Hoje não há print de página inteira (é browser_scroll + outro
@@ -933,7 +944,7 @@ register(Tool(
     scroll))
 register(Tool(
     "browser_screenshot",
-    "Tira um screenshot de UMA TELA da aba ativa (1920x1080 por padrão, seja qual for o tamanho do "
+    "Tira um screenshot de UMA TELA da aba ativa (1280x720 por padrão, seja qual for o tamanho do "
     "painel). Ele aparece no chat para o usuário; se você tiver visão, também chega a você como "
     "imagem. Não existe print de página inteira: ele sairia com milhares de pixels de altura, "
     "demoraria muito para você enxergar e mostraria tudo pequeno demais para julgar. Para ver o "
@@ -941,6 +952,6 @@ register(Tool(
     "passe `selector` e o print sai só dele; para conferir responsividade, peça outra medida "
     "(ex.: largura 390, altura 844 de celular).",
     _obj({"selector": {"type": "string", "description": "Opcional: ref eN ou seletor — fotografa só esse elemento"},
-          "largura": {"type": "integer", "description": "Largura do viewport em px de CSS. Padrão: 1920"},
-          "altura": {"type": "integer", "description": "Altura do viewport em px de CSS. Padrão: 1080"}}, []),
+          "largura": {"type": "integer", "description": "Largura do viewport em px de CSS. Padrão: 1280. Acima de 1600 o modelo local fica MUITO mais lento para olhar a imagem"},
+          "altura": {"type": "integer", "description": "Altura do viewport em px de CSS. Padrão: 720"}}, []),
     screenshot))

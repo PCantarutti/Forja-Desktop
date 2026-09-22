@@ -88,7 +88,7 @@ def test_run_buffer_replay_and_snapshot():
 
 # ------------------------------------------------ loop com LLM falso
 
-def test_retry_and_shell_always_asks(monkeypatch):
+def test_retry_and_writing_shell_always_asks(monkeypatch):
     from app import agent, db, llm
 
     calls = {"n": 0}
@@ -98,7 +98,10 @@ def test_retry_and_shell_always_asks(monkeypatch):
         if calls["n"] == 1:  # conexão cai antes do 1º token
             raise llm.LLMError("Conexão interrompida.")
         if calls["n"] == 2:
-            yield "done", {"tool_calls": [{"id": "c1", "name": "run_command", "arguments": {"command": "ls"}}],
+            # `npm install` e não `ls`: comando só de leitura passa direto no Automático desde que
+            # `safe_command` foi ligado ao policy.decide — quem continua perguntando é quem escreve.
+            yield "done", {"tool_calls": [{"id": "c1", "name": "run_command",
+                                           "arguments": {"command": "npm install"}}],
                            "prompt_tokens": 10, "completion_tokens": 5}
         else:
             yield "content", "Pronto."
@@ -122,7 +125,7 @@ def test_retry_and_shell_always_asks(monkeypatch):
         types = []
         async for ev in agent.run_agent(conv_id, req, run):
             types.append(ev["type"])
-            if ev["type"] == "approval_request":  # shell pediu aprovação mesmo em "automático"
+            if ev["type"] == "approval_request":  # shell que escreve pede aprovação mesmo em "automático"
                 run.resolve("c1", False)
         return types
 

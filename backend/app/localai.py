@@ -786,11 +786,56 @@ def estimate(path: str, p: dict) -> dict:
             "ctx_train": info["ctx_train"], "attn_layers": len(atencao)}
 
 
+# Preferência de formato do projetor de visão, do melhor para o pior. F16 na frente porque é o que
+# todo backend sabe rodar; BF16 atrás porque o Vulkan não tem caminho nativo para ele e cai na CPU —
+# medido em uso: o texto ia a 265 tokens/s e uma imagem de ~1700 tokens passava de 6 minutos, com o
+# turno inteiro parecendo travado. F32 é correto em toda parte, mas é o dobro de memória.
+FORMATOS_MMPROJ = ("f16", "q8", "q6", "q5", "q4", "f32", "bf16")
+
+
+def _posto_mmproj(nome: str) -> tuple[int, str]:
+    """Quanto menor, melhor. Empate volta para a ordem alfabética, que é estável."""
+    n = nome.lower()
+    for i, fmt in enumerate(FORMATOS_MMPROJ):
+        if fmt in n:
+            # "bf16" contém "f16": só vale como f16 se não for bf16.
+            if fmt == "f16" and "bf16" in n:
+                continue
+            return i, n
+    return len(FORMATOS_MMPROJ), n
+
+
+def visao_lenta(mmproj: str, exe: str) -> str:
+    """Aviso quando o projetor não casa com o backend, ou "" quando está tudo bem.
+
+    Um projetor BF16 no Vulkan não tem caminho nativo e o encoder de visão cai na CPU. Medido em
+    uso: o texto ia a 265 tokens/s no mesmo servidor e uma única imagem de ~1700 tokens passava de
+    6 minutos, com o turno inteiro parecendo travado. O arquivo certo pesa o mesmo (858 MB contra
+    861 MB) e está no mesmo repositório, então é só baixar — daí o aviso dizer exatamente isso.
+    """
+    nome = Path(mmproj).name.lower()
+    if not nome:
+        return ""
+    ehbf16 = "bf16" in nome
+    backend = Path(exe).parent.name.lower() if exe else ""
+    if ehbf16 and backend == "vulkan":
+        return ("O projetor de visão é BF16 e o runtime é Vulkan, que não roda BF16 nativamente: o "
+                "reconhecimento de imagem cai na CPU e cada print leva minutos. Baixe o mmproj-F16 "
+                "do mesmo modelo (mesmo tamanho) ou troque o runtime para CUDA.")
+    return ""
+
+
 def projector_for(path: str) -> str:
-    """mmproj-*.gguf na mesma pasta do modelo. É o que dá visão a ele, e vem junto no repositório."""
+    """mmproj-*.gguf na mesma pasta do modelo. É o que dá visão a ele, e vem junto no repositório.
+
+    Com mais de um formato na pasta, escolhe pelo que roda melhor, não pela ordem alfabética — que
+    colocava `mmproj-BF16.gguf` na frente de `mmproj-F16.gguf` só porque B vem antes de F, e era
+    justamente o lento.
+    """
     pasta = Path(path).parent
     try:
-        achados = sorted(f for f in pasta.glob("*.gguf") if f.name.lower().startswith("mmproj"))
+        achados = sorted((f for f in pasta.glob("*.gguf") if f.name.lower().startswith("mmproj")),
+                         key=lambda f: _posto_mmproj(f.name))
     except OSError:
         return ""
     return str(achados[0]) if achados else ""
@@ -1199,7 +1244,8 @@ def load(path: str, patch: dict | None = None) -> dict:
         _proc = proc
         _state.update({"started": time.time(),
                        "info": {"path": path, "alias": alias_of(path), "params": p,
-                                "ctx": int(p["ctx"]), "vision": bool(p.get("mmproj"))}})
+                                "ctx": int(p["ctx"]), "vision": bool(p.get("mmproj")),
+                                "vision_lenta": visao_lenta(str(p.get("mmproj") or ""), str(exe))}})
     try:
         _wait_ready(proc)
     except ToolError as e:
