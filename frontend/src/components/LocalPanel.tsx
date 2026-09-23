@@ -754,6 +754,14 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   );
 }
 
+const ROTULO: Record<string, string> = {
+  vae: "VAE",
+  llm: "Codificador LLM",
+  llm_vision: "Visão do LLM (mmproj)",
+  clip_l: "clip_l",
+  t5xxl: "t5xxl",
+};
+
 /** Modelos de difusão que estão nas pastas. Não têm "Carregar": o sd.cpp sobe e desce a cada imagem —
  *  o que dá para guardar aqui são os ajustes de cada um (o Flux não quer o mesmo CFG que o SD 1.5). */
 function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
@@ -761,6 +769,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
   const [form, setForm] = useState<ImageParams | null>(null);
   const [salvo, setSalvo] = useState("");
   const lista = props.st.image_models;
+  const atual = lista.find((m) => m.path === sel);
 
   if (!lista.length) return null;
   const set = <K extends keyof ImageParams>(k: K, v: ImageParams[K]) => {
@@ -813,6 +822,11 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
               <span className="block truncate text-fg">{m.name}</span>
               {props.st.dirs.length > 1 && <span className="block truncate text-faint">{m.folder}</span>}
             </button>
+            {!!m.falta?.length && (
+              <span className="shrink-0 text-amber-400" title={`${m.req?.nome} precisa de arquivos à parte — abra os ajustes`}>
+                falta arquivo
+              </span>
+            )}
             {props.st.image.model === m.path && <span className="shrink-0 text-faint">em uso</span>}
             <span className="shrink-0 text-faint">{size(m.size)}</span>
             <Confirma
@@ -829,6 +843,44 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
       {sel && form && (
         <div className="mt-3 border-t border-line pt-3">
           <p className="mb-2 text-muted">Ajustes deste modelo</p>
+          {atual?.req && (
+            <div className={`mb-3 rounded-lg border p-2.5 ${atual.falta?.length ? "border-amber-500/40 bg-amber-500/5" : "border-line"}`}>
+              <p className="text-fg">
+                {atual.req.nome}: este arquivo é só o modelo de difusão. Ele precisa também de:
+              </p>
+              <ul className="mt-1.5 flex flex-col gap-1">
+                {Object.entries(atual.req.precisa).map(([k, [oque, link]]) => (
+                  <li key={k}>
+                    <span className={atual.falta?.includes(k) ? "text-amber-400" : "text-emerald-400"}>
+                      {atual.falta?.includes(k) ? "✗" : "✓"} {ROTULO[k] ?? k}
+                    </span>{" "}
+                    <span className="text-muted">— {oque}</span>{" "}
+                    <a href={link} target="_blank" rel="noreferrer" className="underline text-faint">baixar</a>
+                  </li>
+                ))}
+                {Object.entries(atual.req.edita ?? {}).map(([k, [oque, link]]) => (
+                  <li key={k}>
+                    <span className={atual.falta_edicao?.includes(k) ? "text-faint" : "text-emerald-400"}>
+                      {atual.falta_edicao?.includes(k) ? "○" : "✓"} {ROTULO[k] ?? k}
+                    </span>{" "}
+                    <span className="text-muted">— para editar imagens: {oque}</span>{" "}
+                    <a href={link} target="_blank" rel="noreferrer" className="underline text-faint">baixar</a>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-faint">
+                Guarde fora das pastas de modelos (senão eles aparecem nas listas) e cole o caminho nos campos abaixo.{" "}
+                <a href={atual.req.doc} target="_blank" rel="noreferrer" className="underline">Guia do sd.cpp</a>
+              </p>
+              <button
+                className="mt-2 underline text-fg"
+                onClick={() => setForm((f) => f && { ...f, ...atual.req!.sugere })}
+                title={Object.entries(atual.req.sugere).map(([k, v]) => `${k}: ${v}`).join(", ")}
+              >
+                Aplicar ajustes sugeridos
+              </button>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <Num label="Passos" value={form.steps} onChange={(v) => set("steps", v)} />
             <Num label="CFG" value={form.cfg} onChange={(v) => set("cfg", v)} />
@@ -857,6 +909,9 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
             </Field>
             <Field label="Codificador LLM" hint="Qwen-Image: Qwen2.5-VL-7B (1.0) ou Qwen3-VL-8B (2.1), em GGUF ou safetensors.">
               <input className={input} value={form.llm ?? ""} onChange={(e) => set("llm", e.target.value)} placeholder="opcional" />
+            </Field>
+            <Field label="Visão do LLM (mmproj)" hint="Só para editar imagem com codificador em GGUF (Qwen-Image 2.1).">
+              <input className={input} value={form.llm_vision ?? ""} onChange={(e) => set("llm_vision", e.target.value)} placeholder="opcional" />
             </Field>
           </div>
           <div className="mt-3 flex items-center gap-2">

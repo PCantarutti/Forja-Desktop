@@ -31,9 +31,9 @@ def _fake_sd(monkeypatch, falhar=()):
     """Troca o sd-cli por um PNG de mentira; guarda o que cada chamada recebeu."""
     chamadas: list[dict] = []
 
-    def generate(prompt, out, opts=None, job_id=""):
+    def generate(prompt, out, opts=None, job_id="", refs=()):
         o = dict(opts or {})
-        chamadas.append({"prompt": prompt, "out": Path(out), **o})
+        chamadas.append({"prompt": prompt, "out": Path(out), "refs": list(refs), **o})
         if o.get("model") in falhar:
             raise imagegen.ToolError("sd falhou (código 1)")
         Path(out).parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +108,16 @@ def test_lote_divide_entre_modelos(monkeypatch):
     assert [c["seed"] for c in chamadas] == [i["seed"] for i in imagens]
 
 
+def test_lote_de_edicao_leva_as_referencias_em_cada_imagem(monkeypatch):
+    chamadas = _fake_sd(monkeypatch)
+    msg = lotes.start(_conversa(), "make it night", models=["q.gguf"], count=2, refs=["C:/r/a.png"])
+    _esperar(msg["id"])
+    assert [c["refs"] for c in chamadas] == [["C:/r/a.png"]] * 2
+    with db.session() as s:
+        pedido = s.get(db.Message, msg["id"] - 1)
+        assert pedido.meta["refs"] == ["C:/r/a.png"]  # "Reaproveitar" traz a edição de volta
+
+
 def test_lote_grava_as_duas_mensagens_e_titula(monkeypatch):
     _fake_sd(monkeypatch)
     conv = _conversa()
@@ -146,7 +156,7 @@ def test_lote_com_llm_carregado_pede_confirmacao(monkeypatch):
 def test_cancelar_marca_as_restantes(monkeypatch):
     conv = _conversa()
 
-    def generate(prompt, out, opts=None, job_id=""):
+    def generate(prompt, out, opts=None, job_id="", refs=()):
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"\x89PNG")
         downloads.cancel(job_id)  # cancela logo na primeira, como o botão faria

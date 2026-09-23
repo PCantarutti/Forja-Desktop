@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 import tempfile
+import time
 from contextlib import asynccontextmanager
 
 from pathlib import Path
@@ -702,6 +703,7 @@ class LoteBody(BaseModel):
     seed: int = 0
     seed_mode: str = "incremental"  # incremental | aleatoria | fixa
     confirm: bool = False
+    refs: list[str] = []  # imagens a editar (-r do sd.cpp); vazio = gerar do zero
 
 
 class DecidirBody(BaseModel):
@@ -714,11 +716,28 @@ class PromptBody(BaseModel):
     model: str
 
 
+@app.post("/api/imagens/referencia")
+async def imagens_referencia(file: UploadFile = File(...)):
+    """Imagem trazida de fora para editar. Fica em <pasta de imagens>/referencias/, que a rota de
+    arquivo já serve: a miniatura aparece como qualquer imagem gerada."""
+    # ponytail: referências não entram no expurgo; ficam até alguém apagar a pasta
+    dados = await file.read()
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(400, "Envie uma imagem (PNG, JPG ou WebP).")
+    if len(dados) > 50_000_000:
+        raise HTTPException(400, "Imagem maior que 50 MB.")
+    pasta = imagegen.out_dir() / "referencias"
+    pasta.mkdir(parents=True, exist_ok=True)
+    alvo = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{uploads.safe_name(file.filename or 'ref.png')}"
+    alvo.write_bytes(dados)
+    return {"path": str(alvo)}
+
+
 @app.post("/api/imagens/{conv_id}/gerar")
 async def imagens_gerar(conv_id: int, body: LoteBody):
     try:
         return await asyncio.to_thread(lotes.start, conv_id, body.prompt, body.opts, body.models,
-                                       body.count, body.seed, body.seed_mode, body.confirm)
+                                       body.count, body.seed, body.seed_mode, body.confirm, body.refs)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
     except ToolError as e:

@@ -92,7 +92,8 @@ def _mensagem(message_id: int) -> dict:
 # ------------------------------------------------------------------ geração
 
 def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str] | None = None,
-          count: int = 1, seed: int = 0, seed_mode: str = "incremental", confirm: bool = False) -> dict:
+          count: int = 1, seed: int = 0, seed_mode: str = "incremental", confirm: bool = False,
+          refs: list[str] | None = None) -> dict:
     """Enfileira o lote e devolve a mensagem do assistente já criada (a thread preenche o resto)."""
     prompt = (prompt or "").strip()
     if not prompt:
@@ -100,9 +101,10 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     count = max(1, min(int(count or 1), MAX_VARIACOES))
     opts = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
     escolhidos = _distribuir(list(models or []), count)
+    refs = [str(r) for r in (refs or [])]
     exe = imagegen._exe()
     for m in dict.fromkeys(escolhidos):  # valida runtime e modelo ANTES de descarregar o LLM por nada
-        imagegen.argv(exe, prompt, imagegen.OUT_DIR / "x.png", imagegen._opts({**opts, "model": m}))
+        imagegen.argv(exe, prompt, imagegen.OUT_DIR / "x.png", imagegen._opts({**opts, "model": m}), refs)
 
     if localai.status()["running"]:
         if not confirm:
@@ -126,18 +128,19 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
 
     _save(conv_id, role="user", content=prompt,
           meta={"opts": opts, "models": list(dict.fromkeys(escolhidos)), "count": count,
-                "seed": seed, "seed_mode": seed_mode})
+                "seed": seed, "seed_mode": seed_mode, "refs": refs})
     job = downloads.create("lote", prompt[:60])
     downloads.update(job["id"], done=0, total=count)
     msg = _save(conv_id, role="assistant", content="", status="running",
                 meta={"job": job["id"], "count": count, "seed_mode": seed_mode,
                       "opts": opts, "images": imagens})
 
-    threading.Thread(target=_trabalhar, args=(conv_id, msg.id, prompt, opts, job["id"]), daemon=True).start()
+    threading.Thread(target=_trabalhar, args=(conv_id, msg.id, prompt, opts, job["id"], refs), daemon=True).start()
     return msg.to_dict()
 
 
-def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: str) -> None:
+def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: str,
+               refs: list[str] | None = None) -> None:
     imagens = list(_mensagem(message_id)["meta"]["images"])
     localai.set_image_busy(True)
     erro = ""
@@ -152,7 +155,7 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             _patch(message_id, meta={"images": imagens})
             try:
                 imagegen.generate(prompt, Path(item["path"]), {**opts, "model": item["model"],
-                                                               "seed": item["seed"]}, job_id)
+                                                               "seed": item["seed"]}, job_id, refs or [])
                 item["status"] = "pronta"
             except Exception as e:
                 # o próprio generate mata o sd-cli quando o job é cancelado no meio de uma imagem

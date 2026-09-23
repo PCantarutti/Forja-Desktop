@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api";
-import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, SeedMode } from "../types";
-import { ArrowUp, Check, FolderOpen, Refresh, Search, Sliders, Square, Trash, X } from "./icons";
+import { api, uploadReferencia } from "../api";
+import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, PedidoMeta, SeedMode } from "../types";
+import { ArrowUp, Check, Edit, FolderOpen, Image, Refresh, Search, Sliders, Square, Trash, X } from "./icons";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -51,6 +51,9 @@ export default function ImagensView(props: {
   const [o, setO] = useState<ImageOpts | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [prompt, setPrompt] = useState("");
+  // Imagens a editar (-r do sd.cpp), na ordem. Vazio = gerar do zero.
+  const [refs, setRefs] = useState<string[]>([]);
+  const arquivo = useRef<HTMLInputElement>(null);
   const [count, setCount] = useState(4);
   const [seedMode, setSeedMode] = useState<SeedMode>("incremental");
   const [abrirAjustes, setAbrirAjustes] = useState(false);
@@ -157,6 +160,7 @@ export default function ImagensView(props: {
         seed: o.seed,
         seed_mode: seedMode,
         confirm,
+        refs,
       });
       setPerguntando(false);
       props.onConversationChanged();
@@ -180,8 +184,21 @@ export default function ImagensView(props: {
     }
   }
 
+  function editar(path: string) {
+    setRefs((r) => (r.includes(path) ? r : [...r, path]));
+  }
+
+  async function anexar(files: FileList | null) {
+    try {
+      for (const f of Array.from(files ?? [])) editar(await uploadReferencia(f));
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
   function reaproveitar(meta: LoteMeta, pedido: Message) {
-    const usados: string[] = (pedido.meta as any)?.models ?? [];
+    const usados: string[] = (pedido.meta as PedidoMeta | null)?.models ?? [];
+    setRefs((pedido.meta as PedidoMeta | null)?.refs ?? []);
     setO((c) => c && { ...c, ...meta.opts });
     if (usados.length) setModels(usados);
     setCount(meta.count);
@@ -194,6 +211,10 @@ export default function ImagensView(props: {
 
   const semRuntime = !st.runtimes.sd.installed;
   const semModelo = !st.image_models.length;
+  // O backend barra também; aqui é só para avisar antes de apertar o botão.
+  const naoEditam = refs.length
+    ? st.image_models.filter((m) => models.includes(m.path) && !m.req?.edita).map((m) => m.name)
+    : [];
 
   return (
     <>
@@ -223,6 +244,7 @@ export default function ImagensView(props: {
               onError={props.onError}
               onMudou={carregarConversa}
               onReaproveitar={() => reaproveitar(resposta.meta as LoteMeta, pedido)}
+              onEditar={editar}
               onSemente={(s) => {
                 setO((c) => c && { ...c, seed: s });
                 setSeedMode("fixa");
@@ -270,6 +292,27 @@ export default function ImagensView(props: {
           )}
 
           <div className="rounded-3xl border border-line bg-surface p-3">
+            {refs.length > 0 && (
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+                {refs.map((r, i) => (
+                  <div key={r} className="relative" title={r}>
+                    <img src={urlDa(r)} alt={`referência ${i + 1}`} className="size-14 rounded-lg border border-line object-cover" />
+                    <button
+                      onClick={() => setRefs((atual) => atual.filter((x) => x !== r))}
+                      title="Tirar da edição"
+                      className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-line bg-surface text-faint hover:text-fg"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </div>
+                ))}
+                <span className={naoEditam.length ? "text-amber-400" : "text-muted"}>
+                  {naoEditam.length
+                    ? `${naoEditam.join(", ")} não edita imagem — escolha um modelo que edita (ex.: Qwen-Image 2.1).`
+                    : "Editando: descreva a mudança no campo abaixo."}
+                </span>
+              </div>
+            )}
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
@@ -280,7 +323,11 @@ export default function ImagensView(props: {
                 }
               }}
               rows={2}
-              placeholder="a red fox in the snow, cinematic lighting — em inglês funciona melhor"
+              placeholder={
+                refs.length
+                  ? "change the sky to a sunset, keep everything else the same"
+                  : "a red fox in the snow, cinematic lighting — em inglês funciona melhor"
+              }
               className="w-full resize-none bg-transparent text-[15px] text-fg placeholder:text-faint focus:outline-none"
             />
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
@@ -291,6 +338,25 @@ export default function ImagensView(props: {
               >
                 <Sliders className="size-3.5" />
                 {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""}` : "Escolher modelo"}
+              </button>
+              <input
+                ref={arquivo}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                multiple
+                hidden
+                onChange={(e) => {
+                  anexar(e.target.files);
+                  e.target.value = "";
+                }}
+              />
+              <button
+                onClick={() => arquivo.current?.click()}
+                title="Trazer uma imagem para editar (modelos que editam, como o Qwen-Image 2.1)"
+                className={`inline-flex items-center gap-1 ${btn}`}
+              >
+                <Image className="size-3.5" />
+                Editar imagem
               </button>
               <button
                 onClick={melhorar}
@@ -514,6 +580,7 @@ function Lote(props: {
   pedido: Message;
   resposta: Message;
   onZoom: (src: string) => void;
+  onEditar: (path: string) => void;
   onError: (e: string) => void;
   onMudou: () => void;
   onReaproveitar: () => void;
@@ -580,6 +647,9 @@ function Lote(props: {
         {[...new Set(imagens.map((i) => i.model_name))].map((n) => (
           <Chip key={n}>{n}</Chip>
         ))}
+        {!!(props.pedido.meta as PedidoMeta | null)?.refs?.length && (
+          <Chip>edição de {(props.pedido.meta as PedidoMeta).refs!.length} imagem(ns)</Chip>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
@@ -599,6 +669,7 @@ function Lote(props: {
             onZoom={() => props.onZoom(urlDa(img.path))}
             onSemente={() => props.onSemente(img.seed)}
             onPasta={() => mostrarNaPasta(img.path)}
+            onEditar={() => props.onEditar(img.path)}
           />
         ))}
       </div>
@@ -660,6 +731,7 @@ function Cartao(props: {
   onZoom: () => void;
   onSemente: () => void;
   onPasta: () => void;
+  onEditar: () => void;
 }) {
   const { img } = props;
   const temArquivo = ["pronta", "mantida", "descartada"].includes(img.status);
@@ -712,6 +784,9 @@ function Cartao(props: {
             <button onClick={props.onSemente} title="Usar esta semente no próximo lote" className="text-faint hover:text-fg">
               <Search className="mr-0.5 inline size-3" />
               {img.seed}
+            </button>
+            <button onClick={props.onEditar} title="Editar esta imagem no próximo lote" className="text-faint hover:text-fg">
+              <Edit className="size-3" />
             </button>
             <button onClick={props.onPasta} title="Mostrar na pasta" className="text-faint hover:text-fg">
               <FolderOpen className="size-3" />

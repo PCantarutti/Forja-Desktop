@@ -283,6 +283,9 @@ export type LocalModel = {
   folder: string;
   kind: "chat" | "image";
   params?: ImageParams; // só nos modelos de imagem: ajustes próprios daquele modelo
+  req?: ImageReq | null; // GGUF só-unet (Qwen-Image, Flux): arquivos que ele precisa à parte
+  falta?: string[]; // chaves de `req.precisa` sem arquivo configurado
+  falta_edicao?: string[]; // idem, contando o que a edição (-r) pede a mais
 };
 
 /** Ajustes que um modelo de imagem pode ter por conta própria. */
@@ -297,6 +300,7 @@ export type ImageParams = {
   clip_l: string;
   t5xxl: string;
   llm: string;
+  llm_vision: string;
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -377,6 +381,14 @@ export type Job = {
   result: string | null;
 };
 
+export type ImageReq = {
+  nome: string;
+  doc: string;
+  precisa: Record<string, [string, string]>; // chave -> [o que baixar, link]
+  edita?: Record<string, [string, string]>; // só nos que editam imagem: o que a edição pede a mais
+  sugere: Partial<ImageParams>;
+};
+
 export type ImageOpts = {
   model: string;
   out_dir: string; // vazio = %APPDATA%/Forja/imagens
@@ -384,6 +396,7 @@ export type ImageOpts = {
   clip_l: string;
   t5xxl: string;
   llm: string;
+  llm_vision: string;
   diffusion_model: string;
   steps: number;
   cfg: number;
@@ -413,6 +426,9 @@ export type LoteMeta = {
   opts: Partial<ImageOpts>;
   images: LoteImagem[];
 };
+
+/** meta da mensagem do usuário num lote. */
+export type PedidoMeta = { models?: string[]; refs?: string[] };
 
 export type SeedMode = "incremental" | "aleatoria" | "fixa";
 

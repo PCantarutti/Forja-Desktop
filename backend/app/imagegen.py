@@ -54,7 +54,25 @@ def _flag_modelo(path: str) -> str:
     return "-m"
 
 
-def argv(exe: Path, prompt: str, out: Path, o: dict) -> list[str]:
+def _confere_arquivos(model: str, o: dict, refs: list[str]) -> None:
+    """Barra antes de rodar: sem VAE/codificador o sd-cli falha com erro que ninguém entende."""
+    req = localai.requisitos(model) or {}
+    if refs and not req.get("edita"):
+        editam = ", ".join(r["nome"] for r in localai.REQUISITOS.values() if r.get("edita"))
+        raise ToolError(f"{Path(model).stem} não edita imagem (só gera). Edição funciona com: {editam}.")
+    for r in refs:
+        if not Path(r).is_file():
+            raise ToolError(f"Imagem de referência não encontrada: {r}")
+    falta = localai.faltando(model, o, editar=bool(refs))
+    if falta:
+        arquivos = {**req.get("precisa", {}), **req.get("edita", {})}
+        itens = "\n".join(f"- {localai.ROTULO_ARQUIVO[k]}: {arquivos[k][0]} — {arquivos[k][1]}" for k in falta)
+        raise ToolError(f"{req.get('nome')} precisa de arquivos que não estão configurados (ou não existem):\n"
+                        f"{itens}\nBaixe e informe os caminhos em IA local › Imagem › ajustes deste modelo. "
+                        f"Guia: {req.get('doc')}")
+
+
+def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = ()) -> list[str]:
     # Sem -M: o modo padrão do sd.cpp é a geração de imagem (img_gen nas builds novas, txt2img nas antigas).
     a = [str(exe), "-p", prompt, "-o", str(out),
          "--steps", str(int(o["steps"])), "--cfg-scale", str(float(o["cfg"])),
@@ -62,12 +80,18 @@ def argv(exe: Path, prompt: str, out: Path, o: dict) -> list[str]:
     if o.get("diffusion_model"):      # Flux/SD3: o unet vem separado do resto
         a += ["--diffusion-model", str(o["diffusion_model"])]
     elif o.get("model"):
+        _confere_arquivos(str(o["model"]), o, list(refs))
         a += [_flag_modelo(str(o["model"])), str(o["model"])]
     else:
         raise ToolError("Escolha um modelo de imagem no painel IA local › Imagem.")
     for key, flag in (("vae", "--vae"), ("clip_l", "--clip_l"), ("t5xxl", "--t5xxl"), ("llm", "--llm")):
         if o.get(key):
             a += [flag, str(o[key])]
+    if refs:  # edição: cada -r é uma imagem de referência, na ordem
+        for r in refs:
+            a += ["-r", str(r)]
+        if o.get("llm_vision"):
+            a += ["--llm_vision", str(o["llm_vision"])]
     if o.get("negative"):
         a += ["-n", str(o["negative"])]
     # -s 0 é uma semente válida para o sd.cpp (o padrão dele é 42, sempre a mesma imagem): 0 aqui = aleatória.
@@ -82,14 +106,15 @@ def _exe() -> Path:
     return exe
 
 
-def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "") -> Path:
+def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
+             refs: list[str] | tuple = ()) -> Path:
     """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread."""
     exe = _exe()
     if not prompt.strip():
         raise ToolError("Descreva a imagem (prompt vazio).")
     o = _opts(opts)
     out.parent.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen(argv(exe, prompt, out, o), cwd=str(exe.parent), stdout=subprocess.PIPE,
+    proc = subprocess.Popen(argv(exe, prompt, out, o, refs), cwd=str(exe.parent), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())
     tail: list[str] = []
@@ -152,10 +177,11 @@ async def image_generate(root: Path, args: dict) -> dict:
     localai.set_image_busy(True)
     prompt = str(args.get("prompt") or "")
     opts = {k: args.get(k) for k in ("negative", "steps", "width", "height", "seed")}
+    refs = [str((root / r).resolve()) for r in (args.get("refs") or [])]  # absoluto passa intacto
     # A imagem do agente mora na pasta de trabalho da conversa; o arquivo aqui é só passagem.
     out = Path(tempfile.gettempdir()) / "forja-sd" / f"{time.strftime('%Y%m%d-%H%M%S')}.png"
     try:
-        await asyncio.to_thread(generate, prompt, out, opts)
+        await asyncio.to_thread(generate, prompt, out, opts, "", refs)
     finally:
         localai.set_image_busy(False)
     dados = out.read_bytes()
@@ -181,7 +207,10 @@ register(Tool(
           "negative": {"type": "string", "description": "O que evitar na imagem"},
           "steps": {"type": "integer", "description": "Passos de amostragem (padrão: o do painel)"},
           "width": {"type": "integer"}, "height": {"type": "integer"},
-          "seed": {"type": "integer", "description": "Semente para repetir a mesma imagem"}},
+          "seed": {"type": "integer", "description": "Semente para repetir a mesma imagem"},
+          "refs": {"type": "array", "items": {"type": "string"},
+                   "description": "Imagens a editar (caminhos na pasta de trabalho). Com isso o prompt "
+                                  "descreve a edição. Só em modelos que editam, como o Qwen-Image 2.1"}},
          ["prompt"]),
     image_generate, mutating=True, preview=_preview,
     available=lambda: bool(localai.find_exe("sd"))))

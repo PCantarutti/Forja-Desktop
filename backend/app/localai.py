@@ -110,7 +110,7 @@ def inference_defaults(path: str = "") -> dict:
 
 
 DEFAULT_IMAGE = {
-    "model": "", "vae": "", "clip_l": "", "t5xxl": "", "llm": "", "diffusion_model": "",
+    "model": "", "vae": "", "clip_l": "", "t5xxl": "", "llm": "", "llm_vision": "", "diffusion_model": "",
     "steps": 20, "cfg": 7.0, "width": 512, "height": 512, "sampler": "euler_a", "negative": "",
     "seed": 0,      # 0 = aleatória
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
@@ -120,7 +120,7 @@ DEFAULT_IMAGE = {
 _cfg_lock = threading.Lock()
 
 
-CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "diffusion_model", "out_dir")
+CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "llm_vision", "diffusion_model", "out_dir")
 
 
 def _image_valores(patch: dict) -> dict:
@@ -933,7 +933,55 @@ def kind_of(f: Path) -> str:
 
 
 # Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
-IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm")
+IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm", "llm_vision")
+
+
+# GGUF só-unet traz a arquitetura no metadado, e sem os arquivos de fora o sd.cpp só cospe erro técnico.
+# Valores e links dos docs do sd.cpp (docs/<doc>.md). Arquitetura fora daqui: sem aviso, como antes.
+_SDDOC = "https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/"
+REQUISITOS = {
+    "qwen_image21": {
+        "nome": "Qwen-Image 2.1", "doc": _SDDOC + "qwen_image_2.1.md",
+        "precisa": {"vae": ("qwen_image_2.1_vae_bf16.safetensors (o VAE do Qwen-Image 1.0 não serve)",
+                            "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/vae"),
+                    "llm": ("Qwen3-VL-8B-Instruct, GGUF (ex.: Q4_K_M) ou safetensors",
+                            "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/tree/main")},
+        # Edição (-r): o codificador em GGUF não traz a parte de visão, que vem no mmproj.
+        "edita": {"llm_vision": ("mmproj-Qwen3VL-8B-Instruct-F16.gguf (só se o codificador for GGUF)",
+                                 "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/tree/main")},
+        "sugere": {"sampler": "euler", "cfg": 6.0, "width": 1024, "height": 1024, "steps": 20}},
+    "qwen_image": {
+        "nome": "Qwen-Image", "doc": _SDDOC + "qwen_image.md",
+        "precisa": {"vae": ("qwen_image_vae.safetensors",
+                            "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/vae"),
+                    "llm": ("Qwen2.5-VL-7B-Instruct, GGUF",
+                            "https://huggingface.co/mradermacher/Qwen2.5-VL-7B-Instruct-GGUF/tree/main")},
+        "sugere": {"sampler": "euler", "cfg": 2.5, "width": 1024, "height": 1024, "steps": 20}},
+    "flux": {
+        "nome": "Flux", "doc": _SDDOC + "flux.md",
+        "precisa": {"vae": ("ae.safetensors", "https://huggingface.co/black-forest-labs/FLUX.1-schnell/tree/main"),
+                    "clip_l": ("clip_l.safetensors", "https://huggingface.co/comfyanonymous/flux_text_encoders/tree/main"),
+                    "t5xxl": ("t5xxl_fp16.safetensors (ou fp8)",
+                              "https://huggingface.co/comfyanonymous/flux_text_encoders/tree/main")},
+        "sugere": {"sampler": "euler", "cfg": 1.0, "width": 1024, "height": 1024, "steps": 20}},
+}
+ROTULO_ARQUIVO = {"vae": "VAE", "llm": "Codificador LLM", "llm_vision": "Visão do LLM (mmproj)",
+                  "clip_l": "clip_l", "t5xxl": "t5xxl"}
+
+
+def requisitos(path: str) -> dict | None:
+    if not str(path).lower().endswith(".gguf"):
+        return None
+    return REQUISITOS.get(gguf_info(path)["arch"])
+
+
+def faltando(path: str, o: dict, editar: bool = False) -> list[str]:
+    """Chaves obrigatórias sem arquivo: vazias ou apontando para caminho que não existe."""
+    req = requisitos(path) or {"precisa": {}}
+    chaves = list(req["precisa"])
+    if editar and str(o.get("llm") or "").lower().endswith(".gguf"):
+        chaves += list(req.get("edita") or {})
+    return [k for k in chaves if not (o.get(k) and Path(o[k]).is_file())]
 
 
 def image_params(path: str) -> dict:
@@ -1641,7 +1689,10 @@ def state() -> dict:
     # `ctx` por modelo: o seletor da Maestro e dos Workers barra quem tem janela pequena demais.
     # `vision`: o seletor mostra o olho, como o LM Studio.
     models = [{**m, "ctx": ctx_de(m["path"]), "vision": tem_visao(m["path"])} for m in todos if m["kind"] == "chat"]
-    imagens = [{**m, "params": image_params(m["path"])} for m in todos if m["kind"] == "image"]
+    imagens = [{**m, "params": image_params(m["path"]), "req": requisitos(m["path"]),
+                "falta": faltando(m["path"], image_params(m["path"])),
+                "falta_edicao": faltando(m["path"], image_params(m["path"]), editar=True)}
+               for m in todos if m["kind"] == "image"]
     baixar = cfg.get("download_dir") or models_dir()
     return {"runtimes": runtimes(), "models": models, "server": status(), "dirs": dirs(), "download_dir": baixar,
             "hardware": hardware(), "guardrail": guardrail(), "autoload": autoload(),

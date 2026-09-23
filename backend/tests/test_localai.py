@@ -228,7 +228,7 @@ def test_argv_do_sd(isolado):
 
 def test_gguf_so_do_unet_vai_em_diffusion_model(isolado, monkeypatch):
     """Qwen-Image/Flux em GGUF são só o unet; com -m o sd.cpp não acha os pesos."""
-    arch = {"C:/m/qwen-image.gguf": "qwen_image", "C:/m/sd15.gguf": ""}
+    arch = {"C:/m/qwen-image.gguf": "arch_sem_requisitos", "C:/m/sd15.gguf": ""}
     monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": arch[str(Path(p).as_posix())]})
     localai.set_image({"model": "C:/m/qwen-image.gguf", "llm": "C:/m/qwen3vl.gguf", "vae": "C:/m/vae.safetensors"})
     a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
@@ -236,6 +236,44 @@ def test_gguf_so_do_unet_vai_em_diffusion_model(isolado, monkeypatch):
     assert a[a.index("--llm") + 1] == str(Path("C:/m/qwen3vl.gguf"))
     localai.set_image({"model": "C:/m/sd15.gguf"})
     assert "-m" in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
+
+
+def test_qwen_image_sem_encoder_explica_o_que_falta(isolado, monkeypatch):
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "qwen_image21"})
+    vae = isolado / "vae.safetensors"
+    vae.write_bytes(b"x")
+    localai.set_image({"model": "C:/m/qwen.gguf", "vae": str(vae), "llm": "C:/nao/existe.gguf"})
+    with pytest.raises(Exception) as e:
+        imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
+    assert "Codificador LLM" in str(e.value) and "VAE:" not in str(e.value)
+
+
+def test_edicao_passa_referencias_e_mmproj(isolado, monkeypatch):
+    """Qwen-Image 2.1 edita: -r por imagem, na ordem, e o mmproj quando o codificador é GGUF."""
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "qwen_image21"})
+    arq = {n: isolado / n for n in ("vae.st", "enc.gguf", "mmproj.gguf", "a.png", "b.png")}
+    for f in arq.values():
+        f.write_bytes(b"x")
+    localai.set_image({"model": "C:/m/qwen.gguf", "vae": str(arq["vae.st"]), "llm": str(arq["enc.gguf"])})
+    refs = [str(arq["a.png"]), str(arq["b.png"])]
+
+    with pytest.raises(Exception, match="mmproj"):  # GGUF sem visão: edição barrada, geração não
+        imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), refs)
+    assert "-r" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
+
+    localai.set_image({"llm_vision": str(arq["mmproj.gguf"])})
+    a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), refs)
+    assert [a[i + 1] for i, v in enumerate(a) if v == "-r"] == refs
+    assert a[a.index("--llm_vision") + 1] == str(arq["mmproj.gguf"])
+
+
+def test_modelo_que_so_gera_recusa_edicao(isolado, monkeypatch):
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": ""})
+    ref = isolado / "a.png"
+    ref.write_bytes(b"x")
+    localai.set_image({"model": "C:/m/sd15.safetensors"})
+    with pytest.raises(Exception, match="não edita"):
+        imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), [str(ref)])
 
 
 def test_sd_sem_modelo_reclama(isolado):
