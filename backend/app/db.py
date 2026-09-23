@@ -72,6 +72,9 @@ class Checkpoint(Base):
     path: Mapped[str] = mapped_column(String(2000))  # caminho absoluto no container
     existed: Mapped[bool] = mapped_column(default=True)
     content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Tentativa de Worker (Maestro) que fez a alteração: é o que permite desfazer UMA tarefa em vez
+    # do turno inteiro da Maestro, que costuma despachar várias.
+    attempt_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
@@ -96,7 +99,7 @@ class Feature(Base):
         ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200))
     goal: Mapped[str] = mapped_column(Text, default="")
-    status: Mapped[str] = mapped_column(String(20), default="planning")  # planning|active|done|cancelled
+    status: Mapped[str] = mapped_column(String(20), default="planning")  # planning|active|validating|done|cancelled
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now)
     tasks: Mapped[list["Task"]] = relationship(
@@ -150,6 +153,9 @@ class Attempt(Base):
     # chamadas com diff, resultados, estatísticas). Gravada a cada rodada, não só no fim: sobrevive a
     # F5, a queda do app e a um Parar no meio.
     transcript: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # {caminho relativo: sha1 | None} dos arquivos que a tentativa deixou. Na tarefa seguinte, o que
+    # não bate mais foi mexido por fora (usuário, outro programa) e a Maestro precisa saber.
+    estado: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     task: Mapped[Task] = relationship(back_populates="attempts")
 
 
@@ -190,6 +196,11 @@ def _migrate() -> None:
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(attempts)")}
         if cols and "transcript" not in cols:
             c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN transcript JSON")
+        if cols and "estado" not in cols:
+            c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN estado JSON")
+        cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(checkpoints)")}
+        if cols and "attempt_id" not in cols:
+            c.exec_driver_sql("ALTER TABLE checkpoints ADD COLUMN attempt_id INTEGER")
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(conversations)")}
         if "workspace" not in cols:
             c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN workspace VARCHAR(1000)")

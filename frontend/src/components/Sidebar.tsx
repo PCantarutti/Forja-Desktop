@@ -138,9 +138,9 @@ export default function Sidebar(props: {
   const extra = (hits ?? []).filter((h) => !byTitle.some((c) => c.id === h.id));
   const list = q.trim() ? [...byTitle, ...extra] : props.conversations;
 
-  // Seção Agente: agrupado por pasta de trabalho (como no Claude); grupo mais recente primeiro.
+  // Agente e Maestro: agrupado por pasta de trabalho (como no Claude); grupo mais recente primeiro.
   const groups = useMemo(() => {
-    if (props.section !== "agent" || q.trim()) return null;
+    if ((props.section !== "agent" && props.section !== "maestro") || q.trim()) return null;
     const map = new Map<string, Conversation[]>();
     for (const c of list) {
       const key = c.workspace ?? "";
@@ -318,7 +318,7 @@ export default function Sidebar(props: {
         >
           {selecting ? "Cancelar" : "Selecionar"}
         </button>
-        <button onClick={props.onNew} title={props.section === "chat" ? "Nova conversa de chat" : "Nova conversa do agente"} className="rounded-lg p-1.5 text-muted hover:bg-raised hover:text-fg">
+        <button onClick={props.onNew} title={props.section === "chat" ? "Nova conversa de chat" : props.section === "maestro" ? "Nova conversa Maestro" : "Nova conversa do agente"} className="rounded-lg p-1.5 text-muted hover:bg-raised hover:text-fg">
           <Edit />
         </button>
       </div>

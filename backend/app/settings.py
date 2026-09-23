@@ -41,6 +41,8 @@ ENV_DEFAULTS: dict[str, Any] = {
     "maestro_max_attempts": config.MAESTRO_MAX_ATTEMPTS,
     "max_workers": config.MAX_WORKERS,
     "model_lifecycle": config.MODEL_LIFECYCLE,
+    "maestro_model": {"provider": "", "model": ""},
+    "maestro_browser": True,
 }
 
 LISTS = ("disabled_tools", "auto_approve_tools", "auto_approve_commands", "trusted_hooks")
@@ -104,6 +106,8 @@ def apply(values: dict | None = None) -> dict:
     config.MAESTRO_MAX_ATTEMPTS = int(values["maestro_max_attempts"])
     config.MAX_WORKERS = int(values["max_workers"])
     config.MODEL_LIFECYCLE = values["model_lifecycle"]
+    config.MAESTRO_MODEL = dict(values["maestro_model"])
+    config.MAESTRO_BROWSER = bool(values["maestro_browser"])
     config.BROWSER_IDLE_MINUTES = int(values["browser_idle_minutes"])
     config.BROWSER_SCALE = int(values["browser_scale"])
     config.BROWSER_STREAM = values["browser_stream"]
@@ -184,7 +188,14 @@ def validate(patch: dict, current: dict) -> dict:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out
-        elif key in ("project_memory", "personal_memory"):
+        elif key == "maestro_model":
+            if not isinstance(raw, dict):
+                raise SettingsError("'maestro_model' precisa ser um objeto {provider, model}.")
+            provider, model = str(raw.get("provider") or ""), str(raw.get("model") or "")
+            if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
+                raise SettingsError(f"Modelo da Maestro: provedor '{provider}' não existe.")
+            values[key] = {"provider": provider, "model": model}
+        elif key in ("project_memory", "personal_memory", "maestro_browser"):
             values[key] = bool(raw)
         elif key == "project_memory_file":
             name = str(raw).strip() or "FORJA.md"

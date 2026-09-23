@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import config, db, gitops, llm, skills, workspace
+from . import config, db, gitops, llm, modelctl, skills, workspace
 from .parsing import parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, register, resolve_path, vision_caps
 
@@ -38,6 +38,7 @@ intermediárias, só o seu relatório final. Faça apenas a tarefa pedida, usand
 responda com um relatório curto e objetivo: o que fez, arquivos alterados, resultados e o que ficou pendente.
 """
 MAX_RESULT_IN_STEP = 2000
+MAX_RECARGAS = 2   # quantas vezes o Worker recarrega o próprio modelo local que caiu
 MAX_NA_TRANSCRICAO = 20_000  # por mensagem da conversa gravada do Worker (read_file de arquivo grande)
 MAX_FILES = 12            # arquivos anexados ao brief
 MAX_DIFF = 30_000         # diff mandado para a revisão
@@ -407,7 +408,11 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
         yield {"type": "sub_message", "parent": pid,
                "message": registra({"role": "user", "content": messages[1]["content"]})}
 
+    recargas = 0
     for i in range(config.SUBAGENT_MAX_ITERATIONS):
+        if getattr(run_obj, "paused", False):  # Pausar vale também no meio de uma tarefa do Worker
+            yield estado(f"{LEVELS[used_level]} · {model}: pausado")
+            await run_obj.espera_retomar()
         if run_obj.cancel.is_set():
             final = final or "(interrompido pelo usuário)"
             break
@@ -438,6 +443,23 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 elif kind == "done":
                     done = val
         except llm.LLMError as e:
+            # O llama-server do Worker morreu no meio (falta de memória, crash): recarrega o mesmo
+            # modelo e repete o passo. As mensagens estão aqui, e os arquivos já escritos continuam
+            # no disco — nada da tentativa se perde. Duas vezes no máximo: morrer de novo é sinal de
+            # que o modelo não cabe, e aí o fallback de slot (abaixo) decide.
+            if (recargas < MAX_RECARGAS and not run_obj.cancel.is_set() and e.status is None
+                    and await modelctl.caiu(spec)):
+                recargas += 1
+                yield estado(f"{LEVELS[used_level]} · {model}: o modelo caiu ({e}); recarregando e "
+                             f"repetindo o passo {i + 1}")
+                try:
+                    async for ev in modelctl.recupera(spec, run_obj.cancel):
+                        yield ev
+                except ToolError as e2:
+                    out.update(status="erro", text=f"O modelo do Worker caiu e não voltou: {e2}", meta=meta)
+                    return
+                info["recovered"] = recargas
+                continue
             proximo = next(((lvl, s) for lvl, s in cadeia if lvl not in tentados), None)
             # trocar de modelo depois que o sub já mexeu em arquivo repetiria efeito colateral
             if proximo and not info["steps"]:

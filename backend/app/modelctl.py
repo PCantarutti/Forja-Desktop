@@ -31,7 +31,8 @@ CAPS: dict[str, frozenset[str]] = {
 }
 
 # O que fazer com o modelo depois que a tarefa termina.
-LIFECYCLES = ("persistent", "unload_after_task")
+LIFECYCLES = ("persistent", "unload_after_task", "unload_clear", "restart_after_task")
+LIBERA_TIMEOUT = 30   # s esperando a VRAM voltar depois de matar o processo
 LOAD_TIMEOUT = 900  # o mesmo teto do localai._wait_ready
 
 
@@ -116,6 +117,34 @@ def carregado(spec: dict) -> bool:
     return bool(localai and localai.status().get("alias") == spec.get("model"))
 
 
+async def caiu(spec: dict | None, espera: float = 3.0) -> bool:
+    """O servidor do modelo deste slot saiu do ar (morreu ou travou)?
+
+    Pergunta ao próprio servidor, não só ao processo: no Windows, logo depois de o processo morrer o
+    handle ainda responde "vivo" por um instante — e é exatamente nesse instante que o erro de conexão
+    chega. Espera até `espera` segundos pela resposta antes de concluir."""
+    if not gerenciavel(spec):
+        return False
+    fim = asyncio.get_running_loop().time() + espera
+    while True:
+        if not carregado(spec):
+            return True
+        if await asyncio.to_thread(localai._health):
+            return False
+        if asyncio.get_running_loop().time() >= fim:
+            return True  # processo de pé mas sem responder: travado conta como caído
+        await asyncio.sleep(0.3)
+
+
+async def recupera(spec: dict, cancel: asyncio.Event | None = None) -> AsyncIterator[dict]:
+    """Põe o modelo do slot de volta no ar depois de uma queda: mata o que sobrou (travado) e recarrega."""
+    if carregado(spec):
+        async for ev in unload("recuperação"):
+            yield ev
+    async for ev in ensure(spec, {}, cancel):
+        yield ev
+
+
 def _evento(fase: str, **extra) -> dict:
     return {"type": "model", "phase": fase, **extra}
 
@@ -178,6 +207,35 @@ async def unload(motivo: str = "") -> AsyncIterator[dict]:
     yield _evento("unloaded", previous=anterior, model="", reason=motivo)
 
 
+def _vram_livre() -> int | None:
+    try:
+        return localai.hardware().get("vram_free")
+    except Exception:  # pragma: no cover - consulta de sistema
+        return None
+
+
+async def libera(motivo: str = "unload_clear") -> AsyncIterator[dict]:
+    """Descarrega e ESPERA a memória voltar. Matar o processo não devolve a VRAM na mesma hora: o
+    driver libera depois, e o próximo modelo carregado nesse meio-tempo acharia a placa cheia e
+    cairia para a CPU. Aqui só segue quando a leitura da VRAM livre para de subir."""
+    antes = _vram_livre()
+    async for ev in unload(motivo):
+        yield ev
+    yield _evento("clearing", reason=motivo)
+    ultima, estavel = _vram_livre(), 0
+    for _ in range(LIBERA_TIMEOUT * 2):
+        await asyncio.sleep(0.5)
+        agora = _vram_livre()
+        if agora is None:
+            break
+        estavel = estavel + 1 if agora == ultima else 0
+        ultima = agora
+        if estavel >= 3:  # 1,5 s sem mudar: o driver terminou de devolver
+            break
+    liberado = (ultima - antes) if (ultima is not None and antes is not None) else None
+    yield _evento("cleared", reason=motivo, freed=liberado)
+
+
 async def after_task(spec: dict | None, maestro: dict | None = None) -> AsyncIterator[dict]:
     """Aplica a estratégia escolhida depois que uma tarefa termina.
 
@@ -189,9 +247,28 @@ async def after_task(spec: dict | None, maestro: dict | None = None) -> AsyncIte
     llama-server do Worker, e descarregar ali deixaria a Maestro sem servidor no passo seguinte —
     ela perderia a conexão justamente ao ler o resultado da tarefa que acabou de terminar.
     """
-    if lifecycle() != "unload_after_task" or not gerenciavel(spec):
+    estrategia = lifecycle()
+    if estrategia == "persistent" or not gerenciavel(spec):
         return
+    # Maestro no MESMO llama-server (mesmo GGUF do Worker): nenhuma estratégia mexe nele. Descarregar
+    # a deixaria sem servidor; reiniciar recarregaria o modelo inteiro a cada tarefa só para zerar um
+    # cache que ela volta a encher na rodada seguinte.
     if maestro and gerenciavel(maestro) and carregado(maestro):
+        return
+    if estrategia == "restart_after_task":
+        # Processo novo com o mesmo modelo: cache e fragmentação zerados, e o modelo de volta no ar
+        # para a próxima tarefa.
+        if not carregado(spec):
+            return
+        yield _evento("restarting", model=spec["model"])
+        async for ev in unload("restart_after_task"):
+            yield ev
+        async for ev in ensure(spec):
+            yield ev
+        return
+    if estrategia == "unload_clear":
+        async for ev in libera("unload_clear"):
+            yield ev
         return
     async for ev in unload("unload_after_task"):
         yield ev

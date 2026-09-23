@@ -287,3 +287,68 @@ def test_janela_por_requisicao_divide_pelo_parallel():
     assert localai.ctx_por_requisicao(131072, {"parallel": 1}) == 131072
     assert localai.ctx_por_requisicao(131072, {}) == 131072
     assert localai.ctx_por_requisicao(None, {"parallel": 2}) == 0
+
+
+
+# ------------------------------------------------------------------ estratégias novas (item 4)
+
+def test_descarregar_e_liberar_espera_a_vram_voltar(monkeypatch):
+    """Matar o processo não devolve a VRAM na hora: o próximo modelo cairia para a CPU."""
+    f = _fake(monkeypatch, alias="A")
+    leituras = iter([2 << 30, 3 << 30, 5 << 30, 6 << 30, 6 << 30, 6 << 30, 6 << 30, 6 << 30])
+    ultima = {"v": 2 << 30}
+
+    def hw():
+        ultima["v"] = next(leituras, ultima["v"])
+        return {"vram": 8 << 30, "vram_free": ultima["v"]}
+
+    monkeypatch.setattr(f, "hardware", hw)
+    monkeypatch.setattr(config, "MODEL_LIFECYCLE", "unload_clear")
+    eventos = _colhe(modelctl.after_task(LOCAL_A))
+    assert [e["phase"] for e in eventos] == ["unloading", "unloaded", "clearing", "cleared"]
+    assert eventos[-1]["freed"] == 4 << 30 and f.chamadas == ["unload"]
+
+
+def test_reiniciar_apos_a_tarefa_volta_com_o_mesmo_modelo(monkeypatch):
+    f = _fake(monkeypatch, alias="A")
+    monkeypatch.setattr(config, "MODEL_LIFECYCLE", "restart_after_task")
+    eventos = _colhe(modelctl.after_task(LOCAL_A, maestro=NUVEM))
+    assert f.chamadas == ["unload", r"load:D:\m\A.gguf"] and f.alias == "A"
+    assert [e["phase"] for e in eventos] == ["restarting", "unloading", "unloaded", "loading", "ready"]
+
+
+def test_liberar_nao_derruba_a_maestro_no_mesmo_servidor(monkeypatch):
+    f = _fake(monkeypatch, alias="A")
+    monkeypatch.setattr(config, "MODEL_LIFECYCLE", "unload_clear")
+    assert _colhe(modelctl.after_task(LOCAL_A, maestro=LOCAL_A)) == [] and f.chamadas == []
+
+
+def test_configuracao_aceita_as_quatro_estrategias():
+    from app import settings
+    for lc in ("persistent", "unload_after_task", "unload_clear", "restart_after_task"):
+        assert settings.validate({"model_lifecycle": lc}, settings.load())["model_lifecycle"] == lc
+
+
+def test_processo_ainda_de_pe_mas_sem_responder_conta_como_caido(monkeypatch):
+    """No Windows o processo morto ainda parece vivo por um instante; o /health decide."""
+    f = _fake(monkeypatch, alias="A")
+    f._health = lambda: False
+    assert asyncio.run(modelctl.caiu(LOCAL_A, espera=0.2)) is True
+    eventos = _colhe(modelctl.recupera(LOCAL_A))
+    assert f.chamadas == ["unload", r"load:D:\m\A.gguf"]  # mata o que sobrou antes de recarregar
+    assert [e["phase"] for e in eventos][-1] == "ready"
+
+
+def test_servidor_respondendo_nao_e_queda(monkeypatch):
+    f = _fake(monkeypatch, alias="A")
+    f._health = lambda: True
+    assert asyncio.run(modelctl.caiu(LOCAL_A)) is False
+    assert asyncio.run(modelctl.caiu({"provider": "lmstudio", "model": "x"})) is False  # não gerenciável
+
+
+@pytest.mark.parametrize("estrategia", ["unload_after_task", "unload_clear", "restart_after_task"])
+def test_maestro_e_worker_no_mesmo_modelo_local_nunca_recarrega(monkeypatch, estrategia):
+    """Mesmo GGUF para os dois: nenhuma estratégia descarrega nem reinicia o servidor da Maestro."""
+    f = _fake(monkeypatch, alias="A")
+    monkeypatch.setattr(config, "MODEL_LIFECYCLE", estrategia)
+    assert _colhe(modelctl.after_task(LOCAL_A, maestro=LOCAL_A)) == [] and f.chamadas == []

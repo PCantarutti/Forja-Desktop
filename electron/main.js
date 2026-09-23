@@ -542,6 +542,7 @@ ipcMain.handle("forja:desktop:zoom", (_e, dir) => stepZoom(dir === "in" ? +1 : d
 
 // Painel Navegador: qual conversa está à mostra e onde (px de CSS da interface); null = escondido/coberto.
 ipcMain.on("forja:browser:view", (_e, shown) => host?.setShown(shown));
+ipcMain.on("forja:focus", () => showWindow());
 
 ipcMain.handle("forja:desktop:open", (_e, what) => {
   if (what === "log") return shell.showItemInFolder(LOG_FILE);

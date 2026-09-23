@@ -25,7 +25,7 @@ export type Approval = {
 
 /** O que está rodando agora: turno do agente e delegações por conversa, e processos vivos. */
 export type Activity = {
-  conversations: { id: number; running: boolean; subagents: number; servers: number }[];
+  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean }[];
   servers: number;
 };
 
@@ -47,7 +47,7 @@ export type Conversation = {
   id: number;
   title: string;
   updated_at: string;
-  kind?: "chat" | "agent" | "imagem";
+  kind?: "chat" | "agent" | "maestro" | "imagem" | "comparar" | "pesquisa";
   workspace?: string | null;
   workspace_label?: string;
   pinned?: boolean;
@@ -575,7 +575,7 @@ export type MaestroFeature = {
   id: number;
   title: string;
   goal: string;
-  status: "planning" | "active" | "done" | "cancelled";
+  status: "planning" | "active" | "validating" | "done" | "cancelled";
   tasks: MaestroTask[];
 };
 
@@ -623,7 +623,7 @@ export type SubState = {
 
 /** Troca de modelo em andamento, para o cockpit mostrar por que a execução parou por uns minutos. */
 export type ModelPhase = {
-  phase: "unloading" | "loading" | "ready" | "unloaded" | "error";
+  phase: "unloading" | "loading" | "ready" | "unloaded" | "error" | "clearing" | "cleared" | "restarting";
   previous?: string;
   model?: string;
   reason?: string;

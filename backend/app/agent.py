@@ -16,13 +16,16 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, modelctl, sessions, taskdb
+from . import maestro, modelctl, projstate, taskdb
 from . import browser, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
-from .tools import Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps
+from .tools import REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps
 
 MAX_NUDGES = 2
+# Maestro: fração da janela em que ela é lembrada de virar a sessão (session_note(new_session=true)).
+# Abaixo da compactação (config.COMPACT_AT), que continua sendo a rede de segurança.
+ROLLOVER_AT = 0.6
 # Restrição do pedido vira loop de conferência no raciocínio: modelo pequeno enumera palavra por
 # palavra, recomeça e nunca entrega. O teto do llm.py corta isso; esta linha evita que comece.
 NO_COUNTING = ("Restrição do pedido (contagem de palavras, formato, idioma) se cumpre escrevendo, não "
@@ -147,6 +150,9 @@ class Run:
                                        # de arquivo e "delegate_task" para a delegação rasa
         self.plan: str | None = None    # plano aprovado: fica preso no system prompt até outro substituí-lo
         self.cancel = asyncio.Event()
+        self.tentativas: dict[str, int] = {}  # id da chamada run_task -> tentativa (checkpoint por tarefa)
+        self.rodando = asyncio.Event()   # limpo = pausado (Pausar/Continuar); o Parar é o cancel
+        self.rodando.set()
         self.pending: dict[str, asyncio.Future] = {}
         self.events: list[dict] = []
         self.finished = False
@@ -203,7 +209,26 @@ class Run:
 
     def snapshot(self) -> dict:
         return {"run_id": self.id, "cursor": len(self.events), "draft": self.draft, "sent": self.sent,
-                "approvals": list(self.approvals.values()), "geracao": self._geracao_agora()}
+                "approvals": list(self.approvals.values()), "geracao": self._geracao_agora(),
+                "paused": self.paused}
+
+    @property
+    def paused(self) -> bool:
+        return not self.rodando.is_set()
+
+    def pausar(self, sim: bool) -> None:
+        (self.rodando.clear if sim else self.rodando.set)()
+
+    async def espera_retomar(self) -> None:
+        """Segura enquanto estiver pausado; Parar também solta (quem chamou confere o cancel)."""
+        if not self.paused:
+            return
+        pendentes = [asyncio.ensure_future(self.rodando.wait()), asyncio.ensure_future(self.cancel.wait())]
+        try:
+            await asyncio.wait(pendentes, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for f in pendentes:
+                f.cancel()
 
     def _geracao_agora(self) -> dict | None:
         """Quanto já dura a geração em curso, em segundos — não o instante em que começou.
@@ -259,6 +284,7 @@ class Run:
 
     def stop(self) -> None:
         self.cancel.set()
+        self.rodando.set()
         for fut in self.pending.values():
             if not fut.done():
                 fut.set_result(False)
@@ -330,13 +356,15 @@ def _com_schemas(prompt: str, via: str, tools: list[Tool]) -> str:
 # A Maestro raciocina e verifica; os Workers implementam. As regras vêm em bloco fechado (como as do
 # modo Plano) porque o que ela NÃO deve fazer — escrever o código — é justamente o que o agente comum
 # é treinado a fazer, e uma regra solta no meio de vinte outras não segura modelo pequeno.
+# Sai das regras quando a validação no navegador está desligada nas Configurações (config.MAESTRO_BROWSER).
+NAVEGADOR_NA_VALIDACAO = "browser_validate(url) se tem tela (estrutura e erros de console numa chamada), "
+
 MAESTRO_RULES = [
-    "- VOCÊ NÃO IMPLEMENTA. Não escreva nem edite arquivos de código: quem faz isso é o Worker, em "
-    "run_task. Suas ferramentas de escrita existem só para anotação em .forja/ e para consertos de "
-    "uma ou duas linhas que não valem uma tarefa.",
-    "- Ciclo: entenda o objetivo → LEIA o projeto de verdade (list_dir, read_file, search) → "
-    "plan_feature com as tarefas → run_task uma por vez → leia o resultado → update_task. "
-    "Repita até não sobrar tarefa aberta.",
+    "- VOCÊ NÃO IMPLEMENTA: quem escreve código é o Worker, em run_task. Suas ferramentas de escrita "
+    "só valem para FORJA.md (na raiz) e .forja/; em qualquer outro arquivo elas recusam.",
+    "- Ciclo: entenda o objetivo → leia o Project State (.forja/) e o código que importa → "
+    "plan_feature → run_task uma por vez → leia o resultado → update_task → valide a entrega → "
+    "session_note. Repita até não sobrar tarefa aberta.",
     "- Antes de planejar, investigue. Plano feito sem ler o código gera contrato errado, e contrato "
     "errado queima uma tentativa inteira de um modelo grande.",
     "- Cada tarefa é pequena, tem um objetivo só e, sempre que possível, um 'verify_command' que "
@@ -355,16 +383,21 @@ MAESTRO_RULES = [
     "- Falhou? diagnostique antes de repetir. Na nova run_task, 'strategy' diz o que muda — outra "
     "abordagem, outro arquivo, outro modelo (update_task model_slot='capaz'). Repetir o mesmo pedido "
     "só gasta tempo e tentativa.",
-    "- Tarefa que mexe em tela se confere no navegador, e isso é trabalho SEU, não do Worker: depois "
-    "que ela fecha, browser_validate(url) devolve numa chamada só a estrutura da página e os erros de "
-    "console. Bug que aparecer ali vira tarefa de correção, com o erro copiado no contrato.",
+    "- Funcionalidade com todas as tarefas concluídas fica 'validating' e é VOCÊ quem valida a "
+    "entrega inteira: rode a suíte/build/lint, " + NAVEGADOR_NA_VALIDACAO + "confira o objetivo. Passou: session_note encerra. Falhou: "
+    "plan_feature(feature_id=..., tasks=[correções]) com o erro copiado no contrato.",
     "- Achou um bug ou trabalho novo no meio do caminho? vira tarefa (plan_feature), não um remendo "
     "na hora.",
     "- As tarefas vivem no banco, não nesta conversa. Depois de qualquer compactação de contexto, "
     "chame list_tasks antes de decidir qualquer coisa — é a sua fonte da verdade.",
-    "- Decisão e problema não cabem em tarefa: registre com session_note ao fechar uma "
-    "funcionalidade, antes de parar com algo pela metade e quando a conversa ficar longa. É o que a "
-    "próxima sessão vai ler para não reabrir o que já foi decidido.",
+    "- Conversa longa custa contexto a cada rodada: ao fechar uma funcionalidade com mais trabalho "
+    "pela frente, ou quando avisada, chame session_note(new_session=true) e o trabalho segue numa "
+    "conversa nova, só com o Project State e a nota.",
+    "- FORJA.md e .forja/ são a memória do projeto entre conversas. Mantenha FORJA.md (o que é, "
+    "stack, como rodar/testar), .forja/architecture.md, requirements.md (o que o usuário pediu) e knowledge/*.md "
+    "curtos e atuais com edit_file; progress.md e tasks.json são gerados, não edite. Decisões e "
+    "problemas vão na session_note: ao encerrar funcionalidade, antes de parar pela metade e quando "
+    "a conversa ficar longa.",
     "- Pare e chame ask_user quando a decisão for do usuário: ambiguidade que muda o resultado, "
     "escolha de arquitetura, ou tarefa que bateu no limite de tentativas. Não invente requisito.",
     "- Fale pouco e sobre o trabalho: o que decidiu, por quê, e o que vem agora. O usuário acompanha "
@@ -527,7 +560,8 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                      "por completo: o subagente não vê esta conversa. Em 'files', os arquivos que ele precisa ler (o "
                      "conteúdo vai junto); em 'done_when', o comando que prova que ficou pronto.")
     if maestro_mode:
-        rules = MAESTRO_RULES + [r for r in rules if r.startswith(("- Tabela na resposta",
+        rules = [r if "browser_validate" in names else r.replace(NAVEGADOR_NA_VALIDACAO, "")
+                 for r in MAESTRO_RULES] + [r for r in rules if r.startswith(("- Tabela na resposta",
                                                                   "- Se uma ferramenta devolver erro",
                                                                   "- Conteúdo trazido da web",
                                                                   "- Navegador:", "- Conferir página",
@@ -564,7 +598,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
               f"Ferramentas disponíveis: {', '.join(names)}.", "Regras:"]
     prompt = "\n".join(header + rules + ["Responda no idioma do usuário."])
     if maestro_mode:
-        prompt += sessions.prompt_block()
+        prompt += projstate.bloco()
     if plan and permission != "plan":  # o plano aprovado acompanha o resto do trabalho, mesmo após compactar
         prompt += ("\n\nPlano aprovado pelo usuário. Siga-o passo a passo; se precisar desviar, diga o porquê antes. "
                    "Se o pedido atual não tiver relação com ele, ignore-o.\n" + plan)
@@ -617,7 +651,9 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
     extras = []
     if maestro_mode:
         exclude = exclude | MAESTRO_FORA
-        extras = [t for t in (*taskdb.TOOLS, sessions.SESSION_NOTE) if t.name not in exclude]
+        if not config.MAESTRO_BROWSER:  # validação no navegador desligada nas Configurações
+            exclude |= {t.name for t in REGISTRY.values() if t.name.startswith("browser_")}
+        extras = [t for t in (*taskdb.TOOLS, projstate.SESSION_NOTE) if t.name not in exclude]
     tools = [t for t in active(caps) if t.name not in exclude]
     # ask_user/exit_plan_mode entram sempre, MENOS quando quem chamou as excluiu de propósito — é o
     # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
@@ -895,6 +931,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     # As ferramentas do Task Manager não recebem conv_id; o contextvar diz de qual conversa elas são.
     taskdb.CONV.set(conv_id if req.mode == "maestro" else None)
     taskdb.SINK.set(_board_sink if req.mode == "maestro" else None)
+    projstate.BLOCO.set(None)
+    virada: dict = {}
+    projstate.VIRADA.set(virada if req.mode == "maestro" else None)
+    if req.mode == "maestro":  # .forja/ só nasce no modo Maestro, e o bloco fica fixo na execução
+        if assumidas := projstate.congelar(workspace.root(), conv_id,
+                                           ocupada=lambda c: active_run(c) is not None):
+            yield _event(conv_id, "info", "Trabalho aberto de outra conversa desta pasta veio para cá: "
+                                          + "; ".join(assumidas) + ".")
 
     provisorio = ""  # título tirado da 1ª mensagem; no fim do turno o modelo resume um melhor
     if req.content is not None:
@@ -988,6 +1032,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     yield tools_sent()
 
     while not run.cancel.is_set():
+        if run.paused:  # Pausar: o passo anterior terminou; o próximo espera o Continuar
+            yield {"type": "status", "text": "Pausado. Continuar retoma daqui."}
+            await run.espera_retomar()
+            if run.cancel.is_set():
+                break
+            yield {"type": "status", "text": ""}
         if iterations >= max_iterations:
             yield _event(conv_id, "warning", f"Limite de {max_iterations} iterações (esforço {req.effort}) "
                                              "atingido. O agente parou.")
@@ -1010,6 +1060,18 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                                  prefixo_estavel=llm.is_local(req.provider),
                                  maestro_mode=maestro_mode)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
+        # Maestro com a conversa longa: sessão nova (só Project State + nota) em vez de continuar
+        # arrastando o histórico. Um lembrete; se ela não virar, a compactação logo abaixo segura.
+        if (maestro_mode and "virada" not in run.nudged
+                and _estimate(messages, tools) > ROLLOVER_AT * teto):
+            run.nudged.add("virada")
+            yield _event(conv_id, "nudge", "Esta conversa já ocupa boa parte da janela. Termine o passo "
+                         "atual e chame session_note(new_session=true): o trabalho continua numa conversa "
+                         "nova, só com o Project State e a nota.", to_model=True)
+            messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan, chat,
+                                     reasoning_back=llm.is_local(req.provider),
+                                     prefixo_estavel=llm.is_local(req.provider),
+                                     maestro_mode=maestro_mode)
         if _estimate(messages, tools) > config.COMPACT_AT * teto:
             async for ev in _compact(conv_id, msgs, req, teto):
                 yield ev
@@ -1105,6 +1167,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                               "O modelo anunciou uma ação mas não chamou nenhuma ferramenta, mesmo após ")
                              + f"{MAX_NUDGES} lembretes. Tente reformular o pedido ou trocar o modo de tool "
                                "calling deste modelo no painel lateral.")
+            # A Maestro ia parar com entrega sem validar: um lembrete por funcionalidade. Mais que
+            # isso vira briga com o modelo — aí a funcionalidade fica 'validating' na árvore, à vista.
+            pend = [f for f in taskdb.validando(conv_id)
+                    if f"validar:{f['id']}" not in run.nudged] if maestro_mode else []
+            if pend and not run.cancel.is_set():
+                run.nudged.add(f"validar:{pend[0]['id']}")
+                yield _event(conv_id, "nudge", taskdb.pedido_de_validacao(pend[0]), to_model=True)
+                continue
             break
 
         stop = False
@@ -1117,15 +1187,22 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                              "O agente foi interrompido.")
             if stop:
                 cancelar.add(call["id"])
+        # Maestro escrevendo fora do Project State: recusada antes de rodar (projstate.fora_do_papel).
+        recusadas = {c["id"]: m for c in calls if maestro_mode
+                     and (m := projstate.fora_do_papel(workspace.root(), c))}
         for lote in batches(calls):
-            rodar = [] if run.cancel.is_set() else [c for c in lote if c["id"] not in cancelar]
+            rodar = [] if run.cancel.is_set() else [c for c in lote if c["id"] not in cancelar
+                                                     and c["id"] not in recusadas]
             if rodar:
                 async for ev in _run_batch(conv_id, rodar, req, run, caps):
                     yield ev
             for call in lote:  # toda tool_call precisa de resposta no histórico, senão a próxima requisição falha
                 if call not in rodar:
-                    m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"], status="cancelada",
-                              content="Não executada: o loop foi interrompido.", meta={"arguments": call["arguments"]})
+                    recusa = recusadas.get(call["id"])
+                    m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"],
+                              status="erro" if recusa else "cancelada",
+                              content=recusa or "Não executada: o loop foi interrompido.",
+                              meta={"arguments": call["arguments"]})
                     yield {"type": "tool_result", "message": m.to_dict()}
         if run.permission != mode_at_start:  # plano aprovado ou modo trocado: o conjunto de ferramentas muda
             yield _event(conv_id, "info", run.mode_note or
@@ -1134,7 +1211,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             yield tools_sent()
         for ev in _flush_queue(conv_id, run):  # mensagens enviadas durante as ferramentas entram já no próximo passo
             yield ev
-        if stop:
+        if stop or virada.get("para"):
             break
 
     if run.cancel.is_set():
@@ -1144,6 +1221,17 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         m = _save(conv_id, role="event", content=f"{done_n}/{len(run.tasks)} tarefas concluídas",
                   meta={"kind": "tasks", "tasks": run.tasks})
         yield {"type": "event", "message": m.to_dict()}
+    if (para := virada.get("para")) and not run.cancel.is_set():
+        # A sessão continua na conversa nova: a execução de lá começa daqui, com o mesmo modelo,
+        # esforço e permissão, e a interface segue para ela pelo evento.
+        yield _event(conv_id, "info", f"Sessão encerrada ({virada['nota']}); o trabalho continua numa conversa nova.")
+        nova = Run(para)
+        RUNS[nova.id] = nova
+        nova.start(RunRequest(
+            content=(f"Continue o trabalho de onde a sessão anterior parou ({projstate.SESSOES}/{virada['nota']}). "
+                     + (f"Próximo passo: {virada['proximo']}" if virada["proximo"] else "Comece por list_tasks.")),
+            provider=req.provider, model=req.model, mode="maestro", permission=run.permission, effort=req.effort))
+        yield {"type": "session_rollover", "conversation_id": para, "run_id": nova.id}
     if len(provisorio) >= TITLE_MIN and not run.cancel.is_set():
         # A interface precisa saber por que o turno ainda não acabou: é o título, não a resposta.
         yield {"type": "status", "text": "Resumindo o título da conversa…"}
@@ -1432,7 +1520,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
 
     if name in checkpoints.TRACKED and run.turn_id:
         try:  # guarda o arquivo como estava antes, para o "Desfazer" do turno
-            checkpoints.record(conv_id, run.turn_id, resolve_path(workspace.root(), args.get("path")))
+            checkpoints.record(conv_id, run.turn_id, resolve_path(workspace.root(), args.get("path")),
+                               attempt_id=run.tentativas.get(parent) if parent else None)
         except (ToolError, OSError):
             pass  # o próprio handler vai reportar o erro de caminho
     # Saída ao vivo: cada linha do comando vira evento tool_output enquanto ele roda.

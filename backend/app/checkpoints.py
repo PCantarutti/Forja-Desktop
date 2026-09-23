@@ -24,20 +24,26 @@ MAX_TURNOS = 20   # turnos com desfazer guardado, por conversa
 MAX_DIAS = 30     # idade máxima; varrido na subida do backend
 
 
-def record(conv_id: int, turn_id: int, path: Path) -> None:
+def record(conv_id: int, turn_id: int, path: Path, attempt_id: int | None = None) -> None:
+    """Guarda o arquivo como estava antes da 1ª escrita do turno — ou da tentativa, com `attempt_id`.
+
+    Dentro de um turno da Maestro rodam várias tentativas; cada uma ganha a própria linha com o
+    estado de antes DELA. O desfazer do turno continua certo: restaura da mais nova para a mais
+    velha, e a última aplicada é a de antes do turno."""
     path = Path(path)
     with db.session() as s:
+        filtro = (db.Checkpoint.attempt_id == attempt_id if attempt_id is not None
+                  else db.Checkpoint.turn_id == turn_id)
         exists = s.scalar(select(db.Checkpoint.id).where(
-            db.Checkpoint.conversation_id == conv_id, db.Checkpoint.turn_id == turn_id,
-            db.Checkpoint.path == str(path)))
+            db.Checkpoint.conversation_id == conv_id, filtro, db.Checkpoint.path == str(path)))
         if exists:
-            return  # já temos o estado de antes deste turno
+            return  # já temos o estado de antes deste turno (ou desta tentativa)
         existed = path.is_file()
         content = path.read_bytes() if existed and path.stat().st_size <= config.MAX_FILE_BYTES else None
         if existed and content is None:
             return  # grande demais para guardar; não finge que dá para desfazer
         s.add(db.Checkpoint(conversation_id=conv_id, turn_id=turn_id, path=str(path),
-                            existed=existed, content=content))
+                            existed=existed, content=content, attempt_id=attempt_id))
         s.commit()
     podar(conv_id)
 
@@ -82,22 +88,44 @@ def summary(conv_id: int) -> dict[int, list[str]]:
 
 def restore_from(conv_id: int, turn_id: int) -> list[str]:
     """Desfaz os turnos >= turn_id (mais novos primeiro). Devolve os arquivos restaurados."""
-    restored: list[str] = []
     with db.session() as s:
         rows = list(s.scalars(select(db.Checkpoint).where(
             db.Checkpoint.conversation_id == conv_id, db.Checkpoint.turn_id >= turn_id)
             .order_by(db.Checkpoint.turn_id.desc(), db.Checkpoint.id.desc())))
-        for cp in rows:
-            p = Path(cp.path)
-            if cp.existed:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(cp.content or b"")
-            elif p.is_file():
-                p.unlink()
-            label = workspace.to_host(p) or cp.path
-            if label not in restored:
-                restored.append(label)
-            s.delete(cp)
+        restored = _aplica(s, rows)
+        s.commit()
+    return restored
+
+
+def _aplica(s, rows) -> list[str]:
+    restored: list[str] = []
+    for cp in rows:
+        p = Path(cp.path)
+        if cp.existed:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(cp.content or b"")
+        elif p.is_file():
+            p.unlink()
+        label = workspace.to_host(p) or cp.path
+        if label not in restored:
+            restored.append(label)
+        s.delete(cp)
+    return restored
+
+
+def arquivos_da_tentativa(attempt_id: int) -> list[Path]:
+    with db.session() as s:
+        return [Path(p) for (p,) in s.execute(select(db.Checkpoint.path).where(
+            db.Checkpoint.attempt_id == attempt_id).order_by(db.Checkpoint.id))]
+
+
+def restore_attempt(attempt_id: int) -> list[str]:
+    """Volta os arquivos de UMA tentativa ao estado de antes dela. Mudança feita depois nesses mesmos
+    arquivos sai junto — é o preço de voltar o arquivo inteiro, e a interface avisa antes."""
+    with db.session() as s:
+        rows = list(s.scalars(select(db.Checkpoint).where(db.Checkpoint.attempt_id == attempt_id)
+                              .order_by(db.Checkpoint.id.desc())))
+        restored = _aplica(s, rows)
         s.commit()
     return restored
 

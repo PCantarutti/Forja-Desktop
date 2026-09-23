@@ -183,12 +183,12 @@ def _concluir(conv_id, code):
         taskdb.set_status(code, st, conv_id)
 
 
-def test_feature_fecha_quando_a_ultima_tarefa_conclui(conv):
+def test_ultima_tarefa_leva_a_feature_para_validacao_nao_para_done(conv):
     _plano(conv)
     _concluir(conv, "TASK-001")
     assert taskdb.board(conv)["features"][0]["status"] == "active"
     _concluir(conv, "TASK-002")
-    assert taskdb.board(conv)["features"][0]["status"] == "done"
+    assert taskdb.board(conv)["features"][0]["status"] == "validating"  # quem encerra é a Maestro, depois de validar a entrega
 
 
 # ------------------------------------------------------------------ tentativas
@@ -355,3 +355,24 @@ def test_toda_tentativa_recomeca_o_ciclo(conv):
     taskdb.set_status("TASK-001", "loading_model", conv)
     assert taskdb.set_status("TASK-001", "implementing", conv)["status"] == "implementing"
     assert taskdb.set_status("TASK-001", "queued", conv)["status"] == "queued"
+
+
+def test_maestro_fecha_direto_uma_tarefa_que_falhou(conv):
+    """Ela conferiu e aceitou: antes precisava percorrer a máquina à mão (10 chamadas numa execução real)."""
+    _plano(conv)
+    for st in ("queued", "implementing", "failed", "completed"):
+        taskdb.set_status("TASK-001", st, conv)
+    assert taskdb.get("TASK-001", conv).status == "completed"
+
+
+def test_reabrir_tarefa_devolve_a_feature_para_active(conv):
+    """Reenviada pelo usuário depois de concluída: a entrega muda, e a validação tem de acontecer de novo."""
+    _plano(conv)
+    _concluir(conv, "TASK-001")
+    _concluir(conv, "TASK-002")
+    assert taskdb.board(conv)["features"][0]["status"] == "validating"
+    taskdb.set_status("TASK-001", "queued", conv)
+    assert taskdb.board(conv)["features"][0]["status"] == "active"
+    _concluir(conv, "TASK-001")
+    assert taskdb.board(conv)["features"][0]["status"] == "validating"
+

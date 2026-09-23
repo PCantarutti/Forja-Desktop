@@ -53,12 +53,20 @@ import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView from "./components/MaestroView";
 
-/** Notificação do sistema quando a aba não está em foco (execução terminou, aprovação pendente). */
-function notify(title: string, body: string, force = false) {
+/** Notificação do sistema quando o Forja não está em foco (execução terminou, aprovação pendente).
+ * "Sem foco", não "minimizada": com a janela só atrás de outro programa, document.hidden é falso e o
+ * aviso não saía. Clicar traz a janela para a frente e, com `abrir`, abre a conversa. */
+function notify(title: string, body: string, force = false, abrir?: () => void) {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
-  if (!document.hidden && !force) return;
+  if (document.hasFocus() && !force) return;
   try {
-    new Notification(title, { body: body.slice(0, 160), silent: true });
+    const n = new Notification(title, { body: body.slice(0, 160), silent: false });
+    n.onclick = () => {
+      (window as any).forja?.focus?.();
+      window.focus();
+      abrir?.();
+      n.close();
+    };
   } catch {
     /* navegador sem suporte */
   }
@@ -69,6 +77,7 @@ type Config = {
   num_ctx: number;
   default_workspace?: string;
   min_ctx_maestro?: number;  // janela mínima de modelo local para a Maestro (o seletor barra abaixo)
+  maestro_model?: { provider: string; model: string };  // modelo padrão da Maestro (Configurações)
 };
 type Live = {
   messages: Message[];
@@ -80,6 +89,7 @@ type Live = {
     approvals: { call: { id: string; name: string; arguments?: any }; preview: any; suggest?: string; parent?: string }[];
     /** Geração em curso, em segundos decorridos — para remontar o contador de t/s ao reabrir. */
     geracao: { segundos: number; segundos_gerando: number; tokens: number } | null;
+    paused?: boolean;
   } | null;
 };
 
@@ -236,12 +246,17 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [geral, setSettings] = useState<Settings>(loadSettings);
   const [catalogKey, setCatalogKey] = useState(0); // força o seletor de modelo a recarregar
   const composer = useRef<HTMLTextAreaElement | null>(null);
   const [showFolder, setShowFolder] = useState(false);
   // Chat e Agente são seções separadas (como no Claude): cada uma lista só as suas conversas.
   const [section, setSection] = useState<Section>(() => (localStorage.getItem("forja.section") as Section) || "agent");
+  // Na seção Maestro o modelo é o dela (Configurações › Maestro), não o do chat: trocar um não troca o
+  // outro. Sem modelo da Maestro definido, ela usa o do chat até alguém escolher um no seletor dela.
+  const modeloMaestro = section === "maestro" && config.maestro_model?.model ? config.maestro_model : null;
+  const settings: Settings = modeloMaestro ? { ...geral, ...modeloMaestro } : geral;
+  const [pausado, setPausado] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem("forja.sidebar") === "hidden");
   const [nativeError, setNativeError] = useState("");
   const [picking, setPicking] = useState(false); // diálogo nativo aberto no sistema
@@ -327,7 +342,23 @@ export default function App() {
   // Só acompanha o fim da conversa enquanto o usuário estiver no fim: se ele subir, a rolagem fica onde está.
   const { ref: scroller, fim: fimDoChat, onScroll: seguirFim, colar } = useStickyBottom<HTMLDivElement>([messages, draft, approvals]);
 
-  const update = (p: Partial<Settings>) => setSettings((s) => ({ ...s, ...p }));
+  const update = (p: Partial<Settings>) => {
+    if (section === "maestro" && (p.provider !== undefined || p.model !== undefined)) {
+      const novo = { provider: p.provider ?? settings.provider, model: p.model ?? settings.model };
+      setConfig((c) => ({ ...c, maestro_model: novo }));
+      api.put("/settings", { maestro_model: novo }).catch((e) => setError(e.message));
+      const { provider: _p, model: _m, ...resto } = p;
+      p = resto;
+    }
+    setSettings((s) => ({ ...s, ...p }));
+  };
+
+  /** Pausar: o passo em curso termina (inclusive o do Worker) e o próximo espera o Continuar. */
+  function pausar(sim: boolean) {
+    if (!runId.current) return;
+    setPausado(sim);
+    api.post(`/runs/${runId.current}/pause`, { paused: sim }).catch((e) => setError(e.message));
+  }
 
   /** Trocar o modo no meio da resposta vale já para a próxima ferramenta (e libera o card aberto). */
   function changePermission(permission: Permission) {
@@ -338,8 +369,8 @@ export default function App() {
   }
 
   useEffect(() => {
-    localStorage.setItem("forja.settings", JSON.stringify(settings));
-  }, [settings]);
+    localStorage.setItem("forja.settings", JSON.stringify(geral));
+  }, [geral]);
 
   useEffect(() => {
     localStorage.setItem("forja.section", section);
@@ -426,6 +457,39 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
+  // Avisos que não dependem da conversa aberta na tela: aprovação esperando (inclusive do Worker) e
+  // Maestro que terminou. Vêm da atividade, que cobre todas as conversas; a aberta já avisa pelo stream.
+  const atividadeAnterior = useRef<Activity | null>(null);
+  useEffect(() => {
+    const antes = atividadeAnterior.current;
+    atividadeAnterior.current = activity;
+    if (!antes) return;
+    const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
+    const abrir = (id: number) => () => openConversation(id);
+    const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
+    for (const c of activity.conversations) {
+      const eram = rodandoAntes.get(c.id)?.waiting ?? 0;
+      if ((c.waiting ?? 0) > eram && c.id !== currentId) {
+        const maestro = conv(c.id)?.kind === "maestro";
+        notify(maestro ? "Maestro pede aprovação" : "Forja pede aprovação",
+               `${conv(c.id)?.title ?? "Conversa"}: ${c.waiting} esperando você`, true, abrir(c.id));
+      }
+    }
+    const agora = new Set(activity.conversations.filter((c) => c.running).map((c) => c.id));
+    // Maestro que acabou de começar enquanto outra parou = virada de sessão, não fim de trabalho.
+    const comecouMaestro = [...agora].some((id) => !rodandoAntes.has(id) && conv(id)?.kind === "maestro");
+    for (const id of rodandoAntes.keys()) {
+      if (agora.has(id) || conv(id)?.kind !== "maestro" || comecouMaestro) continue;
+      api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {
+        const humano = b.counts?.needs_human ?? 0;
+        notify("Maestro terminou",
+               `${conv(id)?.title ?? "Maestro"}: ${b.done}/${b.total} tarefas concluídas`
+               + (humano ? ` · ${humano} precisa(m) de você` : ""), true, abrir(id));
+      }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity]);
+
   // Abrir outra conversa volta a colar no fim.
   useEffect(() => {
     colar();
@@ -485,7 +549,9 @@ export default function App() {
       if (!live) return;
       if (live.run) return void setTimeout(tick, 5000);
       setUnread((u) => new Set(u).add(id));
-      notify("Forja terminou", conversationsRef.current.find((c) => c.id === id)?.title ?? "Conversa em segundo plano", true);
+      // Maestro tem aviso próprio (vigia da atividade, com o resumo das tarefas)
+      if (conversationsRef.current.find((c) => c.id === id)?.kind !== "maestro")
+        notify("Forja terminou", conversationsRef.current.find((c) => c.id === id)?.title ?? "Conversa em segundo plano", true);
       refreshConversations();
     };
     setTimeout(tick, 4000);
@@ -534,6 +600,7 @@ export default function App() {
     setDraft(null);
     setStatus(null);
     setApprovals({});
+    setPausado(false);
     setSubSteps({});
     setLiveOutput({});
     setLiveTasks(null);
@@ -563,7 +630,8 @@ export default function App() {
         loadCheckpoints(convId);
         loadChangesCount(convId);
         setChangesKey((k) => k + 1);
-        notify("Forja terminou", conversationsRef.current.find((c) => c.id === convId)?.title ?? "Resposta pronta");
+        if (conversationsRef.current.find((c) => c.id === convId)?.kind !== "maestro")
+          notify("Forja terminou", conversationsRef.current.find((c) => c.id === convId)?.title ?? "Resposta pronta");
       }
     }
   }
@@ -598,6 +666,7 @@ export default function App() {
     const run = live.run;
     if (run) {
       runId.current = run.run_id;
+      setPausado(!!run.paused);
       // Reconstrói o cronômetro da geração em curso. Ele nasce no `assistant_start`, que já passou
       // para quem está reabrindo, e sem isto a linha de t/s voltava zerada e parada enquanto a
       // resposta continuava chegando. O servidor manda segundos decorridos, não instantes.
@@ -693,8 +762,10 @@ export default function App() {
       });
       if (ev.type === "tool_output")  // saída ao vivo de comando do Worker, no bloco dele
         setLiveOutput((o) => ({ ...o, [ev.call_id]: ((o[ev.call_id] ?? "") + ev.text).slice(-20_000) }));
-      if (ev.type === "approval_request")
+      if (ev.type === "approval_request") {
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, tool: ev.call.name } }));
+        notify("Worker pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`);
+      }
       if (ev.type === "tool_call" && typeof ev.call?.name === "string" && ev.call.name.startsWith("browser_")) {
         setBrowserOpen(true);
         setRight({ tab: "browser", collapsed: false });
@@ -727,12 +798,21 @@ export default function App() {
       case "board":
         setBoard(ev.board);
         break;
+      case "paused":
+        setPausado(!!ev.paused);
+        break;
+      case "session_rollover":
+        // A Maestro virou a sessão: o trabalho seguiu numa conversa nova, que já está rodando.
+        // Fora do handler: abrir a outra conversa corta este stream, que ainda está sendo lido.
+        refreshConversations();
+        setTimeout(() => openConversation(ev.conversation_id), 0);
+        break;
       case "task_update":
         // Só marca que mudou; o board inteiro vem no evento "board" ou no próximo polling.
         break;
       case "model":
         // "ready"/"unloaded" são o fim da troca: o indicador some em vez de ficar preso na tela.
-        setModelPhase(ev.phase === "ready" || ev.phase === "unloaded" ? null : (ev as ModelPhase));
+        setModelPhase(ev.phase === "ready" || ev.phase === "unloaded" || ev.phase === "cleared" ? null : (ev as ModelPhase));
         break;
       case "title": // o modelo resumiu um título melhor no fim do turno
         refreshConversations();
@@ -1823,6 +1903,9 @@ export default function App() {
             composer={composerBlock}
             painel={painelDe}
             onDecide={decide}
+            pausado={pausado}
+            onPausar={pausar}
+            onPedir={(texto) => send(texto)}
           />
         ) : section === "pesquisa" ? (
           <PesquisaView

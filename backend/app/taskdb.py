@@ -42,10 +42,10 @@ TRANSITIONS: dict[str, set[str]] = {
     "pending": {"queued"},
     "queued": {"loading_model", "implementing", "pending"},
     "loading_model": {"implementing", "failed", "queued"},
-    "implementing": {"testing", "reviewing", "failed", "queued"},
-    "testing": {"reviewing", "failed", "queued"},
+    "implementing": {"testing", "reviewing", "failed", "queued", "completed"},
+    "testing": {"reviewing", "failed", "queued", "completed"},
     "reviewing": {"completed", "failed", "queued"},
-    "failed": {"queued", "pending"},
+    "failed": {"queued", "pending", "completed"},  # a Maestro conferiu e aceita: fecha direto
     "blocked": {"pending", "queued"},
     "needs_human": {"pending", "queued"},
     "completed": {"pending", "queued"},   # reabrir: o Maestro achou um bug depois
@@ -126,9 +126,54 @@ def render_contract(task: db.Task, erro_anterior: str = "", strategy: str = "") 
 
 # ------------------------------------------------------------------ CRUD
 
+def _numero(code: str) -> int:
+    try:
+        return int(str(code).rsplit("-", 1)[1])
+    except (IndexError, ValueError):
+        return 0
+
+
 def _proximo_code(s, conv_id: int) -> str:
-    n = s.query(db.Task).filter(db.Task.conversation_id == conv_id).count()
-    return f"TASK-{n + 1:03d}"
+    """Maior número + 1, não contagem + 1: tarefa trazida de outra conversa chega com o número dela."""
+    return f"TASK-{max((_numero(c) for c in _codes_existentes(s, conv_id)), default=0) + 1:03d}"
+
+
+def assume(de: list[int], para: int) -> list[str]:
+    """Traz para a conversa `para` as funcionalidades ABERTAS das conversas `de`, com tarefas e
+    tentativas. É o que deixa uma sessão nova executar o que a anterior deixou pela metade: as
+    tarefas são por conversa, e o run_task só enxerga as da própria. Código que já existe no
+    destino é renumerado, e o depends_on das tarefas trazidas acompanha. Devolve os títulos."""
+    if not de:
+        return []
+    with db.session() as s:
+        feats = s.query(db.Feature).filter(db.Feature.conversation_id.in_(de),
+                                           db.Feature.status.notin_(("done", "cancelled"))).all()
+        if not feats:
+            return []
+        usados = _codes_existentes(s, para)
+        prox = max((_numero(c) for c in usados), default=0)
+        for f in feats:
+            tarefas = s.query(db.Task).filter(db.Task.feature_id == f.id).order_by(db.Task.id).all()
+            troca: dict[str, str] = {}
+            for t in tarefas:
+                if t.code in usados:
+                    prox += 1
+                    troca[t.code] = f"TASK-{prox:03d}"
+                    t.code = troca[t.code]
+                usados.add(t.code)
+                prox = max(prox, _numero(t.code))
+                t.conversation_id = para
+            for t in tarefas:
+                if troca and t.depends_on:
+                    t.depends_on = [troca.get(d, d) for d in t.depends_on]
+            f.conversation_id = para
+            f.updated_at = _now()
+        s.commit()
+        titulos = [f.title for f in feats]
+    for c in de:
+        _publish(c)
+    _publish(para)
+    return titulos
 
 
 def _get(s, code: str, conv_id: int) -> db.Task:
@@ -152,8 +197,11 @@ def _max_attempts() -> int:
     return getattr(config, "MAESTRO_MAX_ATTEMPTS", 5)
 
 
-def create_feature(conv_id: int, title: str, goal: str, tasks: list) -> dict:
-    """Cria a funcionalidade e as tarefas dela numa transação só. Devolve o resumo com os códigos."""
+def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id: int | None = None) -> dict:
+    """Cria a funcionalidade e as tarefas dela numa transação só. Devolve o resumo com os códigos.
+
+    Com `feature_id`, as tarefas entram numa funcionalidade que já existe e ela volta a 'active':
+    é o caminho das correções que a validação da entrega encontrou."""
     if not isinstance(tasks, list) or not tasks:
         raise ToolError("Informe 'tasks': a lista de tarefas em que a funcionalidade foi decomposta.")
     # Título que falta sai do objetivo, ou da primeira tarefa. Os modelos esquecem o 'title' com
@@ -164,10 +212,17 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list) -> dict:
         raise ToolError(f"No máximo {MAX_TASKS_POR_FEATURE} tarefas por funcionalidade. "
                         "Decomponha em mais de uma funcionalidade.")
     with db.session() as s:
-        feat = db.Feature(conversation_id=conv_id, title=title,
-                          goal=str(goal or "").strip()[:MAX_TEXTO], status="active")
-        s.add(feat)
-        s.flush()
+        if feature_id:
+            feat = s.get(db.Feature, int(feature_id))
+            if not feat or feat.conversation_id != conv_id:
+                raise ToolError(f"Funcionalidade {feature_id} não existe nesta conversa.")
+            feat.status = "active"
+            feat.updated_at = _now()
+        else:
+            feat = db.Feature(conversation_id=conv_id, title=title,
+                              goal=str(goal or "").strip()[:MAX_TEXTO], status="active")
+            s.add(feat)
+            s.flush()
         criadas: list[tuple[db.Task, object]] = []
         # Duas passadas: a primeira cria tudo, a segunda resolve depends_on — assim uma tarefa pode
         # depender de outra declarada depois dela na mesma chamada.
@@ -238,6 +293,10 @@ def set_status(code: str, novo: str, conv_id: int | None = None, reason: str = "
         task.updated_at = _now()
         if novo == "completed":
             _fecha_feature(s, task.feature_id, task.id)
+        elif novo in OPEN and (feat := s.get(db.Feature, task.feature_id)) and feat.status in ("validating", "done"):
+            # Tarefa reaberta (reenviada, redespachada): a entrega mudou e precisa ser validada de novo.
+            feat.status = "active"
+            feat.updated_at = _now()
         s.commit()
         out = _task_dict(task)
     _publish(conv_id)
@@ -245,14 +304,73 @@ def set_status(code: str, novo: str, conv_id: int | None = None, reason: str = "
 
 
 def _fecha_feature(s, feature_id: int, fechando: int) -> None:
-    """Funcionalidade vira 'done' quando nenhuma tarefa dela continua aberta. `fechando` é a tarefa
-    que está virando completed nesta mesma transação — ela ainda aparece como aberta na consulta."""
+    """Sem tarefa aberta, a funcionalidade vai para 'validating', não para 'done': tarefa concluída
+    uma a uma não prova que o conjunto funciona. Quem encerra é a Maestro, depois de validar a
+    entrega inteira (close_feature, pela session_note). `fechando` é a tarefa que está virando
+    completed nesta mesma transação — ela ainda aparece como aberta na consulta."""
     abertas = s.query(db.Task).filter(db.Task.feature_id == feature_id, db.Task.id != fechando,
                                       db.Task.status.in_(OPEN)).count()
     feat = s.get(db.Feature, feature_id)
-    if feat and not abertas:
-        feat.status = "done"
+    if feat and not abertas and feat.status != "done":
+        feat.status = "validating"
         feat.updated_at = _now()
+
+
+def validando(conv_id: int) -> list[dict]:
+    """Funcionalidades desta conversa esperando a validação da entrega."""
+    with db.session() as s:
+        feats = s.query(db.Feature).filter(db.Feature.conversation_id == conv_id,
+                                           db.Feature.status == "validating").order_by(db.Feature.id).all()
+        return [{"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id)} for f in feats]
+
+
+def pedido_de_validacao(f: dict) -> str:
+    """O que a Maestro precisa fazer antes de encerrar uma funcionalidade."""
+    cmds = "; ".join(f"`{c}`" for c in f["verify"]) or "a suíte de testes do projeto"
+    return (f"Todas as tarefas de '{f['title']}' (feature_id={f['id']}) concluíram. VALIDE A ENTREGA "
+            f"inteira antes de encerrar: rode {cmds} de novo, juntos, mais build/lint do projeto se houver; "
+            + ("browser_validate se tem tela; " if config.MAESTRO_BROWSER else "") + "confira o objetivo"
+            + (f" ({f['goal'][:300]})" if f["goal"] else "") + ". Passou: session_note encerra. "
+            f"Falhou: plan_feature(feature_id={f['id']}, tasks=[correções]).")
+
+
+# O que conta como validação feita pela própria Maestro. Os comandos do Worker não entram: eles
+# ficam na tentativa, não nesta conversa, e são justamente o que a validação confere.
+VALIDACOES = ("run_command", "browser_validate", "browser_console", "browser_read", "browser_screenshot")
+
+
+def encerra_validadas(conv_id: int) -> list[str]:
+    """Encerra as funcionalidades em 'validating' — só depois de a Maestro ter validado de fato:
+    rodado um comando ou conferido no navegador DEPOIS que a funcionalidade entrou em validação.
+    Recusa (ToolError) se alguma não foi validada. Devolve os títulos encerrados."""
+    with db.session() as s:
+        feats = s.query(db.Feature).filter(db.Feature.conversation_id == conv_id,
+                                           db.Feature.status == "validating").all()
+        if not feats:
+            return []
+        feitas = [m.created_at for m in s.query(db.Message.created_at).filter(
+            db.Message.conversation_id == conv_id, db.Message.role == "tool",
+            db.Message.name.in_(VALIDACOES))]
+        for f in feats:
+            if not any(t >= f.updated_at for t in feitas):
+                raise ToolError("A entrega ainda não foi validada. " + pedido_de_validacao(
+                    {"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id)}))
+        for f in feats:
+            f.status = "done"
+            f.updated_at = _now()
+        s.commit()
+        titulos = [f.title for f in feats]
+    _publish(conv_id)
+    return titulos
+
+
+def _verifies(s, feature_id: int) -> list[str]:
+    cmds: list[str] = []
+    for (contrato,) in s.query(db.Task.contract).filter(db.Task.feature_id == feature_id):
+        c = (contrato or {}).get("verify_command")
+        if c and c not in cmds:
+            cmds.append(c)
+    return cmds
 
 
 def unmet_deps(task: db.Task, conv_id: int | None = None) -> list[str]:
@@ -415,8 +533,14 @@ def detail(conv_id: int, code: str) -> dict:
 
 
 def _publish(conv_id: int) -> None:
-    """Avisa a UI que a árvore mudou. Falha em silêncio de propósito: publicar é o caminho rápido,
-    o /board por polling é o que sempre funciona."""
+    """Avisa a UI que a árvore mudou e atualiza o espelho em .forja/ (progress.md, tasks.json). Falha
+    em silêncio de propósito: publicar é o caminho rápido, o /board por polling é o que sempre
+    funciona, e o espelho é reescrito inteiro na próxima mudança."""
+    try:
+        from . import projstate  # import tardio: projstate importa este módulo
+        projstate.sync(conv_id)
+    except Exception:
+        pass
     sink = SINK.get()
     if sink:
         try:
@@ -451,8 +575,18 @@ _CONTRACT_SCHEMA = {
 
 
 def _plan_feature(_root: Path, args: dict) -> str:
-    out = create_feature(_conv(), args.get("title"), args.get("goal"), args.get("tasks") or [])
-    linhas = [f"Funcionalidade '{out['title']}' criada com {len(out['tasks'])} tarefas:"]
+    from . import projstate, workspace  # import tardio: projstate importa este módulo
+    root = workspace.root()
+    # Portão do Project State: sem ele, a conversa seguinte começa do zero. Instrução no prompt não
+    # bastou (um modelo de 9B leu os arquivos vazios e planejou assim mesmo); aqui não tem como pular.
+    if (root / projstate.PASTA).is_dir() and projstate.vazio(projstate.forja_md(root)):
+        raise ToolError(f"Antes de planejar, escreva {config.PROJECT_MEMORY_FILE} (o que é o projeto, stack, "
+                        f"como rodar e testar, convenções) e, se couber, {projstate.PASTA}/architecture.md e "
+                        "knowledge/. Fatos curtos: é o que a próxima conversa lê primeiro.")
+    out = create_feature(_conv(), args.get("title"), args.get("goal"), args.get("tasks") or [],
+                         args.get("feature_id") or None)
+    linhas = [f"Funcionalidade '{out['title']}' (feature_id={out['feature_id']}): "
+              f"{len(out['tasks'])} tarefas {'novas' if args.get('feature_id') else 'criadas'}:"]
     for t in out["tasks"]:
         dep = f" (depende de {', '.join(t['depends_on'])})" if t["depends_on"] else ""
         linhas.append(f"  {t['code']} {t['title']}{dep}")
@@ -466,6 +600,8 @@ PLAN_FEATURE = Tool(
     "Implementation Contract completo: o Worker que vai executá-la NÃO vê esta conversa, só o "
     "contrato. Decomponha em tarefas pequenas, cada uma verificável por um comando.",
     {"type": "object", "properties": {
+        "feature_id": {"type": "integer", "description": "Acrescenta as tarefas a esta funcionalidade "
+                                                         "(correções da validação) em vez de criar outra"},
         "title": {"type": "string", "description": "Nome da funcionalidade"},
         "goal": {"type": "string", "description": "O objetivo geral dela"},
         "tasks": {"type": "array", "items": {"type": "object", "properties": {
@@ -552,7 +688,10 @@ def _update_task(_root: Path, args: dict) -> str:
     if not mudou:
         raise ToolError("Nada para mudar: informe status, contract, model_slot, priority ou max_attempts.")
     _publish(conv)
-    return f"{code} atualizada ({', '.join(mudou)}). Status atual: {estado}."
+    saida = f"{code} atualizada ({', '.join(mudou)}). Status atual: {estado}."
+    if estado == "completed":
+        saida += "".join("\n" + pedido_de_validacao(f) for f in validando(conv))
+    return saida
 
 
 UPDATE_TASK = Tool(

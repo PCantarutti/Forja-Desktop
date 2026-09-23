@@ -185,6 +185,17 @@ def resolve_path(root: Path, path: str | None) -> Path:
     return target
 
 
+# Espelhos que o Forja gera a partir do banco (projstate.sync): escrever neles é trabalho perdido —
+# a próxima mudança de tarefa reescreve tudo — e o modelo acharia que mudou o estado das tarefas.
+GERADOS = (".forja/progress.md", ".forja/tasks.json")
+
+
+def _nao_gerado(root: Path, p: Path) -> None:
+    if _rel(root, p) in GERADOS:
+        raise ToolError(f"{_rel(root, p)} é gerado pelo Forja a partir das tarefas; não edite. "
+                        "Mude o estado pelas ferramentas de tarefa (update_task, plan_feature).")
+
+
 def _rel(root: Path, p: Path) -> str:
     return p.relative_to(root.resolve()).as_posix() or "."
 
@@ -307,6 +318,7 @@ def _check_size(content: str) -> None:
 
 def write_file(root: Path, args: dict) -> str:
     p = resolve_path(root, args.get("path"))
+    _nao_gerado(root, p)
     content = args["content"]
     _check_size(content)
     if p.is_dir():
@@ -369,6 +381,7 @@ def _apply_edit(root: Path, args: dict) -> tuple[Path, str, str, int]:
 
 
 def edit_file(root: Path, args: dict) -> str:
+    _nao_gerado(root, resolve_path(root, args.get("path")))
     p, _, new, trocas = _apply_edit(root, args)
     _check_size(new)
     p.write_text(new, encoding="utf-8", newline="")

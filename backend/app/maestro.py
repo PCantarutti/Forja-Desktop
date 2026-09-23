@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import time
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import config, gitops, modelctl, subagents, taskdb, workspace
+from . import checkpoints, config, db, gitops, modelctl, subagents, taskdb, workspace
 from .tools import ToolError
 
 MAX_ERROS = 5          # erros de passo que entram no resultado
@@ -189,6 +190,15 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
                                                 "model": spec["model"], "agent": task.agent},
                                     strategy, conv_id)
     attempt_n = task.attempt_count + 1
+    if hasattr(run_obj, "tentativas"):  # escrita do Worker desta chamada = checkpoint desta tentativa
+        run_obj.tentativas[call["id"]] = attempt_id
+    # Arquivo que um Worker deixou num estado e que mudou desde então: foi mexido por fora. A Maestro
+    # precisa saber antes de confiar no que a tarefa anterior entregou.
+    externas = alteracoes_externas(conv_id, root)
+    if externas:
+        yield {"type": "event", "message": {"id": None, "role": "event", "content":
+               "Arquivos alterados fora do Forja desde a última tarefa: " + ", ".join(externas[:10]),
+               "meta": {"kind": "warning"}}}
     # Toda tentativa recomeça o ciclo em 'queued'. Sem isto, despachar de novo uma tarefa parada em
     # 'reviewing' (o Maestro não gostou do resultado) batia numa transição ilegal e derrubava o turno.
     if task.status != "queued":
@@ -271,6 +281,9 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     taskdb.set_status(task.code, "testing", conv_id)
     task = taskdb.get(task.code, conv_id)  # recarrega: o status mudou desde o get inicial
     resultado = collect_result(task, attempt_n, sub_out, root)
+    if externas:
+        resultado["external_changes"] = externas
+    registra_estado(attempt_id, root)
 
     # Etapa de revisão explícita: só quando NADA provou o resultado. Com o comando de verificação
     # passando, o parecer de um modelo menor que o autor rende falso-positivo, não bug — a mesma
@@ -303,6 +316,49 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     meta["task_result"] = resultado
     meta["sub"] = (sub_out.get("meta") or {}).get("sub")
     out.update(status="ok", text=_para_o_maestro(resultado), meta=meta)
+
+
+def _sha(p: Path) -> str | None:
+    try:
+        return hashlib.sha1(p.read_bytes()).hexdigest()
+    except OSError:
+        return None  # apagado (ou nunca existiu)
+
+
+def registra_estado(attempt_id: int, root: Path) -> None:
+    """Como a tentativa deixou os arquivos que ela escreveu (base da detecção de mudança externa)."""
+    estado = {}
+    for p in checkpoints.arquivos_da_tentativa(attempt_id):
+        try:
+            estado[p.relative_to(root).as_posix()] = _sha(p)
+        except ValueError:
+            continue
+    if estado:
+        with db.session() as s:
+            if att := s.get(db.Attempt, attempt_id):
+                att.estado = estado
+                s.commit()
+
+
+def alteracoes_externas(conv_id: int, root: Path) -> list[str]:
+    """Arquivos escritos por Workers desta conversa que mudaram desde então, fora de uma tarefa.
+
+    Aceita a mudança depois de reportar (grava o estado atual), para avisar uma vez só."""
+    with db.session() as s:
+        atts = (s.query(db.Attempt).join(db.Task, db.Task.id == db.Attempt.task_id)
+                .filter(db.Task.conversation_id == conv_id, db.Attempt.estado.isnot(None))
+                .order_by(db.Attempt.id).all())
+        conhecido: dict[str, tuple[str | None, db.Attempt]] = {}
+        for att in atts:
+            for rel, h in (att.estado or {}).items():
+                conhecido[rel] = (h, att)  # a tentativa mais nova vence
+        mudou = [rel for rel, (h, _) in conhecido.items() if _sha(root / rel) != h]
+        for rel in mudou:
+            att = conhecido[rel][1]
+            att.estado = {**att.estado, rel: _sha(root / rel)}
+        if mudou:
+            s.commit()
+    return mudou
 
 
 def _para_o_maestro(r: dict) -> str:

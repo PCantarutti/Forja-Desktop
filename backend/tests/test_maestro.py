@@ -595,7 +595,7 @@ def test_browser_validate_e_do_maestro_nao_do_worker():
 
 def test_prompt_manda_validar_tela_no_navegador():
     p = agent.system_prompt("native", {"vision"}, permission="auto", maestro_mode=True)
-    assert "browser_validate" in p and "tarefa de correção" in p
+    assert "browser_validate" in p and "plan_feature(feature_id=..., tasks=[correções])" in p
 
 
 def test_resultado_sem_verificacao_ganha_revisao(conv, monkeypatch):
@@ -984,3 +984,162 @@ def test_delegate_task_comum_nao_grava_conversa(conv, monkeypatch):
 
     asyncio.run(cena())
     assert not any(e["type"].startswith("sub_") and e["type"] != "sub_status" for e in eventos)
+
+
+# ------------------------------------------------------------------ item 3: configurações e intervenção
+
+def test_modelo_padrao_da_maestro_valida_o_provedor():
+    out = settings.update({"maestro_model": {"provider": "local", "model": "gemma-4-12b-it-Q4_K_M"}})
+    assert out["maestro_model"] == {"provider": "local", "model": "gemma-4-12b-it-Q4_K_M"}
+    assert config.MAESTRO_MODEL["model"] == "gemma-4-12b-it-Q4_K_M"
+    with pytest.raises(settings.SettingsError, match="não existe"):
+        settings.update({"maestro_model": {"provider": "inexistente", "model": "x"}})
+
+
+def test_validacao_no_navegador_desligada_tira_ferramentas_e_regra(monkeypatch):
+    ligado = agent.system_prompt("native", {"vision"}, permission="auto", maestro_mode=True)
+    assert "browser_validate" in ligado
+    monkeypatch.setattr(config, "MAESTRO_BROWSER", False)
+    nomes = {t.name for t in agent.available_tools({"vision"}, "auto", maestro_mode=True)}
+    assert not any(n.startswith("browser_") for n in nomes)
+    desligado = agent.system_prompt("native", {"vision"}, permission="auto", maestro_mode=True)
+    assert "browser_validate" not in desligado and "rode a suíte/build/lint, confira o objetivo" in desligado
+    # o agente comum não é afetado
+    assert any(t.name.startswith("browser_") for t in agent.available_tools({"vision"}, "auto"))
+
+
+def test_pausar_segura_o_proximo_passo_e_continuar_solta(monkeypatch):
+    chamadas = []
+
+    async def fake_stream(*a, **k):
+        chamadas.append(1)
+        yield "content", "ok"
+        yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
+
+    async def fake_limit(*a):
+        return 131072
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", fake_limit)
+    monkeypatch.setitem(config.PROVIDERS, "local", {"id": "local", "type": "llamacpp", "url": "", "api_key": ""})
+    from app import modelctl
+    monkeypatch.setattr(modelctl, "carregado", lambda spec: True)
+
+    async def cena():
+        with db.session() as s:
+            c = db.Conversation(kind="maestro")
+            s.add(c)
+            s.commit()
+            cid = c.id
+        run = agent.Run(cid)
+        run.pausar(True)
+        req = agent.RunRequest(content="x", provider="local", model="m", mode="maestro", permission="bypass")
+        eventos = []
+
+        async def consome():
+            async for ev in agent.run_agent(cid, req, run):
+                eventos.append(ev)
+
+        tarefa = asyncio.ensure_future(consome())
+        await asyncio.sleep(0.3)
+        parado = (len(chamadas), run.snapshot()["paused"])
+        run.pausar(False)
+        await asyncio.wait_for(tarefa, 5)
+        return parado, eventos
+
+    (chamadas_pausado, pausado), eventos = asyncio.run(cena())
+    assert chamadas_pausado == 0 and pausado        # pausado: o modelo nem foi chamado
+    assert chamadas and eventos[-1]["type"] == "done"
+    assert any(e.get("text", "").startswith("Pausado") for e in eventos if e["type"] == "status")
+
+
+def test_parar_solta_uma_execucao_pausada(monkeypatch):
+    async def cena():
+        run = agent.Run(1)
+        run.pausar(True)
+        espera = asyncio.ensure_future(run.espera_retomar())
+        await asyncio.sleep(0.05)
+        run.stop()
+        await asyncio.wait_for(espera, 2)
+        return run.paused
+
+    assert asyncio.run(cena()) is False
+
+
+
+# ------------------------------------------------------------------ item 4: recuperação e Git por tarefa
+
+def test_worker_recarrega_o_modelo_que_caiu_e_repete_o_passo(conv, monkeypatch):
+    """O llama-server morreu no meio da tarefa: recarrega e continua, sem perder a tentativa."""
+    f = _local(monkeypatch, alias="W")
+    chamadas = {"n": 0}
+
+    async def stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        chamadas["n"] += 1
+        if chamadas["n"] == 1:
+            f.alias = ""  # o processo morreu
+            raise llm.LLMError("Não consegui conectar ao servidor do modelo.")
+        yield "content", "Pronto."
+        yield "done", {"tool_calls": [], "completion_tokens": 3}
+
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    _plano(conv)
+    out, eventos = _despacha(conv, "TASK-001")
+    assert out["status"] == "ok" and f.chamadas == ["load:W"] and chamadas["n"] == 2
+    assert [e["phase"] for e in eventos if e["type"] == "model"] == ["loading", "ready"]
+
+
+def test_desfazer_uma_tentativa_nao_mexe_no_resto_do_turno(conv, tmp_path):
+    from app import checkpoints
+    alvo = tmp_path / "a.txt"
+    alvo.write_text("original", "utf-8")
+    checkpoints.record(conv, 1, alvo, attempt_id=101)
+    alvo.write_text("tentativa 1", "utf-8")
+    checkpoints.record(conv, 1, alvo, attempt_id=102)
+    alvo.write_text("tentativa 2", "utf-8")
+    assert checkpoints.restore_attempt(102) and alvo.read_text("utf-8") == "tentativa 1"
+    # o desfazer do turno continua voltando ao estado de antes do turno
+    alvo.write_text("de novo", "utf-8")
+    checkpoints.restore_from(conv, 1)
+    assert alvo.read_text("utf-8") == "original"
+
+
+def test_mudanca_externa_e_avisada_uma_vez(conv, tmp_path):
+    from app import checkpoints
+    _plano(conv)
+    aid = taskdb.new_attempt("TASK-001", {}, "", conv)
+    arq = tmp_path / "calc.py"
+    arq.write_text("x = 1", "utf-8")
+    checkpoints.record(conv, 1, arq, attempt_id=aid)
+    arq.write_text("x = 2", "utf-8")
+    maestro.registra_estado(aid, tmp_path)
+    assert maestro.alteracoes_externas(conv, tmp_path) == []
+    arq.write_text("x = 3  # editado à mão", "utf-8")
+    assert maestro.alteracoes_externas(conv, tmp_path) == ["calc.py"]
+    assert maestro.alteracoes_externas(conv, tmp_path) == []  # aceita depois de avisar
+
+
+def test_rota_desfaz_a_tentativa_e_reabre_a_tarefa(conv, cliente, tmp_path):
+    from app import checkpoints
+    _plano(conv)
+    aid = taskdb.new_attempt("TASK-001", {}, "", conv)
+    for st in ("queued", "implementing", "testing", "reviewing", "completed"):
+        taskdb.set_status("TASK-001", st, conv)
+    arq = tmp_path / "novo.py"
+    checkpoints.record(conv, 1, arq, attempt_id=aid)  # não existia antes
+    arq.write_text("print('oi')", "utf-8")
+    r = cliente.post(f"/api/maestro/{conv}/task/TASK-001/attempt/1/rollback")
+    assert r.status_code == 200 and not arq.exists()
+    assert r.json()["task"]["status"] == "pending"
+    assert cliente.post(f"/api/maestro/{conv}/task/TASK-001/attempt/1/rollback").status_code == 400
+
+
+def test_atividade_conta_as_aprovacoes_esperando(cliente):
+    run = agent.Run(987654)
+    run.approvals["c1"] = {"call": {"id": "c1"}, "preview": None, "parent": "rt1"}
+    agent.RUNS[run.id] = run
+    try:
+        conv = next(c for c in cliente.get("/api/activity").json()["conversations"] if c["id"] == 987654)
+        assert conv["waiting"] == 1 and conv["running"]
+    finally:
+        agent.RUNS.pop(run.id)

@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld("forja", {
   },
   /** Ícone do programa padrão do sistema para uma extensão (".docx"), como data URL. */
   icon: (ext) => ipcRenderer.invoke("forja:icon", ext),
+  /** Traz a janela para a frente (clique numa notificação do sistema), mesmo minimizada na bandeja. */
+  focus: () => ipcRenderer.send("forja:focus"),
   browser: {
     // Onde o painel Navegador está (px de CSS) e de qual conversa; bounds null = não mostrar view nenhuma.
     view: (shown) => ipcRenderer.send("forja:browser:view", shown),

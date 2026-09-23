@@ -107,7 +107,9 @@ def get_config():
             "default_workspace": workspace.label(None), "drives": [d["name"] for d in workspace.roots()],
             "subagents": {k: v for k, v in subagents.configured().items()},
             # o seletor de modelo barra o GGUF local com janela menor que isto (Maestro / Workers)
-            "min_ctx_maestro": config.MAESTRO_MIN_CTX, "min_ctx_worker": config.WORKER_MIN_CTX}
+            "min_ctx_maestro": config.MAESTRO_MIN_CTX, "min_ctx_worker": config.WORKER_MIN_CTX,
+            # modelo padrão da Maestro: o seletor da seção Maestro lê e grava este, não o do chat
+            "maestro_model": config.MAESTRO_MODEL}
 
 
 # ------------------------------------------------------------------ pastas de trabalho
@@ -370,7 +372,12 @@ async def get_activity():
 
     for r in RUNS.values():
         if not r.finished:
-            entrada(r.conv_id)["running"] = True
+            e = entrada(r.conv_id)
+            e["running"] = True
+            # Aprovações e perguntas esperando o usuário, inclusive as do Worker: a interface avisa
+            # (notificação do sistema) mesmo com outra conversa aberta na tela.
+            e["waiting"] = len(r.approvals)
+            e["paused"] = r.paused
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
     vivos = 0
@@ -1654,6 +1661,15 @@ def stop(run_id: str):
     return {"ok": True}
 
 
+@app.post("/api/runs/{run_id}/pause")
+async def pause(run_id: str, body: dict):
+    """Pausa (ou retoma) no fim do passo em curso: o que está rodando termina, o próximo espera."""
+    run = _get_run(run_id)
+    run.pausar(bool(body.get("paused", True)))
+    await run.publish({"type": "paused", "paused": run.paused})
+    return {"ok": True, "paused": run.paused}
+
+
 # ------------------------------------------------------------------ Maestro
 # Execução, cancelamento e aprovação continuam em /conversations/{id}/run e /runs/{id}/*: a Maestro
 # é um Run como qualquer outro. O que existe aqui é a leitura da árvore de tarefas e a intervenção
@@ -1699,6 +1715,39 @@ def maestro_task_patch(conv_id: int, code: str, body: TaskPatch):
                 "task": taskdb.detail(conv_id, code)}
     except ToolError as e:
         raise HTTPException(400, str(e))
+    finally:
+        taskdb.CONV.reset(token)
+
+
+@app.post("/api/maestro/{conv_id}/task/{code}/attempt/{n}/rollback")
+def maestro_attempt_rollback(conv_id: int, code: str, n: int):
+    """Desfaz o que UMA tentativa do Worker escreveu (arquivos voltam ao estado de antes dela)."""
+    if active_run(conv_id):
+        raise HTTPException(409, "Pare a Maestro antes de desfazer uma tentativa")
+    with db.session() as s:
+        task = s.query(db.Task).filter(db.Task.conversation_id == conv_id,
+                                       db.Task.code == code.upper()).first()
+        att = task and s.query(db.Attempt).filter(db.Attempt.task_id == task.id, db.Attempt.n == n).first()
+        if not att:
+            raise HTTPException(404, f"{code} não tem a tentativa {n}")
+        att_id = att.id
+    restaurados = checkpoints.restore_attempt(att_id)
+    if not restaurados:
+        raise HTTPException(400, "Esta tentativa não tem alteração de arquivo guardada para desfazer")
+    with db.session() as s:
+        att = s.get(db.Attempt, att_id)
+        att.estado = None  # os arquivos voltaram: não é mudança externa na próxima tarefa
+        s.commit()
+    # A entrega da tarefa saiu do disco: ela volta a ser trabalho a fazer.
+    token = taskdb.CONV.set(conv_id)
+    try:
+        for novo in ("pending", "queued"):
+            try:
+                taskdb.set_status(code, novo, conv_id)
+                break
+            except ToolError:
+                continue
+        return {"restored": restaurados, "task": taskdb.detail(conv_id, code)}
     finally:
         taskdb.CONV.reset(token)
 

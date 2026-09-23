@@ -172,6 +172,10 @@ export default function MaestroView(props: {
   // Conteúdo das abas do painel direito, montado pelo App: a doca mostra os mesmos painéis.
   painel: (tab: RightTab) => React.ReactNode;
   onDecide: (callId: string, aprovado: boolean) => void;
+  // Intervenção humana (§27): pausar a execução e pedir algo à Maestro (reenviar uma tarefa).
+  pausado: boolean;
+  onPausar: (sim: boolean) => void;
+  onPedir: (texto: string) => void;
 }) {
   const { convId, board, onBoard } = props;
   const { layout, setLayout, salvar } = useLayout(convId);
@@ -305,7 +309,7 @@ export default function MaestroView(props: {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
       <Cabecalho board={board} running={props.running} tarefa={emAndamento} modelPhase={props.modelPhase}
-                 model={props.model} />
+                 model={props.model} pausado={props.pausado} onPausar={props.onPausar} />
 
       <div ref={area} className="flex min-h-0 flex-1 flex-col">
       <div
@@ -373,7 +377,12 @@ export default function MaestroView(props: {
               }}
             />
           ) : (
-            <PainelTarefa tarefa={detalhe} />
+            <PainelTarefa
+              tarefa={detalhe}
+              convId={convId}
+              onAtualizada={setDetalhe}
+              onPedir={props.onPedir}
+            />
           )}
         </div>
       </div>
@@ -396,6 +405,8 @@ function Cabecalho(props: {
   tarefa: MaestroTask | null;
   modelPhase: ModelPhase | null;
   model: string;
+  pausado: boolean;
+  onPausar: (sim: boolean) => void;
 }) {
   const b = props.board;
   const pct = b && b.total ? Math.round((b.done / b.total) * 100) : 0;
@@ -424,9 +435,20 @@ function Cabecalho(props: {
             {props.tarefa.code} · {ESTADO[props.tarefa.status].label}
           </span>
         ) : props.running ? (
-          <span className="text-sky-400">pensando…</span>
+          <span className={props.pausado ? "text-amber-400" : "text-sky-400"}>{props.pausado ? "pausado" : "pensando…"}</span>
         ) : (
           <span className="text-faint">parado</span>
+        )}
+        {props.running && (
+          <button
+            onClick={() => props.onPausar(!props.pausado)}
+            title={props.pausado ? "Retomar de onde parou" : "Termina o passo em curso (inclusive o do Worker) e espera"}
+            className={`rounded-md border px-2 py-0.5 ${props.pausado
+              ? "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+              : "border-line text-muted hover:bg-raised hover:text-fg"}`}
+          >
+            {props.pausado ? "Continuar" : "Pausar"}
+          </button>
         )}
       </div>
     </div>
@@ -437,7 +459,11 @@ function TrocaDeModelo({ fase }: { fase: ModelPhase }) {
   const texto =
     fase.phase === "unloading"
       ? `Descarregando ${fase.previous || "modelo"}…`
-      : fase.phase === "loading"
+      : fase.phase === "clearing"
+        ? "Liberando a memória…"
+        : fase.phase === "restarting"
+          ? `Reiniciando ${fase.model}…`
+          : fase.phase === "loading"
         ? `Carregando ${fase.model}…`
         : fase.phase === "error"
           ? `Falha ao carregar ${fase.model}`
@@ -471,6 +497,11 @@ function Arvore(props: { board: MaestroBoard | null; selecionada: string | null;
               <div className="flex items-baseline gap-1.5 px-2 py-1">
                 <span className="truncate text-xs font-medium">{f.title}</span>
                 {f.status === "done" && <Check className="size-3 shrink-0 text-emerald-400" />}
+                {f.status === "validating" && (
+                  <span className="shrink-0 animate-pulse text-[10px] text-violet-400" title="Todas as tarefas concluíram; a Maestro está validando a entrega">
+                    validando
+                  </span>
+                )}
               </div>
               {emOrdemDeLeitura(f.tasks).map((t) => {
                 const e = ESTADO[t.status];
@@ -769,7 +800,9 @@ function PainelModelos(props: {
           className="w-full rounded-md border border-line bg-bg px-2 py-1 outline-none disabled:text-faint"
         >
           <option value="persistent">Manter o modelo carregado</option>
-          <option value="unload_after_task">Descarregar e liberar a VRAM</option>
+          <option value="unload_after_task">Descarregar após a tarefa</option>
+          <option value="unload_clear">Descarregar e esperar a memória voltar</option>
+          <option value="restart_after_task">Reiniciar o modelo após a tarefa</option>
         </select>
         <p className="text-faint">
           {m.lifecycle === "persistent"
@@ -799,10 +832,55 @@ function PainelModelos(props: {
   );
 }
 
-function PainelTarefa(props: { tarefa: MaestroTask | null }) {
+const LISTAS_CONTRATO = [
+  ["relevant_files", "Arquivos relevantes"],
+  ["requirements", "Requisitos"],
+  ["constraints", "Restrições"],
+  ["do_not", "Não faça"],
+  ["acceptance_criteria", "Critérios de aceitação"],
+] as const;
+const ASSUMIDA = "Assumida pelo usuário: não despache esta tarefa.";
+
+/** Contrato, tentativas e as ações humanas sobre a tarefa (§27): editar o contrato, trocar o modelo,
+ * mudar o limite de tentativas, reenviar ao Worker, assumir, devolver, cancelar. Tudo passa pela mesma
+ * máquina de estados da Maestro (POST /maestro/{conv}/task/{code}); reenviar é um pedido a ela, porque
+ * é ela quem despacha e confere o resultado. */
+function PainelTarefa(props: {
+  tarefa: MaestroTask | null;
+  convId: number | null;
+  onAtualizada: (t: MaestroTask) => void;
+  onPedir: (texto: string) => void;
+}) {
   const t = props.tarefa;
+  const [editando, setEditando] = useState(false);
+  const [erro, setErro] = useState("");
   if (!t) return <p className="p-3 text-xs text-faint">Clique numa tarefa da árvore para ver o contrato.</p>;
   const c = t.contract || {};
+  const trabalhando = ATIVOS.includes(t.status) && t.status !== "queued";
+
+  async function muda(patch: Record<string, unknown>) {
+    setErro("");
+    try {
+      const r = await api.post<{ task: MaestroTask }>(`/maestro/${props.convId}/task/${t!.code}`, patch);
+      props.onAtualizada(r.task);
+      return true;
+    } catch (e: any) {
+      setErro(e.message);
+      return false;
+    }
+  }
+
+  async function reenviar() {
+    // A Maestro só despacha o que está na fila: tira de falha/bloqueio antes de pedir.
+    if (!["queued", "pending"].includes(t!.status) && !(await muda({ status: "queued" }))) return;
+    const ultima = t!.attempts?.[t!.attempts.length - 1];
+    props.onPedir(`Execute ${t!.code} de novo com run_task (reenviada por mim`
+      + (ultima && ultima.status !== "completed"
+        ? `; leia o erro da tentativa ${ultima.n} e mude a estratégia).`
+        : ")."));
+  }
+
+  const acao = "rounded-md border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-fg disabled:opacity-40";
   return (
     <div className="space-y-3 overflow-y-auto p-3 text-xs">
       <div className="flex flex-wrap items-baseline gap-2">
@@ -810,7 +888,37 @@ function PainelTarefa(props: { tarefa: MaestroTask | null }) {
         <span className="font-medium">{t.title}</span>
         <span className={ESTADO[t.status].cor}>{ESTADO[t.status].label}</span>
         {t.model_slot && <span className="text-faint">· {t.model_slot}</span>}
+        <span className="text-faint">· tentativas {t.attempt_count}/{t.max_attempts}</span>
       </div>
+      <div className="flex flex-wrap gap-1.5">
+        <button className={acao} disabled={trabalhando} onClick={() => setEditando((v) => !v)}>
+          {editando ? "Fechar edição" : "Editar contrato"}
+        </button>
+        <button className={acao} disabled={trabalhando || t.status === "pending"} onClick={reenviar}
+                title="Volta para a fila e pede à Maestro para despachar de novo">
+          Reenviar ao Worker
+        </button>
+        {t.status === "needs_human" || t.status === "blocked" ? (
+          <button className={acao} onClick={() => muda({ status: "pending" })} title="A Maestro volta a poder despachar">
+            {t.blocked_reason === ASSUMIDA ? "Devolver à Maestro" : "Desbloquear"}
+          </button>
+        ) : (
+          t.status !== "completed" && t.status !== "cancelled" && (
+            <button className={acao} disabled={trabalhando} onClick={() => muda({ status: "needs_human", reason: ASSUMIDA })}
+                    title="Você faz esta tarefa; a Maestro não a despacha">
+              Assumir tarefa
+            </button>
+          )
+        )}
+        {t.status !== "cancelled" && t.status !== "completed" && (
+          <button className={`${acao} hover:text-red-300`} disabled={trabalhando}
+                  onClick={() => confirm(`Cancelar ${t.code}?`) && muda({ status: "cancelled" })}>
+            Cancelar tarefa
+          </button>
+        )}
+      </div>
+      {erro && <p className="text-red-400">{erro}</p>}
+      {editando && <EditorContrato t={t} onSalvar={async (patch) => (await muda(patch)) && setEditando(false)} />}
       {t.blocked_reason && <p className="rounded-md bg-amber-500/10 p-2 text-amber-300">{t.blocked_reason}</p>}
       <Campo titulo="Objetivo" texto={c.goal} />
       <Campo titulo="Contexto" texto={c.context} />
@@ -824,7 +932,18 @@ function PainelTarefa(props: { tarefa: MaestroTask | null }) {
         <div>
           <div className="mb-1 text-faint">Tentativas</div>
           {t.attempts.map((a) => (
-            <Tentativa key={a.n} a={a} />
+            <Tentativa key={a.n} a={a} onDesfazer={async () => {
+              if (!confirm(`Desfazer a tentativa #${a.n} de ${t.code}? Os arquivos que ela escreveu voltam ao estado de antes dela `
+                + "(mudança feita depois nesses mesmos arquivos também sai). A tarefa volta para a fila.")) return;
+              setErro("");
+              try {
+                const r = await api.post<{ task: MaestroTask; restored: string[] }>(
+                  `/maestro/${props.convId}/task/${t.code}/attempt/${a.n}/rollback`, {});
+                props.onAtualizada(r.task);
+              } catch (e: any) {
+                setErro(e.message);
+              }
+            }} />
           ))}
         </div>
       )}
@@ -832,7 +951,72 @@ function PainelTarefa(props: { tarefa: MaestroTask | null }) {
   );
 }
 
-function Tentativa({ a }: { a: TaskAttempt }) {
+function EditorContrato(props: { t: MaestroTask; onSalvar: (patch: Record<string, unknown>) => void }) {
+  const c = props.t.contract || {};
+  const [goal, setGoal] = useState(c.goal ?? "");
+  const [context, setContext] = useState(c.context ?? "");
+  const [verify, setVerify] = useState(c.verify_command ?? "");
+  const [listas, setListas] = useState<Record<string, string>>(
+    Object.fromEntries(LISTAS_CONTRATO.map(([k]) => [k, (c[k] ?? []).join("\n")])));
+  const [slot, setSlot] = useState(props.t.model_slot ?? "");
+  const [max, setMax] = useState(props.t.max_attempts);
+  const campo = "w-full rounded-md border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+  const salvar = () =>
+    props.onSalvar({
+      contract: {
+        ...c, goal, context, verify_command: verify,
+        ...Object.fromEntries(LISTAS_CONTRATO.map(([k]) => [k, listas[k].split("\n").map((x) => x.trim()).filter(Boolean)])),
+      },
+      model_slot: slot,
+      max_attempts: max,
+    });
+  return (
+    <div className="space-y-2 rounded-lg border border-line bg-surface p-2">
+      <label className="block">
+        <span className="text-faint">Objetivo</span>
+        <textarea rows={2} className={campo} value={goal} onChange={(e) => setGoal(e.target.value)} />
+      </label>
+      <label className="block">
+        <span className="text-faint">Contexto</span>
+        <textarea rows={2} className={campo} value={context} onChange={(e) => setContext(e.target.value)} />
+      </label>
+      {LISTAS_CONTRATO.map(([k, rotulo]) => (
+        <label key={k} className="block">
+          <span className="text-faint">{rotulo} (um por linha)</span>
+          <textarea rows={2} className={`${campo} ${k === "relevant_files" ? "font-mono" : ""}`} value={listas[k]}
+                    onChange={(e) => setListas((l) => ({ ...l, [k]: e.target.value }))} />
+        </label>
+      ))}
+      <label className="block">
+        <span className="text-faint">Comando de verificação</span>
+        <input className={`${campo} font-mono`} value={verify} onChange={(e) => setVerify(e.target.value)} />
+      </label>
+      <div className="flex flex-wrap items-end gap-3">
+        <label>
+          <span className="block text-faint">Modelo do Worker</span>
+          <select className={campo} value={slot} onChange={(e) => setSlot(e.target.value)}>
+            <option value="">automático (capaz)</option>
+            <option value="rapido">rápido</option>
+            <option value="capaz">capaz</option>
+            <option value="nuvem">nuvem</option>
+          </select>
+        </label>
+        <label>
+          <span className="block text-faint">Máx. de tentativas</span>
+          <input type="number" min={1} max={10} className={`${campo} w-20`} value={max}
+                 onChange={(e) => setMax(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} />
+        </label>
+        <button onClick={salvar}
+                className="ml-auto rounded-full bg-fg px-3 py-1 text-xs font-medium text-black hover:bg-white disabled:opacity-40"
+                disabled={!goal.trim()}>
+          Salvar contrato
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Tentativa({ a, onDesfazer }: { a: TaskAttempt; onDesfazer: () => void }) {
   const [aberta, setAberta] = useState(false);
   const r = a.result;
   return (
@@ -876,6 +1060,12 @@ function Tentativa({ a }: { a: TaskAttempt }) {
             </p>
           ))}
           {r?.summary && <p className="whitespace-pre-wrap text-muted">{r.summary}</p>}
+          {!!r?.changes?.length && a.status !== "running" && (
+            <button onClick={onDesfazer}
+                    className="mt-1 rounded-md border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-red-300">
+              Desfazer esta tentativa
+            </button>
+          )}
         </div>
       )}
     </div>
