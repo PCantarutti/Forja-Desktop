@@ -7,6 +7,7 @@ bash no Linux/macOS) — ver native.py. Como no Claude Desktop, a proteção é 
 from __future__ import annotations
 
 import contextvars
+import re
 import subprocess
 import tempfile
 import threading
@@ -81,6 +82,10 @@ def run_command(root: Path, args: dict) -> str:
         raise ToolError("command vazio.")
     if args.get("background"):
         return background(root, args)
+    if parece_servidor(command):
+        # Esperaria o timeout inteiro e voltaria como erro (no StockFlow, 180 s por tentativa).
+        raise ToolError("Esse comando sobe um servidor que não termina. Use serve_start (ele reaproveita "
+                        "um servidor igual que já esteja rodando) e serve_status para ver o que está de pé.")
     cwd = resolve_path(root, args.get("cwd"))
     timeout = max(1, min(int(args.get("timeout") or 60), config.SHELL_TIMEOUT_MAX))
     code, out, timed_out = _execute(command, cwd, timeout, OUTPUT_SINK.get())
@@ -142,12 +147,42 @@ def _log(name: str, tail: int) -> str:
     return "\n".join(lines[-max(1, min(int(tail or 40), 500)):])
 
 
+# Comando que sobe servidor de desenvolvimento e não termina. Rodado por run_command (ou como comando
+# de verificação de tarefa) ele só acaba no timeout, e a tarefa vira falha sem ter falhado.
+SERVIDOR_DEV = re.compile(
+    r"(?:^|[;&|]\s*)(?:npm\s+(?:run\s+)?(?:dev|start|serve|preview)|pnpm\s+(?:run\s+)?(?:dev|start)|"
+    r"yarn\s+(?:run\s+)?(?:dev|start)|npx\s+(?:vite|next\s+dev|serve)\b(?!\s+build)|vite(?:\s+(?!build)|\s*$)|"
+    r"next\s+dev|python\d?\s+-m\s+http\.server|flask\s+run|uvicorn\s|php\s+-S)", re.I)
+URL_NO_LOG = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+[^\s]*")
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def parece_servidor(command: str) -> bool:
+    return bool(SERVIDOR_DEV.search(command or ""))
+
+
+def url_do_log(name: str) -> str:
+    """URL que o servidor anunciou ("Local: http://localhost:5174/"). '' se ainda não anunciou."""
+    achadas = URL_NO_LOG.findall(ANSI.sub("", _log(name, 200)))
+    return achadas[-1].rstrip("/") if achadas else ""
+
+
 def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
     name = _safe_name(str(args.get("name") or "server"))
     command = str(args["command"]).strip()
     if not command:
         raise ToolError("command vazio.")
     cwd = resolve_path(root, args.get("cwd"))
+    # O mesmo servidor já está de pé (mesmo comando, mesma pasta): reaproveita. Subir outro só criava
+    # instâncias em portas novas (5173, 5174, 5175...) e deixava o navegador apontando para a velha.
+    with _servers_lock:
+        vivos = [n for n, s in _SERVERS.items() if s["command"] == command and s["cwd"] == str(cwd)
+                 and s["proc"].poll() is None]
+    if vivos and not args.get("restart") and kind == "Servidor":
+        url = url_do_log(vivos[0])
+        return (f"{kind} '{vivos[0]}' já está rodando esse comando nesta pasta"
+                + (f", em {url}" if url else "") + ". Reaproveitei; nada foi reiniciado. "
+                "Para reiniciar (mudou configuração, travou), chame serve_start com restart=true.")
     info = _start(name, command, cwd)
     time.sleep(2.5)  # dá tempo de o servidor imprimir a porta
     log, alive = _log(name, 30), _info(name)["alive"]
@@ -155,6 +190,9 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
                                       else "JÁ TERMINOU (o log abaixo é o resultado)")
     dica = ("Abra http://localhost:PORTA — vale para o navegador integrado e para o navegador do usuário.\n"
             if kind == "Servidor" else "")
+    url = url_do_log(name) if kind == "Servidor" else ""
+    if url:
+        dica = f"Endereço: {url} — vale para o navegador integrado e para o navegador do usuário.\n"
     return (f"{kind} '{name}' iniciado (pid {info.get('pid')}), {status}.\n{dica}"
             f"Use serve_status(name='{name}') para acompanhar e serve_stop para encerrar.\n"
             f"--- log ---\n{log or '(vazio ainda)'}")

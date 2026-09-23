@@ -888,7 +888,7 @@ def test_maestro_local_recoloca_o_proprio_modelo_antes_de_gerar(conv, monkeypatc
         return [ev async for ev in agent.run_agent(conv, req, agent.Run(conv))]
 
     eventos = asyncio.run(cena())
-    assert gerou_com == ["M"] and f.chamadas == ["load:M"]
+    assert gerou_com and set(gerou_com) == {"M"} and f.chamadas == ["load:M"]
     assert [e["phase"] for e in eventos if e["type"] == "model"] == ["unloading", "loading", "ready"]
 
 

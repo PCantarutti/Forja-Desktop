@@ -17,6 +17,7 @@ import SettingsDialog from "./components/Settings";
 import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
+import Confirma from "./components/Confirma";
 import { LogoMark } from "./components/Logo";
 import {
   EffortMenu,
@@ -336,6 +337,9 @@ export default function App() {
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [editing, setEditing] = useState<{ id: number; text: string } | null>(null);
+  const [rewindAsk, setRewindAsk] = useState<
+    { conv: number; messageId: number; keep: boolean; content: string | null; files: string[] } | null
+  >(null);
   const [uploading, setUploading] = useState(false);
   const runId = useRef<string | null>(null);
   const streamCtl = useRef<AbortController | null>(null);
@@ -469,6 +473,9 @@ export default function App() {
     const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
     for (const c of activity.conversations) {
       const eram = rodandoAntes.get(c.id)?.waiting ?? 0;
+      const alertasAntes = rodandoAntes.get(c.id)?.alertas ?? 0;
+      if ((c.alertas ?? 0) > alertasAntes && c.id !== currentId)
+        notify("Maestro pode estar travada", `${conv(c.id)?.title ?? "Conversa"}: confira e pare se precisar`, true, abrir(c.id));
       if ((c.waiting ?? 0) > eram && c.id !== currentId) {
         const maestro = conv(c.id)?.kind === "maestro";
         notify(maestro ? "Maestro pede aprovação" : "Forja pede aprovação",
@@ -476,10 +483,8 @@ export default function App() {
       }
     }
     const agora = new Set(activity.conversations.filter((c) => c.running).map((c) => c.id));
-    // Maestro que acabou de começar enquanto outra parou = virada de sessão, não fim de trabalho.
-    const comecouMaestro = [...agora].some((id) => !rodandoAntes.has(id) && conv(id)?.kind === "maestro");
     for (const id of rodandoAntes.keys()) {
-      if (agora.has(id) || conv(id)?.kind !== "maestro" || comecouMaestro) continue;
+      if (agora.has(id) || conv(id)?.kind !== "maestro") continue;
       api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {
         const humano = b.counts?.needs_human ?? 0;
         notify("Maestro terminou",
@@ -764,7 +769,7 @@ export default function App() {
         setLiveOutput((o) => ({ ...o, [ev.call_id]: ((o[ev.call_id] ?? "") + ev.text).slice(-20_000) }));
       if (ev.type === "approval_request") {
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, tool: ev.call.name } }));
-        notify("Worker pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`);
+        notify("Worker pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true);
       }
       if (ev.type === "tool_call" && typeof ev.call?.name === "string" && ev.call.name.startsWith("browser_")) {
         setBrowserOpen(true);
@@ -801,11 +806,8 @@ export default function App() {
       case "paused":
         setPausado(!!ev.paused);
         break;
-      case "session_rollover":
-        // A Maestro virou a sessão: o trabalho seguiu numa conversa nova, que já está rodando.
-        // Fora do handler: abrir a outra conversa corta este stream, que ainda está sendo lido.
-        refreshConversations();
-        setTimeout(() => openConversation(ev.conversation_id), 0);
+      case "alerta":  // "a Maestro pode estar travada": o sistema não para sozinho, avisa você
+        notify("Maestro pode estar travada", ev.text, true);
         break;
       case "task_update":
         // Só marca que mudou; o board inteiro vem no evento "board" ou no próximo polling.
@@ -878,15 +880,15 @@ export default function App() {
         break;
       case "approval_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, tool: ev.call.name } }));
-        notify("Forja pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`);
+        notify("Forja pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true);
         break;
       case "plan_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "exit_plan_mode", plan: ev.plan } }));
-        notify("Forja propôs um plano", "Abra a conversa para aprovar ou pedir ajustes.");
+        notify("Forja propôs um plano", "Abra a conversa para aprovar ou pedir ajustes.", true);
         break;
       case "question_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "ask_user", questions: ev.questions } }));
-        notify("Forja tem uma pergunta", String(ev.question ?? ""));
+        notify("Forja tem uma pergunta", String(ev.question ?? ""), true);
         break;
       case "context":
         setCtx(ev);
@@ -948,10 +950,8 @@ export default function App() {
     }
   }
 
-  async function undoTurn(turnId: number, files: string[]) {
+  async function undoTurn(turnId: number) {
     if (currentId === null) return;
-    const lista = files.map((f) => "• " + f).join("\n");
-    if (!confirm(`Desfazer as alterações feitas pelo agente a partir desta mensagem?\n\n${lista}\n\nMudanças feitas por comandos (run_command) não são desfeitas.`)) return;
     try {
       await api.post(`/conversations/${currentId}/checkpoints/restore`, { turn_id: turnId });
     } catch (e: any) {
@@ -985,20 +985,18 @@ export default function App() {
   }
 
   /** Reenvia a partir de uma mensagem: apaga o que vem depois e roda de novo. */
-  async function rewindAndRun(messageId: number, keep: boolean, content: string | null) {
+  async function rewindAndRun(messageId: number, keep: boolean, content: string | null, restore?: boolean) {
     if (currentId === null || running) return;
     setError("");
-    // Turnos que vão sumir e alteraram arquivos: pergunta se desfaz os arquivos também.
+    setRewindAsk(null);
+    // Turnos que vão sumir e alteraram arquivos: pergunta na tela (confirm() não funciona no
+    // Electron, ver Confirma.tsx) se desfaz os arquivos também, e só roda depois da resposta.
     const changed = Object.entries(checkpoints)
       .filter(([turn]) => Number(turn) >= messageId)
       .flatMap(([, files]) => files);
-    const restore_files =
-      changed.length > 0 &&
-      confirm(
-        `O agente alterou ${changed.length} arquivo(s) a partir desta mensagem:\n\n${[...new Set(changed)]
-          .map((f) => "• " + f)
-          .join("\n")}\n\nOK = desfazer essas alterações também · Cancelar = manter os arquivos como estão`,
-      );
+    if (changed.length && restore === undefined)
+      return setRewindAsk({ conv: currentId, messageId, keep, content, files: [...new Set(changed)] });
+    const restore_files = !!restore;
     try {
       const r = await api.post<{ messages: Message[] }>(`/conversations/${currentId}/rewind`, {
         message_id: messageId,
@@ -1449,15 +1447,17 @@ export default function App() {
                       {!so && <div className="flex items-center">
                         <CopyButton text={turn.text} />
                         {turn.userId !== null && checkpoints[String(turn.userId)] && (
-                          <button
-                            title={"Arquivos alterados neste turno:\n" + checkpoints[String(turn.userId)].join("\n")}
-                            disabled={vivo}
-                            onClick={() => undoTurn(turn.userId!, checkpoints[String(turn.userId)])}
+                          <Confirma
+                            titulo={"Arquivos alterados neste turno:\n" + checkpoints[String(turn.userId)].join("\n")}
+                            desabilitado={vivo}
+                            onSim={() => void undoTurn(turn.userId!)}
+                            pergunta="Desfazer daqui em diante? run_command não volta"
                             className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-faint hover:bg-raised hover:text-fg disabled:opacity-30"
-                          >
-                            <Undo className="size-3.5" /> desfazer {checkpoints[String(turn.userId)].length} arquivo
-                            {checkpoints[String(turn.userId)].length > 1 ? "s" : ""}
-                          </button>
+                            rotulo={<>
+                              <Undo className="size-3.5" /> desfazer {checkpoints[String(turn.userId)].length} arquivo
+                              {checkpoints[String(turn.userId)].length > 1 ? "s" : ""}
+                            </>}
+                          />
                         )}
                         {i > lu && lu >= 0 && (
                           <button
@@ -1475,6 +1475,29 @@ export default function App() {
                 </div>
               );
             })}
+            {!so && rewindAsk?.conv === currentId && (
+              <div className="my-4 rounded-2xl border border-line bg-surface p-3 text-sm">
+                <p className="text-amber-300">
+                  O agente alterou {rewindAsk.files.length} arquivo(s) a partir desta mensagem. Desfazer essas alterações também?
+                </p>
+                <ul className="my-2 max-h-40 overflow-y-auto font-mono text-xs text-muted">
+                  {rewindAsk.files.map((f) => <li key={f}>• {f}</li>)}
+                </ul>
+                <div className="flex gap-2">
+                  <button className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                          onClick={() => rewindAndRun(rewindAsk.messageId, rewindAsk.keep, rewindAsk.content, true)}>
+                    Desfazer os arquivos
+                  </button>
+                  <button className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                          onClick={() => rewindAndRun(rewindAsk.messageId, rewindAsk.keep, rewindAsk.content, false)}>
+                    Manter os arquivos
+                  </button>
+                  <button className="px-3 py-1 text-muted hover:text-fg" onClick={() => setRewindAsk(null)}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
             {o.draft && (
               <div className="my-4">
                 <Thinking text={o.draft.thinking} live={!o.draft.content && !o.draft.tool} />
@@ -1831,7 +1854,7 @@ export default function App() {
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
       <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line px-3">
+        <div className="arrasta livre-controles flex h-12 shrink-0 items-center gap-2 px-3">
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
           {sidebarHidden && (
@@ -1876,8 +1899,8 @@ export default function App() {
             collapsed={right.collapsed}
             onSelect={(tab) => setRight((r) => (r.collapsed || r.tab !== tab ? { tab, collapsed: false } : { ...r, collapsed: true }))}
             browserOpen={browserOpen}
-            serversRunning={serversRunning}
-            localRunning={localRunning}
+            serversRunning={Math.max(serversRunning, activity.servers)}
+            localRunning={localRunning || !!activity.local}
             plansPending={plans.filter((p) => p.status === "pendente").length}
             plansTotal={plans.length}
             changesCount={changesCount}
@@ -1903,9 +1926,26 @@ export default function App() {
             composer={composerBlock}
             painel={painelDe}
             onDecide={decide}
+            estadoAbas={{
+              browserOpen, changesCount,
+              // da atividade (a cada 4 s), e não só do painel: fechado, ele não informaria nada
+              serversRunning: Math.max(serversRunning, activity.servers), localRunning: localRunning || !!activity.local,
+              plansPending: plans.filter((p) => p.status === "pendente").length, plansTotal: plans.length,
+            }}
             pausado={pausado}
             onPausar={pausar}
             onPedir={(texto) => send(texto)}
+            onNovaSessao={async () => {
+              // Contexto limpo, com cópia do trabalho aberto; a lista fica nesta conversa para consulta.
+              if (currentId === null) return;
+              try {
+                const r = await api.post<{ id: number }>(`/maestro/${currentId}/nova-sessao`, {});
+                await refreshConversations();
+                openConversation(r.id);
+              } catch (e: any) {
+                setError(e.message);
+              }
+            }}
           />
         ) : section === "pesquisa" ? (
           <PesquisaView

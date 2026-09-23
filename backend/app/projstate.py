@@ -132,7 +132,8 @@ def sync(conv_id: int) -> None:
         root, ids = achado
         if not (root / PASTA).is_dir():
             return  # a pasta nasce no congelar(), no início de uma execução Maestro
-        feats = s.query(db.Feature).filter(db.Feature.conversation_id.in_(ids)).order_by(db.Feature.id).all()
+        feats = s.query(db.Feature).filter(db.Feature.conversation_id.in_(ids),
+                                           db.Feature.copiada_para.is_(None)).order_by(db.Feature.id).all()
         if not feats and not (root / PASTA / "progress.md").exists():
             return  # sem trabalho, sem arquivo: um progresso vazio só convida o modelo a lê-lo
         tarefas: dict[int, list[db.Task]] = {}
@@ -337,22 +338,18 @@ def congelar(root: Path, conv_id: int, ocupada=lambda _c: False) -> list[str]:
     return assumidas
 
 
-# Virada de sessão pedida pela session_note(new_session=true): o handler roda sem acesso ao Run,
-# então deixa o id da conversa nova nesta caixa, que o run_agent criou e confere depois das
-# ferramentas. Caixa mutável e não valor: a ferramenta roda numa cópia do contexto (to_thread).
-VIRADA: contextvars.ContextVar[dict | None] = contextvars.ContextVar("forja_virada", default=None)
-
-
-def nova_sessao(conv_id: int, titulo: str) -> int:
-    """Conversa Maestro nova na mesma pasta, com o trabalho aberto desta. Devolve o id."""
+def nova_sessao(conv_id: int) -> tuple[int, list[str]]:
+    """Botão "Nova sessão": conversa Maestro nova na mesma pasta, com CÓPIA do trabalho aberto desta
+    (a lista fica aqui para consulta). A conversa nova começa só com o Project State. Devolve o id e
+    os títulos copiados."""
     with db.session() as s:
         velha = s.get(db.Conversation, conv_id)
-        nova = db.Conversation(title=titulo[:200], kind="maestro", workspace=velha.workspace)
+        nova = db.Conversation(title=f"{velha.title or 'Maestro'} · nova sessão"[:200], kind="maestro",
+                               workspace=velha.workspace)
         s.add(nova)
         s.commit()
         novo_id = nova.id
-    taskdb.assume([conv_id], novo_id)
-    return novo_id
+    return novo_id, taskdb.assume([conv_id], novo_id)
 
 
 def fora_do_papel(root: Path, call: dict) -> str | None:
@@ -394,13 +391,6 @@ def _session_note(_root: Path, args: dict) -> str:
                  args.get("decisions") or [], args.get("problems") or [], args.get("next_step"))
     if conv is not None:
         sync(conv)
-    caixa = VIRADA.get()
-    if args.get("new_session") and conv is not None and caixa is not None:
-        caixa["para"] = nova_sessao(conv, str(args.get("next_step") or args.get("objective") or "Maestro")[:80])
-        caixa["nota"] = nome
-        caixa["proximo"] = str(args.get("next_step") or "").strip()
-        return (f"Nota gravada em {SESSOES}/{nome}. A execução continua numa conversa nova, só com o "
-                "Project State e esta nota; o trabalho aberto foi junto. Não chame mais nada aqui.")
     return (f"Nota gravada em {SESSOES}/{nome}"
             + "".join(f"; funcionalidade '{t}' encerrada" for t in fechadas)
             + f". Se algo estrutural mudou, atualize {config.PROJECT_MEMORY_FILE}, {PASTA}/architecture.md "
@@ -411,15 +401,13 @@ SESSION_NOTE = register_extra(Tool(
     "session_note",
     "Registra onde esta sessão parou, para a próxima continuar sem reler a conversa: objetivo, "
     "resultado, DECISÕES (vão também para decisions.md) e o porquê, PROBLEMAS em aberto e o próximo "
-    "passo. Encerra a funcionalidade em validação, se você já validou a entrega. new_session=true "
-    "continua o trabalho numa conversa nova, sem este histórico: use quando a conversa ficar longa.",
+    "passo. Encerra a funcionalidade em validação, se você já validou a entrega.",
     {"type": "object", "properties": {
         "objective": {"type": "string"},
         "result": {"type": "string", "description": "O que ficou pronto e como foi validado"},
         "decisions": {"type": "array", "items": {"type": "string"}},
         "problems": {"type": "array", "items": {"type": "string"}},
-        "next_step": {"type": "string"},
-        "new_session": {"type": "boolean"}},
+        "next_step": {"type": "string"}},
      "required": ["objective"]},
     _session_note))
 # Escreve só dentro de .forja/, com caminho montado aqui e nunca vindo do modelo: é escrituração da

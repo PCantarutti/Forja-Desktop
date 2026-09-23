@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { api } from "../api";
+import Confirma from "./Confirma";
 import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench } from "./icons";
@@ -44,6 +45,7 @@ export type AppSettings = {
   model_lifecycle: string;
   maestro_model: { provider: string; model: string };
   maestro_browser: boolean;
+  maestro_visual: { provider: string; model: string };
 };
 
 type Entity = { name: string; entityType?: string; observations?: string[] };
@@ -89,6 +91,7 @@ export default function Settings(props: {
   const [tab, setTab] = useState<Tab>("Geral");
   const [s, setS] = useState<AppSettings | null>(null);
   const [dirty, setDirty] = useState<Partial<AppSettings>>({});
+  const [descartar, setDescartar] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [busy, setBusy] = useState(false);
@@ -111,6 +114,7 @@ export default function Settings(props: {
     try {
       setS(await api.put<AppSettings>("/settings", body));
       setDirty({});
+      setDescartar(false);
       setSaved("Salvo.");
       props.onChanged();
     } catch (e: any) {
@@ -120,7 +124,6 @@ export default function Settings(props: {
   }
 
   async function resetAll() {
-    if (!confirm("Voltar todas as configurações para os valores do .env?")) return;
     setS(await api.post<AppSettings>("/settings/reset", {}));
     setDirty({});
     props.onChanged();
@@ -131,7 +134,11 @@ export default function Settings(props: {
       onClose={props.onClose}
       // Clicar fora com campo mexido apagava a edição sem perguntar — um erro de mira custava
       // um mcp.json ou uma instrução personalizada inteira.
-      canClose={() => !Object.keys(dirty).length || confirm("Descartar as alterações não salvas?")}
+      canClose={() => {
+        if (!Object.keys(dirty).length) return true;
+        setDescartar(true);
+        return false;
+      }}
       label="Configurações"
       className="flex h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-line bg-bg"
     >
@@ -146,15 +153,27 @@ export default function Settings(props: {
               {t}
             </button>
           ))}
-          <button onClick={resetAll} className="mt-auto rounded-lg px-3 py-1.5 text-left text-xs text-muted hover:text-red-300">
-            Restaurar padrões
-          </button>
+          <div className="mt-auto px-3 py-1.5">
+            <Confirma
+              rotulo="Restaurar padrões"
+              pergunta="Voltar tudo ao .env?"
+              className="text-left text-xs text-muted hover:text-red-300"
+              onSim={() => void resetAll()}
+            />
+          </div>
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center gap-3 border-b border-line px-5 py-3">
             <h2 className="flex-1 text-sm text-muted">{tab}</h2>
             {error && <span className="truncate text-sm text-red-300">{error}</span>}
+            {descartar && (
+              <span className="inline-flex items-center gap-1.5 text-xs">
+                <span className="text-amber-300">Descartar as alterações não salvas?</span>
+                <button className={btn} onClick={props.onClose}>Descartar</button>
+                <button className="px-2 text-muted hover:text-fg" onClick={() => setDescartar(false)}>Continuar editando</button>
+              </span>
+            )}
             {saved && <span className="text-sm text-emerald-400">{saved}</span>}
             {!["MCP", "Memória", "Aplicativo", "Pastas", "Runtime", "Hardware"].includes(tab) && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
@@ -1058,6 +1077,25 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
         label="Validar entregas no navegador"
         hint="A Maestro abre a tela no navegador para conferir estrutura e erros de console. Desligado, ela valida só por testes e comandos — e o prompt fica menor."
       />
+      {s.maestro_browser && (
+        <Field label="Revisão visual (modelo com visão)"
+               hint="Julga os prints desktop e mobile de cada entrega com tela (sobreposição, texto cortado, contraste, coerência); o que reprovar vira tarefa. Precisa enxergar imagem — em IA local, um GGUF com projetor mmproj. Vazio: os prints ficam no chat, mas o visual não é julgado.">
+          <div className="flex items-center gap-2 [&>div]:ml-0">
+            <ModelPicker
+              provider={s.maestro_visual?.provider ?? ""}
+              model={s.maestro_visual?.model ?? ""}
+              autoFallback={false}
+              loadLocal={false}
+              onChange={(provider, model) => set("maestro_visual", { provider, model })}
+            />
+            {s.maestro_visual?.model && (
+              <button className={btn} onClick={() => set("maestro_visual", { provider: "", model: "" })}>
+                Limpar
+              </button>
+            )}
+          </div>
+        </Field>
+      )}
       <Field label="Máximo de tentativas por tarefa" hint="Esgotou, a tarefa vai para 'precisa de você'. Vale para tarefas novas; dá para mudar uma a uma no painel da tarefa.">
         <Num value={s.maestro_max_attempts} onChange={(v) => set("maestro_max_attempts", v)} />
       </Field>
@@ -1451,7 +1489,6 @@ function PersonalMemory({ s, set, save }: {
   }
 
   async function apagar(m: Lembranca) {
-    if (!confirm(`Esquecer "${m.name}"?`)) return;
     await api.post("/memory/personal/delete", { names: [m.slug] }).catch(() => null);
     carrega();
   }
@@ -1487,9 +1524,12 @@ function PersonalMemory({ s, set, save }: {
                 </button>
                 <span className="shrink-0 text-xs text-faint">{m.type}</span>
                 <span className="shrink-0 text-xs text-faint">{m.updated}</span>
-                <button className="shrink-0 text-xs text-faint hover:text-red-400" onClick={() => apagar(m)}>
-                  esquecer
-                </button>
+                <Confirma
+                  rotulo="esquecer"
+                  pergunta={`Esquecer "${m.name}"?`}
+                  className="shrink-0 text-xs text-faint hover:text-red-400"
+                  onSim={() => void apagar(m)}
+                />
               </div>
               {aberta === m.slug && (
                 <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#0d0d0d] px-3 py-2 text-xs text-muted">
@@ -1516,7 +1556,6 @@ function MemoryTab() {
   }, []);
 
   async function remove(name: string) {
-    if (!confirm(`Apagar "${name}" da memória da IA?`)) return;
     setBusy(true);
     setM(await api.post<Memory>("/memory/delete", { names: [name] }).catch(() => m));
     setBusy(false);
@@ -1554,14 +1593,16 @@ function MemoryTab() {
               <span className="font-medium text-fg">{e.name}</span>
               {e.entityType && <span className="rounded bg-raised px-1.5 text-[10px] text-muted">{e.entityType}</span>}
               {m.can_delete && (
-                <button
-                  disabled={busy}
-                  onClick={() => remove(e.name)}
-                  className="ml-auto text-faint hover:text-red-400"
-                  title="Apagar"
-                >
-                  <Trash className="size-3.5" />
-                </button>
+                <span className="ml-auto">
+                  <Confirma
+                    rotulo={<Trash className="size-3.5" />}
+                    pergunta="Apagar da memória da IA?"
+                    titulo="Apagar"
+                    className="text-faint hover:text-red-400"
+                    desabilitado={busy}
+                    onSim={() => void remove(e.name)}
+                  />
+                </span>
               )}
             </div>
             {!!e.observations?.length && (

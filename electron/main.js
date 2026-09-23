@@ -360,6 +360,12 @@ function createWindow({ hidden = false } = {}) {
     title: "Forja",
     icon: icon ?? undefined,
     autoHideMenuBar: true,
+    // Sem a barra de título do sistema, como no Claude Desktop: o cabeçalho do próprio app arrasta a
+    // janela (-webkit-app-region no CSS) e os botões nativos de minimizar/maximizar/fechar ficam
+    // desenhados no canto dele, na mesma cor. A altura é a do cabeçalho (h-12 = 48px).
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" }
+      : { titleBarStyle: "hidden", titleBarOverlay: { color: "#171717", symbolColor: "#a3a3a3", height: 48 } }),
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
   mainWindow = win;

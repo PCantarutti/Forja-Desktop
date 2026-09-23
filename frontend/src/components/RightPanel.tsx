@@ -19,31 +19,39 @@ export const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
 ];
 
 /** Botões das abas, sempre visíveis no topo direito do chat. Clicar abre o painel naquela aba; de novo, recolhe. */
-export function RightTabsBar(props: {
-  tab: RightTab;
-  collapsed: boolean;
-  onSelect: (t: RightTab) => void;
+/** O que cada aba sinaliza: ponto verde (navegador aberto, modelo local no ar) ou contador. */
+export type EstadoAbas = {
   browserOpen: boolean;
   serversRunning: number;
   plansPending: number; // planos esperando decisão do usuário
   plansTotal: number;
   changesCount: number; // arquivos alterados pelo agente nesta conversa
   localRunning: boolean; // modelo local carregado no llama-server
+};
+
+/** O selo de uma aba. Compartilhado com a doca do Maestro: os dois lugares sinalizam igual. */
+export function seloDaAba(id: RightTab, e: EstadoAbas): React.ReactNode {
+  return id === "changes" && e.changesCount > 0 ? (
+    <span className="rounded-full bg-amber-600/80 px-1.5 text-[10px] leading-4 text-white">{e.changesCount}</span>
+  ) : id === "browser" && e.browserOpen ? (
+    <span className="size-1.5 rounded-full bg-emerald-400" />
+  ) : id === "local" && e.localRunning ? (
+    <span className="size-1.5 rounded-full bg-emerald-400" />
+  ) : id === "servers" && e.serversRunning > 0 ? (
+    <span className="rounded-full bg-emerald-600/80 px-1.5 text-[10px] leading-4 text-white">{e.serversRunning}</span>
+  ) : id === "plans" && e.plansPending > 0 ? (
+    <span className="rounded-full bg-sky-600/80 px-1.5 text-[10px] leading-4 text-white">{e.plansPending}</span>
+  ) : id === "plans" && e.plansTotal > 0 ? (
+    <span className="rounded-full bg-raised px-1.5 text-[10px] leading-4 text-muted">{e.plansTotal}</span>
+  ) : null;
+}
+
+export function RightTabsBar(props: EstadoAbas & {
+  tab: RightTab;
+  collapsed: boolean;
+  onSelect: (t: RightTab) => void;
 }) {
-  const badge = (id: RightTab) =>
-    id === "changes" && props.changesCount > 0 ? (
-      <span className="rounded-full bg-amber-600/80 px-1.5 text-[10px] leading-4 text-white">{props.changesCount}</span>
-    ) : id === "browser" && props.browserOpen ? (
-      <span className="size-1.5 rounded-full bg-emerald-400" />
-    ) : id === "local" && props.localRunning ? (
-      <span className="size-1.5 rounded-full bg-emerald-400" />
-    ) : id === "servers" && props.serversRunning > 0 ? (
-      <span className="rounded-full bg-emerald-600/80 px-1.5 text-[10px] leading-4 text-white">{props.serversRunning}</span>
-    ) : id === "plans" && props.plansPending > 0 ? (
-      <span className="rounded-full bg-sky-600/80 px-1.5 text-[10px] leading-4 text-white">{props.plansPending}</span>
-    ) : id === "plans" && props.plansTotal > 0 ? (
-      <span className="rounded-full bg-raised px-1.5 text-[10px] leading-4 text-muted">{props.plansTotal}</span>
-    ) : null;
+  const badge = (id: RightTab) => seloDaAba(id, props);
 
   return (
     <div className="ml-auto flex shrink-0 items-center gap-0.5 rounded-lg border border-line p-1" role="tablist" aria-label="Painel direito">

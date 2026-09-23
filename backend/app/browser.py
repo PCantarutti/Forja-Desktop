@@ -626,6 +626,15 @@ def _locator(page, selector: str):
 
 
 def _act_err(selector: str, e: Exception) -> str:
+    texto = str(e)
+    if "resolved to" in texto:
+        # O elemento existe: dizer "a página mudou" mandava o modelo reler e tentar o mesmo ref para
+        # sempre (seis vezes seguidas numa validação real), quando o problema era outro.
+        motivo = next((l.strip(" -") for l in texto.splitlines()
+                       if any(k in l for k in ("not visible", "outside of the viewport", "not stable",
+                                               "intercepts pointer", "not enabled", "disabled"))), _err(e))
+        return (f"'{selector}' existe, mas não aceitou a ação: {motivo}. Tente browser_scroll até ele, "
+                "espere a página terminar de carregar, ou confira se um modal/overlay está por cima.")
     if REF_RE.match(selector.strip()):
         return (f"Ref '{selector}' não encontrado: a página mudou desde o último browser_read. "
                 "Chame browser_read de novo e use um ref atual.")
@@ -697,14 +706,42 @@ async def validate(_root: Path, args: dict) -> str:
     return UNTRUSTED + (NL + NL).join(partes)
 
 
+@asynccontextmanager
+async def _com_tela(page):
+    """Dá à página um viewport de verdade enquanto o agente age nela, se ela não tiver.
+
+    No modo nativo a aba é uma view do Electron que só ganha tamanho quando o painel Navegador
+    daquela conversa está na tela. Com o painel fechado (ou mostrando outra conversa, o normal no
+    cockpit do Maestro) a página fica com viewport 0x0: o snapshot lista os botões, mas todo clique
+    morre em "element is outside of the viewport" — numa validação real, seis cliques seguidos
+    falharam no mesmo contador. Mesma saída do print: override de CDP só durante a ação."""
+    sessao = None
+    with contextlib.suppress(Exception):
+        if page.viewport_size is None and 0 in await page.evaluate("[innerWidth, innerHeight]"):
+            sessao = await page.context.new_cdp_session(page)
+            await sessao.send("Emulation.setDeviceMetricsOverride",
+                              {"width": PRINT_VIEWPORT["width"], "height": PRINT_VIEWPORT["height"],
+                               "deviceScaleFactor": 1, "mobile": False})
+    try:
+        yield
+    finally:
+        if sessao is not None:
+            with contextlib.suppress(Exception):
+                try:
+                    await sessao.send("Emulation.clearDeviceMetricsOverride")
+                finally:
+                    await sessao.detach()
+
+
 async def click(_root: Path, args: dict) -> str:
     page = await current().ensure()
     selector = args["selector"]
-    try:
-        await _locator(page, selector).click(timeout=ACT_TIMEOUT)
-    except Exception as e:
-        raise ToolError(_act_err(selector, e)) from e
-    await _settle(page)
+    async with _com_tela(page):
+        try:
+            await _locator(page, selector).click(timeout=ACT_TIMEOUT)
+        except Exception as e:
+            raise ToolError(_act_err(selector, e)) from e
+        await _settle(page)
     return await _summary(page)
 
 
@@ -712,13 +749,14 @@ async def type_text(_root: Path, args: dict) -> str:
     page = await current().ensure()
     selector = args["selector"]
     loc = _locator(page, selector)
-    try:
-        await loc.fill(str(args["text"]), timeout=ACT_TIMEOUT)
-        if args.get("submit"):
-            await loc.press("Enter", timeout=ACT_TIMEOUT)
-    except Exception as e:
-        raise ToolError(_act_err(selector, e)) from e
-    await _settle(page)
+    async with _com_tela(page):
+        try:
+            await loc.fill(str(args["text"]), timeout=ACT_TIMEOUT)
+            if args.get("submit"):
+                await loc.press("Enter", timeout=ACT_TIMEOUT)
+        except Exception as e:
+            raise ToolError(_act_err(selector, e)) from e
+        await _settle(page)
     return await _summary(page)
 
 
@@ -832,8 +870,12 @@ async def scroll(_root: Path, args: dict) -> str:
     que sobrava era `full_page`, que devolvia uma tira de 5000px e travava o modelo com visão por
     minutos. Com o scroll, cada print continua sendo uma tela de verdade e o modelo desce por ela.
     """
-    s = current()
-    page = await s.ensure()
+    page = await current().ensure()
+    async with _com_tela(page):  # rolar numa aba sem viewport não move nada
+        return await _rola(page, args)
+
+
+async def _rola(page, args: dict) -> str:
     alvo = str(args.get("selector") or "").strip()
     try:
         if alvo:

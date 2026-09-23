@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { Check, Cube, Search } from "./icons";
+import { Check, Cube, Eye, Search } from "./icons";
 
 export type CatalogEntry = { id: string; name: string; type: string; models: string[]; error: string };
 
 /** Recorte do /api/local. Só o que este seletor usa; a versão web não tem essa rota e fica sem. */
 type IaLocal = {
-  models: { path: string; name: string; kind: string; ctx?: number }[];  // ctx: janela por requisição
+  models: { path: string; name: string; kind: string; ctx?: number; vision?: boolean }[];  // ctx: janela por requisição; vision: tem projetor (mmproj)
   server: { running: boolean; path?: string; alias?: string };
   image_busy: boolean;
 };
@@ -247,6 +247,11 @@ export default function ModelPicker(props: {
                     >
                       {carrega && carregado && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />}
                       <span className="flex-1 truncate">{m.name}</span>
+                      {m.vision && (
+                        <span title="Visão: o projetor (mmproj) da pasta dele sobe junto" className="shrink-0 rounded border border-amber-500/50 p-0.5 text-amber-400">
+                          <Eye className="size-3" />
+                        </span>
+                      )}
                       {m.ctx ? (
                         <span className={`shrink-0 font-sans text-[11px] ${curta ? "text-amber-300" : "text-faint"}`}>
                           {fmtK(m.ctx)}{curta ? ` · mín ${fmtK(props.minCtx!)}` : ""}

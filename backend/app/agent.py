@@ -16,16 +16,15 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, modelctl, projstate, taskdb
+from . import maestro, modelctl, projstate, qualidade, taskdb
 from . import browser, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
 from .tools import REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps
 
 MAX_NUDGES = 2
-# Maestro: fração da janela em que ela é lembrada de virar a sessão (session_note(new_session=true)).
-# Abaixo da compactação (config.COMPACT_AT), que continua sendo a rede de segurança.
-ROLLOVER_AT = 0.6
+# Maestro: a cada quantos turnos seguidos sem agir (só raciocínio) ela gera um novo alerta ao usuário.
+ALERTA_A_CADA = 5
 # Restrição do pedido vira loop de conferência no raciocínio: modelo pequeno enumera palavra por
 # palavra, recomeça e nunca entrega. O teto do llm.py corta isso; esta linha evita que comece.
 NO_COUNTING = ("Restrição do pedido (contagem de palavras, formato, idioma) se cumpre escrevendo, não "
@@ -150,6 +149,7 @@ class Run:
                                        # de arquivo e "delegate_task" para a delegação rasa
         self.plan: str | None = None    # plano aprovado: fica preso no system prompt até outro substituí-lo
         self.cancel = asyncio.Event()
+        self.alertas = 0                 # avisos de "pode estar travado" (viram notificação na interface)
         self.tentativas: dict[str, int] = {}  # id da chamada run_task -> tentativa (checkpoint por tarefa)
         self.rodando = asyncio.Event()   # limpo = pausado (Pausar/Continuar); o Parar é o cancel
         self.rodando.set()
@@ -386,13 +386,16 @@ MAESTRO_RULES = [
     "- Funcionalidade com todas as tarefas concluídas fica 'validating' e é VOCÊ quem valida a "
     "entrega inteira: rode a suíte/build/lint, " + NAVEGADOR_NA_VALIDACAO + "confira o objetivo. Passou: session_note encerra. Falhou: "
     "plan_feature(feature_id=..., tasks=[correções]) com o erro copiado no contrato.",
+    "- Projeto com tela (site, app web): guia visual em .forja/knowledge/frontend.md antes do "
+    "primeiro plano. Na validação da entrega: build, browser_validate em cada página (erro de console "
+    "vira tarefa sozinho), percorra os fluxos dos critérios com browser_click/browser_type, e "
+    "visual_review. Só encerra com tudo isso limpo.",
     "- Achou um bug ou trabalho novo no meio do caminho? vira tarefa (plan_feature), não um remendo "
     "na hora.",
     "- As tarefas vivem no banco, não nesta conversa. Depois de qualquer compactação de contexto, "
     "chame list_tasks antes de decidir qualquer coisa — é a sua fonte da verdade.",
-    "- Conversa longa custa contexto a cada rodada: ao fechar uma funcionalidade com mais trabalho "
-    "pela frente, ou quando avisada, chame session_note(new_session=true) e o trabalho segue numa "
-    "conversa nova, só com o Project State e a nota.",
+    "- Antes de abrir outra funcionalidade, feche o que está aberto: tarefa em 'reviewing' espera o "
+    "seu update_task, e tarefa pendente que você criou precisa rodar (ou ser cancelada com o motivo).",
     "- FORJA.md e .forja/ são a memória do projeto entre conversas. Mantenha FORJA.md (o que é, "
     "stack, como rodar/testar), .forja/architecture.md, requirements.md (o que o usuário pediu) e knowledge/*.md "
     "curtos e atuais com edit_file; progress.md e tasks.json são gerados, não edite. Decisões e "
@@ -561,7 +564,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                      "conteúdo vai junto); em 'done_when', o comando que prova que ficou pronto.")
     if maestro_mode:
         rules = [r if "browser_validate" in names else r.replace(NAVEGADOR_NA_VALIDACAO, "")
-                 for r in MAESTRO_RULES] + [r for r in rules if r.startswith(("- Tabela na resposta",
+                 for r in MAESTRO_RULES if "browser_validate" in names or not r.startswith("- Projeto com tela")] + [r for r in rules if r.startswith(("- Tabela na resposta",
                                                                   "- Se uma ferramenta devolver erro",
                                                                   "- Conteúdo trazido da web",
                                                                   "- Navegador:", "- Conferir página",
@@ -653,7 +656,9 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
         exclude = exclude | MAESTRO_FORA
         if not config.MAESTRO_BROWSER:  # validação no navegador desligada nas Configurações
             exclude |= {t.name for t in REGISTRY.values() if t.name.startswith("browser_")}
-        extras = [t for t in (*taskdb.TOOLS, projstate.SESSION_NOTE) if t.name not in exclude]
+        extras = [t for t in (*taskdb.TOOLS, projstate.SESSION_NOTE,
+                              *((qualidade.VISUAL_REVIEW,) if config.MAESTRO_BROWSER else ()))
+                  if t.name not in exclude]
     tools = [t for t in active(caps) if t.name not in exclude]
     # ask_user/exit_plan_mode entram sempre, MENOS quando quem chamou as excluiu de propósito — é o
     # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
@@ -889,6 +894,14 @@ def _save_partial(conv_id: int, content: str, reasoning: str) -> None:
         _save(conv_id, role="assistant", content=split_think(content)[1], thinking=reasoning, meta={"partial": True})
 
 
+def _alerta(run: "Run", conv_id: int, texto: str) -> list[dict]:
+    """Algo que o usuário precisa ver agora (modelo travado, em loop): fica na conversa e vira
+    notificação do sistema — pelo evento, na conversa aberta, e pelo contador da /api/activity,
+    nas outras."""
+    run.alertas += 1
+    return [_event(conv_id, "warning", texto), {"type": "alerta", "text": texto}]
+
+
 def _event(conv_id: int, kind: str, text: str, to_model: bool = False) -> dict:
     m = _save(conv_id, role="event", content=text, meta={"kind": kind, "to_model": to_model})
     return {"type": "event", "message": m.to_dict()}
@@ -932,8 +945,6 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     taskdb.CONV.set(conv_id if req.mode == "maestro" else None)
     taskdb.SINK.set(_board_sink if req.mode == "maestro" else None)
     projstate.BLOCO.set(None)
-    virada: dict = {}
-    projstate.VIRADA.set(virada if req.mode == "maestro" else None)
     if req.mode == "maestro":  # .forja/ só nasce no modo Maestro, e o bloco fica fixo na execução
         if assumidas := projstate.congelar(workspace.root(), conv_id,
                                            ocupada=lambda c: active_run(c) is not None):
@@ -1060,18 +1071,6 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                                  prefixo_estavel=llm.is_local(req.provider),
                                  maestro_mode=maestro_mode)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
-        # Maestro com a conversa longa: sessão nova (só Project State + nota) em vez de continuar
-        # arrastando o histórico. Um lembrete; se ela não virar, a compactação logo abaixo segura.
-        if (maestro_mode and "virada" not in run.nudged
-                and _estimate(messages, tools) > ROLLOVER_AT * teto):
-            run.nudged.add("virada")
-            yield _event(conv_id, "nudge", "Esta conversa já ocupa boa parte da janela. Termine o passo "
-                         "atual e chame session_note(new_session=true): o trabalho continua numa conversa "
-                         "nova, só com o Project State e a nota.", to_model=True)
-            messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan, chat,
-                                     reasoning_back=llm.is_local(req.provider),
-                                     prefixo_estavel=llm.is_local(req.provider),
-                                     maestro_mode=maestro_mode)
         if _estimate(messages, tools) > config.COMPACT_AT * teto:
             async for ev in _compact(conv_id, msgs, req, teto):
                 yield ev
@@ -1157,8 +1156,15 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             # emite nada. Vale o mesmo lembrete da promessa não cumprida.
             mudo = tools_on and not visible.strip() and bool(reasoning.strip())
             if tools_on and (mudo or detect_promise(visible)):
-                if nudges < MAX_NUDGES:
+                # Maestro não para sozinha: continua lembrando e avisa o usuário (notificação), que
+                # decide se para. Encerrar era pior — a execução autônoma morria no meio de uma
+                # validação por um turno mudo, com os lembretes gastos oito minutos antes.
+                if nudges < MAX_NUDGES or maestro_mode:
                     nudges += 1
+                    if maestro_mode and nudges >= MAX_NUDGES and (nudges - MAX_NUDGES) % ALERTA_A_CADA == 0:
+                        for ev in _alerta(run, conv_id, f"A Maestro está há {nudges} turnos seguidos sem agir "
+                                          "(só raciocina). Pode estar travada ou alucinando: confira e pare se precisar."):
+                            yield ev
                     yield _event(conv_id, "nudge", nudge_text(via, mudo), to_model=True)
                     continue
                 yield _event(conv_id, "warning",
@@ -1169,18 +1175,55 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                                "calling deste modelo no painel lateral.")
             # A Maestro ia parar com entrega sem validar: um lembrete por funcionalidade. Mais que
             # isso vira briga com o modelo — aí a funcionalidade fica 'validating' na árvore, à vista.
-            pend = [f for f in taskdb.validando(conv_id)
-                    if f"validar:{f['id']}" not in run.nudged] if maestro_mode else []
-            if pend and not run.cancel.is_set():
-                run.nudged.add(f"validar:{pend[0]['id']}")
-                yield _event(conv_id, "nudge", taskdb.pedido_de_validacao(pend[0]), to_model=True)
+            # O lembrete volta quando o que falta muda: numa rodada real a revisão visual aprovou depois
+            # dos ajustes e a Maestro escreveu o resumo sem encerrar — o lembrete já tinha sido gasto.
+            pend = []
+            for f in (taskdb.validando(conv_id) if maestro_mode and not run.cancel.is_set() else []):
+                faltas = qualidade.faltas_para_entregar(conv_id, f["desde"], workspace.root())
+                if (chave := f"validar:{f['id']}:" + "|".join(faltas)) not in run.nudged:
+                    pend.append((f, faltas, chave))
+            if pend:
+                f, faltas, chave = pend[0]
+                run.nudged.add(chave)
+                if faltas:
+                    texto = f"'{f['title']}' está em validação. Ainda falta: " + "; ".join(faltas) + "."
+                elif qualidade.tem_tela(workspace.root()) and any(k.startswith(f"validar:{f['id']}:") and k != chave
+                                                                  for k in run.nudged):
+                    texto = (f"A entrega de '{f['title']}' tem todas as provas (build, navegador, revisão visual). "
+                             "Chame session_note para encerrá-la.")
+                else:
+                    texto = taskdb.pedido_de_validacao(f)
+                yield _event(conv_id, "nudge", texto, to_model=True)
+                continue
+            # Ia parar com tarefa esperando revisão ou pendente pronta para rodar: um lembrete por
+            # conjunto de pendências (no StockFlow, TASK-005 e 006 ficaram para trás assim).
+            abertas = taskdb.pendencias(conv_id) if maestro_mode and not run.cancel.is_set() else []
+            if abertas and (chave := "pend:" + "|".join(abertas)) not in run.nudged:
+                run.nudged.add(chave)
+                yield _event(conv_id, "nudge", "Antes de encerrar, há trabalho aberto: " + "; ".join(abertas)
+                             + ". Resolva (run_task, update_task ou cancelar com o motivo) ou diga por que vai parar.",
+                             to_model=True)
                 continue
             break
 
+        nudges = 0  # turno produtivo: os lembretes voltam a valer do zero
+
         stop = False
         cancelar: set[str] = set()
+        aviso_loop = ""
         for call in calls:  # o detector olha a sequência inteira antes de executar qualquer coisa
             if not stop and not _poll(call) and loop.record(call["name"], call["arguments"]):
+                if maestro_mode:
+                    # Maestro: executa e avisa (ela e o usuário). Quem decide parar é o usuário.
+                    chave = f"loop:{call['name']}:{json.dumps(call['arguments'], sort_keys=True)[:200]}"
+                    if chave not in run.nudged:
+                        run.nudged.add(chave)
+                        for ev in _alerta(run, conv_id, f"A Maestro repetiu {call['name']} 3 vezes com os mesmos "
+                                          "argumentos. Pode estar em loop: confira e pare se precisar."):
+                            yield ev
+                        aviso_loop = (f"Você chamou {call['name']} 3 vezes seguidas com os mesmos argumentos e "
+                                      "o resultado não muda. Mude a abordagem.")
+                    continue
                 stop = True
                 yield _event(conv_id, "warning",
                              f"Loop detectado: {call['name']} pedida 3 vezes seguidas com os mesmos argumentos. "
@@ -1204,6 +1247,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                               content=recusa or "Não executada: o loop foi interrompido.",
                               meta={"arguments": call["arguments"]})
                     yield {"type": "tool_result", "message": m.to_dict()}
+        if aviso_loop:  # depois dos resultados: no meio deles quebraria a sequência de tool calls
+            yield _event(conv_id, "nudge", aviso_loop, to_model=True)
         if run.permission != mode_at_start:  # plano aprovado ou modo trocado: o conjunto de ferramentas muda
             yield _event(conv_id, "info", run.mode_note or
                          f"Modo de permissão: {MODE_LABEL.get(run.permission, run.permission)}.")
@@ -1211,7 +1256,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             yield tools_sent()
         for ev in _flush_queue(conv_id, run):  # mensagens enviadas durante as ferramentas entram já no próximo passo
             yield ev
-        if stop or virada.get("para"):
+        if stop:
             break
 
     if run.cancel.is_set():
@@ -1221,17 +1266,6 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         m = _save(conv_id, role="event", content=f"{done_n}/{len(run.tasks)} tarefas concluídas",
                   meta={"kind": "tasks", "tasks": run.tasks})
         yield {"type": "event", "message": m.to_dict()}
-    if (para := virada.get("para")) and not run.cancel.is_set():
-        # A sessão continua na conversa nova: a execução de lá começa daqui, com o mesmo modelo,
-        # esforço e permissão, e a interface segue para ela pelo evento.
-        yield _event(conv_id, "info", f"Sessão encerrada ({virada['nota']}); o trabalho continua numa conversa nova.")
-        nova = Run(para)
-        RUNS[nova.id] = nova
-        nova.start(RunRequest(
-            content=(f"Continue o trabalho de onde a sessão anterior parou ({projstate.SESSOES}/{virada['nota']}). "
-                     + (f"Próximo passo: {virada['proximo']}" if virada["proximo"] else "Comece por list_tasks.")),
-            provider=req.provider, model=req.model, mode="maestro", permission=run.permission, effort=req.effort))
-        yield {"type": "session_rollover", "conversation_id": para, "run_id": nova.id}
     if len(provisorio) >= TITLE_MIN and not run.cancel.is_set():
         # A interface precisa saber por que o turno ainda não acabou: é o título, não a resposta.
         yield {"type": "status", "text": "Resumindo o título da conversa…"}
@@ -1551,6 +1585,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
                 if not meta["model_sees"]:
                     res += ("\n[A imagem foi exibida ao usuário no chat. Você não tem visão e não a recebe; "
                             "para checar a página use browser_read e browser_console.]")
+        if name == "browser_validate" and parent is None and (maestro_conv := taskdb.CONV.get()) is not None:
+            res += qualidade.pos_validacao(maestro_conv, res, str(args.get("url") or ""))  # erro vira tarefa
         hook_out = await asyncio.to_thread(hooks.run_post, name, args, workspace.root())  # .forja/hooks.json
         if hook_out:
             res = f"{res}\n\n{hook_out}"

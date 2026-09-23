@@ -100,6 +100,8 @@ class Feature(Base):
     title: Mapped[str] = mapped_column(String(200))
     goal: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(20), default="planning")  # planning|active|validating|done|cancelled
+    # Copiada para uma sessão nova (conversa): a lista fica aqui para consulta, e o trabalho segue lá.
+    copiada_para: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now)
     tasks: Mapped[list["Task"]] = relationship(
@@ -198,6 +200,9 @@ def _migrate() -> None:
             c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN transcript JSON")
         if cols and "estado" not in cols:
             c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN estado JSON")
+        cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(features)")}
+        if cols and "copiada_para" not in cols:
+            c.exec_driver_sql("ALTER TABLE features ADD COLUMN copiada_para INTEGER")
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(checkpoints)")}
         if cols and "attempt_id" not in cols:
             c.exec_driver_sql("ALTER TABLE checkpoints ADD COLUMN attempt_id INTEGER")

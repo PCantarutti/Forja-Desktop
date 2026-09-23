@@ -13,7 +13,9 @@ ferramenta não consegue fazer.
 from __future__ import annotations
 
 import contextvars
+import re
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Callable
 
@@ -79,6 +81,21 @@ def _lista(raw) -> list[str]:
     return [str(x).strip()[:MAX_TEXTO] for x in itens[:MAX_ITENS] if str(x).strip()]
 
 
+def _verify_invalido(cmd: str) -> str:
+    """Motivo para recusar um comando de verificação, ou ''. Ele roda por run_command depois do
+    Worker e tem de TERMINAR — no StockFlow a Maestro escreveu "npm run dev; browser_validate(...)":
+    servidor que nunca acaba (timeout de 180 s, tentativa marcada como falha) e uma ferramenta dela
+    escrita como se fosse comando de terminal."""
+    from . import shell
+    if re.search(r"\b(browser_[a-z]+|serve_(start|status|stop)|run_(task|command))\b", cmd):
+        return ("verify_command é comando de terminal: ferramenta (browser_validate, serve_start...) não "
+                "roda ali. Conferir no navegador é trabalho seu, na validação da entrega.")
+    if shell.parece_servidor(cmd):
+        return ("verify_command precisa TERMINAR (build, testes, lint, tsc). Servidor de desenvolvimento "
+                "nunca termina: a verificação estouraria o tempo e a tarefa viraria falha.")
+    return ""
+
+
 def normalize_contract(raw) -> dict:
     """Implementation Contract validado. Só `goal` é obrigatório — exigir os nove campos faria o
     modelo pequeno travar numa chamada impossível em vez de começar a trabalhar."""
@@ -86,6 +103,8 @@ def normalize_contract(raw) -> dict:
         raise ToolError("contract deve ser um objeto com os campos do Implementation Contract.")
     if not str(raw.get("goal") or "").strip():
         raise ToolError("O contrato precisa de 'goal': o que esta tarefa deve alcançar, em uma frase.")
+    if motivo := _verify_invalido(str(raw.get("verify_command") or "")):
+        raise ToolError(motivo)
     out: dict = {}
     for campo in CONTRACT_FIELDS:
         valor = raw.get(campo)
@@ -138,35 +157,51 @@ def _proximo_code(s, conv_id: int) -> str:
     return f"TASK-{max((_numero(c) for c in _codes_existentes(s, conv_id)), default=0) + 1:03d}"
 
 
+TRABALHANDO = ("queued", "loading_model", "implementing", "testing")
+
+
 def assume(de: list[int], para: int) -> list[str]:
-    """Traz para a conversa `para` as funcionalidades ABERTAS das conversas `de`, com tarefas e
-    tentativas. É o que deixa uma sessão nova executar o que a anterior deixou pela metade: as
-    tarefas são por conversa, e o run_task só enxerga as da própria. Código que já existe no
-    destino é renumerado, e o depends_on das tarefas trazidas acompanha. Devolve os títulos."""
+    """COPIA para a conversa `para` as funcionalidades abertas das conversas `de`, com as tarefas.
+
+    Cópia e não mudança: a lista continua na conversa antiga para consulta (marcada `copiada_para`),
+    e o trabalho segue na nova — o run_task só enxerga tarefas da própria conversa. As tentativas
+    ficam com as tarefas originais (histórico); a cópia leva o contador, para o limite de tentativas
+    continuar valendo. Tarefa que estava no meio (queued/implementing...) volta a 'pending': quem
+    estava trabalhando nela era a outra sessão. Código repetido no destino é renumerado, e o
+    depends_on acompanha. Devolve os títulos copiados."""
     if not de:
         return []
     with db.session() as s:
-        feats = s.query(db.Feature).filter(db.Feature.conversation_id.in_(de),
+        feats = s.query(db.Feature).filter(db.Feature.conversation_id.in_(de), db.Feature.copiada_para.is_(None),
                                            db.Feature.status.notin_(("done", "cancelled"))).all()
         if not feats:
             return []
         usados = _codes_existentes(s, para)
         prox = max((_numero(c) for c in usados), default=0)
         for f in feats:
-            tarefas = s.query(db.Task).filter(db.Task.feature_id == f.id).order_by(db.Task.id).all()
+            nova = db.Feature(conversation_id=para, title=f.title, goal=f.goal, status=f.status)
+            s.add(nova)
+            s.flush()
             troca: dict[str, str] = {}
-            for t in tarefas:
-                if t.code in usados:
+            copias = []
+            for t in s.query(db.Task).filter(db.Task.feature_id == f.id).order_by(db.Task.id).all():
+                code = t.code
+                if code in usados:
                     prox += 1
-                    troca[t.code] = f"TASK-{prox:03d}"
-                    t.code = troca[t.code]
-                usados.add(t.code)
-                prox = max(prox, _numero(t.code))
-                t.conversation_id = para
-            for t in tarefas:
-                if troca and t.depends_on:
-                    t.depends_on = [troca.get(d, d) for d in t.depends_on]
-            f.conversation_id = para
+                    code = troca[t.code] = f"TASK-{prox:03d}"
+                usados.add(code)
+                prox = max(prox, _numero(code))
+                copias.append(db.Task(
+                    feature_id=nova.id, conversation_id=para, code=code, title=t.title,
+                    contract=t.contract, depends_on=list(t.depends_on or []), priority=t.priority,
+                    status="pending" if t.status in TRABALHANDO else t.status, model_slot=t.model_slot,
+                    agent=t.agent, max_attempts=t.max_attempts, attempt_count=t.attempt_count,
+                    result=t.result, blocked_reason=t.blocked_reason))
+            for c in copias:
+                if troca and c.depends_on:
+                    c.depends_on = [troca.get(d, d) for d in c.depends_on]
+                s.add(c)
+            f.copiada_para = para
             f.updated_at = _now()
         s.commit()
         titulos = [f.title for f in feats]
@@ -174,6 +209,55 @@ def assume(de: list[int], para: int) -> list[str]:
         _publish(c)
     _publish(para)
     return titulos
+
+
+def _normaliza(texto: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(texto or "").lower()).strip()
+
+
+def duplicadas(conv_id: int, tasks: list) -> list[str]:
+    """Tarefas do plano que repetem uma tarefa ABERTA desta conversa (mesmo título ou quase).
+
+    No StockFlow, a sessão nova replanejou TASK-008/009, que já estavam pendentes, como 010/011 — e
+    depois de novo como 012. Aqui o plano volta com os códigos que já existem."""
+    with db.session() as s:
+        abertas = [(t.code, t.title) for t in s.query(db.Task).join(db.Feature, db.Feature.id == db.Task.feature_id)
+                   .filter(db.Task.conversation_id == conv_id, db.Task.status.in_(OPEN),
+                           db.Feature.copiada_para.is_(None))]
+    achadas = []
+    for bruto in tasks:
+        if not isinstance(bruto, dict):
+            continue
+        nome = _normaliza(bruto.get("title") or (bruto.get("contract") or {}).get("goal"))
+        if not nome:
+            continue
+        for code, titulo in abertas:
+            if SequenceMatcher(None, nome, _normaliza(titulo)).ratio() >= 0.85:
+                achadas.append(f"'{bruto.get('title') or nome}' já existe como {code} ('{titulo}')")
+                break
+    return achadas
+
+
+def pendencias(conv_id: int) -> list[str]:
+    """O que a Maestro deixou para trás: tarefa esperando a revisão dela, e tarefa pendente ou que
+    falhou (com tentativas sobrando) que já pode rodar. No StockFlow a TASK-005 ficou em 'reviewing'
+    e a 006 pendente enquanto ela abria outra funcionalidade."""
+    with db.session() as s:
+        tarefas = (s.query(db.Task).join(db.Feature, db.Feature.id == db.Task.feature_id)
+                   .filter(db.Task.conversation_id == conv_id, db.Feature.copiada_para.is_(None),
+                           db.Task.status.in_(("reviewing", "pending", "failed")))
+                   .order_by(db.Task.id).all())
+        feitas = {c for (c,) in s.query(db.Task.code).filter(
+            db.Task.conversation_id == conv_id, db.Task.status.in_(TERMINAL))}
+        out = []
+        for t in tarefas:
+            if t.status == "reviewing":
+                out.append(f"{t.code} ({t.title}) espera sua revisão: feche com update_task ou redespache")
+            elif t.status == "failed" and t.attempt_count < t.max_attempts:
+                out.append(f"{t.code} ({t.title}) falhou e ainda tem tentativas")
+            elif t.status == "pending" and all(d in feitas for d in (t.depends_on or [])):
+                out.append(f"{t.code} ({t.title}) está pendente e pronta para rodar")
+        return out
 
 
 def _get(s, code: str, conv_id: int) -> db.Task:
@@ -226,11 +310,14 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id:
         criadas: list[tuple[db.Task, object]] = []
         # Duas passadas: a primeira cria tudo, a segunda resolve depends_on — assim uma tarefa pode
         # depender de outra declarada depois dela na mesma chamada.
+        guia = _guia_no_contrato()
         for i, bruto in enumerate(tasks):
             if not isinstance(bruto, dict):
                 raise ToolError(f"Tarefa {i + 1} deve ser um objeto com title e contract.")
             titulo = str(bruto.get("title") or "").strip()[:200]
             contrato = normalize_contract(bruto.get("contract") or ({"goal": titulo} if titulo else None))
+            if guia and guia not in contrato.get("relevant_files", []):
+                contrato["relevant_files"] = [guia, *contrato.get("relevant_files", [])][:MAX_ITENS]
             titulo = titulo or contrato["goal"][:200]
             slot = str(bruto.get("model_slot") or "").strip().lower() or None
             if slot and slot not in SLOTS:
@@ -265,6 +352,17 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id:
                           "model_slot": t.model_slot} for t, _ in criadas]}
     _publish(conv_id)
     return out
+
+
+def _guia_no_contrato() -> str:
+    """Caminho do guia visual, se o projeto tem tela e o guia existe: vai nos relevant_files de toda
+    tarefa (o Worker recebe o conteúdo junto do briefing). '' fora de execução ou sem guia."""
+    try:
+        from . import qualidade, workspace
+        root = workspace.root()
+        return qualidade.GUIA if qualidade.tem_tela(root) and qualidade.guia_visual(root) else ""
+    except Exception:
+        return ""
 
 
 def _titulo_de(goal, tasks: list) -> str:
@@ -321,7 +419,8 @@ def validando(conv_id: int) -> list[dict]:
     with db.session() as s:
         feats = s.query(db.Feature).filter(db.Feature.conversation_id == conv_id,
                                            db.Feature.status == "validating").order_by(db.Feature.id).all()
-        return [{"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id)} for f in feats]
+        return [{"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id), "desde": f.updated_at}
+                for f in feats]
 
 
 def pedido_de_validacao(f: dict) -> str:
@@ -351,10 +450,14 @@ def encerra_validadas(conv_id: int) -> list[str]:
         feitas = [m.created_at for m in s.query(db.Message.created_at).filter(
             db.Message.conversation_id == conv_id, db.Message.role == "tool",
             db.Message.name.in_(VALIDACOES))]
+        from . import qualidade, workspace  # import tardio: qualidade importa este módulo
         for f in feats:
             if not any(t >= f.updated_at for t in feitas):
                 raise ToolError("A entrega ainda não foi validada. " + pedido_de_validacao(
                     {"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id)}))
+            if faltas := qualidade.faltas_para_entregar(conv_id, f.updated_at, workspace.root()):
+                raise ToolError(f"Projeto com tela: '{f.title}' ainda não pode ser encerrada. Falta: "
+                                + "; ".join(faltas) + ".")
         for f in feats:
             f.status = "done"
             f.updated_at = _now()
@@ -379,9 +482,12 @@ def unmet_deps(task: db.Task, conv_id: int | None = None) -> list[str]:
         return []
     conv_id = conv_id if conv_id is not None else task.conversation_id
     with db.session() as s:
+        # Cancelada conta como resolvida: a dependência foi descartada de propósito. Contar como
+        # aberta travava a tarefa para sempre (no StockFlow, a Maestro cancelou a TASK-008 e a 011
+        # continuou bloqueada por ela, e o jeito que achou foi recriar tudo numa feature nova).
         feitas = {c for (c,) in s.query(db.Task.code).filter(
             db.Task.conversation_id == conv_id, db.Task.code.in_(list(task.depends_on)),
-            db.Task.status == "completed")}
+            db.Task.status.in_(TERMINAL))}
     return [c for c in task.depends_on if c not in feitas]
 
 
@@ -519,6 +625,7 @@ def board(conv_id: int) -> dict:
             por_feature.setdefault(t.feature_id, []).append(_task_dict(t, tent.get(t.id, [])))
         contagem = {st: sum(1 for t in tasks if t.status == st) for st in STATUSES}
         return {"features": [{"id": f.id, "title": f.title, "goal": f.goal, "status": f.status,
+                              "copiada_para": f.copiada_para,
                               "tasks": por_feature.get(f.id, [])} for f in feats],
                 "counts": {k: v for k, v in contagem.items() if v},
                 "total": len(tasks), "done": contagem["completed"],
@@ -579,10 +686,26 @@ def _plan_feature(_root: Path, args: dict) -> str:
     root = workspace.root()
     # Portão do Project State: sem ele, a conversa seguinte começa do zero. Instrução no prompt não
     # bastou (um modelo de 9B leu os arquivos vazios e planejou assim mesmo); aqui não tem como pular.
+    from . import qualidade
+    com_tela = qualidade.tem_tela(root) or qualidade.plano_com_tela(args.get("tasks") or [])
+    if (root / projstate.PASTA).is_dir() and com_tela and not qualidade.guia_visual(root):
+        raise ToolError(f"Projeto com tela: antes de planejar, escreva {qualidade.GUIA} com o guia visual "
+                        "(paleta, tipografia, espaçamentos, componentes e o tom da interface). Ele vai no "
+                        "contrato de cada Worker, e é o que mantém as telas com a mesma cara.")
     if (root / projstate.PASTA).is_dir() and projstate.vazio(projstate.forja_md(root)):
         raise ToolError(f"Antes de planejar, escreva {config.PROJECT_MEMORY_FILE} (o que é o projeto, stack, "
                         f"como rodar e testar, convenções) e, se couber, {projstate.PASTA}/architecture.md e "
                         "knowledge/. Fatos curtos: é o que a próxima conversa lê primeiro.")
+    if repetidas := duplicadas(_conv(), args.get("tasks") or []):
+        raise ToolError("Estas tarefas já existem e estão abertas: " + "; ".join(repetidas)
+                        + ". Execute a existente com run_task (ou ajuste com update_task) em vez de criar outra.")
+    if args.get("feature_id"):
+        with db.session() as s:
+            alvo = s.get(db.Feature, int(args["feature_id"]))
+            if alvo and alvo.copiada_para:
+                raise ToolError(f"A funcionalidade {alvo.id} continua na conversa {alvo.copiada_para}; "
+                                "não acrescente tarefas aqui.")
+    antes = pendencias(_conv()) if not args.get("feature_id") else []
     out = create_feature(_conv(), args.get("title"), args.get("goal"), args.get("tasks") or [],
                          args.get("feature_id") or None)
     linhas = [f"Funcionalidade '{out['title']}' (feature_id={out['feature_id']}): "
@@ -591,6 +714,8 @@ def _plan_feature(_root: Path, args: dict) -> str:
         dep = f" (depende de {', '.join(t['depends_on'])})" if t["depends_on"] else ""
         linhas.append(f"  {t['code']} {t['title']}{dep}")
     linhas.append("Agora execute uma por vez com run_task, respeitando as dependências.")
+    if antes:
+        linhas.append("ATENÇÃO, trabalho aberto de antes (resolva antes de seguir): " + "; ".join(antes) + ".")
     return "\n".join(linhas)
 
 
@@ -628,7 +753,10 @@ def _list_tasks(_root: Path, args: dict) -> str:
     marcas = {"completed": "[x]", "failed": "[!]", "needs_human": "[?]", "blocked": "[-]",
               "cancelled": "[/]"}
     linhas = []
+    copiadas = [f for f in dados["features"] if f.get("copiada_para")]
     for feat in dados["features"]:
+        if feat.get("copiada_para"):
+            continue  # continua em outra conversa: aqui é só consulta
         tarefas = [t for t in feat["tasks"] if not filtro or t["status"] == filtro]
         if filtro and not tarefas:
             continue
@@ -646,6 +774,8 @@ def _list_tasks(_root: Path, args: dict) -> str:
             linhas.append(f"  {marcas.get(t['status'], '[ ]')} {t['code']} {t['title']} [{t['status']}]"
                           + (f" — {'; '.join(extra)}" if extra else ""))
     linhas.append(f"Total: {dados['done']}/{dados['total']} concluídas, {dados['open']} abertas.")
+    if copiadas:
+        linhas.append(f"({len(copiadas)} funcionalidade(s) continuaram em outra conversa e não rodam aqui.)")
     return "\n".join(linhas)
 
 

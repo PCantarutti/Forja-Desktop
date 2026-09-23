@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
-               modelctl, taskdb, terminal, uploads, workspace)
+               modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
@@ -378,6 +378,7 @@ async def get_activity():
             # (notificação do sistema) mesmo com outra conversa aberta na tela.
             e["waiting"] = len(r.approvals)
             e["paused"] = r.paused
+            e["alertas"] = r.alertas  # "pode estar travada": a interface notifica quando sobe
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
     vivos = 0
@@ -390,7 +391,11 @@ async def get_activity():
                 entrada(int(s["conv"]))["servers"] += 1
     except Exception:  # runner fora do ar não pode derrubar a barra lateral
         pass
-    return {"conversations": list(por_conversa.values()), "servers": vivos}
+    try:  # modelo local no ar: o ponto verde da aba IA local não depende de o painel estar aberto
+        local = bool(localai.status().get("running"))
+    except Exception:
+        local = False
+    return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local}
 
 
 @app.post("/api/servers/clear")
@@ -1717,6 +1722,15 @@ def maestro_task_patch(conv_id: int, code: str, body: TaskPatch):
         raise HTTPException(400, str(e))
     finally:
         taskdb.CONV.reset(token)
+
+
+@app.post("/api/maestro/{conv_id}/nova-sessao")
+def maestro_nova_sessao(conv_id: int):
+    """Botão "Nova sessão": contexto limpo, com cópia do trabalho aberto (a lista fica nesta conversa)."""
+    if active_run(conv_id):
+        raise HTTPException(409, "Pare a Maestro antes de abrir uma sessão nova")
+    novo, copiadas = projstate.nova_sessao(conv_id)
+    return {"id": novo, "copied": copiadas}
 
 
 @app.post("/api/maestro/{conv_id}/task/{code}/attempt/{n}/rollback")

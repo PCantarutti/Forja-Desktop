@@ -14,6 +14,12 @@
 }
 
 html, body, #root { height: 100%; }
+/* Janela sem barra de título (Electron, titleBarOverlay): a faixa de cima arrasta a janela, o que é
+   clicável dentro dela não; e o espaço dos botões nativos (minimizar/maximizar/fechar) fica livre. As
+   variáveis titlebar-area-* só existem com a sobreposição ativa: no navegador comum vira padding 0. */
+.arrasta { -webkit-app-region: drag; }
+.arrasta :is(button, a, input, select, textarea, [role="tab"], [role="button"], [role="separator"]) { -webkit-app-region: no-drag; }
+.livre-controles { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 0.75rem); }
 body { background: var(--color-bg); color: var(--color-fg); font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
 
 /* Markdown das respostas */

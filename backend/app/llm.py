@@ -425,9 +425,19 @@ async def capabilities(provider: str, model: str) -> set[str] | None:
     LM Studio: GET /api/v0/models/{id} devolve `type` in llm | vlm | embeddings.
     """
     key = (provider, model)
+    kind, host = spec(provider)["type"], base_url(provider).removesuffix("/v1")
+    if kind == "llamacpp":
+        # Do próprio modelo, e não do que está carregado agora: perguntar pelo gemma com o Qwen no ar
+        # respondia pelo Qwen, e o cache guardava o erro para sempre. Barato (lê arquivos), sem cache.
+        try:
+            visao = localai.visao_do_alias(model)
+        except Exception:
+            visao = None
+        if visao is None:
+            visao = bool(localai.status().get("vision")) if localai.status().get("alias") == model else None
+        return None if visao is None else ({"vision"} if visao else set())
     if key in _CAPS:
         return _CAPS[key]
-    kind, host = spec(provider)["type"], base_url(provider).removesuffix("/v1")
     caps = None
     try:
         async with httpx.AsyncClient(timeout=5, headers=headers(provider)) as c:
@@ -437,9 +447,6 @@ async def capabilities(provider: str, model: str) -> set[str] | None:
             elif kind == "lmstudio":
                 t = (await c.get(f"{host}/api/v0/models/{model}")).json().get("type")
                 caps = None if not t else ({"vision"} if t == "vlm" else set())
-            elif kind == "llamacpp":
-                # Quem carregou o modelo fomos nós: visão = tem mmproj.
-                caps = {"vision"} if localai.status().get("vision") else set()
     except (httpx.HTTPError, ValueError, AttributeError):
         caps = None
     if caps is not None:

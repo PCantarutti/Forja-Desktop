@@ -141,6 +141,12 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     except ToolError as e:
         erro(str(e))
         return
+    with db.session() as s:
+        feat = s.get(db.Feature, task.feature_id)
+        copiada = feat.copiada_para if feat else None
+    if copiada:
+        erro(f"{task.code} foi copiada para a conversa {copiada}, onde o trabalho continua. Aqui a lista é só consulta.")
+        return
 
     if pendentes := taskdb.unmet_deps(task, conv_id):
         erro(f"{task.code} depende de {', '.join(pendentes)}, que ainda não concluíram. "

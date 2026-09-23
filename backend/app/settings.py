@@ -42,6 +42,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "max_workers": config.MAX_WORKERS,
     "model_lifecycle": config.MODEL_LIFECYCLE,
     "maestro_model": {"provider": "", "model": ""},
+    "maestro_visual": {"provider": "", "model": ""},
     "maestro_browser": True,
 }
 
@@ -107,6 +108,7 @@ def apply(values: dict | None = None) -> dict:
     config.MAX_WORKERS = int(values["max_workers"])
     config.MODEL_LIFECYCLE = values["model_lifecycle"]
     config.MAESTRO_MODEL = dict(values["maestro_model"])
+    config.MAESTRO_VISUAL = dict(values["maestro_visual"])
     config.MAESTRO_BROWSER = bool(values["maestro_browser"])
     config.BROWSER_IDLE_MINUTES = int(values["browser_idle_minutes"])
     config.BROWSER_SCALE = int(values["browser_scale"])
@@ -188,9 +190,9 @@ def validate(patch: dict, current: dict) -> dict:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out
-        elif key == "maestro_model":
+        elif key in ("maestro_model", "maestro_visual"):
             if not isinstance(raw, dict):
-                raise SettingsError("'maestro_model' precisa ser um objeto {provider, model}.")
+                raise SettingsError(f"'{key}' precisa ser um objeto {{provider, model}}.")
             provider, model = str(raw.get("provider") or ""), str(raw.get("model") or "")
             if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
                 raise SettingsError(f"Modelo da Maestro: provedor '{provider}' não existe.")

@@ -305,7 +305,7 @@ export default function Sidebar(props: {
 
   return (
     <aside className="flex w-64 shrink-0 flex-col bg-side">
-      <div className="flex items-center gap-2 px-3 pt-3 pb-1">
+      <div className="arrasta flex items-center gap-2 px-3 pt-3 pb-1">
         <SectionTabs value={props.section} onChange={props.onSection} sidebarHidden={false} onToggleSidebar={props.onHide} />
       </div>
       <div className="flex items-center gap-2.5 px-4 pt-2 pb-2">

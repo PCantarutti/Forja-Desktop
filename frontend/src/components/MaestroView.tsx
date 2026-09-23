@@ -17,11 +17,12 @@ import type {
   Approval, Draft, MaestroBoard, MaestroModels, MaestroTask, Message, ModelPhase, Stats, SubState, TaskAttempt,
   TaskStatus,
 } from "../types";
+import Confirma from "./Confirma";
 import ContextRing from "./ContextRing";
 import { Check, Cube, Split, X } from "./icons";
 import { aggregate, type TurnStats } from "./MessageView";
 import ModelPicker from "./ModelPicker";
-import { TABS as ABAS_DIREITA, type RightTab } from "./RightPanel";
+import { TABS as ABAS_DIREITA, seloDaAba, type EstadoAbas, type RightTab } from "./RightPanel";
 
 const POLL_MS = 2000;
 
@@ -74,11 +75,67 @@ const dur = (s?: number | null) => (s == null ? "" : s < 60 ? `${Math.round(s)}s
 
 // ------------------------------------------------------------------ layout redimensionável
 
-/** Larguras das três colunas (em partes proporcionais) e altura da doca (% da área). */
-type Layout = { cols: [number, number, number]; dock: number };
+/** Blocos do cockpit que o usuário reposiciona arrastando pelo cabeçalho. */
+type Bloco = "arvore" | "maestro" | "worker" | "doca";
+const BLOCOS: Bloco[] = ["arvore", "maestro", "worker", "doca"];
+
+/** Colunas da esquerda para a direita (com a largura de cada uma em partes proporcionais) e, opcional,
+ * uma faixa de largura inteira em cima ou embaixo delas, com a altura em % da área. Qualquer bloco
+ * vai para qualquer lugar: a doca pode virar coluna e a Maestro pode virar faixa. */
+type Layout = { colunas: Bloco[]; larguras: number[]; faixa: Bloco | null; faixaEmCima: boolean; dock: number };
 // Tarefas estreita de propósito: é uma lista de códigos e títulos curtos, e o espaço rende mais na
 // coluna da Maestro, onde está o texto e o composer.
-const LAYOUT_PADRAO: Layout = { cols: [14, 56, 30], dock: 36 };
+const LAYOUT_PADRAO: Layout = {
+  colunas: ["arvore", "maestro", "worker"], larguras: [14, 56, 30], faixa: "doca", faixaEmCima: false, dock: 36,
+};
+
+/** Onde o bloco arrastado cai: trocar de lugar com outro, entrar como coluna numa posição, ou virar a
+ * faixa de cima/baixo. */
+type Alvo = { tipo: "trocar"; com: Bloco } | { tipo: "coluna"; pos: number } | { tipo: "faixa"; emCima: boolean };
+
+/** Aplica o solto. Função pura: o mesmo layout entra, um novo sai (ou o mesmo, se não mudou nada). */
+function mover(l: Layout, id: Bloco, alvo: Alvo): Layout {
+  const colunas = [...l.colunas], larguras = [...l.larguras];
+  const i = colunas.indexOf(id);
+  if (alvo.tipo === "trocar") {
+    const j = colunas.indexOf(alvo.com);
+    if (alvo.com === id) return l;
+    if (i >= 0 && j >= 0) {
+      [colunas[i], colunas[j]] = [colunas[j], colunas[i]];
+      [larguras[i], larguras[j]] = [larguras[j], larguras[i]];
+      return { ...l, colunas, larguras };
+    }
+    // um dos dois é a faixa: trocam de papel, a coluna fica com a largura de antes
+    if (i >= 0) colunas[i] = alvo.com;
+    else colunas[j] = id;
+    return { ...l, colunas, faixa: i >= 0 ? id : alvo.com };
+  }
+  if (alvo.tipo === "faixa") {
+    if (l.faixa === id) return l.faixaEmCima === alvo.emCima ? l : { ...l, faixaEmCima: alvo.emCima };
+    if (l.faixa) {  // a faixa atual desce para a coluna que o bloco deixou
+      colunas[i] = l.faixa;
+      return { ...l, colunas, faixa: id, faixaEmCima: alvo.emCima };
+    }
+    if (colunas.length < 2) return l;  // sempre sobra ao menos uma coluna
+    colunas.splice(i, 1);
+    larguras.splice(i, 1);
+    return { ...l, colunas, larguras, faixa: id, faixaEmCima: alvo.emCima };
+  }
+  let pos = alvo.pos;
+  if (i >= 0) {
+    if (pos === i || pos === i + 1) return l;  // soltou no próprio lugar
+    const [larg] = larguras.splice(i, 1);
+    colunas.splice(i, 1);
+    if (pos > i) pos--;
+    colunas.splice(pos, 0, id);
+    larguras.splice(pos, 0, larg);
+    return { ...l, colunas, larguras };
+  }
+  // a faixa virou coluna: entra com a largura média das outras
+  colunas.splice(pos, 0, id);
+  larguras.splice(pos, 0, larguras.reduce((a, b) => a + b, 0) / larguras.length);
+  return { ...l, colunas, larguras, faixa: null };
+}
 const LAYOUT_CHAVE = "forja.maestro.layout";
 const COL_MIN = 10;              // % mínimo de cada coluna
 const DOCK_MIN = 12, DOCK_MAX = 75;
@@ -95,7 +152,21 @@ function lerLayouts(): Record<string, Layout> {
  * reajustar a cada conversa nova; o padrão só vale na primeira vez. */
 function layoutDe(chave: string): Layout {
   const todos = lerLayouts();
-  return todos[chave] ?? todos._ultimo ?? LAYOUT_PADRAO;
+  const salvo = (todos[chave] ?? todos._ultimo ?? {}) as Partial<Layout> & {
+    cols?: number[]; ordem?: Bloco[]; docaEmCima?: boolean;  // formato anterior: 3 colunas + doca
+  };
+  const l: Layout = Array.isArray(salvo.colunas) ? { ...LAYOUT_PADRAO, ...salvo } : {
+    ...LAYOUT_PADRAO,
+    dock: salvo.dock ?? LAYOUT_PADRAO.dock,
+    colunas: salvo.ordem ?? LAYOUT_PADRAO.colunas,
+    larguras: salvo.cols ?? LAYOUT_PADRAO.larguras,
+    faixaEmCima: !!salvo.docaEmCima,
+  };
+  // Conferência: cada bloco uma vez só, nenhum faltando; senão, padrão (layout de versão diferente).
+  const todosBlocos = [...l.colunas, ...(l.faixa ? [l.faixa] : [])];
+  const valido = l.colunas.length > 0 && l.larguras.length === l.colunas.length
+    && [...todosBlocos].sort().join() === [...BLOCOS].sort().join();
+  return valido ? l : LAYOUT_PADRAO;
 }
 
 function useLayout(convId: number | null) {
@@ -172,10 +243,13 @@ export default function MaestroView(props: {
   // Conteúdo das abas do painel direito, montado pelo App: a doca mostra os mesmos painéis.
   painel: (tab: RightTab) => React.ReactNode;
   onDecide: (callId: string, aprovado: boolean) => void;
+  // Selos das abas (ponto verde, contadores): os mesmos do painel direito do chat e do agente.
+  estadoAbas: EstadoAbas;
   // Intervenção humana (§27): pausar a execução e pedir algo à Maestro (reenviar uma tarefa).
   pausado: boolean;
   onPausar: (sim: boolean) => void;
   onPedir: (texto: string) => void;
+  onNovaSessao: () => void;
 }) {
   const { convId, board, onBoard } = props;
   const { layout, setLayout, salvar } = useLayout(convId);
@@ -188,33 +262,122 @@ export default function MaestroView(props: {
     atual.current = layout;
   }, [layout]);
 
-  function arrastaColuna(i: 0 | 1, e: PointerEvent) {
+  function arrastaColuna(i: number, e: PointerEvent) {
     const box = colunas.current?.getBoundingClientRect();
     if (!box) return;
     setLayout((l) => {
-      const [a, b, c] = l.cols;
-      // posição do ponteiro em "partes" desde a borda esquerda
-      const pos = ((e.clientX - box.left) / box.width) * (a + b + c);
-      const cols: [number, number, number] = [a, b, c];
-      if (i === 0) {
-        const novo = Math.min(Math.max(pos, COL_MIN), a + b - COL_MIN);
-        cols[0] = novo;
-        cols[1] = a + b - novo;
-      } else {
-        const novo = Math.min(Math.max(pos - a, COL_MIN), b + c - COL_MIN);
-        cols[1] = novo;
-        cols[2] = b + c - novo;
-      }
-      return { ...l, cols };
+      const larguras = [...l.larguras];
+      const total = larguras.reduce((a, b) => a + b, 0);
+      const par = larguras[i] + larguras[i + 1];
+      const minimo = (COL_MIN / 100) * total;
+      // posição do ponteiro em "partes", contada da borda esquerda da coluna i
+      const pos = ((e.clientX - box.left) / box.width) * total - larguras.slice(0, i).reduce((a, b) => a + b, 0);
+      larguras[i] = Math.min(Math.max(pos, minimo), par - minimo);
+      larguras[i + 1] = par - larguras[i];
+      return { ...l, larguras };
     });
   }
 
   function arrastaDoca(e: PointerEvent) {
     const box = area.current?.getBoundingClientRect();
     if (!box) return;
-    const dock = ((box.bottom - e.clientY) / box.height) * 100;
-    setLayout((l) => ({ ...l, dock: Math.min(Math.max(dock, DOCK_MIN), DOCK_MAX) }));
+    setLayout((l) => {
+      const dock = ((l.faixaEmCima ? e.clientY - box.top : box.bottom - e.clientY) / box.height) * 100;
+      return { ...l, dock: Math.min(Math.max(dock, DOCK_MIN), DOCK_MAX) };
+    });
   }
+
+  // Reposicionar: segurar o cabeçalho de um bloco "descola" o bloco da tela (sombra, leve aumento) e
+  // ele segue o ponteiro; o indicador azul mostra onde vai cair. Solto: lateral de uma coluna insere
+  // ali, o meio troca os dois de lugar, a borda de cima/baixo da área vira a faixa de largura inteira.
+  // Salvo na hora, por conversa, junto com o redimensionamento.
+  type Caixa = { left: number; top: number; width: number; height: number };
+  const [arrastando, setArrastando] = useState<Bloco | null>(null);
+  const [indicador, setIndicador] = useState<{ alvo: Alvo; caixa: Caixa } | null>(null);
+
+  function alvoEm(id: Bloco, x: number, y: number): { alvo: Alvo; caixa: Caixa } | null {
+    const a = area.current?.getBoundingClientRect();
+    if (!a) return null;
+    const l = atual.current;
+    const achado = ((): { alvo: Alvo; caixa: Caixa } | null => {
+      const borda = Math.min(40, a.height * 0.08);
+      if (y < a.top + borda || y > a.bottom - borda) {
+        const emCima = y < a.top + borda;
+        return { alvo: { tipo: "faixa", emCima }, caixa: { left: 0, top: emCima ? 0 : a.height - 4, width: a.width, height: 4 } };
+      }
+      // elementsFromPoint: o bloco levantado não recebe ponteiro e a cortina do arrasto é ignorada
+      const el = document.elementsFromPoint(x, y)
+        .map((e) => (e as HTMLElement).closest<HTMLElement>("[data-bloco]")).find(Boolean);
+      const com = el?.dataset.bloco as Bloco | undefined;
+      if (!el || !com) return null;
+      const r = el.getBoundingClientRect();
+      const caixa = { left: r.left - a.left, top: r.top - a.top, width: r.width, height: r.height };
+      const j = l.colunas.indexOf(com);
+      const fx = (x - r.left) / r.width;
+      if (j >= 0 && (fx < 0.25 || fx > 0.75)) {
+        const depois = fx > 0.75;
+        return { alvo: { tipo: "coluna", pos: j + (depois ? 1 : 0) },
+                 caixa: { ...caixa, left: caixa.left + (depois ? r.width : 0) - 2, width: 4 } };
+      }
+      return { alvo: { tipo: "trocar", com }, caixa };
+    })();
+    // soltar ali não mudaria nada: sem indicador
+    return achado && mover(l, id, achado.alvo) !== l ? achado : null;
+  }
+
+  /** Alça (cabeçalho) de um bloco: segurar e arrastar. Os botões dentro dela continuam clicáveis. */
+  const alca = (id: Bloco): React.HTMLAttributes<HTMLDivElement> => ({
+    title: "Segure e arraste para mudar este bloco de lugar",
+    style: { cursor: arrastando ? "grabbing" : "grab", userSelect: "none" },
+    onPointerDown: (e) => {
+      if (e.button !== 0) return;
+      const bloco = e.currentTarget.closest<HTMLElement>("[data-bloco]");
+      if (!bloco) return;
+      const x0 = e.clientX, y0 = e.clientY, estilo = bloco.style.cssText;
+      let ativo = false;
+      let ultimo: { alvo: Alvo; caixa: Caixa } | null = null;
+      const mexe = (ev: PointerEvent) => {
+        const dx = ev.clientX - x0, dy = ev.clientY - y0;
+        if (!ativo) {
+          if (Math.hypot(dx, dy) < 6) return;  // clique comum num botão da alça não vira arrasto
+          ativo = true;
+          setArrastando(id);
+          document.body.style.userSelect = "none";
+          bloco.style.cssText = estilo + ";position:relative;z-index:50;pointer-events:none;border-radius:12px;"
+            + "opacity:.94;scale:1.025;transition:scale .15s ease-out,box-shadow .15s ease-out;"
+            + "box-shadow:0 28px 60px -12px rgb(0 0 0/.65),0 0 0 1px rgb(56 189 248/.55);";
+        }
+        bloco.style.setProperty("translate", `${dx}px ${dy}px`);
+        ultimo = alvoEm(id, ev.clientX, ev.clientY);
+        setIndicador(ultimo);
+      };
+      const solta = () => {
+        window.removeEventListener("pointermove", mexe);
+        window.removeEventListener("pointerup", solta);
+        window.removeEventListener("pointercancel", solta);
+        if (!ativo) return;
+        bloco.style.cssText = estilo;
+        document.body.style.userSelect = "";
+        // o clique que o navegador dispara depois do arrasto não pode trocar a aba sob o ponteiro
+        const engole = (c: MouseEvent) => c.stopPropagation();
+        window.addEventListener("click", engole, { capture: true, once: true });
+        setTimeout(() => window.removeEventListener("click", engole, { capture: true }), 0);
+        setArrastando(null);
+        setIndicador(null);
+        const alvo = ultimo?.alvo;
+        if (alvo) {
+          setLayout((l) => {
+            const novo = mover(l, id, alvo);
+            if (novo !== l) salvar(novo);
+            return novo;
+          });
+        }
+      };
+      window.addEventListener("pointermove", mexe);
+      window.addEventListener("pointerup", solta);
+      window.addEventListener("pointercancel", solta);
+    },
+  });
   const [doca, setDoca] = useState<DocaTab>("browser");
   const [selecionada, setSelecionada] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<MaestroTask | null>(null);
@@ -306,39 +469,26 @@ export default function MaestroView(props: {
     setAbaWorker(vivo ? vivo.id : "hist");
   }
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-      <Cabecalho board={board} running={props.running} tarefa={emAndamento} modelPhase={props.modelPhase}
-                 model={props.model} pausado={props.pausado} onPausar={props.onPausar} />
-
-      <div ref={area} className="flex min-h-0 flex-1 flex-col">
-      <div
-        ref={colunas}
-        className="grid min-h-0"
-        style={{
-          flex: `${100 - layout.dock} 1 0`,
-          gridTemplateColumns: `minmax(0,${layout.cols[0]}fr) auto minmax(0,${layout.cols[1]}fr) auto minmax(0,${layout.cols[2]}fr)`,
-        }}
-      >
-        <Arvore board={board} selecionada={selecionada} onSelect={abrirTarefa} />
-        <Divisor eixo="x" onArrasto={(e) => arrastaColuna(0, e)} onFim={() => salvar(atual.current)} />
-        <ColunaMaestro conversa={props.conversa} composer={props.composer} />
-        <Divisor eixo="x" onArrasto={(e) => arrastaColuna(1, e)} onFim={() => salvar(atual.current)} />
-        <ColunaWorker
-          key={foco ?? ""}
-          abas={abasWorker}
-          aba={abaWorker}
-          onAba={setAbaWorker}
-          detalhe={detalhe}
-          approvals={props.approvals}
-          conversar={props.renderConversa}
-        />
-      </div>
-
-      <Divisor eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />
-
-      <div className={`${card} flex min-h-[120px] flex-col`} style={{ flex: `${layout.dock} 1 0` }}>
-        <div className="flex shrink-0 items-center gap-1 border-b border-line px-2 py-1">
+  // Conteúdo de cada bloco, para desenhar como coluna ou como faixa.
+  const bloco = (id: Bloco) =>
+    id === "arvore" ? (
+      <Arvore board={board} selecionada={selecionada} onSelect={abrirTarefa} alca={alca("arvore")} />
+    ) : id === "maestro" ? (
+      <ColunaMaestro conversa={props.conversa} composer={props.composer} alca={alca("maestro")} />
+    ) : id === "worker" ? (
+      <ColunaWorker
+        key={foco ?? ""}
+        abas={abasWorker}
+        aba={abaWorker}
+        onAba={setAbaWorker}
+        detalhe={detalhe}
+        approvals={props.approvals}
+        conversar={props.renderConversa}
+        alca={alca("worker")}
+      />
+    ) : (
+      <div className={`${card} flex min-h-[120px] flex-col`}>
+        <div {...alca("doca")} className="@container flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2 py-1">
           {([
             ...DOCA_ORDEM.slice(0, 3).map((id) => abaDireita(id)),
             ["model", "Modelo · VRAM", <Cube className="size-3.5" />],
@@ -348,12 +498,20 @@ export default function MaestroView(props: {
             <button
               key={id}
               onClick={() => setDoca(id as DocaTab)}
-              className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs ${
+              title={label}
+              className={`flex min-w-0 flex-initial items-center gap-1.5 rounded-md px-2 py-1 text-xs @max-[40rem]:flex-1 @max-[40rem]:justify-center ${
                 doca === id ? "bg-raised text-fg" : "text-faint hover:text-fg"
               }`}
             >
-              {icone}
-              {label}
+              <span className="flex shrink-0">{icone}</span>
+              {/* Doca apertando: as abas encolhem por igual e o nome corta com "…"; abaixo de ~40rem
+                  ("Nav…" já não cabe) fica só o ícone, com as abas espalhadas pela largura. O nome
+                  inteiro fica no title. */}
+              <span className="min-w-[3.2em] truncate @max-[40rem]:hidden">{label}</span>
+              {id !== "model" && id !== "task" && (() => {
+                const selo = seloDaAba(id as RightTab, props.estadoAbas);
+                return selo && <span className="flex shrink-0">{selo}</span>;
+              })()}
             </button>
           ))}
         </div>
@@ -386,6 +544,57 @@ export default function MaestroView(props: {
           )}
         </div>
       </div>
+    );
+  // A faixa de largura inteira (em cima ou embaixo das colunas), com o divisor do lado das colunas.
+  const faixa = layout.faixa && [
+    ...(layout.faixaEmCima ? [] : [<Divisor key="divisor-faixa" eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />]),
+    <div key="faixa" data-bloco={layout.faixa} className="flex min-h-[120px] flex-col [&>*]:min-h-0 [&>*]:flex-1"
+         style={{ flex: `${layout.dock} 1 0` }}>
+      {bloco(layout.faixa)}
+    </div>,
+    ...(layout.faixaEmCima ? [<Divisor key="divisor-faixa" eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />] : []),
+  ];
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
+      <Cabecalho board={board} running={props.running} tarefa={emAndamento} modelPhase={props.modelPhase}
+                 model={props.model} pausado={props.pausado} onPausar={props.onPausar}
+                 onNovaSessao={props.convId === null ? undefined : props.onNovaSessao} />
+
+      <div ref={area} className="relative flex min-h-0 flex-1 flex-col">
+        {layout.faixa && layout.faixaEmCima && faixa}
+        <div
+          ref={colunas}
+          className="grid min-h-0"
+          style={{
+            flex: layout.faixa ? `${100 - layout.dock} 1 0` : "1 1 0",
+            gridTemplateColumns: layout.larguras.map((w) => `minmax(0,${w}fr)`).join(" auto "),
+          }}
+        >
+          {layout.colunas.flatMap((id, i) => [
+            ...(i > 0 ? [<Divisor key={`d${i}`} eixo="x" onArrasto={(e) => arrastaColuna(i - 1, e)} onFim={() => salvar(atual.current)} />] : []),
+            <div key={id} data-bloco={id} className="flex min-h-0 min-w-0 flex-col [&>*]:min-h-0 [&>*]:flex-1">
+              {bloco(id)}
+            </div>,
+          ])}
+        </div>
+        {layout.faixa && !layout.faixaEmCima && faixa}
+
+        {arrastando && (
+          <>
+            {/* cortina: segura o ponteiro durante o arrasto (inclusive sobre a view nativa do
+                navegador, que se esconde quando algo cobre o painel) */}
+            <div className="fixed inset-0 z-40 cursor-grabbing" />
+            {indicador && (
+              <div
+                className={`pointer-events-none absolute z-[60] rounded-xl transition-all duration-100 ${
+                  indicador.alvo.tipo === "trocar" ? "bg-sky-500/10 ring-2 ring-sky-500/70" : "bg-sky-500"
+                }`}
+                style={indicador.caixa}
+              />
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -407,6 +616,7 @@ function Cabecalho(props: {
   model: string;
   pausado: boolean;
   onPausar: (sim: boolean) => void;
+  onNovaSessao?: () => void;
 }) {
   const b = props.board;
   const pct = b && b.total ? Math.round((b.done / b.total) * 100) : 0;
@@ -438,6 +648,15 @@ function Cabecalho(props: {
           <span className={props.pausado ? "text-amber-400" : "text-sky-400"}>{props.pausado ? "pausado" : "pensando…"}</span>
         ) : (
           <span className="text-faint">parado</span>
+        )}
+        {props.onNovaSessao && !props.running && (
+          <Confirma
+            rotulo="Nova sessão"
+            pergunta="Abrir sessão nova?"
+            titulo="Conversa nova com contexto limpo e cópia das tarefas abertas; a lista continua aqui para consulta"
+            className="rounded-md border border-line px-2 py-0.5 text-muted hover:bg-raised hover:text-fg"
+            onSim={props.onNovaSessao}
+          />
         )}
         {props.running && (
           <button
@@ -479,11 +698,16 @@ function TrocaDeModelo({ fase }: { fase: ModelPhase }) {
 
 // ------------------------------------------------------------------ árvore
 
-function Arvore(props: { board: MaestroBoard | null; selecionada: string | null; onSelect: (c: string) => void }) {
+function Arvore(props: {
+  board: MaestroBoard | null;
+  selecionada: string | null;
+  onSelect: (c: string) => void;
+  alca?: React.HTMLAttributes<HTMLDivElement>;
+}) {
   const b = props.board;
   return (
     <div className={`${card} flex min-h-0 flex-col`}>
-      <div className={titulo}>Tarefas</div>
+      <div {...props.alca} className={titulo}>Tarefas</div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
         {!b || !b.total ? (
           <p className="px-2 py-6 text-center text-xs text-faint">
@@ -493,9 +717,14 @@ function Arvore(props: { board: MaestroBoard | null; selecionada: string | null;
           </p>
         ) : (
           b.features.map((f) => (
-            <div key={f.id} className="mb-2">
+            <div key={f.id} className={`mb-2 ${f.copiada_para ? "opacity-50" : ""}`}>
               <div className="flex items-baseline gap-1.5 px-2 py-1">
                 <span className="truncate text-xs font-medium">{f.title}</span>
+                {!!f.copiada_para && (
+                  <span className="shrink-0 text-[10px] text-faint" title="O trabalho continua numa sessão nova; aqui é só consulta">
+                    continua em outra conversa
+                  </span>
+                )}
                 {f.status === "done" && <Check className="size-3 shrink-0 text-emerald-400" />}
                 {f.status === "validating" && (
                   <span className="shrink-0 animate-pulse text-[10px] text-violet-400" title="Todas as tarefas concluíram; a Maestro está validando a entrega">
@@ -543,10 +772,14 @@ function Arvore(props: { board: MaestroBoard | null; selecionada: string | null;
 // ------------------------------------------------------------------ colunas
 
 /** Coluna da Maestro: a conversa do chat (o mesmo bloco do App) e o composer do chat. */
-function ColunaMaestro(props: { conversa: React.ReactNode; composer: React.ReactNode }) {
+function ColunaMaestro(props: {
+  conversa: React.ReactNode;
+  composer: React.ReactNode;
+  alca?: React.HTMLAttributes<HTMLDivElement>;
+}) {
   return (
     <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
-      <div className={titulo}>Maestro</div>
+      <div {...props.alca} className={titulo}>Maestro</div>
       {props.conversa}
       <div className="shrink-0">{props.composer}</div>
     </div>
@@ -578,6 +811,7 @@ function ColunaWorker(props: {
   detalhe: MaestroTask | null;
   approvals: Record<string, Approval>;
   conversar: Conversar;
+  alca?: React.HTMLAttributes<HTMLDivElement>;
 }) {
   const atual = props.abas.find((x) => x.id === props.aba) ?? props.abas[0] ?? null;
   const [tentativa, setTentativa] = useState<number | null>(null);
@@ -607,7 +841,7 @@ function ColunaWorker(props: {
 
   return (
     <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
-      <div className="flex shrink-0 items-center gap-1 px-3 py-1.5">
+      <div {...props.alca} className="flex shrink-0 items-center gap-1 px-3 py-1.5">
         <span className="text-[11px] font-medium uppercase tracking-wide text-faint">
           {props.abas.filter((x) => x.tipo === "vivo" && x.w.status).length > 1 ? "Workers" : "Worker"}
         </span>
@@ -911,10 +1145,8 @@ function PainelTarefa(props: {
           )
         )}
         {t.status !== "cancelled" && t.status !== "completed" && (
-          <button className={`${acao} hover:text-red-300`} disabled={trabalhando}
-                  onClick={() => confirm(`Cancelar ${t.code}?`) && muda({ status: "cancelled" })}>
-            Cancelar tarefa
-          </button>
+          <Confirma rotulo="Cancelar tarefa" pergunta={`Cancelar ${t.code}?`} className={`${acao} hover:text-red-300`}
+                    desabilitado={trabalhando} onSim={() => void muda({ status: "cancelled" })} />
         )}
       </div>
       {erro && <p className="text-red-400">{erro}</p>}
@@ -933,8 +1165,6 @@ function PainelTarefa(props: {
           <div className="mb-1 text-faint">Tentativas</div>
           {t.attempts.map((a) => (
             <Tentativa key={a.n} a={a} onDesfazer={async () => {
-              if (!confirm(`Desfazer a tentativa #${a.n} de ${t.code}? Os arquivos que ela escreveu voltam ao estado de antes dela `
-                + "(mudança feita depois nesses mesmos arquivos também sai). A tarefa volta para a fila.")) return;
               setErro("");
               try {
                 const r = await api.post<{ task: MaestroTask; restored: string[] }>(
@@ -1061,10 +1291,13 @@ function Tentativa({ a, onDesfazer }: { a: TaskAttempt; onDesfazer: () => void }
           ))}
           {r?.summary && <p className="whitespace-pre-wrap text-muted">{r.summary}</p>}
           {!!r?.changes?.length && a.status !== "running" && (
-            <button onClick={onDesfazer}
-                    className="mt-1 rounded-md border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-red-300">
-              Desfazer esta tentativa
-            </button>
+            <Confirma
+              rotulo="Desfazer esta tentativa"
+              pergunta="Desfazer? Os arquivos voltam a antes dela"
+              titulo="Mudança feita depois nesses mesmos arquivos também sai; a tarefa volta para a fila"
+              className="mt-1 rounded-md border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-red-300"
+              onSim={onDesfazer}
+            />
           )}
         </div>
       )}

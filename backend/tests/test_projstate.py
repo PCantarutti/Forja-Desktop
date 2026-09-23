@@ -326,7 +326,8 @@ def _outra(root):
         return c.id
 
 
-def test_conversa_nova_assume_o_trabalho_aberto_da_pasta(projeto):
+def test_conversa_nova_copia_o_trabalho_aberto_e_a_lista_fica(projeto):
+    """Cópia, não mudança: a conversa antiga continua mostrando a lista (marcada), e a nova executa."""
     root, conv = projeto
     antiga = _outra(root)
     taskdb.create_feature(antiga, "Feita", "", [{"title": "F", "contract": {"goal": "f"}}])
@@ -346,8 +347,12 @@ def test_conversa_nova_assume_o_trabalho_aberto_da_pasta(projeto):
     a = next(t for t in feats["Aberta"]["tasks"] if t["title"] == "A")
     b = next(t for t in feats["Aberta"]["tasks"] if t["title"] == "B")
     assert b["depends_on"] == [a["code"]]                          # dependência renumerada junto
-    assert [f["title"] for f in taskdb.board(antiga)["features"]] == ["Feita"]  # concluída fica
+    velhas = {f["title"]: f for f in taskdb.board(antiga)["features"]}
+    assert set(velhas) == {"Feita", "Aberta"} and velhas["Aberta"]["copiada_para"] == conv
+    assert len(velhas["Aberta"]["tasks"]) == 2                     # a lista continua lá
     taskdb.set_status(a["code"], "queued", conv)                   # e o run_task daqui a enxerga
+    # progress.md não mostra a funcionalidade duas vezes
+    assert (root / ".forja/progress.md").read_text("utf-8").count("### Aberta") == 1
 
 
 def test_nao_assume_de_conversa_que_esta_rodando(projeto):
@@ -367,73 +372,31 @@ def test_codigo_novo_depois_de_assumir_nao_repete(projeto):
     assert out["tasks"][0]["code"] == "TASK-004"
 
 
-# ------------------------------------------------------------------ virada de sessão
+# ------------------------------------------------------------------ nova sessão (botão)
 
-def test_session_note_com_new_session_abre_conversa_e_leva_o_trabalho(projeto):
-    root, conv = projeto
-    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a"}}])
-    caixa = {}
-    tok = projstate.VIRADA.set(caixa)
-    try:
-        texto = projstate.SESSION_NOTE.handler(None, {"objective": "Auth", "next_step": "rodar TASK-001",
-                                                      "new_session": True})
-    finally:
-        projstate.VIRADA.reset(tok)
-    assert "conversa nova" in texto and caixa["nota"] == "SESSION-001.md" and caixa["proximo"] == "rodar TASK-001"
-    nova = caixa["para"]
-    with db.session() as sess:
-        c = sess.get(db.Conversation, nova)
-        assert c.kind == "maestro" and c.workspace == str(root)
-    assert taskdb.board(nova)["total"] == 1 and taskdb.board(conv)["total"] == 0
-
-
-def test_virada_de_sessao_continua_sozinha_na_conversa_nova(projeto, monkeypatch):
-    """A execução desta conversa para e a da nova começa com a nota — sem o histórico daqui."""
+def test_nova_sessao_copia_o_trabalho_e_a_antiga_nao_executa_mais(projeto):
     import asyncio
 
-    from app import config, llm, modelctl
+    from app import maestro
     root, conv = projeto
-    (root / "FORJA.md").write_text("# Projeto\nCalc\n", "utf-8")
-    vistos: list = []
-
-    async def fake_stream(provider, model, messages, tools, *a, **k):
-        vistos.append(messages)
-        if len(vistos) == 1:
-            yield "done", {"tool_calls": [{"id": "c1", "name": "session_note", "arguments": {
-                "objective": "Calc", "next_step": "fazer a divisão", "new_session": True}}],
-                "prompt_tokens": 1, "completion_tokens": 1}
-        else:
-            yield "content", "Continuando."
-            yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
-
-    async def fake_limit(*a):
-        return 131072
-
-    monkeypatch.setattr(llm, "chat_stream", fake_stream)
-    monkeypatch.setattr(llm, "context_limit", fake_limit)
-    monkeypatch.setitem(config.PROVIDERS, "local", {"id": "local", "type": "llamacpp", "url": "", "api_key": ""})
-    monkeypatch.setattr(modelctl, "carregado", lambda spec: True)
-
-    async def cena():
-        req = agent.RunRequest(content="longa conversa", provider="local", model="m", mode="maestro",
-                               permission="auto")
-        eventos = [ev async for ev in agent.run_agent(conv, req, agent.Run(conv))]
-        virada = next(e for e in eventos if e["type"] == "session_rollover")
-        nova = agent.RUNS[virada["run_id"]]
-        for _ in range(500):
-            if nova.finished:
-                break
-            await asyncio.sleep(0.01)
-        return virada, nova
-
-    virada, nova = asyncio.run(cena())
-    assert nova.finished and virada["conversation_id"] != conv
-    pedido = str(vistos[1])
-    assert "longa conversa" not in pedido                          # sem o histórico da anterior
-    assert "SESSION-001.md" in pedido and "fazer a divisão" in pedido
+    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a"}}])
+    novo, copiadas = projstate.nova_sessao(conv)
+    assert copiadas == ["Auth"] and taskdb.board(novo)["total"] == 1
+    assert taskdb.board(conv)["features"][0]["copiada_para"] == novo  # lista fica, marcada
+    assert "continuaram em outra conversa" in taskdb.LIST_TASKS.handler(None, {})
     with db.session() as sess:
-        msgs = sess.query(db.Message).filter(db.Message.conversation_id == virada["conversation_id"]).all()
-        assert any(m.role == "assistant" and m.content == "Continuando." for m in msgs)
+        assert sess.get(db.Conversation, novo).workspace == str(root)
+    run_obj = agent.Run(conv)
+    out: dict = {}
+    req = agent.RunRequest(content="x", provider="lmstudio", model="m", mode="maestro", permission="bypass")
+
+    async def roda():
+        async for _ in maestro.run_task(conv, {"id": "r1", "name": "run_task", "arguments": {"code": "TASK-001"}},
+                                        req, run_obj, out, None):
+            pass
+
+    asyncio.run(roda())
+    assert out["status"] == "erro" and f"conversa {novo}" in out["text"]
 
 
 # ------------------------------------------------------------------ papel da Maestro
@@ -493,3 +456,121 @@ def test_loop_da_maestro_recusa_escrever_codigo(projeto, monkeypatch):
     assert res["w1"]["status"] == "erro" and "não implementa" in res["w1"]["content"]
     assert not (root / "calc.py").exists()
     assert res["w2"]["status"] == "ok" and (root / "FORJA.md").read_text("utf-8").startswith("# P")
+
+
+
+# ------------------------------------------------------------------ StockFlow: duplicatas e pendências
+
+def test_plano_repetindo_tarefa_aberta_e_recusado(projeto):
+    root, conv = projeto
+    (root / "FORJA.md").write_text("# P\nx\n", "utf-8")
+    out = taskdb.create_feature(conv, "Categorias", "", [{"title": "Listagem de Categorias", "contract": {"goal": "g"}}])
+    with pytest.raises(ToolError, match="TASK-001"):
+        taskdb.PLAN_FEATURE.handler(None, {"feature_id": out["feature_id"], "tasks": [
+            {"title": "Listagem de categorias", "contract": {"goal": "listar"}}]})
+
+
+def test_dependencia_cancelada_nao_trava(projeto):
+    _, conv = projeto
+    taskdb.create_feature(conv, "C", "", [{"title": "A", "contract": {"goal": "a"}},
+                                          {"title": "B", "contract": {"goal": "b"}, "depends_on": ["1"]}])
+    taskdb.set_status("TASK-001", "cancelled", conv)
+    assert taskdb.unmet_deps(taskdb.get("TASK-002", conv), conv) == []
+
+
+def test_nova_funcionalidade_lembra_o_que_ficou_para_tras(projeto):
+    root, conv = projeto
+    (root / "FORJA.md").write_text("# P\nx\n", "utf-8")
+    taskdb.create_feature(conv, "Produtos", "", [{"title": "Seed", "contract": {"goal": "a"}},
+                                                 {"title": "Seed resiliente", "contract": {"goal": "b"}}])
+    for st in ("queued", "implementing", "reviewing"):
+        taskdb.set_status("TASK-001", st, conv)
+    texto = taskdb.PLAN_FEATURE.handler(None, {"title": "Categorias", "tasks": [{"title": "Store", "contract": {"goal": "c"}}]})
+    assert "TASK-001" in texto and "espera sua revisão" in texto and "TASK-002" in texto
+
+
+@pytest.mark.parametrize("cmd", ["npm run dev; browser_validate('http://localhost:5174')", "npm run dev",
+                                 "vite", "serve_start(npm run dev)"])
+def test_verificacao_que_nao_termina_e_recusada(cmd):
+    with pytest.raises(ToolError, match="verify_command"):
+        taskdb.normalize_contract({"goal": "g", "verify_command": cmd})
+    assert taskdb.normalize_contract({"goal": "g", "verify_command": "npm run build"})["verify_command"] == "npm run build"
+
+
+def test_run_command_com_servidor_de_desenvolvimento_manda_usar_serve_start(tmp_path):
+    from app import shell
+    with pytest.raises(ToolError, match="serve_start"):
+        shell.run_command(tmp_path, {"command": "npm run dev"})
+
+
+def test_serve_start_reaproveita_o_servidor_que_ja_roda(tmp_path):
+    import sys
+    from app import shell
+    script = tmp_path / "srv.py"
+    script.write_text("import time\nprint('Local: http://localhost:5174/', flush=True)\ntime.sleep(30)\n", "utf-8")
+    cmd = f'& "{sys.executable}" "{script}"'
+    try:
+        primeiro = shell.serve_start(tmp_path, {"command": cmd, "name": "vite"})
+        assert "http://localhost:5174" in primeiro
+        segundo = shell.serve_start(tmp_path, {"command": cmd, "name": "outro"})
+        assert "já está rodando" in segundo and "http://localhost:5174" in segundo
+        assert "outro" not in [s["name"] for s in shell.list_servers()]
+    finally:
+        shell.close_all()
+
+
+def test_maestro_nao_para_por_turno_mudo_avisa_e_segue(projeto, monkeypatch):
+    """No StockFlow a execução morreu num único turno mudo: os lembretes tinham sido gastos 8 min antes."""
+    import asyncio
+
+    from app import config, llm, modelctl
+    root, conv = projeto
+    (root / "FORJA.md").write_text("# P\nx\n", "utf-8")
+    passos = []
+
+    async def stream(provider, model, messages, tools, *a, **k):
+        passos.append(1)
+        n = len(passos)
+        if n == 3:
+            yield "done", {"tool_calls": [{"id": "c1", "name": "list_tasks", "arguments": {}}],
+                           "prompt_tokens": 1, "completion_tokens": 1}
+            return
+        if n < 10:                           # mudos: 2 no começo, 6 seguidos depois do list_tasks
+            yield "reasoning", "pensando..."
+        else:
+            yield "content", "Pronto."
+        yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
+
+    async def limite(*a):
+        return 131072
+
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    monkeypatch.setattr(llm, "context_limit", limite)
+    monkeypatch.setitem(config.PROVIDERS, "local", {"id": "local", "type": "llamacpp", "url": "", "api_key": ""})
+    monkeypatch.setattr(modelctl, "carregado", lambda spec: True)
+    run = agent.Run(conv)
+
+    async def cena():
+        req = agent.RunRequest(content="faça", provider="local", model="m", mode="maestro", permission="bypass")
+        return [ev async for ev in agent.run_agent(conv, req, run)]
+
+    eventos = asyncio.run(cena())
+    assert len(passos) == 10                                   # não parou: chegou à resposta final
+    assert run.alertas >= 1 and any(e["type"] == "alerta" for e in eventos)
+    avisos = [e["message"]["content"] for e in eventos if e["type"] == "event"
+              and (e["message"].get("meta") or {}).get("kind") == "warning"]
+    assert not any("mesmo após" in a for a in avisos)          # o aviso de encerramento sumiu
+
+
+def test_verificacao_mencionando_ferramenta_sem_parenteses_tambem_e_recusada():
+    """Numa rodada real: 'browser_validate http://localhost:8000 (necessário rodar o servidor primeiro)'."""
+    with pytest.raises(ToolError, match="verify_command"):
+        taskdb.normalize_contract({"goal": "g", "verify_command": "browser_validate http://localhost:8000"})
+
+
+def test_erro_de_clique_distingue_elemento_sumido_de_elemento_que_nao_aceita():
+    from app import browser
+    existe = Exception("Timeout 5000ms exceeded.\n  - locator resolved to <button id=\"b\">+1</button>\n"
+                       "  - element is outside of the viewport\n")
+    assert "existe, mas não aceitou" in browser._act_err("f1e6", existe) and "viewport" in browser._act_err("f1e6", existe)
+    assert "a página mudou" in browser._act_err("f1e6", Exception("Timeout 5000ms exceeded.\n  - waiting for locator"))

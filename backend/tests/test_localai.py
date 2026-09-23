@@ -873,3 +873,19 @@ def test_avisa_projetor_incompativel_com_o_runtime(mmproj, exe, avisa):
     assert bool(msg) is avisa
     if avisa:
         assert "mmproj-F16" in msg and "CUDA" in msg
+
+
+def test_visao_por_modelo_pelo_mmproj_da_pasta(isolado, monkeypatch):
+    """Visão é do modelo, não do servidor: o que tem mmproj na pasta enxerga mesmo descarregado."""
+    monkeypatch.setattr(localai, "kind_of", lambda f: "chat")
+    for nome, com_projetor in (("Qwen3.6", True), ("Coder", False)):
+        pasta = isolado / "modelos" / nome
+        pasta.mkdir()
+        gguf(pasta, f"{nome}-Q4_K_M.gguf")
+        if com_projetor:
+            gguf(pasta, "mmproj-F16.gguf")
+    visao = {m["name"]: m["vision"] for m in localai.state()["models"]}
+    assert visao == {"Qwen3.6-Q4_K_M": True, "Coder-Q4_K_M": False}
+    assert localai.visao_do_alias("Qwen3.6-Q4_K_M") is True
+    assert localai.visao_do_alias("Coder-Q4_K_M") is False
+    assert localai.visao_do_alias("nao-existe") is None

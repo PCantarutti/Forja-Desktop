@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView }
   from "../types";
 import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
+import Confirma from "./Confirma";
 import ModelSearch from "./ModelSearch";
 import { useStickyBottom } from "../useStickyBottom";
 
@@ -505,11 +506,6 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
 
   async function apagar(m: LocalModel) {
     // Apaga de verdade, sem lixeira: modelo tem dezenas de GB e quem apaga quer o espaço de volta.
-    if (!confirm(`Apagar ${m.name} (${size(m.size)}) do disco?
-
-${m.path}
-
-Não dá para desfazer.`)) return;
     try {
       await api.post("/local/model/delete", { path: m.path });
       if (sel === m.path) {
@@ -615,13 +611,13 @@ Não dá para desfazer.`)) return;
                 {size(m.size)}
                 {m.shards > 1 ? ` · ${m.shards} partes` : ""}
               </span>
-              <button
-                title="Apagar do disco"
+              <Confirma
+                rotulo={<Trash className="size-3.5" />}
+                pergunta="Apagar do disco? Não dá para desfazer"
+                titulo={`Apagar do disco: ${m.path}`}
                 className="shrink-0 text-faint hover:text-red-400"
-                onClick={() => apagar(m)}
-              >
-                <Trash className="size-3.5" />
-              </button>
+                onSim={() => void apagar(m)}
+              />
             </div>
           ))}
         </div>
@@ -773,7 +769,6 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
   };
 
   async function apagar(m: LocalModel) {
-    if (!confirm(`Apagar ${m.name} (${size(m.size)}) do disco?\n\n${m.path}\n\nNão dá para desfazer.`)) return;
     try {
       await api.post("/local/model/delete", { path: m.path });
       if (sel === m.path) setSel("");
@@ -820,9 +815,13 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
             </button>
             {props.st.image.model === m.path && <span className="shrink-0 text-faint">em uso</span>}
             <span className="shrink-0 text-faint">{size(m.size)}</span>
-            <button title="Apagar do disco" className="shrink-0 text-faint hover:text-red-400" onClick={() => apagar(m)}>
-              <Trash className="size-3.5" />
-            </button>
+            <Confirma
+              rotulo={<Trash className="size-3.5" />}
+              pergunta="Apagar do disco? Não dá para desfazer"
+              titulo={`Apagar do disco: ${m.path}`}
+              className="shrink-0 text-faint hover:text-red-400"
+              onSim={() => void apagar(m)}
+            />
           </div>
         ))}
       </div>

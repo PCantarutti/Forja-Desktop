@@ -1590,11 +1590,25 @@ def model_view(path: str, patch: dict | None = None) -> dict:
             "inference_overrides": sorted(k for k, v in inf.items() if v != inf_d[k])}
 
 
+def tem_visao(path: str) -> bool:
+    """O modelo sobe com projetor de visão? mmproj salvo, ou o mmproj-*.gguf achado na pasta dele."""
+    return bool({**defaults_for(path), **overrides(path)}.get("mmproj"))
+
+
+def visao_do_alias(alias: str) -> bool | None:
+    """Visão de um modelo local pelo alias, carregado ou não. None = alias desconhecido."""
+    for m in scan():
+        if m.get("kind") == "chat" and (alias_of(m["path"]) == alias or m.get("name") == alias):
+            return tem_visao(m["path"])
+    return None
+
+
 def state() -> dict:
     cfg = read_config()
     todos = scan(WEIGHTS)
     # `ctx` por modelo: o seletor da Maestro e dos Workers barra quem tem janela pequena demais.
-    models = [{**m, "ctx": ctx_de(m["path"])} for m in todos if m["kind"] == "chat"]
+    # `vision`: o seletor mostra o olho, como o LM Studio.
+    models = [{**m, "ctx": ctx_de(m["path"]), "vision": tem_visao(m["path"])} for m in todos if m["kind"] == "chat"]
     imagens = [{**m, "params": image_params(m["path"])} for m in todos if m["kind"] == "image"]
     baixar = cfg.get("download_dir") or models_dir()
     return {"runtimes": runtimes(), "models": models, "server": status(), "dirs": dirs(), "download_dir": baixar,

@@ -25,8 +25,9 @@ export type Approval = {
 
 /** O que está rodando agora: turno do agente e delegações por conversa, e processos vivos. */
 export type Activity = {
-  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean }[];
+  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean; alertas?: number }[];
   servers: number;
+  local?: boolean;  // modelo local carregado no llama-server
 };
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" };
@@ -576,6 +577,7 @@ export type MaestroFeature = {
   title: string;
   goal: string;
   status: "planning" | "active" | "validating" | "done" | "cancelled";
+  copiada_para?: number | null;  // continua numa sessão nova (conversa); aqui fica só para consulta
   tasks: MaestroTask[];
 };
 
