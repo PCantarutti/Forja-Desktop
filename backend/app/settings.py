@@ -36,6 +36,11 @@ ENV_DEFAULTS: dict[str, Any] = {
     "subagents": {"rapido": {"provider": "", "model": ""}, "capaz": {"provider": "", "model": ""},
                   "nuvem": {"provider": "", "model": ""}},
     "subagent_max_iterations": 15,
+    # Maestro
+    "maestro_max_iterations": config.MAESTRO_MAX_ITERATIONS,
+    "maestro_max_attempts": config.MAESTRO_MAX_ATTEMPTS,
+    "max_workers": config.MAX_WORKERS,
+    "model_lifecycle": config.MODEL_LIFECYCLE,
 }
 
 LISTS = ("disabled_tools", "auto_approve_tools", "auto_approve_commands", "trusted_hooks")
@@ -48,6 +53,10 @@ NUMBERS = {  # chave: (tipo, mínimo, máximo)
     "compact_at": (float, 0.3, 0.95),
     "browser_idle_minutes": (int, 0, 1_440),
     "browser_scale": (int, 1, 3),
+    "maestro_max_iterations": (int, 10, 5_000),
+    "maestro_max_attempts": (int, 1, 10),
+    # Teto baixo de propósito: cada Worker é uma inferência inteira, e no local só cabe um.
+    "max_workers": (int, 1, 8),
     "subagent_max_iterations": (int, 1, 100),
 }
 TYPES = ("ollama", "lmstudio", "openai", "llamacpp")
@@ -91,6 +100,10 @@ def apply(values: dict | None = None) -> dict:
     config.ENABLED_MODELS = dict(values["enabled_models"])
     config.SUBAGENTS = dict(values["subagents"])
     config.SUBAGENT_MAX_ITERATIONS = int(values["subagent_max_iterations"])
+    config.MAESTRO_MAX_ITERATIONS = int(values["maestro_max_iterations"])
+    config.MAESTRO_MAX_ATTEMPTS = int(values["maestro_max_attempts"])
+    config.MAX_WORKERS = int(values["max_workers"])
+    config.MODEL_LIFECYCLE = values["model_lifecycle"]
     config.BROWSER_IDLE_MINUTES = int(values["browser_idle_minutes"])
     config.BROWSER_SCALE = int(values["browser_scale"])
     config.BROWSER_STREAM = values["browser_stream"]
@@ -178,6 +191,11 @@ def validate(patch: dict, current: dict) -> dict:
             if "/" in name or "\\" in name or name.startswith("."):
                 raise SettingsError("O arquivo de memória deve ser um nome simples na raiz da pasta de trabalho.")
             values[key] = name
+        elif key == "model_lifecycle":
+            from .modelctl import LIFECYCLES
+            if raw not in LIFECYCLES:
+                raise SettingsError(f"model_lifecycle deve ser um de: {', '.join(LIFECYCLES)}.")
+            values[key] = raw
         elif key == "browser_stream":
             if raw not in ("png", "jpeg"):
                 raise SettingsError("browser_stream deve ser png ou jpeg.")

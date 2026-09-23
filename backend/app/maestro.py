@@ -11,18 +11,49 @@ como `summary` — uma linha entre outras, não o veredito. Quem fecha a tarefa 
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import time
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import gitops, subagents, taskdb, workspace
+from . import config, gitops, modelctl, subagents, taskdb, workspace
 from .tools import ToolError
 
 MAX_ERROS = 5          # erros de passo que entram no resultado
 MAX_ERRO_TEXTO = 1500
 MAX_SAIDA_TESTE = 4000
 WRITE_TOOLS = subagents.WRITE_TOOLS
+
+# Um lock por arquivo, por conversa. Duas tarefas em paralelo que declaram o mesmo arquivo em
+# `relevant_files` serializam; as que não se tocam correm juntas.
+#
+# ponytail: o lock vale para o que o contrato DECLARA, não para o que o Worker de fato escreve —
+# uma tarefa que mexe num arquivo que não listou passa sem esperar. O freio real seria travar no
+# write_file/edit_file, dentro do run_call; fica para quando aparecer conflito de verdade.
+_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def _chave(conv_id: int, caminho: str) -> str:
+    return f"{conv_id}:{caminho.strip().replace(chr(92), '/').lstrip('./').lower()}"
+
+
+@contextlib.asynccontextmanager
+async def _travas(conv_id: int, caminhos: list[str]):
+    """Adquire os locks em ordem alfabética: duas tarefas pedindo {a, b} e {b, a} pegariam cada uma
+    metade e esperariam a outra para sempre se a ordem fosse a do contrato."""
+    chaves = sorted({_chave(conv_id, c) for c in caminhos if c.strip()})
+    async with contextlib.AsyncExitStack() as pilha:
+        for k in chaves:
+            await pilha.enter_async_context(_LOCKS.setdefault(k, asyncio.Lock()))
+        yield chaves
+
+
+def em_conflito(conv_id: int, caminhos: list[str]) -> list[str]:
+    """Arquivos deste contrato que outra tarefa está segurando agora. Serve para avisar na interface
+    por que a tarefa não começou, em vez de ela parecer travada."""
+    return sorted(c for c in caminhos if (l := _LOCKS.get(_chave(conv_id, c))) and l.locked())
 
 
 def _mudancas(root: Path, steps: list[dict]) -> list[dict]:
@@ -132,14 +163,20 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
              f"Último erro:\n{taskdb.last_error(task.code, conv_id)[:1500]}")
         return
 
-    cadeia = subagents.chain(task.model_slot or "capaz")
+    # Em modo sequencial o orquestrador pode trocar o modelo local sozinho, então um slot que só
+    # precisa ser carregado continua elegível (ver subagents._fits e modelctl.ensure).
+    trocar = modelctl.pode_trocar()
+    cadeia = subagents.chain(task.model_slot or "capaz", swap=trocar)
     if not cadeia:
-        porque = subagents._why_not()
+        porque = subagents._why_not(trocar)
         erro("Nenhum Worker disponível agora"
              + (f" ({porque})" if porque else " — configure os slots em Configurações › Subagentes")
              + f". A tarefa {task.code} continua em '{task.status}'.")
         return
     nivel, spec = cadeia[0]
+    if curta := modelctl.janela_curta(spec, config.WORKER_MIN_CTX, "um Worker"):
+        erro(curta)  # antes da tentativa: recusar aqui não gasta uma das max_attempts
+        return
 
     # Lido ANTES de abrir a tentativa nova: last_error() olha a tentativa mais recente, e a que
     # estamos prestes a criar ainda não falhou — pegá-la deixaria o Worker sem saber o que deu errado
@@ -152,8 +189,33 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
                                                 "model": spec["model"], "agent": task.agent},
                                     strategy, conv_id)
     attempt_n = task.attempt_count + 1
-    if task.status in ("pending", "failed", "blocked", "needs_human", "cancelled", "completed"):
+    # Toda tentativa recomeça o ciclo em 'queued'. Sem isto, despachar de novo uma tarefa parada em
+    # 'reviewing' (o Maestro não gostou do resultado) batia numa transição ilegal e derrubava o turno.
+    if task.status != "queued":
         taskdb.set_status(task.code, "queued", conv_id)
+
+    # Ciclo de vida do modelo: carrega o do slot, trocando o que estiver na VRAM se for outro.
+    # O estado da tarefa já está no banco, então descarregar aqui não perde nada.
+    if modelctl.gerenciavel(spec) and not modelctl.carregado(spec):
+        taskdb.set_status(task.code, "loading_model", conv_id)
+        yield {"type": "task_update", "code": task.code, "status": "loading_model",
+               "attempt": attempt_n}
+        troca: dict = {}
+        try:
+            async for ev in modelctl.ensure(spec, troca, run_obj.cancel):
+                yield ev
+        except ToolError as e:
+            taskdb.finish_attempt(attempt_id, "error", error=str(e))
+            taskdb.set_status(task.code, "failed", conv_id, str(e)[:500])
+            erro(f"Não consegui preparar o modelo do Worker: {e}")
+            return
+        if run_obj.cancel.is_set():
+            taskdb.finish_attempt(attempt_id, "cancelled", error="Interrompido durante a carga do modelo.")
+            taskdb.set_status(task.code, "cancelled", conv_id, "Interrompido pelo usuário.")
+            out.update(status="cancelada", text=f"{task.code}: interrompida ao trocar de modelo.", meta=meta)
+            return
+        if troca.get("swapped"):
+            meta["model_swap"] = {"from": troca.get("previous"), "to": troca.get("model")}
 
     brief = taskdb.render_contract(task, erro_anterior, strategy)
     contrato = task.contract or {}
@@ -168,12 +230,21 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
 
     t0 = time.monotonic()
     sub_out: dict = {}
-    taskdb.set_status(task.code, "implementing", conv_id)
-    yield {"type": "task_update", "code": task.code, "status": "implementing", "attempt": attempt_n}
+    arquivos = contrato.get("relevant_files") or []
+    if ocupados := em_conflito(conv_id, arquivos):
+        # Outra tarefa em paralelo está mexendo nos mesmos arquivos: esta espera a vez em vez de
+        # escrever por cima. O evento diz o motivo, senão a tarefa parece travada no cockpit.
+        yield {"type": "task_update", "code": task.code, "status": "queued", "attempt": attempt_n,
+               "waiting_for": ocupados}
     try:
-        async for ev in subagents.run(conv_id, sub_call, req, run_obj, sub_out, run_call,
-                                      structured=True):
-            yield ev
+        async with _travas(conv_id, arquivos):
+            taskdb.set_status(task.code, "implementing", conv_id)
+            yield {"type": "task_update", "code": task.code, "status": "implementing",
+                   "attempt": attempt_n}
+            async for ev in subagents.run(conv_id, sub_call, req, run_obj, sub_out, run_call,
+                                          structured=True,
+                                          ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
+                yield ev
     except Exception as e:  # nunca deixar a tentativa aberta no banco
         taskdb.finish_attempt(attempt_id, "error", error=f"{e.__class__.__name__}: {e}",
                               seconds=time.monotonic() - t0)
@@ -182,16 +253,38 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
         return
 
     if run_obj.cancel.is_set():
-        taskdb.finish_attempt(attempt_id, "cancelled", error="Interrompido pelo usuário.",
-                              seconds=time.monotonic() - t0)
+        # O que o Worker fez até a interrupção fica registrado. Sem isto, parar uma tarefa lenta
+        # apagava justamente o rastro que explicaria a lentidão: modelo, passos, tokens e tempo.
+        parcial = None
+        if sub_out.get("meta"):
+            parcial = collect_result(taskdb.get(task.code, conv_id), attempt_n, sub_out, root)
+            parcial["status"] = "cancelled"
+        taskdb.finish_attempt(attempt_id, "cancelled", parcial, error="Interrompido pelo usuário.",
+                              seconds=time.monotonic() - t0, tokens=(parcial or {}).get("tokens") or 0)
         taskdb.set_status(task.code, "cancelled", conv_id, "Interrompido pelo usuário.")
+        meta["sub"] = (sub_out.get("meta") or {}).get("sub")
+        if parcial:
+            meta["task_result"] = parcial
         out.update(status="cancelada", text=f"{task.code}: interrompida pelo usuário.", meta=meta)
         return
 
     taskdb.set_status(task.code, "testing", conv_id)
     task = taskdb.get(task.code, conv_id)  # recarrega: o status mudou desde o get inicial
     resultado = collect_result(task, attempt_n, sub_out, root)
-    taskdb.finish_attempt(attempt_id, "completed" if resultado["status"] == "completed" else "failed",
+
+    # Etapa de revisão explícita: só quando NADA provou o resultado. Com o comando de verificação
+    # passando, o parecer de um modelo menor que o autor rende falso-positivo, não bug — a mesma
+    # razão pela qual subagents._review fica calado quando há medição.
+    if resultado["status"] == "unverified" and not run_obj.cancel.is_set():
+        taskdb.set_status(task.code, "reviewing", conv_id)
+        yield {"type": "task_update", "code": task.code, "status": "reviewing", "attempt": attempt_n}
+        alvos = {c["path"] for c in resultado["changes"] if c.get("path")}
+        revisor, parecer = await subagents._review(root, brief, alvos)
+        if parecer:
+            resultado["review"] = f"({revisor}) {parecer}"
+    # 'unverified' não é falha: nada provou nem desprovou, e quem decide é o Maestro na revisão.
+    taskdb.finish_attempt(attempt_id, resultado["status"] if resultado["status"] in ("completed", "unverified")
+                          else "failed",
                           resultado, seconds=time.monotonic() - t0,
                           tokens=resultado.get("tokens") or 0)
     # 'reviewing' e não 'completed': a tarefa fica esperando o julgamento do Maestro. É a etapa
@@ -200,6 +293,11 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
                       conv_id, "" if resultado["status"] != "failed" else "A verificação falhou.")
     yield {"type": "task_update", "code": task.code, "status": resultado["status"],
            "attempt": attempt_n}
+
+    # O slot da Maestro vai junto: se ela roda no mesmo modelo local, descarregar a deixaria sem
+    # servidor bem na hora de ler o resultado.
+    async for ev in modelctl.after_task(spec, {"provider": req.provider, "model": req.model}):
+        yield ev
 
     meta["task"] = task.code
     meta["task_result"] = resultado

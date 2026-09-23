@@ -523,7 +523,7 @@ export type TaskResult = {
   type: "task_result";
   task_code: string;
   attempt: number;
-  status: "completed" | "failed" | "unverified" | "error";
+  status: "completed" | "failed" | "unverified" | "error" | "cancelled";
   changes: { path: string; status: string; additions: number | null; deletions: number | null }[];
   commands: { command: string; status: string }[];
   tests: { command: string; status: string; output: string } | null;
@@ -549,6 +549,8 @@ export type TaskAttempt = {
   result: TaskResult | null;
   started_at: string;
   finished_at: string | null;
+  has_transcript?: boolean;
+  transcript?: Message[];  // só no detalhe da tarefa: a conversa do Worker nesta tentativa
 };
 
 export type MaestroTask = {
@@ -595,6 +597,9 @@ export type MaestroModels = {
   ram_free: number | null;
   lifecycle: string;
   max_workers: number;
+  can_swap: boolean;
+  manageable: boolean;
+  min_ctx_worker: number;  // GGUF local com janela menor que isto não pode ser Worker
   slots: Record<string, { provider: string; model: string }>;
   active: SubagentActive[];
 };
@@ -608,4 +613,18 @@ export type Draft = {
 };
 
 /** Passos de um subagente/Worker, agrupados pelo id da chamada que o criou. */
-export type SubState = { status: string; steps: { call: any; result?: Message }[] };
+export type SubState = {
+  status: string;
+  steps: { call: any; result?: Message }[];
+  // Worker de contrato (Maestro): a conversa dele no formato do chat, e a resposta em andamento.
+  mensagens?: Message[];
+  draft?: Draft | null;
+};
+
+/** Troca de modelo em andamento, para o cockpit mostrar por que a execução parou por uns minutos. */
+export type ModelPhase = {
+  phase: "unloading" | "loading" | "ready" | "unloaded" | "error";
+  previous?: string;
+  model?: string;
+  reason?: string;
+};

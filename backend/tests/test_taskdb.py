@@ -96,6 +96,22 @@ def test_model_slot_invalido_e_erro(conv):
         _plano(conv, tasks=[{"contract": {"goal": "a"}, "model_slot": "gigante"}])
 
 
+def test_titulo_da_feature_sai_do_objetivo_quando_falta(conv):
+    """Os modelos esquecem o 'title' na primeira chamada; recusar custava uma rodada inteira."""
+    out = taskdb.create_feature(conv, "", "Autenticação com JWT em cookie httpOnly",
+                                [{"contract": {"goal": "a"}}])
+    assert out["title"] == "Autenticação com JWT em cookie httpOnly"
+
+
+def test_titulo_da_feature_sai_da_primeira_tarefa_sem_objetivo(conv):
+    out = taskdb.create_feature(conv, None, "", [{"title": "Modelo User", "contract": {"goal": "a"}}])
+    assert out["title"] == "Modelo User"
+
+
+def test_plan_feature_so_exige_as_tarefas():
+    assert taskdb.PLAN_FEATURE.parameters["required"] == ["tasks"]
+
+
 def test_feature_sem_tarefas_e_erro(conv):
     with pytest.raises(ToolError, match="tasks"):
         taskdb.create_feature(conv, "X", "y", [])
@@ -327,3 +343,15 @@ def test_run_task_e_declarada_mas_nao_executavel_aqui():
     assert taskdb.RUN_TASK.poll and not taskdb.RUN_TASK.mutating
     with pytest.raises(RuntimeError, match="loop do agente"):
         taskdb.RUN_TASK.handler(None, {})
+
+
+def test_toda_tentativa_recomeca_o_ciclo(conv):
+    """O Maestro que não aprovou o resultado redespacha: reviewing volta para queued."""
+    _plano(conv)
+    for st in ("queued", "implementing", "testing", "reviewing"):
+        taskdb.set_status("TASK-001", st, conv)
+    assert taskdb.set_status("TASK-001", "queued", conv)["status"] == "queued"
+    # e o caminho do modelo continua valendo a partir daí
+    taskdb.set_status("TASK-001", "loading_model", conv)
+    assert taskdb.set_status("TASK-001", "implementing", conv)["status"] == "implementing"
+    assert taskdb.set_status("TASK-001", "queued", conv)["status"] == "queued"

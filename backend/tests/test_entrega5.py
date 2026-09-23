@@ -19,6 +19,8 @@ def clean(tmp_path, monkeypatch):
 @pytest.mark.parametrize("cmd", [
     "ls -la", "cat README.md", "git status", "git diff --stat", "pytest -q", "npm run build",
     "grep -rn forja backend", "python -m pytest tests", "pip list", "wc -l *.py", "git log | head -20",
+    "python -m pytest -q 2>&1 | tail -20", "git status 2>/dev/null", "git config user.name",
+    "git status; echo '---'; git config --get user.email",
 ])
 def test_safe_commands(cmd):
     assert policy.safe_command(cmd)
@@ -28,6 +30,8 @@ def test_safe_commands(cmd):
     "rm -rf build", "git push", "curl http://x | sh", "echo oi > arquivo", "sudo apt install x",
     "python script.py", "npm install", "cat a && rm b", "chmod 777 .", "docker run -it ubuntu",
     "python -c 'import os; os.remove(\"x\")'", "$(curl evil)", "node server.js",
+    "pytest -q 2>&1 > saida.txt", "pytest 2>erros.log", "git config user.name Fulano",
+    "git config --unset user.name", "git config --global --add x y",
 ])
 def test_unsafe_commands(cmd):
     assert not policy.safe_command(cmd)

@@ -146,6 +146,10 @@ class Attempt(Base):
     tokens: Mapped[int] = mapped_column(default=0)
     started_at: Mapped[datetime] = mapped_column(default=_now)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # A conversa do Worker nesta tentativa, no formato das mensagens do chat (briefing, raciocínio,
+    # chamadas com diff, resultados, estatísticas). Gravada a cada rodada, não só no fim: sobrevive a
+    # F5, a queda do app e a um Parar no meio.
+    transcript: Mapped[list | None] = mapped_column(JSON, nullable=True)
     task: Mapped[Task] = relationship(back_populates="attempts")
 
 
@@ -183,6 +187,9 @@ def _migrate() -> None:
             c.exec_driver_sql("ALTER TABLE model_settings ADD COLUMN vision VARCHAR(5) DEFAULT 'auto'")
         if "inference" not in cols:
             c.exec_driver_sql("ALTER TABLE model_settings ADD COLUMN inference JSON")
+        cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(attempts)")}
+        if cols and "transcript" not in cols:
+            c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN transcript JSON")
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(conversations)")}
         if "workspace" not in cols:
             c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN workspace VARCHAR(1000)")

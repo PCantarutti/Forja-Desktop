@@ -36,12 +36,15 @@ OPEN = tuple(s for s in STATUSES if s not in TERMINAL)
 # Máquina de estados. Qualquer estado pode ir para cancelled/needs_human/blocked — isso é tratado
 # em set_status (SEMPRE), não repetido em cada linha.
 TRANSITIONS: dict[str, set[str]] = {
+    # Os estados de trabalho voltam para 'queued' porque toda tentativa nova recomeça o ciclo: o
+    # Maestro que não gostou do resultado redespacha a mesma tarefa, e sem esta aresta o run_task
+    # batia numa transição ilegal e derrubava o turno.
     "pending": {"queued"},
     "queued": {"loading_model", "implementing", "pending"},
-    "loading_model": {"implementing", "failed"},
-    "implementing": {"testing", "reviewing", "failed"},
-    "testing": {"reviewing", "failed"},
-    "reviewing": {"completed", "failed"},
+    "loading_model": {"implementing", "failed", "queued"},
+    "implementing": {"testing", "reviewing", "failed", "queued"},
+    "testing": {"reviewing", "failed", "queued"},
+    "reviewing": {"completed", "failed", "queued"},
     "failed": {"queued", "pending"},
     "blocked": {"pending", "queued"},
     "needs_human": {"pending", "queued"},
@@ -151,11 +154,12 @@ def _max_attempts() -> int:
 
 def create_feature(conv_id: int, title: str, goal: str, tasks: list) -> dict:
     """Cria a funcionalidade e as tarefas dela numa transação só. Devolve o resumo com os códigos."""
-    title = str(title or "").strip()[:200]
-    if not title:
-        raise ToolError("Informe 'title': o nome da funcionalidade.")
     if not isinstance(tasks, list) or not tasks:
         raise ToolError("Informe 'tasks': a lista de tarefas em que a funcionalidade foi decomposta.")
+    # Título que falta sai do objetivo, ou da primeira tarefa. Os modelos esquecem o 'title' com
+    # frequência na primeira chamada, e recusar custava uma rodada inteira só para repetir o pedido
+    # com um nome — o mesmo motivo pelo qual o título de cada tarefa já sai do goal dela.
+    title = str(title or "").strip()[:200] or _titulo_de(goal, tasks)
     if len(tasks) > MAX_TASKS_POR_FEATURE:
         raise ToolError(f"No máximo {MAX_TASKS_POR_FEATURE} tarefas por funcionalidade. "
                         "Decomponha em mais de uma funcionalidade.")
@@ -206,6 +210,15 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list) -> dict:
                           "model_slot": t.model_slot} for t, _ in criadas]}
     _publish(conv_id)
     return out
+
+
+def _titulo_de(goal, tasks: list) -> str:
+    texto = str(goal or "").strip()
+    if not texto:
+        primeira = tasks[0] if isinstance(tasks[0], dict) else {}
+        texto = str(primeira.get("title") or (primeira.get("contract") or {}).get("goal") or "").strip()
+    linha = texto.splitlines()[0] if texto else ""
+    return (linha[:80].rstrip(" .,;:") + ("…" if len(linha) > 80 else "")) or "Funcionalidade"
 
 
 def set_status(code: str, novo: str, conv_id: int | None = None, reason: str = "") -> dict:
@@ -293,6 +306,15 @@ def finish_attempt(attempt_id: int, status: str, result: dict | None = None,
         s.commit()
 
 
+def save_transcript(attempt_id: int, transcript: list) -> None:
+    """Grava a conversa do Worker até agora. Chamada a cada rodada dele."""
+    with db.session() as s:
+        att = s.get(db.Attempt, attempt_id)
+        if att:
+            att.transcript = list(transcript)
+            s.commit()
+
+
 def last_error(code: str, conv_id: int | None = None) -> str:
     """O que deu errado na última tentativa, para entrar no brief da próxima."""
     conv_id = conv_id if conv_id is not None else _conv()
@@ -350,10 +372,16 @@ def _task_dict(task: db.Task, attempts: list | None = None) -> dict:
     return out
 
 
-def _attempt_dict(att: db.Attempt) -> dict:
-    return {"n": att.n, "status": att.status, "worker": att.worker or {}, "strategy": att.strategy,
-            "error": att.error, "seconds": att.seconds, "tokens": att.tokens,
-            "result": att.result, "started_at": att.started_at, "finished_at": att.finished_at}
+def _attempt_dict(att: db.Attempt, transcript: bool = False) -> dict:
+    """`transcript` só no detalhe de uma tarefa: o /board é consultado a cada 2 s e levaria a conversa
+    de todos os Workers de todas as tarefas junto."""
+    out = {"n": att.n, "status": att.status, "worker": att.worker or {}, "strategy": att.strategy,
+           "error": att.error, "seconds": att.seconds, "tokens": att.tokens,
+           "result": att.result, "started_at": att.started_at, "finished_at": att.finished_at,
+           "has_transcript": bool(att.transcript)}
+    if transcript:
+        out["transcript"] = att.transcript or []
+    return out
 
 
 def board(conv_id: int) -> dict:
@@ -383,7 +411,7 @@ def detail(conv_id: int, code: str) -> dict:
     with db.session() as s:
         task = _get(s, code, conv_id)
         atts = s.query(db.Attempt).filter(db.Attempt.task_id == task.id).order_by(db.Attempt.n).all()
-        return _task_dict(task, [_attempt_dict(a) for a in atts])
+        return _task_dict(task, [_attempt_dict(a, transcript=True) for a in atts])
 
 
 def _publish(conv_id: int) -> None:
@@ -416,6 +444,7 @@ _CONTRACT_SCHEMA = {
         "acceptance_criteria": {"type": "array", "items": {"type": "string"}},
         "verify_command": {"type": "string",
                            "description": "Comando que PROVA que ficou pronto (ex.: pytest -q tests/test_x.py). "
+                                          "Executor de testes, não python -c: esse pede aprovação. "
                                           "Roda depois que o Worker para e o resultado entra no task_result."},
         "expected_result": {"type": "string"}},
     "required": ["goal"]}
@@ -450,7 +479,7 @@ PLAN_FEATURE = Tool(
             "agent": {"type": "string", "description": "Persona do projeto (.forja/agents/*.md), se houver"},
             "priority": {"type": "integer"}},
             "required": ["contract"]}}},
-     "required": ["title", "tasks"]},
+     "required": ["tasks"]},
     _plan_feature)
 
 

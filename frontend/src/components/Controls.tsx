@@ -119,12 +119,18 @@ export function PermissionMenu({
   );
 }
 
-export function EffortMenu({ value, onChange }: { value: Effort; onChange: (v: Effort) => void }) {
+export function EffortMenu({ value, onChange, semExtremo }: {
+  value: Effort;
+  onChange: (v: Effort) => void;
+  // No Maestro o "Extremo" não existe: ele é o modo em que o principal só delega, e a tela do
+  // Maestro já é isso — com contrato, tentativa e verificação.
+  semExtremo?: boolean;
+}) {
   return (
     <Menu
       title="Esforço"
-      items={EFFORTS}
-      value={value}
+      items={semExtremo ? EFFORTS.filter((e) => e.id !== "extremo") : EFFORTS}
+      value={semExtremo && value === "extremo" ? "maximo" : value}
       onChange={onChange}
       button={(label) => (
         <>

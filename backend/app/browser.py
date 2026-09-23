@@ -47,6 +47,8 @@ from . import config, uploads
 from .tools import Tool, ToolError, register, resolve_path
 from .web import UNTRUSTED
 
+NL = "\n"  # usado em f-strings/joins do browser_validate, onde a quebra é parte do formato
+
 VIEWPORT = {"width": 1280, "height": 800}  # inicial; o painel da UI manda o tamanho real (set_viewport)
 MIN_VIEWPORT, MAX_VIEWPORT = (320, 240), (3840, 2400)
 NAV_TIMEOUT = 15_000
@@ -669,6 +671,32 @@ async def read(_root: Path, args: dict) -> str:
     return f"{UNTRUSTED}{await _summary(page)}\n\n{snap[:max_chars]}{more}"
 
 
+async def validate(_root: Path, args: dict) -> str:
+    """Abre a página e devolve estrutura + erros de console numa resposta só.
+
+    Existe por orçamento de contexto, não por conveniência: validar uma tela custava três chamadas
+    (navigate, read, console), e cada rodada do modelo recarrega o histórico inteiro. Para a Maestro,
+    que valida depois de cada tarefa, três viram uma.
+    """
+    s = current()
+    antes = len(s.logs)
+    if url := (args.get("url") or "").strip():
+        await navigate(_root, {"url": url})
+    page = await s.ensure()
+    partes = [await _summary(page)]
+
+    novos = list(s.logs)[antes:]
+    erros = [l for l in novos if l.split("] ", 1)[-1].startswith(ERROR_PREFIXES)]
+    cabeca = f"ERROS DE CONSOLE: {len(erros)}"
+    partes.append(NL.join([cabeca, *erros[-20:]]) if erros else cabeca + " (nenhum)")
+
+    estrutura = await read(_root, {"selector": args.get("selector") or "",
+                                   "max_chars": args.get("max_chars") or 8_000})
+    # `read` já carrega o aviso de conteúdo não confiável e o resumo; fica só o corpo.
+    partes.append("ESTRUTURA DA PÁGINA" + NL + estrutura.split(NL + NL, 1)[-1])
+    return UNTRUSTED + (NL + NL).join(partes)
+
+
 async def click(_root: Path, args: dict) -> str:
     page = await current().ensure()
     selector = args["selector"]
@@ -901,6 +929,15 @@ register(Tool(
     _obj({"max_chars": {"type": "integer", "description": "Limite (padrão 15000)"},
           "selector": {"type": "string", "description": "Opcional: ref ou seletor para ler só uma região"}}, []),
     read))
+register(Tool(
+    "browser_validate",
+    "Valida uma página numa chamada só: abre a URL (se você passar uma), lista os erros de console e "
+    "devolve a estrutura da página. Use isto para conferir uma tela depois de uma tarefa, em vez de "
+    "browser_navigate + browser_console + browser_read — é o mesmo resultado numa rodada.",
+    _obj({"url": {"type": "string", "description": "URL a abrir; vazio usa a aba atual"},
+          "selector": {"type": "string", "description": "Opcional: ler só uma região"},
+          "max_chars": {"type": "integer", "description": "Limite da estrutura (padrão 8000)"}}, []),
+    validate))
 register(Tool(
     "browser_click", "Clica num elemento da aba ativa.",
     _obj({"selector": SELECTOR}, ["selector"]), click, mutating=True))

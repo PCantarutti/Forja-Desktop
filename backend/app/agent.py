@@ -16,7 +16,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, taskdb
+from . import maestro, modelctl, sessions, taskdb
 from . import browser, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
@@ -341,7 +341,9 @@ MAESTRO_RULES = [
     "errado queima uma tentativa inteira de um modelo grande.",
     "- Cada tarefa é pequena, tem um objetivo só e, sempre que possível, um 'verify_command' que "
     "PROVA que ficou pronta (pytest, build, lint, type check). Sem esse comando nada prova nada e "
-    "sobra para você conferir na mão.",
+    "sobra para você conferir na mão. Use o executor de testes do projeto, nunca `python -c`/`node -e`: "
+    "no modo Automático testes rodam sozinhos, e código solto na linha de comando para esperando "
+    "aprovação do usuário.",
     "- O contrato é tudo o que o Worker vai saber: ele não vê esta conversa, não conhece o histórico "
     "e não pergunta. Preencha context, goal, relevant_files, requirements, do_not e "
     "acceptance_criteria como se estivesse escrevendo para alguém que chegou hoje.",
@@ -353,10 +355,16 @@ MAESTRO_RULES = [
     "- Falhou? diagnostique antes de repetir. Na nova run_task, 'strategy' diz o que muda — outra "
     "abordagem, outro arquivo, outro modelo (update_task model_slot='capaz'). Repetir o mesmo pedido "
     "só gasta tempo e tentativa.",
+    "- Tarefa que mexe em tela se confere no navegador, e isso é trabalho SEU, não do Worker: depois "
+    "que ela fecha, browser_validate(url) devolve numa chamada só a estrutura da página e os erros de "
+    "console. Bug que aparecer ali vira tarefa de correção, com o erro copiado no contrato.",
     "- Achou um bug ou trabalho novo no meio do caminho? vira tarefa (plan_feature), não um remendo "
     "na hora.",
     "- As tarefas vivem no banco, não nesta conversa. Depois de qualquer compactação de contexto, "
     "chame list_tasks antes de decidir qualquer coisa — é a sua fonte da verdade.",
+    "- Decisão e problema não cabem em tarefa: registre com session_note ao fechar uma "
+    "funcionalidade, antes de parar com algo pela metade e quando a conversa ficar longa. É o que a "
+    "próxima sessão vai ler para não reabrir o que já foi decidido.",
     "- Pare e chame ask_user quando a decisão for do usuário: ambiguidade que muda o resultado, "
     "escolha de arquitetura, ou tarefa que bateu no limite de tentativas. Não invente requisito.",
     "- Fale pouco e sobre o trabalho: o que decidiu, por quê, e o que vem agora. O usuário acompanha "
@@ -555,6 +563,8 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
               *environment_block(names),
               f"Ferramentas disponíveis: {', '.join(names)}.", "Regras:"]
     prompt = "\n".join(header + rules + ["Responda no idioma do usuário."])
+    if maestro_mode:
+        prompt += sessions.prompt_block()
     if plan and permission != "plan":  # o plano aprovado acompanha o resto do trabalho, mesmo após compactar
         prompt += ("\n\nPlano aprovado pelo usuário. Siga-o passo a passo; se precisar desviar, diga o porquê antes. "
                    "Se o pedido atual não tiver relação com ele, ignore-o.\n" + plan)
@@ -585,6 +595,16 @@ def environment_block(names: list[str]) -> list[str]:
     return lines
 
 
+# Ferramentas que atrapalham a Maestro por FUNÇÃO, não por tamanho: cada uma é um segundo jeito de
+# fazer algo que ela já faz melhor com as ferramentas dela. Orçamento de contexto não entra aqui —
+# modelo com janela pequena é barrado na escolha (config.MAESTRO_MIN_CTX), não compensado tirando
+# ferramenta.
+MAESTRO_FORA = frozenset({
+    "update_tasks",     # a lista efêmera competia com as tarefas persistidas; o modelo escolhia a errada
+    "delegate_task",    # segundo jeito de delegar, sem contrato nem tentativa: o dela é run_task
+})
+
+
 def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | None = None,
                     maestro_mode: bool = False) -> list[Tool]:
     """Ferramentas desta requisição. No modo Plano: só leitura + exit_plan_mode.
@@ -596,11 +616,8 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
     exclude = set(exclude or ())
     extras = []
     if maestro_mode:
-        # update_tasks some: a lista efêmera dele e as tarefas persistidas do Task Manager fazem a
-        # mesma coisa na tela, e com as duas ligadas o modelo escolhe a errada — a que não guarda
-        # contrato, tentativa nem dependência, que é tudo o que a Maestro precisa para decidir.
-        exclude = exclude | {"update_tasks"}
-        extras = [t for t in taskdb.TOOLS if t.name not in exclude]
+        exclude = exclude | MAESTRO_FORA
+        extras = [t for t in (*taskdb.TOOLS, sessions.SESSION_NOTE) if t.name not in exclude]
     tools = [t for t in active(caps) if t.name not in exclude]
     # ask_user/exit_plan_mode entram sempre, MENOS quando quem chamou as excluiu de propósito — é o
     # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
@@ -899,6 +916,11 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         run.turn_id = users[-1]
 
     maestro_mode = req.mode == "maestro"
+    if maestro_mode and req.effort == "extremo":
+        # "Extremo" é o modo em que o principal só delega por delegate_task — que a Maestro nem tem,
+        # porque o jeito dela de delegar é run_task. Com ele valendo, o nudge_write recusaria as
+        # escritas pequenas dela mandando usar uma ferramenta inexistente.
+        req.effort = "maximo"
     # A Maestro é um agente com ferramentas a mais e um prompt próprio: tudo o que vale para o modo
     # Agente (permissões, plano, compactação, checkpoints) vale igual para ela.
     agent = req.mode == "agent" or maestro_mode
@@ -911,12 +933,32 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     setting = db.get_model_setting(req.model)
     tool_mode = setting["tool_mode"] if tools_on else "none"
     via = "none" if not tools_on else ("prompt" if tool_mode == "text" else "native")
+    # Maestro local: o modelo dela precisa ser o que está no ar ANTES de medir a janela e de gerar.
+    # Entre tarefas o orquestrador troca o GGUF para o do Worker, e o llama.cpp ignora o campo `model`
+    # do pedido — sem isto a Maestro rodaria calada no modelo do Worker, e a janela medida seria a dele.
+    maestro_spec = {"provider": req.provider, "model": req.model}
+    if maestro_mode:
+        async for ev in _garante_modelo(conv_id, maestro_spec, run):
+            yield ev
+            if ev.get("type") == "done":
+                return
     ctx_max = await llm.context_limit(req.provider, req.model, config.NUM_CTX)
     # Provider que não informa a janela (qualquer OpenAI-compatível, ou LM Studio com a sonda
     # falhando) devolve None, e com `if ctx_max and ...` a compactação simplesmente nunca disparava:
     # o prompt crescia até o servidor recusar a requisição. Supor o num_ctx configurado erra menos
     # do que nunca compactar. Para a UI o valor continua None — o anel de contexto não deve chutar.
     teto = ctx_max or config.NUM_CTX
+    if (maestro_mode and llm.spec(req.provider)["type"] == "llamacpp" and ctx_max
+            and ctx_max < config.MAESTRO_MIN_CTX):
+        # Recusar agora é melhor que o servidor recusar no meio: o prompt da Maestro com o histórico
+        # passa da janela em poucas rodadas, e a tarefa ficaria pela metade.
+        yield _event(conv_id, "error",
+                     f"O modelo local está com janela de {ctx_max:,} tokens por requisição; a Maestro "
+                     f"precisa de pelo menos {config.MAESTRO_MIN_CTX:,}. Aumente o contexto no painel IA "
+                     "local (ou reduza o 'parallel', que divide a janela entre os slots)."
+                     .replace(",", "."))
+        yield {"type": "done"}
+        return
     # Capacidades do modelo (visão): o provider informa ou o usuário força no painel. Ferramentas que
     # exigem o que o modelo não tem (browser_screenshot) ficam fora do `tools`, do prompt e da execução.
     detected = await llm.capabilities(req.provider, req.model) if tools_on else None
@@ -951,6 +993,13 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                                              "atingido. O agente parou.")
             break
         iterations += 1
+        if maestro_mode:  # um run_task pode ter trocado o modelo no ar desde a última rodada
+            parou = False
+            async for ev in _garante_modelo(conv_id, maestro_spec, run):
+                yield ev
+                parou = parou or ev.get("type") == "done"
+            if parou or run.cancel.is_set():
+                break
 
         msgs = _load(conv_id)
         mode_at_start = run.permission
@@ -1103,6 +1152,19 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     yield {"type": "done"}
 
 
+async def _garante_modelo(conv_id: int, spec: dict, run: Run) -> AsyncIterator[dict]:
+    """Recoloca no ar o modelo local de `spec` quando ele não é o carregado. Termina com 'done' se
+    não conseguir: seguir gerando assim seria usar outro modelo sem avisar."""
+    if not modelctl.gerenciavel(spec) or modelctl.carregado(spec):
+        return
+    try:
+        async for ev in modelctl.ensure(spec, {}, run.cancel):
+            yield ev
+    except ToolError as e:
+        yield _event(conv_id, "error", f"Não consegui recarregar o modelo da Maestro: {e}")
+        yield {"type": "done"}
+
+
 TITLE_PROMPT = ("Você dá nome a conversas. Responda SÓ com um título de 3 a 6 palavras para a conversa "
                 "abaixo, no idioma do usuário, dizendo o assunto dela. Sem aspas, sem ponto final, sem "
                 "prefixo como 'Título:' e sem explicar.")
@@ -1194,6 +1256,10 @@ def _poll(call: dict) -> bool:
 
 
 def _parallel(call: dict) -> bool:
+    if call["name"] == "run_task":
+        # Workers em paralelo só quando o usuário pediu: no modo sequencial (o padrão, e o único que
+        # troca modelo local entre tarefas) dois run_task juntos disputariam a mesma VRAM.
+        return int(getattr(config, "MAX_WORKERS", 1)) > 1
     if call["name"] not in PARALLEL_OK:  # ask_user e exit_plan_mode nem estão no REGISTRY
         return False
     try:
@@ -1225,7 +1291,12 @@ def _sem(key: str, limit: int) -> asyncio.Semaphore:
 
 def _limite(call: dict) -> asyncio.Semaphore:
     """Quem divide vaga com quem. Leitura: 4 no total. Delegação: pelo destino — duas tarefas no mesmo
-    modelo local brigariam pela mesma GPU (o Forja sobe um llama-server por vez), então ali é uma só."""
+    modelo local brigariam pela mesma GPU (o Forja sobe um llama-server por vez), então ali é uma só.
+    Tarefa do Maestro: até MAX_WORKERS. A chave leva o limite porque o semáforo fica em cache e o
+    usuário pode mudar o número no meio da sessão."""
+    if call["name"] == "run_task":
+        n = max(1, int(getattr(config, "MAX_WORKERS", 1)))
+        return _sem(f"workers:{n}", n)
     if call["name"] != "delegate_task":
         return _sem("read", PARALLEL_READS)
     spec = subagents.slot(str(call["arguments"].get("level") or "rapido")) or {}

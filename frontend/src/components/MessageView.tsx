@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall } from "../types";
+import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall, Stats } from "../types";
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
 import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
@@ -418,6 +418,56 @@ function Chip({ children }: { children: React.ReactNode }) {
 
 export type TurnStats = { model: string; tokens: number; seconds: number; tps: number | null; estimated: boolean };
 
+/** Soma as iterações de um turno numa linha de estatísticas (t/s ponderado pelo tempo gerando). */
+export function aggregate(list: Stats[]): TurnStats {
+  const withTps = list.filter((s) => s.tps);
+  const gen = withTps.reduce((a, s) => a + s.tokens / s.tps!, 0);
+  return {
+    model: list[list.length - 1].model,
+    tokens: list.reduce((a, s) => a + s.tokens, 0),
+    seconds: list.reduce((a, s) => a + s.seconds, 0),
+    tps: gen > 0 ? withTps.reduce((a, s) => a + s.tokens, 0) / gen : null,
+    estimated: list.some((s) => s.estimated),
+  };
+}
+
+export type Turno = { stats: TurnStats | null; text: string; userId: number | null };
+
+/** Estatísticas por turno (todas as iterações até a próxima mensagem do usuário), chaveadas pelo
+ *  índice da última resposta do turno — é onde a linha de estatísticas é desenhada. */
+export function turnosDe(messages: Message[]): Map<number, Turno> {
+  const out = new Map<number, Turno>();
+  let acc: Stats[] = [];
+  let text: string[] = [];
+  let last = -1;
+  let userId: number | null = null;
+  const flush = () => {
+    if (last >= 0) out.set(last, { stats: acc.length ? aggregate(acc) : null, text: text.join("\n\n"), userId });
+    acc = [];
+    text = [];
+    last = -1;
+  };
+  messages.forEach((m, i) => {
+    if (m.role === "user") {
+      flush();
+      userId = m.id;
+    } else if (m.role === "assistant") {
+      last = i;
+      if (m.meta?.stats) acc.push(m.meta.stats);
+      if (m.content) text.push(m.content);
+    }
+  });
+  flush();
+  return out;
+}
+
+/** Resultado de cada chamada, pelo id: o bloco da ferramenta desenha o desfecho dentro dele. */
+export function resultadosDe(messages: Message[]): Map<string, Message> {
+  const m = new Map<string, Message>();
+  for (const msg of messages) if (msg.role === "tool" && msg.tool_call_id) m.set(msg.tool_call_id, msg);
+  return m;
+}
+
 export function StatsRow({ s, live, instances, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; onInstances?: () => void; phase?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
@@ -677,6 +727,12 @@ export type ActivityPiece =
 
 // Primeira ferramenta do grupo vira a frase de abertura do resumo.
 const ACTION: Record<string, string> = {
+  plan_feature: "Planejou uma funcionalidade",
+  run_task: "Despachou uma tarefa",
+  update_task: "Atualizou uma tarefa",
+  list_tasks: "Conferiu as tarefas",
+  session_note: "Registrou a sessão",
+  browser_validate: "Validou uma página",
   run_command: "Executou um comando",
   read_file: "Leu um arquivo",
   edit_file: "Editou um arquivo",

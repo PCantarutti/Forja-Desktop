@@ -6,18 +6,51 @@ export type CatalogEntry = { id: string; name: string; type: string; models: str
 
 /** Recorte do /api/local. Só o que este seletor usa; a versão web não tem essa rota e fica sem. */
 type IaLocal = {
-  models: { path: string; name: string; kind: string }[];
+  models: { path: string; name: string; kind: string; ctx?: number }[];  // ctx: janela por requisição
   server: { running: boolean; path?: string; alias?: string };
   image_busy: boolean;
 };
 
-/** Seletor de provedor + modelo no campo de mensagem (popover abrindo para cima). */
+const POP_W = 544;   // w-[34rem]
+const POP_H = 320;   // h-80
+const MARGEM = 8;
+
+/** Onde o popover cabe. Posição FIXA calculada do botão, e não `absolute bottom-full`: o seletor mora
+ *  no composer (embaixo), no cabeçalho (em cima) e dentro da doca do Maestro, que tem overflow — e em
+ *  cada um desses lugares o popover relativo saía da tela ou era cortado pelo contêiner. */
+function posicao(botao: HTMLElement | null) {
+  if (!botao) return null;
+  const r = botao.getBoundingClientRect();
+  const w = Math.min(POP_W, window.innerWidth * 0.9);
+  const cabeEmCima = r.top - MARGEM >= POP_H;
+  const top = cabeEmCima ? r.top - MARGEM - POP_H : Math.min(r.bottom + MARGEM, window.innerHeight - POP_H - MARGEM);
+  const left = Math.min(Math.max(r.right - w, MARGEM), window.innerWidth - w - MARGEM);
+  return { top: Math.max(MARGEM, top), left, width: w };
+}
+
+const fmtK = (n: number) => (n >= 1024 ? `${Math.round(n / 1024)}k` : String(n));
+
+/** Seletor de provedor + modelo (campo de mensagem, cabeçalho do Maestro, slots de Worker). */
 export default function ModelPicker(props: {
   provider: string;
   model: string;
   onChange: (provider: string, model: string) => void;
   refreshKey?: number; // muda quando as configurações de provedores mudam
+  // Cair sozinho no primeiro modelo quando o salvo sumiu. Certo no chat (sempre precisa de um
+  // modelo); errado num slot opcional, onde "vazio" é uma escolha e trocar por conta própria grava
+  // configuração que ninguém pediu.
+  autoFallback?: boolean;
+  // Carregar o GGUF ao escolher. Certo onde o modelo é usado já (chat, Maestro); errado num slot de
+  // Worker, que só diz QUAL modelo usar quando houver tarefa — carregar ali trocaria o modelo da
+  // própria Maestro, se ela roda local.
+  loadLocal?: boolean;
+  // Janela mínima (tokens por requisição) para um GGUF local ser escolhível. Abaixo disso o servidor
+  // recusa o prompt no meio do trabalho, então o modelo aparece desabilitado com o motivo.
+  minCtx?: number;
 }) {
+  const carrega = props.loadLocal ?? true;
+  const botao = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
   const [local, setLocal] = useState<IaLocal | null>(null);
@@ -36,7 +69,7 @@ export default function ModelPicker(props: {
         setCatalog(c);
         // Modelo salvo sumiu (provedor removido ou modelo desmarcado): cai no primeiro disponível.
         const current = c.find((p) => p.id === props.provider);
-        if (!current?.models.includes(props.model)) {
+        if ((props.autoFallback ?? true) && !current?.models.includes(props.model)) {
           const first = c.find((p) => p.models.length);
           if (first) props.onChange(first.id, first.models[0]);
         }
@@ -58,11 +91,16 @@ export default function ModelPicker(props: {
       if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
     };
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const reposiciona = () => setPos(posicao(botao.current));
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", esc);
+    window.addEventListener("resize", reposiciona);
+    window.addEventListener("scroll", reposiciona, true);  // true: rolagem de qualquer contêiner
     return () => {
       document.removeEventListener("mousedown", close);
       document.removeEventListener("keydown", esc);
+      window.removeEventListener("resize", reposiciona);
+      window.removeEventListener("scroll", reposiciona, true);
     };
   }, [open]);
 
@@ -108,7 +146,11 @@ export default function ModelPicker(props: {
   return (
     <div ref={box} className="relative ml-auto min-w-0">
       <button
-        onClick={() => setOpen(!open)}
+        ref={botao}
+        onClick={() => {
+          if (!open) setPos(posicao(botao.current));
+          setOpen(!open);
+        }}
         title={`Trocar provedor e modelo — ${providerName} · ${props.model}`}
         className="flex max-w-56 items-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2.5 py-1 text-xs whitespace-nowrap text-muted hover:text-fg"
       >
@@ -118,7 +160,10 @@ export default function ModelPicker(props: {
       </button>
 
       {open && (
-        <div className="absolute right-0 bottom-full z-40 mb-2 flex h-80 w-[34rem] max-w-[90vw] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl shadow-black/50">
+        <div
+          style={pos ?? undefined}
+          className={`${pos ? "fixed" : "absolute right-0 bottom-full mb-2"} z-50 flex h-80 w-[34rem] max-w-[90vw] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl shadow-black/50`}
+        >
           <ul className="w-40 shrink-0 space-y-0.5 overflow-y-auto border-r border-line bg-side p-2 text-sm">
             {catalog === null && <li className="px-2 py-1 text-muted">carregando…</li>}
             {catalog?.map((p) => (
@@ -157,7 +202,7 @@ export default function ModelPicker(props: {
               {erro && <li className="px-2 py-2 text-xs text-red-300">{erro}</li>}
               {prov?.error && !localAtivo && <li className="px-2 py-2 text-xs text-red-300">{prov.error}</li>}
 
-              {localAtivo && local.server.running && (
+              {carrega && localAtivo && local.server.running && (
                 <li className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted">
                   <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />
                   <span className="min-w-0 flex-1 truncate">{local.server.alias} está carregado</span>
@@ -175,26 +220,44 @@ export default function ModelPicker(props: {
               {localAtivo && daPasta.map((m) => {
                 const carregado = local.server.path === m.path;
                 const subindo = carregando === m.path;
+                const escolhido = active === props.provider && m.name === props.model;
+                const curta = !!props.minCtx && !!m.ctx && m.ctx < props.minCtx;
+                const marcado = carrega ? carregado : escolhido;
                 return (
                   <li key={m.path}>
                     <button
-                      disabled={!!carregando || (local.image_busy && !carregado)}
-                      title={carregado ? m.path : `Carregar ${m.name}`}
+                      disabled={curta || !!carregando || (carrega && local.image_busy && !carregado)}
+                      title={
+                        curta
+                          ? `Janela de ${m.ctx} tokens por requisição; o mínimo aqui é ${props.minCtx}. Aumente o contexto dele no painel IA local.`
+                          : carrega && !carregado ? `Carregar ${m.name}` : m.path
+                      }
                       onClick={() => {
+                        if (!carrega) {
+                          props.onChange(active, m.name);  // só registra a escolha; carrega quando houver tarefa
+                          return setOpen(false);
+                        }
                         if (!carregado) return void carregar(m.path);
                         props.onChange(active, local.server.alias || m.name);
                         setOpen(false);
                       }}
                       className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[13px] disabled:opacity-40 ${
-                        carregado ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
+                        marcado ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
                       }`}
                     >
-                      {carregado && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />}
+                      {carrega && carregado && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />}
                       <span className="flex-1 truncate">{m.name}</span>
-                      <span className="shrink-0 font-sans text-[11px] text-faint">
-                        {subindo ? "carregando…" : carregado ? "carregado" : "carregar"}
-                      </span>
-                      {carregado && <Check className="size-3.5 shrink-0" />}
+                      {m.ctx ? (
+                        <span className={`shrink-0 font-sans text-[11px] ${curta ? "text-amber-300" : "text-faint"}`}>
+                          {fmtK(m.ctx)}{curta ? ` · mín ${fmtK(props.minCtx!)}` : ""}
+                        </span>
+                      ) : null}
+                      {carrega && (
+                        <span className="shrink-0 font-sans text-[11px] text-faint">
+                          {subindo ? "carregando…" : carregado ? "carregado" : "carregar"}
+                        </span>
+                      )}
+                      {marcado && <Check className="size-3.5 shrink-0" />}
                     </button>
                   </li>
                 );

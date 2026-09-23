@@ -46,6 +46,9 @@ SAFE_PYTHON_ARGS = {"-m", "--version", "-V", "-c"}
 DANGEROUS = re.compile(r"(^|\s)(rm|rmdir|mv|dd|mkfs|chmod|chown|sudo|su|kill|pkill|shutdown|reboot|"
                        r"curl|wget|nc|ssh|scp|apt|apt-get|yum|brew|systemctl)(\s|$)")
 REDIRECT = re.compile(r"[>]|(^|\s)tee(\s|$)")
+# Redirecionamento que não grava arquivo: juntar um fluxo no outro (2>&1) ou jogar no nulo.
+SEM_ARQUIVO = re.compile(r"\d?>&\d|\d?>\s*(/dev/null|nul|\$null)(?=$|[\s;&|)])", re.I)
+GIT_CONFIG_LEITURA = {"--get", "--get-all", "--list", "-l", "--show-origin"}
 # Comandos que destroem dados ou mexem no sistema: nem o modo Ignorar permissões deixa passar calado.
 # Casa no início de qualquer trecho (depois de ; && || | ( ` $( ), então `$(rm -rf x)` também é pego.
 DESTRUCTIVE = re.compile(
@@ -92,7 +95,7 @@ def destructive_args(args: dict) -> bool:
 def safe_command(command: str) -> bool:
     """True se TODOS os trechos do comando forem leitura/teste conhecidos."""
     command = (command or "").strip()
-    if not command or REDIRECT.search(command) or DANGEROUS.search(command) or "$(" in command or "`" in command:
+    if not command or REDIRECT.search(SEM_ARQUIVO.sub(" ", command)) or DANGEROUS.search(command) or "$(" in command or "`" in command:
         return False
     for part in SPLIT.split(command):
         try:
@@ -109,6 +112,11 @@ def safe_command(command: str) -> bool:
                                                                     ("pytest", "unittest", "pip", "json.tool")):
                 continue
             return False
+        # `git config chave` e `git config --get/--list` leem; `git config chave valor` grava.
+        if base == "git" and words[1:2] == ["config"] and (
+                len(words) == 3 and not words[2].startswith("-") or
+                len(words) >= 3 and words[2] in GIT_CONFIG_LEITURA and len(words) <= 4):
+            continue
         subs = SAFE_SUBCOMMANDS.get(base)
         if subs and len(words) > 1 and words[1] in subs:
             continue

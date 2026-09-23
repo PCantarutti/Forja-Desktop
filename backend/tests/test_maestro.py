@@ -8,6 +8,7 @@ import asyncio
 import pytest
 
 from app import agent, config, db, llm, maestro, settings, subagents, taskdb, workspace
+from app.tools import ToolError
 
 
 @pytest.fixture(autouse=True)
@@ -187,6 +188,8 @@ def test_sem_comando_de_verificacao_o_resultado_e_unverified(conv, monkeypatch):
     assert out["meta"]["task_result"]["status"] == "unverified"
     assert out["meta"]["task_result"]["tests"] is None
     assert "NADA prova que funcionou" in out["text"]
+    # a tentativa não é gravada como falha: nada provou nem desprovou
+    assert taskdb.detail(conv, "TASK-001")["attempts"][0]["status"] == "unverified"
 
 
 def test_o_worker_recebe_o_contrato_renderizado(conv, monkeypatch):
@@ -464,3 +467,520 @@ def test_policy_libera_as_do_maestro_no_modo_automatico():
     for nome in ("plan_feature", "list_tasks", "update_task", "run_task"):
         precisa, _ = policy.decide(get_tool(nome), {"code": "TASK-001"}, "auto")
         assert not precisa, f"{nome} pararia a execução autônoma"
+
+
+# ------------------------------------------------------------------ ciclo de vida do modelo
+
+class _FakeLocal:
+    """llama-server de mentira: o suficiente para modelctl decidir e registrar a troca."""
+
+    def __init__(self, alias="", janela=131072):
+        self.alias = alias
+        self.janela = janela
+        self.chamadas = []
+
+    def ctx_de(self, path):
+        return self.janela
+
+    def status(self):
+        return {"running": bool(self.alias), "alias": self.alias, "ctx": 8192, "loading": {}}
+
+    def hardware(self):
+        return {"vram": 8 << 30, "vram_free": 6 << 30, "ram": 16 << 30, "ram_free": 8 << 30}
+
+    def scan(self):
+        return [{"path": r"D:\m\W.gguf", "name": "W", "kind": "chat"}]
+
+    def alias_of(self, path):
+        return path.rsplit("\\", 1)[-1].removesuffix(".gguf")
+
+    def image_busy(self):
+        return False
+
+    def load(self, path):
+        self.chamadas.append(f"load:{self.alias_of(path)}")
+        self.alias = self.alias_of(path)
+
+    def unload(self):
+        self.chamadas.append("unload")
+        self.alias = ""
+
+    def cancel_load(self):
+        return True
+
+
+def _local(monkeypatch, alias="", janela=131072):
+    from app import modelctl
+    f = _FakeLocal(alias, janela)
+    monkeypatch.setattr(modelctl, "localai", f)
+    monkeypatch.setattr(subagents, "localai", f)
+    monkeypatch.setitem(config.PROVIDERS, "local",
+                        {"id": "local", "type": "llamacpp", "url": "", "api_key": ""})
+    config.SUBAGENTS = {"capaz": {"provider": "local", "model": "W"}}
+    return f
+
+
+def test_run_task_carrega_o_modelo_do_worker(conv, monkeypatch):
+    """O ciclo que sustenta IA local em máquina apertada: a tarefa carrega o modelo de que precisa."""
+    f = _local(monkeypatch, alias="OUTRO")
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    _plano(conv)
+    out, eventos = _despacha(conv, "TASK-001")
+    assert out["status"] == "ok"
+    assert f.chamadas == ["load:W"] and f.alias == "W"
+    fases = [e["phase"] for e in eventos if e["type"] == "model"]
+    assert fases == ["unloading", "loading", "ready"]
+    assert out["meta"]["model_swap"] == {"from": "OUTRO", "to": "W"}
+    assert "loading_model" in [e.get("status") for e in eventos if e["type"] == "task_update"]
+
+
+def test_run_task_nao_recarrega_o_que_ja_esta_no_ar(conv, monkeypatch):
+    f = _local(monkeypatch, alias="W")
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    _plano(conv)
+    out, eventos = _despacha(conv, "TASK-001")
+    assert out["status"] == "ok" and f.chamadas == []
+    assert not [e for e in eventos if e["type"] == "model"]
+    assert "model_swap" not in out["meta"]
+
+
+def test_unload_after_task_libera_a_vram_no_fim(conv, monkeypatch):
+    f = _local(monkeypatch, alias="W")
+    monkeypatch.setattr(config, "MODEL_LIFECYCLE", "unload_after_task")
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    _plano(conv)
+    out, eventos = _despacha(conv, "TASK-001")
+    assert out["status"] == "ok"
+    assert f.alias == "" and "unload" in f.chamadas
+    assert [e["phase"] for e in eventos if e["type"] == "model"][-1] == "unloaded"
+
+
+def test_modelo_que_nao_carrega_falha_a_tarefa_sem_rodar_worker(conv, monkeypatch):
+    from app import modelctl
+    f = _local(monkeypatch, alias="OUTRO")
+    monkeypatch.setattr(f, "load", lambda p: (_ for _ in ()).throw(ToolError("VRAM insuficiente")))
+    chamou = []
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    monkeypatch.setattr(subagents, "run", lambda *a, **k: chamou.append(1))
+    _plano(conv)
+    out, _ = _despacha(conv, "TASK-001")
+    assert out["status"] == "erro" and "VRAM insuficiente" in out["text"]
+    assert not chamou  # não gastou um Worker com o modelo errado
+    assert taskdb.get("TASK-001", conv).status == "failed"
+    assert taskdb.detail(conv, "TASK-001")["attempts"][0]["status"] == "error"
+
+
+def test_redespachar_tarefa_em_reviewing_funciona(conv, monkeypatch):
+    """O Maestro não gostou do resultado e mandou de novo: antes isso batia em transição ilegal."""
+    _local(monkeypatch, alias="W")
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    _plano(conv)
+    _despacha(conv, "TASK-001")
+    assert taskdb.get("TASK-001", conv).status == "reviewing"
+    out, _ = _despacha(conv, "TASK-001", strategy="tente com outra biblioteca")
+    assert out["status"] == "ok" and out["meta"]["task_result"]["attempt"] == 2
+
+
+# ------------------------------------------------------------------ Etapa 5: validação e revisão
+
+def test_browser_validate_e_do_maestro_nao_do_worker():
+    """§17: o navegador é ferramenta de validação da Maestro. O Worker implementa."""
+    from app.tools import get_tool
+
+    nomes = [t.name for t in agent.available_tools({"vision"}, "auto", maestro_mode=True)]
+    assert "browser_validate" in nomes
+    assert "browser_validate" not in subagents.WORKER_TOOLS
+    assert not get_tool("browser_validate").mutating  # abrir e ler não altera nada
+
+
+def test_prompt_manda_validar_tela_no_navegador():
+    p = agent.system_prompt("native", {"vision"}, permission="auto", maestro_mode=True)
+    assert "browser_validate" in p and "tarefa de correção" in p
+
+
+def test_resultado_sem_verificacao_ganha_revisao(conv, monkeypatch):
+    """Sem comando que prove nada, a revisão do diff é o único parecer disponível."""
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+
+    async def revisao(root, task, paths):
+        return "revisor-3b", "VEREDITO: ajustar\nfalta tratar divisão por zero em calc.py"
+
+    monkeypatch.setattr(subagents, "_review", revisao)
+    _plano(conv, [{"title": "Sem prova", "contract": {"goal": "fazer algo"}}])
+    out, eventos = _despacha(conv, "TASK-001")
+    r = out["meta"]["task_result"]
+    assert r["status"] == "unverified"
+    assert "divisão por zero" in r["review"] and "revisor-3b" in r["review"]
+    assert "reviewing" in [e.get("status") for e in eventos if e["type"] == "task_update"]
+
+
+def test_resultado_verificado_nao_chama_revisao(conv, monkeypatch):
+    """Com exit code 0 na mão, o parecer de um modelo menor rende falso-positivo, não bug."""
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    chamou = []
+
+    async def revisao(root, task, paths):
+        chamou.append(1)
+        return "x", "y"
+
+    monkeypatch.setattr(subagents, "_review", revisao)
+    _plano(conv)  # TASK-001 tem verify_command
+    out, _ = _despacha(conv, "TASK-001")
+    assert out["meta"]["task_result"]["status"] == "completed"
+    assert not chamou
+
+
+# ------------------------------------------------------------------ Etapa 6: paralelo e locks
+
+def _rt(code):
+    return {"id": f"c-{code}", "name": "run_task", "arguments": {"code": code}}
+
+
+def test_run_task_so_paraleliza_fora_do_modo_sequencial(monkeypatch):
+    """No sequencial (o padrão, e o único que troca modelo local) dois Workers disputariam a VRAM."""
+    monkeypatch.setattr(config, "MAX_WORKERS", 1)
+    assert [len(b) for b in agent.batches([_rt("TASK-001"), _rt("TASK-002")])] == [1, 1]
+    monkeypatch.setattr(config, "MAX_WORKERS", 3)
+    assert [len(b) for b in agent.batches([_rt("TASK-001"), _rt("TASK-002")])] == [2]
+
+
+def test_limite_de_workers_acompanha_a_configuracao(monkeypatch):
+    """O semáforo fica em cache: sem o limite na chave, mudar MAX_WORKERS não teria efeito."""
+    monkeypatch.setattr(config, "MAX_WORKERS", 2)
+    a = agent._limite(_rt("TASK-001"))
+    monkeypatch.setattr(config, "MAX_WORKERS", 4)
+    b = agent._limite(_rt("TASK-001"))
+    assert a is not b and b._value == 4
+
+
+def test_arquivos_disjuntos_correm_juntos():
+    """src/auth/* e src/dashboard/* não se tocam: as duas tarefas ficam ativas ao mesmo tempo."""
+    ativos, pico = [0], [0]
+
+    async def tarefa(arquivos):
+        async with maestro._travas(9001, arquivos):
+            ativos[0] += 1
+            pico[0] = max(pico[0], ativos[0])
+            await asyncio.sleep(0.05)
+            ativos[0] -= 1
+
+    async def cena():
+        await asyncio.gather(tarefa(["src/auth/login.py"]), tarefa(["src/dashboard/home.py"]))
+
+    asyncio.run(cena())
+    assert pico[0] == 2
+
+
+def test_mesmo_arquivo_serializa():
+    """package.json nas duas: uma espera a outra terminar em vez de escrever por cima."""
+    ativos, pico = [0], [0]
+
+    async def tarefa(arquivos):
+        async with maestro._travas(9002, arquivos):
+            ativos[0] += 1
+            pico[0] = max(pico[0], ativos[0])
+            await asyncio.sleep(0.05)
+            ativos[0] -= 1
+
+    async def cena():
+        await asyncio.gather(tarefa(["package.json", "src/a.ts"]), tarefa(["package.json"]))
+
+    asyncio.run(cena())
+    assert pico[0] == 1
+
+
+def test_ordem_inversa_nao_trava():
+    """{a, b} e {b, a}: adquirindo na ordem do contrato cada uma pegaria metade e esperaria a outra
+    para sempre. A ordem alfabética garante que as duas terminam."""
+    async def tarefa(arquivos):
+        async with maestro._travas(9003, arquivos):
+            await asyncio.sleep(0.02)
+
+    async def cena():
+        await asyncio.wait_for(asyncio.gather(tarefa(["b.py", "a.py"]), tarefa(["a.py", "b.py"])), 2)
+
+    asyncio.run(cena())  # sem deadlock: termina dentro do timeout
+
+
+def test_caminho_normalizado_no_lock():
+    """./src/A.py e src\\a.py são o mesmo arquivo para quem escreve nele."""
+    assert maestro._chave(1, "./src/A.py") == maestro._chave(1, r"src\a.py")
+    assert maestro._chave(1, "a.py") != maestro._chave(2, "a.py")  # conversas não se travam
+
+
+def test_em_conflito_aponta_o_arquivo_ocupado():
+    async def cena():
+        async with maestro._travas(9004, ["package.json"]):
+            return maestro.em_conflito(9004, ["package.json", "src/x.py"])
+
+    assert asyncio.run(cena()) == ["package.json"]
+    assert maestro.em_conflito(9004, ["package.json"]) == []  # liberou ao sair
+
+
+def test_maestro_so_perde_o_que_atrapalha_por_funcao():
+    """Orçamento de contexto não é motivo para tirar ferramenta: modelo de janela pequena é barrado
+    na escolha. Fora ficam só os segundos jeitos de fazer o que ela já faz melhor."""
+    nomes = {t.name for t in agent.available_tools({"vision"}, "auto", maestro_mode=True)}
+    assert not ({"delegate_task", "update_tasks"} & nomes)
+    assert {"write_document", "remember", "read_file", "run_command", "browser_validate",
+            "plan_feature", "run_task", "session_note", "ask_user"} <= nomes
+
+
+def test_worker_local_com_janela_curta_nao_gasta_tentativa(conv, monkeypatch):
+    """O servidor recusaria o prompt no meio do trabalho; recusar antes não queima max_attempts."""
+    _local(monkeypatch, alias="W", janela=8192)
+    monkeypatch.setattr(config, "WORKER_MIN_CTX", 16384)
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    _plano(conv)
+    out, _ = _despacha(conv, "TASK-001")
+    assert out["status"] == "erro" and "8.192" in out["text"] and "16.384" in out["text"]
+    assert "IA local" in out["text"]  # diz onde resolver
+    assert taskdb.get("TASK-001", conv).attempt_count == 0
+
+
+def test_worker_de_nuvem_nao_passa_pelo_minimo(conv, monkeypatch):
+    """A janela do modelo de nuvem não é o usuário que escolhe: o mínimo vale só para o local."""
+    from app import modelctl
+    assert modelctl.janela({"provider": "lmstudio", "model": "grande"}) is None
+    assert modelctl.janela_curta({"provider": "lmstudio", "model": "grande"}, 10**9, "x") == ""
+
+
+def _roda_maestro(monkeypatch, janela, provider="local"):
+    """run_agent inteiro no modo Maestro, com o provedor e a janela combinados. Devolve os eventos e
+    se o modelo chegou a ser chamado."""
+    chamado = []
+
+    async def fake_stream(*a, **k):
+        chamado.append(1)
+        yield "content", "ok"
+        yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
+
+    async def fake_limit(*a):
+        return janela
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", fake_limit)
+    monkeypatch.setitem(config.PROVIDERS, "local", {"id": "local", "type": "llamacpp", "url": "", "api_key": ""})
+    from app import modelctl
+    monkeypatch.setattr(modelctl, "carregado", lambda spec: True)  # o modelo da Maestro já está no ar
+
+    async def cena():
+        with db.session() as s:
+            c = db.Conversation(kind="maestro")
+            s.add(c)
+            s.commit()
+            cid = c.id
+        req = agent.RunRequest(content="objetivo", provider=provider, model="m", mode="maestro",
+                               permission="auto")
+        return [ev async for ev in agent.run_agent(cid, req, agent.Run(cid))]
+
+    return asyncio.run(cena()), chamado
+
+
+def test_maestro_local_com_janela_curta_nem_comeca(monkeypatch):
+    """Melhor recusar agora do que o servidor recusar o prompt no meio de uma tarefa."""
+    monkeypatch.setattr(config, "MAESTRO_MIN_CTX", 32768)
+    eventos, chamado = _roda_maestro(monkeypatch, 8192)
+    erros = [e["message"]["content"] for e in eventos if e["type"] == "event"
+             and (e["message"].get("meta") or {}).get("kind") == "error"]
+    assert erros and "8.192" in erros[0] and "32.768" in erros[0]
+    assert not chamado  # o modelo nem foi chamado
+
+
+def test_maestro_local_com_janela_boa_roda(monkeypatch):
+    monkeypatch.setattr(config, "MAESTRO_MIN_CTX", 32768)
+    _, chamado = _roda_maestro(monkeypatch, 131072)
+    assert chamado
+
+
+def test_parar_no_meio_guarda_o_que_o_worker_fez(conv, monkeypatch):
+    """Parar uma tarefa lenta apagava o rastro: modelo, passos e tokens sumiam, e sobrava só o log do
+    llama.cpp para descobrir por que ela estava lenta."""
+    passo = {"n": 0}
+
+    async def fala(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        passo["n"] += 1
+        if passo["n"] == 1:  # primeiro passo: pede uma ferramenta
+            yield "done", {"tool_calls": [{"id": "c1", "name": "write_file",
+                                           "arguments": {"path": "a.py", "content": "x=1"}}],
+                           "completion_tokens": 30}
+        else:
+            yield "content", "continuando"
+            yield "done", {"tool_calls": [], "completion_tokens": 5}
+
+    monkeypatch.setattr(llm, "chat_stream", fala)
+    run_obj = agent.Run(conv)
+
+    async def run_call(_c, call, _r, _ru, _caps, out, parent=None):
+        out.update(status="ok", text="gravado", meta={"arguments": call["arguments"]})
+        run_obj.cancel.set()  # o usuário aperta Parar logo depois do primeiro passo
+        return
+        yield
+
+    _plano(conv, [{"title": "X", "contract": {"goal": "g"}}])
+    req = agent.RunRequest(content="x", provider="lmstudio", model="m", mode="maestro", permission="auto")
+    out: dict = {}
+
+    async def cena():
+        async for _ in maestro.run_task(conv, {"id": "rt1", "name": "run_task",
+                                               "arguments": {"code": "TASK-001"}}, req, run_obj, out, run_call):
+            pass
+
+    asyncio.run(cena())
+    assert out["status"] == "cancelada"
+    assert out["meta"]["sub"]["model"] == "coder-14b"
+    assert [s["name"] for s in out["meta"]["sub"]["steps"]] == ["write_file"]
+    tent = taskdb.detail(conv, "TASK-001")["attempts"][0]
+    assert tent["status"] == "cancelled" and tent["result"]["status"] == "cancelled"
+    assert tent["result"]["model"] == "coder-14b" and tent["tokens"] == 30
+
+
+def test_maestro_nao_roda_em_esforco_extremo(monkeypatch):
+    """Extremo manda delegar por delegate_task, que a Maestro não tem: vira Máximo."""
+    visto = {}
+
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        visto["effort"] = effort
+        yield "content", "ok"
+        yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
+
+    async def limite(*a):
+        return 131072
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", limite)
+
+    async def cena():
+        with db.session() as s:
+            c = db.Conversation(kind="maestro")
+            s.add(c)
+            s.commit()
+            cid = c.id
+        req = agent.RunRequest(content="x", provider="lmstudio", model="m", mode="maestro",
+                               permission="auto", effort="extremo")
+        [ev async for ev in agent.run_agent(cid, req, agent.Run(cid))]
+        return req
+
+    req = asyncio.run(cena())
+    assert req.effort == "maximo" and visto["effort"] == "maximo"
+
+
+def test_maestro_local_recoloca_o_proprio_modelo_antes_de_gerar(conv, monkeypatch):
+    """O Worker da tarefa anterior deixou o GGUF dele no ar. O llama.cpp ignora o campo `model`:
+    sem recarregar, a Maestro rodaria calada no modelo do Worker."""
+    f = _local(monkeypatch, alias="W")
+    monkeypatch.setattr(f, "scan", lambda: [{"path": r"D:\m\M.gguf", "name": "M", "kind": "chat"}])
+    gerou_com = []
+
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        gerou_com.append(f.alias)  # qual modelo estava no ar quando a Maestro gerou
+        yield "content", "ok"
+        yield "done", {"tool_calls": [], "prompt_tokens": 1, "completion_tokens": 1}
+
+    async def limite(*a):
+        return 131072
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", limite)
+
+    async def cena():
+        req = agent.RunRequest(content="x", provider="local", model="M", mode="maestro", permission="auto")
+        return [ev async for ev in agent.run_agent(conv, req, agent.Run(conv))]
+
+    eventos = asyncio.run(cena())
+    assert gerou_com == ["M"] and f.chamadas == ["load:M"]
+    assert [e["phase"] for e in eventos if e["type"] == "model"] == ["unloading", "loading", "ready"]
+
+
+# ------------------------------------------------------------------ conversa do Worker
+
+def test_worker_de_contrato_vira_conversa_gravada_na_tentativa(conv, monkeypatch):
+    """O cockpit desenha o Worker como uma tela de agente, e a conversa fica na tarefa para rever."""
+    passo = {"n": 0}
+
+    async def fala(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        passo["n"] += 1
+        if passo["n"] == 1:
+            yield "reasoning", "vou criar o arquivo"
+            yield "done", {"tool_calls": [{"id": "c1", "name": "write_file",
+                                           "arguments": {"path": "a.py", "content": "x = 1"}}],
+                           "prompt_tokens": 900, "completion_tokens": 40}
+        else:
+            yield "content", "Pronto."
+            yield "done", {"tool_calls": [], "prompt_tokens": 1000, "completion_tokens": 5}
+
+    monkeypatch.setattr(llm, "chat_stream", fala)
+    _plano(conv)  # TASK-001 tem verify_command
+    out, eventos = _despacha(conv, "TASK-001")
+    assert out["status"] == "ok"
+
+    t = taskdb.detail(conv, "TASK-001")["attempts"][0]["transcript"]
+    papeis = [(m["role"], m.get("name")) for m in t]
+    # briefing, rodada com a ferramenta, resultado, rodada final, verificação e a saída dela
+    assert papeis == [("user", None), ("assistant", None), ("tool", "write_file"),
+                      ("assistant", None), ("assistant", None), ("tool", "run_command")]
+    assert "TAREFA TASK-001" in t[0]["content"]
+    assert t[1]["thinking"] == "vou criar o arquivo"
+    assert t[1]["tool_calls"][0]["name"] == "write_file"
+    assert t[1]["meta"]["stats"]["tokens"] == 40 and t[1]["meta"]["stats"]["prompt_tokens"] == 900
+    assert t[4]["meta"]["verificacao"] and t[4]["tool_calls"][0]["arguments"]["command"]
+    assert [m["id"] for m in t] == list(range(1, len(t) + 1))
+
+    # ao vivo, os mesmos passos saem pela SSE marcados com o id da chamada run_task
+    tipos = {e["type"] for e in eventos if e.get("parent") == "rt1"}
+    assert {"sub_message", "sub_assistant_start", "sub_thinking", "tool_result"} <= tipos
+
+
+def test_board_nao_carrega_a_conversa_dos_workers(conv, monkeypatch):
+    """O /board é consultado a cada 2 s: a conversa de cada Worker iria junto em toda consulta."""
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    _plano(conv)
+    _despacha(conv, "TASK-001")
+    tent = taskdb.board(conv)["features"][0]["tasks"][0]["attempts"][0]
+    assert "transcript" not in tent and tent["has_transcript"]
+
+
+def test_conversa_fica_gravada_mesmo_se_parar_no_meio(conv, monkeypatch):
+    """Gravada a cada rodada: o Parar não leva junto o que o Worker já tinha feito."""
+    async def fala(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        yield "done", {"tool_calls": [{"id": "c1", "name": "write_file",
+                                       "arguments": {"path": "a.py", "content": "x"}}], "completion_tokens": 3}
+
+    monkeypatch.setattr(llm, "chat_stream", fala)
+    run_obj = agent.Run(conv)
+
+    async def run_call(_c, call, _r, _ru, _caps, out, parent=None):
+        out.update(status="ok", text="gravado", meta={"arguments": call["arguments"]})
+        run_obj.cancel.set()
+        return
+        yield
+
+    _plano(conv, [{"title": "X", "contract": {"goal": "g"}}])
+    req = agent.RunRequest(content="x", provider="lmstudio", model="m", mode="maestro", permission="auto")
+
+    async def cena():
+        async for _ in maestro.run_task(conv, {"id": "rt1", "name": "run_task",
+                                               "arguments": {"code": "TASK-001"}}, req, run_obj, {}, run_call):
+            pass
+
+    asyncio.run(cena())
+    t = taskdb.detail(conv, "TASK-001")["attempts"][0]["transcript"]
+    assert [m["role"] for m in t] == ["user", "assistant", "tool"]
+
+
+def test_delegate_task_comum_nao_grava_conversa(conv, monkeypatch):
+    """A conversa gravada é do Worker de contrato; o delegate_task do agente segue como sempre."""
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    out: dict = {}
+    eventos = []
+
+    async def cena():
+        rc, _ = _run_call_factory()
+        async for ev in subagents.run(conv, {"id": "d1", "name": "delegate_task",
+                                             "arguments": {"task": "faça algo"}},
+                                      agent.RunRequest(content="x", provider="lmstudio", model="m"),
+                                      agent.Run(conv), out, rc):
+            eventos.append(ev)
+
+    asyncio.run(cena())
+    assert not any(e["type"].startswith("sub_") and e["type"] != "sub_status" for e in eventos)

@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
-               taskdb, terminal, uploads, workspace)
+               modelctl, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
@@ -105,7 +105,9 @@ def get_config():
     return {"providers": [{"id": p["id"], "name": p["name"]} for p in config.PROVIDERS.values()],
             "num_ctx": config.NUM_CTX, "max_iterations": config.MAX_ITERATIONS,
             "default_workspace": workspace.label(None), "drives": [d["name"] for d in workspace.roots()],
-            "subagents": {k: v for k, v in subagents.configured().items()}}
+            "subagents": {k: v for k, v in subagents.configured().items()},
+            # o seletor de modelo barra o GGUF local com janela menor que isto (Maestro / Workers)
+            "min_ctx_maestro": config.MAESTRO_MIN_CTX, "min_ctx_worker": config.WORKER_MIN_CTX}
 
 
 # ------------------------------------------------------------------ pastas de trabalho
@@ -1704,12 +1706,8 @@ def maestro_task_patch(conv_id: int, code: str, body: TaskPatch):
 @app.get("/api/maestro/models")
 def maestro_models():
     """Estado do ciclo de vida dos modelos, para o painel Modelo·VRAM do cockpit."""
-    estado = localai.status()
-    hw = localai.hardware()
-    return {"running": estado.get("running"), "alias": estado.get("alias"), "ctx": estado.get("ctx"),
-            "vram": hw.get("vram"), "vram_free": hw.get("vram_free"),
-            "ram": hw.get("ram"), "ram_free": hw.get("ram_free"),
-            "lifecycle": config.MODEL_LIFECYCLE, "max_workers": config.MAX_WORKERS,
+    return {**modelctl.status(), "max_workers": config.MAX_WORKERS,
+            "can_swap": modelctl.pode_trocar(), "min_ctx_worker": config.WORKER_MIN_CTX,
             "slots": subagents.configured(), "active": subagents.ativas()}
 
 
