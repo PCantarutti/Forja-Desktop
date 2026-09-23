@@ -245,6 +245,15 @@ export default function CompararView(props: {
     carregarConversa();
   }, [carregarConversa]);
 
+  /** Escolher no seletor não carrega nada: modelo local vira o .gguf da comparação, que sobe na hora
+   *  de rodar (e desce no fim). O "local" cru seria "o que estiver carregado", que não é o escolhido. */
+  function entradaDe(e: { provider: string; model: string }): CompararEntrada {
+    const gguf = e.provider === "local"
+      ? ggufs.find((m) => m.name === e.model || nomeDoArquivo(m.path) === e.model)
+      : undefined;
+    return gguf ? { path: gguf.path, nome: gguf.name } : { provider: e.provider, model: e.model, nome: e.model };
+  }
+
   function adicionar(entrada: CompararEntrada) {
     setItens((atual) => {
       if (atual.length >= MAX_MODELOS) return atual;
@@ -484,10 +493,10 @@ export default function CompararView(props: {
           {estado && estado.itens.length < MAX_MODELOS && (
             <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
               <span>Adicionar a esta comparação (só ele gera):</span>
-              <ModelPicker provider={escolha.provider} model={escolha.model}
+              <ModelPicker provider={escolha.provider} model={escolha.model} loadLocal={false}
                            onChange={(provider, model) => setEscolha({ provider, model })} />
               <button className={btn} disabled={!escolha.model}
-                      onClick={() => adicionarNaComparacao({ provider: escolha.provider, model: escolha.model, nome: escolha.model })}>
+                      onClick={() => adicionarNaComparacao(entradaDe(escolha))}>
                 Adicionar
               </button>
               {estado.modo === "sequencial" && !!ggufs.length && (
@@ -523,7 +532,7 @@ export default function CompararView(props: {
                 <span className={titulo}>Analisar com IA</span>
                 <span className="text-faint">um modelo que você confia lê as respostas e as estatísticas e compara</span>
                 <div className="ml-auto flex items-center gap-1.5">
-                  <ModelPicker provider={juiz.provider} model={juiz.model}
+                  <ModelPicker provider={juiz.provider} model={juiz.model} loadLocal={false}
                                onChange={(provider, model) => setJuiz({ provider, model })} />
                   {analise?.rodando ? (
                     <button className={btn} onClick={pararAnalise} title="Parar a análise">
@@ -582,10 +591,10 @@ export default function CompararView(props: {
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <div className="flex items-center gap-1">
-              <ModelPicker provider={escolha.provider} model={escolha.model}
+              <ModelPicker provider={escolha.provider} model={escolha.model} loadLocal={false}
                            onChange={(provider, model) => setEscolha({ provider, model })} />
               <button className={btn} disabled={!escolha.model || itens.length >= MAX_MODELOS}
-                      onClick={() => adicionar({ provider: escolha.provider, model: escolha.model, nome: escolha.model })}>
+                      onClick={() => adicionar(entradaDe(escolha))}>
                 Adicionar
               </button>
             </div>
