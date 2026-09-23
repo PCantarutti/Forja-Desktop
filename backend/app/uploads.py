@@ -16,6 +16,7 @@ import base64
 import mimetypes
 import re
 import time
+import uuid
 from pathlib import Path
 
 from . import config, documentos, workspace
@@ -50,7 +51,9 @@ def save(name: str, data: bytes, mime: str | None = None, root: Path | None = No
     mime = mime or mimetypes.guess_type(name)[0] or "application/octet-stream"
     folder = (root or workspace.root()) / UPLOAD_DIR
     folder.mkdir(parents=True, exist_ok=True)
-    filename = f"{time.strftime('%Y%m%d-%H%M%S')}-{safe_name(name)}"
+    # Único mesmo no mesmo segundo: dois prints seguidos (desktop e celular da revisão visual) saíam com
+    # o mesmo nome, e o segundo sobrescrevia o primeiro — o modelo "via" o desktop e recebia o celular.
+    filename = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}-{safe_name(name)}"
     (folder / filename).write_bytes(data)
     anexo = {"path": f"{UPLOAD_DIR}/{filename}", "name": name, "size": len(data), "mime": mime,
              "kind": kind_of(mime)}

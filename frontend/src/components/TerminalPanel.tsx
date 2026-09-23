@@ -4,6 +4,21 @@ import { api } from "../api";
 type Session = { id: string; where: string; shell: string; cwd: string; buf: string; cursor: number; history: string[]; alive: boolean };
 // Uma sessão por conversa, viva enquanto o app estiver aberto (trocar de aba não fecha o shell).
 const SESSIONS: Record<string, Session> = {};
+// Comando pedido de fora (o "Testar" de um bloco de código) antes de o shell desta conversa abrir.
+const PENDENTES: Record<string, string> = {};
+
+/** Roda um comando no terminal da conversa, como se a pessoa tivesse digitado. Sem shell aberto
+ * ainda, o comando espera e roda assim que a aba Terminal abrir um. */
+export async function executarNoTerminal(conv: string, text: string) {
+  const s = SESSIONS[conv];
+  if (!s) {
+    PENDENTES[conv] = text;
+    return;
+  }
+  s.history = [text, ...s.history.filter((h) => h !== text)].slice(0, 100);
+  s.buf = (s.buf + `\n$ ${text}\n`).slice(-200_000);
+  await api.post(`/term/${s.id}/input`, { text });
+}
 
 /**
  * Aba Terminal: seu shell na pasta da conversa (PowerShell no Windows, bash no Linux/macOS).
@@ -35,6 +50,11 @@ export default function TerminalPanel(props: { conv: string }) {
       setSess(SESSIONS[conv]);
       setOut("");
       setError("");
+      if (PENDENTES[conv]) {
+        const t = PENDENTES[conv];
+        delete PENDENTES[conv];
+        executarNoTerminal(conv, t).then(() => setOut(SESSIONS[conv]?.buf ?? "")).catch((e) => setError(e.message));
+      }
     } catch (e: any) {
       setError(e.message);
     }

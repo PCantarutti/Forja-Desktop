@@ -1,19 +1,38 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import { createPortal } from "react-dom";
 import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall, Stats } from "../types";
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
-import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Download, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+
+/** Quem fornece isto ganha o botão "Testar" nos blocos de código (código, linguagem do bloco).
+ * Só o Comparar fornece: no chat o bloco continua só com o copiar. */
+export const TestarCodigo = createContext<((codigo: string, linguagem: string) => void) | null>(null);
 
 /** Bloco de código com botão de copiar no canto (aparece ao passar o mouse). */
 function CodeBlock(props: React.ComponentProps<"pre">) {
   const ref = useRef<HTMLPreElement>(null);
+  const testar = useContext(TestarCodigo);
   // ponytail: o texto vem do DOM já renderizado, sem remontar o AST do markdown
   return (
     <div className="group relative">
       <BotaoDeCanto>
+        {testar && (
+          <button
+            title="Testar este código: HTML abre no navegador, Python e JavaScript rodam no terminal"
+            onClick={() => {
+              const code = ref.current?.querySelector("code");
+              const lang = /language-([\w-]+)/.exec(code?.className ?? "")?.[1] ?? "";
+              testar(ref.current?.textContent ?? "", lang);
+            }}
+            className="mr-1 rounded-md border border-line bg-surface px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-fg"
+          >
+            ▶ Testar
+          </button>
+        )}
         <CopyButton text={() => ref.current?.textContent ?? ""} bg />
       </BotaoDeCanto>
       <pre ref={ref} {...props} />
@@ -85,7 +104,19 @@ function Link({ href, children, ...rest }: React.ComponentProps<"a">) {
   );
 }
 
-const MD_COMPONENTS = { pre: CodeBlock, table: Table, a: Link };
+/** Imagem na resposta (ex.: prints do revisor do Comparar): clique amplia, no mesmo Lightbox dos anexos. */
+function Imagem({ src, alt, ...rest }: React.ComponentProps<"img">) {
+  const [zoom, setZoom] = useState(false);
+  return (
+    <>
+      <img src={src} alt={alt} {...rest} title={alt ? `${alt} — clique para ampliar` : "Clique para ampliar"}
+           onClick={() => setZoom(true)} className="cursor-zoom-in" />
+      {zoom && typeof src === "string" && <Lightbox src={src} titulo={alt} onClose={() => setZoom(false)} />}
+    </>
+  );
+}
+
+const MD_COMPONENTS = { pre: CodeBlock, table: Table, a: Link, img: Imagem };
 
 /**
  * Memoizado, e é o `memo` que mais paga no app inteiro.
@@ -181,16 +212,51 @@ export const setFileConv = (conv: number | null) => {
 export const fileUrl = (a: Attachment) => `/api/files?path=${encodeURIComponent(a.path)}&conv=${fileConv}`;
 
 /** Imagem em tela cheia; clique (ou Esc) fecha. */
-export function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
+export function Lightbox({ src, onClose, titulo }: { src: string; onClose: () => void; titulo?: string }) {
+  const [real, setReal] = useState(false);          // false = cabe na tela; true = pixel a pixel, com rolagem
+  const [medida, setMedida] = useState<[number, number] | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
-    <div onClick={onClose} className="fixed inset-0 z-50 grid cursor-zoom-out place-items-center bg-black/85 p-4">
-      <img src={src} alt="" className="max-h-full max-w-full rounded-lg shadow-2xl" />
-    </div>
+  const nome = titulo || decodeURIComponent(src.split(/[/?=&]/).filter(Boolean).pop() || "Imagem");
+  const botao = "flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-fg";
+  // Portal no body: desenhado dentro da resposta, herdava o CSS dela (miniatura de 280px numa célula de
+  // tabela) e o "ampliar" mostrava a imagem do mesmo tamanho, só que com o fundo escuro.
+  return createPortal(
+    <div onClick={onClose} role="dialog" aria-label={nome}
+         className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
+      <div onClick={(e) => e.stopPropagation()}
+           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl">
+        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
+          <span className="min-w-0 truncate text-sm text-fg" title={nome}>{nome}</span>
+          {medida && <span className="shrink-0 text-[11px] text-faint">{medida[0]}×{medida[1]}</span>}
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <button className={botao} onClick={() => setReal((v) => !v)}
+                    title={real ? "Ajustar à tela" : "Ver no tamanho real (com rolagem)"}>
+              {real ? "Ajustar à tela" : "Tamanho real"}
+            </button>
+            <a className={botao} href={src} download title="Baixar a imagem">
+              <Download className="size-3.5" />
+            </a>
+            <button className={botao} onClick={onClose} title="Fechar (Esc)">
+              <X className="size-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className={`min-h-0 flex-1 bg-bg p-3 ${real ? "overflow-auto" : "flex items-center justify-center overflow-hidden"}`}>
+          <img
+            src={src}
+            alt={nome}
+            onLoad={(e) => setMedida([e.currentTarget.naturalWidth, e.currentTarget.naturalHeight])}
+            onClick={() => setReal((v) => !v)}
+            className={`rounded-lg ${real ? "max-w-none cursor-zoom-out" : "max-h-[calc(100vh-8rem)] max-w-full cursor-zoom-in object-contain"}`}
+          />
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

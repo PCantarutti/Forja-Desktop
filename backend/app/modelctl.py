@@ -150,7 +150,7 @@ def _evento(fase: str, **extra) -> dict:
 
 
 async def ensure(spec: dict, out: dict | None = None,
-                 cancel: asyncio.Event | None = None) -> AsyncIterator[dict]:
+                 cancel: asyncio.Event | None = None, temporario: dict | None = None) -> AsyncIterator[dict]:
     """Garante que o modelo do slot esteja no ar, trocando o que estiver carregado se preciso.
 
     Gerador assíncrono como `subagents.run`: os eventos saem enquanto acontecem, para a interface
@@ -158,8 +158,14 @@ async def ensure(spec: dict, out: dict | None = None,
     """
     out = out if out is not None else {}
     out.setdefault("swapped", False)
-    if not gerenciavel(spec) or carregado(spec):
+    if not gerenciavel(spec):
         return
+    if carregado(spec):
+        # Com janela pedida (`temporario["ctx"]`): recarrega se a atual não cabe o pedido, ou se é tão
+        # maior que só ocupa VRAM que faltaria ao encoder de visão.
+        ctx_agora, ctx_pedido = int(localai.status().get("ctx") or 0), int((temporario or {}).get("ctx") or 0)
+        if not ctx_pedido or ctx_pedido <= ctx_agora <= ctx_pedido * 2:
+            return
 
     alvo = spec["model"]
     caminho = path_for(alvo)
@@ -179,7 +185,8 @@ async def ensure(spec: dict, out: dict | None = None,
 
     # `load` é síncrono e segura o _proc_lock por até LOAD_TIMEOUT; numa thread o event loop segue
     # publicando eventos e atendendo o botão Parar. Ele já descarrega o anterior sozinho.
-    tarefa = asyncio.create_task(asyncio.to_thread(localai.load, caminho))
+    carga = (localai.load, caminho, None, temporario) if temporario else (localai.load, caminho)
+    tarefa = asyncio.create_task(asyncio.to_thread(*carga))
     if cancel is not None:
         espera = asyncio.ensure_future(cancel.wait())
         feitos, _ = await asyncio.wait({tarefa, espera}, return_when=asyncio.FIRST_COMPLETED)

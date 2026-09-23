@@ -1248,8 +1248,11 @@ def load_last() -> None:
         print(f"Forja: não deu para carregar o último modelo: {e}", flush=True)
 
 
-def load(path: str, patch: dict | None = None) -> dict:
+def load(path: str, patch: dict | None = None, temporario: dict | None = None) -> dict:
     """Sobe o llama-server com o modelo. Substitui o que estiver carregado (um por vez).
+
+    `patch` muda os parâmetros salvos do modelo; `temporario` vale só para esta carga e não é gravado
+    (o revisor do Comparar sobe com a janela de que precisa, sem mexer na configuração do usuário).
 
     ponytail: um modelo por vez; multi-modelo simultâneo é caso de llama-swap, não deste projeto.
     """
@@ -1261,7 +1264,7 @@ def load(path: str, patch: dict | None = None) -> dict:
         raise ToolError("llama.cpp não instalado. Baixe o runtime no painel IA local.")
     if not Path(path).is_file():
         raise ToolError(f"Modelo não encontrado: {path}")
-    p = save_params(path, patch or {})
+    p = {**save_params(path, patch or {}), **(temporario or {})}
     _checa_memoria(path, p)
     unload()
     for _ in range(10):  # a porta leva um instante para liberar depois do kill do modelo anterior
@@ -1289,6 +1292,7 @@ def load(path: str, patch: dict | None = None) -> dict:
         _state.update({"started": time.time(),
                        "info": {"path": path, "alias": alias_of(path), "params": p,
                                 "ctx": int(p["ctx"]), "vision": bool(p.get("mmproj")),
+                                "temporario": bool(temporario),
                                 "vision_lenta": visao_lenta(str(p.get("mmproj") or ""), str(exe))}})
     try:
         _wait_ready(proc)

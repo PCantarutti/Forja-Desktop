@@ -781,6 +781,13 @@ class CompararBody(BaseModel):
     bateria: str = ""               # teste pronto de especialidade (baterias.BATERIAS): anexo e gabarito
 
 
+class TestarBody(BaseModel):
+    codigo: str
+    linguagem: str = ""             # a do bloco (```html); vazio = descobre pelo conteúdo
+    chave: str = "teste"            # uma pasta por resposta (comparação + modelo)
+    conv: int | None = None         # conversa dona do servidor de teste (aba Instâncias)
+
+
 class JuizBody(BaseModel):
     provider: str = ""
     model: str = ""
@@ -840,25 +847,57 @@ def comparar_voto(message_id: int, body: VotoBody):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/comparar/testar")
+def comparar_testar(body: TestarBody):
+    """Testar o código de uma resposta: HTML sobe num servidor (abre no navegador integrado);
+    Python e JavaScript voltam como comando para o terminal."""
+    try:
+        return baterias.testar_codigo(body.codigo, body.linguagem, body.chave, body.conv)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/comparar/baterias")
 def comparar_baterias():
     """Testes prontos por especialidade de Worker (prompt, o que medem, arquivo e gabarito)."""
     return baterias.publico()
 
 
-@app.post("/api/comparar/{message_id}/julgar")
-async def comparar_julgar(message_id: int, body: JuizBody):
-    """Um modelo escolhido pelo usuário lê todas as respostas e estatísticas e responde com a tabela
-    comparativa (quem acertou, quem alucinou, quem foi mais rápido). Stream de texto, como um chat."""
+def _sse_analise(message_id: int) -> StreamingResponse:
+    """Retrato da análise a cada tick, até ela acabar. Sair da tela não a interrompe: ela roda no
+    servidor, e voltar reconecta aqui."""
     async def stream():
-        try:
-            async for ev in baterias.julgar(message_id, body.provider, body.model):
-                yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
-        except (ToolError, llm.LLMError) as e:
-            yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+        while True:
+            estado = baterias.estado_analise(message_id) or {"status": "nenhum"}
+            yield f"data: {json.dumps(estado, ensure_ascii=False, default=str)}\n\n"
+            if estado["status"] != "rodando":
+                return
+            await asyncio.sleep(comparar.TICK)
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/comparar/{message_id}/julgar")
+async def comparar_julgar(message_id: int, body: JuizBody):
+    """Um modelo escolhido pelo usuário lê todas as respostas e estatísticas e responde com a tabela
+    comparativa (quem acertou, quem alucinou, quem foi mais rápido), em forma de chat."""
+    if not (body.provider and body.model):
+        raise HTTPException(400, "Escolha o modelo que vai analisar.")
+    baterias.iniciar_analise(message_id, body.provider, body.model)
+    return _sse_analise(message_id)
+
+
+@app.get("/api/comparar/{message_id}/julgar")
+def comparar_julgar_acompanhar(message_id: int):
+    """Reconectar à análise (voltou à página): o andamento, ou {"status": "nenhum"}."""
+    return _sse_analise(message_id)
+
+
+@app.post("/api/comparar/{message_id}/julgar/parar")
+def comparar_julgar_parar(message_id: int):
+    baterias.parar_analise(message_id)
+    return {"ok": True}
 
 
 @app.get("/api/comparar/placar")
@@ -1048,6 +1087,27 @@ async def browser_tabs(body: TabsBody, conv: str = "0"):
             await s.close_tab(body.index)
         else:
             raise HTTPException(400, "action deve ser new, switch ou close")
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return await s.state_with_title()
+
+
+@app.post("/api/browser/abrir")
+async def browser_abrir(body: NavigateBody, conv: str = "0"):
+    """Abre a URL numa aba só dela (o "Testar" do Comparar): se já há uma aba nessa URL, volta para ela
+    e recarrega (o código pode ter mudado); senão abre uma aba nova. Nunca duplica a mesma página."""
+    s = _sess(conv)
+    try:
+        abas = await s.tabs() if s.open else []
+        mesma = next((t for t in abas if t["url"].split("#")[0] == body.url), None)
+        vazia = len(abas) == 1 and abas[0]["url"] in ("about:blank", "")
+        if mesma:
+            await s.switch_tab(mesma["index"])
+            await s.navigate(body.url)
+        elif vazia:
+            await s.navigate(body.url)  # a única aba está em branco: usa ela
+        else:
+            await s.new_tab(body.url)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return await s.state_with_title()

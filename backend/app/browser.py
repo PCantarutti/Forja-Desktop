@@ -817,6 +817,12 @@ def eval_preview(_root: Path, args: dict) -> dict:
             "text": str(args.get("script", ""))}
 
 
+SEM_BARRA = """() => { if (document.getElementById('forja-sem-barra')) return;
+  const s = document.createElement('style'); s.id = 'forja-sem-barra';
+  s.textContent = 'html,body{scrollbar-width:none!important}html::-webkit-scrollbar,body::-webkit-scrollbar{display:none!important}';
+  document.documentElement.appendChild(s); }"""
+
+
 @asynccontextmanager
 async def _viewport_do_print(page, largura: int, altura: int):
     """Renderiza a página num viewport dado, só enquanto o print é tirado, e devolve a MEDIDA REAL.
@@ -842,6 +848,11 @@ async def _viewport_do_print(page, largura: int, altura: int):
             sessao = await page.context.new_cdp_session(page)
             await sessao.send("Emulation.setDeviceMetricsOverride",
                               {"width": largura, "height": altura, "deviceScaleFactor": 1, "mobile": False})
+    # Sem barra de rolagem no print: ela come ~15px da largura (o "desktop" deixa de ter 1280 de conteúdo)
+    # e aparece como uma faixa cinza que o modelo com visão lê como parte do layout. Estilo injetado só
+    # durante a foto — o `Emulation.setScrollbarsHidden` do CDP não vale na captura da view do Electron.
+    with contextlib.suppress(Exception):
+        await page.evaluate(SEM_BARRA)
     # Deixa o layout assentar antes de medir e fotografar: a troca de viewport é assíncrona e uma
     # página longa leva um tempo para refluir.
     with contextlib.suppress(Exception):
@@ -851,8 +862,11 @@ async def _viewport_do_print(page, largura: int, altura: int):
     except Exception:
         medido = [largura, altura]
     try:
-        yield {"width": int(medido[0]), "height": int(medido[1])}
+        # `cdp`: no nativo, a foto tem de sair por esta mesma sessão (ver screenshot)
+        yield {"width": int(medido[0]), "height": int(medido[1]), "cdp": sessao}
     finally:
+        with contextlib.suppress(Exception):
+            await page.evaluate("() => document.getElementById('forja-sem-barra')?.remove()")
         with contextlib.suppress(Exception):
             if sessao is not None:
                 try:
@@ -927,6 +941,14 @@ async def screenshot(_root: Path, args: dict) -> dict:
                 elemento = _locator(page, alvo)
                 await elemento.scroll_into_view_if_needed(timeout=PRINT_TIMEOUT)
                 jpg = await elemento.screenshot(**comum)
+            elif real.get("cdp") is not None:
+                # Nativo: o `page.screenshot()` do Playwright, numa aba sem viewport dele, fotografava o
+                # tamanho do PAINEL (estreito e alto), não o override — o print "desktop" de 1280x720
+                # saía igual ao de celular, e a revisão visual julgava o desktop sem nunca vê-lo. A foto
+                # sai pela mesma sessão CDP que aplicou o tamanho.
+                r = await real["cdp"].send("Page.captureScreenshot",
+                                           {"format": "jpeg", "quality": JPEG_QUALITY, "fromSurface": True})
+                jpg = base64.b64decode(r["data"])
             else:
                 jpg = await page.screenshot(**comum)
     except Exception as e:

@@ -208,6 +208,8 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
                     item["reasoning"] += val
                 elif kind == "done":
                     done = val or {}
+                if t_first:
+                    item["stats"] = _ao_vivo(item, t0, t_first)
         pensou, visivel = split_think(item["content"])
         item["content"] = visivel or item["content"]
         item["reasoning"] = item["reasoning"] or pensou
@@ -218,6 +220,19 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
         item.update(status="erro", error=str(e) or e.__class__.__name__)
     finally:
         _persistir(run)
+
+
+CHARS_POR_TOKEN = 3.5  # estimativa durante a geração; o número real chega no fim, do servidor
+
+
+def _ao_vivo(item: dict, t0: float, t_first: float) -> dict:
+    """Estatística enquanto o modelo gera (o servidor só conta os tokens no fim): tokens estimados pelos
+    caracteres, tempo desde o pedido e tok/s desde o primeiro token. Marcada como estimada."""
+    agora = time.monotonic()
+    tokens = round((len(item["content"]) + len(item["reasoning"])) / CHARS_POR_TOKEN)
+    gerando = max(agora - t_first, 0.001)
+    return {"tokens": tokens, "seconds": round(agora - t0, 1), "tps": round(tokens / gerando, 1),
+            "estimated": True, "ao_vivo": True}
 
 
 async def _sequencial(run: dict, mensagens: list[dict], effort: str) -> None:

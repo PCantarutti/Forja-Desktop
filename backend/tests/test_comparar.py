@@ -299,12 +299,12 @@ def test_juiz_recebe_gabarito_e_estatisticas_e_responde_como_chat(monkeypatch):
 
     async def juiz(provider, model, messages, tools, num_ctx, effort=None, **kw):
         pedidos.append(messages)
+        yield ("reasoning", "comparando A e B")
         yield ("content", "| Modelo | Acertou |\n|---|---|\n| A | sim |")
         yield ("done", {})
 
-    async def ensure(spec):
-        return
-        yield
+    async def ensure(spec, *a, **k):
+        yield {"type": "model", "phase": "loading"}
 
     monkeypatch.setattr(baterias.llm, "chat_stream", juiz)
     monkeypatch.setattr(modelctl, "ensure", ensure)
@@ -320,7 +320,10 @@ def test_juiz_recebe_gabarito_e_estatisticas_e_responde_como_chat(monkeypatch):
     assert "tok/s" in pedido
     fim = eventos[-1]["fim"]
     assert fim["meta"]["julgamento"]["de"] == estado["message_id"]
-    assert "| A | sim |" in fim["content"] and "**A** = modelo-a" in fim["content"]
+    assert "| modelo-a | sim |" in fim["content"]      # fora do modo cego: o nome no lugar da letra
+    assert fim["thinking"] == "comparando A e B" and {"pensando": "comparando A e B"} in eventos
+    passos = [e["etapa"] for e in eventos if "etapa" in e]
+    assert any("Carregando juiz-grande" in p for p in passos) and any("lendo 2 respostas" in p for p in passos)
 
 
 def test_velocidade_conta_o_tempo_do_raciocinio(monkeypatch):
@@ -340,3 +343,197 @@ def test_velocidade_conta_o_tempo_do_raciocinio(monkeypatch):
     estado = _rodar(conv_id=_conversa(), prompt="x", itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
     s = estado["itens"][0]["stats"]
     assert s["tps"] < 200  # 40 tokens em ~0,3 s ≈ 130; com o relógio no texto daria milhares
+
+
+def test_testar_codigo_html_sobe_servidor_e_python_vira_comando(tmp_path, monkeypatch):
+    from app import baterias, shell
+    monkeypatch.setattr(baterias, "TESTES_DIR", tmp_path)
+    subidos = []
+    monkeypatch.setattr(shell, "_start", lambda nome, cmd, cwd: subidos.append((nome, cmd, cwd, shell.CONV.get())))
+    monkeypatch.setattr(shell, "list_servers", lambda: [{"name": n, "alive": True} for n, _, _, _ in subidos])
+    r = baterias.testar_codigo("<!DOCTYPE html><h1>oi</h1>", "", "7-A", conv=42)
+    assert subidos[0][3] == "42" and shell.CONV.get() == ""   # servidor é da conversa; o contexto volta
+    assert r["tipo"] == "web" and r["url"].endswith("/index.html")
+    assert (tmp_path / "7-A" / "index.html").read_text("utf-8").startswith("<!DOCTYPE")
+    assert baterias.testar_codigo("<!DOCTYPE html><h1>de novo</h1>", "html", "7-A")["url"] == r["url"]
+    assert len(subidos) == 1                       # mesma resposta: reaproveita o servidor
+    from app import native
+    assert subidos[0][1].startswith('& "') == native.WINDOWS  # PowerShell: caminho entre aspas só roda com &
+    py = baterias.testar_codigo("print('oi')", "python", "7-B")
+    assert py["tipo"] == "terminal" and py["comando"].startswith("python ") and "main.py" in py["comando"]
+    with pytest.raises(ToolError, match="Não reconheci"):
+        baterias.testar_codigo("apenas texto", "", "7-C")
+
+
+def test_juiz_com_visao_no_teste_de_frontend_recebe_os_prints(monkeypatch, tmp_path):
+    from app import baterias, browser, modelctl
+    _fake_llm(monkeypatch, textos={"a": ["```html\n<!DOCTYPE html><p>A</p>\n```"], "b": ["sem html"]})
+    conv = _conversa()
+    estado = _rodar(conv_id=conv, prompt="card", bateria="frontend",
+                    itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
+    monkeypatch.setattr(baterias, "testar_codigo", lambda codigo, dica, chave, conv=None: {"url": f"http://x/{chave}"})
+    fotos = []
+
+    async def navega(_root, args):
+        return "ok"
+
+    async def foto(_root, args):
+        fotos.append(args["largura"])
+        return {"attachments": [{"kind": "image", "path": str(tmp_path / f"f{len(fotos)}.jpg")}]}
+
+    async def tem_visao(p, m):
+        return True
+
+    async def ensure(spec, *a, **k):
+        return
+        yield
+
+    pedidos = []
+
+    async def juiz(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        pedidos.append(messages)
+        yield ("content", "tabela")
+
+    monkeypatch.setattr(browser, "navigate", navega)
+    monkeypatch.setattr(browser, "screenshot", foto)
+    monkeypatch.setattr(baterias, "_tem_visao", tem_visao)
+    monkeypatch.setattr(modelctl, "ensure", ensure)
+    monkeypatch.setattr(baterias.llm, "chat_stream", juiz)
+    from app import uploads
+    monkeypatch.setattr(uploads, "user_message", lambda texto, anexos: {"role": "user", "content": texto, "n": len(anexos)})
+
+    async def main():
+        return [ev async for ev in baterias.julgar(estado["message_id"], "p", "juiz")]
+
+    asyncio.run(main())
+    assert fotos == [1280, 390]                      # só o modelo A entregou HTML: desktop e celular
+    ultimo = pedidos[0][-1]
+    assert ultimo["n"] == 2 and "MODELO A — desktop" in ultimo["content"] and "MODELO B: não entregou HTML" in ultimo["content"]
+    with db.session() as s:
+        analise = s.query(db.Message).filter(db.Message.conversation_id == conv).order_by(db.Message.id.desc()).first()
+    assert "Prints que o revisor analisou" in analise.content and "/api/files?path=" in analise.content
+
+
+def test_estatistica_aparece_durante_a_geracao(monkeypatch):
+    """O servidor só conta os tokens no fim; enquanto gera, a coluna mostra uma estimativa."""
+    _fake_llm(monkeypatch, textos={"a": ["x" * 35] * 6, "b": ["y" * 35] * 6}, pausa=0.05)
+
+    async def main():
+        msg = comparar.start(conv_id=_conversa(), prompt="p", itens=[{"provider": "p", "model": "a"},
+                                                                      {"provider": "p", "model": "b"}])
+        await asyncio.sleep(0.18)
+        meio = comparar.estado(msg["id"])["itens"][0]["stats"]
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+        return meio, comparar.estado(msg["id"])["itens"][0]["stats"]
+
+    meio, fim = asyncio.run(main())
+    assert meio["estimated"] and meio["ao_vivo"] and meio["tokens"] > 0
+    assert not fim.get("ao_vivo")
+
+
+def test_dois_prints_no_mesmo_segundo_nao_se_sobrescrevem(tmp_path):
+    from app import uploads
+    a = uploads.save("browser.jpg", b"desktop", "image/jpeg", root=tmp_path)
+    b = uploads.save("browser.jpg", b"mobile", "image/jpeg", root=tmp_path)
+    assert a["path"] != b["path"] and (tmp_path / a["path"]).read_bytes() == b"desktop"
+
+
+
+def test_resposta_longa_vai_inteira_ao_juiz_e_corte_e_avisado():
+    from app import baterias
+    itens = [{"rotulo": "A", "nome": "a", "content": "x" * 20000, "stats": None},
+             {"rotulo": "B", "nome": "b", "content": "y" * 100, "stats": None}]
+    pedido = baterias.pedido_ao_juiz("p", "frontend", itens, baterias.limite_por_resposta(65536, 2))[-1]["content"]
+    assert "x" * 20000 in pedido and "cortou" not in pedido          # página inteira cabe
+    curto = baterias.pedido_ao_juiz("p", "frontend", itens, 6000)[-1]["content"]
+    assert "NÃO conte" in curto                                       # se cortar, o juiz é avisado
+
+
+def test_com_nomes_troca_letras_so_onde_e_rotulo():
+    from app import baterias
+    itens = [{"rotulo": "A", "nome": "gemma"}, {"rotulo": "B", "nome": "ornith"}]
+    t = baterias.com_nomes("| **A** | sim |\n| B | não |\nVencedor: Modelo B. A nota A+ fica.", itens)
+    assert t == "| **gemma** | sim |\n| ornith | não |\nVencedor: ornith. A nota A+ fica."
+
+
+def test_analise_roda_no_servidor_sem_tela_e_para_quando_pedido(monkeypatch):
+    """Trocar de página não pode matar a análise: ela vive numa tarefa do servidor."""
+    from app import baterias, modelctl
+    _fake_llm(monkeypatch)
+    estado = _rodar(conv_id=_conversa(), prompt="p", itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
+
+    async def ensure(spec, *a, **k):
+        return
+        yield
+
+    async def lento(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        for _ in range(50):
+            await asyncio.sleep(0.02)
+            yield ("content", "x")
+
+    async def rapido(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        yield ("content", "| A | ok |")
+
+    monkeypatch.setattr(modelctl, "ensure", ensure)
+    mid = estado["message_id"]
+
+    async def main():
+        monkeypatch.setattr(baterias.llm, "chat_stream", rapido)
+        baterias.iniciar_analise(mid, "p", "juiz")          # ninguém acompanhando
+        await asyncio.sleep(0.2)
+        pronto = baterias.estado_analise(mid)
+        monkeypatch.setattr(baterias.llm, "chat_stream", lento)
+        baterias.iniciar_analise(mid, "p", "juiz")
+        await asyncio.sleep(0.15)
+        vivo = baterias.estado_analise(mid)
+        baterias.parar_analise(mid)
+        await asyncio.sleep(0.05)
+        return pronto, vivo, baterias.estado_analise(mid)
+
+    pronto, vivo, parado = asyncio.run(main())
+    assert pronto["status"] == "pronto" and "| a | ok |" in pronto["texto"] and pronto["fim"]
+    assert vivo["status"] == "rodando" and vivo["stats"]["estimated"]
+    assert parado["status"] == "parado"
+
+
+def test_revisor_local_sobe_com_janela_propria_sem_gravar_na_configuracao(monkeypatch):
+    """A janela cresce com o que o revisor vai ler; vale só para a carga dele e ele é descarregado no fim."""
+    from app import baterias, modelctl
+    _fake_llm(monkeypatch, textos={"a": ["x" * 30000], "b": ["y" * 30000]})
+    estado = _rodar(conv_id=_conversa(), prompt="p", itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
+    pedidos, descargas = [], []
+
+    async def ensure(spec, out=None, cancel=None, temporario=None):
+        pedidos.append(temporario)
+        if out is not None:
+            out["swapped"] = True
+        return
+        yield
+
+    async def unload(motivo=""):
+        descargas.append(motivo)
+        return
+        yield
+
+    async def juiz(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        yield ("content", "ok")
+
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: True)
+    monkeypatch.setattr(modelctl, "ensure", ensure)
+    monkeypatch.setattr(modelctl, "unload", unload)
+    monkeypatch.setattr(baterias.llm, "chat_stream", juiz)
+
+    async def main():
+        return [ev async for ev in baterias.julgar(estado["message_id"], "local", "qwen")]
+
+    eventos = asyncio.run(main())
+    assert pedidos == [{"ctx": 32768, "parallel": 1}]      # 60 mil caracteres de respostas → 32k
+    assert descargas and any("Janela do revisor: 32.768" in e.get("etapa", "") for e in eventos)
+    assert baterias.janela_do_revisor("p", [{"content": "a"}], 0) == baterias.JANELA_MIN
+
+
+def test_parametro_temporario_nao_e_gravado(tmp_path, monkeypatch):
+    from app import localai
+    monkeypatch.setattr(localai.config, "LOCAL_CONFIG", tmp_path / "local.json")
+    salvos = localai.save_params("m.gguf", {"ctx": 131072})
+    assert {**salvos, **{"ctx": 32768}}["ctx"] == 32768 and localai.params("m.gguf")["ctx"] == 131072

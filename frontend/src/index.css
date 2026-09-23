@@ -48,6 +48,9 @@ body { background: var(--color-bg); color: var(--color-fg); font-family: ui-sans
 .md tbody tr:last-child td { border-bottom: 0; }
 .md tbody tr:nth-child(even) { background: #ffffff06; }
 .md blockquote { border-left: 3px solid var(--color-line); padding-left: 0.8em; color: var(--color-muted); }
+/* Imagens na resposta (ex.: prints que o revisor do Comparar analisou): cabem no card; dentro de tabela, miniatura. */
+.md img { max-width: 100%; height: auto; border: 1px solid var(--color-line); border-radius: 8px; }
+.md td img { max-height: 280px; width: auto; }
 
 /* Scrollbar discreta */
 * { scrollbar-width: thin; scrollbar-color: #3a3a3a transparent; }

@@ -13,6 +13,7 @@ import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
 import InfoPanel, { type McpStatus, type ToolInfo } from "./components/InfoPanel";
 import RightPanel, { RightTabsBar, type RightTab } from "./components/RightPanel";
+import { executarNoTerminal } from "./components/TerminalPanel";
 import SettingsDialog from "./components/Settings";
 import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
@@ -1987,6 +1988,16 @@ export default function App() {
             model={settings.model}
             onError={setError}
             onConversationChanged={refreshConversations}
+            onAbrirNoNavegador={(url) => {
+              // a página do teste abre no navegador integrado desta conversa, com o painel à vista
+              setRight({ tab: "browser", collapsed: false });
+              // aba própria para cada página testada; testar de novo volta para ela (não duplica)
+              api.post(`/browser/abrir?conv=${browserKey}`, { url }).catch((e) => setError(e.message));
+            }}
+            onRodarNoTerminal={(comando) => {
+              setRight({ tab: "terminal", collapsed: false });
+              executarNoTerminal(browserKey, comando).catch((e) => setError(e.message));
+            }}
           />
         ) : section === "imagem" ? (
           <ImagensView
