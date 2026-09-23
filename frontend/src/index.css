@@ -27,6 +27,14 @@ html, body, #root { height: 100%; }
 .livre-controles { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 0.75rem); }
 body { background: var(--color-bg); color: var(--color-fg); font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
 
+/* Notas de atualização: seção vira rótulo pequeno, lista enxuta (o .md é pensado para respostas longas). */
+.notas { line-height: 1.5; color: var(--color-muted); }
+.notas.md > * + * { margin-top: 0.5em; }
+.notas.md h1, .notas.md h2, .notas.md h3 { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-fg); margin-top: 1em; }
+.notas > :first-child { margin-top: 0; }
+.notas li + li { margin-top: 0.25em; }
+.notas li::marker { color: var(--color-faint); }
+
 /* Markdown das respostas */
 .md { line-height: 1.65; overflow-wrap: anywhere; }
 .md > * + * { margin-top: 0.75em; }

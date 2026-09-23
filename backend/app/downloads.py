@@ -175,21 +175,67 @@ def _run(job: dict, urls: list[str], dest: Path, extract: bool, headers: dict | 
                 break
         update(job["id"], total=total)
         base = 0
+        # Extrai ao lado e só troca no fim: extrair por cima parava no primeiro .dll em uso e deixava
+        # o runtime com metade das DLLs de cada versão (o llama.cpp b11146 sobre o 11135, 23/09/2026).
+        destino = dest.with_name(dest.name + ".novo") if extract else dest
+        if extract:
+            shutil.rmtree(destino, ignore_errors=True)
+            destino.mkdir(parents=True, exist_ok=True)
         for url in urls:
             name = url.rsplit("/", 1)[-1].split("?")[0]
-            target = (dest / name) if extract else dest
+            target = (destino / name) if extract else dest
             update(job["id"], detail=name)
             _fetch(url, target, job, base, total, headers)
             base = job["done"]
             if extract:
                 update(job["id"], detail=f"extraindo {name}")
-                _unzip(target, dest)
+                _unzip(target, destino)
                 target.unlink(missing_ok=True)
+        if extract:
+            update(job["id"], detail="instalando")
+            _trocar(destino, dest)
         finish(job["id"], result=str(dest))
     except _Cancelled:
         pass
     except Exception as e:  # rede, disco, zip corrompido — tudo vira erro visível no painel
         finish(job["id"], error=f"{e.__class__.__name__}: {e}")
+
+
+TRAVADO_TENTATIVAS = 10  # x 0,5 s: o `--list-devices` do painel prende as DLLs por menos de 1 s
+
+
+def _travado(f: Path) -> bool:
+    """Windows não deixa escrever num .dll/.exe carregado por algum processo."""
+    try:
+        with open(f, "r+b"):
+            return False
+    except PermissionError:
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _trocar(novo: Path, dest: Path) -> None:
+    """Põe os arquivos de `novo` em `dest` só se nenhum dos que serão substituídos estiver em uso.
+
+    Tudo ou nada: se algum continuar travado, nada é tocado e o runtime antigo segue inteiro.
+    """
+    arquivos = [f for f in novo.rglob("*") if f.is_file()]
+    for _ in range(TRAVADO_TENTATIVAS):
+        presos = [f.relative_to(novo) for f in arquivos if _travado(dest / f.relative_to(novo))]
+        if not presos:
+            break
+        time.sleep(0.5)
+    else:
+        shutil.rmtree(novo, ignore_errors=True)
+        raise PermissionError(f"{presos[0]} está em uso por outro programa (um modelo carregado, ou o Forja "
+                              "instalado usando o mesmo runtime). Descarregue o modelo e tente de novo; "
+                              "o runtime atual não foi alterado.")
+    for f in arquivos:
+        alvo = dest / f.relative_to(novo)
+        alvo.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(f, alvo)
+    shutil.rmtree(novo, ignore_errors=True)
 
 
 def _unzip(zip_path: Path, dest: Path) -> None:

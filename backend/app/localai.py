@@ -13,6 +13,7 @@ descarrega junto com o app.
 """
 from __future__ import annotations
 
+import fnmatch
 import functools
 import json
 import os
@@ -429,6 +430,11 @@ def install_runtime(kind: str, backend: str) -> dict:
     if not SUPPORTED:
         raise ToolError("Download automático de runtime só está pronto para Windows. "
                         "Compile o llama.cpp/sd.cpp e aponte a pasta manualmente.")
+    # O llama-server em uso trava as DLLs; atualizar por baixo dele não tem como dar certo.
+    if kind == "llama" and status()["running"]:
+        raise ToolError("Descarregue o modelo antes de atualizar o llama.cpp: o llama-server em uso trava os arquivos.")
+    if kind == "sd" and image_busy():
+        raise ToolError("Espere a imagem em andamento terminar antes de atualizar o stable-diffusion.cpp.")
     tag, urls = _find_assets(kind, backend)
     dest = runtime_dir(kind, backend)
     return downloads.start("runtime", f"{kind} {backend} {tag}", urls, dest, extract=True)
@@ -976,6 +982,60 @@ REQUISITOS = {
         "sugere": {"sampler": "euler", "cfg": 1.0, "width": 1024, "height": 1024, "steps": 20,
                    "offload": True, "flash_attn": True, "vae_tiling": True}},
 }
+# Nomes que cada arquivo costuma ter (fnmatch, sem diferenciar maiúsculas). É só para achar e
+# sugerir: quem decide é a pessoa, no botão "Usar".
+PADROES = {
+    "qwen_image21": {"vae": ["*qwen*image*2.1*vae*"], "llm": ["*qwen3*vl*8b*"], "llm_vision": ["mmproj*qwen3*vl*8b*"]},
+    "qwen_image": {"vae": ["*qwen*image*vae*"], "llm": ["*qwen2.5*vl*7b*"], "llm_vision": ["mmproj*qwen2.5*vl*7b*"]},
+    "flux": {"vae": ["ae.safetensors", "*flux*vae*", "*flux*ae.safetensors"], "clip_l": ["clip_l*"], "t5xxl": ["t5xxl*"]},
+}
+EXTENSOES_PESO = (".gguf", ".safetensors", ".sft")
+BUSCA_PROFUNDIDADE = 3   # níveis abaixo de cada raiz
+BUSCA_ANCESTRAIS = 3     # quantas pastas acima do modelo viram raiz (D:\Modelos-IA\lmstudio\autor\repo -> D:\Modelos-IA)
+BUSCA_TETO = 20000       # arquivos olhados no total: pasta gigante não trava a tela
+
+
+def achar_arquivos(path: str) -> dict[str, list[str]]:
+    """Candidatos a VAE/codificador/mmproj do modelo, procurando pelo nome perto dele.
+
+    Raízes: a pasta do modelo, algumas acima (quem baixa o VAE costuma pôr numa pasta irmã) e as
+    pastas de modelos. Roda sob demanda (ao abrir os ajustes), nunca na varredura de 3 s.
+    """
+    info = gguf_info(path) if str(path).lower().endswith(".gguf") else {"arch": ""}
+    padroes = PADROES.get(info["arch"])
+    if not padroes:
+        return {}
+    pasta = Path(path).parent
+    raizes = [pasta, *list(pasta.parents)[:BUSCA_ANCESTRAIS], *map(Path, dirs())]
+    achados: dict[str, list[str]] = {k: [] for k in padroes}
+    vistos: set[str] = set()
+    olhados = 0
+    for raiz in raizes:
+        base = len(raiz.parts)
+        for atual, subpastas, arquivos in os.walk(raiz):
+            if len(Path(atual).parts) - base >= BUSCA_PROFUNDIDADE:
+                subpastas[:] = []
+            for nome in arquivos:
+                olhados += 1
+                if olhados > BUSCA_TETO:
+                    return achados
+                baixo = nome.lower()
+                if not baixo.endswith(EXTENSOES_PESO):
+                    continue
+                completo = os.path.join(atual, nome)
+                if _chave(completo) in vistos or _chave(completo) == _chave(path):
+                    continue
+                for k, globs in padroes.items():
+                    # mmproj só serve de visão: não pode ser sugerido como codificador nem VAE
+                    if baixo.startswith("mmproj") != (k == "llm_vision"):
+                        continue
+                    if any(fnmatch.fnmatch(baixo, g) for g in globs):
+                        achados[k].append(completo)
+                        vistos.add(_chave(completo))
+                        break
+    return achados
+
+
 ROTULO_ARQUIVO = {"vae": "VAE", "llm": "Codificador LLM", "llm_vision": "Visão do LLM (mmproj)",
                   "clip_l": "clip_l", "t5xxl": "t5xxl"}
 

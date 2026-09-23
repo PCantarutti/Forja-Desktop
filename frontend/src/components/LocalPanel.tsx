@@ -770,6 +770,47 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
   const [salvo, setSalvo] = useState("");
   const lista = props.st.image_models;
   const atual = lista.find((m) => m.path === sel);
+  // VAE/codificador/mmproj achados perto do modelo (busca no disco, só ao abrir os ajustes).
+  // Guardado com o caminho buscado: trocar de modelo não mostra os achados do anterior.
+  const [busca, setBusca] = useState<{ path: string; r: Record<string, string[]> }>({ path: "", r: {} });
+  const achados = busca.path === sel ? busca.r : {};
+  const temReq = !!atual?.req;
+  useEffect(() => {
+    if (!sel || !temReq) return;
+    let vivo = true;
+    api
+      .get<Record<string, string[]>>(`/local/image/achados?path=${encodeURIComponent(sel)}`)
+      .then((r) => vivo && setBusca({ path: sel, r }))
+      .catch(() => {}); // sem sugestão, o campo continua valendo
+    return () => {
+      vivo = false;
+    };
+  }, [sel, temReq]);
+  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl";
+  const achadoDe = (k: string) => {
+    const f = achados[k]?.[0];
+    return f && form && form[k as Arquivo] !== f ? f : "";
+  };
+  const usarAchados = () =>
+    setForm((f) => {
+      if (!f) return f;
+      const novo = { ...f };
+      for (const [k, lista] of Object.entries(achados)) if (lista[0] && !novo[k as Arquivo]) novo[k as Arquivo] = lista[0];
+      return novo;
+    });
+  const nome = (p: string) => p.split(/[\\/]/).pop();
+  const Achado = ({ k }: { k: string }) => {
+    const f = achadoDe(k);
+    if (!f) return null;
+    return (
+      <span className="mt-0.5 flex items-center gap-1.5 pl-4 text-faint" title={f}>
+        encontrado: <span className="truncate text-muted">{nome(f)}</span>
+        <button className="shrink-0 underline text-fg" onClick={() => set(k as Arquivo, f)}>
+          Usar
+        </button>
+      </span>
+    );
+  };
 
   if (!lista.length) return null;
   const set = <K extends keyof ImageParams>(k: K, v: ImageParams[K]) => {
@@ -856,6 +897,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                     </span>{" "}
                     <span className="text-muted">— {oque}</span>{" "}
                     <a href={link} target="_blank" rel="noreferrer" className="underline text-faint">baixar</a>
+                    <Achado k={k} />
                   </li>
                 ))}
                 {Object.entries(atual.req.edita ?? {}).map(([k, [oque, link]]) => (
@@ -865,20 +907,29 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                     </span>{" "}
                     <span className="text-muted">— para editar imagens: {oque}</span>{" "}
                     <a href={link} target="_blank" rel="noreferrer" className="underline text-faint">baixar</a>
+                    <Achado k={k} />
                   </li>
                 ))}
               </ul>
               <p className="mt-1.5 text-faint">
-                Podem ficar na mesma pasta do modelo: cole o caminho nos campos abaixo e, depois de salvos, eles saem da lista de modelos de imagem.{" "}
+                O Forja procura esses arquivos perto do modelo; o que não achar, cole o caminho nos campos abaixo.
+                Depois de salvos, eles saem da lista de modelos de imagem.{" "}
                 <a href={atual.req.doc} target="_blank" rel="noreferrer" className="underline">Guia do sd.cpp</a>
               </p>
-              <button
-                className="mt-2 underline text-fg"
-                onClick={() => setForm((f) => f && { ...f, ...atual.req!.sugere })}
-                title={Object.entries(atual.req.sugere).map(([k, v]) => `${k}: ${v}`).join(", ")}
-              >
-                Aplicar ajustes sugeridos
-              </button>
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+                {Object.keys(achados).some((k) => achadoDe(k)) && (
+                  <button className="underline text-fg" onClick={usarAchados} title="Preenche os campos vazios com os arquivos encontrados">
+                    Usar os encontrados
+                  </button>
+                )}
+                <button
+                  className="underline text-fg"
+                  onClick={() => setForm((f) => f && { ...f, ...atual.req!.sugere })}
+                  title={Object.entries(atual.req.sugere).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                >
+                  Aplicar ajustes sugeridos
+                </button>
+              </div>
             </div>
           )}
           <div className="grid grid-cols-2 gap-2">

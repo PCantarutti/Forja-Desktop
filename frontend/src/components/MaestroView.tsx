@@ -553,7 +553,7 @@ export default function MaestroView(props: {
                  onNovaSessao={props.convId === null ? undefined : props.onNovaSessao}
                  onSalvarLayout={mostraSalvarPadrao ? () => setPerguntaPadrao(true) : undefined} />
       {perguntaPadrao && (
-        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] p-5">
+        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] rounded-2xl border border-line bg-surface p-5 shadow-2xl">
           <h2 className="text-sm font-medium">Salvar este layout como padrão?</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted">
             Conversas novas da Maestro vão começar com os blocos nesta posição, neste tamanho e com os

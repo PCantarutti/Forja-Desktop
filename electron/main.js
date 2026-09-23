@@ -459,7 +459,13 @@ function setUpdate(patch) {
 }
 
 function wireUpdater() {
-  if (!app.isPackaged) return; // em dev não há release para comparar
+  if (!app.isPackaged) {
+    // Em dev não há release para comparar. FORJA_FAKE_UPDATE=<notas.md> finge uma pronta, para ver
+    // o aviso com notas de verdade sem publicar nada.
+    const notas = process.env.FORJA_FAKE_UPDATE;
+    if (notas) setUpdate({ state: "ready", version: "0.0.0-dev", notes: fs.readFileSync(notas, "utf8") });
+    return;
+  }
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.on("checking-for-update", () => setUpdate({ state: "checking", error: "" }));

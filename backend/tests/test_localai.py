@@ -330,6 +330,30 @@ def test_vae_configurado_some_da_lista_de_imagem(isolado, monkeypatch):
     assert nomes() == {"qwen"}
 
 
+def test_acha_vae_e_codificador_perto_do_modelo(isolado, monkeypatch):
+    """Layout real do Pedro: modelo dentro do lmstudio, VAE e codificador numa pasta irmã lá em cima."""
+    raiz = isolado / "Modelos-IA"
+    repo = raiz / "lmstudio" / "autor" / "Qwen-Image-2.1-GGUF"
+    irma = raiz / "Qwen-Image-2.1"
+    for p in (repo, irma):
+        p.mkdir(parents=True)
+    modelo = gguf(repo, "qwen-image-2.1-Q8_0.gguf")
+    mmproj = gguf(repo, "mmproj-Qwen3VL-8B-Instruct-F16.gguf")
+    vae = gguf(irma, "qwen_image_2.1_vae_bf16.safetensors")
+    llm = gguf(irma, "Qwen3VL-8B-Instruct-Q4_K_M.gguf")
+    gguf(irma, "leia-me.txt")
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "qwen_image21"})
+
+    achados = localai.achar_arquivos(str(modelo))
+
+    assert achados == {"vae": [str(vae)], "llm": [str(llm)], "llm_vision": [str(mmproj)]}
+
+
+def test_modelo_sem_requisitos_nao_procura_nada(isolado, monkeypatch):
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": ""})
+    assert localai.achar_arquivos(str(gguf(isolado, "sd15.gguf"))) == {}
+
+
 def test_sd_sem_modelo_reclama(isolado):
     with pytest.raises(Exception):
         imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())

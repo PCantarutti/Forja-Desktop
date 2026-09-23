@@ -667,6 +667,12 @@ async def local_image_defaults(body: dict):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/local/image/achados")
+async def local_image_achados(path: str):
+    """VAE/codificador/mmproj com cara de ser deste modelo, perto dele no disco (para o botão Usar)."""
+    return await asyncio.to_thread(localai.achar_arquivos, path)
+
+
 @app.put("/api/local/image/model")
 async def local_image_model(body: LoadBody):
     """Ajustes de um modelo de imagem (passos, CFG, VAE...). Só o que sai do padrão fica salvo."""

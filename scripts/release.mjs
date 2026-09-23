@@ -7,6 +7,18 @@
  * minutos de empacotamento e 269 MB de upload custa caro.
  *
  * Atalhos:  --rapido  pula os testes      --seco  faz tudo menos publicar
+ *
+ * Notas da versão: Markdown, uma seção por área e um item por mudança. É o texto do aviso de
+ * atualização dentro do app (vai no latest.yml) e também a descrição da release no GitHub.
+ *
+ *   ### Imagens
+ *   - **Edição de imagem**: clique no lápis de uma imagem gerada e descreva a mudança.
+ *   - **Cancelar** encerra a geração na hora.
+ *
+ *   ### Correções
+ *   - Erros da aba Imagens agora aparecem na própria aba.
+ *
+ * No modo interativo: linha começando com # abre uma seção, as outras viram itens.
  */
 import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
@@ -139,9 +151,18 @@ function semPerguntar(atual) {
   if (versao === atual) parar("a versão precisa ser diferente da atual: o updater compara número.");
   if (!fs.existsSync(arq)) parar(`não achei o arquivo de notas: ${arq}`);
   const notas = fs.readFileSync(arq, "utf8").trim();
-  if (!notas) parar("o arquivo de notas está vazio.", "Quem for atualizar precisa saber o que muda.");
+  conferirNotas(notas);
   passo(`versão ${versao} (sem perguntar)`);
   return { versao, notas };
+}
+
+/** O formato do cabeçalho: sem nenhum item "- " o aviso vira um parágrafo corrido difícil de ler. */
+function conferirNotas(notas) {
+  if (!notas) parar("sem texto de release.", "Quem for atualizar precisa saber o que muda.");
+  if (!notas.split(NL).some((l) => /^\s*[-*] /.test(l))) {
+    parar("as notas não têm nenhum item de lista (linha começando com \"- \").",
+      "Use o formato do cabeçalho de scripts/release.mjs: ### Área e um - item por mudança.");
+  }
 }
 
 async function perguntar(rl, atual) {
@@ -164,15 +185,18 @@ async function perguntar(rl, atual) {
   if (versao === atual) parar("a versão precisa ser diferente da atual: o updater compara número.");
 
   passo("o que mudou nesta versão");
-  console.log(cor(90, "  Uma linha por item. Linha vazia encerra. É o que o app mostra ao avisar da atualização."));
+  console.log(cor(90, "  Uma linha por item; \"# Área\" abre uma seção (ex.: # Imagens). Linha vazia encerra."));
+  console.log(cor(90, "  É o que o app mostra ao avisar da atualização. **negrito** e `código` valem."));
   const linhas = [];
   for (;;) {
-    const linha = await rl.question("  - ");
-    if (!linha.trim()) break;
-    linhas.push("- " + linha.trim());
+    const linha = (await rl.question("  > ")).trim();
+    if (!linha) break;
+    if (linha.startsWith("#")) linhas.push((linhas.length ? NL : "") + "### " + linha.replace(/^#+\s*/, ""), "");
+    else linhas.push("- " + linha.replace(/^[-*]\s*/, ""));
   }
-  if (!linhas.length) parar("sem texto de release.", "Quem for atualizar precisa saber o que muda.");
-  return { versao, notas: linhas.join(NL) };
+  const notas = linhas.join(NL).trim();
+  conferirNotas(notas);
+  return { versao, notas };
 }
 
 // ------------------------------------------------------------------ publicação
@@ -207,6 +231,29 @@ function subirVersao(versao, notas) {
   ok(`commit da versão enviado`);
 }
 
+/**
+ * O electron-builder cria a release com a descrição vazia (as notas só vão para o latest.yml, que é
+ * de onde o app lê). Quem abre a página no GitHub merece o mesmo texto. Falhar aqui não desfaz nada:
+ * o instalador já subiu, então é aviso, não parada.
+ */
+async function descreverRelease(versao, notas) {
+  if (SECO) return;
+  const { owner, repo } = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).build.publish[0];
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+  const h = { Authorization: `token ${token}`, "User-Agent": "forja-release", "Content-Type": "application/json" };
+  try {
+    // Rascunho não aparece em /releases/tags/...: só na lista, e só para quem tem escrita.
+    const lista = await (await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`, { headers: h })).json();
+    const rel = Array.isArray(lista) && lista.find((r) => r.tag_name === `v${versao}`);
+    if (!rel) return aviso(`não achei a release v${versao} para preencher a descrição.`);
+    const r = await fetch(rel.url, { method: "PATCH", headers: h, body: JSON.stringify({ body: notas }) });
+    if (!r.ok) return aviso(`o GitHub respondeu ${r.status} ao gravar a descrição.`);
+    ok("descrição da release preenchida com as notas");
+  } catch (e) {
+    aviso(`não deu para preencher a descrição: ${e.message}`);
+  }
+}
+
 function publicar() {
   if (SECO) return aviso("--seco: parando antes de empacotar");
   passo("empacotando e publicando (demora; o Python e o Chromium vêm do cache)");
@@ -227,12 +274,12 @@ try {
   rodarTestes();
   subirVersao(versao, notas);
   publicar();
+  await descreverRelease(versao, notas);
 
   const { owner, repo } = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).build.publish[0];
   console.log(NL + cor(32, `Pronto: ${versao} empacotada e enviada.`));
   console.log(cor(33, "Falta um passo manual:") + " a release nasce como RASCUNHO e o updater não");
-  console.log("enxerga rascunho. Abra e clique em Publish release (a descrição vem vazia; o texto");
-  console.log("que você escreveu está no latest.yml, que é de onde o app tira o aviso):");
+  console.log("enxerga rascunho. Abra e clique em Publish release (a descrição já leva as notas):");
   console.log("  " + cor(36, `https://github.com/${owner}/${repo}/releases`));
 } finally {
   rl.close();

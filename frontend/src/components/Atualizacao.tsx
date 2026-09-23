@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Modal } from "./Modal";
 import { Download } from "./icons";
 
@@ -36,6 +38,15 @@ function useAtualizacao(ligado: boolean) {
   return [u, setU] as const;
 }
 
+/**
+ * As notas vêm do latest.yml em Markdown (ver scripts/release.mjs). Se um dia vierem do feed do
+ * GitHub, chegam em HTML: aí vale o texto, não as tags cruas na tela.
+ */
+function textoDasNotas(notas: string) {
+  if (!/^\s*</.test(notas)) return notas;
+  return new DOMParser().parseFromString(notas, "text/html").body.textContent ?? "";
+}
+
 const btn = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
 const btnPrimary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
 
@@ -56,7 +67,11 @@ function ModalAtualizacao(props: { onClose: () => void }) {
   }[u.state];
 
   return (
-    <Modal onClose={props.onClose} label="Atualização do Forja" className="w-[min(30rem,92vw)] p-5">
+    <Modal
+      onClose={props.onClose}
+      label="Atualização do Forja"
+      className="w-[min(34rem,92vw)] rounded-2xl border border-line bg-surface p-5 shadow-2xl"
+    >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 text-amber-300">
           <Download />
@@ -68,8 +83,8 @@ function ModalAtualizacao(props: { onClose: () => void }) {
           </div>
 
           {notas && (
-            <div className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-line bg-raised p-3 text-sm text-muted">
-              {notas}
+            <div className="notas md mt-3 max-h-72 overflow-auto rounded-lg border border-line bg-bg px-4 py-3 text-sm">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{textoDasNotas(notas)}</ReactMarkdown>
             </div>
           )}
 
