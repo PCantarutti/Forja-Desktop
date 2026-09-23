@@ -246,7 +246,9 @@ async function descreverRelease(versao, notas) {
     const lista = await (await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`, { headers: h })).json();
     const rel = Array.isArray(lista) && lista.find((r) => r.tag_name === `v${versao}`);
     if (!rel) return aviso(`não achei a release v${versao} para preencher a descrição.`);
-    const r = await fetch(rel.url, { method: "PATCH", headers: h, body: JSON.stringify({ body: notas }) });
+    // tag_name vai junto SEMPRE: editar um rascunho sem ele troca a tag por "untagged-…", e a
+    // release publicada sai sem tag (a 0.6.1 sumiu da lista assim, 23/09/2026).
+    const r = await fetch(rel.url, { method: "PATCH", headers: h, body: JSON.stringify({ tag_name: rel.tag_name, body: notas }) });
     if (!r.ok) return aviso(`o GitHub respondeu ${r.status} ao gravar a descrição.`);
     ok("descrição da release preenchida com as notas");
   } catch (e) {
