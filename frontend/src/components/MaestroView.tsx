@@ -20,7 +20,7 @@ import {
 } from "../types";
 import Confirma from "./Confirma";
 import ContextRing from "./ContextRing";
-import { Balanca, Check, Cube, Expandir, Recolher, Split, X } from "./icons";
+import { Balanca, Check, Clock, Cube, Expandir, Recolher, Split, X } from "./icons";
 import { Modal } from "./Modal";
 import { aggregate, type TurnStats } from "./MessageView";
 import { layoutDe, mover, type Alvo, type Bloco, type Layout } from "./layout";
@@ -66,7 +66,9 @@ function emOrdemDeLeitura(tasks: MaestroTask[]): MaestroTask[] {
     posto.add(t.code);
     saida.push(t);
   };
-  tasks.forEach(coloca);
+  // pelo número (TASK-001, 002…): o /board vem por prioridade, que é ordem de despacho, não de leitura
+  const numero = (t: MaestroTask) => Number(t.code.replace(/\D/g, "")) || 0;
+  [...tasks].sort((a, b) => numero(a) - numero(b)).forEach(coloca);
   return saida;
 }
 
@@ -423,6 +425,20 @@ export default function MaestroView(props: {
       : []),
   ];
 
+  // Despachou tarefa nova: a coluna vai para o Worker que acabou de nascer, mesmo que a aba estivesse
+  // no histórico de outra tarefa ou no Worker anterior. Clicar noutra aba depois continua valendo.
+  const vistos = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    const vivos = workers.filter((x) => x.w.status).map((x) => x.id);
+    if (vistos.current === null) {
+      vistos.current = new Set(vivos); // ao abrir a tela: nada é "novo"
+      return;
+    }
+    const novo = vivos.find((id) => !vistos.current!.has(id));
+    vivos.forEach((id) => vistos.current!.add(id));
+    if (novo) setAbaWorker(novo);
+  }, [workers]);
+
   function abrirTarefa(code: string) {
     setSelecionada(code);
     setDoca("task");
@@ -656,6 +672,29 @@ function abaDireita(id: RightTab): [DocaTab, string, React.ReactNode] {
 
 // ------------------------------------------------------------------ cabeçalho
 
+/** Tempo total da conversa no relógio, do primeiro pedido até agora (rodando) ou até a última atividade
+ *  (parada). A estatística da Maestro soma só o tempo dela no modelo, sem os Workers. */
+function Relogio(props: { inicio: string; ultima: string | null; correndo: boolean }) {
+  const [agora, setAgora] = useState(() => Date.now());
+  useEffect(() => {
+    if (!props.correndo) return;
+    const t = setInterval(() => setAgora(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [props.correndo]);
+  const fim = props.correndo ? agora : Date.parse(props.ultima ?? props.inicio);
+  const s = Math.max(0, Math.round((fim - Date.parse(props.inicio)) / 1000));
+  const h = Math.floor(s / 3600);
+  const texto = h ? `${h}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`
+    : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  return (
+    <span className="flex shrink-0 items-center gap-1 text-xs text-muted tabular-nums"
+          title="Tempo total da execução: do seu pedido até agora, contando Maestro e Workers">
+      <Clock className="size-3.5 text-faint" />
+      {texto}
+    </span>
+  );
+}
+
 function Cabecalho(props: {
   board: MaestroBoard | null;
   running: boolean;
@@ -684,6 +723,7 @@ function Cabecalho(props: {
           </span>
         </>
       )}
+      {b?.inicio && <Relogio inicio={b.inicio} ultima={b.ultima ?? null} correndo={props.running} />}
       <div className="ml-auto flex items-center gap-3 text-xs">
         {props.onSalvarLayout && (
           <button
@@ -768,7 +808,7 @@ function Arvore(props: {
     <div className={`${card} flex min-h-0 flex-col`}>
       <div {...props.alca} className={`${titulo} flex items-center`}>Tarefas{props.acao}</div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {!b || !b.total ? (
+        {!b || !b.features.length ? (
           <p className="px-2 py-6 text-center text-xs text-faint">
             Nenhuma tarefa ainda.
             <br />

@@ -574,3 +574,15 @@ def test_erro_de_clique_distingue_elemento_sumido_de_elemento_que_nao_aceita():
                        "  - element is outside of the viewport\n")
     assert "existe, mas não aceitou" in browser._act_err("f1e6", existe) and "viewport" in browser._act_err("f1e6", existe)
     assert "a página mudou" in browser._act_err("f1e6", Exception("Timeout 5000ms exceeded.\n  - waiting for locator"))
+
+
+def test_correcao_sem_feature_id_durante_a_validacao_entra_nela(projeto):
+    """TaskBoard: cada bug achado no navegador virava funcionalidade nova."""
+    root, conv = projeto
+    (root / "FORJA.md").write_text("# Projeto\nTaskBoard\n", "utf-8")
+    out = taskdb.create_feature(conv, "TaskBoard", "", [{"title": "A", "contract": {"goal": "a"}}])
+    _conclui("TASK-001", conv)
+    texto = taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Corrige modal", "contract": {"goal": "modal"}}]})
+    assert f"funcionalidade {out['feature_id']}, que está em validação" in texto
+    feat = taskdb.board(conv)["features"]
+    assert len(feat) == 1 and len(feat[0]["tasks"]) == 2

@@ -13,6 +13,7 @@ ferramenta não consegue fazer.
 from __future__ import annotations
 
 import contextvars
+import json
 import re
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -155,7 +156,14 @@ def render_contract(task: db.Task, erro_anterior: str = "", strategy: str = "") 
         # mesmo prompt, que é exatamente o laço que max_attempts existe para cortar.
         partes.append(f"A TENTATIVA ANTERIOR FALHOU\n{erro_anterior}")
     if strategy:
-        partes.append(f"MUDE A ABORDAGEM NESTA TENTATIVA\n{strategy}")
+        # sem falha antes, o strategy é recado da Maestro ("corrija também os IDs do HTML"), não troca
+        # de abordagem
+        titulo = "MUDE A ABORDAGEM NESTA TENTATIVA" if erro_anterior else "ORIENTAÇÃO DA MAESTRO PARA ESTA TAREFA"
+        partes.append(f"{titulo}\n{strategy}")
+    if escopo := [a for a in c.get("relevant_files") or [] if not a.replace(chr(92), "/").removeprefix("./").startswith(".forja/")]:
+        # No TaskBoard o Worker da camada de dados reescreveu o CSS de outra tarefa.
+        partes.append("ESCOPO\nMexa só em: " + ", ".join(escopo) + ". Precisa mudar outro arquivo? Mude o "
+                      "mínimo e diga no relatório — outra tarefa pode ser dona dele; não o reescreva inteiro.")
     return "\n\n".join(partes)
 
 
@@ -229,6 +237,29 @@ def assume(de: list[int], para: int) -> list[str]:
 
 def _normaliza(texto: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", str(texto or "").lower()).strip()
+
+
+def sem_copias(tasks: list) -> tuple[list, int]:
+    """Tira do plano a tarefa repetida IGUAL (título e contrato), remapeando as dependências por
+    posição. No TaskBoard a Maestro mandou a TASK-004 duas vezes (virou TASK-009); recusar custaria
+    gerar o plano inteiro de novo. Só cópia exata: título parecido pode ser tarefa diferente."""
+    vistos: dict[str, int] = {}
+    mapa: dict[str, str] = {}
+    out: list = []
+    for i, t in enumerate(tasks, 1):
+        chave = json.dumps(t, sort_keys=True, ensure_ascii=False) if isinstance(t, dict) else ""
+        if chave and chave in vistos:
+            mapa[str(i)] = str(vistos[chave])
+            continue
+        out.append(t)
+        mapa[str(i)] = str(len(out))
+        if chave:
+            vistos[chave] = len(out)
+    if len(out) < len(tasks):
+        for t in out:
+            if isinstance(t, dict) and isinstance(t.get("depends_on"), list):
+                t["depends_on"] = [mapa.get(str(d).strip(), d) for d in t["depends_on"]]
+    return out, len(tasks) - len(out)
 
 
 def duplicadas(conv_id: int, tasks: list) -> list[str]:
@@ -377,6 +408,17 @@ def _guia_no_contrato() -> str:
         return qualidade.GUIA if qualidade.tem_tela(root) and qualidade.guia_visual(root) else ""
     except Exception:
         return ""
+
+
+def _objetivo_da_conversa() -> str | None:
+    """Primeira linha do pedido do usuário: nome melhor para a funcionalidade sem título que o
+    objetivo da primeira tarefa ("Criar package.json…" virou o nome do TaskBoard inteiro)."""
+    with db.session() as s:
+        m = (s.query(db.Message).filter(db.Message.conversation_id == _conv(), db.Message.role == "user")
+             .order_by(db.Message.id).first())
+    linha = next((l for l in (m.content if m else "").splitlines() if l.strip()), "")
+    linha = re.sub(r"[*_`#>]+", "", linha).strip()
+    return (linha[:80].rstrip(" .,;:") + ("…" if len(linha) > 80 else "")) or None
 
 
 def _titulo_de(goal, tasks: list) -> str:
@@ -626,6 +668,13 @@ def _attempt_dict(att: db.Attempt, transcript: bool = False) -> dict:
     return out
 
 
+def _utc(t: datetime | None) -> str | None:
+    """ISO com Z: o SQLite devolve sem fuso, e o navegador leria como hora local."""
+    if t is None:
+        return None
+    return (t.astimezone(timezone.utc).replace(tzinfo=None) if t.tzinfo else t).isoformat() + "Z"
+
+
 def board(conv_id: int) -> dict:
     """Árvore completa para o cockpit: funcionalidades, tarefas e as tentativas de cada uma."""
     with db.session() as s:
@@ -642,11 +691,23 @@ def board(conv_id: int) -> dict:
         for t in tasks:
             por_feature.setdefault(t.feature_id, []).append(_task_dict(t, tent.get(t.id, [])))
         contagem = {st: sum(1 for t in tasks if t.status == st) for st in STATUSES}
-        return {"features": [{"id": f.id, "title": f.title, "goal": f.goal, "status": f.status,
+        # Relógio da conversa para o cabeçalho: do primeiro pedido até a última coisa que aconteceu
+        # (mensagem, tarefa ou tentativa). A estatística da Maestro soma só o tempo DELA no modelo —
+        # no TaskBoard mostrava 35 min de uma conversa de 1h18.
+        from sqlalchemy import func
+        inicio, ultima_msg = s.query(func.min(db.Message.created_at), func.max(db.Message.created_at)).filter(
+            db.Message.conversation_id == conv_id).one()
+        marcas = [ultima_msg, *(t.updated_at for t in tasks),
+                  *(a.finished_at or a.started_at for a in (s.query(db.Attempt).filter(db.Attempt.task_id.in_(ids))
+                                                             if ids else []))]
+        sem_fuso = [m.astimezone(timezone.utc).replace(tzinfo=None) if m.tzinfo else m for m in marcas if m]
+        ultima = max(sem_fuso, default=None)
+        return {"inicio": _utc(inicio), "ultima": _utc(ultima), "features": [{"id": f.id, "title": f.title, "goal": f.goal, "status": f.status,
                               "copiada_para": f.copiada_para,
                               "tasks": por_feature.get(f.id, [])} for f in feats],
                 "counts": {k: v for k, v in contagem.items() if v},
-                "total": len(tasks), "done": contagem["completed"],
+                # cancelada não conta: "10/11" com uma cancelada parecia trabalho faltando
+                "total": len(tasks) - contagem["cancelled"], "done": contagem["completed"],
                 "open": sum(1 for t in tasks if t.status in OPEN)}
 
 
@@ -725,11 +786,27 @@ def _plan_feature(_root: Path, args: dict) -> str:
             if alvo and alvo.copiada_para:
                 raise ToolError(f"A funcionalidade {alvo.id} continua na conversa {alvo.copiada_para}; "
                                 "não acrescente tarefas aqui.")
+    anexada = None
+    if not args.get("feature_id"):
+        # Plano no meio da validação é correção da entrega: vai para a funcionalidade em validação. No
+        # TaskBoard cada bug achado no navegador virou funcionalidade nova (12, 13), cada uma pedindo a
+        # própria validação, mesmo com o aviso dizendo feature_id=11.
+        with db.session() as s:
+            validando = s.query(db.Feature).filter(db.Feature.conversation_id == _conv(),
+                                                   db.Feature.status == "validating",
+                                                   db.Feature.copiada_para.is_(None)).all()
+        if len(validando) == 1:
+            anexada = validando[0]
+            args = {**args, "feature_id": anexada.id}
     antes = pendencias(_conv()) if not args.get("feature_id") else []
-    out = create_feature(_conv(), args.get("title"), args.get("goal"), args.get("tasks") or [],
+    tarefas, copias = sem_copias(args.get("tasks") or [])
+    out = create_feature(_conv(), args.get("title") or (None if args.get("goal") else _objetivo_da_conversa()), args.get("goal"), tarefas,
                          args.get("feature_id") or None)
     linhas = [f"Funcionalidade '{out['title']}' (feature_id={out['feature_id']}): "
-              f"{len(out['tasks'])} tarefas {'novas' if args.get('feature_id') else 'criadas'}:"]
+              f"{len(out['tasks'])} tarefas {'novas' if args.get('feature_id') else 'criadas'}"
+              + (f" ({copias} cópia(s) repetida(s) no plano ignorada(s))" if copias else "") + ":"]
+    if anexada:
+        linhas.insert(0, f"(Entraram na funcionalidade {anexada.id}, que está em validação: são correções da entrega.)")
     for t in out["tasks"]:
         dep = f" (depende de {', '.join(t['depends_on'])})" if t["depends_on"] else ""
         linhas.append(f"  {t['code']} {t['title']}{dep}")
@@ -759,7 +836,9 @@ PLAN_FEATURE = Tool(
                            "description": "rapido (simples), capaz (difícil) ou o id de um Worker especialista "
                                           "da lista do prompt. Vazio: escolhido pelo tipo e pelos arquivos"},
             "agent": {"type": "string", "description": "Persona do projeto (.forja/agents/*.md), se houver"},
-            "priority": {"type": "integer"}},
+            "priority": {"type": "integer",
+                         "description": "Urgência: MAIOR sai primeiro (padrão 0). Não é a ordem de execução — "
+                                        "ordem é depends_on"}},
             "required": ["contract"]}}},
      "required": ["tasks"]},
     _plan_feature)
@@ -769,7 +848,7 @@ def _list_tasks(_root: Path, args: dict) -> str:
     conv = _conv()
     filtro = str(args.get("status") or "").strip().lower()
     dados = board(conv)
-    if not dados["total"]:
+    if not dados["features"]:
         return "Nenhuma tarefa ainda. Use plan_feature depois de analisar o projeto."
     marcas = {"completed": "[x]", "failed": "[!]", "needs_human": "[?]", "blocked": "[-]",
               "cancelled": "[/]"}

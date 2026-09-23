@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import time
 import uuid
@@ -362,8 +363,9 @@ NAVEGADOR_NA_VALIDACAO = "browser_validate(url) se tem tela (estrutura e erros d
 MAESTRO_RULES = [
     "- VOCÊ NÃO IMPLEMENTA: quem escreve código é o Worker, em run_task. Suas ferramentas de escrita "
     "só valem para FORJA.md (na raiz) e .forja/; em qualquer outro arquivo elas recusam.",
-    "- Ciclo: entenda o objetivo → leia o Project State (.forja/) e o código que importa → "
-    "plan_feature → run_task uma por vez → leia o resultado → update_task → valide a entrega → "
+    "- Ciclo: entenda o objetivo → leia o Project State (.forja/) e o código que importa → escreva "
+    "FORJA.md, .forja/requirements.md e, se tem tela, .forja/knowledge/frontend.md (plan_feature "
+    "recusa sem eles) → plan_feature → run_task uma por vez → leia o resultado → update_task → valide a entrega → "
     "session_note. Repita até não sobrar tarefa aberta.",
     "- Antes de planejar, investigue. Plano feito sem ler o código gera contrato errado, e contrato "
     "errado queima uma tentativa inteira de um modelo grande.",
@@ -391,7 +393,9 @@ MAESTRO_RULES = [
     "vira tarefa sozinho), percorra os fluxos dos critérios com browser_click/browser_type, e "
     "visual_review. Só encerra com tudo isso limpo.",
     "- Achou um bug ou trabalho novo no meio do caminho? vira tarefa (plan_feature), não um remendo "
-    "na hora.",
+    "na hora. Se for encaixar numa tarefa que já existe, ESCREVA no contrato dela (update_task com "
+    "contract) ou no 'strategy' do run_task: o Worker só sabe o que está lá — 'vou corrigir junto' "
+    "dito aqui na conversa se perde.",
     "- As tarefas vivem no banco, não nesta conversa. Depois de qualquer compactação de contexto, "
     "chame list_tasks antes de decidir qualquer coisa — é a sua fonte da verdade.",
     "- Antes de abrir outra funcionalidade, feche o que está aberto: tarefa em 'reviewing' espera o "
@@ -403,6 +407,9 @@ MAESTRO_RULES = [
     "a conversa ficar longa.",
     "- Pare e chame ask_user quando a decisão for do usuário: ambiguidade que muda o resultado, "
     "escolha de arquitetura, ou tarefa que bateu no limite de tentativas. Não invente requisito.",
+    "- No resumo final, afirme só o que uma ferramenta PROVOU nesta conversa. Ferramenta que voltou "
+    "'INDISPONÍVEL' ou erro não validou nada: diga ao usuário o que ficou sem verificar (ex.: visual não "
+    "revisado, arrastar e soltar não testado) em vez de dar por aprovado.",
     "- Fale pouco e sobre o trabalho: o que decidiu, por quê, e o que vem agora. O usuário acompanha "
     "a árvore de tarefas na tela; não repita nela o que já está lá.",
 ]
@@ -573,7 +580,9 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
             # Sem isto o modelo despachava uma tarefa por resposta e o modo paralelo nunca acontecia.
             rules.append(f"- Modo paralelo: até {n} Workers ao mesmo tempo. Tarefas sem dependência entre si "
                          "e sem arquivo em comum: despache TODAS numa chamada só, run_task(codes=[...]) — "
-                         "elas rodam juntas. Uma por vez deixa os outros Workers parados.")
+                         "elas rodam juntas. Uma por vez deixa os outros Workers parados. Com arquivo em "
+                         "comum, uma por vez: juntas, a trava faz uma esperar a outra e você só vê o "
+                         "resultado da primeira quando a segunda acaba.")
         if esp := subagents.especialidades():
             # Uma linha por especialista com modelo: é o que a Maestro põe em model_slot.
             rules.append("- Workers especialistas (model_slot = id): " + "; ".join(
@@ -652,6 +661,16 @@ MAESTRO_FORA = frozenset({
 })
 
 
+def _so_memoria(t: Tool) -> Tool:
+    """write_file/edit_file da Maestro com a regra no próprio schema. Só no prompt não bastou: na
+    primeira conversa ela escrevia package.json e o index.html inteiro (3 min gerando) antes de ser
+    recusada e ir para o plan_feature."""
+    return dataclasses.replace(t, description=(
+        "SÓ para FORJA.md (na raiz) e arquivos em .forja/ — a memória do projeto (requirements, "
+        "architecture, knowledge/frontend.md…). Código, HTML, CSS, package.json e configuração NÃO: é "
+        "trabalho de Worker (plan_feature → run_task), e aqui é recusado. " + t.description))
+
+
 def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | None = None,
                     maestro_mode: bool = False) -> list[Tool]:
     """Ferramentas desta requisição. No modo Plano: só leitura + exit_plan_mode.
@@ -670,6 +689,8 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
                               *((qualidade.VISUAL_REVIEW,) if config.MAESTRO_BROWSER else ()))
                   if t.name not in exclude]
     tools = [t for t in active(caps) if t.name not in exclude]
+    if maestro_mode:
+        tools = [_so_memoria(t) if t.name in ("write_file", "edit_file") else t for t in tools]
     # ask_user/exit_plan_mode entram sempre, MENOS quando quem chamou as excluiu de propósito — é o
     # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
     # schema com uma ferramenta que só devolveria erro.

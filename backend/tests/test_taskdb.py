@@ -261,7 +261,8 @@ def test_board_agrupa_e_conta(conv):
 
 
 def test_board_vazio(conv):
-    assert taskdb.board(conv) == {"features": [], "counts": {}, "total": 0, "done": 0, "open": 0}
+    assert taskdb.board(conv) == {"inicio": None, "ultima": None, "features": [], "counts": {}, "total": 0,
+                                  "done": 0, "open": 0}
 
 
 def test_list_tasks_mostra_dependencia_e_tentativa(conv):
@@ -376,3 +377,51 @@ def test_reabrir_tarefa_devolve_a_feature_para_active(conv):
     _concluir(conv, "TASK-001")
     assert taskdb.board(conv)["features"][0]["status"] == "validating"
 
+
+
+def test_copia_exata_no_plano_sai_e_dependencia_remapeia():
+    """TaskBoard: a Maestro mandou a TASK-004 duas vezes no mesmo plano."""
+    dados = {"title": "Dados", "contract": {"goal": "CRUD"}}
+    tarefas = [{"title": "Base", "contract": {"goal": "HTML"}}, dict(dados),
+               {"title": "Tela", "contract": {"goal": "render"}, "depends_on": ["3"]}, dict(dados)]
+    tarefas[2]["depends_on"] = ["4", "1"]   # aponta para a cópia
+    limpas, copias = taskdb.sem_copias(tarefas)
+    assert copias == 1 and [t["title"] for t in limpas] == ["Base", "Dados", "Tela"]
+    assert limpas[2]["depends_on"] == ["2", "1"]
+    parecidas = [{"title": "Tela de login", "contract": {"goal": "a"}},
+                 {"title": "Tela de logout", "contract": {"goal": "a"}}]
+    assert taskdb.sem_copias(parecidas)[1] == 0   # parecido não é cópia
+
+
+def test_funcionalidade_sem_titulo_leva_o_pedido_do_usuario(conv):
+    with db.session() as s:
+        s.add(db.Message(conversation_id=conv, role="user",
+                         content="\nCrie uma aplicação chamada **TaskBoard**.\n\nDetalhes..."))
+        s.commit()
+    assert taskdb._objetivo_da_conversa() == "Crie uma aplicação chamada TaskBoard"
+
+
+def test_brief_traz_escopo_e_recado_sem_falha(conv):
+    _plano(conv, tasks=[{"title": "Dados", "contract": {"goal": "CRUD", "relevant_files": [".forja/knowledge/frontend.md", "src/app.js"]}}])
+    texto = taskdb.render_contract(taskdb.get("TASK-001"), strategy="corrija também os IDs list-* do HTML")
+    assert "ORIENTAÇÃO DA MAESTRO" in texto and "MUDE A ABORDAGEM" not in texto
+    assert "Mexa só em: src/app.js." in texto
+
+
+def test_board_traz_relogio_da_conversa(conv):
+    with db.session() as s:
+        s.add(db.Message(conversation_id=conv, role="user", content="Crie o TaskBoard"))
+        s.commit()
+    _plano(conv)
+    b = taskdb.board(conv)
+    assert b["inicio"].endswith("Z") and b["ultima"].endswith("Z") and b["ultima"] >= b["inicio"]
+
+
+def test_cancelada_nao_conta_no_total(conv):
+    """"10/11 tarefas" com uma cancelada parecia trabalho faltando."""
+    _plano(conv)
+    taskdb.set_status("TASK-002", "cancelled", conv)
+    b = taskdb.board(conv)
+    assert b["total"] == 1 and len(b["features"][0]["tasks"]) == 2
+    taskdb.set_status("TASK-001", "cancelled", conv)
+    assert taskdb.board(conv)["total"] == 0 and taskdb.board(conv)["features"]   # a árvore continua lá

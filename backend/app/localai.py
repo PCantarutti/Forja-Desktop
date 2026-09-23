@@ -254,7 +254,11 @@ def ctx_por_requisicao(ctx, params: dict | None) -> int:
     recusa qualquer prompt acima de 8192 ("exceeds the available context size"). Usar a janela total
     fazia o agente achar que tinha espaço e a compactação nunca disparar a tempo.
     """
-    return int(ctx or 0) // max(1, int((params or {}).get("parallel") or 1))
+    p = params or {}
+    if p.get("kv_unified"):
+        return int(ctx or 0)  # KV unificado: os slots dividem o pool, cada um enxerga a janela toda
+    # 0 (automático): o llama.cpp abre 4 slots e unifica o KV sozinho — janela inteira
+    return int(ctx or 0) // max(1, int(p.get("parallel") or 1))
 
 
 def ctx_de(path: str) -> int:
@@ -1186,7 +1190,9 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
                       ("n_cpu_moe", "--n-cpu-moe")):
         if int(p.get(key) or 0) > 0 and ok(flag):
             a += [flag, str(int(p[key]))]
-    if int(p.get("parallel") or 1) > 1:
+    # 0 = o llama.cpp decide (abre 4). 1 também vai explícito: omitido, o servidor abria os 4 dele e o
+    # "1 previsão simultânea" das Configurações não valia (visto com o Qwen3.6 na Maestro)
+    if int(p.get("parallel") or 0) >= 1:
         a += ["-np", str(int(p["parallel"]))]
     a += ["-fa", "on" if p.get("flash_attn") else "off"]
     for key, flag in (("cache_type_k", "--cache-type-k"), ("cache_type_v", "--cache-type-v")):

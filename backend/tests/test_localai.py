@@ -1035,3 +1035,14 @@ def test_vram_livre_vem_do_sistema_e_a_troca_conta_o_modelo_atual(isolado, monke
     monkeypatch.setattr(localai, "status", lambda: {"path": ""})
     with pytest.raises(Exception, match="rigorosa"):
         localai._checa_memoria("novo.gguf", {})
+
+
+def test_argv_uma_previsao_simultanea_vai_explicita():
+    """Omitido, o llama-server abria 4 slots e o "1" das Configurações não valia."""
+    a = localai.argv(Path("llama-server.exe"), "C:/m/m.gguf", {**localai.DEFAULT_PARAMS, "parallel": 1})
+    assert a[a.index("-np") + 1] == "1"
+
+
+def test_kv_unificado_cada_requisicao_ve_a_janela_toda():
+    assert localai.ctx_por_requisicao(131072, {"parallel": 4, "kv_unified": True}) == 131072
+    assert localai.ctx_por_requisicao(131072, {"parallel": 4}) == 32768

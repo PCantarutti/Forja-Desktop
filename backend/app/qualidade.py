@@ -137,6 +137,17 @@ async def _pergunta_a_visao(spec: dict, texto: str, anexos: list[dict]) -> str:
     return resposta.strip()
 
 
+def _visao_carregada() -> dict:
+    """Sem revisor configurado: o modelo local já carregado, se enxerga (no TaskBoard era o próprio Qwen3.6
+    da Maestro, com mmproj, e a revisão saiu "indisponível"). Não troca modelo: usa o que está na VRAM."""
+    try:
+        from . import localai
+        st = localai.status()
+    except Exception:  # forja-web: sem IA local
+        return {}
+    return {"provider": config.LOCAL_PROVIDER["id"], "model": st["alias"]} if st.get("running") and st.get("vision") else {}
+
+
 async def _visual_review(_root: Path, args: dict) -> dict:
     from . import browser
     conv = taskdb.CONV.get()
@@ -154,6 +165,8 @@ async def _visual_review(_root: Path, args: dict) -> dict:
             foto = await browser.screenshot(_root, {"largura": largura, "altura": altura})
             anexos += foto["attachments"]
             linhas.append(f"{url} — {nome} {largura}x{altura}")
+    if not spec.get("model"):
+        spec = _visao_carregada()
     if not spec.get("model"):
         return {"text": ("REVISÃO VISUAL INDISPONÍVEL: nenhum modelo com visão em Configurações › Maestro › "
                          "Revisão visual. Os prints estão no chat para o usuário; o visual NÃO foi julgado."),

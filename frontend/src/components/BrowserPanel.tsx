@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
-import type { BrowserState } from "../types";
+import type { BrowserState, ServerInfo } from "../types";
 import { ArrowLeft, ArrowRight, Refresh, X } from "./icons";
 
 const EMPTY: BrowserState = { open: false, url: "", title: "", width: 1280, height: 800, scale: 1, tabs: [] };
@@ -382,6 +382,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
                   ? "Nenhuma sessão neste rascunho. Digite uma URL acima; cada conversa tem o próprio navegador."
                   : "Esta conversa não tem navegador aberto. Digite uma URL acima ou peça ao agente para abrir uma página."
                 : "Conectando ao navegador…"}
+            <ServidoresRodando onAbrir={(url) => call("navigate", { url })} />
           </div>
         )}
       </div>
@@ -392,6 +393,53 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
             ? `navegador nativo · ${state.width}×${state.height} · ${tabs.length} aba${tabs.length === 1 ? "" : "s"}`
             : `viewport ${state.width}×${state.height} (segue o painel) · render ${state.scale ?? 1}x · ${tabs.length} aba${tabs.length === 1 ? "" : "s"} · clique na tela para focar e digitar`}
       </div>
+    </div>
+  );
+}
+
+
+/** `& "C:\...\python.exe" -m http.server` → `python -m http.server`: o caminho inteiro fica no title. */
+const comandoCurto = (cmd: string) =>
+  cmd.replace(/^&\s*/, "").replace(/"[^"]*[\\/]([^"\\/]+?)(?:\.exe)?"/gi, "$1");
+
+/** Servidores de desenvolvimento no ar (os do serve_start, de qualquer conversa) para abrir com um
+ *  clique, sem decorar a porta. Só os que já anunciaram o endereço no log. */
+function ServidoresRodando(props: { onAbrir: (url: string) => void }) {
+  const [servidores, setServidores] = useState<ServerInfo[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    const ler = () =>
+      api.get<{ servers: ServerInfo[] }>("/servers")
+        .then((r) => vivo && setServidores(r.servers.filter((x) => x.alive && x.url)))
+        .catch(() => {});
+    ler();
+    const t = setInterval(ler, 4000);
+    return () => {
+      vivo = false;
+      clearInterval(t);
+    };
+  }, []);
+  if (!servidores.length) return null;
+  return (
+    <div className="mx-auto mt-6 flex max-w-lg flex-col gap-2">
+      <p className="text-center text-xs text-faint">Servidores rodando: clique para abrir aqui.</p>
+      {servidores.map((x) => (
+        <div key={x.name} className="flex items-center gap-3 rounded-xl border border-line bg-panel px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] text-faint">
+              {x.url!.replace(/^https?:\/\//, "")}
+              {x.cwd ? ` · ${x.cwd.split(/[\\/]/).filter(Boolean).pop()}` : ""}
+            </div>
+            <div className="truncate font-mono text-xs text-fg" title={x.command}>{comandoCurto(x.command)}</div>
+          </div>
+          <button
+            className="shrink-0 rounded-lg bg-raised px-3 py-1 text-xs text-fg hover:bg-line"
+            onClick={() => props.onAbrir(x.url!)}
+          >
+            Abrir
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

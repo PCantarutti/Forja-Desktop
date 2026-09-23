@@ -335,6 +335,35 @@ export default function CompararView(props: {
 
   /** Um modelo lê todas as respostas e estatísticas e devolve a tabela comparativa, em forma de chat.
    *  No teste de frontend, com juiz que enxerga, ele recebe também os prints de cada página. */
+  // Revisão automática: quando a comparação acompanhada termina (inclusive depois de Refazer ou
+  // Adicionar), o revisor começa sozinho. Preferência do usuário, fica neste navegador.
+  const [autoAnalise, setAutoAnalise] = useState(() => {
+    try {
+      return localStorage.getItem("forja.comparar.autoAnalise") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const statusAnterior = useRef<{ id: number; status: string } | null>(null);
+  useEffect(() => {
+    if (!estado) return;
+    const antes = statusAnterior.current;
+    statusAnterior.current = { id: estado.message_id, status: estado.status };
+    if (autoAnalise && antes?.id === estado.message_id && antes.status === "rodando" && estado.status === "pronto")
+      void analisar();
+    // só a transição rodando → pronto dispara; analisar muda a cada render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estado?.status, estado?.message_id]);
+
+  function trocarAutoAnalise(v: boolean) {
+    setAutoAnalise(v);
+    try {
+      localStorage.setItem("forja.comparar.autoAnalise", v ? "1" : "0");
+    } catch {
+      /* sem armazenamento: vale só nesta sessão */
+    }
+  }
+
   async function analisar() {
     if (!estado || !juiz.model) return;
     colarPagina();  // a página desce e acompanha a análise (rolar para cima solta, como no chat)
@@ -525,13 +554,18 @@ export default function CompararView(props: {
             </div>
           )}
 
-          {estado && !rodando && (
+          {estado && (
             <div className={`${card} flex flex-col gap-3 px-4 py-3 text-xs`}>
               <div className="flex flex-wrap items-center gap-2">
                 <Balanca className="size-4 text-faint" />
                 <span className={titulo}>Analisar com IA</span>
                 <span className="text-faint">um modelo que você confia lê as respostas e as estatísticas e compara</span>
                 <div className="ml-auto flex items-center gap-1.5">
+                  <label className="mr-1 flex items-center gap-1.5 text-muted"
+                         title="Quando todas as respostas forem entregues, o revisor começa sozinho">
+                    <input type="checkbox" checked={autoAnalise} onChange={(e) => trocarAutoAnalise(e.target.checked)} />
+                    Analisar ao terminar
+                  </label>
                   <ModelPicker provider={juiz.provider} model={juiz.model} loadLocal={false}
                                onChange={(provider, model) => setJuiz({ provider, model })} />
                   {analise?.rodando ? (
@@ -540,7 +574,8 @@ export default function CompararView(props: {
                       Parar
                     </button>
                   ) : (
-                    <button className={btnPrimary} disabled={!juiz.model} onClick={analisar}>
+                    <button className={btnPrimary} disabled={!juiz.model || rodando} onClick={analisar}
+                            title={rodando ? "Espere as respostas terminarem" : undefined}>
                       {analise ? "Analisar de novo" : "Analisar"}
                     </button>
                   )}

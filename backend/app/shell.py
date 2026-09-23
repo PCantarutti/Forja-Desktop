@@ -136,7 +136,7 @@ def _info(name: str) -> dict:
     code = s["proc"].poll()
     return {"name": name, "pid": s["proc"].pid, "alive": code is None, "exit_code": code, "command": s["command"],
             "cwd": s["cwd"], "log": s["log"], "uptime": int(time.time() - s["started"]),
-            "conv": s.get("conv") or ""}
+            "conv": s.get("conv") or "", "url": url_do_log(name) if code is None else ""}
 
 
 def _log(name: str, tail: int) -> str:
@@ -153,7 +153,8 @@ SERVIDOR_DEV = re.compile(
     r"(?:^|[;&|]\s*)(?:npm\s+(?:run\s+)?(?:dev|start|serve|preview)|pnpm\s+(?:run\s+)?(?:dev|start)|"
     r"yarn\s+(?:run\s+)?(?:dev|start)|npx\s+(?:vite|next\s+dev|serve)\b(?!\s+build)|vite(?:\s+(?!build)|\s*$)|"
     r"next\s+dev|python\d?\s+-m\s+http\.server|flask\s+run|uvicorn\s|php\s+-S)", re.I)
-URL_NO_LOG = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+[^\s]*")
+# sem ) ] > aspas e vírgula no fim: o http.server anuncia "(http://127.0.0.1:8000/) ..."
+URL_NO_LOG = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+[^\s)\]>'\",]*")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 

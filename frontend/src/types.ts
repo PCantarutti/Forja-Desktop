@@ -136,6 +136,7 @@ export type ServerInfo = {
   log?: string;
   uptime?: number;
   conv?: string; // conversa que subiu o processo, para a aba separar por conversa
+  url?: string; // endereço que o servidor anunciou no log (vazio até anunciar)
   where: "local" | "host" | "container"; // no Desktop é sempre "local": tudo roda na sua máquina
   error?: string;
 };
@@ -620,6 +621,8 @@ export type MaestroFeature = {
 };
 
 export type MaestroBoard = {
+  inicio?: string | null; // primeiro pedido da conversa (ISO UTC)
+  ultima?: string | null; // última atividade: mensagem, tarefa ou tentativa
   features: MaestroFeature[];
   counts: Partial<Record<TaskStatus, number>>;
   total: number;

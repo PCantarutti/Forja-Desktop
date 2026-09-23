@@ -51,6 +51,13 @@ async def _travas(conv_id: int, caminhos: list[str]):
         yield chaves
 
 
+def para_travar(arquivos: list[str]) -> list[str]:
+    """Os arquivos do contrato que entram no lock. .forja/ fica de fora: o guia visual vai nos
+    relevant_files de TODA tarefa com tela e o Worker só lê — travar nele serializava as tarefas
+    "paralelas" do TaskBoard uma atrás da outra."""
+    return [a for a in arquivos if not a.replace(chr(92), "/").removeprefix("./").startswith(".forja/")]
+
+
 def em_conflito(conv_id: int, caminhos: list[str]) -> list[str]:
     """Arquivos deste contrato que outra tarefa está segurando agora. Serve para avisar na interface
     por que a tarefa não começou, em vez de ela parecer travada."""
@@ -102,12 +109,14 @@ def collect_result(task, attempt_n: int, sub_out: dict, root: Path) -> dict:
         # julgar (ler o diff, rodar algo, abrir o navegador) em vez de confiar no relatório.
         status = "unverified"
 
+    mudancas = _mudancas(root, steps)
     return {
         "type": "task_result",
         "task_code": task.code,
         "attempt": attempt_n,
         "status": status,
-        "changes": _mudancas(root, steps),
+        "changes": mudancas,
+        "outside_contract": fora_do_contrato(mudancas, (task.contract or {}).get("relevant_files") or []),
         "commands": [{"command": s["arguments"].get("command"), "status": s["status"]}
                      for s in steps if s["name"] == "run_command"],
         "tests": ({"command": verify.get("command"), "status": verify.get("status"),
@@ -123,6 +132,20 @@ def collect_result(task, attempt_n: int, sub_out: dict, root: Path) -> dict:
         "tokens": info.get("tokens"),
         "iterations": info.get("iterations"),
     }
+
+
+def _norm(caminho: str) -> str:
+    return str(caminho).replace(chr(92), "/").removeprefix("./").lower()
+
+
+def fora_do_contrato(mudancas: list[dict], declarados: list[str]) -> list[str]:
+    """Arquivos escritos que o contrato não listou. No TaskBoard o Worker da camada de dados reescreveu
+    o style.css que a tarefa anterior tinha entregue, e ninguém viu. Contrato sem arquivos: nada a dizer."""
+    declarados = para_travar(declarados)  # o guia visual entra sozinho: não conta como declaração
+    if not declarados:
+        return []
+    ok = {_norm(d) for d in declarados}
+    return [m["path"] for m in mudancas if _norm(m["path"]) not in ok]
 
 
 def mesmo_modelo(req) -> dict | None:
@@ -300,7 +323,7 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
 
     t0 = time.monotonic()
     sub_out: dict = {}
-    arquivos = contrato.get("relevant_files") or []
+    arquivos = para_travar(contrato.get("relevant_files") or [])
     if ocupados := em_conflito(conv_id, arquivos):
         # Outra tarefa em paralelo está mexendo nos mesmos arquivos: esta espera a vez em vez de
         # escrever por cima. O evento diz o motivo, senão a tarefa parece travada no cockpit.
@@ -439,4 +462,7 @@ def _para_o_maestro(r: dict) -> str:
         "error": "O Worker não concluiu. Veja 'errors' e decida: nova tentativa com outra estratégia, "
                  "outro modelo (update_task model_slot), ou needs_human.",
     }.get(r["status"], "Analise o resultado e decida o próximo passo.")
+    if fora := r.get("outside_contract"):
+        cauda += (f"\nATENÇÃO: o Worker escreveu fora do contrato ({', '.join(fora)}). Confira se não desfez "
+                  "o trabalho de outra tarefa antes de fechar esta.")
     return json.dumps(r, ensure_ascii=False, default=str) + "\n\n" + cauda

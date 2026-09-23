@@ -85,6 +85,7 @@ SCRATCH = "0"  # sessão do painel quando nenhuma conversa está aberta
 REF_RE = re.compile(r"^(?:ref=)?((?:f\d+)?e\d+)$")  # e12 na página principal; f1e12 dentro de frame
 MARKER = "about:blank?forja="  # URL inicial de uma aba nativa: identifica a view do Electron para o Playwright
 MARKER_WAIT = 8.0  # segundos para o Electron criar a view depois do `create`
+HOST_PING = 30.0   # keepalive do canal do Electron (o fetch do Node corta resposta parada há 300 s)
 ERROR_PREFIXES = ("pageerror", "console.error", "requestfailed")
 
 # Conversa dona das chamadas de ferramenta em andamento (agent.run_agent define no início do run).
@@ -522,7 +523,13 @@ class Manager:
         try:
             yield {"type": "hello", "native": self.native}
             while True:
-                yield await q.get()
+                try:
+                    yield await asyncio.wait_for(q.get(), HOST_PING)
+                except asyncio.TimeoutError:
+                    # Sem isto o canal ficava mudo enquanto um Worker trabalhava; o fetch do Node derruba
+                    # resposta parada há 5 min, o Electron reconecta e FECHA todas as views — a Maestro
+                    # voltava para a validação e achava a aba em about:blank.
+                    yield {"type": "ping"}
         finally:
             self.hosts.discard(q)
 
@@ -627,6 +634,14 @@ def _locator(page, selector: str):
 
 def _act_err(selector: str, e: Exception) -> str:
     texto = str(e)
+    if m := re.search(r"strict mode violation.*?resolved to (\d+) elements", texto, re.S):
+        # Vários iguais ("Excluir" em cada card, "Alta" no filtro e no modal): no TaskBoard a Maestro
+        # desistia e clicava por browser_eval, sem passar pelo clique de verdade.
+        dica = (" Num <select>, prefira browser_type no combobox com o texto da opção."
+                if "option" in selector.lower() else "")
+        return (f"'{selector}' casou com {m.group(1)} elementos. Escolha um: acrescente ' >> nth=0' (o 1º), "
+                f"' >> nth=1'…, restrinja pelo contêiner (ex.: '#modal >> {selector}') ou use o ref do "
+                f"browser_read.{dica}")
     if "resolved to" in texto:
         # O elemento existe: dizer "a página mudou" mandava o modelo reler e tentar o mesmo ref para
         # sempre (seis vezes seguidas numa validação real), quando o problema era outro.
@@ -733,12 +748,29 @@ async def _com_tela(page):
                     await sessao.detach()
 
 
+async def _tag(loc) -> str:
+    try:
+        return str(await loc.evaluate("e => e.tagName", timeout=2000)).upper()
+    except Exception:  # vários elementos, ou nenhum: o clique/fill normal dá o erro certo
+        return ""
+
+
+# <option> não é clicável (fica oculta dentro do <select>): seleciona pelo próprio select, com os eventos
+# que um usuário dispararia. No TaskBoard a Maestro tentou clicar em "Em Andamento" e desistiu.
+SELECIONA_OPCAO = """o => { const s = o.closest('select'); s.value = o.value;
+  s.dispatchEvent(new Event('input', {bubbles: true})); s.dispatchEvent(new Event('change', {bubbles: true})); }"""
+
+
 async def click(_root: Path, args: dict) -> str:
     page = await current().ensure()
     selector = args["selector"]
     async with _com_tela(page):
         try:
-            await _locator(page, selector).click(timeout=ACT_TIMEOUT)
+            loc = _locator(page, selector)
+            if await _tag(loc) == "OPTION":
+                await loc.evaluate(SELECIONA_OPCAO)
+            else:
+                await loc.click(timeout=ACT_TIMEOUT)
         except Exception as e:
             raise ToolError(_act_err(selector, e)) from e
         await _settle(page)
@@ -751,7 +783,13 @@ async def type_text(_root: Path, args: dict) -> str:
     loc = _locator(page, selector)
     async with _com_tela(page):
         try:
-            await loc.fill(str(args["text"]), timeout=ACT_TIMEOUT)
+            if await _tag(loc) == "SELECT":  # fill não serve em <select>: escolhe a opção pelo texto
+                try:
+                    await loc.select_option(label=str(args["text"]), timeout=ACT_TIMEOUT)
+                except Exception:
+                    await loc.select_option(value=str(args["text"]), timeout=ACT_TIMEOUT)
+            else:
+                await loc.fill(str(args["text"]), timeout=ACT_TIMEOUT)
             if args.get("submit"):
                 await loc.press("Enter", timeout=ACT_TIMEOUT)
         except Exception as e:
@@ -803,8 +841,15 @@ async def tabs(_root: Path, args: dict) -> str:
 
 async def evaluate(_root: Path, args: dict) -> str:
     page = await current().ensure()
+    script = str(args["script"])
     try:
-        result = await page.evaluate(str(args["script"]))
+        try:
+            result = await page.evaluate(script)
+        except Exception as e:
+            # corpo de função solto ("const x = ...; return x"): o modelo escreve assim o tempo todo
+            if "Illegal return" not in str(e):
+                raise
+            result = await page.evaluate(f"(() => {{\n{script}\n}})()")
     except Exception as e:
         raise ToolError(f"Erro no JS: {_err(e)}") from e
     text = json.dumps(result, ensure_ascii=False, default=str)
@@ -1003,10 +1048,11 @@ register(Tool(
           "max_chars": {"type": "integer", "description": "Limite da estrutura (padrão 8000)"}}, []),
     validate))
 register(Tool(
-    "browser_click", "Clica num elemento da aba ativa.",
+    "browser_click", "Clica num elemento da aba ativa. Numa <option> de um <select>, seleciona a opção.",
     _obj({"selector": SELECTOR}, ["selector"]), click, mutating=True))
 register(Tool(
-    "browser_type", "Preenche um campo (substitui o conteúdo) e opcionalmente aperta Enter.",
+    "browser_type", "Preenche um campo (substitui o conteúdo) e opcionalmente aperta Enter. Num <select> "
+                    "(combobox), escolhe a opção cujo texto é 'text'.",
     _obj({"selector": SELECTOR, "text": {"type": "string"},
           "submit": {"type": "boolean", "description": "Apertar Enter depois. Padrão: false"}},
          ["selector", "text"]),

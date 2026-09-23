@@ -1288,3 +1288,27 @@ def test_workers_usam_o_modelo_da_maestro_com_o_interruptor(conv, monkeypatch):
     assert r["model"] == "maestro-32b" and "modelo da Maestro" in r["route"]
     tent = taskdb.detail(conv, "TASK-001")["attempts"][0]
     assert tent["worker"]["model"] == "maestro-32b"
+
+
+def test_escrita_da_maestro_diz_no_schema_que_e_so_memoria():
+    from app import agent
+    nomes = {t.name: t for t in agent.available_tools(None, "auto", maestro_mode=True)}
+    assert nomes["write_file"].description.startswith("SÓ para FORJA.md")
+    assert nomes["edit_file"].description.startswith("SÓ para FORJA.md")
+    comum = {t.name: t for t in agent.available_tools(None, "auto")}
+    assert not comum["write_file"].description.startswith("SÓ")   # o chat/agente não muda
+
+
+def test_guia_visual_nao_trava_tarefas_paralelas():
+    from app import maestro
+    assert maestro.para_travar([".forja/knowledge/frontend.md", "src/app.js", "./.forja/x.md", "forja/a.py"]) \
+        == ["src/app.js", "forja/a.py"]
+
+
+def test_escrita_fora_do_contrato_vira_aviso():
+    from app import maestro
+    mud = [{"path": "src/app.js"}, {"path": "src/style.css"}, {"path": "index.html"}]
+    assert maestro.fora_do_contrato(mud, [".forja/knowledge/frontend.md", "src/app.js"]) == ["src/style.css", "index.html"]
+    assert maestro.fora_do_contrato(mud, [".forja/knowledge/frontend.md"]) == []   # só o guia: sem declaração
+    r = {"status": "unverified", "outside_contract": ["src/style.css"]}
+    assert "fora do contrato (src/style.css)" in maestro._para_o_maestro(r)
