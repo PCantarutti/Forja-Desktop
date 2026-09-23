@@ -29,6 +29,14 @@ def _fora_do_codigo(texto: str) -> str:
     return re.sub(r"```.*?```", " ", texto or "", flags=re.S)
 
 
+def _previsao(texto: str, funcao: str) -> str:
+    """Onde o modelo diz o retorno previsto: o texto livre e os blocos que não definem a função (muitos
+    põem o resultado num bloco de código próprio)."""
+    outros = [c for _, c in re.findall(r"```(\w*)[^\n]*\n(.*?)```", texto or "", re.S) if not re.search(
+        rf"(def|function)\s+{funcao}\b|{funcao}\s*=", c)]
+    return _fora_do_codigo(texto) + "\n" + "\n".join(outros)
+
+
 def _roda(cmd: list[str], arquivos: dict[str, str]) -> tuple[int, str]:
     with tempfile.TemporaryDirectory() as d:
         for nome, conteudo in arquivos.items():
@@ -68,7 +76,8 @@ def erro(movs):
     try: custo_fifo(movs); return False
     except ValueError: return True
     except Exception: return False
-t("exemplo do enunciado", lambda: norm(custo_fifo([("entrada",10,500),("entrada",5,800),("saida",12),("entrada",3,700),("saida",4)])) == (9700, [(2,700)]))
+t("exemplo do enunciado", lambda: norm(custo_fifo([("entrada",10,500),("entrada",5,800),("saida",12),("entrada",3,700),("saida",4),("devolucao",2)])) == (8200, [(1,800),(3,700)]))
+t("exemplo sem a devolução", lambda: norm(custo_fifo([("entrada",10,500),("entrada",5,800),("saida",12),("entrada",3,700),("saida",4)])) == (9700, [(2,700)]))
 t("só entradas", lambda: norm(custo_fifo([("entrada",4,100)])) == (0, [(4,100)]))
 t("saída zera o estoque", lambda: norm(custo_fifo([("entrada",3,100),("saida",3)])) == (300, []))
 t("saída atravessa 3 lotes", lambda: norm(custo_fifo([("entrada",1,100),("entrada",1,200),("entrada",1,300),("saida",3)])) == (600, []))
@@ -78,6 +87,14 @@ t("saída maior que o estoque: ValueError", lambda: erro([("entrada",2,100),("sa
 t("quantidade zero: ValueError", lambda: erro([("entrada",0,100)]))
 t("saída negativa: ValueError", lambda: erro([("entrada",2,100),("saida",-1)]))
 t("tipo desconhecido: ValueError", lambda: erro([("ajuste",1)]))
+t("devolução desfaz a saída de trás para frente", lambda: norm(custo_fifo([("entrada",1,100),("entrada",1,200),("saida",2),("devolucao",1)])) == (100, [(1,200)]))
+t("devolvido é o primeiro a sair de novo", lambda: norm(custo_fifo([("entrada",1,100),("entrada",1,200),("entrada",1,300),("saida",2),("devolucao",1),("saida",1)])) == (300, [(1,300)]))
+t("devolução junta com lote de mesmo custo", lambda: norm(custo_fifo([("entrada",3,100),("saida",1),("devolucao",1)])) == (0, [(3,100)]))
+t("devoluções seguidas desfazem a mesma saída", lambda: norm(custo_fifo([("entrada",2,100),("entrada",2,200),("saida",3),("devolucao",1),("devolucao",1)])) == (100, [(1,100),(2,200)]))
+t("devolução só da saída mais recente", lambda: norm(custo_fifo([("entrada",1,100),("entrada",1,200),("saida",1),("saida",1),("devolucao",1)])) == (100, [(1,200)]))
+t("devolução maior que a saída: ValueError", lambda: erro([("entrada",5,100),("saida",2),("devolucao",3)]))
+t("devolver de novo o que já voltou: ValueError", lambda: erro([("entrada",5,100),("saida",1),("devolucao",1),("devolucao",1)]))
+t("devolução sem saída: ValueError", lambda: erro([("entrada",5,100),("devolucao",1)]))
 print(json.dumps(res))
 '''
 
@@ -91,8 +108,8 @@ def logica(texto: str) -> dict:
     if res is None:
         return {"nota": 0, "resumo": "o código não roda: " + saida.strip()[-160:]}
     ok = sum(res.values())
-    texto_livre = _fora_do_codigo(texto).replace(" ", "")
-    disse = ("9700" in texto_livre or "9.700" in texto_livre or "97,00" in texto_livre) + ("(2,700)" in texto_livre or "[(2,700)]" in texto_livre)
+    texto_livre = re.sub(r"\s", "", _previsao(texto, "custo_fifo"))
+    disse = ("8200" in texto_livre or "8.200" in texto_livre or "82,00" in texto_livre) + ("[(1,800),(3,700)]" in texto_livre)
     falhas = [k for k, v in res.items() if not v]
     return {"nota": round(10 * (ok + disse) / (len(res) + 2), 1),
             "resumo": f"{ok}/{len(res)} casos; cálculo sem executar {disse}/2"
@@ -152,34 +169,43 @@ def testes(texto: str) -> dict:
                        + f"; bugs pegos {len(pegos)}/{len(MUTANTES)}" + (f" ({', '.join(pegos)})" if pegos else ""))}
 
 
-# ------------------------------------------------------------------ geral: topN em JavaScript
+# ------------------------------------------------------------------ geral: períodos ocupados em JavaScript
 
-CASOS_TOPN = r'''
+CASOS_OCUPADOS = r'''
 const r = {};
 const t = (n, f) => { try { r[n] = !!f(); } catch (e) { r[n] = false; } };
-const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-t("exemplo [5,12,3,12,40,7], 3", () => igual(topN([5, 12, 3, 12, 40, 7], 3), [40, 12, 7]));
-t("ordena como número (100 > 20 > 9)", () => igual(topN([9, 100, 20], 5), [100, 20, 9]));
-t("não altera a lista original", () => { const l = [3, 1, 2]; topN(l, 2); return igual(l, [3, 1, 2]); });
-t("remove duplicados", () => igual(topN([7, 7, 7, 1], 2), [7, 1]));
-t("n = 0 devolve []", () => igual(topN([1, 2], 0), []));
-t("n negativo devolve []", () => igual(topN([1, 2, 3], -1), []));
-t("lista vazia devolve []", () => igual(topN([], 3), []));
+const min = h => typeof h === "number" ? h : (([a, b]) => +a * 60 + +b)(String(h).split(":"));
+const igual = (saida, esperado) => Array.isArray(saida) && saida.length === esperado.length &&
+  saida.every((p, i) => p && min(p.inicio) === min(esperado[i][0]) && min(p.fim) === min(esperado[i][1]));
+const R = (...ps) => ps.map(([inicio, fim]) => ({ inicio, fim }));
+t("exemplo do enunciado", () => igual(ocupados(R(["9:00", "10:30"], ["13:30", "14:00"], ["10:30", "11:00"], ["13:00", "15:00"], ["8:15", "9:00"])), [["8:15", "11:00"], ["13:00", "15:00"]]));
+t("hora de um dígito ordena como hora (9:00 antes de 10:00)", () => igual(ocupados(R(["10:00", "11:00"], ["9:00", "9:30"])), [["9:00", "9:30"], ["10:00", "11:00"]]));
+t("sobreposição que cruza 9h → 10h", () => igual(ocupados(R(["9:30", "10:15"], ["10:00", "10:45"])), [["9:30", "10:45"]]));
+t("reservas que encostam viram uma", () => igual(ocupados(R(["9:00", "10:00"], ["10:00", "11:00"])), [["9:00", "11:00"]]));
+t("reserva contida não encurta o período", () => igual(ocupados(R(["9:00", "10:00"], ["9:30", "9:45"])), [["9:00", "10:00"]]));
+t("encadeadas viram um período só", () => igual(ocupados(R(["9:15", "10:00"], ["9:00", "9:30"], ["9:50", "11:00"])), [["9:00", "11:00"]]));
+t("separadas continuam separadas", () => igual(ocupados(R(["13:00", "14:00"], ["9:00", "10:00"])), [["9:00", "10:00"], ["13:00", "14:00"]]));
+t("não altera os objetos recebidos", () => { const l = R(["9:00", "10:00"], ["9:30", "11:00"]); const antes = JSON.stringify(l); ocupados(l); return JSON.stringify(l) === antes; });
+t("não altera a ordem da lista", () => { const l = R(["13:00", "14:00"], ["9:00", "10:00"]); ocupados(l); return l[0].inicio === "13:00"; });
+t("lista vazia devolve []", () => { const s = ocupados([]); return Array.isArray(s) && s.length === 0; });
 console.log(JSON.stringify(r));
 '''
 
 
 def geral(texto: str) -> dict:
-    codigo = "\n\n".join(c for c in _blocos(texto, "js", "javascript", "") if "topN" in c)
+    codigo = "\n\n".join(c for c in _blocos(texto, "js", "javascript", "") if "ocupados" in c)
     if not codigo:
-        return {"nota": 0, "resumo": "não entregou a função topN corrigida"}
-    _, saida = _roda(["node", "m.js"], {"m.js": codigo + "\n" + CASOS_TOPN})
+        return {"nota": 0, "resumo": "não entregou a função ocupados corrigida"}
+    codigo = re.sub(r"^export\s+(default\s+)?", "", codigo, flags=re.M)   # node roda como CommonJS
+    _, saida = _roda(["node", "m.js"], {"m.js": codigo + "\n" + CASOS_OCUPADOS})
     res = _casos(saida)
     if res is None:
         return {"nota": 0, "resumo": "o código não roda: " + saida.strip()[-160:]}
     ok = sum(res.values())
-    livre = _fora_do_codigo(texto).replace(" ", "")
-    disse = ("[40,12,7]" in livre) + ("[100,20,9]" in livre)
+    livre = re.sub(r"[\s\"'`]", "", _previsao(texto, "ocupados"))
+    # a previsão: os dois períodos em sequência; "13:00 → 15:00" sozinho está na própria entrada
+    disse = (bool(re.search(r"0?8:15\D{1,12}11:00", livre))
+             + bool(re.search(r"0?8:15\D{1,12}11:00\D{1,30}13:00\D{1,12}15:00", livre)))
     falhas = [k for k, v in res.items() if not v]
     return {"nota": round(10 * (ok + disse) / (len(res) + 2), 1),
             "resumo": f"{ok}/{len(res)} casos; saídas ditas {disse}/2" + (f"; falhou: {', '.join(falhas)}" if falhas else "")}
@@ -217,8 +243,8 @@ def para_testar(bateria: str, linguagem: str, codigo: str) -> tuple[str, str] | 
     casos do gabarito (OK / FALHOU por caso). Devolve (conteúdo do arquivo, modo) ou None."""
     if bateria == "logica" and linguagem == "python" and "def custo_fifo" in codigo:
         return codigo + "\n" + _legivel_py(CASOS_FIFO), "python"
-    if bateria == "geral" and linguagem == "javascript" and "topN" in codigo:
-        return codigo + "\n" + _legivel_js(CASOS_TOPN), "node"
+    if bateria == "geral" and linguagem == "javascript" and "ocupados" in codigo:
+        return codigo + "\n" + _legivel_js(CASOS_OCUPADOS), "node"
     if bateria == "testes" and linguagem == "python" and "def test" in codigo:
         from .baterias import CODIGO_TESTES
         # os testes do modelo contra a função do enunciado, que tem 3 bugs: os que falham acharam um

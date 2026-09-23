@@ -7,7 +7,7 @@ from app import baterias, conferencia
 
 FIFO_CERTO = '''```python
 def custo_fifo(movimentos):
-    lotes, total = [], 0
+    lotes, total, ultima = [], 0, []
     for mov in movimentos:
         tipo, qtd = mov[0], mov[1]
         if qtd <= 0:
@@ -17,18 +17,35 @@ def custo_fifo(movimentos):
         elif tipo == "saida":
             if qtd > sum(l[0] for l in lotes):
                 raise ValueError("estoque")
+            ultima = []
             while qtd:
                 usa = min(qtd, lotes[0][0])
                 total += usa * lotes[0][1]
+                ultima.append([usa, lotes[0][1]])
                 lotes[0][0] -= usa
                 qtd -= usa
                 if not lotes[0][0]:
                     lotes.pop(0)
+        elif tipo == "devolucao":
+            if qtd > sum(u[0] for u in ultima):
+                raise ValueError("devolucao")
+            while qtd:
+                usa = min(qtd, ultima[-1][0])
+                custo = ultima[-1][1]
+                total -= usa * custo
+                ultima[-1][0] -= usa
+                qtd -= usa
+                if not ultima[-1][0]:
+                    ultima.pop()
+                if lotes and lotes[0][1] == custo:
+                    lotes[0][0] += usa
+                else:
+                    lotes.insert(0, [usa, custo])
         else:
             raise ValueError("tipo")
     return total, [tuple(l) for l in lotes]
 ```
-Sem executar: (9700, [(2, 700)])'''
+Sem executar: (8200, [(1, 800), (3, 700)])'''
 
 TESTES_BONS = '''```python
 import pytest
@@ -40,20 +57,40 @@ def test_invalidos(t):
         minutos(t)
 ```'''
 
-TOPN_CERTO = '''```js
-function topN(lista, n) {
-  if (n <= 0) return [];
-  return [...new Set(lista)].sort((a, b) => b - a).slice(0, n);
+OCUPADOS_CERTO = '''```js
+function ocupados(reservas) {
+  const min = h => { const [a, b] = h.split(":"); return +a * 60 + +b; };
+  const ordenadas = reservas.map(r => ({ ...r })).sort((a, b) => min(a.inicio) - min(b.inicio));
+  const res = [];
+  for (const r of ordenadas) {
+    const ultimo = res[res.length - 1];
+    if (ultimo && min(r.inicio) <= min(ultimo.fim)) {
+      if (min(r.fim) > min(ultimo.fim)) ultimo.fim = r.fim;
+    } else {
+      res.push(r);
+    }
+  }
+  return res;
 }
 ```
-Devolve [40, 12, 7] e [100, 20, 9].'''
+Devolve [{inicio: "8:15", fim: "11:00"}, {inicio: "13:00", fim: "15:00"}].'''
 
 
 def test_fifo_certo_nota_maxima_e_lifo_perde():
     assert conferencia.logica(FIFO_CERTO)["nota"] == 10
-    lifo = FIFO_CERTO.replace("lotes[0]", "lotes[-1]").replace("lotes.pop(0)", "lotes.pop()").replace("(9700, [(2, 700)])", "")
+    lifo = FIFO_CERTO.replace("lotes[0]", "lotes[-1]").replace("lotes.pop(0)", "lotes.pop()").replace("(8200, [(1, 800), (3, 700)])", "")
     r = conferencia.logica(lifo)
     assert r["nota"] <= 7 and "exemplo do enunciado" in r["resumo"] and "lote mais antigo" in r["resumo"]
+
+
+def test_devolucao_no_fim_da_fila_ou_das_primeiras_unidades_perde():
+    """O desempate da lógica: quem acerta o FIFO mas erra a devolução não leva 10."""
+    no_fim = FIFO_CERTO.replace("lotes.insert(0, [usa, custo])", "lotes.append([usa, custo])")
+    assert "devolvido é o primeiro a sair" in conferencia.logica(no_fim)["resumo"]
+    primeiras = FIFO_CERTO.replace("ultima[-1]", "ultima[0]").replace("ultima.pop()", "ultima.pop(0)")
+    assert conferencia.logica(primeiras)["nota"] < 10
+    sem_juntar = FIFO_CERTO.replace("if lotes and lotes[0][1] == custo:", "if False:")
+    assert "junta com lote" in conferencia.logica(sem_juntar)["resumo"]
 
 
 def test_testes_contam_bugs_pegos_e_testes_errados_zeram():
@@ -65,10 +102,16 @@ def test_testes_contam_bugs_pegos_e_testes_errados_zeram():
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="precisa do node")
-def test_topn_certo_e_o_original_bugado():
-    assert conferencia.geral(TOPN_CERTO)["nota"] == 10
+def test_ocupados_certo_e_o_original_bugado():
+    assert conferencia.geral(OCUPADOS_CERTO)["nota"] == 10
     original = "```js\n" + baterias.CODIGO_GERAL + "\n```"
     assert conferencia.geral(original)["nota"] <= 3
+    # o erro sutil: copiar só a lista (slice) e continuar mudando o objeto do chamador
+    raso = OCUPADOS_CERTO.replace("reservas.map(r => ({ ...r }))", "reservas.slice()")
+    r = conferencia.geral(raso)
+    assert r["nota"] < 10 and "não altera os objetos" in r["resumo"]
+    texto = OCUPADOS_CERTO.replace("min(a.inicio) - min(b.inicio)", "a.inicio < b.inicio ? -1 : 1")
+    assert "um dígito" in conferencia.geral(texto)["resumo"]
 
 
 def test_bug_do_enunciado_de_testes_e_o_que_os_mutantes_simulam():

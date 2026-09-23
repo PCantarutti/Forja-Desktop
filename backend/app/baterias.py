@@ -77,19 +77,29 @@ def minutos(texto: str) -> int:
         raise ValueError(texto)
     return int(h or 0) * 60 + int(mi or 0)'''
 
-CODIGO_GERAL = """// Devolve os n maiores valores DISTINTOS de `lista`, do maior para o menor, sem alterar `lista`.
-// n maior que a quantidade de distintos: devolve todos. n <= 0 ou lista vazia: [].
-function topN(lista, n) {
-  lista.sort();
-  lista.reverse();
-  return lista.slice(0, n);
+CODIGO_GERAL = """// Recebe reservas {inicio, fim} com horários em texto "H:MM" ou "HH:MM" (fim > inicio, mesmo dia), em
+// qualquer ordem, e devolve os períodos ocupados: reservas que se sobrepõem OU encostam (uma termina
+// quando a outra começa) viram um período só. Resultado em ordem de início, cada item {inicio, fim} em
+// texto. Não altera a lista recebida nem os objetos dela. Lista vazia: [].
+function ocupados(reservas) {
+  const ordenadas = reservas.slice().sort((a, b) => (a.inicio < b.inicio ? -1 : 1));
+  const res = [ordenadas[0]];
+  for (const r of ordenadas.slice(1)) {
+    const ultimo = res[res.length - 1];
+    if (r.inicio < ultimo.fim) {
+      ultimo.fim = r.fim;
+    } else {
+      res.push(r);
+    }
+  }
+  return res;
 }"""
 
 BATERIAS: dict[str, dict] = {
     "logica": {
         "titulo": "Lógica e back-end",
-        "mede": "regra de negócio com vários casos que interagem (FIFO de estoque), validação e se o modelo "
-                "calcula certo sem executar — o Forja roda a função contra 9 casos",
+        "mede": "regra de negócio com estado que interage (FIFO de estoque com devolução), validação e se o modelo "
+                "calcula certo sem executar — o Forja roda a função contra 19 casos",
         "prompt": ("Escreva em Python a função `custo_fifo(movimentos)` que calcula o custo das saídas de estoque "
                    "pelo método FIFO (o primeiro lote que entrou é o primeiro a sair).\n"
                    "- `movimentos` é uma lista de tuplas: (\"entrada\", quantidade, custo_unitario_em_centavos) ou "
@@ -98,15 +108,24 @@ BATERIAS: dict[str, dict] = {
                    "FIFO como lista de tuplas `(quantidade, custo_unitario)`.\n"
                    "- Uma saída consome dos lotes mais antigos e pode atravessar vários lotes; lote zerado sai da "
                    "lista.\n"
-                   "- Quantidade menor ou igual a zero, saída maior que o estoque disponível ou tipo desconhecido: "
-                   "ValueError.\n"
+                   "- (\"devolucao\", quantidade): o cliente devolve unidades da saída MAIS RECENTE. A devolução "
+                   "desfaz essa saída de trás para frente: devolve primeiro as unidades que saíram por último, e "
+                   "cada unidade devolvida entra NA FRENTE de tudo o que está na fila (inclusive das devolvidas "
+                   "antes dela), com o custo com que saiu — devolver a saída inteira deixa a fila exatamente como "
+                   "estava antes dela. O custo das unidades devolvidas é descontado do total. No início da fila, unidades de mesmo custo lado a "
+                   "lado formam um lote só. Devoluções seguidas continuam desfazendo a mesma saída.\n"
+                   "- Quantidade menor ou igual a zero, saída maior que o estoque disponível, devolução maior que o "
+                   "que ainda resta da última saída (ou sem saída antes) e tipo desconhecido: ValueError.\n"
                    "- Tudo em inteiros (centavos); nada de float.\n\n"
                    "Depois, SEM executar, diga o retorno de: custo_fifo([(\"entrada\", 10, 500), (\"entrada\", 5, 800), "
-                   "(\"saida\", 12), (\"entrada\", 3, 700), (\"saida\", 4)])"),
-        "gabarito": ("O exemplo devolve (9700, [(2, 700)]): a 1ª saída consome 10×500 + 2×800 = 6600 e sobra (3, 800); "
-                     "entra (3, 700); a 2ª saída consome 3×800 + 1×700 = 3100 e sobra (2, 700); total 6600 + 3100 = "
-                     "9700. Erros comuns: consumir do lote mais NOVO (LIFO), não atravessar lotes, deixar lote com "
-                     "quantidade 0 na lista, aceitar saída maior que o estoque, usar float, e errar a conta manual."),
+                   "(\"saida\", 12), (\"entrada\", 3, 700), (\"saida\", 4), (\"devolucao\", 2)])"),
+        "gabarito": ("O exemplo devolve (8200, [(1, 800), (3, 700)]): a 1ª saída consome 10×500 + 2×800 = 6600 e sobra "
+                     "(3, 800); entra (3, 700); a 2ª saída consome 3×800 + 1×700 = 3100 (total 9700) e sobra (2, 700); "
+                     "a devolução de 2 desfaz a 2ª saída de trás para frente: volta 1×700 (junta com o (2, 700) do "
+                     "início → (3, 700)) e depois 1×800 → [(1, 800), (3, 700)]; total 9700 − 700 − 800 = 8200. Erros "
+                     "comuns: consumir do lote mais NOVO (LIFO), não atravessar lotes, deixar lote com quantidade 0, "
+                     "devolver as primeiras unidades da saída em vez das últimas, pôr o devolvido no FIM da fila, não "
+                     "juntar lotes de mesmo custo no início, esquecer o que já foi devolvido, e errar a conta manual."),
     },
     "frontend": {
         "titulo": "Frontend e aparência",
@@ -175,15 +194,21 @@ BATERIAS: dict[str, dict] = {
     },
     "geral": {
         "titulo": "Geral (achar e corrigir bugs)",
-        "mede": "achar TODOS os bugs de uma função curta, corrigir e prever a saída — o Forja roda a versão "
-                "corrigida contra 7 casos",
+        "mede": "achar TODOS os bugs de uma função curta com armadilhas sutis (texto comparado como hora, objeto "
+                "alterado por referência), corrigir e prever a saída — o Forja roda a versão corrigida contra 10 casos",
         "prompt": ("Esta função JavaScript não faz o que o comentário diz. Liste todos os problemas, mostre a versão "
-                   "corrigida (num bloco js) e diga o que ela devolve para topN([5, 12, 3, 12, 40, 7], 3) e para "
-                   "topN([9, 100, 20], 5).\n\n```js\n" + CODIGO_GERAL + "\n```"),
-        "gabarito": ("Problemas: (1) sort() sem comparador ordena como TEXTO (100 fica antes de 20 e de 9); (2) sort() "
-                     "e reverse() ALTERAM a lista original; (3) não remove duplicados; (4) n negativo devolve itens "
-                     "(slice com negativo), deveria devolver []. Saídas: [40, 12, 7] e [100, 20, 9]. Quem lista só um "
-                     "problema, ou prevê [40, 12, 12], errou."),
+                   "corrigida (num bloco js, mantendo o nome ocupados) e diga, SEM executar, o que ela devolve para:\n"
+                   "ocupados([{inicio: \"9:00\", fim: \"10:30\"}, {inicio: \"13:30\", fim: \"14:00\"}, "
+                   "{inicio: \"10:30\", fim: \"11:00\"}, {inicio: \"13:00\", fim: \"15:00\"}, "
+                   "{inicio: \"8:15\", fim: \"9:00\"}])\n\n```js\n" + CODIGO_GERAL + "\n```"),
+        "gabarito": ("Problemas: (1) compara horários como TEXTO: \"9:00\" > \"10:00\", então a ordenação e as "
+                     "comparações erram com hora de um dígito — tem que converter para minutos; (2) usa < e não "
+                     "junta reservas que encostam (fim == início); (3) reserva contida numa maior ENCURTA o período "
+                     "(fim = r.fim em vez do maior dos dois fins, comparado em minutos); (4) altera os objetos "
+                     "recebidos: slice() copia só a lista, e ultimo.fim = ... muda o objeto original do chamador; "
+                     "(5) lista vazia devolve [undefined]. Saída do exemplo: [{inicio: \"8:15\", fim: \"11:00\"}, "
+                     "{inicio: \"13:00\", fim: \"15:00\"}]. Erros comuns: achar que o slice() resolve a mutação, "
+                     "trocar para <= mas continuar comparando texto, e prever fim \"14:00\" no segundo período."),
     },
 }
 
@@ -295,7 +320,10 @@ Responda em português, em Markdown, nesta ordem:
 3. Até 3 frases de justificativa. Nada de elogio genérico.
 Modelo que deu erro ou não respondeu recebe nota 0 e "sem resposta".
 Se vier CONFERÊNCIA AUTOMÁTICA, ela é FATO: o Forja executou o código de cada modelo contra casos com
-resposta certa. Use-a para decidir quem acertou; não contradiga o que foi medido.
+resposta certa. Use-a para decidir quem acertou; não contradiga o que foi medido. Quem passou em TODOS
+os casos resolveu a tarefa: não tire nota dele por estilo ou formato. Antes de apontar defeito num
+código, cite o trecho exato — defeito que você não consegue citar não existe.
+Refira-se aos modelos sempre como "Modelo A", "Modelo B"… — nunca a letra sozinha.
 Se vierem PRINTS (a página de cada modelo aberta de verdade, desktop e celular), julgue também o que se
 VÊ: layout quebrado, texto cortado, contraste, alinhamento, se o celular respeita a largura pedida. O
 visual conta na nota e ganha uma coluna "Visual" na tabela."""
@@ -320,6 +348,11 @@ def com_nomes(texto: str, itens: list[dict]) -> str:
     (para não favorecer nome conhecido); a troca é feita depois, no texto dele."""
     nomes = {i["rotulo"]: i["nome"] for i in itens}
     texto = re.sub(r"\b[Mm][Oo][Dd][Ee][Ll][Oo] ([A-F])\b", lambda m: nomes.get(m.group(1), m.group(0)), texto)
+    # letra sozinha em negrito ("Mais correto: **D**"), mesmo o prompt pedindo "Modelo D"
+    texto = re.sub(r"\*\*([A-F])\*\*", lambda m: f"**{nomes[m.group(1)]}**" if m.group(1) in nomes else m.group(0), texto)
+    # "o A não gerou código", "do B", "que o C": artigo + letra maiúscula sozinha
+    texto = re.sub(r"\b([Oo]|do|ao|no|pelo) ([A-F])\b(?![\w'’-])",
+                   lambda m: f"{m.group(1)} {nomes[m.group(2)]}" if m.group(2) in nomes else m.group(0), texto)
     # primeira coluna da tabela: "| A |" ou "| **A** |"
     return re.sub(r"(?m)^(\|\s*)(\*\*)?([A-F])(\*\*)?(\s*\|)",
                   lambda m: (f"{m.group(1)}{m.group(2) or ''}{nomes[m.group(3)]}{m.group(4) or ''}{m.group(5)}"

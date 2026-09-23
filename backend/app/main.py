@@ -865,6 +865,41 @@ def comparar_cancelar(message_id: int):
     return comparar.cancelar(message_id)
 
 
+class RefazerBody(BaseModel):
+    item: str
+
+
+class AdicionarBody(BaseModel):
+    provider: str = ""
+    model: str = ""
+    path: str = ""
+
+
+@app.post("/api/comparar/{message_id}/adicionar")
+async def comparar_adicionar(message_id: int, body: AdicionarBody):
+    try:
+        return comparar.adicionar(message_id, body.model_dump())
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/comparar/{message_id}/remover")
+def comparar_remover(message_id: int, body: RefazerBody):
+    try:
+        return comparar.remover(message_id, body.item)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/comparar/{message_id}/refazer")
+async def comparar_refazer(message_id: int, body: RefazerBody):
+    # async: com a comparação encerrada, abre uma task nova no loop
+    try:
+        return comparar.refazer(message_id, body.item)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/comparar/{message_id}/voto")
 def comparar_voto(message_id: int, body: VotoBody):
     try:

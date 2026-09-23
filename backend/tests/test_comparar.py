@@ -314,7 +314,7 @@ def test_juiz_recebe_gabarito_e_estatisticas_e_responde_como_chat(monkeypatch):
 
     eventos = asyncio.run(main())
     pedido = pedidos[0][-1]["content"]
-    assert "(9700, [(2, 700)])" in pedido                       # o gabarito vai junto
+    assert "(8200, [(1, 800), (3, 700)])" in pedido                      # o gabarito vai junto
     cabecalhos = [l for l in pedido.splitlines() if l.startswith("=== MODELO")]
     assert len(cabecalhos) == 2 and all("modelo-" not in l for l in cabecalhos)  # só letras: o juiz não vê nomes
     assert "tok/s" in pedido
@@ -537,3 +537,116 @@ def test_parametro_temporario_nao_e_gravado(tmp_path, monkeypatch):
     monkeypatch.setattr(localai.config, "LOCAL_CONFIG", tmp_path / "local.json")
     salvos = localai.save_params("m.gguf", {"ctx": 131072})
     assert {**salvos, **{"ctx": 32768}}["ctx"] == 32768 and localai.params("m.gguf")["ctx"] == 131072
+
+
+def test_laco_de_repeticao_e_detectado_sem_falso_positivo():
+    """Modelo local degenerado repetindo a mesma linha (visto com Qwen3.6 na bateria de lógica)."""
+    from app.comparar import em_laco
+    codigo = "def f():\n" + "".join(f"    x{i} = {i}\n" for i in range(40))
+    assert not em_laco(codigo)
+    assert em_laco(codigo + "            custo_total -= qtd * custo\n" * 30 + "            custo_to")
+    assert em_laco(codigo + "a = 1\nb = 2\n\n" * 20)
+    assert not em_laco("| a | b |\n|---|---|\n" + "".join(f"| {i} | x |\n" for i in range(30)))
+
+
+def test_comparacao_corta_modelo_em_laco(monkeypatch):
+    from app import comparar
+
+    async def fluxo(*a, **k):
+        yield "content", "começo\n"
+        for _ in range(500):
+            yield "content", "    custo_total -= qtd * custo\n"
+        yield "content", "NUNCA CHEGA"
+
+    async def ctx(*a, **k):
+        return 8192
+
+    monkeypatch.setattr(comparar.llm, "chat_stream", fluxo)
+    monkeypatch.setattr(comparar.llm, "context_limit", ctx)
+    monkeypatch.setattr(comparar, "_persistir", lambda run: None)
+    item = {"provider": "p", "model": "m", "content": "", "reasoning": "", "status": "pendente"}
+    asyncio.run(comparar._um({"cancelar": False}, item, [{"role": "user", "content": "oi"}], "medio"))
+    assert item["status"] == "pronto" and comparar.LACO in item["content"]
+    assert "NUNCA CHEGA" not in item["content"] and item["content"].count("custo_total") < 60
+
+
+def test_com_nomes_troca_letra_solta_do_revisor():
+    itens = [{"rotulo": "A", "nome": "qwen-1.5b"}, {"rotulo": "D", "nome": "Qwen3.6"}]
+    from app import baterias
+    texto = baterias.com_nomes("Mais correto: **D**. O A não gerou código; pelo D. Vitamina A e plano B.", itens)
+    assert texto == "Mais correto: **Qwen3.6**. O qwen-1.5b não gerou código; pelo Qwen3.6. Vitamina A e plano B."
+
+
+def test_refazer_depois_de_encerrada_roda_so_aquele_modelo(tmp_path, monkeypatch):
+    """O modelo alucinou: gera de novo só a resposta dele, com o mesmo prompt, e descarrega no fim."""
+    eventos = _fake_local(monkeypatch, tmp_path)
+    chamados = _fake_llm(monkeypatch)
+    itens = [{"path": _gguf(tmp_path, "um")}, {"path": _gguf(tmp_path, "dois")}]
+    est = _rodar(conv_id=_conversa(), prompt="teste", itens=itens, modo="sequencial")
+    mid = est["message_id"]
+
+    async def main():
+        comparar.refazer(mid, "0")
+        assert comparar.estado(mid)["status"] == "rodando"
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+        return comparar.estado(mid)
+
+    depois = asyncio.run(main())
+    assert chamados == ["um", "dois", "um"]
+    assert eventos[-2:] == ["load:um", "unload"]
+    assert depois["status"] == "pronto" and _item(depois, "um")["content"] == "resposta de um"
+    assert _item(depois, "dois")["content"] == "resposta de dois"   # o outro não mexe
+    with pytest.raises(ToolError):
+        comparar.refazer(mid, "9")
+
+
+def test_refazer_no_meio_da_geracao_recomeca_do_zero(monkeypatch):
+    chamados = _fake_llm(monkeypatch, {"a": ["x"] * 6}, pausa=0.02)
+    itens = [{"provider": "ollama", "model": m} for m in ("a", "b")]
+
+    async def main():
+        msg = comparar.start(_conversa(), "teste", itens)
+        while comparar.estado(msg["id"])["itens"][0]["content"] != "xx":
+            await asyncio.sleep(0.005)
+        comparar.refazer(msg["id"], "0")
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+        return comparar.estado(msg["id"])
+
+    est = asyncio.run(main())
+    assert chamados.count("a") == 2 and _item(est, "a")["content"] == "xxxxxx"   # não emenda com a 1ª
+
+
+def test_adicionar_e_remover_modelo_sem_regerar_os_outros(tmp_path, monkeypatch):
+    eventos = _fake_local(monkeypatch, tmp_path)
+    chamados = _fake_llm(monkeypatch)
+    itens = [{"path": _gguf(tmp_path, "um")}, {"path": _gguf(tmp_path, "dois")}]
+    est = _rodar(conv_id=_conversa(), prompt="teste", itens=itens, modo="sequencial")
+    mid = est["message_id"]
+
+    async def main():
+        r = comparar.adicionar(mid, {"path": _gguf(tmp_path, "tres")})
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+        return r, comparar.estado(mid)
+
+    r, depois = asyncio.run(main())
+    assert chamados == ["um", "dois", "tres"] and eventos[-2:] == ["load:tres", "unload"]
+    novo = _item(depois, "tres")
+    assert r["item"] == novo["id"] == "2" and novo["rotulo"] == "C" and novo["content"] == "resposta de tres"
+    with pytest.raises(ToolError, match="repetido"):
+        comparar.adicionar(mid, {"path": _gguf(tmp_path, "um")})
+
+    comparar.votar(mid, "0")
+    comparar.remover(mid, "0")
+    final = comparar.estado(mid)
+    assert [i["nome"] for i in final["itens"]] == ["dois", "tres"] and final["voto"] == ""
+    assert _item(final, "dois")["content"] == "resposta de dois"
+    with pytest.raises(ToolError, match="pelo menos 2"):
+        comparar.remover(mid, "1")
+    # a letra nova não reaproveita a do removido
+    assert asyncio.run(_adiciona(mid, {"path": _gguf(tmp_path, "quatro")}))["rotulo"] == "D"
+
+
+async def _adiciona(mid, cru):
+    comparar.adicionar(mid, cru)
+    await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+    return comparar.estado(mid)["itens"][-1]

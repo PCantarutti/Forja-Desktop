@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import { useStickyBottom } from "../useStickyBottom";
 import type { CompararEntrada, CompararEstado, CompararItem, Message, PlacarLinha } from "../types";
-import { ArrowUp, Balanca, Check, Copy, Cube, Gauge, Square, Trash, X } from "./icons";
+import { ArrowUp, Balanca, Check, Copy, Cube, Gauge, Refresh, Square, Trash, X } from "./icons";
 import { Markdown, TestarCodigo, Thinking } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 
@@ -279,6 +279,40 @@ export default function CompararView(props: {
     if (estado) await api.post(`/comparar/${estado.message_id}/cancelar`, {}).catch(() => {});
   }
 
+  /** Gera de novo só a resposta deste modelo (alucinou, entrou em laço, deu erro). */
+  async function refazer(item: CompararItem) {
+    if (!estado) return;
+    try {
+      await api.post(`/comparar/${estado.message_id}/refazer`, { item: item.id });
+      void ouvir(estado.message_id); // comparação já encerrada: volta a acompanhar
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
+
+  /** Mais um modelo nesta comparação: só ele gera, as respostas dos outros ficam. */
+  async function adicionarNaComparacao(entrada: CompararEntrada) {
+    if (!estado) return;
+    try {
+      await api.post(`/comparar/${estado.message_id}/adicionar`,
+        { provider: entrada.provider ?? "", model: entrada.model ?? "", path: entrada.path ?? "" });
+      void ouvir(estado.message_id);
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
+
+  /** Tira o modelo e a resposta dele — para analisar de novo sem ele. */
+  async function remover(item: CompararItem) {
+    if (!estado) return;
+    try {
+      await api.post(`/comparar/${estado.message_id}/remover`, { item: item.id });
+      setEstado((e) => e && { ...e, itens: e.itens.filter((i) => i.id !== item.id), voto: e.voto === item.id ? "" : e.voto });
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
+
   async function votar(item: CompararItem) {
     if (!estado) return;
     try {
@@ -440,8 +474,30 @@ export default function CompararView(props: {
             <div className="grid gap-3" style={colunas}>
               {estado.itens.map((item) => (
                 <ColunaResposta key={item.id} item={item} estado={estado} rodando={rodando}
-                                onVotar={() => votar(item)} onTestar={(c, l) => testar(item, c, l)} />
+                                onVotar={() => votar(item)} onRefazer={() => refazer(item)}
+                                onRemover={estado.itens.length > 2 ? () => remover(item) : undefined}
+                                onTestar={(c, l) => testar(item, c, l)} />
               ))}
+            </div>
+          )}
+
+          {estado && estado.itens.length < MAX_MODELOS && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-faint">
+              <span>Adicionar a esta comparação (só ele gera):</span>
+              <ModelPicker provider={escolha.provider} model={escolha.model}
+                           onChange={(provider, model) => setEscolha({ provider, model })} />
+              <button className={btn} disabled={!escolha.model}
+                      onClick={() => adicionarNaComparacao({ provider: escolha.provider, model: escolha.model, nome: escolha.model })}>
+                Adicionar
+              </button>
+              {estado.modo === "sequencial" && !!ggufs.length && (
+                <select className={campo} value=""
+                        onChange={(e) => e.target.value && adicionarNaComparacao({ path: e.target.value, nome: nomeDoArquivo(e.target.value) })}>
+                  <option value="">Adicionar arquivo .gguf…</option>
+                  {ggufs.filter((m) => !estado.itens.some((i) => i.path === m.path))
+                    .map((m) => <option key={m.path} value={m.path}>{m.name}</option>)}
+                </select>
+              )}
             </div>
           )}
 
@@ -607,6 +663,8 @@ function ColunaResposta(props: {
   estado: CompararEstado;
   rodando: boolean;
   onVotar: () => void;
+  onRefazer: () => void;
+  onRemover?: () => void;
   onTestar: (codigo: string, linguagem: string) => void;
 }) {
   const { item, estado } = props;
@@ -622,6 +680,21 @@ function ColunaResposta(props: {
           {rotuloDe(item, estado)}
         </span>
         {item.status !== "pronto" && <span className="text-[11px] text-faint">{ROTULOS[item.status]}</span>}
+        {["rodando", "pronto", "erro", "cancelado"].includes(item.status) && (
+          <button
+            title="Gerar esta resposta de novo (alucinou, entrou em laço, deu erro)"
+            onClick={props.onRefazer}
+            className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] text-faint hover:bg-raised hover:text-fg"
+          >
+            <Refresh className="size-3" /> Refazer
+          </button>
+        )}
+        {props.onRemover && !["rodando", "carregando"].includes(item.status) && (
+          <button title="Tirar este modelo da comparação (a resposta dele é descartada)" onClick={props.onRemover}
+                  className="rounded-full p-1 text-faint hover:bg-raised hover:text-fg">
+            <X className="size-3" />
+          </button>
+        )}
         {!props.rodando && item.status === "pronto" && (
           <button
             title={estado.voto === item.id ? "Desfazer voto" : "Marcar como melhor resposta"}

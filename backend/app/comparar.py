@@ -86,32 +86,33 @@ def _preparar(itens: list[dict] | None, modo: str) -> list[dict]:
     if not 2 <= len(crus) <= MAX_MODELOS:
         raise ToolError(f"Escolha de 2 a {MAX_MODELOS} modelos para comparar.")
     out: list[dict] = []
-    vistos: set[tuple[str, str, str]] = set()
     for i, cru in enumerate(crus):
-        path = str(cru.get("path") or "").strip()
-        provider = str(cru.get("provider") or "").strip()
-        model = str(cru.get("model") or "").strip()
-        if path:
-            if localai is None:
-                raise ToolError("Esta versão do Forja não roda arquivos .gguf; escolha modelos de um provedor.")
-            if modo != "sequencial":
-                raise ToolError("Arquivos .gguf só entram no modo sequencial: o Forja sobe um "
-                                "llama-server por vez.")
-            if not Path(path).is_file():
-                raise ToolError(f"Modelo não encontrado: {path}")
-            provider, model = PROVIDER_LOCAL, localai.alias_of(path)
-        elif not (provider and model):
-            raise ToolError("Escolha um provedor e um modelo, ou um arquivo .gguf.")
-        chave = (provider, model, path)
-        if chave in vistos:
-            raise ToolError(f"Modelo repetido na comparação: {model}")
-        vistos.add(chave)
-        out.append({"id": str(i), "rotulo": chr(ord("A") + i), "provider": provider, "model": model,
-                    "path": path, "nome": model, "status": "pendente", "content": "", "reasoning": "",
-                    "stats": None, "error": ""})
+        out.append(_novo_item(cru, modo, i, out))
     if any(x["path"] for x in out) and any(x["provider"] == PROVIDER_LOCAL and not x["path"] for x in out):
         raise ToolError("Não dá para comparar o modelo local já carregado com um .gguf: a carga o substitui.")
     return out
+
+
+def _novo_item(cru: dict, modo: str, n: int, existentes: list[dict]) -> dict:
+    path = str(cru.get("path") or "").strip()
+    provider = str(cru.get("provider") or "").strip()
+    model = str(cru.get("model") or "").strip()
+    if path:
+        if localai is None:
+            raise ToolError("Esta versão do Forja não roda arquivos .gguf; escolha modelos de um provedor.")
+        if modo != "sequencial":
+            raise ToolError("Arquivos .gguf só entram no modo sequencial: o Forja sobe um "
+                            "llama-server por vez.")
+        if not Path(path).is_file():
+            raise ToolError(f"Modelo não encontrado: {path}")
+        provider, model = PROVIDER_LOCAL, localai.alias_of(path)
+    elif not (provider and model):
+        raise ToolError("Escolha um provedor e um modelo, ou um arquivo .gguf.")
+    if any((i["provider"], i["model"], i["path"]) == (provider, model, path) for i in existentes):
+        raise ToolError(f"Modelo repetido na comparação: {model}")
+    return {"id": str(n), "rotulo": chr(ord("A") + n), "provider": provider, "model": model,
+            "path": path, "nome": model, "status": "pendente", "content": "", "reasoning": "",
+            "stats": None, "error": ""}
 
 
 def _mensagens(prompt: str, system: str) -> list[dict]:
@@ -155,31 +156,151 @@ def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "para
                 meta={"modo": modo, "cego": cego, "revelado": False, "voto": "", "system": system,
                       "effort": effort, "descarregado": descarregado, "itens": itens})
     run = _RUNS[msg.id] = {"message_id": msg.id, "conv_id": conv_id, "status": "rodando", "modo": modo,
-                           "cego": cego, "cancelar": False, "itens": itens}
+                           "cego": cego, "cancelar": False, "itens": itens, "fila": []}
     # O loop só guarda referência fraca para a task: sem manter a nossa, o coletor de lixo pode
     # levar a execução no meio e a mensagem fica em "running" para sempre, sem erro nenhum.
     # O arquivo da bateria (documento para ler) vai para os modelos, não para a mensagem visível.
     enviado = baterias.com_anexo(prompt, bateria) if bateria else prompt
-    t = asyncio.create_task(_rodar(run, _mensagens(enviado, system), effort))
-    _TAREFAS.add(t)
-    t.add_done_callback(_TAREFAS.discard)
+    _disparar(_rodar(run, _mensagens(enviado, system), effort))
     return msg.to_dict()
 
 
-async def _rodar(run: dict, mensagens: list[dict], effort: str) -> None:
+def _disparar(coro) -> None:
+    t = asyncio.create_task(coro)
+    _TAREFAS.add(t)
+    t.add_done_callback(_TAREFAS.discard)
+
+
+def refazer(message_id: int, item_id: str) -> dict:
+    """Gera de novo a resposta de UM modelo (alucinou, entrou em laço, deu erro). Gerando: recomeça na
+    hora. Já terminou com a comparação ainda rodando: entra na fila do fim. Comparação encerrada: abre
+    uma corrida só com ele — mesmo prompt, mesmo system, mesmo anexo."""
+    run = _RUNS.get(message_id)
+    if run:
+        item = next((i for i in run["itens"] if i["id"] == item_id), None)
+        if not item:
+            raise ToolError("Modelo não encontrado nesta comparação.")
+        if item["status"] == "rodando":
+            item["refazer"] = True
+        elif item["status"] not in ("pendente", "carregando") and item not in run["fila"]:
+            _limpar(item, "pendente")
+            run["fila"].append(item)
+            _persistir(run)
+        return {"ok": True}
+
+    m = _mensagem(message_id)
+    meta = m["meta"] or {}
+    item = next((i for i in meta["itens"] if i["id"] == item_id), None)
+    if not item:
+        raise ToolError("Modelo não encontrado nesta comparação.")
+    if item["path"] and not Path(item["path"]).is_file():
+        raise ToolError(f"Modelo não encontrado: {item['path']}")
+    itens = meta["itens"]
+    item = next(i for i in itens if i["id"] == item_id)
+    _limpar(item, "pendente")
+    _so_a_fila(m, itens, item)
+    return {"ok": True}
+
+
+def _so_a_fila(m: dict, itens: list[dict], item: dict) -> None:
+    """Comparação encerrada: uma corrida nova só com este item — mesmo prompt, system e anexo."""
+    message_id, meta = m["id"], m["meta"] or {}
+    with db.session() as s:
+        pedido = s.scalars(select(db.Message).where(db.Message.conversation_id == m["conversation_id"],
+                                                    db.Message.role == "user", db.Message.id < message_id)
+                           .order_by(db.Message.id.desc()).limit(1)).first()
+        prompt, bateria = (pedido.content, (pedido.meta or {}).get("bateria") or "") if pedido else ("", "")
+    if not prompt:
+        raise ToolError("Não achei o prompt desta comparação.")
+    from . import baterias
+    enviado = baterias.com_anexo(prompt, bateria) if bateria else prompt
+    run = _RUNS[message_id] = {"message_id": message_id, "conv_id": m["conversation_id"], "status": "rodando",
+                               "modo": meta.get("modo") or "paralelo", "cego": bool(meta.get("cego")),
+                               "cancelar": False, "itens": itens, "fila": [item]}
+    _patch(message_id, status="running", meta={"itens": itens})
+    _disparar(_rodar(run, _mensagens(enviado, meta.get("system") or ""), meta.get("effort") or "medio",
+                     so_fila=True))
+
+
+def adicionar(message_id: int, cru: dict) -> dict:
+    """Mais um modelo numa comparação que já rodou: só ele gera; os outros ficam como estão."""
+    run = _RUNS.get(message_id)
+    m = None if run else _mensagem(message_id)
+    itens = run["itens"] if run else m["meta"]["itens"]
+    modo = run["modo"] if run else (m["meta"].get("modo") or "paralelo")
+    if len(itens) >= MAX_MODELOS:
+        raise ToolError(f"A comparação já tem {MAX_MODELOS} modelos.")
+    if cru.get("path") and modo != "sequencial":
+        raise ToolError("Esta comparação rodou em paralelo: .gguf só entra numa comparação sequencial.")
+    # letra e id novos, nunca reaproveitados: a análise antiga e o voto citam os de antes
+    n = max((ord(i["rotulo"]) - ord("A") for i in itens), default=-1) + 1
+    item = _novo_item(cru, modo, n, itens)
+    item["id"] = str(max((int(i["id"]) for i in itens), default=-1) + 1)
+    itens.append(item)
+    if run:
+        run["fila"].append(item)
+        _persistir(run)
+    else:
+        _so_a_fila(m, itens, item)
+    return {"ok": True, "item": item["id"]}
+
+
+def remover(message_id: int, item_id: str) -> dict:
+    """Tira um modelo (e a resposta dele) da comparação — para analisar de novo sem ele."""
+    run = _RUNS.get(message_id)
+    itens = run["itens"] if run else _mensagem(message_id)["meta"]["itens"]
+    item = next((i for i in itens if i["id"] == item_id), None)
+    if not item:
+        raise ToolError("Modelo não encontrado nesta comparação.")
+    if item["status"] in ("rodando", "carregando"):
+        raise ToolError("Este modelo está gerando: pare a comparação antes de tirá-lo.")
+    if len(itens) <= 2:
+        raise ToolError("Uma comparação precisa de pelo menos 2 modelos.")
+    itens.remove(item)
+    if run:
+        if item in run["fila"]:
+            run["fila"].remove(item)
+        _persistir(run)
+        return {"ok": True}
+    voto = _mensagem(message_id)["meta"].get("voto")
+    out = _patch(message_id, meta={"itens": itens, **({"voto": ""} if voto == item_id else {})})
+    mirror.write(out["conversation_id"])
+    return {"ok": True}
+
+
+async def _rodar(run: dict, mensagens: list[dict], effort: str, so_fila: bool = False) -> None:
     try:
-        if run["modo"] == "sequencial":
+        if so_fila:
+            pass
+        elif run["modo"] == "sequencial":
             await _sequencial(run, mensagens, effort)
         else:
             # gather: uma falha não derruba as outras porque _um nunca levanta
             await asyncio.gather(*(_um(run, item, mensagens, effort) for item in run["itens"]))
+        await _fila(run, mensagens, effort)
     finally:
+        if run.get("subiu"):
+            await asyncio.to_thread(localai.unload)  # a VRAM não fica presa depois da comparação
         pronto = any(i["status"] == "pronto" for i in run["itens"])
         run["status"] = "pronto" if pronto else ("cancelado" if run["cancelar"] else "erro")
         _patch(run["message_id"], status=run["status"], meta={"itens": run["itens"]})
         mirror.write(run["conv_id"])
         # sai do ar por último: daqui em diante o `estado()` vem do banco, já final
         _RUNS.pop(run["message_id"], None)
+
+
+LACO = "**[Parado pelo Forja: o modelo entrou em laço, repetindo o mesmo trecho]**"
+REPETICOES = 12
+
+
+def em_laco(texto: str) -> bool:
+    """O fim do texto é um ciclo de 1 a 6 linhas repetido REPETICOES vezes seguidas."""
+    linhas = [l.strip() for l in texto[-6000:].splitlines()]
+    for p in range(1, 7):
+        cauda = linhas[-p * REPETICOES - 1:-1]  # a última linha ainda pode estar pela metade
+        if len(cauda) == p * REPETICOES and any(cauda[:p]) and all(l == cauda[i % p] for i, l in enumerate(cauda)):
+            return True
+    return False
 
 
 async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None:
@@ -189,7 +310,7 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
         return
     item["status"] = "rodando"
     _persistir(run)
-    t0, t_first, done = time.monotonic(), 0.0, {}
+    t0, t_first, done, de_novo = time.monotonic(), 0.0, {}, False
     try:
         ctx = await llm.context_limit(item["provider"], item["model"], config.NUM_CTX)
         async with aclosing(llm.chat_stream(item["provider"], item["model"], mensagens, None,
@@ -198,6 +319,9 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
                 if run["cancelar"]:
                     item["status"] = "cancelado"
                     return  # fechar o gerador corta o HTTP e o servidor para de gerar
+                if item.pop("refazer", False):
+                    de_novo = True
+                    break
                 if kind == "content":
                     t_first = t_first or time.monotonic()
                     item["content"] += val
@@ -210,6 +334,15 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
                     done = val or {}
                 if t_first:
                     item["stats"] = _ao_vivo(item, t0, t_first)
+                texto = item["content"] if kind == "content" else item["reasoning"]
+                if kind in ("content", "reasoning") and len(texto) // 400 != (len(texto) - len(val or "")) // 400 and em_laco(texto):
+                    # modelo local degenerado repete a mesma linha até o teto de tokens (minutos de GPU à
+                    # toa): corta, e a resposta fica como está — é o resultado deste modelo
+                    item["content"] += f"\n\n{LACO}"
+                    break
+        if de_novo:
+            _limpar(item, "rodando")
+            return
         pensou, visivel = split_think(item["content"])
         item["content"] = visivel or item["content"]
         item["reasoning"] = item["reasoning"] or pensou
@@ -220,6 +353,13 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
         item.update(status="erro", error=str(e) or e.__class__.__name__)
     finally:
         _persistir(run)
+        if de_novo:
+            await _um(run, item, mensagens, effort)
+
+
+def _limpar(item: dict, status: str) -> None:
+    item.update(status=status, content="", reasoning="", stats=None, error="")
+    item.pop("refazer", None)
 
 
 CHARS_POR_TOKEN = 3.5  # estimativa durante a geração; o número real chega no fim, do servidor
@@ -235,29 +375,40 @@ def _ao_vivo(item: dict, t0: float, t_first: float) -> dict:
             "estimated": True, "ao_vivo": True}
 
 
+async def _carregar_e_rodar(run: dict, item: dict, mensagens: list[dict], effort: str) -> bool:
+    """Devolve se subiu um llama-server (quem chamou descarrega no fim)."""
+    if run["cancelar"]:
+        item["status"] = "cancelado"
+        _persistir(run)
+        return False
+    if item["path"]:
+        if localai.status().get("alias") != localai.alias_of(item["path"]):
+            item["status"] = "carregando"
+            _persistir(run)
+            try:
+                await asyncio.to_thread(localai.load, item["path"])
+            except Exception as e:  # sem runtime, sem memória, imagem ocupando a VRAM
+                item.update(status="erro", error=str(e))
+                _persistir(run)
+                return False
+        item["model"] = localai.status().get("alias") or item["nome"]
+    await _um(run, item, mensagens, effort)
+    return bool(item["path"])
+
+
 async def _sequencial(run: dict, mensagens: list[dict], effort: str) -> None:
-    subiu = False
-    try:
-        for item in run["itens"]:
-            if run["cancelar"]:
-                item["status"] = "cancelado"
-                _persistir(run)
-                continue
-            if item["path"]:
-                item["status"] = "carregando"
-                _persistir(run)
-                try:
-                    await asyncio.to_thread(localai.load, item["path"])
-                    subiu = True
-                except Exception as e:  # sem runtime, sem memória, imagem ocupando a VRAM
-                    item.update(status="erro", error=str(e))
-                    _persistir(run)
-                    continue
-                item["model"] = localai.status().get("alias") or item["nome"]
+    for item in run["itens"]:
+        run["subiu"] = await _carregar_e_rodar(run, item, mensagens, effort) or run.get("subiu", False)
+
+
+async def _fila(run: dict, mensagens: list[dict], effort: str) -> None:
+    """Modelos que o usuário mandou refazer depois de terminarem, um de cada vez."""
+    while run["fila"] and not run["cancelar"]:
+        item = run["fila"].pop(0)
+        if run["modo"] == "sequencial":
+            run["subiu"] = await _carregar_e_rodar(run, item, mensagens, effort) or run.get("subiu", False)
+        else:
             await _um(run, item, mensagens, effort)
-    finally:
-        if subiu:
-            await asyncio.to_thread(localai.unload)  # a VRAM não fica presa depois da comparação
 
 
 # ------------------------------------------------------------------ leitura e controle
