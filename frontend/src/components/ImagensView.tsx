@@ -71,6 +71,9 @@ export default function ImagensView(props: {
     return { provider: props.provider, model: props.model };
   });
   const fim = useRef<HTMLDivElement>(null);
+  // O erro do App só aparece no composer do chat, que esta aba não mostra: sem isto, falha era silêncio.
+  const [erro, setErro] = useState("");
+  const mostrarErro = useCallback((e: string) => setErro(e), []);
 
   useEffect(() => {
     localStorage.setItem(KEY_LLM, JSON.stringify(llm));
@@ -88,9 +91,9 @@ export default function ImagensView(props: {
         atual.length ? atual : novo.image_models.some((m) => m.path === novo.image.model) ? [novo.image.model] : [],
       );
     } catch (e: any) {
-      props.onError(e.message);
+      mostrarErro(e.message);
     }
-  }, [props.onError]);
+  }, [mostrarErro]);
 
   useEffect(() => {
     carregarLocal();
@@ -104,10 +107,10 @@ export default function ImagensView(props: {
         const c = await api.get<{ messages: Message[] }>(`/conversations/${id}`);
         setMessages(c.messages);
       } catch (e: any) {
-        props.onError(e.message);
+        mostrarErro(e.message);
       }
     },
-    [props.conv, props.onError],
+    [props.conv, mostrarErro],
   );
 
   useEffect(() => {
@@ -154,7 +157,8 @@ export default function ImagensView(props: {
       const conv = await props.ensureConversation();
       await api.post(`/imagens/${conv}/gerar`, {
         prompt,
-        opts: { ...o, model: undefined, seed: undefined },
+        // offload/flash attention são do modelo (IA local › Modelos): o global não passa por cima
+        opts: { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined },
         models,
         count,
         seed: o.seed,
@@ -163,11 +167,13 @@ export default function ImagensView(props: {
         refs,
       });
       setPerguntando(false);
+      setErro("");
+      setPrompt(""); // "Reaproveitar" no lote traz o texto de volta
       props.onConversationChanged();
       carregarConversa(conv);
     } catch (e: any) {
       if (e.status === 409) setPerguntando(true); // tem LLM na VRAM: a conta é do usuário
-      else props.onError(e.message);
+      else mostrarErro(e.message);
     }
   }
 
@@ -178,7 +184,7 @@ export default function ImagensView(props: {
       const r = await api.post<{ prompt: string }>("/imagens/prompt", { prompt, ...llm });
       setPrompt(r.prompt);
     } catch (e: any) {
-      props.onError(e.message);
+      mostrarErro(e.message);
     } finally {
       setMelhorando(false);
     }
@@ -192,7 +198,7 @@ export default function ImagensView(props: {
     try {
       for (const f of Array.from(files ?? [])) editar(await uploadReferencia(f));
     } catch (e: any) {
-      props.onError(e.message);
+      mostrarErro(e.message);
     }
   }
 
@@ -241,7 +247,7 @@ export default function ImagensView(props: {
               pedido={pedido}
               resposta={resposta}
               onZoom={setZoom}
-              onError={props.onError}
+              onError={mostrarErro}
               onMudou={carregarConversa}
               onReaproveitar={() => reaproveitar(resposta.meta as LoteMeta, pedido)}
               onEditar={editar}
@@ -258,6 +264,14 @@ export default function ImagensView(props: {
 
       <div className="shrink-0 px-5 pb-4">
         <div className="mx-auto max-w-5xl">
+          {erro && (
+            <div className="mb-2 flex items-start gap-2 rounded-xl border border-red-900/70 bg-red-950/30 p-2.5 text-xs text-red-200">
+              <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">{erro}</p>
+              <button onClick={() => setErro("")} title="Fechar" className="text-red-300 hover:text-red-100">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
           {perguntando && (
             <div className="mb-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
               <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
@@ -286,7 +300,7 @@ export default function ImagensView(props: {
               divisao={divisao}
               seedMode={seedMode}
               onSeedMode={setSeedMode}
-              onError={props.onError}
+              onError={mostrarErro}
               onFechar={() => setAbrirAjustes(false)}
             />
           )}
@@ -428,7 +442,12 @@ function Ajustes(props: {
   const [limpando, setLimpando] = useState("");
 
   function alternar(path: string) {
-    props.onModels(props.models.includes(path) ? props.models.filter((p) => p !== path) : [...props.models, path]);
+    const entra = !props.models.includes(path);
+    props.onModels(entra ? [...props.models, path] : props.models.filter((p) => p !== path));
+    // Os ajustes do modelo (IA local › Modelos) viram os do composer: senão os globais — 512², CFG 7 —
+    // iam por cima e o Qwen-Image saía com o CFG do SD 1.5.
+    const p = entra && st.image_models.find((m) => m.path === path)?.params;
+    if (p) for (const k of ["steps", "cfg", "width", "height", "sampler"] as const) set(k, p[k] as never);
   }
 
   async function esvaziar() {
@@ -670,6 +689,7 @@ function Lote(props: {
             onSemente={() => props.onSemente(img.seed)}
             onPasta={() => mostrarNaPasta(img.path)}
             onEditar={() => props.onEditar(img.path)}
+            origem={(props.pedido.meta as PedidoMeta | null)?.refs?.[0]}
           />
         ))}
       </div>
@@ -720,6 +740,44 @@ function Lote(props: {
   );
 }
 
+/** Nível sobe com o passo da amostragem; antes do 1º passo (carregando pesos) fica uma lâmina no fundo. */
+/** "32 s/passo" quando lento, "2,5 passos/s" quando rápido — como o sd.cpp decide a unidade. */
+const velocidade = (s: number) =>
+  s >= 1 ? `${Math.round(s)} s/passo` : `${(1 / s).toFixed(1).replace(".", ",")} passos/s`;
+
+const duracao = (s: number) =>
+  s < 60 ? `~${Math.max(1, Math.round(s))} s` : `~${Math.floor(s / 60)} min${s % 60 >= 30 && s < 600 ? " 30 s" : ""}`;
+
+function Liquido({ fracao, sPasso, restante }: { fracao: number; sPasso?: number; restante?: number }) {
+  const pct = Math.round(Math.min(1, Math.max(0, fracao)) * 100);
+  return (
+    <>
+      <div
+        // Cor sólida por dentro e a transparência no grupo: crista e corpo se sobrepõem 1 px, e com
+        // cada um semitransparente a sobreposição aparecia como uma linha mais escura.
+        className="absolute inset-x-0 bottom-0 bg-sky-400 opacity-25 transition-[height] duration-1000 ease-out"
+        style={{ height: `${Math.max(pct, 4)}%` }}
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <svg viewBox="0 0 200 10" preserveAspectRatio="none" className="onda absolute -top-[9px] left-0 h-2.5 w-[200%]" aria-hidden>
+          <path d="M0 5 Q 25 0 50 5 T 100 5 T 150 5 T 200 5 V 10 H 0 Z" className="fill-sky-400" />
+        </svg>
+      </div>
+      <div className="relative text-center tabular-nums">
+        <span className="block text-sm font-medium text-fg">{pct}%</span>
+        {!!sPasso && (
+          <span className="block text-[11px] text-muted">
+            {velocidade(sPasso)} · {duracao(restante ?? 0)} restantes
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return <span className="rounded-full bg-raised px-2 py-0.5">{children}</span>;
 }
@@ -732,6 +790,7 @@ function Cartao(props: {
   onSemente: () => void;
   onPasta: () => void;
   onEditar: () => void;
+  origem?: string; // edição: a imagem que está sendo editada aparece por trás enquanto gera
 }) {
   const { img } = props;
   const temArquivo = ["pronta", "mantida", "descartada"].includes(img.status);
@@ -752,14 +811,17 @@ function Cartao(props: {
           }`}
         />
       ) : (
-        <div className="grid aspect-square w-full place-items-center">
+        <div className="relative grid aspect-square w-full place-items-center overflow-hidden">
+          {props.origem && img.status !== "erro" && (
+            <img src={urlDa(props.origem)} alt="imagem em edição" className="absolute inset-0 size-full object-cover opacity-40" />
+          )}
           {img.status === "erro" ? (
             <span className="px-3 text-center text-[11px] text-red-300" title={img.error}>
               {img.error.split("\n")[0].slice(0, 90)}
             </span>
-          ) : (
-            <div className={`size-full ${img.status === "gerando" ? "animate-pulse bg-[#2a2a2a]" : ""}`} />
-          )}
+          ) : img.status === "gerando" ? (
+            <Liquido fracao={img.progress ?? 0} sPasso={img.s_passo} restante={img.restante} />
+          ) : null}
         </div>
       )}
 

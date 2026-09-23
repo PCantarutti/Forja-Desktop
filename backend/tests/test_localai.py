@@ -261,10 +261,13 @@ def test_edicao_passa_referencias_e_mmproj(isolado, monkeypatch):
         imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), refs)
     assert "-r" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
 
-    localai.set_image({"llm_vision": str(arq["mmproj.gguf"])})
+    localai.set_image({"llm_vision": str(arq["mmproj.gguf"]), "offload": True, "flash_attn": True,
+                       "vae_tiling": True})
     a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), refs)
     assert [a[i + 1] for i, v in enumerate(a) if v == "-r"] == refs
     assert a[a.index("--llm_vision") + 1] == str(arq["mmproj.gguf"])
+    assert "--offload-to-cpu" in a and "--diffusion-fa" in a  # sem isso a edição em 1024² vai à CPU
+    assert "--vae-tiling" in a  # sem isso o VAE pede 4,7 GB de uma vez e a Arc perde o dispositivo
 
 
 def test_modelo_que_so_gera_recusa_edicao(isolado, monkeypatch):
@@ -274,6 +277,57 @@ def test_modelo_que_so_gera_recusa_edicao(isolado, monkeypatch):
     localai.set_image({"model": "C:/m/sd15.safetensors"})
     with pytest.raises(Exception, match="não edita"):
         imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), [str(ref)])
+
+
+def test_cancelar_mata_o_sd_mesmo_calado(isolado, monkeypatch):
+    """Carregando pesos o sd-cli não imprime nada; o cancelamento não pode esperar a próxima linha."""
+    import sys
+    import threading
+    import time
+
+    from app import downloads
+    monkeypatch.setattr(imagegen, "_exe", lambda: Path(sys.executable))
+    monkeypatch.setattr(imagegen, "argv", lambda *a, **k: [sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setattr(imagegen, "_opts", lambda o=None: {})
+    job = downloads.create("imagem", "teste")
+    threading.Timer(0.3, lambda: downloads.cancel(job["id"])).start()
+    inicio = time.monotonic()
+    with pytest.raises(Exception, match="cancelada"):
+        imagegen.generate("x", isolado / "o.png", {}, job["id"])
+    assert time.monotonic() - inicio < 5
+
+
+def test_progresso_le_a_velocidade_nas_duas_unidades():
+    rapido = imagegen.PROGRESS.search("  |====>     | 3/8 - 2.50it/s")
+    lento = imagegen.PROGRESS.search("  |====>     | 11/20 - 31.78s/it")
+    assert rapido.groups() == ("3", "8", "2.50", "it/s")
+    assert lento.groups() == ("11", "20", "31.78", "s/it")
+
+
+def test_barra_do_vae_nao_conta_como_passo(isolado, monkeypatch):
+    """Com VAE em blocos o sd.cpp imprime outra barra em s/it; o card não pode ir a 100% com ela."""
+    import sys
+    saida = "  |####| 16/16 - 1.62s/it\n  |#   | 1/20 - 31.00s/it\n  |####| 16/16 - 1.10s/it\n"
+    monkeypatch.setattr(imagegen, "_exe", lambda: Path(sys.executable))
+    monkeypatch.setattr(imagegen, "_opts", lambda o=None: {"steps": 20})
+    out = isolado / "o.png"
+    monkeypatch.setattr(imagegen, "argv", lambda *a, **k: [
+        sys.executable, "-c", f"import sys, pathlib; sys.stdout.write({saida!r}); pathlib.Path({str(out)!r}).write_bytes(b'x')"])
+    vistos = []
+    imagegen.generate("x", out, {}, progresso=lambda p, t, s: vistos.append((p, t, s)))
+    assert vistos == [(1, 20, 31.0)]
+
+
+def test_vae_configurado_some_da_lista_de_imagem(isolado, monkeypatch):
+    """VAE e codificador na mesma pasta do modelo: configurados, não aparecem como modelo de imagem."""
+    pasta = isolado / "modelos"
+    modelo = gguf(pasta, "qwen.safetensors")
+    vae = gguf(pasta, "qwen_vae.safetensors")
+    monkeypatch.setattr(localai, "hardware", lambda: {"gpus": []})
+    nomes = lambda: {m["name"] for m in localai.state()["image_models"]}
+    assert nomes() == {"qwen", "qwen_vae"}  # sem configurar, o VAE parece modelo
+    localai.save_image_params(str(modelo), {"vae": str(vae).replace("\\", "/")})  # barra da API
+    assert nomes() == {"qwen"}
 
 
 def test_sd_sem_modelo_reclama(isolado):
@@ -655,11 +709,11 @@ def test_ajustes_por_modelo_de_imagem(isolado):
     localai.save_image_params("C:/m/flux.gguf", {"steps": 4, "cfg": 1.0})
 
     assert localai.image_params("C:/m/flux.gguf")["steps"] == 4
-    assert localai.read_config()["image_models"]["C:/m/flux.gguf"] == {"steps": 4, "cfg": 1.0}
+    assert localai.read_config()["image_models"][str(Path("C:/m/flux.gguf"))] == {"steps": 4, "cfg": 1.0}
     assert localai.image_params("C:/m/outro.gguf")["steps"] == 20      # outro modelo segue o padrão
 
     localai.save_image_params("C:/m/flux.gguf", {"steps": 20})          # voltou ao padrão: some do arquivo
-    assert localai.read_config()["image_models"]["C:/m/flux.gguf"] == {"cfg": 1.0}
+    assert localai.read_config()["image_models"][str(Path("C:/m/flux.gguf"))] == {"cfg": 1.0}
 
 
 # ---------------------------------------------------------------- busca: ordem e filtro de imagem

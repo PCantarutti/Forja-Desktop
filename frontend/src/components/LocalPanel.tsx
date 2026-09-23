@@ -869,7 +869,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                 ))}
               </ul>
               <p className="mt-1.5 text-faint">
-                Guarde fora das pastas de modelos (senão eles aparecem nas listas) e cole o caminho nos campos abaixo.{" "}
+                Podem ficar na mesma pasta do modelo: cole o caminho nos campos abaixo e, depois de salvos, eles saem da lista de modelos de imagem.{" "}
                 <a href={atual.req.doc} target="_blank" rel="noreferrer" className="underline">Guia do sd.cpp</a>
               </p>
               <button
@@ -910,6 +910,18 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
             <Field label="Codificador LLM" hint="Qwen-Image: Qwen2.5-VL-7B (1.0) ou Qwen3-VL-8B (2.1), em GGUF ou safetensors.">
               <input className={input} value={form.llm ?? ""} onChange={(e) => set("llm", e.target.value)} placeholder="opcional" />
             </Field>
+            <label className="flex items-center gap-2 text-muted" title="--offload-to-cpu: pesos na RAM, sobem à GPU sob demanda">
+              <input type="checkbox" checked={!!form.offload} onChange={(e) => set("offload", e.target.checked)} />
+              Pesos na RAM (modelo maior que a VRAM)
+            </label>
+            <label className="flex items-center gap-2 text-muted" title="--diffusion-fa: bem menos memória na atenção">
+              <input type="checkbox" checked={!!form.flash_attn} onChange={(e) => set("flash_attn", e.target.checked)} />
+              Flash attention na difusão
+            </label>
+            <label className="flex items-center gap-2 text-muted" title="--vae-tiling: decodifica em blocos, sem pico de memória no fim">
+              <input type="checkbox" checked={!!form.vae_tiling} onChange={(e) => set("vae_tiling", e.target.checked)} />
+              VAE em blocos (evita estourar a VRAM no fim)
+            </label>
             <Field label="Visão do LLM (mmproj)" hint="Só para editar imagem com codificador em GGUF (Qwen-Image 2.1).">
               <input className={input} value={form.llm_vision ?? ""} onChange={(e) => set("llm_vision", e.target.value)} placeholder="opcional" />
             </Field>

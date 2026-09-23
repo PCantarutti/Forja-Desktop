@@ -29,7 +29,7 @@ def out_dir() -> Path:
     return Path(escolhida) if escolhida else OUT_DIR
 # Barra de amostragem do sd.cpp: "  |=====>   | 3/8 - 11.5it/s". As barras de carregamento do modelo
 # usam MB/s e ficam de fora — senão a barra da UI andaria para trás.
-PROGRESS = re.compile(r"\|\s*(\d+)/(\d+) - [\d.]+\s*(?:it/s|s/it)")
+PROGRESS = re.compile(r"\|\s*(\d+)/(\d+) - ([\d.]+)\s*(it/s|s/it)")
 TIMEOUT = 1800  # 30 min: CPU puro com modelo grande é lento mesmo
 
 
@@ -92,6 +92,12 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
             a += ["-r", str(r)]
         if o.get("llm_vision"):
             a += ["--llm_vision", str(o["llm_vision"])]
+    if o.get("offload"):
+        a += ["--offload-to-cpu"]
+    if o.get("flash_attn"):
+        a += ["--diffusion-fa"]
+    if o.get("vae_tiling"):
+        a += ["--vae-tiling"]
     if o.get("negative"):
         a += ["-n", str(o["negative"])]
     # -s 0 é uma semente válida para o sd.cpp (o padrão dele é 42, sempre a mesma imagem): 0 aqui = aleatória.
@@ -107,7 +113,8 @@ def _exe() -> Path:
 
 
 def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
-             refs: list[str] | tuple = ()) -> Path:
+             refs: list[str] | tuple = (), progresso=None) -> Path:
+    """`progresso(passo, total, s_passo)` a cada passo da amostragem (o card do lote enche com isso)."""
     """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread."""
     exe = _exe()
     if not prompt.strip():
@@ -120,21 +127,46 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
     tail: list[str] = []
     timer = threading.Timer(TIMEOUT, lambda: native.kill_tree(proc))
     timer.start()
+    # Vigia à parte: carregando pesos o sd-cli passa minutos sem imprimir nada, e conferir o
+    # cancelamento só a cada linha deixava o processo vivo (e a GPU ocupada) depois do "Cancelar".
+    parar = threading.Event()
+
+    def vigia():
+        while not parar.wait(0.5):
+            if downloads.cancelled(job_id):
+                native.kill_tree(proc)
+                return
+
+    if job_id:
+        threading.Thread(target=vigia, daemon=True).start()
     try:
         for line in proc.stdout:  # type: ignore[union-attr]
             tail.append(line.rstrip())
             del tail[:-40]
             m = PROGRESS.search(line)
+            # Só a barra da amostragem (total = passos): o VAE em blocos também imprime barra em s/it, e
+            # na edição ele codifica a referência antes de amostrar — o card ia a 100% e voltava a 0.
+            if m and int(m.group(2)) != int(o["steps"]):
+                m = None
             if job_id and m:
                 downloads.update(job_id, done=int(m.group(1)), total=int(m.group(2)))
-            if job_id and downloads.cancelled(job_id):
-                native.kill_tree(proc)
-                raise ToolError("Geração cancelada.")
+            if progresso and m:
+                v = float(m.group(3))
+                # o sd.cpp troca a unidade conforme a velocidade: abaixo de 1 it/s ele passa a s/it
+                progresso(int(m.group(1)), int(m.group(2)), v if m.group(4) == "s/it" else (1 / v if v else 0.0))
         proc.wait()
     finally:
+        parar.set()
         timer.cancel()
+    if job_id and downloads.cancelled(job_id):
+        raise ToolError("Geração cancelada.")
     if proc.returncode != 0 or not out.exists():
-        raise ToolError(f"sd falhou (código {proc.returncode}):\n" + "\n".join(tail[-12:]))
+        log = "\n".join(tail[-12:])
+        dica = ""
+        if "DeviceLost" in log or "OutOfDeviceMemory" in log or "out of memory" in log.lower():
+            dica = ("A GPU ficou sem memória. Em IA local › Modelos › ajustes deste modelo, ligue "
+                    "\"Pesos na RAM\", \"Flash attention\" e \"VAE em blocos\", ou diminua a resolução.\n\n")
+        raise ToolError(f"{dica}sd falhou (código {proc.returncode}):\n{log}")
     return out
 
 

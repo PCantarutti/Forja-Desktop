@@ -152,10 +152,20 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                 _patch(message_id, meta={"images": imagens})
                 break
             item["status"] = "gerando"
+            item["progress"] = 0.0
             _patch(message_id, meta={"images": imagens})
+
+            def progresso(passo: int, total: int, s_passo: float = 0.0, item=item) -> None:
+                # Vai no meta porque a tela já consulta a conversa enquanto o lote roda: nada de rota nova.
+                item["progress"] = round(passo / total, 3) if total else 0.0
+                item["s_passo"] = round(s_passo, 2)
+                item["restante"] = round(max(0, total - passo) * s_passo)  # só a amostragem; o VAE vem depois
+                _patch(message_id, meta={"images": imagens})
+
             try:
                 imagegen.generate(prompt, Path(item["path"]), {**opts, "model": item["model"],
-                                                               "seed": item["seed"]}, job_id, refs or [])
+                                                               "seed": item["seed"]}, job_id, refs or [],
+                                  progresso)
                 item["status"] = "pronta"
             except Exception as e:
                 # o próprio generate mata o sd-cli quando o job é cancelado no meio de uma imagem

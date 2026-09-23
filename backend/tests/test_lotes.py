@@ -31,11 +31,13 @@ def _fake_sd(monkeypatch, falhar=()):
     """Troca o sd-cli por um PNG de mentira; guarda o que cada chamada recebeu."""
     chamadas: list[dict] = []
 
-    def generate(prompt, out, opts=None, job_id="", refs=()):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None):
         o = dict(opts or {})
         chamadas.append({"prompt": prompt, "out": Path(out), "refs": list(refs), **o})
         if o.get("model") in falhar:
             raise imagegen.ToolError("sd falhou (código 1)")
+        if progresso:
+            progresso(10, 20, 3.5)
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"\x89PNG")
         return Path(out)
@@ -100,6 +102,8 @@ def test_lote_divide_entre_modelos(monkeypatch):
     assert pronto["status"] == "pronto"
     imagens = pronto["meta"]["images"]
     assert [i["status"] for i in imagens] == ["pronta"] * 6
+    assert all(i["progress"] == 0.5 for i in imagens)  # o card enche com o passo do sd-cli
+    assert all(i["s_passo"] == 3.5 and i["restante"] == 35 for i in imagens)  # 10 passos x 3,5 s
     assert [i["model"] for i in imagens] == ["m1.safetensors"] * 3 + ["m2.safetensors"] * 3
     assert [i["seed"] for i in imagens] == [1000, 1001, 1002, 1003, 1004, 1005]
     assert all(Path(i["path"]).exists() for i in imagens)
@@ -156,7 +160,7 @@ def test_lote_com_llm_carregado_pede_confirmacao(monkeypatch):
 def test_cancelar_marca_as_restantes(monkeypatch):
     conv = _conversa()
 
-    def generate(prompt, out, opts=None, job_id="", refs=()):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None):
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"\x89PNG")
         downloads.cancel(job_id)  # cancela logo na primeira, como o botão faria

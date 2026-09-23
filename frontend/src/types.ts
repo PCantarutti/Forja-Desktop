@@ -301,6 +301,9 @@ export type ImageParams = {
   t5xxl: string;
   llm: string;
   llm_vision: string;
+  offload: boolean;
+  flash_attn: boolean;
+  vae_tiling: boolean;
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -397,6 +400,9 @@ export type ImageOpts = {
   t5xxl: string;
   llm: string;
   llm_vision: string;
+  offload: boolean;
+  flash_attn: boolean;
+  vae_tiling: boolean;
   diffusion_model: string;
   steps: number;
   cfg: number;
@@ -416,6 +422,9 @@ export type LoteImagem = {
   model_name: string;
   status: "pendente" | "gerando" | "pronta" | "erro" | "mantida" | "descartada" | "cancelada";
   error: string;
+  progress?: number; // 0..1, passo da amostragem enquanto gera
+  s_passo?: number; // segundos por passo, lido do sd-cli
+  restante?: number; // segundos até o fim da amostragem
 };
 
 /** meta da mensagem do assistente num lote (a thread do backend vai preenchendo `images`). */
