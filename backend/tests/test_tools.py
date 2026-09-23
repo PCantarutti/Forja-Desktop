@@ -92,7 +92,7 @@ def test_edit_preview_is_diff(ws):
 def test_write_creates_dirs_and_read_numbers_lines(ws):
     run_tool("write_file", {"path": "pkg/sub/m.py", "content": "a\nb\n"}, ws)
     out = run_tool("read_file", {"path": "pkg/sub/m.py", "start_line": 2}, ws)
-    assert out.strip() == "2\tb"
+    assert out.strip() == "2\tb\n(Fim do arquivo - 2 linhas)"
 
 
 def test_write_preview_new_vs_existing(ws):

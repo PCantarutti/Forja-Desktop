@@ -54,7 +54,7 @@ WRITE_TOOLS = {"write_file", "edit_file"}
 # antes de o Worker chegar a rodar o teste. Com esta lista o orçamento cabe. Quem precisar de mais
 # (gerar documento, navegar) declara uma persona em .forja/agents/*.md com o `tools:` que quiser.
 WORKER_TOOLS = frozenset({
-    "read_file", "write_file", "edit_file", "list_dir", "search",
+    "read_file", "write_file", "edit_file", "list_dir", "glob", "grep",
     "run_command", "serve_start", "serve_status", "serve_stop",
 })
 NUDGE_LINES = 12          # escrita maior que isto, no extremo, é trabalho de subagente

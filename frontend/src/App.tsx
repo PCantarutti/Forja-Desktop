@@ -182,6 +182,8 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   write_file: (a) => `Escrevendo ${arquivo(a.path) ?? "um arquivo"}`,
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
+  glob: (a) => `Procurando arquivos ${trecho(a.pattern, 36) ?? ""}`.trim(),
+  grep: (a) => (trecho(a.pattern, 36) ? `Procurando “${trecho(a.pattern, 36)}”` : "Procurando no código"),
 
   // shell e servidores
   run_command: (a) =>

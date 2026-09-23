@@ -18,10 +18,11 @@ from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, modelctl, projstate, qualidade, taskdb
-from . import browser, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
+from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
 from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
-from .tools import REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool, resolve_path, vision_caps
+from .tools import (LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
+                    resolve_path, spill, vision_caps)
 
 MAX_NUDGES = 2
 # Maestro: a cada quantos turnos seguidos sem agir (só raciocínio) ela gera um novo alerta ao usuário.
@@ -110,7 +111,7 @@ RETRY_DELAY = 2.0
 TOOL_TAIL = 4000    # cauda dos argumentos guardada para quem reconectar no meio de uma escrita longa
 # Chamadas de leitura que o modelo pede juntas rodam juntas: a inferência já terminou, o que sobra é I/O.
 # Escrita, shell, aprovação e o resto do navegador continuam em fila, na ordem em que o modelo pediu.
-PARALLEL_OK = {"read_file", "list_dir", "search", "web_search", "fetch_url", "browser_read", "delegate_task"}
+PARALLEL_OK = {"read_file", "list_dir", "glob", "grep", "web_search", "fetch_url", "browser_read", "delegate_task"}
 PARALLEL_READS = 4        # leituras simultâneas no total
 PARALLEL_SUBAGENTS = 2    # delegações simultâneas por destino remoto (local é sempre 1)
 KEEP_FINISHED_RUN = 120  # segundos que uma execução terminada continua consultável
@@ -452,8 +453,17 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
              "- Precisa de vários arquivos ou buscas? peça TODAS as leituras na mesma resposta: elas rodam em "
              "paralelo. Uma por vez só desperdiça rodada."]
     if "edit_file" in names or "write_file" in names:
-        rules.append("- Leia o arquivo antes de editar. Use edit_file para mudanças pontuais (old_str exato e único, "
-                     "sem números de linha) e write_file para arquivos novos ou reescritas completas.")
+        rules.append("- Leia o arquivo antes de editar (a ferramenta recusa arquivo não lido ou que mudou depois da "
+                     "leitura). Use edit_file para mudanças pontuais (old_str exato e único, sem números de linha) "
+                     "e write_file para arquivos novos ou reescritas completas.")
+    if "read_file" in names:
+        rules.append("- Use read_file, não comandos de shell (cat, type, Get-Content), para ler arquivos. Arquivo "
+                     "grande: continue com start_line.")
+    if "grep" in names or "glob" in names:
+        rules.append("- Para achar código use grep (conteúdo) e glob (nomes de arquivo), não findstr, "
+                     "Select-String, find ou dir pelo shell. Depois leia o que achou com read_file.")
+    rules.append("- Resultado grande demais vem cortado, com o caminho do texto completo: leia por partes com "
+                 "read_file ou procure nele com grep, em vez de rodar a ferramenta de novo.")
     rules.append("- Tabela na resposta vai em Markdown (`| coluna | coluna |` com a linha de `---` embaixo do "
                  "cabeçalho), nunca em colunas alinhadas com espaço: a interface renderiza a de Markdown como "
                  "tabela de verdade, com botão de copiar para o Excel, e a de espaços como texto torto.")
@@ -944,6 +954,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     browser.CURRENT_KEY.set(str(conv_id))  # ferramentas browser_* agem na sessão desta conversa
     shell.CONV.set(str(conv_id))           # processo de fundo fica marcado com a conversa que o subiu
     memory.index(refresh=True)  # congela o índice do turno: system prompt estável = cache do llama.cpp vivo
+    LIDOS.set({})  # ler antes de editar vale por execução (tools._observado)
     yield {"type": "run_started", "run_id": run.id}
 
     with db.session() as s:
@@ -1643,7 +1654,7 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         if hook_out:
             res = f"{res}\n\n{hook_out}"
             meta["hooks"] = hook_out
-        result("ok", res)
+        result("ok", spill(res, f"{conv_id}/{call['id']}"))
     except ToolError as e:
         result("erro", str(e))
     except Exception as e:  # nunca derrubar o loop

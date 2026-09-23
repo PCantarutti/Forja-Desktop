@@ -7,6 +7,7 @@ só com um `register(Tool(...))`, sem mexer no loop do agente.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import difflib
 import inspect
 import os
@@ -197,7 +198,74 @@ def _nao_gerado(root: Path, p: Path) -> None:
 
 
 def _rel(root: Path, p: Path) -> str:
+    if SPILL_DIR in p.parents:  # saída guardada de outra ferramenta: fora da pasta, vai o caminho inteiro
+        return str(p)
     return p.relative_to(root.resolve()).as_posix() or "."
+
+
+# ---------------------------------------------------------------- spill de saída grande
+# Resultado enorme (log de build, página inteira, grep amplo) enchia a janela do modelo local de uma
+# vez. Como no DeepSeek Harness: cabeça e cauda vão ao modelo, o texto inteiro fica num arquivo que
+# ele lê por partes com read_file/grep. Só esses dois leem fora da pasta de trabalho, e só aqui.
+SPILL_DIR = (config.DATA_DIR / "spill").resolve()
+SPILL_CHARS = 24_000
+SPILL_HEAD = 16_000
+SPILL_TAIL = 6_000
+
+
+def spill(texto: str, nome: str) -> str:
+    if len(texto) <= SPILL_CHARS:
+        return texto
+    destino = SPILL_DIR / f"{nome}.txt"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    destino.write_text(texto, encoding="utf-8")
+    omitidos = len(texto) - SPILL_HEAD - SPILL_TAIL
+    return (f"{texto[:SPILL_HEAD]}\n\n[...]\n\n{texto[-SPILL_TAIL:]}\n\n(Omitidos {omitidos} caracteres. "
+            f"Resultado completo em: {destino}. Leia por partes com read_file (start_line/end_line) ou "
+            "procure nele com grep.)")
+
+
+def resolve_leitura(root: Path, path: str | None) -> Path:
+    """resolve_path, mais a pasta de spill: o único lugar fora da raiz que dá para ler."""
+    raw = (path or "").strip()
+    if raw:
+        alvo = Path(raw).expanduser()
+        if alvo.is_absolute() and (alvo := alvo.resolve()).is_relative_to(SPILL_DIR):
+            return alvo
+    return resolve_path(root, path)
+
+
+# ---------------------------------------------------------------- ler antes de escrever
+# Portado da fs-observation-policy do DeepSeek Harness. Editar de memória — o modelo "lembra" como
+# o arquivo era, ou o arquivo mudou por um comando depois da leitura — é a origem de old_str que
+# não bate e de write_file que apaga o que ele nunca viu. O dicionário é por execução (contextvar
+# que o agente liga); fora de uma execução (testes, rotas da API) não há checagem.
+LIDOS: contextvars.ContextVar[dict | None] = contextvars.ContextVar("forja_lidos", default=None)
+
+
+def _versao(p: Path) -> tuple[int, int]:
+    st = p.stat()
+    return st.st_mtime_ns, st.st_size
+
+
+def marcar_lido(p: Path) -> None:
+    lidos = LIDOS.get()
+    if lidos is not None and p.is_file():
+        lidos[str(p)] = _versao(p)
+
+
+def _observado(root: Path, p: Path) -> None:
+    """Recusa escrever em arquivo existente que não foi lido nesta execução, ou que mudou depois."""
+    lidos = LIDOS.get()
+    if lidos is None or not p.is_file():
+        return
+    visto = lidos.get(str(p))
+    if visto is None:
+        raise ToolError(f"Não dá para alterar '{_rel(root, p)}': o arquivo ainda não foi lido nesta conversa. "
+                        "Leia com read_file e tente de novo.")
+    if visto != _versao(p):
+        raise ToolError(f"'{_rel(root, p)}' mudou depois da sua última leitura (outro comando ou o usuário "
+                        "mexeu). Leia de novo com read_file e tente de novo.")
 
 
 def _read_text(p: Path) -> str:
@@ -294,17 +362,31 @@ def _conteudo(p: Path, usar_ocr: bool = False) -> str:
     return texto
 
 
+MAX_LINE_CHARS = 2000
+
+
+def _linha(texto: str) -> str:
+    if len(texto) <= MAX_LINE_CHARS:
+        return texto
+    return texto[:MAX_LINE_CHARS] + f"... (linha cortada em {MAX_LINE_CHARS} caracteres)"
+
+
 def read_file(root: Path, args: dict) -> str:
-    p = resolve_path(root, args.get("path"))
+    p = resolve_leitura(root, args.get("path"))
     lines = _conteudo(p, bool(args.get("ocr"))).splitlines()
+    marcar_lido(p)
     start = max(int(args.get("start_line") or 1), 1)
     end = int(args.get("end_line") or len(lines))
     end = min(end, len(lines), start + MAX_READ_LINES - 1)
     if not lines:
         return f"(arquivo vazio: {_rel(root, p)})"
-    body = "\n".join(f"{i:>5}\t{lines[i - 1]}" for i in range(start, end + 1))
+    if start > len(lines):
+        raise ToolError(f"start_line {start} passa do fim: o arquivo tem {len(lines)} linhas.")
+    body = "\n".join(f"{i:>5}\t{_linha(lines[i - 1])}" for i in range(start, end + 1))
     if end < len(lines):
-        body += f"\n(mostrando linhas {start}-{end} de {len(lines)}; use start_line/end_line para ver o resto)"
+        body += f"\n(Mostrando linhas {start}-{end} de {len(lines)}. Use start_line={end + 1} para continuar.)"
+    else:
+        body += f"\n(Fim do arquivo - {len(lines)} linhas)"
     return body
 
 
@@ -323,9 +405,11 @@ def write_file(root: Path, args: dict) -> str:
     _check_size(content)
     if p.is_dir():
         raise ToolError(f"'{args.get('path')}' é um diretório.")
+    _observado(root, p)
     existed = p.exists()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8", newline="")
+    marcar_lido(p)  # quem escreveu sabe o que está lá
     lines = content.count("\n") + (0 if content.endswith("\n") or not content else 1)
     return f"Arquivo {'sobrescrito' if existed else 'criado'}: {_rel(root, p)} ({lines} linhas)"
 
@@ -334,6 +418,7 @@ def write_preview(root: Path, args: dict) -> dict:
     p = resolve_path(root, args.get("path"))
     content = args.get("content", "")
     _check_size(content)
+    _observado(root, p)
     if p.is_file():
         return {"kind": "diff", "path": _rel(root, p), "text": _diff(_read_text(p), content, _rel(root, p))}
     return {"kind": "new", "path": _rel(root, p), "text": content}
@@ -370,6 +455,7 @@ def _one_edit(text: str, edit: dict, onde: str) -> tuple[str, int]:
 def _apply_edit(root: Path, args: dict) -> tuple[Path, str, str, int]:
     """Aplica as edições em sequência, tudo ou nada: se uma não bater, nada é escrito."""
     p = resolve_path(root, args.get("path"))
+    _observado(root, p)
     edits = _edits(args)
     old = novo = _read_text(p)
     trocas = 0
@@ -385,6 +471,7 @@ def edit_file(root: Path, args: dict) -> str:
     p, _, new, trocas = _apply_edit(root, args)
     _check_size(new)
     p.write_text(new, encoding="utf-8", newline="")
+    marcar_lido(p)
     detalhe = f" ({trocas} trechos)" if trocas > 1 else ""
     return f"Arquivo editado: {_rel(root, p)}{detalhe}"
 
@@ -419,7 +506,8 @@ register(Tool(
                                  "fiel que o OCR."}}, ["path"]),
     read_file))
 register(Tool(
-    "write_file", "Cria ou sobrescreve um arquivo com o conteúdo completo. Cria diretórios intermediários.",
+    "write_file", "Cria ou sobrescreve um arquivo com o conteúdo completo. Cria diretórios intermediários. "
+    "Arquivo que já existe precisa ter sido lido antes com read_file; para mudança pontual prefira edit_file.",
     _obj({"path": {"type": "string"}, "content": {"type": "string", "description": "Conteúdo completo do arquivo"}},
          ["path", "content"]),
     write_file, mutating=True, preview=write_preview))
@@ -427,7 +515,8 @@ register(Tool(
     "edit_file",
     "Substitui trechos exatos de um arquivo. Por padrão old_str precisa aparecer uma vez só; use "
     "replace_all para trocar todas as ocorrências, e `edits` para várias trocas no mesmo arquivo numa "
-    "chamada só (aplicadas em ordem; se uma não bater, nada é escrito).",
+    "chamada só (aplicadas em ordem; se uma não bater, nada é escrito). Leia o arquivo com read_file "
+    "antes, a não ser que você mesmo o tenha criado ou editado agora há pouco.",
     _obj({"path": {"type": "string"},
           "old_str": {"type": "string", "description": "Trecho exato existente (sem números de linha)"},
           "new_str": {"type": "string", "description": "Texto que substitui old_str"},

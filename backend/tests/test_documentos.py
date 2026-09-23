@@ -264,7 +264,7 @@ def test_read_file_numera_e_corta_por_linha_no_documento(ws):
     saida = run_tool("read_file", {"path": "documentos/d.csv", "start_line": 3, "end_line": 4}, ws)
     assert "item 2" in saida and "item 3" in saida   # 3ª e 4ª: cabeçalho e separador vêm antes
     assert "item 1" not in saida and "item 5" not in saida
-    assert "mostrando linhas 3-4" in saida
+    assert "Mostrando linhas 3-4" in saida
 
 
 # ------------------------------------------------ o card de aprovação
