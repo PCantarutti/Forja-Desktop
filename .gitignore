@@ -9,3 +9,6 @@ dist/
 # gerados pelo build do instalador
 resources/
 build/
+
+# logs da instância de desenvolvimento (Start-Process -RedirectStandardError)
+electron.*.log

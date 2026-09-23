@@ -503,7 +503,18 @@ export type HfFile = { path: string; size: number; quant: string; shards: number
 // A Maestro planeja e verifica; os Workers implementam. O estado real vive no SQLite do backend
 // (taskdb) — a árvore aqui é leitura, vinda de /api/maestro/{conv}/board.
 
+/** Tipo da tarefa: o Worker sabe que mudança é, o roteador sabe que especialista chamar. */
+export type TipoTarefa = "feature" | "bugfix" | "refactor" | "test" | "ui" | "docs" | "chore";
+export const TIPOS_TAREFA: [TipoTarefa, string][] = [
+  ["feature", "Funcionalidade"], ["bugfix", "Correção"], ["refactor", "Refatoração"], ["test", "Testes"],
+  ["ui", "Tela / visual"], ["docs", "Documentação"], ["chore", "Manutenção"],
+];
+
+/** Worker especialista (Configurações › Maestro): o id é o que vai em model_slot. */
+export type Especialidade = { id: string; nome: string; quando: string; provider: string; model: string };
+
 export type Contract = {
+  type?: TipoTarefa;
   context?: string;
   goal: string;
   relevant_files?: string[];
@@ -603,6 +614,7 @@ export type MaestroModels = {
   manageable: boolean;
   min_ctx_worker: number;  // GGUF local com janela menor que isto não pode ser Worker
   slots: Record<string, { provider: string; model: string }>;
+  especialidades?: Especialidade[];
   active: SubagentActive[];
 };
 

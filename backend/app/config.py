@@ -115,6 +115,18 @@ MAESTRO_MAX_ITERATIONS = int(os.getenv("MAESTRO_MAX_ITERATIONS", "500"))  # o fr
 MAESTRO_MAX_ATTEMPTS = int(os.getenv("MAESTRO_MAX_ATTEMPTS", "5"))        # tentativas por tarefa
 MAX_WORKERS = 1                     # 1 = sequencial (Etapa 6 abre o paralelo)
 MAESTRO_MODEL = {"provider": "", "model": ""}  # modelo padrão da Maestro; vazio = o do seletor do chat
+# Workers especialistas: a Maestro escolhe pelo nome/quando no plano, e o roteador (subagents.rota)
+# escolhe sozinho pelo tipo da tarefa e pelos arquivos. Sem modelo = não existe para a Maestro.
+ESPECIALIDADES_PADRAO = [
+    {"id": "logica", "nome": "Lógica e back-end",
+     "quando": "algoritmos, regras de negócio, APIs, banco de dados, scripts", "provider": "", "model": ""},
+    {"id": "frontend", "nome": "Frontend e aparência",
+     "quando": "HTML, CSS, componentes de interface, layout, estilo, responsividade", "provider": "", "model": ""},
+    {"id": "testes", "nome": "Testes", "quando": "escrever e corrigir testes automatizados",
+     "provider": "", "model": ""},
+    {"id": "docs", "nome": "Documentação", "quando": "README, guias, comentários e textos", "provider": "", "model": ""},
+]
+WORKER_ESPECIALIDADES: list[dict] = [dict(e) for e in ESPECIALIDADES_PADRAO]
 MAESTRO_VISUAL = {"provider": "", "model": ""}  # modelo COM VISÃO que julga os prints (visual_review)
 MAESTRO_BROWSER = True             # a Maestro valida entregas no navegador (browser_validate e browser_*)
 MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)

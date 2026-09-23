@@ -55,13 +55,25 @@ TRANSITIONS: dict[str, set[str]] = {
 }
 SEMPRE = {"cancelled", "needs_human", "blocked"}
 
-CONTRACT_FIELDS = ("context", "goal", "relevant_files", "requirements", "constraints", "do_not",
+CONTRACT_FIELDS = ("type", "context", "goal", "relevant_files", "requirements", "constraints", "do_not",
                    "acceptance_criteria", "verify_command", "expected_result")
+# Tipo da tarefa: diz ao Worker que tipo de mudança é (correção não é hora de refatorar) e ao
+# roteador que especialista chamar (subagents.ROTA_POR_TIPO). Fora da lista, é ignorado.
+TIPOS = ("feature", "bugfix", "refactor", "test", "ui", "docs", "chore")
 LISTAS = ("relevant_files", "requirements", "constraints", "do_not", "acceptance_criteria")
 MAX_TASKS_POR_FEATURE = 40
 MAX_ITENS = 20          # itens por lista do contrato
 MAX_TEXTO = 4000        # caracteres por campo de texto do contrato
 SLOTS = ("rapido", "capaz", "nuvem")
+
+
+def _slot_valido(slot: str | None, onde: str = "") -> str | None:
+    """model_slot aceito: nível ou especialidade cadastrada (mesmo sem modelo: cai no capaz)."""
+    slot = str(slot or "").strip().lower() or None
+    ids = [e["id"] for e in getattr(config, "WORKER_ESPECIALIDADES", [])]
+    if slot and slot not in SLOTS and slot not in ids:
+        raise ToolError(f"model_slot inválido '{slot}'{onde}: use {', '.join([*SLOTS, *ids])}.")
+    return slot
 
 
 def _now() -> datetime:
@@ -108,7 +120,10 @@ def normalize_contract(raw) -> dict:
     out: dict = {}
     for campo in CONTRACT_FIELDS:
         valor = raw.get(campo)
-        if campo in LISTAS:
+        if campo == "type":
+            if (tipo := str(valor or "").strip().lower()) in TIPOS:
+                out[campo] = tipo
+        elif campo in LISTAS:
             if itens := _lista(valor):
                 out[campo] = itens
         elif texto := str(valor or "").strip()[:MAX_TEXTO]:
@@ -120,7 +135,8 @@ def render_contract(task: db.Task, erro_anterior: str = "", strategy: str = "") 
     """O contrato virando o briefing que o Worker lê. Texto porque é o que o modelo consome, mas
     gerado a partir de dados estruturados: o Maestro não escreve o brief à mão."""
     c = task.contract or {}
-    partes = [f"TAREFA {task.code}: {task.title}"]
+    tipo = f" ({c['type']})" if c.get("type") else ""
+    partes = [f"TAREFA {task.code}{tipo}: {task.title}"]
     if c.get("context"):
         partes.append("CONTEXTO\n" + c["context"])
     partes.append("OBJETIVO\n" + c.get("goal", task.title))
@@ -319,9 +335,7 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id:
             if guia and guia not in contrato.get("relevant_files", []):
                 contrato["relevant_files"] = [guia, *contrato.get("relevant_files", [])][:MAX_ITENS]
             titulo = titulo or contrato["goal"][:200]
-            slot = str(bruto.get("model_slot") or "").strip().lower() or None
-            if slot and slot not in SLOTS:
-                raise ToolError(f"model_slot inválido '{slot}' na tarefa {i + 1}: use {', '.join(SLOTS)}.")
+            slot = _slot_valido(bruto.get("model_slot"), f" na tarefa {i + 1}")
             task = db.Task(
                 feature_id=feat.id, conversation_id=conv_id, code=_proximo_code(s, conv_id),
                 title=titulo, contract=contrato, depends_on=[],
@@ -664,6 +678,8 @@ _CONTRACT_SCHEMA = {
     "type": "object",
     "description": "Implementation Contract: tudo o que o Worker precisa saber. Ele não vê esta conversa.",
     "properties": {
+        "type": {"type": "string", "enum": list(TIPOS),
+                 "description": "feature (nova), bugfix (correção), refactor, test, ui (tela/visual), docs, chore"},
         "context": {"type": "string", "description": "Como o código está hoje, na parte que importa"},
         "goal": {"type": "string", "description": "O que esta tarefa deve alcançar, em uma frase"},
         "relevant_files": {"type": "array", "items": {"type": "string"},
@@ -735,8 +751,9 @@ PLAN_FEATURE = Tool(
             "depends_on": {"type": "array", "items": {"type": "string"},
                            "description": "Códigos (TASK-002) ou a posição na lista ('1') das tarefas "
                                           "que precisam concluir antes desta"},
-            "model_slot": {"type": "string", "enum": list(SLOTS),
-                           "description": "rapido para tarefa simples, capaz para tarefa difícil"},
+            "model_slot": {"type": "string",
+                           "description": "rapido (simples), capaz (difícil) ou o id de um Worker especialista "
+                                          "da lista do prompt. Vazio: escolhido pelo tipo e pelos arquivos"},
             "agent": {"type": "string", "description": "Persona do projeto (.forja/agents/*.md), se houver"},
             "priority": {"type": "integer"}},
             "required": ["contract"]}}},
@@ -801,10 +818,8 @@ def _update_task(_root: Path, args: dict) -> str:
             task.contract = normalize_contract(c)
             mudou.append("contrato")
         if (slot := args.get("model_slot")) is not None:
-            slot = str(slot).strip().lower()
-            if slot and slot not in SLOTS:
-                raise ToolError(f"model_slot inválido '{slot}': use {', '.join(SLOTS)}.")
-            task.model_slot = slot or None
+            slot = _slot_valido(slot)
+            task.model_slot = slot
             mudou.append(f"modelo={slot or 'automático'}")
         if (p := args.get("priority")) is not None:
             task.priority = int(p)
@@ -834,7 +849,7 @@ UPDATE_TASK = Tool(
         "status": {"type": "string", "enum": list(STATUSES)},
         "reason": {"type": "string", "description": "Por quê, quando for blocked/needs_human/failed"},
         "contract": _CONTRACT_SCHEMA,
-        "model_slot": {"type": "string", "enum": list(SLOTS)},
+        "model_slot": {"type": "string", "description": "rapido, capaz ou id de especialista; '' = automático"},
         "priority": {"type": "integer"},
         "max_attempts": {"type": "integer"}},
      "required": ["code"]},

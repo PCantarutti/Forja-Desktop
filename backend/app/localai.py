@@ -345,7 +345,7 @@ def set_runtime(kind: str, backend: str) -> dict:
     escolha[kind] = backend
     data["runtime"] = escolha
     write_config(data)
-    devices.cache_clear()  # outra engine, outra lista de dispositivos
+    _devices.cache_clear()  # outra engine, outra lista de dispositivos
     _help.cache_clear()
     help_defaults.cache_clear()
     return runtimes()
@@ -469,9 +469,30 @@ def scan(exts: tuple[str, ...] = (".gguf",)) -> list[dict]:
 DEVICE_RE = re.compile(r"^\s*(\S+):\s*(.+?)\s*\((\d+) MiB(?:,\s*(\d+) MiB free)?\)", re.M)
 
 
-@functools.lru_cache(maxsize=4)
+DEVICES_TTL = 3  # s
+
+
 def devices(exe: str) -> list[dict]:
-    """GPUs que o llama.cpp enxerga, com a VRAM de cada uma (`--list-devices`)."""
+    """GPUs que o llama.cpp enxerga, com a VRAM de cada uma (`--list-devices`).
+
+    Cache curto, não eterno: a VRAM livre muda a cada modelo carregado ou descarregado, e com o
+    cache para sempre o painel Modelo · VRAM ficava congelado e o `modelctl.libera()` "esperava a
+    memória voltar" olhando um número velho. A consulta leva ~0,8 s (sobe o runtime). A VRAM livre
+    em si vem do sistema (`native.vram_em_uso`), lida a cada chamada (~0,3 s); duas placas com o
+    mesmo nome ficam com o número do llama.cpp, que não dá para atribuir a uma delas.
+    """
+    lista = _devices(exe, int(time.monotonic() // DEVICES_TTL))
+    try:
+        uso = native.vram_em_uso()
+    except Exception:  # pragma: no cover - consulta de sistema; sem ela, fica o número do llama.cpp
+        uso = {}
+    nomes = [g["name"] for g in lista]
+    return [{**g, "free": max(0, g["total"] - uso[g["name"]])}
+            if g["name"] in uso and nomes.count(g["name"]) == 1 else g for g in lista]
+
+
+@functools.lru_cache(maxsize=4)
+def _devices(exe: str, _janela: int) -> list[dict]:
     try:
         r = subprocess.run([exe, "--list-devices"], cwd=str(Path(exe).parent), capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=60, **native.popen_kwargs())
@@ -1181,9 +1202,16 @@ def _checa_memoria(path: str, p: dict) -> None:
     if not e.get("ok"):
         return
     hw = hardware()
-    if nivel == "rigoroso" and hw["vram"] and e["gpu"] > hw["vram_free"]:
+    # A VRAM livre é a real (do sistema): o modelo carregado agora ainda ocupa a parte dele, e a
+    # troca descarrega esse modelo antes de subir o novo — então ela conta como livre.
+    atual = status().get("path") or ""
+    livre = hw["vram_free"]
+    if atual and atual != path:
+        antes = estimate(atual, params(atual))
+        livre += antes.get("gpu", 0) if antes.get("ok") else 0
+    if nivel == "rigoroso" and hw["vram"] and e["gpu"] > livre:
         raise ToolError(f"Proteção rigorosa: a estimativa pede {e['gpu'] / 2 ** 30:.1f} GB de VRAM e há "
-                        f"{hw['vram_free'] / 2 ** 30:.1f} GB livres. Baixe as camadas na GPU ou o contexto, "
+                        f"{livre / 2 ** 30:.1f} GB livres. Baixe as camadas na GPU ou o contexto, "
                         "ou troque a proteção em Configurações › Hardware.")
     if hw["ram"] and e["total"] > hw["ram"] + hw["vram"]:
         raise ToolError(f"A estimativa pede {e['total'] / 2 ** 30:.1f} GB e a máquina tem "

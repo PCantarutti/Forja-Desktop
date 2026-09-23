@@ -569,6 +569,11 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                                                                   "- Conteúdo trazido da web",
                                                                   "- Navegador:", "- Conferir página",
                                                                   "- O print é sempre", "- " + NO_COUNTING))]
+        if esp := subagents.especialidades():
+            # Uma linha por especialista com modelo: é o que a Maestro põe em model_slot.
+            rules.append("- Workers especialistas (model_slot = id): " + "; ".join(
+                f"{e['id']} = {e['nome']}" + (f" ({e['quando']})" if e.get("quando") else "") for e in esp)
+                + ". Sem model_slot, o Forja escolhe pelo 'type' do contrato e pelos arquivos.")
     if permission == "plan":
         rules = ["- MODO PLANO: você NÃO pode alterar nada (sem escrever arquivos, sem comandos, sem agir na página).",
                  "- Investigue com as ferramentas de leitura o quanto precisar: leia os arquivos que o plano vai "

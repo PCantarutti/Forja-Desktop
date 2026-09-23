@@ -173,7 +173,9 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     # Em modo sequencial o orquestrador pode trocar o modelo local sozinho, então um slot que só
     # precisa ser carregado continua elegível (ver subagents._fits e modelctl.ensure).
     trocar = modelctl.pode_trocar()
-    cadeia = subagents.chain(task.model_slot or "capaz", swap=trocar)
+    # Quem faz: a escolha da Maestro, ou o especialista pelo tipo/arquivos, ou o capaz.
+    nivel = subagents.rota(task.model_slot, task.contract)
+    cadeia = subagents.chain(nivel, swap=trocar)
     if not cadeia:
         porque = subagents._why_not(trocar)
         erro("Nenhum Worker disponível agora"
@@ -239,7 +241,7 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     # Muda só de onde vem o briefing — um contrato estruturado em vez de texto que o modelo escreveu.
     sub_call = {"id": call["id"], "name": "delegate_task", "arguments": {
         "task": brief,
-        "level": task.model_slot or "capaz",
+        "level": nivel,
         "agent": task.agent,
         "files": contrato.get("relevant_files") or [],
         "done_when": contrato.get("verify_command") or ""}}

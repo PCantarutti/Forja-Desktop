@@ -208,6 +208,10 @@ async def unload(motivo: str = "") -> AsyncIterator[dict]:
 
 
 def _vram_livre() -> int | None:
+    """Leitura nova, sem o cache curto do `devices()`: é a espera pela memória que depende dela."""
+    limpa = getattr(getattr(localai, "_devices", None), "cache_clear", None)
+    if limpa:
+        limpa()
     try:
         return localai.hardware().get("vram_free")
     except Exception:  # pragma: no cover - consulta de sistema
@@ -228,7 +232,8 @@ async def libera(motivo: str = "unload_clear") -> AsyncIterator[dict]:
         agora = _vram_livre()
         if agora is None:
             break
-        estavel = estavel + 1 if agora == ultima else 0
+        # tolerância: a VRAM livre oscila uns MB com o resto do sistema (navegador, desktop)
+        estavel = estavel + 1 if abs(agora - (ultima or 0)) < (64 << 20) else 0
         ultima = agora
         if estavel >= 3:  # 1,5 s sem mudar: o driver terminou de devolver
             break

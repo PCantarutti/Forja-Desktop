@@ -43,6 +43,15 @@ SAFE_SUBCOMMANDS = {
     "python": set(), "python3": set(), "node": set(),  # tratados abaixo (só -m pytest / --version etc.)
 }
 SAFE_PYTHON_ARGS = {"-m", "--version", "-V", "-c"}
+# Cmdlets e utilitários do Windows que só leem (o run_command roda no PowerShell). Minúsculos: o
+# PowerShell não diferencia caixa. Escrita (Set-Content, Out-File, Remove-Item...) fica de fora.
+SAFE_WINDOWS = {
+    "get-date", "get-content", "gc", "type", "test-path", "select-string", "sls", "findstr",
+    "get-childitem", "gci", "dir", "get-location", "gl", "get-item", "gi", "get-itemproperty",
+    "select-object", "select", "where-object", "where", "measure-object", "measure", "sort-object",
+    "format-table", "ft", "format-list", "fl", "get-command", "gcm", "resolve-path", "split-path",
+    "join-path", "get-filehash", "write-output", "write-host",
+}
 DANGEROUS = re.compile(r"(^|\s)(rm|rmdir|mv|dd|mkfs|chmod|chown|sudo|su|kill|pkill|shutdown|reboot|"
                        r"curl|wget|nc|ssh|scp|apt|apt-get|yum|brew|systemctl)(\s|$)")
 REDIRECT = re.compile(r"[>]|(^|\s)tee(\s|$)")
@@ -71,13 +80,33 @@ DESTRUCTIVE_EXTRA = re.compile(
 SPLIT = re.compile(r"&&|\|\||;|\|")
 
 
+def partes(command: str) -> list[str]:
+    """Os comandos de uma linha, separados por ; && || | FORA de aspas. Dividir pelo regex puro
+    cortava `python -c "import a; a.b()"` no meio das aspas, e o trecho sem fechar aspas virava
+    "comando desconhecido" — pedia aprovação no modo Automático para algo que é um comando só."""
+    out, atual, aspas, i = [], "", "", 0
+    while i < len(command):
+        ch = command[i]
+        if aspas:
+            aspas = "" if ch == aspas else aspas
+        elif ch in "\"'":
+            aspas = ch
+        elif m := SPLIT.match(command, i):
+            out.append(atual)
+            atual, i = "", m.end()
+            continue
+        atual += ch
+        i += 1
+    return [*out, atual]
+
+
 def chained(command: str) -> bool:
     """Mais de um comando na mesma string: separador, subshell, crase ou quebra de linha.
 
     Uma regra de auto-aprovação vale para UM comando, não para o que vier grudado nele:
     o glob casa prefixo, então `pytest*` sozinho liberaria `pytest -q; Remove-Item -Recurse C:/`.
     """
-    return (len(command.splitlines()) > 1 or len(SPLIT.split(command)) > 1
+    return (len(command.splitlines()) > 1 or len(partes(command)) > 1
             or "$(" in command or "`" in command)
 
 
@@ -97,15 +126,18 @@ def safe_command(command: str) -> bool:
     command = (command or "").strip()
     if not command or REDIRECT.search(SEM_ARQUIVO.sub(" ", command)) or DANGEROUS.search(command) or "$(" in command or "`" in command:
         return False
-    for part in SPLIT.split(command):
+    for part in partes(command):
         try:
-            words = shlex.split(part)
+            # posix=False: no Windows a barra invertida é separador de pasta, não escape
+            words = [w.strip("\"'") for w in shlex.split(part, posix=False)]
         except ValueError:
             return False
         if not words:
             return False
-        base = words[0].rsplit("/", 1)[-1]
-        if base in SAFE_COMMANDS:
+        base = words[0].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe")
+        if base in SAFE_COMMANDS or base in SAFE_WINDOWS:
+            continue
+        if len(words) == 2 and words[1] in ("--version", "-V"):  # só imprime a versão
             continue
         if base in ("python", "python3", "node"):
             if len(words) > 1 and words[1] in SAFE_PYTHON_ARGS and (len(words) < 3 or words[2] in

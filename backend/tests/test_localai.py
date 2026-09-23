@@ -889,3 +889,21 @@ def test_visao_por_modelo_pelo_mmproj_da_pasta(isolado, monkeypatch):
     assert localai.visao_do_alias("Qwen3.6-Q4_K_M") is True
     assert localai.visao_do_alias("Coder-Q4_K_M") is False
     assert localai.visao_do_alias("nao-existe") is None
+
+
+def test_vram_livre_vem_do_sistema_e_a_troca_conta_o_modelo_atual(isolado, monkeypatch):
+    """O Vulkan não enxerga a VRAM de outros processos: a livre vem do sistema. E a proteção rigorosa
+    não pode recusar uma troca por causa do modelo que a própria troca vai descarregar."""
+    from app import native
+    monkeypatch.setattr(localai, "_devices", lambda exe, janela: [{"id": "Vulkan0", "name": "GPU", "total": 12 << 30, "free": 12 << 30}])
+    monkeypatch.setattr(native, "vram_em_uso", lambda: {"GPU": 9 << 30})
+    assert localai.devices("llama")[0]["free"] == 3 << 30
+
+    monkeypatch.setattr(localai, "guardrail", lambda: "rigoroso")
+    monkeypatch.setattr(localai, "hardware", lambda: {"vram": 12 << 30, "vram_free": 3 << 30, "ram": 32 << 30})
+    monkeypatch.setattr(localai, "estimate", lambda path, p: {"ok": True, "gpu": 8 << 30, "total": 9 << 30})
+    monkeypatch.setattr(localai, "status", lambda: {"path": "atual.gguf"})
+    localai._checa_memoria("novo.gguf", {})  # 3 livres + 8 do atual >= 8: passa
+    monkeypatch.setattr(localai, "status", lambda: {"path": ""})
+    with pytest.raises(Exception, match="rigorosa"):
+        localai._checa_memoria("novo.gguf", {})

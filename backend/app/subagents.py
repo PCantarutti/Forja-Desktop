@@ -95,8 +95,44 @@ def agents_for(root: Path) -> dict[str, dict]:
 
 
 def slot(level: str) -> dict | None:
-    spec = config.SUBAGENTS.get(level) or {}
+    """Modelo de um nível (rapido/capaz/nuvem) ou de uma especialidade (logica, frontend...)."""
+    spec = config.SUBAGENTS.get(level) or especialidade(level) or {}
     return spec if spec.get("provider") and spec.get("model") else None
+
+
+def especialidade(eid: str) -> dict | None:
+    return next((e for e in getattr(config, "WORKER_ESPECIALIDADES", []) if e.get("id") == eid), None)
+
+
+def especialidades() -> list[dict]:
+    """Especialidades com modelo: só estas a Maestro enxerga."""
+    return [e for e in getattr(config, "WORKER_ESPECIALIDADES", []) if slot(e["id"])]
+
+
+def nome_do_nivel(level: str) -> str:
+    return LEVELS.get(level) or (especialidade(level) or {}).get("nome") or level
+
+
+# tipo da tarefa -> especialidade que o roteador tenta quando a Maestro não escolheu
+ROTA_POR_TIPO = {"ui": "frontend", "test": "testes", "docs": "docs",
+                 "feature": "logica", "bugfix": "logica", "refactor": "logica", "chore": "logica"}
+
+
+def rota(model_slot: str | None, contrato: dict | None) -> str:
+    """Quem faz a tarefa. A escolha da Maestro manda; sem ela, o tipo do contrato e os arquivos
+    decidem a especialidade (se ela tiver modelo); no fim, o Worker capaz."""
+    if model_slot:
+        return model_slot
+    c = contrato or {}
+    from .qualidade import EXTENSOES_DE_TELA  # import tardio: qualidade importa taskdb
+    arquivos = [str(a).lower() for a in c.get("relevant_files") or []]
+    tipo = c.get("type") or ""
+    # tarefa sem tipo que só mexe em tela é de frontend (o guia visual entra em toda tarefa: não conta)
+    de_tela = [a for a in arquivos if not a.endswith(".forja/knowledge/frontend.md")]
+    if not tipo and de_tela and all(a.endswith(EXTENSOES_DE_TELA) for a in de_tela):
+        tipo = "ui"
+    alvo = ROTA_POR_TIPO.get(tipo)
+    return alvo if alvo and slot(alvo) else "capaz"
 
 
 def configured() -> dict[str, dict]:
@@ -145,7 +181,9 @@ def chain(level: str, swap: bool = False) -> list[tuple[str, dict]]:
     """Ordem de tentativa: o nível pedido, a reserva na nuvem e o outro nível. Slot sem modelo, ou que
     não roda agora nesta máquina, fica de fora. Com `swap`, um slot local que só precisa ser carregado
     continua valendo (ver _fits)."""
-    ordem = dict.fromkeys([level, "nuvem", "capaz" if level == "rapido" else "rapido"])
+    # especialidade: ela, depois o capaz (generalista), a nuvem e o rápido
+    ordem = dict.fromkeys([level, "nuvem", "capaz" if level == "rapido" else "rapido"] if level in LEVELS
+                          else [level, "capaz", "nuvem", "rapido"])
     return [(lvl, spec) for lvl in ordem if (spec := slot(lvl)) and _fits(spec, swap)[0]]
 
 
@@ -384,7 +422,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
     t0 = time.monotonic()
     final = ""
-    yield estado(f"{LEVELS[used_level]} · {model}: começando…")
+    yield estado(f"{nome_do_nivel(used_level)} · {model}: começando…")
 
     # Worker de contrato vira uma conversa como a do chat: mensagens no mesmo formato, transmitidas
     # ao vivo (a coluna Worker do cockpit desenha com os componentes do chat) e gravadas a cada
@@ -411,13 +449,13 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     recargas = 0
     for i in range(config.SUBAGENT_MAX_ITERATIONS):
         if getattr(run_obj, "paused", False):  # Pausar vale também no meio de uma tarefa do Worker
-            yield estado(f"{LEVELS[used_level]} · {model}: pausado")
+            yield estado(f"{nome_do_nivel(used_level)} · {model}: pausado")
             await run_obj.espera_retomar()
         if run_obj.cancel.is_set():
             final = final or "(interrompido pelo usuário)"
             break
         info["iterations"] = i + 1
-        yield estado(f"{LEVELS[used_level]} · {model}: pensando (passo {i + 1})")
+        yield estado(f"{nome_do_nivel(used_level)} · {model}: pensando (passo {i + 1})")
         content = reasoning = ""
         done: dict = {"tool_calls": []}
         t_passo, t_primeiro = time.monotonic(), None
@@ -450,7 +488,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             if (recargas < MAX_RECARGAS and not run_obj.cancel.is_set() and e.status is None
                     and await modelctl.caiu(spec)):
                 recargas += 1
-                yield estado(f"{LEVELS[used_level]} · {model}: o modelo caiu ({e}); recarregando e "
+                yield estado(f"{nome_do_nivel(used_level)} · {model}: o modelo caiu ({e}); recarregando e "
                              f"repetindo o passo {i + 1}")
                 try:
                     async for ev in modelctl.recupera(spec, run_obj.cancel):
@@ -471,7 +509,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 info.update(level=used_level, provider=provider, model=model)
                 if structured:
                     ctx_max = await llm.context_limit(provider, model, config.NUM_CTX)
-                info["fallback"] = f"O slot anterior falhou ({e}); segui com {LEVELS[used_level]} · {model}."
+                info["fallback"] = f"O slot anterior falhou ({e}); segui com {nome_do_nivel(used_level)} · {model}."
                 yield estado(info["fallback"])
                 continue
             out.update(status="erro", text=f"Subagente falhou ({model}): {e}", meta=meta)
@@ -570,7 +608,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     info["seconds"] = round(time.monotonic() - t0, 1)
     yield estado("")
     out.update(status="ok", meta=meta,
-               text=f"[Relatório do subagente {LEVELS[used_level]} ({model})]\n{final}")
+               text=f"[Relatório do subagente {nome_do_nivel(used_level)} ({model})]\n{final}")
 
 async def run(conv_id: int, call: dict, req, run_obj, out: dict,
               run_call: Callable, structured: bool = False,

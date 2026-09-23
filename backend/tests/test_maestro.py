@@ -1143,3 +1143,56 @@ def test_atividade_conta_as_aprovacoes_esperando(cliente):
         assert conv["waiting"] == 1 and conv["running"]
     finally:
         agent.RUNS.pop(run.id)
+
+
+def test_roteador_escolhe_especialista_pelo_tipo_e_pelos_arquivos(monkeypatch):
+    from app import subagents
+    monkeypatch.setattr(config, "SUBAGENTS", {"capaz": {"provider": "x", "model": "geral"}})
+    monkeypatch.setattr(config, "WORKER_ESPECIALIDADES", [
+        {"id": "frontend", "nome": "Frontend", "quando": "", "provider": "x", "model": "tela"},
+        {"id": "logica", "nome": "Lógica", "quando": "", "provider": "", "model": ""},  # sem modelo
+    ])
+    rota = subagents.rota
+    assert rota("rapido", {"type": "ui"}) == "rapido"                       # escolha da Maestro manda
+    assert rota(None, {"type": "ui"}) == "frontend"
+    assert rota(None, {"relevant_files": [".forja/knowledge/frontend.md", "src/App.tsx", "style.css"]}) == "frontend"
+    assert rota(None, {"relevant_files": ["src/App.tsx", "api.py"]}) == "capaz"   # misto: generalista
+    assert rota(None, {"type": "bugfix"}) == "capaz"                        # logica sem modelo
+    assert [lvl for lvl, _ in subagents.chain("frontend")][:2] == ["frontend", "capaz"]
+    assert subagents.nome_do_nivel("frontend") == "Frontend"
+    assert "frontend = Frontend" in agent.system_prompt("native", set(), permission="auto", maestro_mode=True)
+    assert "logica =" not in agent.system_prompt("native", set(), permission="auto", maestro_mode=True)
+
+
+def test_contrato_guarda_tipo_valido_e_aceita_especialidade(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WORKER_ESPECIALIDADES", [{"id": "frontend", "nome": "F", "quando": "", "provider": "", "model": ""}])
+    assert taskdb.normalize_contract({"goal": "x", "type": "BUGFIX"})["type"] == "bugfix"
+    assert "type" not in taskdb.normalize_contract({"goal": "x", "type": "qualquer"})
+    assert taskdb._slot_valido("Frontend") == "frontend"
+    with pytest.raises(ToolError, match="frontend"):
+        taskdb._slot_valido("design")
+
+
+@pytest.mark.parametrize("cmd,seguro", [
+    ('python -m pytest -q -k "a or b"', True),
+    ("Get-Date -Format 'yyyy-MM-dd'", True),
+    ('Select-String -Path "x.html" -Pattern "footer|contentinfo" | Select-Object -First 30', True),
+    ("where.exe tesseract; python --version; pip --version", True),
+    ('Test-Path .\index.html', True),
+    ('git status; git diff', True),
+    ('python -c "import os; os.remove(\'x\')"', False),       # código arbitrário continua perguntando
+    ("python check.py", False),
+    ('Get-Content a.txt | Set-Content b.txt', False),
+    ('echo "a;b" > saida.txt', False),
+    ('git status; Remove-Item -Recurse C:/', False),
+    ('echo "$(rm -rf x)"', False),
+])
+def test_modo_automatico_libera_leitura_e_respeita_aspas(cmd, seguro):
+    from app import policy
+    assert policy.safe_command(cmd) is seguro
+
+
+def test_regra_de_comando_nao_vale_para_o_que_vem_grudado():
+    from app import policy
+    assert policy.chained('pytest -q; Remove-Item -Recurse C:/')
+    assert not policy.chained('python -m pytest -k "a; b"')

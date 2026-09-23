@@ -44,7 +44,9 @@ ENV_DEFAULTS: dict[str, Any] = {
     "maestro_model": {"provider": "", "model": ""},
     "maestro_visual": {"provider": "", "model": ""},
     "maestro_browser": True,
+    "worker_especialidades": [dict(e) for e in config.ESPECIALIDADES_PADRAO],
 }
+MAX_ESPECIALIDADES = 12
 
 LISTS = ("disabled_tools", "auto_approve_tools", "auto_approve_commands", "trusted_hooks")
 
@@ -68,6 +70,33 @@ ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 
 class SettingsError(ValueError):
     """Valor inválido vindo da UI."""
+
+
+def _especialidades(raw, provedores: set[str]) -> list[dict]:
+    """Lista de Workers especialistas. O id é o que a Maestro escreve em model_slot: não pode
+    colidir com os níveis (rapido/capaz/nuvem) nem repetir."""
+    if not isinstance(raw, list):
+        raise SettingsError("'worker_especialidades' precisa ser uma lista.")
+    if len(raw) > MAX_ESPECIALIDADES:
+        raise SettingsError(f"No máximo {MAX_ESPECIALIDADES} especialidades.")
+    out, vistos = [], set()
+    for e in raw:
+        e = e if isinstance(e, dict) else {}
+        nome = str(e.get("nome") or "").strip()[:60]
+        if not nome and not e.get("model"):
+            continue  # linha que a pessoa adicionou e deixou em branco
+        eid = str(e.get("id") or "").strip().lower() or re.sub(r"[^a-z0-9]+", "-", nome.lower()).strip("-")[:30]
+        if not nome or not ID_RE.match(eid or "-"):
+            raise SettingsError("Toda especialidade precisa de um nome (e de um id em letras minúsculas).")
+        if eid in ("rapido", "capaz", "nuvem") or eid in vistos:
+            raise SettingsError(f"Especialidade '{eid}' repetida ou com o nome de um nível (rápido/capaz/nuvem).")
+        provider, model = str(e.get("provider") or ""), str(e.get("model") or "")
+        if provider and provider not in provedores:
+            raise SettingsError(f"Especialidade '{nome}': provedor '{provider}' não existe.")
+        vistos.add(eid)
+        out.append({"id": eid, "nome": nome, "quando": str(e.get("quando") or "").strip()[:200],
+                    "provider": provider, "model": model})
+    return out
 
 
 def load() -> dict:
@@ -109,6 +138,7 @@ def apply(values: dict | None = None) -> dict:
     config.MODEL_LIFECYCLE = values["model_lifecycle"]
     config.MAESTRO_MODEL = dict(values["maestro_model"])
     config.MAESTRO_VISUAL = dict(values["maestro_visual"])
+    config.WORKER_ESPECIALIDADES = [dict(e) for e in values["worker_especialidades"]]
     config.MAESTRO_BROWSER = bool(values["maestro_browser"])
     config.BROWSER_IDLE_MINUTES = int(values["browser_idle_minutes"])
     config.BROWSER_SCALE = int(values["browser_scale"])
@@ -190,6 +220,8 @@ def validate(patch: dict, current: dict) -> dict:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out
+        elif key == "worker_especialidades":
+            values[key] = _especialidades(raw, {p["id"] for p in values["providers"]} | {"local"})
         elif key in ("maestro_model", "maestro_visual"):
             if not isinstance(raw, dict):
                 raise SettingsError(f"'{key}' precisa ser um objeto {{provider, model}}.")

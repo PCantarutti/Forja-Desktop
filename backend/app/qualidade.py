@@ -84,7 +84,7 @@ def _feature_alvo(s, conv_id: int):
             or q.filter(db.Feature.status == "active").order_by(db.Feature.id.desc()).first())
 
 
-def tarefa_de_correcao(conv_id: int, titulo: str, problemas: list[str], contexto: str) -> str:
+def tarefa_de_correcao(conv_id: int, titulo: str, problemas: list[str], contexto: str, tipo: str = "bugfix") -> str:
     """Cria (sem duplicar) a tarefa de correção. Devolve a frase para o resultado da ferramenta."""
     with db.session() as s:
         feat = _feature_alvo(s, conv_id)
@@ -101,7 +101,7 @@ def tarefa_de_correcao(conv_id: int, titulo: str, problemas: list[str], contexto
                     "Não criei outra: pergunte ao usuário (ask_user) como seguir.")
     out = taskdb.create_feature(conv_id, "", "", [{
         "title": titulo,
-        "contract": {"goal": titulo, "context": f"{MARCA_AUTO} {contexto}",
+        "contract": {"type": tipo, "goal": titulo, "context": f"{MARCA_AUTO} {contexto}",
                      "requirements": problemas[:taskdb.MAX_ITENS],
                      "acceptance_criteria": ["Os problemas listados em requisitos não aparecem mais."]}}], fid)
     code = out["tasks"][0]["code"]
@@ -167,7 +167,8 @@ async def _visual_review(_root: Path, args: dict) -> dict:
     if not ok and conv is not None:
         problemas = [l.lstrip("- ").strip() for l in veredito.splitlines()[1:] if l.strip().startswith("-")]
         texto += tarefa_de_correcao(conv, "Ajustes visuais: " + ", ".join(urls)[:120],
-                                    problemas or [veredito[:500]], "A revisão visual reprovou: " + ", ".join(urls))
+                                    problemas or [veredito[:500]], "A revisão visual reprovou: " + ", ".join(urls),
+                                    tipo="ui")
     return {"text": texto, "attachments": anexos}
 
 

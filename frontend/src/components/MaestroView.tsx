@@ -13,13 +13,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api";
 import { useStickyBottom } from "../useStickyBottom";
-import type {
-  Approval, Draft, MaestroBoard, MaestroModels, MaestroTask, Message, ModelPhase, Stats, SubState, TaskAttempt,
-  TaskStatus,
+import {
+  TIPOS_TAREFA,
+  type Approval, type Draft, type Especialidade, type MaestroBoard, type MaestroModels, type MaestroTask, type Message,
+  type ModelPhase, type Stats, type SubState, type TaskAttempt, type TaskStatus, type TipoTarefa,
 } from "../types";
 import Confirma from "./Confirma";
 import ContextRing from "./ContextRing";
-import { Check, Cube, Split, X } from "./icons";
+import { Check, Cube, Expandir, Recolher, Split, X } from "./icons";
+import { Modal } from "./Modal";
 import { aggregate, type TurnStats } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { TABS as ABAS_DIREITA, seloDaAba, type EstadoAbas, type RightTab } from "./RightPanel";
@@ -82,12 +84,17 @@ const BLOCOS: Bloco[] = ["arvore", "maestro", "worker", "doca"];
 /** Colunas da esquerda para a direita (com a largura de cada uma em partes proporcionais) e, opcional,
  * uma faixa de largura inteira em cima ou embaixo delas, com a altura em % da área. Qualquer bloco
  * vai para qualquer lugar: a doca pode virar coluna e a Maestro pode virar faixa. */
-type Layout = { colunas: Bloco[]; larguras: number[]; faixa: Bloco | null; faixaEmCima: boolean; dock: number };
+type Layout = {
+  colunas: Bloco[]; larguras: number[]; faixa: Bloco | null; faixaEmCima: boolean; dock: number;
+  recolhidos: Bloco[];  // viram uma barra fina (coluna: vertical; faixa: horizontal)
+};
 // Tarefas estreita de propósito: é uma lista de códigos e títulos curtos, e o espaço rende mais na
 // coluna da Maestro, onde está o texto e o composer.
 const LAYOUT_PADRAO: Layout = {
   colunas: ["arvore", "maestro", "worker"], larguras: [14, 56, 30], faixa: "doca", faixaEmCima: false, dock: 36,
+  recolhidos: [],
 };
+const NOMES: Record<Bloco, string> = { arvore: "Tarefas", maestro: "Maestro", worker: "Worker", doca: "Painéis" };
 
 /** Onde o bloco arrastado cai: trocar de lugar com outro, entrar como coluna numa posição, ou virar a
  * faixa de cima/baixo. */
@@ -148,11 +155,11 @@ function lerLayouts(): Record<string, Layout> {
   }
 }
 
-/** Layout por conversa. Conversa sem layout salvo herda o último usado, para a pessoa não ter que
- * reajustar a cada conversa nova; o padrão só vale na primeira vez. */
+/** Layout por conversa. Conversa sem layout salvo começa no padrão que o usuário escolheu
+ * ("Salvar como padrão", guardado em `_padrao`), ou no original. */
 function layoutDe(chave: string): Layout {
   const todos = lerLayouts();
-  const salvo = (todos[chave] ?? todos._ultimo ?? {}) as Partial<Layout> & {
+  const salvo = ((chave !== "_nova" && todos[chave]) || todos._padrao || {}) as Partial<Layout> & {
     cols?: number[]; ordem?: Bloco[]; docaEmCima?: boolean;  // formato anterior: 3 colunas + doca
   };
   const l: Layout = Array.isArray(salvo.colunas) ? { ...LAYOUT_PADRAO, ...salvo } : {
@@ -166,7 +173,8 @@ function layoutDe(chave: string): Layout {
   const todosBlocos = [...l.colunas, ...(l.faixa ? [l.faixa] : [])];
   const valido = l.colunas.length > 0 && l.larguras.length === l.colunas.length
     && [...todosBlocos].sort().join() === [...BLOCOS].sort().join();
-  return valido ? l : LAYOUT_PADRAO;
+  if (!valido) return LAYOUT_PADRAO;
+  return { ...l, recolhidos: (Array.isArray(l.recolhidos) ? l.recolhidos : []).filter((b) => BLOCOS.includes(b)) };
 }
 
 function useLayout(convId: number | null) {
@@ -174,17 +182,23 @@ function useLayout(convId: number | null) {
   const [st, setSt] = useState(() => ({ chave, layout: layoutDe(chave) }));
   // Trocou de conversa: ajusta no próprio render (padrão do React para "estado derivado de prop"),
   // sem um efeito que desenharia um quadro com o layout da conversa anterior.
-  if (st.chave !== chave) setSt({ chave, layout: layoutDe(chave) });
-  const layout = st.chave === chave ? st.layout : layoutDe(chave);
+  // A conversa nova ganha id no primeiro envio: o que foi ajustado antes disso vai junto com ela.
+  const herda = st.chave === "_nova" && chave !== "_nova" && !lerLayouts()[chave];
+  if (st.chave !== chave) setSt({ chave, layout: herda ? st.layout : layoutDe(chave) });
+  const layout = st.chave === chave || herda ? st.layout : layoutDe(chave);
   const setLayout = (f: (l: Layout) => Layout) => setSt((s) => ({ ...s, layout: f(s.layout) }));
-  const salvar = (l: Layout) => {
+  const grava = (k: string, l: Layout) => {
     try {
-      localStorage.setItem(LAYOUT_CHAVE, JSON.stringify({ ...lerLayouts(), [chave]: l, _ultimo: l }));
+      localStorage.setItem(LAYOUT_CHAVE, JSON.stringify({ ...lerLayouts(), [k]: l }));
     } catch {
       /* sem storage: vale só nesta sessão */
     }
   };
-  return { layout, setLayout, salvar };
+  // "_nova" não é gravado: cada conversa nova parte do padrão, não do rascunho da anterior.
+  const salvar = (l: Layout) => chave !== "_nova" && grava(chave, l);
+  const salvarPadrao = (l: Layout) => grava("_padrao", l);
+  const ehPadrao = (l: Layout) => JSON.stringify(l) === JSON.stringify(layoutDe("_nova"));
+  return { layout, setLayout, salvar, salvarPadrao, ehPadrao };
 }
 
 /** Faixa de arrasto entre dois blocos. Só reporta o deslocamento; quem sabe o que fazer é o pai. */
@@ -216,9 +230,8 @@ function Divisor(props: { eixo: "x" | "y"; onArrasto: (e: PointerEvent) => void;
   );
 }
 
+// Ordem da doca: a mesma do painel direito do chat e do agente, e no fim as duas só da Maestro.
 type DocaTab = RightTab | "model" | "task";
-// Ordem da doca: primeiro o que ela já tinha, depois as abas do painel direito que faltavam.
-const DOCA_ORDEM: RightTab[] = ["browser", "terminal", "changes", "info", "servers", "local", "plans"];
 
 export default function MaestroView(props: {
   convId: number | null;
@@ -252,7 +265,37 @@ export default function MaestroView(props: {
   onNovaSessao: () => void;
 }) {
   const { convId, board, onBoard } = props;
-  const { layout, setLayout, salvar } = useLayout(convId);
+  const { layout, setLayout, salvar: gravar, salvarPadrao, ehPadrao } = useLayout(convId);
+  // Toda mudança de layout feita pela pessoa mostra por alguns segundos, no cabeçalho, o botão
+  // discreto de "salvar como padrão" (se já não for o padrão).
+  const [avisoEm, setAvisoEm] = useState(0);
+  const [perguntaPadrao, setPerguntaPadrao] = useState(false);
+  const salvar = (l: Layout) => {
+    gravar(l);
+    setAvisoEm((n) => n + 1);  // contador: cada mudança reinicia os segundos do aviso
+  };
+  useEffect(() => {
+    if (!avisoEm) return;
+    const t = setTimeout(() => setAvisoEm(0), 8000);
+    return () => clearTimeout(t);
+  }, [avisoEm]);
+  const mostraSalvarPadrao = (!!avisoEm || perguntaPadrao) && !ehPadrao(layout);
+  function recolher(id: Bloco, sim: boolean) {
+    setLayout((l) => {
+      const novo = { ...l, recolhidos: sim ? [...l.recolhidos, id] : l.recolhidos.filter((b) => b !== id) };
+      salvar(novo);
+      return novo;
+    });
+  }
+  const botaoRecolher = (id: Bloco) => (
+    <button
+      onClick={() => recolher(id, true)}
+      title={`Recolher ${NOMES[id]} numa barra fina`}
+      className="ml-auto shrink-0 rounded p-0.5 text-faint hover:bg-raised hover:text-fg"
+    >
+      <Recolher className="size-3.5" />
+    </button>
+  );
   const area = useRef<HTMLDivElement>(null);     // tudo abaixo do cabeçalho: colunas + doca
   const colunas = useRef<HTMLDivElement>(null);
   // O último layout, para gravar quando o arrasto termina (o handler do pointerup foi criado no
@@ -263,15 +306,17 @@ export default function MaestroView(props: {
   }, [layout]);
 
   function arrastaColuna(i: number, e: PointerEvent) {
-    const box = colunas.current?.getBoundingClientRect();
-    if (!box) return;
+    // Pelos retângulos das duas colunas vizinhas: com colunas recolhidas (largura fixa) no meio, a
+    // conta pela soma das partes da grade inteira erraria.
+    const els = colunas.current?.querySelectorAll<HTMLElement>(":scope > [data-bloco]");
+    if (!els?.[i + 1]) return;
+    const esq = els[i].getBoundingClientRect(), dir = els[i + 1].getBoundingClientRect();
     setLayout((l) => {
       const larguras = [...l.larguras];
       const total = larguras.reduce((a, b) => a + b, 0);
       const par = larguras[i] + larguras[i + 1];
-      const minimo = (COL_MIN / 100) * total;
-      // posição do ponteiro em "partes", contada da borda esquerda da coluna i
-      const pos = ((e.clientX - box.left) / box.width) * total - larguras.slice(0, i).reduce((a, b) => a + b, 0);
+      const minimo = Math.min((COL_MIN / 100) * total, par / 2);
+      const pos = ((e.clientX - esq.left) / (dir.right - esq.left)) * par;
       larguras[i] = Math.min(Math.max(pos, minimo), par - minimo);
       larguras[i + 1] = par - larguras[i];
       return { ...l, larguras };
@@ -399,9 +444,9 @@ export default function MaestroView(props: {
   }, [convId, onBoard]);
 
   useEffect(() => {
-    if (doca !== "model") return;
     const puxa = () => api.get<MaestroModels>("/maestro/models").then(setModelos).catch(() => {});
-    puxa();
+    puxa();  // uma vez sempre: o painel da tarefa mostra o nome do especialista
+    if (doca !== "model") return;
     const t = setInterval(puxa, 3000);
     return () => clearInterval(t);
   }, [doca]);
@@ -472,9 +517,9 @@ export default function MaestroView(props: {
   // Conteúdo de cada bloco, para desenhar como coluna ou como faixa.
   const bloco = (id: Bloco) =>
     id === "arvore" ? (
-      <Arvore board={board} selecionada={selecionada} onSelect={abrirTarefa} alca={alca("arvore")} />
+      <Arvore board={board} selecionada={selecionada} onSelect={abrirTarefa} alca={alca("arvore")} acao={botaoRecolher("arvore")} />
     ) : id === "maestro" ? (
-      <ColunaMaestro conversa={props.conversa} composer={props.composer} alca={alca("maestro")} />
+      <ColunaMaestro conversa={props.conversa} composer={props.composer} alca={alca("maestro")} acao={botaoRecolher("maestro")} />
     ) : id === "worker" ? (
       <ColunaWorker
         key={foco ?? ""}
@@ -485,15 +530,15 @@ export default function MaestroView(props: {
         approvals={props.approvals}
         conversar={props.renderConversa}
         alca={alca("worker")}
+        acao={botaoRecolher("worker")}
       />
     ) : (
       <div className={`${card} flex min-h-[120px] flex-col`}>
         <div {...alca("doca")} className="@container flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2 py-1">
           {([
-            ...DOCA_ORDEM.slice(0, 3).map((id) => abaDireita(id)),
-            ["model", "Modelo · VRAM", <Cube className="size-3.5" />],
+            ...ABAS_DIREITA.map((t) => abaDireita(t.id)),
             ["task", selecionada ?? "Tarefa", <Split className="size-3.5" />],
-            ...DOCA_ORDEM.slice(3).map((id) => abaDireita(id)),
+            ["model", "Modelo · VRAM", <Cube className="size-3.5" />],
           ] as [DocaTab, string, React.ReactNode][]).map(([id, label, icone]) => (
             <button
               key={id}
@@ -514,6 +559,7 @@ export default function MaestroView(props: {
               })()}
             </button>
           ))}
+          {botaoRecolher("doca")}
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
           {/* BrowserPanel reporta o próprio retângulo ao Electron, então a WebContentsView nativa
@@ -533,10 +579,16 @@ export default function MaestroView(props: {
                 setModelos((m) => (m ? { ...m, max_workers: n, can_swap: n <= 1 } : m));
                 await api.put("/settings", { max_workers: n }).catch(() => {});
               }}
+              onEspecialidade={async (id, provider, model) => {
+                const lista = (modelos?.especialidades ?? []).map((e) => (e.id === id ? { ...e, provider, model } : e));
+                setModelos((m) => (m ? { ...m, especialidades: lista } : m));
+                await api.put("/settings", { worker_especialidades: lista }).catch(() => {});
+              }}
             />
           ) : (
             <PainelTarefa
               tarefa={detalhe}
+              especialidades={modelos?.especialidades ?? []}
               convId={convId}
               onAtualizada={setDetalhe}
               onPedir={props.onPedir}
@@ -545,21 +597,65 @@ export default function MaestroView(props: {
         </div>
       </div>
     );
+  const recolhido = (id: Bloco) => layout.recolhidos.includes(id);
+  // Todas as colunas recolhidas: a faixa ocupa o resto da altura; faixa recolhida: as colunas ocupam.
+  const colunasFechadas = layout.colunas.every(recolhido);
+  const faixaFechada = !!layout.faixa && recolhido(layout.faixa);
+  const barra = (id: Bloco, vertical: boolean) => (
+    <BarraRecolhida
+      nome={NOMES[id]}
+      vertical={vertical}
+      alca={alca(id)}
+      resumo={id === "arvore" && board?.total ? `${board.done}/${board.total}` : undefined}
+      ativo={(id === "maestro" && props.running) || (id === "worker" && workers.some((x) => x.w.status))}
+      onAbrir={() => recolher(id, false)}
+    />
+  );
   // A faixa de largura inteira (em cima ou embaixo das colunas), com o divisor do lado das colunas.
+  const divisorFaixa = !faixaFechada && !colunasFechadas && (
+    <Divisor key="divisor-faixa" eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />
+  );
   const faixa = layout.faixa && [
-    ...(layout.faixaEmCima ? [] : [<Divisor key="divisor-faixa" eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />]),
-    <div key="faixa" data-bloco={layout.faixa} className="flex min-h-[120px] flex-col [&>*]:min-h-0 [&>*]:flex-1"
-         style={{ flex: `${layout.dock} 1 0` }}>
-      {bloco(layout.faixa)}
+    ...(layout.faixaEmCima ? [] : [divisorFaixa || <div key="divisor-faixa" className="h-2 shrink-0" />]),
+    <div key="faixa" data-bloco={layout.faixa}
+         className={`flex flex-col ${faixaFechada ? "" : "min-h-[120px] [&>*]:min-h-0 [&>*]:flex-1"}`}
+         style={{ flex: faixaFechada ? "0 0 auto" : colunasFechadas ? "1 1 0" : `${layout.dock} 1 0` }}>
+      {faixaFechada ? barra(layout.faixa, false) : bloco(layout.faixa)}
     </div>,
-    ...(layout.faixaEmCima ? [<Divisor key="divisor-faixa" eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />] : []),
+    ...(layout.faixaEmCima ? [divisorFaixa || <div key="divisor-faixa" className="h-2 shrink-0" />] : []),
   ];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
       <Cabecalho board={board} running={props.running} tarefa={emAndamento} modelPhase={props.modelPhase}
                  model={props.model} pausado={props.pausado} onPausar={props.onPausar}
-                 onNovaSessao={props.convId === null ? undefined : props.onNovaSessao} />
+                 onNovaSessao={props.convId === null ? undefined : props.onNovaSessao}
+                 onSalvarLayout={mostraSalvarPadrao ? () => setPerguntaPadrao(true) : undefined} />
+      {perguntaPadrao && (
+        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] p-5">
+          <h2 className="text-sm font-medium">Salvar este layout como padrão?</h2>
+          <p className="mt-2 text-xs leading-relaxed text-muted">
+            Conversas novas da Maestro vão começar com os blocos nesta posição, neste tamanho e com os
+            mesmos recolhidos. As conversas que já têm layout próprio continuam como estão. Para voltar
+            ao original: Configurações › Maestro › Layout do cockpit.
+          </p>
+          <div className="mt-4 flex justify-end gap-2 text-xs">
+            <button className="rounded-md px-3 py-1.5 text-muted hover:text-fg" onClick={() => setPerguntaPadrao(false)}>
+              Cancelar
+            </button>
+            <button
+              className="rounded-full bg-fg px-3 py-1.5 font-medium text-black hover:bg-white"
+              onClick={() => {
+                salvarPadrao(layout);
+                setPerguntaPadrao(false);
+                setAvisoEm(0);
+              }}
+            >
+              Salvar como padrão
+            </button>
+          </div>
+        </Modal>
+      )}
 
       <div ref={area} className="relative flex min-h-0 flex-1 flex-col">
         {layout.faixa && layout.faixaEmCima && faixa}
@@ -567,14 +663,19 @@ export default function MaestroView(props: {
           ref={colunas}
           className="grid min-h-0"
           style={{
-            flex: layout.faixa ? `${100 - layout.dock} 1 0` : "1 1 0",
-            gridTemplateColumns: layout.larguras.map((w) => `minmax(0,${w}fr)`).join(" auto "),
+            flex: colunasFechadas && layout.faixa && !faixaFechada ? "0 0 auto"
+              : layout.faixa && !faixaFechada ? `${100 - layout.dock} 1 0` : "1 1 0",
+            gridTemplateColumns: layout.colunas
+              .map((id, i) => (recolhido(id) ? "2rem" : `minmax(0,${layout.larguras[i]}fr)`)).join(" auto "),
           }}
         >
           {layout.colunas.flatMap((id, i) => [
-            ...(i > 0 ? [<Divisor key={`d${i}`} eixo="x" onArrasto={(e) => arrastaColuna(i - 1, e)} onFim={() => salvar(atual.current)} />] : []),
+            // divisor só entre duas colunas abertas; ao lado de uma recolhida fica só o espaço
+            ...(i > 0 ? [recolhido(id) || recolhido(layout.colunas[i - 1])
+              ? <div key={`d${i}`} className="w-2" />
+              : <Divisor key={`d${i}`} eixo="x" onArrasto={(e) => arrastaColuna(i - 1, e)} onFim={() => salvar(atual.current)} />] : []),
             <div key={id} data-bloco={id} className="flex min-h-0 min-w-0 flex-col [&>*]:min-h-0 [&>*]:flex-1">
-              {bloco(id)}
+              {recolhido(id) ? barra(id, true) : bloco(id)}
             </div>,
           ])}
         </div>
@@ -600,6 +701,32 @@ export default function MaestroView(props: {
   );
 }
 
+/** Bloco recolhido: barra fina com o nome (em pé, se for coluna). Clique abre; segurar arrasta. */
+function BarraRecolhida(props: {
+  nome: string;
+  vertical: boolean;
+  alca: React.HTMLAttributes<HTMLDivElement>;
+  resumo?: string;
+  ativo?: boolean;
+  onAbrir: () => void;
+}) {
+  return (
+    <div
+      {...props.alca}
+      onClick={props.onAbrir}
+      title={`${props.nome} — clique para abrir, segure para mudar de lugar`}
+      className={`${card} group flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-faint hover:bg-raised hover:text-fg ${
+        props.vertical ? "h-full flex-col py-2" : "h-8 px-3"
+      }`}
+    >
+      <Expandir className="size-3.5 shrink-0" />
+      {props.ativo && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" />}
+      <span className={props.vertical ? "[writing-mode:vertical-rl]" : ""}>{props.nome}</span>
+      {props.resumo && <span className={`normal-case text-muted ${props.vertical ? "[writing-mode:vertical-rl]" : ""}`}>{props.resumo}</span>}
+    </div>
+  );
+}
+
 /** Rótulo e ícone de uma aba do painel direito, no tamanho da doca. */
 function abaDireita(id: RightTab): [DocaTab, string, React.ReactNode] {
   const t = ABAS_DIREITA.find((x) => x.id === id)!;
@@ -617,6 +744,7 @@ function Cabecalho(props: {
   pausado: boolean;
   onPausar: (sim: boolean) => void;
   onNovaSessao?: () => void;
+  onSalvarLayout?: () => void;
 }) {
   const b = props.board;
   const pct = b && b.total ? Math.round((b.done / b.total) * 100) : 0;
@@ -636,6 +764,15 @@ function Cabecalho(props: {
         </>
       )}
       <div className="ml-auto flex items-center gap-3 text-xs">
+        {props.onSalvarLayout && (
+          <button
+            onClick={props.onSalvarLayout}
+            title="Conversas novas começam com o layout atual"
+            className="rounded-md px-2 py-0.5 text-faint hover:bg-raised hover:text-fg"
+          >
+            Salvar layout como padrão
+          </button>
+        )}
         {/* Trocar de modelo local leva minutos de VRAM indo e voltando. Sem dizer isso, o cockpit
             parece travado justamente quando está fazendo o que torna a IA local viável. */}
         {props.modelPhase ? (
@@ -703,11 +840,12 @@ function Arvore(props: {
   selecionada: string | null;
   onSelect: (c: string) => void;
   alca?: React.HTMLAttributes<HTMLDivElement>;
+  acao?: React.ReactNode;
 }) {
   const b = props.board;
   return (
     <div className={`${card} flex min-h-0 flex-col`}>
-      <div {...props.alca} className={titulo}>Tarefas</div>
+      <div {...props.alca} className={`${titulo} flex items-center`}>Tarefas{props.acao}</div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
         {!b || !b.total ? (
           <p className="px-2 py-6 text-center text-xs text-faint">
@@ -776,10 +914,11 @@ function ColunaMaestro(props: {
   conversa: React.ReactNode;
   composer: React.ReactNode;
   alca?: React.HTMLAttributes<HTMLDivElement>;
+  acao?: React.ReactNode;
 }) {
   return (
     <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
-      <div {...props.alca} className={titulo}>Maestro</div>
+      <div {...props.alca} className={`${titulo} flex items-center`}>Maestro{props.acao}</div>
       {props.conversa}
       <div className="shrink-0">{props.composer}</div>
     </div>
@@ -812,6 +951,7 @@ function ColunaWorker(props: {
   approvals: Record<string, Approval>;
   conversar: Conversar;
   alca?: React.HTMLAttributes<HTMLDivElement>;
+  acao?: React.ReactNode;
 }) {
   const atual = props.abas.find((x) => x.id === props.aba) ?? props.abas[0] ?? null;
   const [tentativa, setTentativa] = useState<number | null>(null);
@@ -880,6 +1020,7 @@ function ColunaWorker(props: {
             />
           </div>
         )}
+        <div className={usado != null ? "flex" : "ml-auto flex"}>{props.acao}</div>
       </div>
 
       {atual?.tipo === "historico" && comConversa.length > 1 && (
@@ -948,6 +1089,7 @@ function PainelModelos(props: {
   modelos: MaestroModels | null;
   onSlot: (nivel: string, provider: string, model: string) => void;
   onWorkers: (n: number) => void;
+  onEspecialidade: (id: string, provider: string, model: string) => void;
 }) {
   // Estado local só para o select não "voltar" entre o clique e o próximo polling.
   const [lifecycle, setLifecycle] = useState<string | null>(null);
@@ -1015,6 +1157,28 @@ function PainelModelos(props: {
             </div>
           );
         })}
+        {(m.especialidades ?? []).map((e) => (
+          <div key={e.id} className="flex items-center gap-2 [&>div]:ml-0" title={e.quando}>
+            <span className="w-14 shrink-0 truncate text-faint">{e.nome}</span>
+            <ModelPicker
+              provider={e.provider}
+              model={e.model}
+              autoFallback={false}
+              loadLocal={false}
+              minCtx={m.min_ctx_worker}
+              onChange={(provider, model) => props.onEspecialidade(e.id, provider, model)}
+            />
+            {e.model && (
+              <button
+                onClick={() => props.onEspecialidade(e.id, "", "")}
+                title={`Deixar ${e.nome} sem modelo (as tarefas dele vão para o capaz)`}
+                className="shrink-0 rounded p-1 text-faint hover:bg-raised hover:text-fg"
+              >
+                <X className="size-3" />
+              </button>
+            )}
+          </div>
+        ))}
         {Object.keys(m.slots).length === 0 && (
           <p className="text-amber-400">
             Nenhum Worker configurado — sem isso a Maestro não tem a quem delegar.
@@ -1079,8 +1243,15 @@ const ASSUMIDA = "Assumida pelo usuário: não despache esta tarefa.";
  * mudar o limite de tentativas, reenviar ao Worker, assumir, devolver, cancelar. Tudo passa pela mesma
  * máquina de estados da Maestro (POST /maestro/{conv}/task/{code}); reenviar é um pedido a ela, porque
  * é ela quem despacha e confere o resultado. */
+/** Nome de quem faz a tarefa: nível ou especialista. */
+function nomeDoSlot(slot: string | null | undefined, esp: Especialidade[]): string {
+  if (!slot) return "automático";
+  return esp.find((e) => e.id === slot)?.nome ?? ({ rapido: "rápido", capaz: "capaz", nuvem: "nuvem" } as Record<string, string>)[slot] ?? slot;
+}
+
 function PainelTarefa(props: {
   tarefa: MaestroTask | null;
+  especialidades: Especialidade[];
   convId: number | null;
   onAtualizada: (t: MaestroTask) => void;
   onPedir: (texto: string) => void;
@@ -1116,12 +1287,19 @@ function PainelTarefa(props: {
 
   const acao = "rounded-md border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-fg disabled:opacity-40";
   return (
-    <div className="space-y-3 overflow-y-auto p-3 text-xs">
+    <div className="h-full space-y-3 overflow-y-auto p-3 text-xs">
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="font-mono text-faint">{t.code}</span>
         <span className="font-medium">{t.title}</span>
         <span className={ESTADO[t.status].cor}>{ESTADO[t.status].label}</span>
-        {t.model_slot && <span className="text-faint">· {t.model_slot}</span>}
+        {t.contract?.type && (
+          <span className="rounded bg-raised px-1.5 text-[10px] text-muted">
+            {TIPOS_TAREFA.find(([k]) => k === t.contract?.type)?.[1] ?? t.contract.type}
+          </span>
+        )}
+        <span className="text-faint" title="Quem executa: escolha da Maestro, ou automático pelo tipo e pelos arquivos">
+          · {nomeDoSlot(t.model_slot, props.especialidades)}
+        </span>
         <span className="text-faint">· tentativas {t.attempt_count}/{t.max_attempts}</span>
       </div>
       <div className="flex flex-wrap gap-1.5">
@@ -1150,7 +1328,7 @@ function PainelTarefa(props: {
         )}
       </div>
       {erro && <p className="text-red-400">{erro}</p>}
-      {editando && <EditorContrato t={t} onSalvar={async (patch) => (await muda(patch)) && setEditando(false)} />}
+      {editando && <EditorContrato t={t} especialidades={props.especialidades} onSalvar={async (patch) => (await muda(patch)) && setEditando(false)} />}
       {t.blocked_reason && <p className="rounded-md bg-amber-500/10 p-2 text-amber-300">{t.blocked_reason}</p>}
       <Campo titulo="Objetivo" texto={c.goal} />
       <Campo titulo="Contexto" texto={c.context} />
@@ -1181,8 +1359,13 @@ function PainelTarefa(props: {
   );
 }
 
-function EditorContrato(props: { t: MaestroTask; onSalvar: (patch: Record<string, unknown>) => void }) {
+function EditorContrato(props: {
+  t: MaestroTask;
+  especialidades: Especialidade[];
+  onSalvar: (patch: Record<string, unknown>) => void;
+}) {
   const c = props.t.contract || {};
+  const [tipo, setTipo] = useState<TipoTarefa | "">(c.type ?? "");
   const [goal, setGoal] = useState(c.goal ?? "");
   const [context, setContext] = useState(c.context ?? "");
   const [verify, setVerify] = useState(c.verify_command ?? "");
@@ -1194,7 +1377,7 @@ function EditorContrato(props: { t: MaestroTask; onSalvar: (patch: Record<string
   const salvar = () =>
     props.onSalvar({
       contract: {
-        ...c, goal, context, verify_command: verify,
+        ...c, type: tipo || undefined, goal, context, verify_command: verify,
         ...Object.fromEntries(LISTAS_CONTRATO.map(([k]) => [k, listas[k].split("\n").map((x) => x.trim()).filter(Boolean)])),
       },
       model_slot: slot,
@@ -1223,12 +1406,22 @@ function EditorContrato(props: { t: MaestroTask; onSalvar: (patch: Record<string
       </label>
       <div className="flex flex-wrap items-end gap-3">
         <label>
-          <span className="block text-faint">Modelo do Worker</span>
+          <span className="block text-faint">Tipo</span>
+          <select className={campo} value={tipo} onChange={(e) => setTipo(e.target.value as TipoTarefa | "")}>
+            <option value="">sem tipo</option>
+            {TIPOS_TAREFA.map(([k, rotulo]) => <option key={k} value={k}>{rotulo}</option>)}
+          </select>
+        </label>
+        <label>
+          <span className="block text-faint">Worker</span>
           <select className={campo} value={slot} onChange={(e) => setSlot(e.target.value)}>
-            <option value="">automático (capaz)</option>
+            <option value="">automático (pelo tipo e arquivos)</option>
             <option value="rapido">rápido</option>
             <option value="capaz">capaz</option>
             <option value="nuvem">nuvem</option>
+            {props.especialidades.map((e) => (
+              <option key={e.id} value={e.id}>{e.nome}{e.model ? "" : " (sem modelo → capaz)"}</option>
+            ))}
           </select>
         </label>
         <label>

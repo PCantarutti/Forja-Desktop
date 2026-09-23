@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { api } from "../api";
+import type { Especialidade } from "../types";
 import Confirma from "./Confirma";
 import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
@@ -46,6 +47,7 @@ export type AppSettings = {
   maestro_model: { provider: string; model: string };
   maestro_browser: boolean;
   maestro_visual: { provider: string; model: string };
+  worker_especialidades: Especialidade[];
 };
 
 type Entity = { name: string; entityType?: string; observations?: string[] };
@@ -1047,6 +1049,8 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
           </div>
         </Field>
       ))}
+      <Especialistas lista={s.worker_especialidades ?? []} minCtx={minimo.min_ctx_worker}
+                     onChange={(l) => set("worker_especialidades", l)} />
       <Field label="Execução dos Workers" hint="Sequencial: um por vez — o único modo que troca de modelo local entre tarefas. Paralelo: tarefas independentes e sem arquivo em comum rodam juntas.">
         <div className="flex items-center gap-2">
           <select className={input} value={paralelo ? "paralelo" : "sequencial"}
@@ -1102,6 +1106,102 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
       <Field label="Máximo de passos da Maestro por mensagem" hint="Teto de segurança da execução autônoma (planejar, despachar, validar...).">
         <Num value={s.maestro_max_iterations} onChange={(v) => set("maestro_max_iterations", v)} />
       </Field>
+      <LayoutCockpit />
+    </div>
+  );
+}
+
+/** Workers por especialidade. A Maestro vê só os que têm modelo (id, nome e "quando usar") e escolhe
+ * por tarefa; sem escolha, o Forja decide pelo tipo da tarefa e pelos arquivos. */
+function Especialistas(props: { lista: Especialidade[]; minCtx?: number; onChange: (l: Especialidade[]) => void }) {
+  const muda = (i: number, patch: Partial<Especialidade>) =>
+    props.onChange(props.lista.map((e, j) => (j === i ? { ...e, ...patch } : e)));
+  return (
+    <div>
+      <span className="text-sm text-fg">Workers especialistas</span>
+      <span className="mt-0.5 block text-xs text-muted">
+        Um modelo por tipo de trabalho. A Maestro escolhe o especialista de cada tarefa; quando ela não escolhe, o Forja
+        usa o tipo da tarefa (tela → Frontend, correção → Lógica, testes → Testes) e cai no Worker capaz se o
+        especialista não tiver modelo. Sem modelo, o especialista não aparece para a Maestro.
+      </span>
+      <div className="mt-2 space-y-2">
+        {props.lista.map((e, i) => (
+          <div key={e.id || i} className="rounded-lg border border-line p-2.5">
+            <div className="flex items-center gap-2">
+              <div className="w-52 shrink-0">
+                <input className={input} value={e.nome} placeholder="Nome"
+                       onChange={(ev) => muda(i, { nome: ev.target.value })} />
+              </div>
+              <div className="min-w-0 flex-1 [&>div]:ml-0">
+                <ModelPicker provider={e.provider} model={e.model} autoFallback={false} loadLocal={false}
+                             minCtx={props.minCtx} onChange={(provider, model) => muda(i, { provider, model })} />
+              </div>
+              {e.model && (
+                <button className="shrink-0 text-xs text-muted hover:text-fg" onClick={() => muda(i, { provider: "", model: "" })}>
+                  Limpar
+                </button>
+              )}
+              <button className="shrink-0 text-xs text-faint hover:text-red-300" title="Remover especialidade"
+                      onClick={() => props.onChange(props.lista.filter((_, j) => j !== i))}>
+                Remover
+              </button>
+            </div>
+            <input className={`${input} mt-1.5 text-xs`} value={e.quando} placeholder="Quando usar (a Maestro lê isto)"
+                   onChange={(ev) => muda(i, { quando: ev.target.value })} />
+          </div>
+        ))}
+      </div>
+      {props.lista.length < 12 && (
+        <button className="mt-2 rounded-md border border-line px-3 py-1.5 text-sm text-muted hover:bg-raised hover:text-fg"
+                onClick={() => props.onChange([...props.lista, { id: "", nome: "", quando: "", provider: "", model: "" }])}>
+          Adicionar especialidade
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Mesma chave do MaestroView: o padrão salvo pelo botão "Salvar layout como padrão" fica em `_padrao`.
+const LAYOUT_CHAVE = "forja.maestro.layout";
+
+function LayoutCockpit() {
+  const ler = (): Record<string, unknown> => {
+    try {
+      return JSON.parse(localStorage.getItem(LAYOUT_CHAVE) || "{}");
+    } catch {
+      return {};
+    }
+  };
+  const [temPadrao, setTemPadrao] = useState(() => "_padrao" in ler());
+  return (
+    // div, não Field: o <label> do Field repassa o clique ao primeiro botão de dentro, e depois do
+    // primeiro clique esse botão já é o "Sim" da confirmação — confirmaria sozinho.
+    <div>
+      <span className="text-sm text-fg">Layout do cockpit</span>
+      <span className="mt-0.5 block text-xs text-muted">
+        Posição, tamanho e blocos recolhidos com que as conversas novas da Maestro começam. As conversas que já têm
+        layout próprio não mudam.
+      </span>
+      <div className="mt-1.5">
+      {temPadrao ? (
+        <Confirma
+          rotulo="Voltar ao layout original"
+          pergunta="Conversas novas voltam ao layout original?"
+          className="rounded-md border border-line px-3 py-1.5 text-sm text-muted hover:bg-raised hover:text-fg"
+          onSim={() => {
+            const { _padrao: _, ...resto } = ler();
+            try {
+              localStorage.setItem(LAYOUT_CHAVE, JSON.stringify(resto));
+            } catch {
+              /* sem storage: nada salvo, nada a apagar */
+            }
+            setTemPadrao(false);
+          }}
+        />
+      ) : (
+        <p className="text-sm text-faint">Original. Ajuste o cockpit e use "Salvar layout como padrão", que aparece no cabeçalho.</p>
+      )}
+      </div>
     </div>
   );
 }

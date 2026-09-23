@@ -148,3 +148,81 @@ def open_path(path: str, mode: str) -> str:
         return "padrão"
     subprocess.Popen(["open" if SYSTEM == "Darwin" else "xdg-open", path])
     return "padrão"
+
+
+def vram_em_uso() -> dict[str, int]:
+    """Nome do adaptador -> VRAM dedicada em uso no sistema todo (bytes). {} fora do Windows.
+
+    É o número do Gerenciador de Tarefas: contador de desempenho "GPU Adapter Memory", ligado ao nome
+    da placa pelo LUID que o DXGI informa. O `--list-devices` do llama.cpp (Vulkan) não serve para
+    isso: ele não enxerga a memória de outros processos, e com um modelo de 8 GB na placa ainda dizia
+    que ela estava livre.
+    """
+    if not WINDOWS:
+        return {}
+    import ctypes
+    from ctypes import wintypes as W
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("Low", W.DWORD), ("High", W.LONG)]
+
+    class DESC(ctypes.Structure):
+        _fields_ = [("Description", ctypes.c_wchar * 128), ("VendorId", W.UINT), ("DeviceId", W.UINT),
+                    ("SubSysId", W.UINT), ("Revision", W.UINT), ("Dedicated", ctypes.c_size_t),
+                    ("DedicatedSys", ctypes.c_size_t), ("Shared", ctypes.c_size_t), ("Luid", LUID)]
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("a", W.DWORD), ("b", W.WORD), ("c", W.WORD), ("d", ctypes.c_ubyte * 8)]
+
+    iid = GUID(0x7b7166ec, 0x21c7, 0x44ae, (ctypes.c_ubyte * 8)(0xb2, 0x1a, 0xc9, 0xae, 0x32, 0x1a, 0xe3, 0x69))
+    fab = ctypes.c_void_p()
+    if ctypes.windll.dxgi.CreateDXGIFactory(ctypes.byref(iid), ctypes.byref(fab)):
+        return {}
+
+    def metodo(obj, i, *tipos):
+        vt = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *tipos)(vt[i])
+
+    nomes = {}
+    i = 0
+    while True:
+        ad = ctypes.c_void_p()
+        if metodo(fab, 7, W.UINT, ctypes.c_void_p)(fab, i, ctypes.byref(ad)):  # EnumAdapters
+            break
+        d = DESC()
+        metodo(ad, 8, ctypes.c_void_p)(ad, ctypes.byref(d))  # GetDesc
+        nomes[f"luid_0x{d.Luid.High & 0xffffffff:08x}_0x{d.Luid.Low:08x}"] = d.Description
+        metodo(ad, 2)(ad)  # Release
+        i += 1
+    metodo(fab, 2)(fab)
+
+    pdh = ctypes.windll.pdh
+    q, c = ctypes.c_void_p(), ctypes.c_void_p()
+    if pdh.PdhOpenQueryW(None, None, ctypes.byref(q)):
+        return {}
+    try:
+        if pdh.PdhAddEnglishCounterW(q, "\\GPU Adapter Memory(*)\\Dedicated Usage", None, ctypes.byref(c)):
+            return {}
+        pdh.PdhCollectQueryData(q)
+
+        class VAL(ctypes.Structure):
+            _fields_ = [("status", W.DWORD), ("valor", ctypes.c_longlong)]
+
+        class ITEM(ctypes.Structure):
+            _fields_ = [("nome", ctypes.c_wchar_p), ("v", VAL)]
+
+        tam, n = W.DWORD(0), W.DWORD(0)
+        pdh.PdhGetFormattedCounterArrayW(c, 0x400, ctypes.byref(tam), ctypes.byref(n), None)
+        buf = ctypes.create_string_buffer(tam.value)
+        if pdh.PdhGetFormattedCounterArrayW(c, 0x400, ctypes.byref(tam), ctypes.byref(n), buf):
+            return {}
+        itens = ctypes.cast(buf, ctypes.POINTER(ITEM))
+        uso: dict[str, int] = {}
+        for k in range(n.value):
+            inst = itens[k].nome.lower()
+            nome = next((v for luid, v in nomes.items() if inst.startswith(luid)), None)
+            if nome:
+                uso[nome] = uso.get(nome, 0) + itens[k].v.valor
+        return uso
+    finally:
+        pdh.PdhCloseQuery(q)

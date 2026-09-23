@@ -1771,7 +1771,8 @@ def maestro_models():
     """Estado do ciclo de vida dos modelos, para o painel Modelo·VRAM do cockpit."""
     return {**modelctl.status(), "max_workers": config.MAX_WORKERS,
             "can_swap": modelctl.pode_trocar(), "min_ctx_worker": config.WORKER_MIN_CTX,
-            "slots": subagents.configured(), "active": subagents.ativas()}
+            "slots": subagents.configured(), "active": subagents.ativas(),
+            "especialidades": config.WORKER_ESPECIALIDADES}
 
 
 # ------------------------------------------------------------------ interface (build do Vite)

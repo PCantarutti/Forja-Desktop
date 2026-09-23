@@ -1606,6 +1606,11 @@ export default function App() {
               <>
                 Agente: lê e escreve em <span className="font-mono text-fg">{wsLabel}</span>
               </>
+            ) : section === "maestro" ? (
+              <>
+                Maestro: diga o objetivo; ela planeja, delega aos Workers e valida em{" "}
+                <span className="font-mono text-fg">{wsLabel}</span>
+              </>
             ) : (
               "Chat: conversa com busca na web, sem acesso a arquivos."
             )}
