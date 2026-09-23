@@ -4,6 +4,7 @@ import { api } from "../api";
 import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench } from "./icons";
+import ModelPicker from "./ModelPicker";
 
 export type Provider = {
   id: string;
@@ -37,6 +38,12 @@ export type AppSettings = {
   browser_idle_minutes: number;
   browser_scale: number;
   browser_stream: "png" | "jpeg";
+  maestro_max_iterations: number;
+  maestro_max_attempts: number;
+  max_workers: number;
+  model_lifecycle: string;
+  maestro_model: { provider: string; model: string };
+  maestro_browser: boolean;
 };
 
 type Entity = { name: string; entityType?: string; observations?: string[] };
@@ -50,7 +57,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
+const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
 type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
@@ -222,6 +229,8 @@ export default function Settings(props: {
               <Providers s={s} set={set} />
             ) : tab === "Subagentes" ? (
               <Subagents s={s} set={set} />
+            ) : tab === "Maestro" ? (
+              <MaestroTab s={s} set={set} />
             ) : tab === "Ferramentas" ? (
               <Tools tools={props.tools} disabled={s.disabled_tools} onToggle={(d) => save({ disabled_tools: d })} />
             ) : tab === "Permissões" ? (
@@ -965,6 +974,99 @@ const SLOTS = [
   { key: "capaz", title: "Capaz", hint: "Modelo maior e mais lento para raciocínio difícil: depurar, projetar, código complexo." },
   { key: "nuvem", title: "Nuvem", hint: "Rede de segurança: entra quando o slot escolhido não roda nesta máquina ou falha (ex.: Ollama Cloud). O modelo nunca escolhe este slot sozinho." },
 ] as const;
+
+// ------------------------------------------------------------------ Maestro
+
+const CICLOS: [string, string, string][] = [
+  ["persistent", "Persistente", "O modelo fica carregado entre tarefas. Mais rápido quando o mesmo modelo faz várias."],
+  ["unload_after_task", "Descarregar após a tarefa", "Libera VRAM/RAM ao fim de cada tarefa. Para quem troca de modelo com pouca memória."],
+  ["unload_clear", "Descarregar e esperar a memória voltar", "Descarrega e só segue quando a VRAM livre para de subir: o driver devolve a memória depois do processo morrer, e o próximo modelo carregado antes disso cairia para a CPU."],
+  ["restart_after_task", "Reiniciar o modelo após a tarefa", "Processo novo com o mesmo modelo, cache zerado. Para modelo que fica lento ou instável depois de muitas tarefas."],
+];
+
+/** Tudo que o usuário decide sobre o Maestro num lugar só (§30 do plano). Os slots de Worker são os
+ * mesmos da aba Subagentes e da doca Modelo · VRAM: um valor, três lugares para mexer nele. */
+function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
+  const paralelo = s.max_workers > 1;
+  const slot = (k: "rapido" | "capaz") => s.subagents[k] ?? { provider: "", model: "" };
+  // Mesmos mínimos de janela do cockpit: GGUF local abaixo disso aparece desabilitado com o motivo.
+  const [minimo, setMinimo] = useState<{ min_ctx_maestro?: number; min_ctx_worker?: number }>({});
+  useEffect(() => {
+    api.get<{ min_ctx_maestro?: number; min_ctx_worker?: number }>("/config").then(setMinimo).catch(() => {});
+  }, []);
+  return (
+    <div className="max-w-2xl space-y-5">
+      <Field label="Modelo padrão da Maestro" hint="Usado na seção Maestro. Separado do modelo do chat e do agente: trocar um não troca o outro. Vazio = o modelo escolhido no chat.">
+        <div className="flex items-center gap-2 [&>div]:ml-0">
+          <ModelPicker
+            provider={s.maestro_model?.provider ?? ""}
+            model={s.maestro_model?.model ?? ""}
+            autoFallback={false}
+            loadLocal={false}
+            minCtx={minimo.min_ctx_maestro}
+            onChange={(provider, model) => set("maestro_model", { provider, model })}
+          />
+          {s.maestro_model?.model && (
+            <button className={btn} onClick={() => set("maestro_model", { provider: "", model: "" })}>
+              Limpar
+            </button>
+          )}
+        </div>
+      </Field>
+      {(["rapido", "capaz"] as const).map((k) => (
+        <Field key={k} label={`Worker ${k === "rapido" ? "rápido" : "capaz"}`}
+               hint={k === "rapido" ? "Tarefas simples. A Maestro escolhe o nível por tarefa." : "Tarefas difíceis, e o padrão quando a tarefa não diz."}>
+          <div className="flex items-center gap-2 [&>div]:ml-0">
+            <ModelPicker
+              provider={slot(k).provider}
+              model={slot(k).model}
+              autoFallback={false}
+              loadLocal={false}
+              minCtx={minimo.min_ctx_worker}
+              onChange={(provider, model) => set("subagents", { ...s.subagents, [k]: { provider, model } })}
+            />
+          </div>
+        </Field>
+      ))}
+      <Field label="Execução dos Workers" hint="Sequencial: um por vez — o único modo que troca de modelo local entre tarefas. Paralelo: tarefas independentes e sem arquivo em comum rodam juntas.">
+        <div className="flex items-center gap-2">
+          <select className={input} value={paralelo ? "paralelo" : "sequencial"}
+                  onChange={(e) => set("max_workers", e.target.value === "paralelo" ? Math.max(2, s.max_workers) : 1)}>
+            <option value="sequencial">Sequencial</option>
+            <option value="paralelo">Paralelo</option>
+          </select>
+          {paralelo && (
+            <label className="flex shrink-0 items-center gap-2 text-sm text-muted">
+              até
+              <input type="number" min={2} max={8} className={`${input} w-20`} value={s.max_workers}
+                     onChange={(e) => set("max_workers", Math.min(8, Math.max(2, Number(e.target.value) || 2)))} />
+              Workers
+            </label>
+          )}
+        </div>
+      </Field>
+      <Field label="Ciclo de vida do modelo local" hint={CICLOS.find((c) => c[0] === s.model_lifecycle)?.[2]}>
+        <select className={input} value={s.model_lifecycle} onChange={(e) => set("model_lifecycle", e.target.value)}>
+          {CICLOS.map(([v, l]) => (
+            <option key={v} value={v}>{l}</option>
+          ))}
+        </select>
+      </Field>
+      <Toggle
+        checked={s.maestro_browser}
+        onChange={(v) => set("maestro_browser", v)}
+        label="Validar entregas no navegador"
+        hint="A Maestro abre a tela no navegador para conferir estrutura e erros de console. Desligado, ela valida só por testes e comandos — e o prompt fica menor."
+      />
+      <Field label="Máximo de tentativas por tarefa" hint="Esgotou, a tarefa vai para 'precisa de você'. Vale para tarefas novas; dá para mudar uma a uma no painel da tarefa.">
+        <Num value={s.maestro_max_attempts} onChange={(v) => set("maestro_max_attempts", v)} />
+      </Field>
+      <Field label="Máximo de passos da Maestro por mensagem" hint="Teto de segurança da execução autônoma (planejar, despachar, validar...).">
+        <Num value={s.maestro_max_iterations} onChange={(v) => set("maestro_max_iterations", v)} />
+      </Field>
+    </div>
+  );
+}
 
 function SlotModels({ provider, value, onChange }: { provider: string; value: string; onChange: (m: string) => void }) {
   const [models, setModels] = useState<string[]>([]);

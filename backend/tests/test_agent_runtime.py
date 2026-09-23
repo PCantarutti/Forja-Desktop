@@ -442,3 +442,14 @@ def test_raciocinio_antigo_fica_no_contexto_do_local(tmp_path, monkeypatch):
     local = ag.build_history(msgs, "native", reasoning_back=True, prefixo_estavel=True)
     assert raciocinios(nuvem) == ["pensei no turno de agora"]
     assert raciocinios(local) == ["pensei no turno antigo", "pensei no turno de agora"]
+
+
+def test_turno_so_de_raciocinio_leva_lembrete(monkeypatch, tmp_path):
+    """Modelo pensante com prompt grande monta o plano todo dentro do <think> e não emite nada.
+    Sem lembrete o turno acabava em silêncio: caixa de raciocínio na tela e nenhuma resposta."""
+    from app import agent
+
+    assert "raciocínio" in agent.nudge_text("native", mudo=True)
+    assert "chamou nenhuma ferramenta" in agent.nudge_text("native", mudo=False)
+    # o texto muda conforme o modo de tool calling
+    assert "<tool_call>" in agent.nudge_text("prompt", mudo=True)

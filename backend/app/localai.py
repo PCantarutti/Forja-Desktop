@@ -239,6 +239,22 @@ def defaults_for(path: str = "") -> dict:
     return d
 
 
+def ctx_por_requisicao(ctx, params: dict | None) -> int:
+    """Janela que cada requisição enxerga de verdade.
+
+    Com `--parallel N` o llama-server divide o contexto entre os N slots: ctx=32768 com parallel=4
+    recusa qualquer prompt acima de 8192 ("exceeds the available context size"). Usar a janela total
+    fazia o agente achar que tinha espaço e a compactação nunca disparar a tempo.
+    """
+    return int(ctx or 0) // max(1, int((params or {}).get("parallel") or 1))
+
+
+def ctx_de(path: str) -> int:
+    """Janela por requisição que este GGUF teria com os parâmetros salvos dele, carregado ou não."""
+    p = {**defaults_for(path), **overrides(path)}
+    return ctx_por_requisicao(p.get("ctx"), p)
+
+
 def set_defaults(patch: dict) -> dict:
     """Padrões que valem para todo modelo (tela Hardware: cache KV na GPU, por exemplo)."""
     atuais = {**(read_config().get("defaults") or {}), **_clean_params(patch)}
@@ -1577,7 +1593,8 @@ def model_view(path: str, patch: dict | None = None) -> dict:
 def state() -> dict:
     cfg = read_config()
     todos = scan(WEIGHTS)
-    models = [m for m in todos if m["kind"] == "chat"]
+    # `ctx` por modelo: o seletor da Maestro e dos Workers barra quem tem janela pequena demais.
+    models = [{**m, "ctx": ctx_de(m["path"])} for m in todos if m["kind"] == "chat"]
     imagens = [{**m, "params": image_params(m["path"])} for m in todos if m["kind"] == "image"]
     baixar = cfg.get("download_dir") or models_dir()
     return {"runtimes": runtimes(), "models": models, "server": status(), "dirs": dirs(), "download_dir": baixar,

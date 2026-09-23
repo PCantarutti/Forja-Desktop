@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
-               terminal, uploads, workspace)
+               modelctl, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
@@ -36,7 +36,8 @@ async def lifespan(_app):
         print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
-    localai.reap_orphan()  # sobra de um backend que morreu sem descarregar o modelo
+    localai.reap_orphan()
+    taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
@@ -104,7 +105,11 @@ def get_config():
     return {"providers": [{"id": p["id"], "name": p["name"]} for p in config.PROVIDERS.values()],
             "num_ctx": config.NUM_CTX, "max_iterations": config.MAX_ITERATIONS,
             "default_workspace": workspace.label(None), "drives": [d["name"] for d in workspace.roots()],
-            "subagents": {k: v for k, v in subagents.configured().items()}}
+            "subagents": {k: v for k, v in subagents.configured().items()},
+            # o seletor de modelo barra o GGUF local com janela menor que isto (Maestro / Workers)
+            "min_ctx_maestro": config.MAESTRO_MIN_CTX, "min_ctx_worker": config.WORKER_MIN_CTX,
+            # modelo padrão da Maestro: o seletor da seção Maestro lê e grava este, não o do chat
+            "maestro_model": config.MAESTRO_MODEL}
 
 
 # ------------------------------------------------------------------ pastas de trabalho
@@ -367,7 +372,12 @@ async def get_activity():
 
     for r in RUNS.values():
         if not r.finished:
-            entrada(r.conv_id)["running"] = True
+            e = entrada(r.conv_id)
+            e["running"] = True
+            # Aprovações e perguntas esperando o usuário, inclusive as do Worker: a interface avisa
+            # (notificação do sistema) mesmo com outra conversa aberta na tela.
+            e["waiting"] = len(r.approvals)
+            e["paused"] = r.paused
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
     vivos = 0
@@ -1105,8 +1115,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "imagem", "comparar", "pesquisa"):
-        raise HTTPException(400, "kind deve ser chat, agent, imagem, comparar ou pesquisa")
+    if kind not in ("chat", "agent", "maestro", "imagem", "comparar", "pesquisa"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, comparar ou pesquisa")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)
@@ -1649,6 +1659,105 @@ def change_permission(run_id: str, body: dict):
 def stop(run_id: str):
     _get_run(run_id).stop()
     return {"ok": True}
+
+
+@app.post("/api/runs/{run_id}/pause")
+async def pause(run_id: str, body: dict):
+    """Pausa (ou retoma) no fim do passo em curso: o que está rodando termina, o próximo espera."""
+    run = _get_run(run_id)
+    run.pausar(bool(body.get("paused", True)))
+    await run.publish({"type": "paused", "paused": run.paused})
+    return {"ok": True, "paused": run.paused}
+
+
+# ------------------------------------------------------------------ Maestro
+# Execução, cancelamento e aprovação continuam em /conversations/{id}/run e /runs/{id}/*: a Maestro
+# é um Run como qualquer outro. O que existe aqui é a leitura da árvore de tarefas e a intervenção
+# humana sobre ela (editar contrato, reenviar, assumir).
+
+
+@app.get("/api/maestro/{conv_id}/board")
+def maestro_board(conv_id: int):
+    """Árvore de funcionalidades, tarefas e tentativas. É o que o cockpit desenha."""
+    with db.session() as s:
+        _get_conv(s, conv_id)
+    return taskdb.board(conv_id)
+
+
+@app.get("/api/maestro/{conv_id}/task/{code}")
+def maestro_task(conv_id: int, code: str):
+    try:
+        return taskdb.detail(conv_id, code)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+class TaskPatch(BaseModel):
+    status: str | None = None
+    reason: str | None = None
+    contract: dict | None = None
+    model_slot: str | None = None
+    priority: int | None = None
+    max_attempts: int | None = None
+
+
+@app.post("/api/maestro/{conv_id}/task/{code}")
+def maestro_task_patch(conv_id: int, code: str, body: TaskPatch):
+    """Intervenção humana: corrigir o contrato, trocar o modelo, desbloquear, assumir a tarefa."""
+    if active_run(conv_id) and body.status in ("implementing", "testing"):
+        raise HTTPException(409, "A Maestro está executando; pare antes de mexer no estado da tarefa")
+    patch = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not patch:
+        raise HTTPException(400, "Nada para mudar")
+    token = taskdb.CONV.set(conv_id)
+    try:
+        return {"ok": True, "text": taskdb._update_task(None, {"code": code, **patch}),
+                "task": taskdb.detail(conv_id, code)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    finally:
+        taskdb.CONV.reset(token)
+
+
+@app.post("/api/maestro/{conv_id}/task/{code}/attempt/{n}/rollback")
+def maestro_attempt_rollback(conv_id: int, code: str, n: int):
+    """Desfaz o que UMA tentativa do Worker escreveu (arquivos voltam ao estado de antes dela)."""
+    if active_run(conv_id):
+        raise HTTPException(409, "Pare a Maestro antes de desfazer uma tentativa")
+    with db.session() as s:
+        task = s.query(db.Task).filter(db.Task.conversation_id == conv_id,
+                                       db.Task.code == code.upper()).first()
+        att = task and s.query(db.Attempt).filter(db.Attempt.task_id == task.id, db.Attempt.n == n).first()
+        if not att:
+            raise HTTPException(404, f"{code} não tem a tentativa {n}")
+        att_id = att.id
+    restaurados = checkpoints.restore_attempt(att_id)
+    if not restaurados:
+        raise HTTPException(400, "Esta tentativa não tem alteração de arquivo guardada para desfazer")
+    with db.session() as s:
+        att = s.get(db.Attempt, att_id)
+        att.estado = None  # os arquivos voltaram: não é mudança externa na próxima tarefa
+        s.commit()
+    # A entrega da tarefa saiu do disco: ela volta a ser trabalho a fazer.
+    token = taskdb.CONV.set(conv_id)
+    try:
+        for novo in ("pending", "queued"):
+            try:
+                taskdb.set_status(code, novo, conv_id)
+                break
+            except ToolError:
+                continue
+        return {"restored": restaurados, "task": taskdb.detail(conv_id, code)}
+    finally:
+        taskdb.CONV.reset(token)
+
+
+@app.get("/api/maestro/models")
+def maestro_models():
+    """Estado do ciclo de vida dos modelos, para o painel Modelo·VRAM do cockpit."""
+    return {**modelctl.status(), "max_workers": config.MAX_WORKERS,
+            "can_swap": modelctl.pode_trocar(), "min_ctx_worker": config.WORKER_MIN_CTX,
+            "slots": subagents.configured(), "active": subagents.ativas()}
 
 
 # ------------------------------------------------------------------ interface (build do Vite)

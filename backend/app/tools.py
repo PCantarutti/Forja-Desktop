@@ -41,10 +41,20 @@ class Tool:
 
 
 REGISTRY: dict[str, Tool] = {}
+# Ferramentas que só existem num modo específico (hoje: as do Maestro). Ficam fora do REGISTRY de
+# propósito — não devem aparecer nas Configurações, nem no modo Agente, nem em /api/tools — mas
+# precisam ser encontráveis por get_tool/execute na hora de rodar. Quem decide quando elas entram
+# no prompt é agent.available_tools().
+EXTRA: dict[str, Tool] = {}
 
 
 def register(tool: Tool) -> Tool:
     REGISTRY[tool.name] = tool
+    return tool
+
+
+def register_extra(tool: Tool) -> Tool:
+    EXTRA[tool.name] = tool
     return tool
 
 
@@ -77,7 +87,7 @@ def vision_caps(detected: set[str] | None, override: str) -> set[str]:
 def get_tool(name: str, caps: set[str] | None = None) -> Tool:
     if name in config.DISABLED_TOOLS:
         raise ToolError(f"A ferramenta '{name}' está desativada nas configurações do Forja.")
-    tool = REGISTRY.get(name)
+    tool = REGISTRY.get(name) or EXTRA.get(name)
     if not tool:
         raise ToolError(f"Ferramenta desconhecida: '{name}'. Disponíveis: {', '.join(REGISTRY)}")
     if caps is not None and not tool.requires <= caps:
@@ -173,6 +183,17 @@ def resolve_path(root: Path, path: str | None) -> Path:
             f"Acesso negado: '{path}' está fora da pasta de trabalho. "
             "Use caminhos relativos à pasta de trabalho.")
     return target
+
+
+# Espelhos que o Forja gera a partir do banco (projstate.sync): escrever neles é trabalho perdido —
+# a próxima mudança de tarefa reescreve tudo — e o modelo acharia que mudou o estado das tarefas.
+GERADOS = (".forja/progress.md", ".forja/tasks.json")
+
+
+def _nao_gerado(root: Path, p: Path) -> None:
+    if _rel(root, p) in GERADOS:
+        raise ToolError(f"{_rel(root, p)} é gerado pelo Forja a partir das tarefas; não edite. "
+                        "Mude o estado pelas ferramentas de tarefa (update_task, plan_feature).")
 
 
 def _rel(root: Path, p: Path) -> str:
@@ -297,6 +318,7 @@ def _check_size(content: str) -> None:
 
 def write_file(root: Path, args: dict) -> str:
     p = resolve_path(root, args.get("path"))
+    _nao_gerado(root, p)
     content = args["content"]
     _check_size(content)
     if p.is_dir():
@@ -359,6 +381,7 @@ def _apply_edit(root: Path, args: dict) -> tuple[Path, str, str, int]:
 
 
 def edit_file(root: Path, args: dict) -> str:
+    _nao_gerado(root, resolve_path(root, args.get("path")))
     p, _, new, trocas = _apply_edit(root, args)
     _check_size(new)
     p.write_text(new, encoding="utf-8", newline="")

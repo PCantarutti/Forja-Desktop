@@ -106,3 +106,19 @@ PROJECT_MEMORY_FILE = "FORJA.md"
 ENABLED_MODELS: dict[str, list[str]] = {}  # provedor -> modelos visíveis nos chats (ausente = todos)
 SUBAGENTS: dict[str, dict] = {}            # "rapido"/"capaz" -> {"provider", "model"}
 SUBAGENT_MAX_ITERATIONS = 15
+
+# ------------------------------------------------------------------ Maestro
+# A Maestro planeja, delega e verifica; os Workers implementam. O estado do projeto fica no SQLite
+# (taskdb), nunca no contexto do modelo — é o que permite descarregar um modelo local e carregar
+# outro entre tarefas sem perder o trabalho.
+MAESTRO_MAX_ITERATIONS = int(os.getenv("MAESTRO_MAX_ITERATIONS", "500"))  # o freio real é max_attempts
+MAESTRO_MAX_ATTEMPTS = int(os.getenv("MAESTRO_MAX_ATTEMPTS", "5"))        # tentativas por tarefa
+MAX_WORKERS = 1                     # 1 = sequencial (Etapa 6 abre o paralelo)
+MAESTRO_MODEL = {"provider": "", "model": ""}  # modelo padrão da Maestro; vazio = o do seletor do chat
+MAESTRO_BROWSER = True             # a Maestro valida entregas no navegador (browser_validate e browser_*)
+MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)
+# Janela mínima (por requisição) de um modelo LOCAL em cada papel. Abaixo disso a Maestro não cabe
+# junto com o histórico e o Worker não cabe junto com o contrato e os arquivos — o servidor recusa o
+# prompt no meio do trabalho. Modelo de nuvem fica de fora: a janela dele não é o usuário que escolhe.
+MAESTRO_MIN_CTX = int(os.getenv("MAESTRO_MIN_CTX", "32768"))
+WORKER_MIN_CTX = int(os.getenv("WORKER_MIN_CTX", "16384"))

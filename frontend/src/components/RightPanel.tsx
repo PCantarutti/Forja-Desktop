@@ -8,7 +8,7 @@ const WIDTH: Record<Exclude<RightTab, "browser">, number> = { info: 288, servers
 const MIN_BROWSER = 320;
 const KEY = "forja.right.width";
 
-const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
+export const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: "info", label: "Info", icon: <Info className="size-4" /> },
   { id: "browser", label: "Navegador", icon: <Globe className="size-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="size-4" /> },

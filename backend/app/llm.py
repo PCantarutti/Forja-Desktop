@@ -82,7 +82,8 @@ async def context_limit(provider: str, model: str, num_ctx: int) -> int | None:
     if kind == "ollama":
         return num_ctx
     if kind == "llamacpp":
-        return localai.status().get("ctx")
+        st = localai.status()
+        return localai.ctx_por_requisicao(st.get("ctx"), st.get("params")) if st.get("running") else None
     if kind == "lmstudio":
         try:
             async with httpx.AsyncClient(timeout=5) as c:

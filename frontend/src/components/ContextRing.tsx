@@ -16,6 +16,7 @@ export default function ContextRing(props: {
   onCompact: () => void;
   provider: string;   // o que está no seletor de modelo
   models: string[];   // modelos que já responderam nesta conversa
+  abaixo?: boolean;   // abre para baixo e alinhado à direita (anel no topo de uma coluna)
 }) {
   const [open, setOpen] = useState(false);
   // Só consulta a cota com o popover aberto. Mostra TODO provedor de nuvem configurado, mesmo
@@ -65,7 +66,7 @@ export default function ContextRing(props: {
         </svg>
       </button>
       {open && (
-        <div className="absolute bottom-full left-0 z-30 mb-2 w-60 rounded-xl border border-line bg-surface p-3 font-mono text-xs text-muted shadow-xl">
+        <div className={`absolute z-30 ${props.abaixo ? "right-0 top-full mt-2" : "bottom-full left-0 mb-2"} w-60 rounded-xl border border-line bg-surface p-3 font-mono text-xs text-muted shadow-xl`}>
           <div className="mb-1 flex items-center justify-between">
             <span>Contexto</span>
             <span className="text-fg">{props.used == null ? "—" : `${fmt(props.used)} / ${props.max ? fmt(props.max) : "?"}`}</span>

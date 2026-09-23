@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import config, db, gitops, llm, skills, workspace
+from . import config, db, gitops, llm, modelctl, skills, workspace
 from .parsing import parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, register, resolve_path, vision_caps
 
@@ -38,11 +38,24 @@ intermediárias, só o seu relatório final. Faça apenas a tarefa pedida, usand
 responda com um relatório curto e objetivo: o que fez, arquivos alterados, resultados e o que ficou pendente.
 """
 MAX_RESULT_IN_STEP = 2000
+MAX_RECARGAS = 2   # quantas vezes o Worker recarrega o próprio modelo local que caiu
+MAX_NA_TRANSCRICAO = 20_000  # por mensagem da conversa gravada do Worker (read_file de arquivo grande)
 MAX_FILES = 12            # arquivos anexados ao brief
 MAX_DIFF = 30_000         # diff mandado para a revisão
 VERIFY_TIMEOUT = 180      # teto do done_when (o run_command ainda corta em SHELL_TIMEOUT_MAX)
 SUB_BUDGET_MULT = 1.5     # quem resolve a tarefa é ele: pensa mais folgado que o maestro (ver llm._budget)
 WRITE_TOOLS = {"write_file", "edit_file"}
+# Ferramentas de um Worker que recebe Implementation Contract (maestro.run_task). O resto sai.
+#
+# Não é preferência de estilo, é orçamento de contexto: os schemas de TODAS as ferramentas custam
+# ~4900 tokens, contra ~1600 do system prompt. Num Ornith 9B com 8k de janela isso deixava ~1,6k
+# para o contrato, os arquivos e os resultados — e a janela batia em 7914/8192 no segundo passo,
+# antes de o Worker chegar a rodar o teste. Com esta lista o orçamento cabe. Quem precisar de mais
+# (gerar documento, navegar) declara uma persona em .forja/agents/*.md com o `tools:` que quiser.
+WORKER_TOOLS = frozenset({
+    "read_file", "write_file", "edit_file", "list_dir", "search",
+    "run_command", "serve_start", "serve_status", "serve_stop",
+})
 NUDGE_LINES = 12          # escrita maior que isto, no extremo, é trabalho de subagente
 REVIEW_PROMPT = (
     "Você revisa o diff abaixo, escrito por outro modelo para a tarefa dada. Responda em no máximo 8 linhas: "
@@ -101,35 +114,48 @@ def ativas() -> list[dict]:
              "steps": len(a["info"]["steps"])} for a in list(ATIVAS.values())]
 
 
-def _fits(spec: dict) -> tuple[bool, str]:
+def _fits(spec: dict, swap: bool = False) -> tuple[bool, str]:
     """(dá para usar agora?, por que não). Um slot do provedor local só vale se o modelo dele for
     justamente o que está carregado: o Forja sobe um llama-server por vez e o llama.cpp ignora o campo
-    `model` do pedido, então pedir outro alias rodaria o modelo errado em silêncio."""
+    `model` do pedido, então pedir outro alias rodaria o modelo errado em silêncio.
+
+    `swap=True` (Maestro em modo sequencial) muda a pergunta: não é "já está carregado?" e sim "dá
+    para carregar?". O orquestrador chama `modelctl.ensure` antes de despachar, então basta o arquivo
+    existir em alguma pasta configurada. É o que permite o ciclo carrega A → tarefa → carrega B.
+    """
     if localai is None or config.PROVIDERS.get(spec["provider"], {}).get("type") != "llamacpp":
         return True, ""
     estado = localai.status()
+    alias = estado.get("alias") or ""
+    if alias and alias == spec["model"]:
+        return True, ""
+    if swap:
+        from . import modelctl  # import tardio: modelctl importa localai, que importa config
+        if modelctl.path_for(spec["model"]):
+            return True, ""
+        return False, f"o modelo local '{spec['model']}' não está em nenhuma pasta configurada"
     if not estado.get("running"):
         return False, "nenhum modelo local está carregado"
-    alias = estado.get("alias") or ""
-    if alias and alias != spec["model"]:
+    if alias:
         return False, f"o modelo local carregado é '{alias}', não '{spec['model']}'"
     return True, ""
 
 
-def chain(level: str) -> list[tuple[str, dict]]:
+def chain(level: str, swap: bool = False) -> list[tuple[str, dict]]:
     """Ordem de tentativa: o nível pedido, a reserva na nuvem e o outro nível. Slot sem modelo, ou que
-    não roda agora nesta máquina, fica de fora."""
+    não roda agora nesta máquina, fica de fora. Com `swap`, um slot local que só precisa ser carregado
+    continua valendo (ver _fits)."""
     ordem = dict.fromkeys([level, "nuvem", "capaz" if level == "rapido" else "rapido"])
-    return [(lvl, spec) for lvl in ordem if (spec := slot(lvl)) and _fits(spec)[0]]
+    return [(lvl, spec) for lvl in ordem if (spec := slot(lvl)) and _fits(spec, swap)[0]]
 
 
-def _why_not() -> str:
+def _why_not(swap: bool = False) -> str:
     """Motivo de cada slot configurado que não pode rodar agora. Vira o texto do erro: o principal
     precisa saber que não adianta insistir, é para fazer sozinho."""
     motivos = []
     for lvl in LEVELS:
         spec = slot(lvl)
-        if spec and not (fit := _fits(spec))[0]:
+        if spec and not (fit := _fits(spec, swap))[0]:
             motivos.append(f"{LEVELS[lvl]}: {fit[1]}")
     return "; ".join(motivos)
 
@@ -232,7 +258,8 @@ def _falta(root: Path, task: str, files: list[str]) -> str:
     return ""
 
 
-async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = None) -> tuple:
+async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = None,
+                 focado: bool = False) -> tuple:
     """(via, auto, caps, tools, schemas, mensagem de sistema) de um slot. Serve à primeira tentativa e
     ao fallback: trocar de modelo troca ferramentas, capacidades e formato de tool call junto."""
     from .agent import available_tools, system_prompt  # import tardio: agent importa este módulo
@@ -242,9 +269,15 @@ async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = No
     via = "prompt" if setting["tool_mode"] == "text" else "native"
     caps = vision_caps(await llm.capabilities(provider, model), setting["vision"])
     excluir = {"delegate_task"}
-    if persona and persona["tools"]:  # persona com lista de ferramentas: o resto nem aparece para ela
-        permitidas = set(persona["tools"])
+    permitidas = set(persona["tools"]) if persona and persona["tools"] else (
+        set(WORKER_TOOLS) if focado else None)
+    if permitidas is not None:  # tudo o que não está na lista nem aparece para ele
         excluir |= {t.name for t in available_tools(caps, run_obj.permission) if t.name not in permitidas}
+    # Persona que lista ferramentas continua ganhando o ask_user de brinde (comportamento de sempre);
+    # o Worker de contrato não, porque _run_call recusa ask_user de subagente e o schema só ocuparia
+    # janela para devolver erro.
+    if not focado:
+        excluir.discard("ask_user")
     tools = available_tools(caps, run_obj.permission, exclude=excluir)
     conteudo = system_prompt(via, caps, exclude=excluir, permission=run_obj.permission,
                              effort=sub_effort) + SUB_PROMPT
@@ -284,7 +317,11 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
 
 
 async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
-               run_call: Callable) -> AsyncIterator[dict]:
+               run_call: Callable, structured: bool = False,
+               ao_registrar: Callable[[list], None] | None = None) -> AsyncIterator[dict]:
+    """`structured=True`: o brief veio de um Implementation Contract do Maestro (taskdb), nao de um
+    delegate_task escrito a maquina pelo modelo. Os freios de delegacao rasa (_falta) nao se aplicam:
+    o contrato ja foi validado na criacao da tarefa, e recusar aqui travaria o ciclo autonomo."""
     args = call["arguments"]
     pid = call["id"]
     root_persona = workspace.root()
@@ -300,7 +337,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     if not task:
         out.update(status="erro", text="Informe 'task' com a tarefa completa.", meta=meta)
         return
-    if effort == "extremo" and (motivo := _falta(root, task, files)) and "delegate_task" not in run_obj.nudged:
+    if effort == "extremo" and not structured and (motivo := _falta(root, task, files))             and "delegate_task" not in run_obj.nudged:
         run_obj.nudged.add("delegate_task")  # uma vez por turno: insistir é sinal de que não há mais contexto
         out.update(status="erro", meta=meta, text=(
             f"Delegação recusada (nada foi feito): {motivo}. Modelo de chamada boa: "
@@ -319,12 +356,15 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     used_level, spec = cadeia[0]
     tentados = {used_level}
     provider, model = spec["provider"], spec["model"]
-    via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona)
+    via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona, structured)
     brief = [task]
     if ctx := _context(root, files):
         brief.append("Arquivos relevantes (já lidos para você):\n" + ctx)
     if done_when:
         brief.append(f"Critério de pronto: ao final será executado `{done_when}`. Faça o necessário para passar.")
+    if structured:  # execução autônoma: cada `python -c` para esperando o usuário clicar
+        brief.append("Para conferir, rode os testes (pytest, npm test...) em vez de `python -c`/`node -e`: "
+                     "no modo Automático testes passam direto, código solto na linha de comando pede aprovação.")
     messages: list[dict] = [system, {"role": "user", "content": "\n\n".join(brief)}]
 
     info = {"level": used_level, "provider": provider, "model": model, "steps": [], "tokens": 0,
@@ -346,32 +386,91 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     final = ""
     yield estado(f"{LEVELS[used_level]} · {model}: começando…")
 
+    # Worker de contrato vira uma conversa como a do chat: mensagens no mesmo formato, transmitidas
+    # ao vivo (a coluna Worker do cockpit desenha com os componentes do chat) e gravadas a cada
+    # rodada na tentativa. O delegate_task comum continua como sempre — só passos e relatório.
+    from .agent import _stats  # import tardio: agent importa este módulo
+    transcricao: list[dict] = []
+    ctx_max = await llm.context_limit(provider, model, config.NUM_CTX) if structured else None
+
+    def registra(msg: dict) -> dict:
+        msg = {"id": len(transcricao) + 1, "thinking": "", "tool_calls": None, "tool_call_id": None,
+               "name": None, "status": None, "meta": None, **msg}
+        for campo in ("content", "thinking"):
+            if isinstance(msg.get(campo), str) and len(msg[campo]) > MAX_NA_TRANSCRICAO:
+                msg[campo] = msg[campo][:MAX_NA_TRANSCRICAO] + "\n… (cortado na gravação)"
+        transcricao.append(msg)
+        if ao_registrar:
+            ao_registrar(transcricao)
+        return msg
+
+    if structured:
+        yield {"type": "sub_message", "parent": pid,
+               "message": registra({"role": "user", "content": messages[1]["content"]})}
+
+    recargas = 0
     for i in range(config.SUBAGENT_MAX_ITERATIONS):
+        if getattr(run_obj, "paused", False):  # Pausar vale também no meio de uma tarefa do Worker
+            yield estado(f"{LEVELS[used_level]} · {model}: pausado")
+            await run_obj.espera_retomar()
         if run_obj.cancel.is_set():
             final = final or "(interrompido pelo usuário)"
             break
         info["iterations"] = i + 1
         yield estado(f"{LEVELS[used_level]} · {model}: pensando (passo {i + 1})")
-        content = ""
+        content = reasoning = ""
         done: dict = {"tool_calls": []}
+        t_passo, t_primeiro = time.monotonic(), None
+        if structured:
+            yield {"type": "sub_assistant_start", "parent": pid}
         try:
             async for kind, val in llm.chat_stream(provider, model, messages, schemas, config.NUM_CTX,
                                                    sub_effort, budget_mult=SUB_BUDGET_MULT):
                 if run_obj.cancel.is_set():
                     break
+                if kind != "done" and t_primeiro is None:
+                    t_primeiro = time.monotonic()
                 if kind == "content":
                     content += val
+                    if structured:
+                        yield {"type": "sub_token", "parent": pid, "text": val}
+                elif kind == "reasoning":
+                    reasoning += val
+                    if structured:
+                        yield {"type": "sub_thinking", "parent": pid, "text": val}
+                elif kind == "tool_args" and structured:
+                    yield {"type": "sub_tool_token", "parent": pid, "name": val["name"], "text": val["text"]}
                 elif kind == "done":
                     done = val
         except llm.LLMError as e:
+            # O llama-server do Worker morreu no meio (falta de memória, crash): recarrega o mesmo
+            # modelo e repete o passo. As mensagens estão aqui, e os arquivos já escritos continuam
+            # no disco — nada da tentativa se perde. Duas vezes no máximo: morrer de novo é sinal de
+            # que o modelo não cabe, e aí o fallback de slot (abaixo) decide.
+            if (recargas < MAX_RECARGAS and not run_obj.cancel.is_set() and e.status is None
+                    and await modelctl.caiu(spec)):
+                recargas += 1
+                yield estado(f"{LEVELS[used_level]} · {model}: o modelo caiu ({e}); recarregando e "
+                             f"repetindo o passo {i + 1}")
+                try:
+                    async for ev in modelctl.recupera(spec, run_obj.cancel):
+                        yield ev
+                except ToolError as e2:
+                    out.update(status="erro", text=f"O modelo do Worker caiu e não voltou: {e2}", meta=meta)
+                    return
+                info["recovered"] = recargas
+                continue
             proximo = next(((lvl, s) for lvl, s in cadeia if lvl not in tentados), None)
             # trocar de modelo depois que o sub já mexeu em arquivo repetiria efeito colateral
             if proximo and not info["steps"]:
                 used_level, spec = proximo
                 tentados.add(used_level)
                 provider, model = spec["provider"], spec["model"]
-                via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort, persona)
+                via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort,
+                                                                              persona, structured)
                 info.update(level=used_level, provider=provider, model=model)
+                if structured:
+                    ctx_max = await llm.context_limit(provider, model, config.NUM_CTX)
                 info["fallback"] = f"O slot anterior falhou ({e}); segui com {LEVELS[used_level]} · {model}."
                 yield estado(info["fallback"])
                 continue
@@ -379,11 +478,18 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             return
         info["tokens"] += done.get("completion_tokens") or len(content) // 4
 
-        _, visible = split_think(content)
+        pensou, visible = split_think(content)
         calls = done.get("tool_calls") or []
         if not calls and (via == "prompt" or auto):
             parsed, visible = parse_text_tool_calls(content, [t.name for t in tools])
             calls = [{"id": "call_" + uuid.uuid4().hex[:12], **c} for c in parsed]
+        if structured:
+            stats = _stats(messages, schemas, content, reasoning, done, t_passo, t_primeiro, ctx_max, model)
+            yield {"type": "sub_message", "parent": pid, "message": registra({
+                "role": "assistant", "content": visible, "thinking": (reasoning + "\n" + pensou).strip(),
+                "tool_calls": [{"id": c["id"], "name": c["name"], "arguments": c["arguments"]}
+                               for c in calls] or None,
+                "meta": {"stats": stats}})}
         if not calls:
             final = visible
             break
@@ -406,10 +512,13 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                     "result": sub_out["text"][:MAX_RESULT_IN_STEP], "meta": {
                         k: v for k, v in sub_out["meta"].items() if k in ("preview", "auto_rule", "approved")}}
             info["steps"].append(step)
-            # resultado do passo para a UI (não é gravado como mensagem da conversa)
-            yield {"type": "tool_result", "parent": pid, "message": {
-                "id": None, "role": "tool", "content": sub_out["text"], "thinking": "", "tool_calls": None,
-                "tool_call_id": c["id"], "name": c["name"], "status": sub_out["status"], "meta": sub_out["meta"]}}
+            # resultado do passo para a UI (não entra na conversa da Maestro; entra na do Worker)
+            resultado = {"role": "tool", "content": sub_out["text"], "tool_call_id": c["id"],
+                         "name": c["name"], "status": sub_out["status"], "meta": sub_out["meta"]}
+            if structured:
+                resultado = registra(resultado)
+            yield {"type": "tool_result", "parent": pid,
+                   "message": {"id": None, "thinking": "", "tool_calls": None, **resultado}}
             if via == "native":
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": sub_out["text"]})
             else:
@@ -428,13 +537,21 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
         ver: dict = {}
         vcall = {"id": "ver_" + uuid.uuid4().hex[:12], "name": "run_command",
                  "arguments": {"command": done_when, "timeout": VERIFY_TIMEOUT}}
+        if structured:  # na conversa do Worker a verificação aparece como uma chamada, com a saída
+            yield {"type": "sub_message", "parent": pid, "message": registra({
+                "role": "assistant", "content": "", "tool_calls": [
+                    {"id": vcall["id"], "name": "run_command", "arguments": vcall["arguments"]}],
+                "meta": {"verificacao": True}})}
         async for ev in run_call(conv_id, vcall, req, run_obj, caps, ver, parent=pid):
             yield ev
         info["steps"].append({"id": vcall["id"], "name": "run_command", "arguments": vcall["arguments"],
                               "status": ver["status"], "result": ver["text"][:MAX_RESULT_IN_STEP], "meta": {}})
-        yield {"type": "tool_result", "parent": pid, "message": {
-            "id": None, "role": "tool", "content": ver["text"], "thinking": "", "tool_calls": None,
-            "tool_call_id": vcall["id"], "name": "run_command", "status": ver["status"], "meta": ver["meta"]}}
+        resultado = {"role": "tool", "content": ver["text"], "tool_call_id": vcall["id"],
+                     "name": "run_command", "status": ver["status"], "meta": ver["meta"]}
+        if structured:
+            resultado = registra(resultado)
+        yield {"type": "tool_result", "parent": pid,
+               "message": {"id": None, "thinking": "", "tool_calls": None, **resultado}}
         info["verify"] = {"command": done_when, "status": ver["status"]}
         final += (f"\n\nVerificação `{done_when}`: {'PASSOU' if ver['status'] == 'ok' else 'FALHOU'}\n"
                   f"{ver['text'][:MAX_RESULT_IN_STEP]}")
@@ -456,11 +573,12 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                text=f"[Relatório do subagente {LEVELS[used_level]} ({model})]\n{final}")
 
 async def run(conv_id: int, call: dict, req, run_obj, out: dict,
-              run_call: Callable) -> AsyncIterator[dict]:
+              run_call: Callable, structured: bool = False,
+              ao_registrar: Callable[[list], None] | None = None) -> AsyncIterator[dict]:
     """Roda a delegação e garante que ela saia da lista de ativas. O finally vale também quando o
     usuário cancela o turno: o consumidor fecha o gerador e o finally corre."""
     try:
-        async for ev in _run(conv_id, call, req, run_obj, out, run_call):
+        async for ev in _run(conv_id, call, req, run_obj, out, run_call, structured, ao_registrar):
             yield ev
     finally:
         ATIVAS.pop(call["id"], None)
