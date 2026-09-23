@@ -226,6 +226,18 @@ def test_argv_do_sd(isolado):
     assert imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())[-1] == "-1"
 
 
+def test_gguf_so_do_unet_vai_em_diffusion_model(isolado, monkeypatch):
+    """Qwen-Image/Flux em GGUF são só o unet; com -m o sd.cpp não acha os pesos."""
+    arch = {"C:/m/qwen-image.gguf": "qwen_image", "C:/m/sd15.gguf": ""}
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": arch[str(Path(p).as_posix())]})
+    localai.set_image({"model": "C:/m/qwen-image.gguf", "llm": "C:/m/qwen3vl.gguf", "vae": "C:/m/vae.safetensors"})
+    a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
+    assert a[a.index("--diffusion-model") + 1] == str(Path("C:/m/qwen-image.gguf")) and "-m" not in a
+    assert a[a.index("--llm") + 1] == str(Path("C:/m/qwen3vl.gguf"))
+    localai.set_image({"model": "C:/m/sd15.gguf"})
+    assert "-m" in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
+
+
 def test_sd_sem_modelo_reclama(isolado):
     with pytest.raises(Exception):
         imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())

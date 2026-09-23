@@ -43,6 +43,17 @@ def _opts(patch: dict | None = None) -> dict:
     return {**base, **do_modelo, **{k: v for k, v in (patch or {}).items() if v not in (None, "")}}
 
 
+def _flag_modelo(path: str) -> str:
+    """GGUF com `general.architecture` (flux, qwen_image...) é só o unet: vai em --diffusion-model.
+
+    Com -m o sd.cpp procura os pesos com o prefixo de checkpoint completo e não acha nada.
+    """
+    # ponytail: heurística pelo metadado; o `convert` do sd.cpp (checkpoint inteiro) não grava arquitetura
+    if path.lower().endswith(".gguf") and localai.gguf_info(path)["arch"]:
+        return "--diffusion-model"
+    return "-m"
+
+
 def argv(exe: Path, prompt: str, out: Path, o: dict) -> list[str]:
     # Sem -M: o modo padrão do sd.cpp é a geração de imagem (img_gen nas builds novas, txt2img nas antigas).
     a = [str(exe), "-p", prompt, "-o", str(out),
@@ -51,10 +62,10 @@ def argv(exe: Path, prompt: str, out: Path, o: dict) -> list[str]:
     if o.get("diffusion_model"):      # Flux/SD3: o unet vem separado do resto
         a += ["--diffusion-model", str(o["diffusion_model"])]
     elif o.get("model"):
-        a += ["-m", str(o["model"])]
+        a += [_flag_modelo(str(o["model"])), str(o["model"])]
     else:
         raise ToolError("Escolha um modelo de imagem no painel IA local › Imagem.")
-    for key, flag in (("vae", "--vae"), ("clip_l", "--clip_l"), ("t5xxl", "--t5xxl")):
+    for key, flag in (("vae", "--vae"), ("clip_l", "--clip_l"), ("t5xxl", "--t5xxl"), ("llm", "--llm")):
         if o.get(key):
             a += [flag, str(o[key])]
     if o.get("negative"):

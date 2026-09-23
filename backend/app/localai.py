@@ -110,7 +110,7 @@ def inference_defaults(path: str = "") -> dict:
 
 
 DEFAULT_IMAGE = {
-    "model": "", "vae": "", "clip_l": "", "t5xxl": "", "diffusion_model": "",
+    "model": "", "vae": "", "clip_l": "", "t5xxl": "", "llm": "", "diffusion_model": "",
     "steps": 20, "cfg": 7.0, "width": 512, "height": 512, "sampler": "euler_a", "negative": "",
     "seed": 0,      # 0 = aleatória
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
@@ -120,7 +120,7 @@ DEFAULT_IMAGE = {
 _cfg_lock = threading.Lock()
 
 
-CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "diffusion_model", "out_dir")
+CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "diffusion_model", "out_dir")
 
 
 def _image_valores(patch: dict) -> dict:
@@ -933,7 +933,7 @@ def kind_of(f: Path) -> str:
 
 
 # Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
-IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl")
+IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm")
 
 
 def image_params(path: str) -> dict:

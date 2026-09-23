@@ -296,6 +296,7 @@ export type ImageParams = {
   vae: string;
   clip_l: string;
   t5xxl: string;
+  llm: string;
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -382,6 +383,7 @@ export type ImageOpts = {
   vae: string;
   clip_l: string;
   t5xxl: string;
+  llm: string;
   diffusion_model: string;
   steps: number;
   cfg: number;

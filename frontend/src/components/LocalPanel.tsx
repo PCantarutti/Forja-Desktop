@@ -855,6 +855,9 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                 <input className={input} value={form.t5xxl} onChange={(e) => set("t5xxl", e.target.value)} placeholder="t5xxl" />
               </div>
             </Field>
+            <Field label="Codificador LLM" hint="Qwen-Image: Qwen2.5-VL-7B (1.0) ou Qwen3-VL-8B (2.1), em GGUF ou safetensors.">
+              <input className={input} value={form.llm ?? ""} onChange={(e) => set("llm", e.target.value)} placeholder="opcional" />
+            </Field>
           </div>
           <div className="mt-3 flex items-center gap-2">
             <button className={btnPrimary} onClick={salvar}>
