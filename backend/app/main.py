@@ -805,6 +805,7 @@ class TestarBody(BaseModel):
     linguagem: str = ""             # a do bloco (```html); vazio = descobre pelo conteúdo
     chave: str = "teste"            # uma pasta por resposta (comparação + modelo)
     conv: int | None = None         # conversa dona do servidor de teste (aba Instâncias)
+    bateria: str = ""               # resposta de teste pronto: roda junto os casos do gabarito
 
 
 class JuizBody(BaseModel):
@@ -871,7 +872,7 @@ def comparar_testar(body: TestarBody):
     """Testar o código de uma resposta: HTML sobe num servidor (abre no navegador integrado);
     Python e JavaScript voltam como comando para o terminal."""
     try:
-        return baterias.testar_codigo(body.codigo, body.linguagem, body.chave, body.conv)
+        return baterias.testar_codigo(body.codigo, body.linguagem, body.chave, body.conv, body.bateria)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

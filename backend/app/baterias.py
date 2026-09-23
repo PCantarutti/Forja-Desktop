@@ -8,6 +8,7 @@ fraco inventa.
 """
 from __future__ import annotations
 
+import asyncio
 import re
 import socket
 import sys
@@ -20,69 +21,92 @@ from .tools import ToolError
 
 SYSTEM = "Responda em português do Brasil. Seja direto e preciso; se algo não estiver no material, diga que não consta."
 
-POLITICA = """# Política de Reembolso — Aurora Viagens (versão 3.2, vigente desde 01/02/2026)
+POLITICA = """# Política de Reembolso e Alterações — Aurora Viagens (versão 4.0, vigente desde 01/03/2026)
+
+Esta versão substitui a 3.2. Na versão 3.2 a multa do item 1.2 era de 10%; ela não vale mais.
 
 ## 1. Cancelamento pelo cliente
-1.1. O cliente pode cancelar sem multa em até 7 (sete) dias corridos após a compra, desde que faltem
-mais de 30 (trinta) dias para a data de início da viagem na data do cancelamento.
+1.1. O cliente pode cancelar sem multa em até 7 (sete) dias corridos após a compra, desde que, na data
+do cancelamento, faltem mais de 30 (trinta) dias para o início de uma viagem nacional, ou mais de 60
+(sessenta) dias para o início de uma viagem internacional.
 1.2. Fora da condição do item 1.1, o cancelamento tem multa de 20% sobre o valor total do pacote.
 1.3. Cancelamentos a menos de 72 horas do embarque não têm reembolso; o valor pago vira crédito de 50%.
 
 ## 2. Forma e prazo do reembolso
 2.1. O reembolso é feito no mesmo meio de pagamento da compra, em até 10 (dez) dias úteis.
-2.2. Compras pagas por boleto são reembolsadas por PIX, em até 5 (cinco) dias úteis, para uma chave
-em nome do titular da compra.
-2.3. Compras no cartão de crédito parceladas são estornadas nas faturas seguintes, conforme a
-operadora do cartão.
+2.2. Compras pagas por boleto são reembolsadas por PIX, em até 5 (cinco) dias úteis, para uma chave em
+nome do titular da compra.
+2.3. Os prazos em dias úteis contam a partir do dia útil seguinte ao pedido de reembolso. Dia útil é de
+segunda a sexta, exceto feriados nacionais. Feriados nacionais de 2026 considerados: 03/04 (Sexta-feira
+Santa), 21/04 (Tiradentes) e 01/05 (Dia do Trabalho).
 
 ## 3. Pacotes promocionais
 3.1. Pacotes marcados como "Tarifa Promocional" não são reembolsáveis.
-3.2. Nesses pacotes, o cancelamento gera crédito de 70% do valor pago, válido por 12 meses, para
-qualquer produto da Aurora Viagens.
+3.2. Nesses pacotes, o cancelamento gera crédito de 70% do valor pago, válido por 12 meses, para qualquer
+produto da Aurora Viagens.
+3.3. Em caso de conflito com a seção 1, esta seção prevalece.
 
-## 4. Cancelamento pela Aurora Viagens
-4.1. Se a Aurora cancelar a viagem, o cliente escolhe entre reembolso integral em até 10 dias úteis
-ou remarcação sem custo em até 6 meses.
+## 4. Alteração de data
+4.1. Alterar a data não é cancelamento: custa uma taxa fixa de R$ 150,00 por passageiro, desde que o
+pedido seja feito até 15 dias antes do embarque.
+4.2. A menos de 15 dias do embarque não é possível alterar a data; só cancelar, conforme a seção 1.
 
-## 5. Contato
-Pedidos de reembolso: reembolso@auroraviagens.com.br ou pelo aplicativo, em Minhas Viagens › Cancelar.
+## 5. Cancelamento pela Aurora Viagens
+5.1. Se a Aurora cancelar a viagem, o cliente escolhe entre reembolso integral em até 10 dias úteis ou
+remarcação sem custo em até 6 meses.
+
+## 6. Contato
+Pedidos de reembolso e alteração: reembolso@auroraviagens.com.br ou pelo aplicativo, em Minhas Viagens.
 """
 
-CODIGO_TESTES = '''def desconto(preco: float, cupom: str | None) -> float:
-    """Aplica um cupom ao preço.
+CODIGO_TESTES = r'''import re
 
-    - None ou "FRETE": o preço não muda
-    - "DEZ": tira 10% do preço
-    - "VINTE": tira R$ 20,00, mas o preço nunca fica negativo
-    - qualquer outro cupom: ValueError
+def minutos(texto: str) -> int:
+    """Converte uma duração em minutos.
+
+    Formatos aceitos (sem espaços): "45m", "2h", "1h30m" — horas antes de minutos.
+    - Com horas, os minutos vão de 0 a 59 ("1h60m" é inválido); sozinhos, qualquer valor ("90m" = 90).
+    - "0m" e "0h" valem 0.
+    - Texto vazio, com espaço, número sem unidade ("30") ou fora de ordem ("30m1h"): ValueError.
     """
-    if cupom is None or cupom == "FRETE":
-        return preco
-    if cupom == "DEZ":
-        return preco - preco * 10 / 100
-    if cupom == "VINTE":
-        return preco - 20
-    raise ValueError("cupom inválido")'''
+    m = re.fullmatch(r"(?:(\d+)h)?\s*(?:(\d+)m)?", texto)
+    if not m:
+        raise ValueError(texto)
+    h, mi = m.groups()
+    if h and mi and int(mi) > 60:
+        raise ValueError(texto)
+    return int(h or 0) * 60 + int(mi or 0)'''
 
-CODIGO_GERAL = """function media(notas) {
-  // média das notas, ignorando os valores null
-  let soma = 0;
-  for (const n of notas) if (n !== null) soma += n;
-  return soma / notas.length;
+CODIGO_GERAL = """// Devolve os n maiores valores DISTINTOS de `lista`, do maior para o menor, sem alterar `lista`.
+// n maior que a quantidade de distintos: devolve todos. n <= 0 ou lista vazia: [].
+function topN(lista, n) {
+  lista.sort();
+  lista.reverse();
+  return lista.slice(0, n);
 }"""
 
 BATERIAS: dict[str, dict] = {
     "logica": {
         "titulo": "Lógica e back-end",
-        "mede": "raciocínio com regra de negócio, casos de borda e validação — e se o modelo calcula certo sem executar",
-        "prompt": ("Escreva em Python a função `parcelas(total_centavos: int, n: int) -> list[int]` que divide um "
-                   "valor em n parcelas inteiras (em centavos), com diferença de no máximo 1 centavo entre elas e as "
-                   "maiores primeiro. Valide as entradas: n >= 1 e total_centavos >= 0; senão, ValueError.\n\n"
-                   "Depois, SEM executar código, diga o retorno de parcelas(1000, 3), parcelas(1, 4) e parcelas(0, 2), "
-                   "e a complexidade de tempo em uma frase."),
-        "gabarito": ("parcelas(1000, 3) = [334, 333, 333]; parcelas(1, 4) = [1, 0, 0, 0]; parcelas(0, 2) = [0, 0]. "
-                     "A soma das parcelas é sempre o total. ValueError para n < 1 ou total < 0. Complexidade O(n). "
-                     "Uso de float/arredondamento que faça a soma não bater é erro."),
+        "mede": "regra de negócio com vários casos que interagem (FIFO de estoque), validação e se o modelo "
+                "calcula certo sem executar — o Forja roda a função contra 9 casos",
+        "prompt": ("Escreva em Python a função `custo_fifo(movimentos)` que calcula o custo das saídas de estoque "
+                   "pelo método FIFO (o primeiro lote que entrou é o primeiro a sair).\n"
+                   "- `movimentos` é uma lista de tuplas: (\"entrada\", quantidade, custo_unitario_em_centavos) ou "
+                   "(\"saida\", quantidade).\n"
+                   "- Devolve `(custo_total_das_saidas_em_centavos, lotes_restantes)`, com `lotes_restantes` na ordem "
+                   "FIFO como lista de tuplas `(quantidade, custo_unitario)`.\n"
+                   "- Uma saída consome dos lotes mais antigos e pode atravessar vários lotes; lote zerado sai da "
+                   "lista.\n"
+                   "- Quantidade menor ou igual a zero, saída maior que o estoque disponível ou tipo desconhecido: "
+                   "ValueError.\n"
+                   "- Tudo em inteiros (centavos); nada de float.\n\n"
+                   "Depois, SEM executar, diga o retorno de: custo_fifo([(\"entrada\", 10, 500), (\"entrada\", 5, 800), "
+                   "(\"saida\", 12), (\"entrada\", 3, 700), (\"saida\", 4)])"),
+        "gabarito": ("O exemplo devolve (9700, [(2, 700)]): a 1ª saída consome 10×500 + 2×800 = 6600 e sobra (3, 800); "
+                     "entra (3, 700); a 2ª saída consome 3×800 + 1×700 = 3100 e sobra (2, 700); total 6600 + 3100 = "
+                     "9700. Erros comuns: consumir do lote mais NOVO (LIFO), não atravessar lotes, deixar lote com "
+                     "quantidade 0 na lista, aceitar saída maior que o estoque, usar float, e errar a conta manual."),
     },
     "frontend": {
         "titulo": "Frontend e aparência",
@@ -114,42 +138,52 @@ BATERIAS: dict[str, dict] = {
     },
     "testes": {
         "titulo": "Testes",
-        "mede": "escrever testes a partir do comportamento documentado e achar o bug que eles expõem",
-        "prompt": ("Escreva testes pytest para a função abaixo, cobrindo o comportamento DOCUMENTADO na docstring. "
-                   "Depois diga: algum dos seus testes falha com esta implementação? Qual, e por quê? "
-                   "Não invente regras que a docstring não diz.\n\n```python\n" + CODIGO_TESTES + "\n```"),
-        "gabarito": ("O bug: 'VINTE' com preço menor que 20 devolve valor negativo (ex.: desconto(10, 'VINTE') "
-                     "devolve -10, deveria ser 0). Testes esperados: None e 'FRETE' mantêm o preço; 'DEZ' em 100 dá "
-                     "90; 'VINTE' em 50 dá 30; 'VINTE' em 10 dá 0 (este FALHA); cupom desconhecido levanta ValueError "
-                     "(pytest.raises). Inventar regra (ex.: cupom em minúsculas, limite de preço) conta como erro."),
+        "mede": "escrever testes a partir do comportamento documentado — o Forja roda os testes do modelo contra "
+                "a versão certa e contra 3 versões com um bug cada, e conta quantos bugs eles pegam",
+        "prompt": ("Escreva testes pytest para a função abaixo, cobrindo o comportamento DOCUMENTADO na docstring "
+                   "(não o que o código faz). Depois diga quais dos seus testes falham com esta implementação e por "
+                   "quê. Não invente regras que a docstring não diz. Responda com os testes num bloco python.\n\n"
+                   "```python\n" + CODIGO_TESTES + "\n```"),
+        "gabarito": ("A implementação tem 3 bugs contra a docstring: (1) texto vazio \"\" devolve 0 em vez de ValueError "
+                     "(o regex casa vazio); (2) \"1h60m\" é aceito (compara > 60 em vez de > 59); (3) \"1h 30m\" é "
+                     "aceito (o \\s* no regex permite espaço). Bons testes: \"45m\"=45, \"2h\"=120, \"1h30m\"=90, "
+                     "\"90m\"=90, \"0m\"=0, \"1h59m\"=119, e ValueError para \"\", \"1h60m\", \"1h 30m\", \"30\", "
+                     "\"30m1h\". Testes que exigem algo fora da docstring estão errados."),
     },
     "docs": {
         "titulo": "Documentação e leitura de documentos",
-        "mede": "ler um documento fornecido, resumir, aplicar a regra a um caso e NÃO inventar o que não está lá",
+        "mede": "ler um documento com exceções, precedência entre regras e contagem de dias úteis com feriado — e "
+                "dizer 'não consta' em vez de inventar",
         "anexo": {"nome": "politica-de-reembolso.md", "texto": POLITICA},
-        "prompt": ("Leia o arquivo anexo (politica-de-reembolso.md) e responda:\n"
-                   "1. Um resumo em até 5 tópicos.\n"
-                   "2. Comprei um pacote comum em 01/03, a viagem começa em 20/03 e cancelei em 04/03. Pago multa? "
-                   "Quanto? Cite o item.\n"
-                   "3. Paguei por boleto: como e em quanto tempo recebo o reembolso?\n"
-                   "4. A política cobre seguro-viagem? Em que condições?"),
-        "gabarito": ("2: SIM, multa de 20% (item 1.2): o cancelamento foi em até 7 dias, mas faltavam só 16 dias "
-                     "para a viagem (menos de 30), então o item 1.1 não se aplica. 3: por PIX, em até 5 dias úteis, "
-                     "para chave em nome do titular (item 2.2). 4: o documento NÃO fala de seguro-viagem — a resposta "
-                     "certa é dizer que não consta; qualquer regra de seguro é alucinação. O resumo deve citar "
-                     "cancelamento (7 dias/30 dias, multa 20%, 72h com crédito de 50%), reembolso (10 dias úteis, "
-                     "boleto por PIX), promocional (crédito de 70% por 12 meses) e cancelamento pela Aurora."),
+        "prompt": ("Leia o arquivo anexo (politica-de-reembolso.md) e responda, citando o item de cada resposta:\n"
+                   "1. Comprei um pacote INTERNACIONAL comum em 02/03/2026, a viagem começa em 20/04/2026 e cancelei em "
+                   "06/03/2026. Pago multa? De quanto?\n"
+                   "2. Paguei por boleto e pedi o reembolso na segunda-feira, 30/03/2026. Como recebo e até que data?\n"
+                   "3. Cancelei um pacote em \"Tarifa Promocional\" 48 horas antes do embarque. O que recebo?\n"
+                   "4. Quero mudar a data de uma viagem de 2 passageiros, pedindo 20 dias antes do embarque. Quanto "
+                   "pago?\n"
+                   "5. Qual o telefone da central de atendimento?\n"
+                   "6. A política cobre extravio de bagagem?"),
+        "gabarito": ("1: SIM, multa de 20% (item 1.2): o cancelamento foi em até 7 dias da compra, mas para viagem "
+                     "internacional precisam faltar mais de 60 dias e faltavam 45 (item 1.1). Os 10% da versão 3.2 NÃO "
+                     "valem mais. 2: por PIX (item 2.2), até 07/04/2026 — a contagem começa no dia útil seguinte "
+                     "(31/03) e pula o feriado de 03/04: 31/03, 01/04, 02/04, 06/04, 07/04 (item 2.3). 3: crédito de "
+                     "70% válido por 12 meses (item 3.2), porque a seção 3 prevalece sobre o item 1.3 (item 3.3); dizer "
+                     "crédito de 50% é erro. 4: R$ 300,00 — R$ 150,00 por passageiro, pedido com mais de 15 dias "
+                     "(item 4.1). 5: NÃO consta telefone (só e-mail e aplicativo). 6: NÃO consta nada sobre bagagem. "
+                     "Inventar telefone, regra de bagagem ou usar a multa de 10% é alucinação."),
     },
     "geral": {
-        "titulo": "Geral (achar e corrigir bug)",
-        "mede": "ler código, achar o bug, corrigir e prever a saída — o básico de qualquer Worker",
-        "prompt": ("Esta função JavaScript deveria devolver a média das notas ignorando os valores null, mas tem um "
-                   "bug. Diga qual é em uma frase, mostre a versão corrigida e diga o que ela devolve para "
-                   "[10, null, 7, 8] e para [].\n\n```js\n" + CODIGO_GERAL + "\n```"),
-        "gabarito": ("Bug: divide pela quantidade TOTAL de itens (incluindo os null), não pela quantidade de notas "
-                     "válidas. Correção: contar as não-nulas e dividir por essa contagem. [10, null, 7, 8] → 25/3 ≈ "
-                     "8,33. [] (ou só nulls): a versão corrigida precisa tratar o caso (devolver 0, null ou lançar erro, "
-                     "de forma explícita); dizer que dá 8,33 ou ignorar o caso vazio é erro."),
+        "titulo": "Geral (achar e corrigir bugs)",
+        "mede": "achar TODOS os bugs de uma função curta, corrigir e prever a saída — o Forja roda a versão "
+                "corrigida contra 7 casos",
+        "prompt": ("Esta função JavaScript não faz o que o comentário diz. Liste todos os problemas, mostre a versão "
+                   "corrigida (num bloco js) e diga o que ela devolve para topN([5, 12, 3, 12, 40, 7], 3) e para "
+                   "topN([9, 100, 20], 5).\n\n```js\n" + CODIGO_GERAL + "\n```"),
+        "gabarito": ("Problemas: (1) sort() sem comparador ordena como TEXTO (100 fica antes de 20 e de 9); (2) sort() "
+                     "e reverse() ALTERAM a lista original; (3) não remove duplicados; (4) n negativo devolve itens "
+                     "(slice com negativo), deveria devolver []. Saídas: [40, 12, 7] e [100, 20, 9]. Quem lista só um "
+                     "problema, ou prevê [40, 12, 12], errou."),
     },
 }
 
@@ -203,7 +237,7 @@ def _porta_livre() -> int:
         return sk.getsockname()[1]
 
 
-def testar_codigo(codigo: str, dica: str, chave: str, conv: int | str | None = None) -> dict:
+def testar_codigo(codigo: str, dica: str, chave: str, conv: int | str | None = None, bateria: str = "") -> dict:
     """Grava o código numa pasta de teste e diz como vê-lo rodar: HTML sobe um servidor estático
     (a tela abre no navegador integrado); Python e JavaScript viram um comando para o terminal.
     Cada resposta tem a própria pasta (chave = comparação + modelo), então testar de novo reaproveita."""
@@ -214,10 +248,14 @@ def testar_codigo(codigo: str, dica: str, chave: str, conv: int | str | None = N
     pasta = TESTES_DIR / (re.sub(r"[^A-Za-z0-9_-]+", "-", chave).strip("-")[:60] or "teste")
     pasta.mkdir(parents=True, exist_ok=True)
     arquivo = pasta / ARQUIVO[lang]
-    arquivo.write_text(codigo, encoding="utf-8")
+    from . import conferencia
+    com_casos = conferencia.para_testar(bateria, lang, codigo) if bateria else None
+    arquivo.write_text(com_casos[0] if com_casos else codigo, encoding="utf-8")
     if lang != "html":
-        return {"tipo": "terminal", "linguagem": lang, "arquivo": str(arquivo),
-                "comando": f'{"python" if lang == "python" else "node"} "{arquivo}"'}
+        modo = com_casos[1] if com_casos else ("python" if lang == "python" else "node")
+        comando = (f'python -m pytest -v -p no:cacheprovider "{arquivo}"' if modo == "pytest"
+                   else f'{"python" if modo == "python" else "node"} "{arquivo}"')
+        return {"tipo": "terminal", "linguagem": lang, "arquivo": str(arquivo), "comando": comando}
     nome = f"teste-{pasta.name}"
     vivo = any(x["name"] == nome and x["alive"] for x in shell.list_servers())
     if not (vivo and nome in _PORTAS):
@@ -256,6 +294,8 @@ Responda em português, em Markdown, nesta ordem:
 2. **Vencedor geral** e, em uma linha cada: mais correto, mais rápido, melhor custo-benefício.
 3. Até 3 frases de justificativa. Nada de elogio genérico.
 Modelo que deu erro ou não respondeu recebe nota 0 e "sem resposta".
+Se vier CONFERÊNCIA AUTOMÁTICA, ela é FATO: o Forja executou o código de cada modelo contra casos com
+resposta certa. Use-a para decidir quem acertou; não contradiga o que foi medido.
 Se vierem PRINTS (a página de cada modelo aberta de verdade, desktop e celular), julgue também o que se
 VÊ: layout quebrado, texto cortado, contraste, alinhamento, se o celular respeita a largura pedida. O
 visual conta na nota e ganha uma coluna "Visual" na tabela."""
@@ -286,7 +326,8 @@ def com_nomes(texto: str, itens: list[dict]) -> str:
                              if m.group(3) in nomes else m.group(0)), texto)
 
 
-def pedido_ao_juiz(prompt: str, bateria: str, itens: list[dict], limite: int = MIN_RESPOSTA * 3) -> list[dict]:
+def pedido_ao_juiz(prompt: str, bateria: str, itens: list[dict], limite: int = MIN_RESPOSTA * 3,
+                   conferido: dict[str, dict] | None = None) -> list[dict]:
     gabarito = (BATERIAS.get(bateria) or {}).get("gabarito") or "(sem gabarito: julgue pela correção técnica e pela tarefa)"
     partes = [f"TAREFA:\n{prompt}", f"GABARITO:\n{gabarito}"]
     for it in itens:
@@ -296,6 +337,8 @@ def pedido_ao_juiz(prompt: str, bateria: str, itens: list[dict], limite: int = M
         inteiro = (it.get("content") or "").strip()
         corpo = (inteiro[:limite] + (CORTE if len(inteiro) > limite else "")) if inteiro \
             else f"(sem resposta: {it.get('error') or it.get('status')})"
+        if conf := (conferido or {}).get(it["rotulo"]):
+            corpo = f"CONFERÊNCIA AUTOMÁTICA (executado): nota {conf.get('nota')}/10 — {conf.get('resumo')}\n\n" + corpo
         partes.append(f"=== MODELO {it['rotulo']} — {medida} ===\n{corpo}")
     return [{"role": "system", "content": JUIZ}, {"role": "user", "content": "\n\n".join(partes)}]
 
@@ -317,6 +360,8 @@ async def julgar(message_id: int, provider: str, model: str) -> AsyncIterator[di
         raise ToolError("Escolha o modelo que vai analisar.")
     itens = meta.get("itens") or []
     cego = bool(meta.get("cego")) and not meta.get("revelado")
+    # quem acompanha ao vivo também vê nomes (fora do modo cego), não só o texto final
+    yield {"rotulos": [] if cego else [{"rotulo": i["rotulo"], "nome": i["nome"]} for i in itens]}
     galeria: list[dict] = []  # prints tirados: vão numa tabela no fim da análise
     fotos, legendas = [], []
     # Teste de frontend e juiz com visão: cada página aberta de verdade e fotografada (desktop e
@@ -344,7 +389,15 @@ async def julgar(message_id: int, provider: str, model: str) -> AsyncIterator[di
         ctx_juiz = await llm.context_limit(provider, model, config.NUM_CTX)
     except Exception:  # sem a janela, usa o mínimo generoso
         ctx_juiz = None
-    mensagens = pedido_ao_juiz(prompt, bateria, itens, limite_por_resposta(ctx_juiz, len(itens)))
+    # Conferência automática: o que dá para medir executando o código, mede-se (ver conferencia.py).
+    from . import conferencia
+    conferido: dict[str, dict] = {}
+    if bateria in conferencia.CONFERE:
+        yield {"etapa": "Conferindo: executando o código de cada modelo contra os casos do gabarito"}
+        for it in itens:
+            if r := await asyncio.to_thread(conferencia.conferir, bateria, it.get("content") or ""):
+                conferido[it["rotulo"]] = r
+    mensagens = pedido_ao_juiz(prompt, bateria, itens, limite_por_resposta(ctx_juiz, len(itens)), conferido)
     if fotos:
         from . import uploads
         mensagens[-1] = uploads.user_message(
@@ -380,7 +433,7 @@ async def julgar(message_id: int, provider: str, model: str) -> AsyncIterator[di
     stats = _stats(mensagens, None, texto, pensou, done, t0, t_first, ctx, model)
     embutido, visivel = split_think(texto)
     # Modo cego: letras, sem legenda e sem nomes na tabela de prints (revelar é o voto que faz).
-    legenda = tabela_de_prints(galeria, itens, m["conversation_id"], cego)
+    legenda = tabela_de_conferencia(conferido, itens, cego) + tabela_de_prints(galeria, itens, m["conversation_id"], cego)
     if not cego:
         visivel, texto = com_nomes(visivel, itens), com_nomes(texto, itens)
     msg = _save(m["conversation_id"], role="assistant", content=(visivel or texto).strip() + legenda,
@@ -427,6 +480,21 @@ async def _tem_visao(provider: str, model: str) -> bool:
 # Qwen3.6: 8 s por imagem de 720p, 68 s em 1080p — ver browser.PRINT_VIEWPORT). Prints de 1280x1400 e
 # 390x1600 somavam ~5 MP e deixaram o revisor 10 minutos "lendo" sem responder.
 from .qualidade import TELAS as TELAS_JUIZ  # noqa: E402
+
+
+def tabela_de_conferencia(conferido: dict[str, dict], itens: list[dict], cego: bool) -> str:
+    """O que foi medido executando o código, numa tabela no fim da análise (fato, não opinião do revisor)."""
+    if not conferido:
+        return ""
+    linhas = ["", "", "### Conferência automática (o Forja executou o código)", "", "| Modelo | Nota | O que foi medido |",
+              "|---|---|---|"]
+    for it in itens:
+        if c := conferido.get(it["rotulo"]):
+            quem = f"Modelo {it['rotulo']}" if cego else it["nome"]
+            nota = "—" if c.get("nota") is None else f"{c['nota']}/10"
+            resumo = " ".join(str(c.get("resumo") or "").split()).replace("|", "/")  # quebra de linha desmonta a tabela
+            linhas.append(f"| **{quem}** | {nota} | {resumo} |")
+    return "\n".join(linhas)
 
 
 def tabela_de_prints(galeria: list[dict], itens: list[dict], conv_id: int, cego: bool = False) -> str:
@@ -478,7 +546,6 @@ async def _prints(conv_id: int, message_id: int, itens: list[dict], fotos: list,
 # Presa à conexão da tela, a análise morria ao trocar de página: o revisor parou em 81% da leitura e
 # nada foi gravado. Como a comparação, ela vive numa tarefa daqui e a tela só acompanha (e reconecta).
 
-import asyncio  # noqa: E402
 
 _ANALISES: dict[int, dict] = {}   # message_id da comparação -> andamento da análise
 _TAREFAS_ANALISE: set = set()      # referência forte (o loop só guarda uma fraca)
@@ -497,7 +564,9 @@ def iniciar_analise(message_id: int, provider: str, model: str) -> dict:
     async def roda():
         try:
             async for ev in julgar(message_id, provider, model):
-                if "etapa" in ev:
+                if "rotulos" in ev:
+                    a["_rotulos"] = ev["rotulos"]
+                elif "etapa" in ev:
                     if a["passos"][-1] != ev["etapa"]:
                         a["passos"].append(ev["etapa"])
                 elif "pensando" in ev:
@@ -529,6 +598,8 @@ def estado_analise(message_id: int) -> dict | None:
     if not a:
         return None
     out = {k: v for k, v in a.items() if not k.startswith("_") and k not in ("t0", "t_first")}
+    if a["status"] == "rodando" and a.get("_rotulos"):
+        out["texto"] = com_nomes(out["texto"], a["_rotulos"])
     if a["status"] == "rodando":
         agora = time.monotonic()
         tokens = round((len(a["texto"]) + len(a["pensou"])) / CHARS_POR_TOKEN_VIVO)

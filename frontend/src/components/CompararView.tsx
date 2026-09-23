@@ -107,6 +107,10 @@ export default function CompararView(props: {
   const corte = useRef<AbortController | null>(null); // aborta o stream da conversa anterior
 
   const rodando = estado?.status === "rodando";
+  // Rolagem da página: acompanha a análise do revisor enquanto ela é escrita (a caixa dela fica lá embaixo).
+  const { ref: rolagem, fim: fimDaPagina, onScroll: aoRolar, colar: colarPagina } = useStickyBottom<HTMLDivElement>([
+    analise?.rodando ? analise.texto.length + analise.pensou.length + analise.passos.length : 0,
+  ]);
   const temGguf = itens.some((i) => i.path);
   const ggufs = useMemo(() => (st?.models ?? []).filter((m) => m.kind === "chat"), [st]);
 
@@ -290,6 +294,7 @@ export default function CompararView(props: {
    *  No teste de frontend, com juiz que enxerga, ele recebe também os prints de cada página. */
   async function analisar() {
     if (!estado || !juiz.model) return;
+    colarPagina();  // a página desce e acompanha a análise (rolar para cima solta, como no chat)
     setAnalise({ texto: "", pensou: "", juiz: juiz.model, rodando: true, passos: ["Preparando a análise"] });
     acompanharAnalise(estado.message_id, juiz);
   }
@@ -305,7 +310,7 @@ export default function CompararView(props: {
     if (!estado) return;
     try {
       const r = await api.post<{ tipo: string; url?: string; comando?: string }>("/comparar/testar",
-        { codigo, linguagem, chave: `${estado.message_id}-${item.rotulo}`, conv: props.conv });
+        { codigo, linguagem, chave: `${estado.message_id}-${item.rotulo}`, conv: props.conv, bateria: bateria?.id ?? "" });
       if (r.tipo === "web" && r.url) props.onAbrirNoNavegador(r.url);
       else if (r.comando) props.onRodarNoTerminal(r.comando);
     } catch (e: any) {
@@ -343,7 +348,7 @@ export default function CompararView(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div ref={rolagem} onScroll={aoRolar} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         <div className="flex w-full flex-col gap-3">
           {!estado && !bateria && (
             <div className={`${card} px-4 py-3 text-xs text-muted`}>
@@ -479,6 +484,7 @@ export default function CompararView(props: {
               {analise && <CaixaAnalise analise={analise} />}
             </div>
           )}
+          <div ref={fimDaPagina} />
         </div>
       </div>
 

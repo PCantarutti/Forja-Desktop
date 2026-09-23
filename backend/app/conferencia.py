@@ -1,0 +1,226 @@
+"""Conferência automática dos testes prontos do Comparar: EXECUTA o código que cada modelo entregou.
+
+O revisor lê respostas e erra — numa validação real ele "viu" um código truncado que estava inteiro e
+deu nota por impressão. O que dá para medir, mede-se: a função roda contra casos com resposta certa,
+os testes do modelo rodam contra a versão certa e contra versões com um bug plantado cada (quantos
+bugs eles pegam). O resultado vai para o revisor como fato e fica numa tabela na análise.
+
+O código é de um modelo respondendo a um teste nosso, e roda como o "Testar" já roda: processo
+separado, pasta temporária, tempo limite. Não recebe arquivo nem rede do usuário além disso.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+TEMPO = 30  # s por execução
+
+
+def _blocos(texto: str, *linguagens: str) -> list[str]:
+    achados = re.findall(r"```(\w*)[^\n]*\n(.*?)```", texto or "", re.S)
+    return [c for lang, c in achados if lang.lower() in linguagens or (not lang and "" in linguagens)]
+
+
+def _fora_do_codigo(texto: str) -> str:
+    return re.sub(r"```.*?```", " ", texto or "", flags=re.S)
+
+
+def _roda(cmd: list[str], arquivos: dict[str, str]) -> tuple[int, str]:
+    with tempfile.TemporaryDirectory() as d:
+        for nome, conteudo in arquivos.items():
+            with open(os.path.join(d, nome), "w", encoding="utf-8") as f:
+                f.write(conteudo)
+        try:
+            r = subprocess.run(cmd, cwd=d, capture_output=True, text=True, timeout=TEMPO,
+                               encoding="utf-8", errors="replace")
+        except subprocess.TimeoutExpired:
+            return -1, "tempo esgotado (laço infinito?)"
+        except OSError as e:  # sem node, por exemplo
+            return -1, f"não deu para executar: {e}"
+    return r.returncode, r.stdout + r.stderr
+
+
+def _casos(saida: str) -> dict | None:
+    for linha in reversed(saida.strip().splitlines()):
+        try:
+            return json.loads(linha)
+        except ValueError:
+            continue
+    return None
+
+
+# ------------------------------------------------------------------ lógica: custo FIFO
+
+CASOS_FIFO = r'''
+import json
+res = {}
+def norm(r):
+    total, lotes = r
+    return int(total), [tuple(int(x) for x in l) for l in lotes]
+def t(nome, f):
+    try: res[nome] = bool(f())
+    except Exception as e: res[nome] = False
+def erro(movs):
+    try: custo_fifo(movs); return False
+    except ValueError: return True
+    except Exception: return False
+t("exemplo do enunciado", lambda: norm(custo_fifo([("entrada",10,500),("entrada",5,800),("saida",12),("entrada",3,700),("saida",4)])) == (9700, [(2,700)]))
+t("só entradas", lambda: norm(custo_fifo([("entrada",4,100)])) == (0, [(4,100)]))
+t("saída zera o estoque", lambda: norm(custo_fifo([("entrada",3,100),("saida",3)])) == (300, []))
+t("saída atravessa 3 lotes", lambda: norm(custo_fifo([("entrada",1,100),("entrada",1,200),("entrada",1,300),("saida",3)])) == (600, []))
+t("sai do lote mais antigo e mantém a ordem", lambda: norm(custo_fifo([("entrada",2,100),("entrada",2,200),("saida",1)])) == (100, [(1,100),(2,200)]))
+t("saída parcial mantém o resto do lote", lambda: norm(custo_fifo([("entrada",5,100),("saida",2)])) == (200, [(3,100)]))
+t("saída maior que o estoque: ValueError", lambda: erro([("entrada",2,100),("saida",3)]))
+t("quantidade zero: ValueError", lambda: erro([("entrada",0,100)]))
+t("saída negativa: ValueError", lambda: erro([("entrada",2,100),("saida",-1)]))
+t("tipo desconhecido: ValueError", lambda: erro([("ajuste",1)]))
+print(json.dumps(res))
+'''
+
+
+def logica(texto: str) -> dict:
+    codigo = "\n\n".join(c for c in _blocos(texto, "python", "py", "") if "def custo_fifo" in c)
+    if not codigo:
+        return {"nota": 0, "resumo": "não entregou a função custo_fifo"}
+    _, saida = _roda([sys.executable, "m.py"], {"m.py": codigo + "\n" + CASOS_FIFO})
+    res = _casos(saida)
+    if res is None:
+        return {"nota": 0, "resumo": "o código não roda: " + saida.strip()[-160:]}
+    ok = sum(res.values())
+    texto_livre = _fora_do_codigo(texto).replace(" ", "")
+    disse = ("9700" in texto_livre or "9.700" in texto_livre or "97,00" in texto_livre) + ("(2,700)" in texto_livre or "[(2,700)]" in texto_livre)
+    falhas = [k for k, v in res.items() if not v]
+    return {"nota": round(10 * (ok + disse) / (len(res) + 2), 1),
+            "resumo": f"{ok}/{len(res)} casos; cálculo sem executar {disse}/2"
+                      + (f"; falhou: {', '.join(falhas)}" if falhas else "")}
+
+
+# ------------------------------------------------------------------ testes: quantos bugs plantados os testes pegam
+
+MINUTOS_CERTA = r'''
+import re
+def minutos(texto: str) -> int:
+    m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?", texto)
+    if not texto or not m:
+        raise ValueError(texto)
+    h, mi = m.groups()
+    if h is not None and mi is not None and int(mi) > 59:
+        raise ValueError(texto)
+    return int(h or 0) * 60 + int(mi or 0)
+'''
+MUTANTES = {
+    "texto vazio vira 0": MINUTOS_CERTA.replace("if not texto or not m:", "if not m:"),
+    "aceita 1h60m": MINUTOS_CERTA.replace("int(mi) > 59", "int(mi) > 60"),
+    "aceita espaço (1h 30m)": MINUTOS_CERTA.replace(r'(?:(\d+)h)?(?:(\d+)m)?', r'(?:(\d+)h)?\s*(?:(\d+)m)?'),
+}
+
+
+def _suite(codigo_testes: str, impl: str) -> tuple[int, int]:
+    _, saida = _roda([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_m.py"],
+                     {"test_m.py": "import pytest\n" + impl + "\n" + codigo_testes})
+    falhas = re.search(r"(\d+) failed", saida)
+    passes = re.search(r"(\d+) passed", saida)
+    erros = re.search(r"(\d+) error", saida)
+    return (int(falhas.group(1)) if falhas else 0) + (int(erros.group(1)) if erros else 0), \
+        int(passes.group(1)) if passes else 0
+
+
+def so_testes(codigo: str) -> str:
+    """Os testes sem o import da função nem uma cópia dela colada junto: a função vem da nossa versão."""
+    codigo = re.sub(r"^\s*from\s+\S+\s+import\s+minutos.*$", "", codigo, flags=re.M)
+    return re.sub(r"^def minutos\(.*?(?=^\S)", "", codigo + "\n#fim\n", flags=re.M | re.S)
+
+
+def testes(texto: str) -> dict:
+    codigo = "\n\n".join(c for c in _blocos(texto, "python", "py", "") if "def test" in c)
+    if not codigo:
+        return {"nota": 0, "resumo": "não entregou testes pytest"}
+    codigo = so_testes(codigo)
+    falhas_ok, passes_ok = _suite(codigo, MINUTOS_CERTA)
+    if not passes_ok and not falhas_ok:
+        return {"nota": 0, "resumo": "os testes não rodam"}
+    pegos = [nome for nome, impl in MUTANTES.items() if _suite(codigo, impl)[0] > 0]
+    validos = falhas_ok == 0
+    nota = (1 if validos else 0) + (3 * len(pegos) if validos else 0)
+    return {"nota": nota,
+            "resumo": (f"{passes_ok + falhas_ok} testes; " + ("passam na versão certa" if validos
+                       else f"{falhas_ok} FALHAM na versão certa (testes errados)")
+                       + f"; bugs pegos {len(pegos)}/{len(MUTANTES)}" + (f" ({', '.join(pegos)})" if pegos else ""))}
+
+
+# ------------------------------------------------------------------ geral: topN em JavaScript
+
+CASOS_TOPN = r'''
+const r = {};
+const t = (n, f) => { try { r[n] = !!f(); } catch (e) { r[n] = false; } };
+const igual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+t("exemplo [5,12,3,12,40,7], 3", () => igual(topN([5, 12, 3, 12, 40, 7], 3), [40, 12, 7]));
+t("ordena como número (100 > 20 > 9)", () => igual(topN([9, 100, 20], 5), [100, 20, 9]));
+t("não altera a lista original", () => { const l = [3, 1, 2]; topN(l, 2); return igual(l, [3, 1, 2]); });
+t("remove duplicados", () => igual(topN([7, 7, 7, 1], 2), [7, 1]));
+t("n = 0 devolve []", () => igual(topN([1, 2], 0), []));
+t("n negativo devolve []", () => igual(topN([1, 2, 3], -1), []));
+t("lista vazia devolve []", () => igual(topN([], 3), []));
+console.log(JSON.stringify(r));
+'''
+
+
+def geral(texto: str) -> dict:
+    codigo = "\n\n".join(c for c in _blocos(texto, "js", "javascript", "") if "topN" in c)
+    if not codigo:
+        return {"nota": 0, "resumo": "não entregou a função topN corrigida"}
+    _, saida = _roda(["node", "m.js"], {"m.js": codigo + "\n" + CASOS_TOPN})
+    res = _casos(saida)
+    if res is None:
+        return {"nota": 0, "resumo": "o código não roda: " + saida.strip()[-160:]}
+    ok = sum(res.values())
+    livre = _fora_do_codigo(texto).replace(" ", "")
+    disse = ("[40,12,7]" in livre) + ("[100,20,9]" in livre)
+    falhas = [k for k, v in res.items() if not v]
+    return {"nota": round(10 * (ok + disse) / (len(res) + 2), 1),
+            "resumo": f"{ok}/{len(res)} casos; saídas ditas {disse}/2" + (f"; falhou: {', '.join(falhas)}" if falhas else "")}
+
+
+CONFERE = {"logica": logica, "testes": testes, "geral": geral}
+
+
+def conferir(bateria: str, resposta: str) -> dict | None:
+    """{"nota", "resumo"} medidos executando o código, ou None (bateria sem conferência)."""
+    f = CONFERE.get(bateria)
+    if not f:
+        return None
+    try:
+        return f(resposta or "")
+    except Exception as e:  # conferência que quebra não pode derrubar a análise
+        return {"nota": None, "resumo": f"conferência falhou: {e}"}
+
+
+# ------------------------------------------------------------------ "▶ Testar" de uma resposta de teste pronto
+
+def _legivel_py(casos: str) -> str:
+    return casos.replace("print(json.dumps(res))",
+                         'print("\\nCasos do gabarito:")\nfor k, v in res.items():\n    print(("OK      " if v else "FALHOU  ") + k)')
+
+
+def _legivel_js(casos: str) -> str:
+    return casos.replace("console.log(JSON.stringify(r));",
+                         "console.log('\\nCasos do gabarito:');\n"
+                         "for (const [k, v] of Object.entries(r)) console.log((v ? 'OK      ' : 'FALHOU  ') + k);")
+
+
+def para_testar(bateria: str, linguagem: str, codigo: str) -> tuple[str, str] | None:
+    """Função sozinha não mostra nada no terminal: numa resposta de teste pronto, o "Testar" roda junto os
+    casos do gabarito (OK / FALHOU por caso). Devolve (conteúdo do arquivo, modo) ou None."""
+    if bateria == "logica" and linguagem == "python" and "def custo_fifo" in codigo:
+        return codigo + "\n" + _legivel_py(CASOS_FIFO), "python"
+    if bateria == "geral" and linguagem == "javascript" and "topN" in codigo:
+        return codigo + "\n" + _legivel_js(CASOS_TOPN), "node"
+    if bateria == "testes" and linguagem == "python" and "def test" in codigo:
+        from .baterias import CODIGO_TESTES
+        # os testes do modelo contra a função do enunciado, que tem 3 bugs: os que falham acharam um
+        return "import pytest\n" + CODIGO_TESTES + "\n\n" + so_testes(codigo), "pytest"
+    return None

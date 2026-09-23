@@ -314,7 +314,7 @@ def test_juiz_recebe_gabarito_e_estatisticas_e_responde_como_chat(monkeypatch):
 
     eventos = asyncio.run(main())
     pedido = pedidos[0][-1]["content"]
-    assert "[334, 333, 333]" in pedido                       # o gabarito vai junto
+    assert "(9700, [(2, 700)])" in pedido                       # o gabarito vai junto
     cabecalhos = [l for l in pedido.splitlines() if l.startswith("=== MODELO")]
     assert len(cabecalhos) == 2 and all("modelo-" not in l for l in cabecalhos)  # só letras: o juiz não vê nomes
     assert "tok/s" in pedido
