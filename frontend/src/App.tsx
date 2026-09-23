@@ -1940,6 +1940,15 @@ export default function App() {
             pausado={pausado}
             onPausar={pausar}
             onPedir={(texto) => send(texto)}
+            onTestarWorker={(id, nome, spec) => {
+              // O Comparar lê isto ao abrir: teste pronto da especialidade e o modelo atual já na lista.
+              try {
+                localStorage.setItem("forja.comparar.preset", JSON.stringify({ id, nome, spec }));
+              } catch {
+                /* sem storage: abre o Comparar vazio */
+              }
+              changeSection("comparar");
+            }}
             onNovaSessao={async () => {
               // Contexto limpo, com cópia do trabalho aberto; a lista fica nesta conversa para consulta.
               if (currentId === null) return;

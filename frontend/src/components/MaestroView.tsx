@@ -20,7 +20,7 @@ import {
 } from "../types";
 import Confirma from "./Confirma";
 import ContextRing from "./ContextRing";
-import { Check, Cube, Expandir, Recolher, Split, X } from "./icons";
+import { Balanca, Check, Cube, Expandir, Recolher, Split, X } from "./icons";
 import { Modal } from "./Modal";
 import { aggregate, type TurnStats } from "./MessageView";
 import { layoutDe, mover, type Alvo, type Bloco, type Layout } from "./layout";
@@ -177,6 +177,8 @@ export default function MaestroView(props: {
   onPausar: (sim: boolean) => void;
   onPedir: (texto: string) => void;
   onNovaSessao: () => void;
+  // "Testar" num tipo de Worker: abre o Comparar com o teste pronto daquela especialidade.
+  onTestarWorker: (id: string, nome: string, spec?: { provider: string; model: string }) => void;
 }) {
   const { convId, board, onBoard } = props;
   const { layout, setLayout, salvar: gravar, salvarPadrao, ehPadrao } = useLayout(convId);
@@ -493,6 +495,11 @@ export default function MaestroView(props: {
                 setModelos((m) => (m ? { ...m, max_workers: n, can_swap: n <= 1 } : m));
                 await api.put("/settings", { max_workers: n }).catch(() => {});
               }}
+              onMesmoModelo={async (sim) => {
+                setModelos((m) => (m ? { ...m, workers_do_maestro: sim } : m));
+                await api.put("/settings", { workers_do_maestro: sim }).catch(() => {});
+              }}
+              onTestar={props.onTestarWorker}
               onEspecialidade={async (id, provider, model) => {
                 const lista = (modelos?.especialidades ?? []).map((e) => (e.id === id ? { ...e, provider, model } : e));
                 setModelos((m) => (m ? { ...m, especialidades: lista } : m));
@@ -999,11 +1006,34 @@ function alvo(args: any): string {
 
 // ------------------------------------------------------------------ doca
 
+const NOME_NIVEL: Record<string, string> = { rapido: "Rápido", capaz: "Capaz", nuvem: "Nuvem (reserva)" };
+// O "?" de cada linha: o que faz um modelo ser bom naquele papel e quando o Forja o usa.
+const AJUDA_NIVEL: Record<string, string> = {
+  rapido: "Modelo pequeno e veloz. O Forja manda para ele só texto e manutenção (documentação, ajustes simples) " +
+    "quando a Maestro não escolhe; se falhar, a tarefa sobe para o capaz.",
+  capaz: "O generalista: resolve qualquer tarefa de código e é o padrão quando nenhum especialista se aplica. " +
+    "Bom capaz = segue o contrato à risca, roda os testes e não inventa API.",
+  nuvem: "Reserva paga: só entra quando os outros não estão disponíveis ou falharam. Vazio = nunca gasta API.",
+};
+const AJUDA_ESPECIALIDADE: Record<string, string> = {
+  logica: "Bom em lógica e back-end = acerta regra de negócio e casos de borda (valores zero, vazios, arredondamento), " +
+    "valida entradas e escreve código que passa nos testes. Recebe tarefas de funcionalidade, correção e refatoração.",
+  frontend: "Bom em frontend e aparência = escreve HTML/CSS/JS que funciona e fica bonito: layout responsivo, " +
+    "acessibilidade (contraste, foco), consistência com o guia visual. Recebe tarefas de tela (tipo ui) e as que só " +
+    "mexem em arquivos de interface.",
+  testes: "Bom em testes = escreve testes a partir do comportamento esperado (não do código), cobre os casos de borda " +
+    "e acha o bug que o teste expõe, sem inventar regra. Recebe tarefas do tipo test.",
+  docs: "Bom em documentação = lê o material, resume sem perder o essencial e diz 'não consta' em vez de inventar. " +
+    "Recebe tarefas do tipo docs (README, guias).",
+};
+
 function PainelModelos(props: {
   modelos: MaestroModels | null;
   onSlot: (nivel: string, provider: string, model: string) => void;
   onWorkers: (n: number) => void;
   onEspecialidade: (id: string, provider: string, model: string) => void;
+  onMesmoModelo: (sim: boolean) => void;
+  onTestar: (id: string, nome: string, spec?: { provider: string; model: string }) => void;
 }) {
   // Estado local só para o select não "voltar" entre o clique e o próximo polling.
   const [lifecycle, setLifecycle] = useState<string | null>(null);
@@ -1042,58 +1072,73 @@ function PainelModelos(props: {
       </div>
       <div className="space-y-1.5">
         <div className="text-faint">Modelo dos Workers</div>
+        {/* Maestro e Workers no mesmo modelo: nada é descarregado para subir o modelo de um
+            especialista, e com IA local os Workers rodam em paralelo nas vagas do mesmo servidor. */}
+        <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-line p-2 hover:bg-raised">
+          <input type="checkbox" className="mt-0.5" checked={!!m.workers_do_maestro}
+                 onChange={(e) => props.onMesmoModelo(e.target.checked)} />
+          <span>
+            <span className="text-fg">Workers usam o modelo da Maestro</span>
+            <span className="block text-faint">
+              Ninguém troca de modelo: a Maestro não é descarregada para subir o modelo de um Worker. Com IA local,
+              os Workers rodam em paralelo no mesmo servidor. Os modelos abaixo ficam guardados, sem uso.
+            </span>
+          </span>
+        </label>
         {/* Aqui e não só nas Configurações: escolher o Worker é decisão de execução, e quem está
             olhando o cockpit é quem percebe que o modelo atual não está dando conta da tarefa. */}
-        {(["rapido", "capaz", "nuvem"] as const).map((nivel) => {
-          const slot = m.slots[nivel];
-          return (
-            <div key={nivel} className="flex items-center gap-2 [&>div]:ml-0">
-              <span className="w-14 shrink-0 capitalize text-faint">{nivel}</span>
+        <div className={`space-y-1.5 ${m.workers_do_maestro ? "pointer-events-none opacity-40" : ""}`}>
+          {[
+            ...(["rapido", "capaz", "nuvem"] as const).map((nivel) => ({
+              id: nivel as string, nome: NOME_NIVEL[nivel], ajuda: AJUDA_NIVEL[nivel],
+              spec: m.slots[nivel], mudar: (pr: string, mo: string) => props.onSlot(nivel, pr, mo),
+            })),
+            ...(m.especialidades ?? []).map((e) => ({
+              id: e.id, nome: e.nome, ajuda: (AJUDA_ESPECIALIDADE[e.id] ?? "Especialista criado por você.") +
+                (e.quando ? ` Quando usar: ${e.quando}.` : ""),
+              spec: e.model ? { provider: e.provider, model: e.model } : undefined,
+              mudar: (pr: string, mo: string) => props.onEspecialidade(e.id, pr, mo),
+            })),
+          ].map((w) => (
+            <div key={w.id} className="flex items-center gap-2 [&>div]:ml-0">
+              <span className="flex w-36 shrink-0 items-center gap-1 leading-tight text-faint">
+                <span className="min-w-0">{w.nome}</span>
+                <span title={w.ajuda} aria-label={w.ajuda}
+                      className="flex size-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-line text-[9px] text-faint hover:text-fg">
+                  ?
+                </span>
+              </span>
               {/* autoFallback desligado: slot vazio é escolha (sem reserva na nuvem = sem gasto de
                   API), e o seletor não pode gravar um modelo só porque o painel foi aberto. */}
               <ModelPicker
-                provider={slot?.provider || ""}
-                model={slot?.model || ""}
+                provider={w.spec?.provider || ""}
+                model={w.spec?.model || ""}
                 autoFallback={false}
                 loadLocal={false}
                 minCtx={m.min_ctx_worker}
-                onChange={(provider, model) => props.onSlot(nivel, provider, model)}
+                onChange={w.mudar}
               />
-              {slot?.model && (
+              {w.spec?.model && (
                 <button
-                  onClick={() => props.onSlot(nivel, "", "")}
-                  title={`Deixar o slot ${nivel} sem modelo`}
+                  onClick={() => w.mudar("", "")}
+                  title={`Deixar ${w.nome} sem modelo`}
                   className="shrink-0 rounded p-1 text-faint hover:bg-raised hover:text-fg"
                 >
                   <X className="size-3" />
                 </button>
               )}
-            </div>
-          );
-        })}
-        {(m.especialidades ?? []).map((e) => (
-          <div key={e.id} className="flex items-center gap-2 [&>div]:ml-0" title={e.quando}>
-            <span className="w-14 shrink-0 truncate text-faint">{e.nome}</span>
-            <ModelPicker
-              provider={e.provider}
-              model={e.model}
-              autoFallback={false}
-              loadLocal={false}
-              minCtx={m.min_ctx_worker}
-              onChange={(provider, model) => props.onEspecialidade(e.id, provider, model)}
-            />
-            {e.model && (
               <button
-                onClick={() => props.onEspecialidade(e.id, "", "")}
-                title={`Deixar ${e.nome} sem modelo (as tarefas dele vão para o capaz)`}
-                className="shrink-0 rounded p-1 text-faint hover:bg-raised hover:text-fg"
+                onClick={() => props.onTestar(w.id, w.nome, w.spec)}
+                title={`Comparar modelos locais num teste pronto de ${w.nome}`}
+                className="ml-auto flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-faint hover:bg-raised hover:text-fg"
               >
-                <X className="size-3" />
+                <Balanca className="size-3.5" />
+                Testar
               </button>
-            )}
-          </div>
-        ))}
-        {Object.keys(m.slots).length === 0 && (
+            </div>
+          ))}
+        </div>
+        {Object.keys(m.slots).length === 0 && !m.workers_do_maestro && (
           <p className="text-amber-400">
             Nenhum Worker configurado — sem isso a Maestro não tem a quem delegar.
           </p>

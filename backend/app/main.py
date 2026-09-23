@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
+from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
@@ -778,6 +778,12 @@ class CompararBody(BaseModel):
     effort: str = "medio"
     cego: bool = False
     confirm: bool = False
+    bateria: str = ""               # teste pronto de especialidade (baterias.BATERIAS): anexo e gabarito
+
+
+class JuizBody(BaseModel):
+    provider: str = ""
+    model: str = ""
 
 
 class VotoBody(BaseModel):
@@ -807,7 +813,7 @@ def _sse_comparar(message_id: int) -> StreamingResponse:
 async def comparar_rodar(conv_id: int, body: CompararBody):
     try:
         msg = comparar.start(conv_id, body.prompt, body.itens, body.modo, body.system, body.effort,
-                             body.cego, body.confirm)
+                             body.cego, body.confirm, body.bateria)
     except comparar.ModeloCarregado as e:
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
     except ToolError as e:
@@ -832,6 +838,27 @@ def comparar_voto(message_id: int, body: VotoBody):
         return comparar.votar(message_id, body.voto)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/comparar/baterias")
+def comparar_baterias():
+    """Testes prontos por especialidade de Worker (prompt, o que medem, arquivo e gabarito)."""
+    return baterias.publico()
+
+
+@app.post("/api/comparar/{message_id}/julgar")
+async def comparar_julgar(message_id: int, body: JuizBody):
+    """Um modelo escolhido pelo usuário lê todas as respostas e estatísticas e responde com a tabela
+    comparativa (quem acertou, quem alucinou, quem foi mais rápido). Stream de texto, como um chat."""
+    async def stream():
+        try:
+            async for ev in baterias.julgar(message_id, body.provider, body.model):
+                yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+        except (ToolError, llm.LLMError) as e:
+            yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.get("/api/comparar/placar")
@@ -1772,7 +1799,8 @@ def maestro_models():
     return {**modelctl.status(), "max_workers": config.MAX_WORKERS,
             "can_swap": modelctl.pode_trocar(), "min_ctx_worker": config.WORKER_MIN_CTX,
             "slots": subagents.configured(), "active": subagents.ativas(),
-            "especialidades": config.WORKER_ESPECIALIDADES}
+            "especialidades": config.WORKER_ESPECIALIDADES, "workers_do_maestro": config.WORKERS_DO_MAESTRO,
+            "maestro_model": config.MAESTRO_MODEL}
 
 
 # ------------------------------------------------------------------ interface (build do Vite)

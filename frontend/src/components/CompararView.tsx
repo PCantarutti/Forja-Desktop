@@ -42,6 +42,13 @@ const situacao = (s: string | null | undefined): CompararEstado["status"] =>
 
 const nomeDoArquivo = (p: string) => p.split(/[\\/]/).pop()?.replace(/\.gguf$/i, "") ?? p;
 
+/** Teste pronto de uma especialidade de Worker (backend: baterias.py). */
+type Bateria = {
+  titulo: string; mede: string; prompt: string; gabarito: string;
+  anexo?: { nome: string; texto: string } | null;
+};
+const BATERIA_DE: Record<string, string> = { logica: "logica", frontend: "frontend", testes: "testes", docs: "docs" };
+
 /** O nome só aparece quando o modo cego não está mais em jogo. */
 const rotuloDe = (item: CompararItem, e: CompararEstado) =>
   e.cego && !e.revelado ? `Modelo ${item.rotulo}` : item.nome;
@@ -82,6 +89,10 @@ export default function CompararView(props: {
   const [perguntando, setPerguntando] = useState(false);
   const [placar, setPlacar] = useState<PlacarLinha[] | null>(null);
   const [copiado, setCopiado] = useState(false);
+  // Teste pronto (vindo do "Testar" da doca Modelo · VRAM) e a análise do juiz.
+  const [bateria, setBateria] = useState<{ id: string; b: Bateria } | null>(null);
+  const [juiz, setJuiz] = useState({ provider: props.provider, model: props.model });
+  const [analise, setAnalise] = useState<{ texto: string; juiz: string; rodando: boolean } | null>(null);
   const acompanhando = useRef(0); // message_id que já está sendo ouvido: não abrir dois SSE
   const corte = useRef<AbortController | null>(null); // aborta o stream da conversa anterior
 
@@ -92,6 +103,35 @@ export default function CompararView(props: {
   useEffect(() => {
     api.get<IaLocal>("/local").then(setSt).catch(() => setSt(null));
   }, []);
+
+  // "Testar" num tipo de Worker: prompt e arquivo do teste pronto, e o modelo atual dele já na lista.
+  const onError = props.onError;
+  useEffect(() => {
+    let preset: { id: string; nome: string; spec?: { provider: string; model: string } } | null = null;
+    try {
+      preset = JSON.parse(localStorage.getItem("forja.comparar.preset") || "null");
+      localStorage.removeItem("forja.comparar.preset");
+    } catch {
+      preset = null;
+    }
+    if (!preset) return;
+    const id = BATERIA_DE[preset.id] ?? "geral";
+    Promise.all([api.get<Record<string, Bateria>>("/comparar/baterias"), api.get<IaLocal>("/local").catch(() => null)])
+      .then(([todas, local]) => {
+        const b = todas[id];
+        if (!b) return;
+        setBateria({ id, b });
+        setPrompt(b.prompt);
+        const spec = preset!.spec;
+        if (!spec?.model) return;
+        // Modelo local escolhido pelo alias: na comparação ele entra como .gguf (carrega e descarrega).
+        const gguf = spec.provider === "local"
+          ? local?.models.find((m) => m.kind === "chat" && (m.name === spec.model || nomeDoArquivo(m.path) === spec.model))
+          : undefined;
+        setItens([gguf ? { path: gguf.path, nome: gguf.name } : { provider: spec.provider, model: spec.model, nome: spec.model }]);
+      })
+      .catch((e) => onError(e.message));
+  }, [onError]);
 
   // Um .gguf por vez: o Forja sobe um llama-server só, então o paralelo deixa de ser opção.
   useEffect(() => {
@@ -136,6 +176,13 @@ export default function CompararView(props: {
         const m = c.messages[i];
         const meta = m.meta as any;
         setPrompt(c.messages[i - 1]?.content ?? "");
+        const idBateria = (c.messages[i - 1]?.meta as any)?.bateria as string | undefined;
+        if (idBateria) {
+          api.get<Record<string, Bateria>>("/comparar/baterias")
+            .then((t) => t[idBateria] && setBateria({ id: idBateria, b: t[idBateria] })).catch(() => {});
+        } else setBateria(null);
+        const julgado = c.messages.find((x) => (x.meta as any)?.julgamento?.de === m.id);
+        setAnalise(julgado ? { texto: julgado.content, juiz: (julgado.meta as any).julgamento.juiz, rodando: false } : null);
         setEstado({
           message_id: m.id, status: situacao(m.status),
           modo: meta.modo || "paralelo", cego: !!meta.cego, revelado: !!meta.revelado,
@@ -167,14 +214,33 @@ export default function CompararView(props: {
       const id = await props.ensureConversation();
       setPerguntando(false);
       setEstado(null);
+      setAnalise(null);
       await streamSSE(`/comparar/${id}/rodar`,
-        { method: "POST", body: JSON.stringify({ prompt, itens, modo, cego, confirm }) },
+        { method: "POST", body: JSON.stringify({ prompt, itens, modo, cego, confirm, bateria: bateria?.id ?? "" }) },
         (ev) => (ev.erro ? props.onError(ev.erro) : setEstado(ev)));
       props.onConversationChanged();
       carregarConversa(id);
     } catch (e: any) {
       if (e.status === 409) setPerguntando(true); // tem modelo na VRAM: a conta é do usuário
       else props.onError(e.message);
+    }
+  }
+
+  /** Um modelo lê todas as respostas e estatísticas e devolve a tabela comparativa, em forma de chat. */
+  async function analisar() {
+    if (!estado || !juiz.model) return;
+    setAnalise({ texto: "", juiz: juiz.model, rodando: true });
+    try {
+      await streamSSE(`/comparar/${estado.message_id}/julgar`, { method: "POST", body: JSON.stringify(juiz) }, (ev) => {
+        if (ev.erro) {
+          props.onError(ev.erro);
+          setAnalise(null);
+        } else if (ev.delta) setAnalise((a) => a && { ...a, texto: a.texto + ev.delta });
+        else if (ev.fim) setAnalise({ texto: ev.fim.content, juiz: juiz.model, rodando: false });
+      });
+    } catch (e: any) {
+      props.onError(e.message);
+      setAnalise(null);
     }
   }
 
@@ -233,6 +299,34 @@ export default function CompararView(props: {
                 aceita arquivos .gguf, porque o Forja sobe um llama-server por vez: carrega, responde,
                 descarrega e passa para o próximo.
               </p>
+            </div>
+          )}
+
+          {bateria && (
+            <div className={`${card} text-xs`}>
+              <p className="text-sm text-fg">Teste pronto: {bateria.b.titulo}</p>
+              <p className="mt-1 text-muted">Mede {bateria.b.mede}.</p>
+              {!estado && (
+                <p className="mt-1 text-faint">
+                  Adicione os modelos que quer comparar (os .gguf rodam um de cada vez) e envie. No fim, use
+                  "Analisar com IA" para um modelo que você confia montar a tabela: quem acertou, quem alucinou, quem foi
+                  mais rápido.
+                </p>
+              )}
+              {bateria.b.anexo && (
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-muted hover:text-fg">
+                    Arquivo fornecido pelo Forja: <span className="font-mono">{bateria.b.anexo.nome}</span> (todos os modelos recebem)
+                  </summary>
+                  <pre className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap rounded-lg bg-raised p-2 text-[11px] text-muted">
+                    {bateria.b.anexo.texto}
+                  </pre>
+                </details>
+              )}
+              <details className="mt-1">
+                <summary className="cursor-pointer text-muted hover:text-fg">Gabarito (o juiz também recebe)</summary>
+                <p className="mt-1 whitespace-pre-wrap text-muted">{bateria.b.gabarito}</p>
+              </details>
             </div>
           )}
 
@@ -303,6 +397,28 @@ export default function CompararView(props: {
                 <Gauge className="mr-1 inline size-3.5" />
                 Placar
               </button>
+            </div>
+          )}
+
+          {estado && !rodando && (
+            <div className={`${card} flex flex-col gap-2 text-xs`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-fg">Analisar com IA</span>
+                <span className="text-faint">um modelo que você confia lê as respostas e as estatísticas e compara</span>
+                <div className="ml-auto flex items-center gap-1">
+                  <ModelPicker provider={juiz.provider} model={juiz.model}
+                               onChange={(provider, model) => setJuiz({ provider, model })} />
+                  <button className={btnPrimary} disabled={!juiz.model || analise?.rodando} onClick={analisar}>
+                    {analise?.rodando ? "Analisando…" : analise ? "Analisar de novo" : "Analisar"}
+                  </button>
+                </div>
+              </div>
+              {analise && (
+                <div className="rounded-xl bg-raised px-3 py-2 text-sm">
+                  <p className="mb-1 text-[11px] text-faint">Análise de {analise.juiz}</p>
+                  {analise.texto ? <Markdown text={analise.texto} /> : <p className="text-xs text-faint">pensando…</p>}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -384,7 +500,7 @@ export default function CompararView(props: {
 
             <div className="flex items-end gap-2">
               <textarea
-                rows={2}
+                rows={bateria ? 5 : 2}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {

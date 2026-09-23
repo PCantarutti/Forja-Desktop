@@ -418,7 +418,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             '"files":["backend/app/x.py","backend/tests/test_x.py"],"done_when":"pytest -q backend/tests/test_x.py"}'
             ". Refaça a chamada agora — mesmo que só dê para melhorar a 'task', a próxima passa."))
         return
-    cadeia = chain(level)
+    # `_spec`: a Maestro mandou o Worker usar um modelo específico (o dela), sem cadeia de reserva
+    cadeia = [(level, dict(args["_spec"]))] if isinstance(args.get("_spec"), dict) else chain(level)
     if not cadeia:
         porque = _why_not()
         out.update(status="erro", meta=meta, text=(

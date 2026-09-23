@@ -127,7 +127,8 @@ ESPECIALIDADES_PADRAO = [
     {"id": "docs", "nome": "Documentação", "quando": "README, guias, comentários e textos", "provider": "", "model": ""},
 ]
 WORKER_ESPECIALIDADES: list[dict] = [dict(e) for e in ESPECIALIDADES_PADRAO]
-MAESTRO_VISUAL = {"provider": "", "model": ""}  # modelo COM VISÃO que julga os prints (visual_review)
+MAESTRO_VISUAL = {"provider": "", "model": ""}
+WORKERS_DO_MAESTRO = False  # Workers rodam no mesmo modelo da Maestro (sem troca, paralelo no mesmo servidor)  # modelo COM VISÃO que julga os prints (visual_review)
 MAESTRO_BROWSER = True             # a Maestro valida entregas no navegador (browser_validate e browser_*)
 MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)
 # Janela mínima (por requisição) de um modelo LOCAL em cada papel. Abaixo disso a Maestro não cabe

@@ -122,7 +122,7 @@ def _mensagens(prompt: str, system: str) -> list[dict]:
 # ------------------------------------------------------------------ execução
 
 def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "paralelo", system: str = "",
-          effort: str = "medio", cego: bool = False, confirm: bool = False) -> dict:
+          effort: str = "medio", cego: bool = False, confirm: bool = False, bateria: str = "") -> dict:
     """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente."""
     prompt = (prompt or "").strip()
     if not prompt:
@@ -144,8 +144,13 @@ def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "para
             conv.title = prompt.splitlines()[0][:60] or "Nova conversa"
         s.commit()
 
+    from . import baterias  # import tardio: baterias usa este módulo
+    if bateria and bateria not in baterias.BATERIAS:
+        raise ToolError(f"Teste desconhecido: {bateria}")
+    if bateria and not system.strip():
+        system = baterias.SYSTEM
     _save(conv_id, role="user", content=prompt,
-          meta={"modo": modo, "cego": cego, "modelos": [i["nome"] for i in itens]})
+          meta={"modo": modo, "cego": cego, "modelos": [i["nome"] for i in itens], "bateria": bateria})
     msg = _save(conv_id, role="assistant", content="", status="running",
                 meta={"modo": modo, "cego": cego, "revelado": False, "voto": "", "system": system,
                       "effort": effort, "descarregado": descarregado, "itens": itens})
@@ -153,7 +158,9 @@ def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "para
                            "cego": cego, "cancelar": False, "itens": itens}
     # O loop só guarda referência fraca para a task: sem manter a nossa, o coletor de lixo pode
     # levar a execução no meio e a mensagem fica em "running" para sempre, sem erro nenhum.
-    t = asyncio.create_task(_rodar(run, _mensagens(prompt, system), effort))
+    # O arquivo da bateria (documento para ler) vai para os modelos, não para a mensagem visível.
+    enviado = baterias.com_anexo(prompt, bateria) if bateria else prompt
+    t = asyncio.create_task(_rodar(run, _mensagens(enviado, system), effort))
     _TAREFAS.add(t)
     t.add_done_callback(_TAREFAS.discard)
     return msg.to_dict()
@@ -195,6 +202,9 @@ async def _um(run: dict, item: dict, mensagens: list[dict], effort: str) -> None
                     t_first = t_first or time.monotonic()
                     item["content"] += val
                 elif kind == "reasoning":
+                    # o relógio da geração começa no primeiro token, pensado ou não: os tokens de
+                    # raciocínio entram na contagem, e sem isto o tok/s saía 4x maior que o real
+                    t_first = t_first or time.monotonic()
                     item["reasoning"] += val
                 elif kind == "done":
                     done = val or {}

@@ -257,3 +257,86 @@ def test_api_recusa_gguf_em_paralelo(tmp_path, monkeypatch):
                    json={"prompt": "teste", "itens": [{"path": _gguf(tmp_path, "um")},
                                                       {"provider": "ollama", "model": "b"}]})
         assert r.status_code == 400 and "sequencial" in r.json()["detail"]
+
+
+# ------------------------------------------------------------------ baterias por especialidade e juiz
+
+def test_bateria_de_documentos_manda_o_arquivo_aos_modelos_e_nao_na_mensagem(monkeypatch):
+    from app import baterias
+    vistos = []
+
+    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        vistos.append(messages)
+        yield ("content", "resumo")
+        yield ("done", {"prompt_tokens": 10, "completion_tokens": 5})
+
+    async def context_limit(*a, **k):
+        return 8192
+
+    monkeypatch.setattr(comparar.llm, "chat_stream", chat_stream)
+    monkeypatch.setattr(comparar.llm, "context_limit", context_limit)
+    conv = _conversa()
+    prompt = baterias.BATERIAS["docs"]["prompt"]
+    _rodar(conv_id=conv, prompt=prompt, bateria="docs",
+           itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
+    enviado = vistos[0][-1]["content"]
+    assert "politica-de-reembolso.md" in enviado and "Aurora Viagens" in enviado
+    assert vistos[0][0]["role"] == "system"  # a bateria põe o system de "não invente"
+    with db.session() as s:
+        user = s.query(db.Message).filter_by(conversation_id=conv, role="user").one()
+        assert "Aurora Viagens" not in user.content and user.meta["bateria"] == "docs"
+    with pytest.raises(ToolError, match="desconhecido"):
+        _rodar(conv_id=conv, prompt="x", bateria="nada", itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
+
+
+def test_juiz_recebe_gabarito_e_estatisticas_e_responde_como_chat(monkeypatch):
+    from app import baterias, modelctl
+    _fake_llm(monkeypatch)
+    conv = _conversa()
+    estado = _rodar(conv_id=conv, prompt=baterias.BATERIAS["logica"]["prompt"], bateria="logica",
+                    itens=[{"provider": "p", "model": "modelo-a"}, {"provider": "p", "model": "modelo-b"}])
+    pedidos = []
+
+    async def juiz(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        pedidos.append(messages)
+        yield ("content", "| Modelo | Acertou |\n|---|---|\n| A | sim |")
+        yield ("done", {})
+
+    async def ensure(spec):
+        return
+        yield
+
+    monkeypatch.setattr(baterias.llm, "chat_stream", juiz)
+    monkeypatch.setattr(modelctl, "ensure", ensure)
+
+    async def main():
+        return [ev async for ev in baterias.julgar(estado["message_id"], "p", "juiz-grande")]
+
+    eventos = asyncio.run(main())
+    pedido = pedidos[0][-1]["content"]
+    assert "[334, 333, 333]" in pedido                       # o gabarito vai junto
+    cabecalhos = [l for l in pedido.splitlines() if l.startswith("=== MODELO")]
+    assert len(cabecalhos) == 2 and all("modelo-" not in l for l in cabecalhos)  # só letras: o juiz não vê nomes
+    assert "tok/s" in pedido
+    fim = eventos[-1]["fim"]
+    assert fim["meta"]["julgamento"]["de"] == estado["message_id"]
+    assert "| A | sim |" in fim["content"] and "**A** = modelo-a" in fim["content"]
+
+
+def test_velocidade_conta_o_tempo_do_raciocinio(monkeypatch):
+    """Tokens pensados entram no total; o relógio tem de começar neles, não no primeiro texto visível."""
+    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        for _ in range(3):
+            await asyncio.sleep(0.1)
+            yield ("reasoning", "pensando ")
+        yield ("content", "ok")
+        yield ("done", {"prompt_tokens": 10, "completion_tokens": 40})
+
+    async def context_limit(*a, **k):
+        return 8192
+
+    monkeypatch.setattr(comparar.llm, "chat_stream", chat_stream)
+    monkeypatch.setattr(comparar.llm, "context_limit", context_limit)
+    estado = _rodar(conv_id=_conversa(), prompt="x", itens=[{"provider": "p", "model": "a"}, {"provider": "p", "model": "b"}])
+    s = estado["itens"][0]["stats"]
+    assert s["tps"] < 200  # 40 tokens em ~0,3 s ≈ 130; com o relógio no texto daria milhares

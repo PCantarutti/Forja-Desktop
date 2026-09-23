@@ -615,6 +615,7 @@ export type MaestroModels = {
   min_ctx_worker: number;  // GGUF local com janela menor que isto não pode ser Worker
   slots: Record<string, { provider: string; model: string }>;
   especialidades?: Especialidade[];
+  workers_do_maestro?: boolean;
   active: SubagentActive[];
 };
 

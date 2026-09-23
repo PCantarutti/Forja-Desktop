@@ -1276,3 +1276,15 @@ def test_maestro_fecha_tarefa_que_devolveu_para_a_fila_depois_de_conferir(tmp_pa
     taskdb.set_status("TASK-001", "queued", conv)
     taskdb.set_status("TASK-001", "pending", conv)
     assert taskdb.set_status("TASK-001", "completed", conv)["status"] == "completed"
+
+
+def test_workers_usam_o_modelo_da_maestro_com_o_interruptor(conv, monkeypatch):
+    """Ligado: o Worker roda no modelo da Maestro (nada de trocar de modelo por um especialista)."""
+    monkeypatch.setattr(llm, "chat_stream", _fala())
+    monkeypatch.setattr(config, "WORKERS_DO_MAESTRO", True)
+    _plano(conv)
+    out, _ = _despacha(conv, "TASK-001")
+    r = out["meta"]["task_result"]
+    assert r["model"] == "maestro-32b" and "modelo da Maestro" in r["route"]
+    tent = taskdb.detail(conv, "TASK-001")["attempts"][0]
+    assert tent["worker"]["model"] == "maestro-32b"

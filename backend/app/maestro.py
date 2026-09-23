@@ -125,6 +125,14 @@ def collect_result(task, attempt_n: int, sub_out: dict, root: Path) -> dict:
     }
 
 
+def mesmo_modelo(req) -> dict | None:
+    """Modelo da Maestro para os Workers, com o interruptor ligado; senão None."""
+    if not getattr(config, "WORKERS_DO_MAESTRO", False):
+        return None
+    provider, model = getattr(req, "provider", ""), getattr(req, "model", "")
+    return {"provider": provider, "model": model} if provider and model else None
+
+
 SUCESSO = ("completed", "unverified")
 MIN_HISTORICO = 3       # tentativas de um nível no projeto antes de o histórico pesar
 TAXA_MINIMA = 1 / 3     # abaixo disto o nível sai do roteamento automático no projeto
@@ -210,6 +218,13 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     # histórico do projeto).
     nivel, motivo_rota = subagents.rota(task.model_slot, task.contract, evitar_niveis(task, root))
     cadeia = subagents.chain(nivel, swap=trocar)
+    mesmo = mesmo_modelo(req)
+    if mesmo:
+        # "Workers usam o modelo da Maestro": nada de trocar de modelo. Com IA local, a Maestro e os
+        # Workers dividem o mesmo llama-server (as vagas dele rodam os Workers em paralelo) e nada é
+        # descarregado por engano para subir o modelo de um especialista.
+        cadeia = [(nivel, mesmo)]
+        motivo_rota = "modelo da Maestro (Workers usam o mesmo modelo)"
     if not cadeia:
         porque = subagents._why_not(trocar)
         erro("Nenhum Worker disponível agora"
@@ -280,6 +295,8 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
         "agent": task.agent,
         "files": contrato.get("relevant_files") or [],
         "done_when": contrato.get("verify_command") or ""}}
+    if mesmo:
+        sub_call["arguments"]["_spec"] = mesmo  # o _run usa este modelo em vez da cadeia do nível
 
     t0 = time.monotonic()
     sub_out: dict = {}

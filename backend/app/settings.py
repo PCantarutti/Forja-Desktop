@@ -44,6 +44,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "maestro_model": {"provider": "", "model": ""},
     "maestro_visual": {"provider": "", "model": ""},
     "maestro_browser": True,
+    "workers_do_maestro": False,
     "worker_especialidades": [dict(e) for e in config.ESPECIALIDADES_PADRAO],
 }
 MAX_ESPECIALIDADES = 12
@@ -140,6 +141,7 @@ def apply(values: dict | None = None) -> dict:
     config.MAESTRO_VISUAL = dict(values["maestro_visual"])
     config.WORKER_ESPECIALIDADES = [dict(e) for e in values["worker_especialidades"]]
     config.MAESTRO_BROWSER = bool(values["maestro_browser"])
+    config.WORKERS_DO_MAESTRO = bool(values["workers_do_maestro"])
     config.BROWSER_IDLE_MINUTES = int(values["browser_idle_minutes"])
     config.BROWSER_SCALE = int(values["browser_scale"])
     config.BROWSER_STREAM = values["browser_stream"]
@@ -229,7 +231,7 @@ def validate(patch: dict, current: dict) -> dict:
             if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
                 raise SettingsError(f"Modelo da Maestro: provedor '{provider}' não existe.")
             values[key] = {"provider": provider, "model": model}
-        elif key in ("project_memory", "personal_memory", "maestro_browser"):
+        elif key in ("project_memory", "personal_memory", "maestro_browser", "workers_do_maestro"):
             values[key] = bool(raw)
         elif key == "project_memory_file":
             name = str(raw).strip() or "FORJA.md"
