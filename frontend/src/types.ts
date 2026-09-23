@@ -553,7 +553,7 @@ export type TaskResult = {
 export type TaskAttempt = {
   n: number;
   status: string;
-  worker: { level?: string; provider?: string; model?: string; agent?: string | null };
+  worker: { level?: string; provider?: string; model?: string; agent?: string | null; rota?: string };
   strategy: string | null;
   error: string | null;
   seconds: number;

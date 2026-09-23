@@ -396,7 +396,11 @@ def set_status(code: str, novo: str, conv_id: int | None = None, reason: str = "
     with db.session() as s:
         task = _get(s, code, conv_id)
         atual = task.status
-        if novo != atual and novo not in SEMPRE and novo not in TRANSITIONS.get(atual, set()):
+        # A Maestro conferiu sozinha (rodou os testes) o trabalho que um Worker já fez e quer fechar a
+        # tarefa que ela mesma tinha devolvido para a fila: sem esta saída, numa rodada real ela tentou
+        # oito vezes e desistiu com needs_human em tarefas com os testes passando.
+        conferida = novo == "completed" and atual in ("pending", "queued", "needs_human", "blocked")             and task.attempt_count > 0
+        if novo != atual and novo not in SEMPRE and not conferida and novo not in TRANSITIONS.get(atual, set()):
             permitidos = ", ".join(sorted(TRANSITIONS.get(atual, set()) | SEMPRE))
             raise ToolError(f"{task.code} está em '{atual}' e não pode ir para '{novo}'. "
                             f"De '{atual}' dá para: {permitidos}.")
@@ -868,13 +872,15 @@ RUN_TASK = Tool(
     "Entrega a tarefa a um Worker e devolve o resultado medido (arquivos alterados, testes, erros) "
     "em JSON. O Worker recebe só o Implementation Contract, roda num modelo próprio e não vê esta "
     "conversa. Ele NÃO fecha a tarefa: leia o resultado e decida com update_task. "
-    "Numa nova tentativa, diga em 'strategy' o que deve ser feito diferente.",
+    "Numa nova tentativa, diga em 'strategy' o que deve ser feito diferente. Várias tarefas "
+    "independentes de uma vez: 'codes' (rodam juntas no modo paralelo).",
     {"type": "object", "properties": {
         "code": {"type": "string", "description": "Código da tarefa (TASK-003)"},
+        "codes": {"type": "array", "items": {"type": "string"},
+                  "description": "Várias tarefas independentes numa chamada só (TASK-001, TASK-002)"},
         "strategy": {"type": "string",
                      "description": "Obrigatório a partir da 2ª tentativa: o que mudar em relação à "
-                                    "tentativa anterior. Repetir a mesma abordagem só gasta tempo."}},
-     "required": ["code"]},
+                                    "tentativa anterior. Repetir a mesma abordagem só gasta tempo."}}},
     _nao_usado,
     # Não é `mutating` pelo mesmo motivo do delegate_task: quem altera o projeto são as chamadas do
     # Worker lá dentro, e cada uma passa por policy.decide e pelo card de aprovação. Pedir aprovação

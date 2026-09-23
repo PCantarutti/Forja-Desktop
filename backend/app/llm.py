@@ -219,6 +219,11 @@ async def _openai_stream(provider, model, messages, tools, num_ctx, extra: dict 
                   "stream_options": {"include_usage": True}, **(extra or {})}
     if tools:
         body["tools"] = tools
+        # No llama-server o padrão é false: o modelo só consegue chamar UMA ferramenta por resposta.
+        # Sem isto a Maestro nunca despachava duas tarefas juntas (e o agente lia um arquivo por vez),
+        # mesmo com max_workers > 1. A OpenAI já liga por padrão; outros compatíveis ficam como estão.
+        if config.PROVIDERS.get(provider, {}).get("type") == "llamacpp":
+            body.setdefault("parallel_tool_calls", True)
     calls: dict[int, dict] = {}
     prompt_tokens = completion_tokens = None
     async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers(provider)) as c:

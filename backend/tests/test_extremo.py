@@ -216,6 +216,7 @@ def test_subagente_nao_herda_o_esforco_extremo(monkeypatch):
 # ------------------------------------------------ verificação
 
 def test_done_when_roda_pelo_caminho_de_aprovacao(monkeypatch):
+    monkeypatch.setattr(subagents.shutil, "which", lambda nome: nome)  # pytest no PATH: comando intacto
     _slots(capaz=("lmstudio", "grande"))
     fake, _ = _fala("terminei")
     monkeypatch.setattr(llm, "chat_stream", fake)

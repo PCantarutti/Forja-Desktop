@@ -16,6 +16,7 @@ mão, o parecer de um modelo menor que o autor rende falso-positivo, não bug.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -118,11 +119,32 @@ ROTA_POR_TIPO = {"ui": "frontend", "test": "testes", "docs": "docs",
                  "feature": "logica", "bugfix": "logica", "refactor": "logica", "chore": "logica"}
 
 
-def rota(model_slot: str | None, contrato: dict | None) -> str:
-    """Quem faz a tarefa. A escolha da Maestro manda; sem ela, o tipo do contrato e os arquivos
-    decidem a especialidade (se ela tiver modelo); no fim, o Worker capaz."""
+FERRAMENTAS_PY = ("pytest", "mypy", "ruff", "black", "flake8")
+
+
+def sem_path(cmd: str) -> str:
+    """`pytest x` -> `python -m pytest x` quando o executável não está no PATH. No Windows o pip
+    instala o pytest sem pôr a pasta Scripts no PATH: o Worker rodava `python -m pytest` e passava,
+    a verificação `pytest` falhava com "termo não reconhecido" e a tarefa virava falha."""
+    primeira = cmd.split(maxsplit=1)[0] if cmd.strip() else ""
+    if primeira in FERRAMENTAS_PY and not shutil.which(primeira):
+        return f"python -m {cmd.strip()}"
+    return cmd
+
+
+def pequena(c: dict) -> bool:
+    """Tarefa que o Worker rápido dá conta: texto e manutenção. Código fica com o capaz mesmo quando
+    é um arquivo só — o rápido costuma ser um modelo bem menor (1,5B), e errar custa uma tentativa."""
+    return c.get("type") in ("docs", "chore")
+
+
+def rota(model_slot: str | None, contrato: dict | None, evitar: dict[str, str] | None = None) -> tuple[str, str]:
+    """(quem faz a tarefa, por quê). A escolha da Maestro manda. Sem ela, em ordem: o especialista
+    do tipo/arquivos, o rápido se a tarefa é pequena, o capaz, a nuvem — pulando quem tem modelo
+    vazio e quem está em `evitar` (nível -> motivo: já falhou nesta tarefa, ou vai mal no projeto)."""
     if model_slot:
-        return model_slot
+        return model_slot, "escolha da Maestro"
+    evitar = evitar or {}
     c = contrato or {}
     from .qualidade import EXTENSOES_DE_TELA  # import tardio: qualidade importa taskdb
     arquivos = [str(a).lower() for a in c.get("relevant_files") or []]
@@ -131,8 +153,21 @@ def rota(model_slot: str | None, contrato: dict | None) -> str:
     de_tela = [a for a in arquivos if not a.endswith(".forja/knowledge/frontend.md")]
     if not tipo and de_tela and all(a.endswith(EXTENSOES_DE_TELA) for a in de_tela):
         tipo = "ui"
-    alvo = ROTA_POR_TIPO.get(tipo)
-    return alvo if alvo and slot(alvo) else "capaz"
+    candidatos = []
+    if alvo := ROTA_POR_TIPO.get(tipo):
+        candidatos.append((alvo, f"especialista pelo tipo '{tipo}'"))
+    if pequena(c):
+        candidatos.append(("rapido", "tarefa pequena"))
+    candidatos += [("capaz", "generalista"), ("nuvem", "reserva")]
+    pulados = []
+    for nivel, motivo in candidatos:
+        if not slot(nivel):
+            continue
+        if nivel in evitar:
+            pulados.append(f"{nome_do_nivel(nivel)}: {evitar[nivel]}")
+            continue
+        return nivel, motivo + (f" (pulei {'; '.join(pulados)})" if pulados else "")
+    return "capaz", "padrão" + (f" (pulei {'; '.join(pulados)})" if pulados else "")
 
 
 def configured() -> dict[str, dict]:
@@ -367,7 +402,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     level = persona["level"] if persona else str(args.get("level") or "rapido").lower()
     task = str(args.get("task") or "").strip()
     files = _files(args.get("files"))
-    done_when = str(args.get("done_when") or "").strip()
+    done_when = sem_path(str(args.get("done_when") or "").strip())
     effort = getattr(req, "effort", "medio")
     sub_effort = "maximo" if effort == "extremo" else effort  # o sub não delega: herdar 'extremo' seria letra morta
     root = workspace.root()

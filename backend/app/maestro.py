@@ -125,6 +125,39 @@ def collect_result(task, attempt_n: int, sub_out: dict, root: Path) -> dict:
     }
 
 
+SUCESSO = ("completed", "unverified")
+MIN_HISTORICO = 3       # tentativas de um nível no projeto antes de o histórico pesar
+TAXA_MINIMA = 1 / 3     # abaixo disto o nível sai do roteamento automático no projeto
+
+
+def evitar_niveis(task, root) -> dict[str, str]:
+    """Níveis que o roteador automático deve pular nesta tarefa (nível -> motivo): os que já
+    falharam nela, e os que vão mal neste projeto (pasta), contando todas as conversas dela."""
+    evitar: dict[str, str] = {}
+    with db.session() as s:
+        for a in s.query(db.Attempt).filter(db.Attempt.task_id == task.id):
+            nivel = (a.worker or {}).get("level")
+            if nivel and a.status in ("failed", "error"):
+                evitar[nivel] = f"falhou na tentativa {a.n} desta tarefa"
+        # mesma pasta, escrita de qualquer jeito (barra, maiúscula): compara o caminho resolvido
+        alvo = Path(root).resolve()
+        convs = [c for c, ws in s.query(db.Conversation.id, db.Conversation.workspace)
+                 if ws and Path(ws).resolve() == alvo]
+        placar: dict[str, list[int]] = {}
+        if convs:
+            q = (s.query(db.Attempt.worker, db.Attempt.status).join(db.Task, db.Task.id == db.Attempt.task_id)
+                 .filter(db.Task.conversation_id.in_(convs), db.Attempt.status != "running"))
+            for worker, status in q:
+                if nivel := (worker or {}).get("level"):
+                    p = placar.setdefault(nivel, [0, 0])
+                    p[0] += status in SUCESSO
+                    p[1] += 1
+    for nivel, (ok, total) in placar.items():
+        if total >= MIN_HISTORICO and ok / total < TAXA_MINIMA and nivel not in evitar:
+            evitar[nivel] = f"{ok}/{total} tentativas com sucesso neste projeto"
+    return evitar
+
+
 async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
                    run_call: Callable) -> AsyncIterator[dict]:
     args = call["arguments"]
@@ -173,8 +206,9 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     # Em modo sequencial o orquestrador pode trocar o modelo local sozinho, então um slot que só
     # precisa ser carregado continua elegível (ver subagents._fits e modelctl.ensure).
     trocar = modelctl.pode_trocar()
-    # Quem faz: a escolha da Maestro, ou o especialista pelo tipo/arquivos, ou o capaz.
-    nivel = subagents.rota(task.model_slot, task.contract)
+    # Quem faz: a escolha da Maestro, ou o roteador (tipo, tamanho, falhas desta tarefa e o
+    # histórico do projeto).
+    nivel, motivo_rota = subagents.rota(task.model_slot, task.contract, evitar_niveis(task, root))
     cadeia = subagents.chain(nivel, swap=trocar)
     if not cadeia:
         porque = subagents._why_not(trocar)
@@ -195,7 +229,8 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     # Tentativa persistida ANTES de qualquer efeito colateral: se o app cair agora, taskdb.reap()
     # encontra o rastro e devolve a tarefa para 'queued' na próxima abertura.
     attempt_id = taskdb.new_attempt(task.code, {"level": nivel, "provider": spec["provider"],
-                                                "model": spec["model"], "agent": task.agent},
+                                                "model": spec["model"], "agent": task.agent,
+                                                "rota": motivo_rota},
                                     strategy, conv_id)
     attempt_n = task.attempt_count + 1
     if hasattr(run_obj, "tentativas"):  # escrita do Worker desta chamada = checkpoint desta tentativa
@@ -289,6 +324,7 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     taskdb.set_status(task.code, "testing", conv_id)
     task = taskdb.get(task.code, conv_id)  # recarrega: o status mudou desde o get inicial
     resultado = collect_result(task, attempt_n, sub_out, root)
+    resultado["route"] = f"{subagents.nome_do_nivel(nivel)} — {motivo_rota}"
     if externas:
         resultado["external_changes"] = externas
     registra_estado(attempt_id, root)

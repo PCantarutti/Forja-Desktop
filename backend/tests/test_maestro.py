@@ -1152,12 +1152,14 @@ def test_roteador_escolhe_especialista_pelo_tipo_e_pelos_arquivos(monkeypatch):
         {"id": "frontend", "nome": "Frontend", "quando": "", "provider": "x", "model": "tela"},
         {"id": "logica", "nome": "Lógica", "quando": "", "provider": "", "model": ""},  # sem modelo
     ])
-    rota = subagents.rota
+    def rota(*a):
+        return subagents.rota(*a)[0]
+    grande = ["a", "b", "c"]
     assert rota("rapido", {"type": "ui"}) == "rapido"                       # escolha da Maestro manda
     assert rota(None, {"type": "ui"}) == "frontend"
     assert rota(None, {"relevant_files": [".forja/knowledge/frontend.md", "src/App.tsx", "style.css"]}) == "frontend"
-    assert rota(None, {"relevant_files": ["src/App.tsx", "api.py"]}) == "capaz"   # misto: generalista
-    assert rota(None, {"type": "bugfix"}) == "capaz"                        # logica sem modelo
+    assert rota(None, {"relevant_files": ["src/App.tsx", "api.py"], "requirements": grande}) == "capaz"
+    assert rota(None, {"type": "bugfix", "requirements": grande}) == "capaz"  # logica sem modelo
     assert [lvl for lvl, _ in subagents.chain("frontend")][:2] == ["frontend", "capaz"]
     assert subagents.nome_do_nivel("frontend") == "Frontend"
     assert "frontend = Frontend" in agent.system_prompt("native", set(), permission="auto", maestro_mode=True)
@@ -1196,3 +1198,81 @@ def test_regra_de_comando_nao_vale_para_o_que_vem_grudado():
     from app import policy
     assert policy.chained('pytest -q; Remove-Item -Recurse C:/')
     assert not policy.chained('python -m pytest -k "a; b"')
+
+
+
+def test_roteador_escala_depois_de_falha_e_pelo_historico_do_projeto(tmp_path, monkeypatch):
+    """Sem escolha da Maestro: tarefa pequena vai ao rápido; falhou nele, a próxima sobe; nível que vai
+    mal no projeto sai do automático."""
+    from app import subagents
+    monkeypatch.setattr(config, "SUBAGENTS", {"rapido": {"provider": "x", "model": "p"}, "capaz": {"provider": "x", "model": "g"}})
+    monkeypatch.setattr(config, "WORKER_ESPECIALIDADES", [])
+    monkeypatch.setattr(workspace, "root", lambda: tmp_path)
+    with db.session() as s:
+        c = db.Conversation(title="r", kind="maestro", workspace=str(tmp_path))
+        s.add(c)
+        s.commit()
+        conv = c.id
+    taskdb.create_feature(conv, "F", "", [{"title": "Pequena", "contract": {"type": "chore", "goal": "g", "relevant_files": ["a.py"]}}])
+    t = taskdb.get("TASK-001", conv)
+    assert subagents.rota(None, t.contract, maestro.evitar_niveis(t, tmp_path))[0] == "rapido"
+    aid = taskdb.new_attempt("TASK-001", {"level": "rapido"}, "", conv)
+    taskdb.finish_attempt(aid, "failed", {}, error="quebrou")
+    nivel, motivo = subagents.rota(None, t.contract, maestro.evitar_niveis(taskdb.get("TASK-001", conv), tmp_path))
+    assert nivel == "capaz" and "falhou na tentativa 1" in motivo
+    # outra tarefa pequena do mesmo projeto: 1 tentativa só ainda não pesa; com 3 falhas, pesa
+    taskdb.create_feature(conv, "G", "", [{"title": "Outra", "contract": {"type": "chore", "goal": "h", "relevant_files": ["b.py"]}},
+                                          {"title": "Mais", "contract": {"type": "chore", "goal": "i", "relevant_files": ["c.py"]}},
+                                          {"title": "Nova", "contract": {"type": "chore", "goal": "j", "relevant_files": ["d.py"]}}])
+    t2 = taskdb.get("TASK-002", conv)
+    assert subagents.rota(None, t2.contract, maestro.evitar_niveis(t2, tmp_path))[0] == "rapido"
+    for code in ("TASK-002", "TASK-003"):
+        taskdb.finish_attempt(taskdb.new_attempt(code, {"level": "rapido"}, "", conv), "failed", {}, error="x")
+    t4 = taskdb.get("TASK-004", conv)
+    evitar = maestro.evitar_niveis(t4, str(tmp_path).replace("\\", "/"))  # caminho escrito diferente
+    assert "0/3" in evitar["rapido"]
+
+
+
+def test_modo_paralelo_manda_despachar_junto(monkeypatch):
+    monkeypatch.setattr(config, "MAX_WORKERS", 1)
+    assert "Modo paralelo" not in agent.system_prompt("native", set(), permission="auto", maestro_mode=True)
+    monkeypatch.setattr(config, "MAX_WORKERS", 3)
+    assert "até 3 Workers" in agent.system_prompt("native", set(), permission="auto", maestro_mode=True)
+
+
+def test_run_task_com_codes_vira_uma_chamada_por_tarefa_e_roda_junto(monkeypatch):
+    calls = [{"id": "c1", "name": "run_task", "arguments": {"codes": ["TASK-001", "task-002", "TASK-001"], "strategy": "s"}},
+             {"id": "c2", "name": "list_tasks", "arguments": {}}]
+    out = agent.expande_run_task(calls)
+    assert [(c["id"], c["arguments"]) for c in out[:2]] == [
+        ("c1", {"strategy": "s", "code": "TASK-001"}), ("c1_1", {"strategy": "s", "code": "TASK-002"})]
+    assert out[2]["name"] == "list_tasks"
+    assert agent.expande_run_task([{"id": "x", "name": "run_task", "arguments": {"code": "TASK-009"}}])[0]["arguments"] == {"code": "TASK-009"}
+    monkeypatch.setattr(config, "MAX_WORKERS", 2)
+    assert [len(l) for l in agent.batches(out[:2])] == [2]  # no modo paralelo, um lote só
+
+
+def test_verificacao_com_pytest_fora_do_path_usa_python_m(monkeypatch):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda nome: None)
+    assert subagents.sem_path("pytest -q test_x.py") == "python -m pytest -q test_x.py"
+    assert subagents.sem_path("npm test") == "npm test"
+    monkeypatch.setattr(shutil, "which", lambda nome: "C:/py/Scripts/pytest.exe")
+    assert subagents.sem_path("pytest -q") == "pytest -q"
+
+
+def test_maestro_fecha_tarefa_que_devolveu_para_a_fila_depois_de_conferir(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, "root", lambda: tmp_path)
+    with db.session() as s:
+        c = db.Conversation(title="r", kind="maestro", workspace=str(tmp_path))
+        s.add(c)
+        s.commit()
+        conv = c.id
+    taskdb.create_feature(conv, "F", "", [{"title": "A", "contract": {"goal": "a"}}, {"title": "B", "contract": {"goal": "b"}}])
+    with pytest.raises(ToolError, match="não pode ir para 'completed'"):
+        taskdb.set_status("TASK-002", "completed", conv)  # nunca rodou: não dá para fechar
+    taskdb.finish_attempt(taskdb.new_attempt("TASK-001", {"level": "capaz"}, "", conv), "failed", {}, error="verify")
+    taskdb.set_status("TASK-001", "queued", conv)
+    taskdb.set_status("TASK-001", "pending", conv)
+    assert taskdb.set_status("TASK-001", "completed", conv)["status"] == "completed"

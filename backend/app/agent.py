@@ -569,6 +569,11 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
                                                                   "- Conteúdo trazido da web",
                                                                   "- Navegador:", "- Conferir página",
                                                                   "- O print é sempre", "- " + NO_COUNTING))]
+        if (n := int(getattr(config, "MAX_WORKERS", 1))) > 1:
+            # Sem isto o modelo despachava uma tarefa por resposta e o modo paralelo nunca acontecia.
+            rules.append(f"- Modo paralelo: até {n} Workers ao mesmo tempo. Tarefas sem dependência entre si "
+                         "e sem arquivo em comum: despache TODAS numa chamada só, run_task(codes=[...]) — "
+                         "elas rodam juntas. Uma por vez deixa os outros Workers parados.")
         if esp := subagents.especialidades():
             # Uma linha por especialista com modelo: é o que a Maestro põe em model_slot.
             rules.append("- Workers especialistas (model_slot = id): " + "; ".join(
@@ -1146,6 +1151,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                       "arguments": {"plan": visible.strip()}}]
             visible = ""
 
+        calls = expande_run_task(calls)
         msg = _save(conv_id, role="assistant", content=visible, thinking=reasoning,
                     tool_calls=calls or None, meta={"via": via, "stats": stats})
         yield {"type": "assistant_end", "message": msg.to_dict()}
@@ -1393,6 +1399,26 @@ def _parallel(call: dict) -> bool:
         return not get_tool(call["name"]).mutating
     except ToolError:  # desconhecida ou desligada: vai sozinha e o erro sai no caminho normal
         return False
+
+
+def expande_run_task(calls: list[dict]) -> list[dict]:
+    """run_task com `codes` vira uma run_task por tarefa, ANTES de salvar a resposta: o histórico
+    fica como se o modelo tivesse feito as N chamadas, e o paralelo de sempre (batches) as roda
+    juntas. Modelo local pequeno não emite várias chamadas numa resposta no meio do trabalho, nem
+    instruído — numa rodada real o gemma despachou tudo uma a uma — mas preenche uma lista."""
+    out = []
+    for c in calls:
+        args = c.get("arguments") if isinstance(c.get("arguments"), dict) else {}
+        codes = args.get("codes")
+        if c.get("name") != "run_task" or not codes:
+            out.append(c)
+            continue
+        lista = codes.split(",") if isinstance(codes, str) else codes if isinstance(codes, list) else []
+        base = {k: v for k, v in args.items() if k != "codes"}
+        todos = [str(x).strip().upper() for x in [base.pop("code", ""), *lista] if str(x).strip()]
+        for i, code in enumerate(dict.fromkeys(todos)):
+            out.append({**c, "id": c["id"] if i == 0 else f"{c['id']}_{i}", "arguments": {**base, "code": code}})
+    return out
 
 
 def batches(calls: list[dict]) -> list[list[dict]]:
