@@ -1,13 +1,16 @@
-"""Hooks do projeto: comandos que rodam depois de uma ferramenta, definidos em `.forja/hooks.json`.
+"""Hooks do projeto: comandos que rodam em pontos do ciclo do agente, definidos em `.forja/hooks.json`.
 
     {"post_tool": [
         {"tools": ["write_file", "edit_file"], "command": "npx prettier --write \\"{path}\\""},
         {"tools": ["run_command"], "command": "echo rodou {tool}"}
-    ]}
+    ],
+     "pre_tool": [{"tools": ["run_command"], "command": "python .forja/checa.py \\"{command}\\""}],
+     "stop": [{"command": "npm test --silent"}]}
 
-`{path}` e `{tool}` são substituídos. O comando roda como o run_command, na
-pasta da conversa, com timeout curto; a saída (resumida) é anexada ao resultado da ferramenta para o
-modelo ver (ex.: erro de lint). Só ferramentas que terminaram com sucesso disparam hooks.
+Eventos: pre_tool, post_tool, user_prompt, session_start, stop, subagent_start, subagent_stop (ver
+EVENTOS). `{path}`, `{tool}`, `{command}`, `{prompt}` e `{task}` são substituídos quando fazem
+sentido. O comando roda como o run_command, na pasta da conversa, com timeout curto; a saída
+(resumida) chega ao modelo. post_tool só dispara para ferramenta que terminou com sucesso.
 
 **A pasta precisa ser confiável.** O arquivo vem da pasta de trabalho, então ele pode ter vindo junto
 num `git clone`: sem essa trava, abrir um repositório de terceiros e pedir um `read_file` já rodaria o
@@ -16,6 +19,7 @@ modelo de aprovação do Forja. A pasta é liberada em Configurações › Permi
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from fnmatch import fnmatch
 from pathlib import Path
@@ -62,22 +66,63 @@ def aviso(root: Path) -> str | None:
             "Permissões › Pastas confiáveis:" + chr(10) + chr(10) + f"`{caminho}`")
 
 
-def run_post(tool: str, args: dict, root: Path) -> str | None:
-    """Roda os hooks post_tool que casam com `tool`; devolve texto para anexar ao resultado (ou None)."""
+# Eventos (os do DeepSeek Harness / Claude Code). Código de saída do comando:
+#   0 = segue; 2 = BLOQUEIA (pre_tool nega a ferramenta; stop obriga a continuar; a saída é o motivo);
+#   3 = só no pre_tool: pede aprovação no card mesmo em modo automático. Outro código: erro do hook,
+#   mostrado, mas não bloqueia nada.
+EVENTOS = ("pre_tool", "post_tool", "user_prompt", "session_start", "stop", "subagent_start", "subagent_stop")
+BLOQUEIA, PERGUNTA = 2, 3
+
+
+def tem(root: Path) -> bool:
+    """Checagem barata antes de mandar um hook para thread: quase nenhuma pasta tem hooks."""
+    return (root / FILE).is_file() and trusted(root)
+
+
+def rodar(evento: str, root: Path, tool: str = "", subs: dict | None = None) -> list[tuple[str, int, str]]:
+    """Roda os hooks de `evento` (os de ferramenta, só os que casam com `tool`). [(comando, exit, saída)]."""
     if not trusted(root):
-        return None  # pasta não liberada: quem avisa o usuário é o agente, uma vez por execução
-    entries = [e for e in load(root).get("post_tool", []) if isinstance(e, dict) and e.get("command") and _matches(e, tool)]
-    if not entries:
-        return None
-    parts = []
-    for e in entries:
-        command = str(e["command"]).replace("{path}", str(args.get("path") or "")).replace("{tool}", tool)
+        return []  # pasta não liberada: quem avisa o usuário é o agente, uma vez por execução
+    entradas = [e for e in load(root).get(evento, []) if isinstance(e, dict) and e.get("command")
+                and (not tool or _matches(e, tool))]
+    feitos = []
+    for e in entradas:
+        command = str(e["command"]).replace("{tool}", tool)
+        for k, v in (subs or {}).items():
+            command = command.replace("{" + k + "}", str(v or ""))
         try:
             code, out = shell.exec_in(root, command, int(e.get("timeout") or TIMEOUT))
-        except Exception as ex:  # hook quebrado não derruba a ferramenta
+        except Exception as ex:  # hook quebrado não derruba nada
             code, out = -1, f"{ex.__class__.__name__}: {ex}"
         out = out.strip()
         if len(out) > MAX_OUT:
             out = "...\n" + out[-MAX_OUT:]
-        parts.append(f"[hook `{command}` → exit {code}]" + (f"\n{out}" if out else ""))
-    return "\n".join(parts)
+        feitos.append((command, code, out))
+    return feitos
+
+
+def texto(feitos: list[tuple[str, int, str]]) -> str | None:
+    return "\n".join(f"[hook `{c}` → exit {code}]" + (f"\n{out}" if out else "") for c, code, out in feitos) or None
+
+
+def pre_tool(tool: str, args: dict, root: Path) -> tuple[str, str]:
+    """('segue'|'nega'|'pergunta', motivo)."""
+    feitos = rodar("pre_tool", root, tool, {"path": args.get("path") or "", "command": args.get("command") or ""})
+    if negou := [f for f in feitos if f[1] == BLOQUEIA]:
+        return "nega", "\n".join(o or f"bloqueado pelo hook `{c}`" for c, _, o in negou)
+    if pediu := [f for f in feitos if f[1] == PERGUNTA]:
+        return "pergunta", "\n".join(o or f"o hook `{c}` pediu aprovação" for c, _, o in pediu)
+    return "segue", ""
+
+
+async def rodar_async(evento: str, root: Path, tool: str = "", subs: dict | None = None) -> list:
+    return await asyncio.to_thread(rodar, evento, root, tool, subs) if tem(root) else []
+
+
+async def pre_tool_async(tool: str, args: dict, root: Path) -> tuple[str, str]:
+    return await asyncio.to_thread(pre_tool, tool, args, root) if tem(root) else ("segue", "")
+
+
+def run_post(tool: str, args: dict, root: Path) -> str | None:
+    """Roda os hooks post_tool que casam com `tool`; devolve texto para anexar ao resultado (ou None)."""
+    return texto(rodar("post_tool", root, tool, {"path": args.get("path") or ""}))

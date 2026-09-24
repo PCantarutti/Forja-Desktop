@@ -969,6 +969,7 @@ export function EventNotice({ m }: { m: Message }) {
     info: "Info",
     aviso: "Segundo plano",
     goal: "Nova rodada da goal",
+    hook: "Hook do projeto",
   }[kind as string];
   return (
     <div className={`my-3 rounded-2xl border bg-surface px-4 py-2.5 text-sm ${EVENT_STYLE[kind] ?? EVENT_STYLE.info}`}>

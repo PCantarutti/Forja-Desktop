@@ -15,6 +15,7 @@ mão, o parecer de um modelo menor que o autor rende falso-positivo, não bug.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import time
@@ -656,8 +657,14 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
               ao_registrar: Callable[[list], None] | None = None) -> AsyncIterator[dict]:
     """Roda a delegação e garante que ela saia da lista de ativas. O finally vale também quando o
     usuário cancela o turno: o consumidor fecha o gerador e o finally corre."""
+    from . import hooks  # tardio: hooks importa shell, que importa tools; evita ciclo no import do pacote
+
+    tarefa = {"task": str(call["arguments"].get("task") or "")[:500]}
+    await hooks.rodar_async("subagent_start", workspace.root(), "", tarefa)
     try:
         async for ev in _run(conv_id, call, req, run_obj, out, run_call, structured, ao_registrar):
             yield ev
     finally:
         ATIVAS.pop(call["id"], None)
+    if saida := hooks.texto(await hooks.rodar_async("subagent_stop", workspace.root(), "", tarefa)):
+        out["text"] = f"{out.get('text') or ''}\n\n{saida}"

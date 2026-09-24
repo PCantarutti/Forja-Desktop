@@ -27,6 +27,7 @@ from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, ex
                     resolve_path, spill, vision_caps)
 
 MAX_NUDGES = 2
+MAX_STOP_HOOKS = 3  # hook stop que sempre bloqueia não pode prender o turno para sempre
 # Maestro: a cada quantos turnos seguidos sem agir (só raciocínio) ela gera um novo alerta ao usuário.
 ALERTA_A_CADA = 5
 # Restrição do pedido vira loop de conferência no raciocínio: modelo pequeno enumera palavra por
@@ -170,6 +171,7 @@ class Run:
         self.avisos: list[str] = []     # término de processo/subagente em segundo plano (entram no próximo passo)
         self.filhos: dict[str, dict] = {}  # subagentes em segundo plano: id -> {task, tarefa, inicio}
         self.acorda = asyncio.Event()   # algo chegou em `avisos` (o fim do turno espera por isso)
+        self.stop_hooks = 0             # vezes que um hook stop segurou o fim do turno (teto MAX_STOP_HOOKS)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
         self.nudged: set[str] = set()   # já levaram o freio do esforço extremo (um aviso cada): caminhos
                                        # de arquivo e "delegate_task" para a delegação rasa
@@ -1148,10 +1150,16 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             if conv.title == "Nova conversa":
                 provisorio = conv.title = req.content.strip().splitlines()[0][:60] or "Nova conversa"
             s.commit()
+        primeira = not any(m.role == "user" for m in _load(conv_id))
         user_msg = _save(conv_id, role="user", content=req.content,
                          meta={"attachments": req.attachments} if req.attachments else None)
         run.turn_id = user_msg.id
         yield {"type": "message", "message": user_msg.to_dict()}
+        # Hooks de início de conversa e de mensagem: a saída chega ao modelo como contexto.
+        for evento, cond in (("session_start", primeira), ("user_prompt", True)):
+            if cond and (saida := hooks.texto(await hooks.rodar_async(
+                    evento, workspace.root(), "", {"prompt": req.content}))):
+                yield _event(conv_id, "hook", f"Saída do hook {evento} do projeto:\n{saida}", to_model=True)
     else:
         users = [m.id for m in _load(conv_id) if m.role == "user"]
         if not users:
@@ -1435,6 +1443,15 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 yield _event(conv_id, "goal", rodada, to_model=True)
                 iterations = 0  # o teto de passos vale por rodada; o de rodadas é goals.MAX_RODADAS
                 continue
+            # Hook stop com exit 2: o projeto diz que ainda não acabou (ex.: testes falhando).
+            if tools_on and not run.cancel.is_set() and run.stop_hooks < MAX_STOP_HOOKS:
+                bloqueios = [f for f in await hooks.rodar_async("stop", workspace.root())
+                             if f[1] == hooks.BLOQUEIA]
+                if bloqueios:
+                    run.stop_hooks += 1
+                    yield _event(conv_id, "hook", "Um hook stop do projeto não deixou o turno acabar. Resolva e "
+                                 "responda de novo:\n" + (hooks.texto(bloqueios) or ""), to_model=True)
+                    continue
             break
 
         nudges = 0  # turno produtivo: os lembretes voltam a valer do zero
@@ -1838,8 +1855,15 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         result("erro", str(e))
         return
 
+    decisao, motivo = await hooks.pre_tool_async(name, args, workspace.root())  # .forja/hooks.json
+    if decisao == "nega":
+        result("erro", f"Bloqueado por um hook pre_tool do projeto: {motivo}")
+        return
     mode_now = run.permission
     needs_approval, rule = policy.decide(tool, args, run.permission)
+    if decisao == "pergunta":  # o hook pediu que o usuário decida, mesmo num modo que aprovaria sozinho
+        needs_approval, rule = True, None
+        meta["hook"] = motivo
     if rule:
         meta["auto_rule"] = rule  # por que passou sem perguntar (sempre visível na UI)
     if needs_approval:
