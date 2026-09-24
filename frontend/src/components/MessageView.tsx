@@ -534,7 +534,7 @@ export function resultadosDe(messages: Message[]): Map<string, Message> {
   return m;
 }
 
-export function StatsRow({ s, live, instances, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; onInstances?: () => void; phase?: string }) {
+export function StatsRow({ s, live, instances, instancesLabel, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; instancesLabel?: string; onInstances?: () => void; phase?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
       <Chip>
@@ -564,7 +564,7 @@ export function StatsRow({ s, live, instances, onInstances, phase }: { s: TurnSt
           ) : (
             <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
           )}
-          {[instances ? `${instances} instância${instances > 1 ? "s" : ""} rodando` : "", phase]
+          {[instances ? instancesLabel || `${instances} em segundo plano` : "", phase]
             .filter(Boolean)
             .join(" · ")}
         </button>

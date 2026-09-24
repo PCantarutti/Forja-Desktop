@@ -1176,6 +1176,11 @@ export default function App() {
   // Instâncias desta conversa (delegações) + processos vivos, para o indicador embaixo da resposta.
   const daConversa = activity.conversations.find((c) => c.id === currentId);
   const instancias = (daConversa?.subagents ?? 0) + (daConversa?.servers ?? 0);
+  const plural = (n: number, um: string, varios: string) => (n ? `${n} ${n > 1 ? varios : um}` : "");
+  const rotuloInstancias = [
+    plural(daConversa?.subagents ?? 0, "agente em segundo plano", "agentes em segundo plano"),
+    plural(daConversa?.servers ?? 0, "processo rodando", "processos rodando"),
+  ].filter(Boolean).join(" · ");
 
   // Planos do modo Plano nesta conversa (chamadas exit_plan_mode), para a aba Planos.
   const plans = useMemo<PlanEntry[]>(() => {
@@ -1457,6 +1462,7 @@ export default function App() {
                         <StatsRow
                           s={turn.stats}
                           instances={i === la ? (so ? 0 : instancias) : 0}
+                          instancesLabel={rotuloInstancias}
                           onInstances={() => setRight({ tab: "servers", collapsed: false })}
                         />
                       )}
@@ -1533,6 +1539,7 @@ export default function App() {
                   live={vivo}
                   phase={o.fase}
                   instances={(so ? 0 : instancias)}
+                  instancesLabel={rotuloInstancias}
                   onInstances={() => setRight({ tab: "servers", collapsed: false })}
                 />
               </div>
