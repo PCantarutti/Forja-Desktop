@@ -39,6 +39,8 @@ import {
   Attachments,
   CopyButton,
   EventNotice,
+  Reconectando,
+  TENTATIVA,
   NOTA_DO_AGENTE,
   Markdown,
   setFileConv,
@@ -1488,8 +1490,14 @@ export default function App() {
                     )}
                   </div>
                 );
-              if (m.role === "event")
-                return String(m.meta?.kind ?? "") in NOTA_DO_AGENTE || m.meta?.kind === "tasks" ? null : <EventNotice key={m.id} m={m} />; // essas vão no bloco de atividade
+              if (m.role === "event") {
+                if (String(m.meta?.kind ?? "") in NOTA_DO_AGENTE || m.meta?.kind === "tasks") return null; // essas vão no bloco de atividade
+                // Cada tentativa de reconexão grava um evento: na tela é um cartão só, o da tentativa atual. Some
+                // quando conecta (vem outra mensagem); se esgotar, fica o erro final, que já diz o motivo.
+                const tentativa = TENTATIVA.exec(m.content ?? "");
+                if (tentativa) return i === messages.length - 1 ? <Reconectando key={m.id} texto={m.content ?? ""} n={tentativa[1]} /> : null;
+                return <EventNotice key={m.id} m={m} />;
+              }
               if (m.role !== "assistant") return null;
               const turn = tur.get(i);
               const showTurn = turn && !(vivo && i > lu);

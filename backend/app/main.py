@@ -54,7 +54,10 @@ async def lifespan(_app):
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
     task = asyncio.create_task(mcp_client.start())
     vivas.add(task)
+    if mobile.lan_quer():  # celular na rede local, ligado na aba Celular
+        await mobile.liga_lan(_app)
     yield
+    await mobile.desliga_lan()
     task.cancel()
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
@@ -545,6 +548,13 @@ async def local_prefs(body: LocalPrefsBody):
 async def local_inference(model: str, path: str = ""):
     """Ajustes de amostragem de um modelo qualquer (local, Ollama ou LM Studio)."""
     return await asyncio.to_thread(localai.inference_view, model, path)
+
+
+@app.get("/api/local/carregando")
+def local_carregando():
+    """Só o progresso da carga do modelo ({} quando nada carrega). O celular consulta a cada poucos segundos:
+    o /api/local inteiro (hardware, pastas, modelos) custa ~0,6 s por chamada."""
+    return {"loading": localai._progress()}
 
 
 @app.post("/api/local/cancel-load")
@@ -2071,7 +2081,16 @@ def approve(run_id: str, body: ApproveBody):
 def mobile_info():
     """O que a aba Celular põe no QR: endereço na tailnet (se o Tailscale estiver no PC) e o token."""
     return {"token": mobile.token(), "url": mobile.tailnet_url(), "devices": len(mobile.devices()),
-            "defaults": mobile.defaults()}
+            "defaults": mobile.defaults(), "lan": mobile.lan_url(), "lan_ligado": mobile.lan_quer()}
+
+
+@app.post("/api/mobile/lan")
+async def mobile_lan(body: dict):
+    """Liga/desliga o acesso direto pela rede local (o app tenta ele antes da tailnet)."""
+    await mobile.define_lan(app, bool(body.get("ligado")))
+    if body.get("ligado") and not mobile.lan_url():
+        raise HTTPException(409, f"Não deu para abrir a porta {mobile.LAN_PORTA} na rede local (em uso ou sem rede)")
+    return mobile_info()
 
 
 @app.post("/api/mobile/rotate")

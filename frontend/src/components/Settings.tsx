@@ -279,41 +279,54 @@ export default function Settings(props: {
 
 // ------------------------------------------------------------------ celular (app Forja Mobile)
 
-/** QR que o app do celular lê para parear: endereço na tailnet + token estável (backend/app/mobile.py). */
+/** QR que o app do celular lê para parear: endereço na tailnet e/ou na rede local + token estável (backend/app/mobile.py).
+ *  Com os dois, o app tenta a rede local primeiro e cai para a tailnet fora de casa. */
 function CelularTab(props: { onError: (e: string) => void }) {
-  const [m, setM] = useState<{ token: string; url: string | null; devices: number } | null>(null);
+  type Info = { token: string; url: string | null; lan: string | null; lan_ligado: boolean; devices: number };
+  const [m, setM] = useState<Info | null>(null);
+  const [mudando, setMudando] = useState(false);
   useEffect(() => {
-    api.get<typeof m>("/mobile").then(setM).catch((e) => props.onError(e.message));
+    api.get<Info>("/mobile").then(setM).catch((e) => props.onError(e.message));
   }, []);
+  const lan = (ligado: boolean) => {
+    setMudando(true);
+    api.post<Info>("/mobile/lan", { ligado }).then(setM).catch((e) => props.onError(e.message)).finally(() => setMudando(false));
+  };
   if (!m) return <div className="text-muted">Carregando…</div>;
-  if (!m.url)
-    return (
-      <div className="space-y-2 text-sm text-muted">
-        <p className="text-fg">Tailscale não encontrado ou sem login neste PC.</p>
-        <p>Instale o Tailscale (grátis) aqui e no celular, entre com a mesma conta e reabra esta aba.</p>
-      </div>
-    );
-  const qr = qrcode(0, "M");
-  qr.addData(JSON.stringify({ url: m.url, token: m.token }));
-  qr.make();
   const porta = location.port || "80";
+  const qr = qrcode(0, "M");
+  qr.addData(JSON.stringify({ url: m.url, lan: m.lan, token: m.token }));
+  qr.make();
   return (
     <div className="space-y-4 text-sm">
-      <p className="text-muted">
-        Leia com o app Forja Mobile. Antes, publique o Forja na sua tailnet (uma vez, no PowerShell):
-      </p>
-      <code className="block rounded-lg bg-raised px-3 py-2 text-xs text-fg">
-        tailscale serve --bg --https=443 http://127.0.0.1:{porta}
-      </code>
-      <div className="inline-block rounded-xl bg-white p-3" dangerouslySetInnerHTML={{ __html: qr.createSvgTag({ cellSize: 5, margin: 0 }) }} />
-      <p className="text-muted">
-        {m.url} · {m.devices} aparelho(s) com notificação
-      </p>
+      <Toggle checked={m.lan_ligado} disabled={mudando} onChange={lan} label="Rede local (Wi‑Fi de casa)"
+              hint={`O celular fala direto com o PC pela porta ${m.lan ? m.lan.split(":").pop() : "47811"}, sem ligar a VPN. Fora de casa ele usa o Tailscale. Na primeira vez o Windows pergunta se libera o acesso: permita só em redes privadas.`} />
+      {m.lan_ligado && !m.lan && <p className="text-muted">Sem endereço na rede local agora (sem Wi‑Fi/cabo, ou a porta está em uso).</p>}
+      {m.url ? (
+        <>
+          <p className="text-muted">Para usar fora de casa, publique o Forja na sua tailnet (uma vez, no PowerShell):</p>
+          <code className="block rounded-lg bg-raised px-3 py-2 text-xs text-fg">tailscale serve --bg --https=443 http://127.0.0.1:{porta}</code>
+        </>
+      ) : (
+        <p className="text-muted">Tailscale não encontrado neste PC: {m.lan ? "o celular só conecta pela rede local." : "ligue a rede local acima ou instale o Tailscale (grátis) aqui e no celular."}</p>
+      )}
+      {(m.url || m.lan) && (
+        <>
+          <p className="text-muted">Leia com o app Forja Mobile:</p>
+          <div className="inline-block rounded-xl bg-white p-3" dangerouslySetInnerHTML={{ __html: qr.createSvgTag({ cellSize: 5, margin: 0 }) }} />
+          <p className="text-muted">{[m.lan, m.url].filter(Boolean).join(" · ")} · {m.devices} aparelho(s) com notificação</p>
+          {/* Sem câmera: o mesmo conteúdo do QR num link forja:// (mande para você mesmo e toque no celular). */}
+          <button className={btn} onClick={() => navigator.clipboard.writeText(
+            `forja://parear?c=${encodeURIComponent(JSON.stringify({ url: m.url, lan: m.lan, token: m.token }))}`)}>
+            Copiar link de pareamento
+          </button>
+        </>
+      )}
       <Confirma
         className={btn}
         rotulo="Revogar e gerar novo QR"
         pergunta="O celular pareado perde o acesso. Continuar?"
-        onSim={() => api.post<typeof m>("/mobile/rotate").then(setM).catch((e) => props.onError(e.message))}
+        onSim={() => api.post<Info>("/mobile/rotate").then(setM).catch((e) => props.onError(e.message))}
       />
     </div>
   );

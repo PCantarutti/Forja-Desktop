@@ -1009,6 +1009,22 @@ const EVENT_STYLE: Record<string, string> = {
   imagens: "border-sky-500/30 text-muted whitespace-pre-wrap", // uma linha por imagem
 };
 
+/** agent.py: "... Tentando de novo em 2.0s (2/5)..." */
+export const TENTATIVA = /Tentando de novo.*\((\d+\/\d+)\)/;
+
+/** O aviso de reconexão ao modelo, um só, atualizado a cada tentativa. */
+export function Reconectando({ texto, n }: { texto: string; n: string }) {
+  return (
+    <div className="my-3 flex items-start gap-2.5 rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
+      <span className="mt-1 size-3 shrink-0 animate-spin rounded-full border-2 border-faint border-t-transparent" />
+      <div className="min-w-0">
+        <div className="text-fg">Reconectando ao modelo · tentativa {n}</div>
+        <div className="truncate text-xs">{texto.split(" Tentando de novo")[0]}</div>
+      </div>
+    </div>
+  );
+}
+
 export function EventNotice({ m }: { m: Message }) {
   const kind = m.meta?.kind ?? "info";
   if (kind === "tasks") return <TasksCard tasks={m.meta?.tasks ?? []} />;

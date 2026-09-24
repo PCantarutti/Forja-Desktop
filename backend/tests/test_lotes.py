@@ -496,4 +496,6 @@ def test_slot_que_falha_nao_tira_a_imagem_do_site(tmp_path, monkeypatch):
     feito = _esperar(lotes.start(conv, "", {}, ["sem-vram.gguf"], slots_de=tool_id)["id"])
     assert feito["meta"]["images"][0]["status"] == "erro"
     assert no_site.read_bytes() == b"a que o site mostra"  # o sd falhou: o site fica como estava
+    # e o slot volta à fila: sai de novo com outro modelo, não fica preso ao do lote que falhou
+    assert [sl["nome"] for sl in lotes.origem(conv)["pendentes"]] == ["vela-3141"]
     assert not list(lotes.descartadas_dir().glob("vela-3141-*.png"))

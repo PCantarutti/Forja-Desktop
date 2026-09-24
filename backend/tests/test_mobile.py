@@ -71,3 +71,20 @@ def test_expose_so_servidor_vivo_do_agente(isolado, monkeypatch):
         assert c.post("/api/mobile/expose/morto", headers=h).status_code == 404
         assert c.post("/api/mobile/expose/8077", headers=h).status_code == 404
     assert chamadas == [8791]
+
+
+def test_rede_local_exige_token_em_toda_rota(isolado):
+    """Na LAN não há tailnet autenticando: até /api/files e as imagens pedem o token (header ou ?t=)."""
+    import httpx
+
+    async def roda():
+        porta = httpx.AsyncClient(transport=httpx.ASGITransport(app=mobile._porteiro(app)), base_url="http://lan")
+        async with porta as c:
+            tok = mobile.token()
+            assert (await c.get("/api/config")).status_code == 403
+            assert (await c.get("/api/files?path=x&conv=1")).status_code == 403  # sem token no desktop, aqui não
+            assert (await c.get("/", headers={"X-Forja-Token": tok})).status_code == 403  # só /api
+            assert (await c.get("/api/config", headers={"X-Forja-Token": "errado"})).status_code == 403
+            assert (await c.get("/api/config", headers={"X-Forja-Token": tok})).status_code == 200
+            assert (await c.get(f"/api/config?t={tok}")).status_code == 200  # <Image>/vídeo mandam na URL
+    asyncio.run(roda())

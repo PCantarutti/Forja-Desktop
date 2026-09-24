@@ -191,9 +191,14 @@ def _lotes_da_conversa(conv_id: int) -> list[tuple[int, str | None, list[dict]]]
         return [(m.id, m.status, [dict(i) for i in (m.meta or {}).get("images") or []]) for m in msgs]
 
 
+FALHOU = ("cancelada", "erro", "interrompida")  # "pendente" fica de fora: é a fila de um lote rodando
+
+
 def _gerados(conv_id: int) -> set[str]:
+    # Cancelado, com erro ou interrompido não conta: o slot volta a ser pendente e sai de novo com o modelo
+    # escolhido agora (antes ficava preso ao "Continuar", que repete o modelo do lote que falhou).
     return {i.get("destino") or i.get("slot") for _, _, imgs in _lotes_da_conversa(conv_id) for i in imgs
-            if i.get("destino") or i.get("slot")}
+            if (i.get("destino") or i.get("slot")) and i.get("status") not in FALHOU}
 
 
 def conversa_dos_slots(tool_message_id: int) -> dict:

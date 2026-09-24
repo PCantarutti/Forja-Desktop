@@ -46,6 +46,23 @@ const MAX_REFS = 10;  // Qwen-Image 2.1; o backend barra também
 export const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
 // O arquivo do slot troca de conteúdo sem trocar de caminho ("Usar no site"): a semente na URL fura o cache.
 const srcDe = (img: LoteImagem) => urlDa(img.path) + (img.destino ? `&v=${img.seed}` : "");
+/** Largura/altura de verdade da imagem (o slot tem tamanho próprio; senão, o do lote), presa entre 1:2 e 2.4:1
+ *  para um banner não virar fita nem um retrato comprido empurrar a grade. */
+const proporcaoDe = (img: LoteImagem, opts?: { width?: number; height?: number }) => {
+  const w = img.width || opts?.width, h = img.height || opts?.height;
+  return w && h ? Math.min(2.4, Math.max(0.5, w / h)) : 1;
+};
+
+/** Fotos empilhadas por trás do card: o slot tem mais versões para escolher. */
+function Pilha(props: { n: number; largo?: boolean; children: React.ReactNode }) {
+  return (
+    <div className={`relative ${props.largo ? "col-span-2" : ""}`}>
+      {props.n > 2 && <div aria-hidden className="absolute inset-0 translate-x-2 -translate-y-2 rotate-[3deg] rounded-xl border border-line bg-[#232323]" />}
+      {props.n > 1 && <div aria-hidden className="absolute inset-0 translate-x-1 -translate-y-1 rotate-[1.5deg] rounded-xl border border-line bg-[#2a2a2a]" />}
+      <div className="relative">{props.children}</div>
+    </div>
+  );
+}
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
 
 export default function ImagensView(props: {
@@ -188,13 +205,20 @@ export default function ImagensView(props: {
     for (const { resposta } of lotes)
       for (const img of (resposta.meta as LoteMeta).images) {
         const chave = img.destino ?? img.slot;
-        if (chave) m.set(chave, [...(m.get(chave) ?? []), { img, lote: resposta }]);
+        // Cancelada, com erro ou interrompida não é versão: também tem `destino`, e o card do slot
+        // pegava ela (cinza, "cancelada") no lugar da que foi gerada depois com outro modelo.
+        if (chave && !["cancelada", "erro", "interrompida"].includes(img.status))
+          m.set(chave, [...(m.get(chave) ?? []), { img, lote: resposta }]);
       }
     return m;
   }, [lotes]);
 
   // Variações de um slot moram no modal dele: não aparecem como lote na tela.
-  const visiveis = lotes.filter((l) => !(l.resposta.meta as LoteMeta).variacao_de);
+  // Lote de slots que falhou inteiro (cancelado, erro) e cujos slots já saíram em outro lote é sobra: mostrava
+  // as imagens de novo, com um "Continuar" que refaria tudo no modelo do lote que falhou.
+  const superado = (l: Message) => (l.meta as LoteMeta).images.every((i) =>
+    ["cancelada", "erro", "interrompida"].includes(i.status) && (i.destino ?? i.slot) && variacoes.has((i.destino ?? i.slot)!));
+  const visiveis = lotes.filter((l) => !(l.resposta.meta as LoteMeta).variacao_de && !superado(l.resposta));
   // A fila dos slots aparece até sair o primeiro lote dela.
   const slotsPendentes = origem?.pendentes.length ? { message_id: origem.message_id, slots: origem.pendentes } : null;
   const foraDoCodigo = new Set(origem?.fora_do_codigo ?? []);
@@ -1018,7 +1042,7 @@ function Lote(props: {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+      <div className="grid grid-cols-2 items-start gap-3 md:grid-cols-3 xl:grid-cols-4">
         {imagens.map((img) => {
           const chave = img.destino ?? img.slot;
           const versoes = chave ? props.versoes(chave) : [];
@@ -1030,6 +1054,8 @@ function Lote(props: {
           <Cartao
             key={img.path}
             img={mostrada}
+            proporcao={proporcaoDe(mostrada, meta.opts)}
+            pilha={deSlots ? versoes.length : 1}
             semMarcar={deSlots}
             extra={gerandoVersao ? "gerando versão…"
               : chave && props.foraDoCodigo.has(chave) ? "fora do código"
@@ -1231,8 +1257,11 @@ function Cartao(props: {
   semMarcar?: boolean; // slot do site: não se marca para manter/descartar
   extra?: string; // "3 versões", "gerando versão…"
   origem?: string; // edição: a imagem que está sendo editada aparece por trás enquanto gera
+  proporcao?: number; // largura/altura da imagem (1 = quadrada)
+  pilha?: number; // versões do slot: mais de uma vira pilha de fotos por trás
 }) {
   const { img } = props;
+  const ar = { aspectRatio: String(props.proporcao ?? 1) };
   const temArquivo = ["pronta", "mantida", "descartada"].includes(img.status);
   // Com prévia, a imagem fica inteira à vista: o andamento vai num anel no lugar da bolinha de marcar
   // (que aparece ali quando ela fica pronta) e o número no rodapé. Sem prévia, o líquido por cima.
@@ -1240,6 +1269,7 @@ function Cartao(props: {
   const pct = Math.round(Math.min(1, Math.max(0, img.progress ?? 0)) * 100);
 
   return (
+    <Pilha n={props.pilha ?? 1} largo={(props.proporcao ?? 1) > 1.3 && !!props.semMarcar}>
     <figure
       className={`group relative overflow-hidden rounded-xl border ${
         props.marcada ? "border-emerald-500" : "border-line"
@@ -1250,12 +1280,13 @@ function Cartao(props: {
           src={srcDe(img)}
           alt={`semente ${img.seed}`}
           onClick={props.onZoom}
-          className={`aspect-square w-full cursor-zoom-in object-cover ${
+          style={ar}
+          className={`w-full cursor-zoom-in object-cover ${
             img.status === "descartada" ? "opacity-40 grayscale" : ""
           }`}
         />
       ) : (
-        <div className="relative grid aspect-square w-full place-items-center overflow-hidden">
+        <div style={ar} className="relative grid w-full place-items-center overflow-hidden">
           {/* A prévia do passo atual e, até ela chegar, a imagem em edição. */}
           {img.status !== "erro" && (
             <Fundo
@@ -1328,6 +1359,7 @@ function Cartao(props: {
         )}
       </figcaption>
     </figure>
+    </Pilha>
   );
 }
 
@@ -1391,7 +1423,7 @@ function Variacoes(props: {
           className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] leading-relaxed text-fg focus:border-[#555] focus:outline-none"
         />
       </label>
-      <div className="grid min-h-0 grid-cols-2 gap-3 overflow-y-auto md:grid-cols-3 xl:grid-cols-4">
+      <div className="grid min-h-0 grid-cols-2 items-start gap-3 overflow-y-auto p-2 md:grid-cols-3 xl:grid-cols-4">
         {ordem.map(({ img, lote }) => {
           const pronta = ["pronta", "mantida"].includes(img.status);
           const noSite = !!img.destino;
@@ -1402,13 +1434,19 @@ function Variacoes(props: {
                   src={srcDe(img)}
                   alt={`${nome}, semente ${img.seed}`}
                   onClick={() => props.onZoom(srcDe(img))}
-                  className={`aspect-square w-full cursor-zoom-in object-cover ${img.status === "descartada" ? "opacity-40 grayscale" : ""}`}
+                  style={{ aspectRatio: String(proporcaoDe(img, lote.meta?.opts)) }}
+                  className={`w-full cursor-zoom-in object-cover ${img.status === "descartada" ? "opacity-40 grayscale" : ""}`}
                 />
               ) : (
-                <div className="grid aspect-square w-full place-items-center px-3 text-center text-faint" title={img.error || undefined}>
-                  {img.status === "gerando" ? `gerando ${Math.round((img.progress ?? 0) * 100)}%`
-                    : img.status === "erro" ? <span className="text-red-300">{img.error.split("\n")[0].slice(0, 90) || "erro"}</span>
-                    : img.status}
+                <div style={{ aspectRatio: String(proporcaoDe(img, lote.meta?.opts)) }}
+                     className="relative grid w-full place-items-center overflow-hidden px-3 text-center text-faint" title={img.error || undefined}>
+                  {/* A prévia do passo atual, como no card do lote (antes só o número aparecia aqui). */}
+                  {img.status === "gerando" && img.preview && <Fundo src={`${urlDa(img.preview)}&v=${img.progress ?? 0}`} />}
+                  <span className={`relative ${img.status === "gerando" && img.preview ? "rounded-full bg-black/60 px-2 py-0.5 text-fg" : ""}`}>
+                    {img.status === "gerando" ? `gerando ${Math.round((img.progress ?? 0) * 100)}%`
+                      : img.status === "erro" ? <span className="text-red-300">{img.error.split("\n")[0].slice(0, 90) || "erro"}</span>
+                      : img.status}
+                  </span>
                 </div>
               )}
               <figcaption className="flex items-center gap-1.5 px-2 py-1.5">
