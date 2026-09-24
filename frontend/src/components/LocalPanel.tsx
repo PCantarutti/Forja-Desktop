@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView }
-  from "../types";
-import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
+import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView,
+  VideoKit } from "../types";
+import { Check, ChevronDown, Download, ExternalLink, Film, FolderOpen, Search, Square, Trash, X } from "./icons";
 import Confirma from "./Confirma";
 import ModelSearch from "./ModelSearch";
+import SelosModo from "./SelosModo";
+import { BaixarAmpliacao } from "./AmpliarVideo";
 import { useStickyBottom } from "../useStickyBottom";
 
 const POLL_MS = 3000;
@@ -19,7 +21,7 @@ export const input = `w-full ${campo}`;
 const CACHE_TYPES = ["f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
 export const SAMPLERS = ["euler_a", "euler", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "lcm",
   "ddim_trailing", "tcd", "res_multistep", "er_sde", "dpm++2m_sde", "lms"];
-const SUBTABS = ["Modelos", "Inferência", "Baixar", "Imagem"] as const;
+const SUBTABS = ["Modelos", "Inferência", "Baixar", "Imagem", "Vídeo"] as const;
 type SubTab = (typeof SUBTABS)[number];
 
 /** O que cada controle faz, em uma frase — é o tooltip do (?), como no LM Studio. */
@@ -88,6 +90,16 @@ export default function LocalPanel(props: {
     return () => clearInterval(t);
   }, []);
 
+  // A aba Vídeo sem modelo manda abrir aqui direto em Baixar.
+  useEffect(() => {
+    const abrir = (e: Event) => {
+      const aba = (e as CustomEvent<SubTab>).detail;
+      if (SUBTABS.includes(aba)) setTab(aba);
+    };
+    window.addEventListener("forja:ia-local", abrir);
+    return () => window.removeEventListener("forja:ia-local", abrir);
+  }, []);
+
   if (!st) return <div className="p-3 text-xs text-muted">{error || "Carregando…"}</div>;
 
   return (
@@ -108,13 +120,15 @@ export default function LocalPanel(props: {
         {error && <Erro texto={error} onClose={() => setError("")} />}
         {st.server.error?.message && <ErroDeCarga erro={st.server.error} onDone={refresh} />}
         {tab !== "Inferência" && (
-          <Runtime st={st} kind={tab === "Imagem" ? "sd" : "llama"} onDone={refresh} onError={setError} />
+          <Runtime st={st} kind={tab === "Imagem" || tab === "Vídeo" ? "sd" : "llama"} onDone={refresh} onError={setError} />
         )}
+        {tab === "Vídeo" && <Runtime st={st} kind="ffmpeg" onDone={refresh} onError={setError} />}
         <Jobs jobs={st.jobs} onDone={refresh} />
         {tab === "Modelos" && <Models st={st} onDone={refresh} onError={setError} />}
         {tab === "Inferência" && <Inferencia st={st} chatModel={props.chatModel} onError={setError} />}
         {tab === "Baixar" && <Downloader st={st} onDone={refresh} onError={setError} />}
-        {tab === "Imagem" && <ImageTab st={st} onDone={refresh} onError={setError} />}
+        {tab === "Imagem" && <ImageTab />}
+        {tab === "Vídeo" && <VideoTab st={st} onDone={refresh} onError={setError} />}
       </div>
     </div>
   );
@@ -208,11 +222,11 @@ function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["load
 
 // ---------------------------------------------------------------- runtime
 
-function Runtime(props: { st: LocalState; kind: "llama" | "sd"; onDone: () => void; onError: (e: string) => void }) {
+function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg"; onDone: () => void; onError: (e: string) => void }) {
   const info = props.st.runtimes[props.kind];
-  const [backend, setBackend] = useState("vulkan");
+  const [backend, setBackend] = useState(info.backends.includes("vulkan") ? "vulkan" : info.backends[0]);
   const [busy, setBusy] = useState(false);
-  const nome = props.kind === "llama" ? "llama.cpp" : "stable-diffusion.cpp";
+  const nome = { llama: "llama.cpp", sd: "stable-diffusion.cpp", ffmpeg: "ffmpeg" }[props.kind];
 
   async function install() {
     setBusy(true);
@@ -260,11 +274,13 @@ function Runtime(props: { st: LocalState; kind: "llama" | "sd"; onDone: () => vo
     <section className={card}>
       <p className="text-fg">{nome} não está instalado.</p>
       <p className="mt-1 text-muted">
-        Vulkan roda em qualquer GPU (NVIDIA, AMD, Intel) e é o menor download. CUDA só para NVIDIA, e baixa
-        também o runtime da NVIDIA (~370 MB). CPU funciona em qualquer máquina, devagar.
+        {props.kind === "ffmpeg"
+          ? "É o motor da ampliação de vídeo: separa os quadros, junta de volta com o áudio e interpola o movimento (~80 MB)."
+          : `Vulkan roda em qualquer GPU (NVIDIA, AMD, Intel) e é o menor download. CUDA só para NVIDIA, e baixa
+        também o runtime da NVIDIA (~370 MB). CPU funciona em qualquer máquina, devagar.`}
       </p>
       <div className="mt-2.5 flex items-center gap-2">
-        <select className={`${campo} w-auto`} value={backend} onChange={(e) => setBackend(e.target.value)}>
+        <select className={`${campo} w-auto ${info.backends.length < 2 ? "hidden" : ""}`} value={backend} onChange={(e) => setBackend(e.target.value)}>
           {info.backends.map((b) => (
             <option key={b} value={b}>
               {b}
@@ -624,6 +640,24 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       </section>
 
       <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} />
+      {/* também na aba Vídeo: aqui é "tudo o que está instalado", lá é tudo do vídeo */}
+      <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} video />
+      <ListaArquivos
+        titulo="LoRAs"
+        dica="aplicadas por cima de um modelo de vídeo"
+        itens={st.loras.map((l) => ({ ...l, extra: l.passos ? `${l.passos} passos` : l.dim ? `dim ${l.dim}` : "" }))}
+        dirs={st.dirs.length}
+        onDone={props.onDone}
+        onError={props.onError}
+      />
+      <ListaArquivos
+        titulo="Modelos de ampliação"
+        dica="ESRGAN, usados em Ampliar vídeo"
+        itens={st.ampliadores ?? []}
+        dirs={st.dirs.length}
+        onDone={props.onDone}
+        onError={props.onError}
+      />
 
       {sel && form && view && (
         <section className={card}>
@@ -763,15 +797,64 @@ const ROTULO: Record<string, string> = {
   clip_l: "clip_l",
   t5xxl: "t5xxl",
   taesd: "TAESD",
+  clip_vision: "CLIP Vision",
+  high_noise_model: "Modelo HighNoise",
 };
 
 /** Modelos de difusão que estão nas pastas. Não têm "Carregar": o sd.cpp sobe e desce a cada imagem —
  *  o que dá para guardar aqui são os ajustes de cada um (o Flux não quer o mesmo CFG que o SD 1.5). */
-function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
+/** Arquivos que não têm ajustes próprios (LoRA, ESRGAN): nome, pasta, tamanho e apagar. */
+function ListaArquivos(props: {
+  titulo: string;
+  dica: string;
+  itens: { path: string; name: string; folder?: string; size: number; extra?: string }[];
+  dirs: number;
+  onDone: () => void;
+  onError: (e: string) => void;
+}) {
+  if (!props.itens.length) return null;
+  async function apagar(path: string) {
+    try {
+      await api.post("/local/model/delete", { path });
+      props.onDone();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  return (
+    <section className={card}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-fg">{props.titulo} ({props.itens.length})</span>
+        <span className="text-faint">{props.dica}</span>
+      </div>
+      <div className="flex flex-col">
+        {props.itens.map((m) => (
+          <div key={m.path} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised" title={m.path}>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-fg">{m.name}</span>
+              {props.dirs > 1 && m.folder && <span className="block truncate text-faint">{m.folder}</span>}
+            </span>
+            {m.extra && <span className="shrink-0 text-faint">{m.extra}</span>}
+            <span className="shrink-0 text-faint">{size(m.size)}</span>
+            <Confirma
+              rotulo={<Trash className="size-3.5" />}
+              pergunta="Apagar do disco? Não dá para desfazer"
+              titulo={`Apagar do disco: ${m.path}`}
+              className="shrink-0 text-faint hover:text-red-400"
+              onSim={() => void apagar(m.path)}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void; video?: boolean }) {
   const [sel, setSel] = useState("");
   const [form, setForm] = useState<ImageParams | null>(null);
   const [salvo, setSalvo] = useState("");
-  const lista = props.st.image_models;
+  const lista = props.video ? props.st.video_models : props.st.image_models;
   const atual = lista.find((m) => m.path === sel);
   // VAE/codificador/mmproj achados perto do modelo (busca no disco, só ao abrir os ajustes).
   // Guardado com o caminho buscado: trocar de modelo não mostra os achados do anterior.
@@ -789,7 +872,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
       vivo = false;
     };
   }, [sel, temReq]);
-  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl" | "taesd";
+  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl" | "taesd" | "clip_vision" | "high_noise_model";
   const achadoDe = (k: string) => {
     const f = achados[k]?.[0];
     return f && form && form[k as Arquivo] !== f ? f : "";
@@ -845,8 +928,8 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
   return (
     <section className={card}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-fg">Modelos de imagem ({lista.length})</span>
-        <span className="text-faint">usados na aba Imagem</span>
+        <span className="text-fg">{props.video ? "Modelos de vídeo" : "Modelos de imagem"} ({lista.length})</span>
+        <span className="text-faint">{props.video ? "usados na aba Vídeo" : "usados na aba Imagem"}</span>
       </div>
       <div className="flex flex-col">
         {lista.map((m) => (
@@ -872,7 +955,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                 falta arquivo
               </span>
             )}
-            {props.st.image.model === m.path && <span className="shrink-0 text-faint">em uso</span>}
+            {(props.video ? props.st.video.model : props.st.image.model) === m.path && <span className="shrink-0 text-faint">em uso</span>}
             <span className="shrink-0 text-faint">{size(m.size)}</span>
             <Confirma
               rotulo={<Trash className="size-3.5" />}
@@ -941,7 +1024,17 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
             <Num label="CFG" value={form.cfg} onChange={(v) => set("cfg", v)} />
             <Num label="Largura" value={form.width} onChange={(v) => set("width", v)} />
             <Num label="Altura" value={form.height} onChange={(v) => set("height", v)} />
+            {props.video && (
+              <>
+                <Num label="Quadros" value={form.frames} onChange={(v) => set("frames", Math.max(1, Math.round((v - 1) / 4)) * 4 + 1)} step={4} hint="4k+1" />
+                <Num label="FPS" value={form.fps} onChange={(v) => set("fps", v)} />
+                <Num label="Flow shift" value={form.flow_shift} onChange={(v) => set("flow_shift", v)} step={0.5} hint="0 = automático" />
+              </>
+            )}
           </div>
+          {props.video ? (
+            <CamposVideo form={form} set={set} req={atual?.req} achado={achado} variante={atual?.variante} />
+          ) : (
           <div className="mt-2.5 flex flex-col gap-2.5">
             <Field label="Amostrador">
               <select className={input} value={form.sampler} onChange={(e) => set("sampler", e.target.value)}>
@@ -1013,16 +1106,87 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
               </Field>
             )}
           </div>
+          )}
           <div className="mt-3 flex items-center gap-2">
             <button className={btnPrimary} onClick={salvar}>
               Salvar
             </button>
             {salvo && <span className="text-emerald-400">{salvo}</span>}
-            <span className="text-faint">Valem quando este modelo estiver escolhido na aba Imagem.</span>
+            <span className="text-faint">Valem quando este modelo estiver escolhido na aba {props.video ? "Vídeo" : "Imagem"}.</span>
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+const VARIANTES_WAN: [string, string][] = [
+  ["", "Pelo nome do arquivo"], ["wan21_t2v", "Wan2.1 T2V"], ["wan21_i2v", "Wan2.1 I2V"], ["wan21_flf2v", "Wan2.1 FLF2V"],
+  ["wan21_vace", "Wan2.1 VACE"], ["wan22_ti2v", "Wan2.2 TI2V 5B"], ["wan22_a14b_t2v", "Wan2.2 T2V A14B"],
+  ["wan22_a14b_i2v", "Wan2.2 I2V A14B"],
+];
+
+/** Os arquivos e ligações de memória de um modelo de vídeo (Wan). Os caminhos se preenchem sozinhos
+ *  quando o kit baixa tudo junto; aqui é para conferir e trocar. */
+function CamposVideo(props: {
+  form: ImageParams;
+  set: <K extends keyof ImageParams>(k: K, v: ImageParams[K]) => void;
+  req?: LocalModel["req"];
+  variante?: string;
+  achado: (k: string) => React.ReactNode;
+}) {
+  const { form, set } = props;
+  const pede = (k: string) => !!props.req?.precisa?.[k];
+  const caminho = (k: "vae" | "t5xxl" | "clip_vision" | "high_noise_model", rotulo: string, dica: string) => (
+    <Field label={rotulo} hint={dica}>
+      <input className={input} value={form[k] ?? ""} onChange={(e) => set(k, e.target.value)} placeholder="caminho do arquivo" spellCheck={false} />
+      {props.achado(k)}
+    </Field>
+  );
+  return (
+    <div className="mt-2.5 flex flex-col gap-2.5">
+      <Field label="Amostrador">
+        <select className={input} value={form.sampler} onChange={(e) => set("sampler", e.target.value)}>
+          {SAMPLERS.map((s) => <option key={s}>{s}</option>)}
+        </select>
+      </Field>
+      <Field label="Negativo padrão">
+        <input className={input} value={form.negative} onChange={(e) => set("negative", e.target.value)} />
+      </Field>
+      <Field label="Variante" hint={`Qual Wan é este arquivo: decide os arquivos que ele pede e os modos. Detectada: ${props.variante ?? "?"}.`}>
+        <select className={input} value={form.variante ?? ""} onChange={(e) => set("variante", e.target.value)}>
+          {VARIANTES_WAN.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+        </select>
+      </Field>
+      {caminho("vae", "VAE", "wan_2.1_vae (Wan2.1 e A14B) ou wan2.2_vae (TI2V 5B).")}
+      {caminho("t5xxl", "Codificador de texto (umt5-xxl)", "O mesmo para todos os Wan; GGUF Q8 é o equilíbrio.")}
+      {pede("clip_vision") && caminho("clip_vision", "CLIP Vision", "clip_vision_h: o Wan2.1 I2V e o FLF2V leem a imagem com ele.")}
+      {pede("high_noise_model") && (
+        <>
+          {caminho("high_noise_model", "Modelo HighNoise", "A outra metade do A14B, da mesma quantização.")}
+          <div className="grid grid-cols-2 gap-2">
+            <Num label="Passos (alto ruído)" value={form.high_noise_steps} onChange={(v) => set("high_noise_steps", v)} hint="-1 = automático" />
+            <Num label="CFG (alto ruído)" value={form.high_noise_cfg} onChange={(v) => set("high_noise_cfg", v)} step={0.5} hint="0 = o mesmo" />
+          </div>
+        </>
+      )}
+      <label className="flex items-center gap-2 text-muted" title="--offload-to-cpu: pesos na RAM, sobem à GPU sob demanda">
+        <input type="checkbox" checked={!!form.offload} onChange={(e) => set("offload", e.target.checked)} />
+        Pesos na RAM (modelo maior que a VRAM)
+      </label>
+      <label className="flex items-center gap-2 text-muted" title="--diffusion-fa: bem menos memória na atenção">
+        <input type="checkbox" checked={!!form.flash_attn} onChange={(e) => set("flash_attn", e.target.checked)} />
+        Flash attention na difusão
+      </label>
+      <label className="flex items-center gap-2 text-muted" title="--vae-tiling: decodifica em blocos; com dezenas de quadros, quase obrigatório">
+        <input type="checkbox" checked={!!form.vae_tiling} onChange={(e) => set("vae_tiling", e.target.checked)} />
+        VAE em blocos (evita estourar a VRAM no fim)
+      </label>
+      <label className="flex items-center gap-2 text-muted" title="--backend te=cpu: o umt5 (6 GB) sai da VRAM; roda uma vez por vídeo">
+        <input type="checkbox" checked={!!form.te_cpu} onChange={(e) => set("te_cpu", e.target.checked ? "sempre" : "")} />
+        Codificador de texto na CPU
+      </label>
+    </div>
   );
 }
 
@@ -1131,7 +1295,7 @@ function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: st
 // ---------------------------------------------------------------- aba Baixar
 
 function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
-  const [kind, setKind] = useState<"text" | "image">("text");
+  const [kind, setKind] = useState<"text" | "image" | "video">("text");
   const [buscando, setBuscando] = useState(false);
   // Se a pasta salva saiu da lista (removida), cai na primeira em vez de deixar o select vazio.
   const [destino, setDestino] = useState(
@@ -1204,6 +1368,19 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
         Procurar modelos
       </button>
 
+      <KitsVideo
+        st={props.st}
+        destino={destino}
+        onDone={props.onDone}
+        onError={props.onError}
+        onProcurar={() => {
+          setKind("video");
+          setBuscando(true);
+        }}
+      />
+      <KitsVideo st={props.st} destino={destino} onDone={props.onDone} onError={props.onError} auto />
+
+
       {buscando && (
         <ModelSearch
           kind={kind}
@@ -1219,153 +1396,219 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
   );
 }
 
-// ---------------------------------------------------------------- aba Imagem
+/** Kits do Wan: o modelo e as peças que a variante pede, num clique. O que já está no disco não baixa
+ *  de novo; o selo diz se o modelo cabe na GPU desta máquina. */
+function KitsVideo(props: {
+  st: LocalState;
+  destino: string;
+  onDone: () => void;
+  onError: (e: string) => void;
+  onProcurar?: () => void;
+  auto?: boolean; // a lista montada sozinha da busca do Hugging Face, em vez da curada
+}) {
+  const [kits, setKits] = useState<VideoKit[] | null>(null);
+  // a automática consulta dezenas de repositórios: só quando a pessoa abre (depois fica em cache no backend)
+  const [ligado, setLigado] = useState(!props.auto);
+  const [vram, setVram] = useState(0); // GB da GPU que o sd.cpp usa (a integrada não conta)
+  const [aberto, setAberto] = useState<string | null>(null);
+  // Quantização trocada no cartão (id do kit → quant). Sem troca, vale a do backend: a maior que cabe.
+  const [quants, setQuants] = useState<Record<string, string>>({});
+  const baixando = props.st.jobs.filter((j) => j.kind === "modelo" && j.status === "running").map((j) => j.name);
 
-function ImageTab(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
-  const { st } = props;
-  const [o, setO] = useState<ImageOpts>(st.image);
-  const [prompt, setPrompt] = useState("");
-  const [seed, setSeed] = useState(0);
-  const set = <K extends keyof ImageOpts>(k: K, v: ImageOpts[K]) => setO((c) => ({ ...c, [k]: v }));
-  const pronta = st.jobs.filter((j) => j.kind === "imagem" && j.status === "pronto" && j.result).pop();
-  const atual = st.image_models.find((m) => m.path === o.model);
-  const [perguntando, setPerguntando] = useState(false);
+  const carregar = useCallback(() => {
+    if (!ligado) return;
+    api
+      .get<{ kits: VideoKit[]; vram_gb: number }>(
+        `/local/video/kits?quants=${encodeURIComponent(JSON.stringify(quants))}${props.auto ? "&auto=true" : ""}`,
+      )
+      .then((r) => {
+        setKits(r.kits);
+        setVram(r.vram_gb);
+      })
+      .catch((e) => {
+        setKits([]);
+        props.onError(e.message);
+      });
+  }, [quants, ligado]);
+  useEffect(carregar, [carregar, baixando.length]);
 
-  async function gerar(confirm = false) {
+  // "cabe" vem do backend, pela mesma folga que escolhe a quantização (nada de conta repetida aqui)
+  const cabe = (k: VideoKit) => k.opcoes.find((o) => o.quant === k.quant)?.cabe ?? null;
+  const recomendado = props.auto ? undefined : kits
+    ?.filter((k) => cabe(k) && k.modos.length > 1)
+    .sort((a, b) => b.gb_modelo - a.gb_modelo)[0]?.id;
+
+  async function baixar(k: VideoKit) {
     try {
-      await api.put("/local/image/defaults", o); // o que está na tela vira o padrão da ferramenta do agente
-      await api.post("/local/image", { prompt, opts: { seed }, confirm });
-      setPerguntando(false);
+      await api.post("/local/video/kit", { id: k.id, folder: props.destino, quant: k.quant });
       props.onDone();
-    } catch (e: any) {
-      // 409 = tem um LLM na VRAM; a conta de descarregar é do usuário, não nossa.
-      if (e.status === 409) setPerguntando(true);
-      else props.onError(e.message);
-    }
-  }
-
-  async function mostrarNaPasta(caminho: string) {
-    try {
-      await api.post("/open", { path: caminho, mode: "reveal" });
+      carregar();
     } catch (e: any) {
       props.onError(e.message);
     }
   }
 
+  if (props.auto && !ligado)
+    return (
+      <section className={card}>
+        <button className="flex w-full items-center gap-1.5 text-left text-fg" onClick={() => setLigado(true)} aria-expanded={false}>
+          <Film className="size-3.5" /> Kits automáticos
+          <ChevronDown className="ml-auto size-3.5 text-muted" />
+        </button>
+        <p className="mt-1 text-faint">
+          Montados sozinhos a partir dos repositórios de Wan em GGUF mais baixados do Hugging Face: cada família de arquivos
+          vira um kit, com as peças que a variante pede. Sem curadoria — confira o repositório antes de baixar.
+        </p>
+      </section>
+    );
+
   return (
     <section className={card}>
-      <div className="flex flex-col gap-2.5">
-        <Field label="Modelo" hint="Baixe .safetensors/.gguf de imagem para uma pasta de modelos.">
-          <select className={input} value={o.model} onChange={(e) => set("model", e.target.value)}>
-            <option value="">— escolher —</option>
-            {st.image_models.map((m) => (
-              <option key={m.path} value={m.path}>
-                {m.name} ({size(m.size)})
-              </option>
-            ))}
-          </select>
-        </Field>
-        {atual ? (
-          <p className="text-faint">
-            Em uso: <span className="text-muted">{atual.name}</span> · {size(atual.size)} · {atual.folder}
-            <br />O sd.cpp carrega o modelo a cada imagem e libera a memória no fim — nada fica preso na GPU.
-          </p>
-        ) : (
-          <p className="text-faint">Nenhum modelo escolhido: a ferramenta do agente também não vai gerar.</p>
-        )}
-        <Field label="Prompt">
-          <textarea
-            className={`${input} h-20 resize-none`}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="a red fox in the snow, cinematic lighting"
-          />
-        </Field>
-        <Field label="Negativo">
-          <input className={input} value={o.negative} onChange={(e) => set("negative", e.target.value)} />
-        </Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Num label="Passos" value={o.steps} onChange={(v) => set("steps", v)} />
-          <Num label="CFG" value={o.cfg} onChange={(v) => set("cfg", v)} />
-          <Num label="Largura" value={o.width} onChange={(v) => set("width", v)} />
-          <Num label="Altura" value={o.height} onChange={(v) => set("height", v)} />
-        </div>
-        <Field label="Amostrador">
-          <select className={input} value={o.sampler} onChange={(e) => set("sampler", e.target.value)}>
-            {SAMPLERS.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </Field>
-        <Num label="Semente" value={seed} onChange={setSeed} hint="0 = aleatória" />
-        <Field label="Salvar imagens em" hint="As do agente continuam indo para a pasta de trabalho da conversa.">
-          <div className="flex items-center gap-2">
-            <input
-              className={input}
-              value={o.out_dir || st.image_dir}
-              onChange={(e) => set("out_dir", e.target.value)}
-              spellCheck={false}
-            />
-            <button
-              className={btn}
-              title="Escolher pasta"
-              onClick={async () => {
-                const escolhida = window.forja ? await window.forja.pickFolder(o.out_dir || st.image_dir) : "";
-                if (escolhida) set("out_dir", escolhida);
-              }}
-            >
-              <FolderOpen className="size-3.5" />
-            </button>
-          </div>
-        </Field>
-        <button
-          className={btnPrimary}
-          onClick={() => gerar()}
-          disabled={!prompt.trim() || !st.runtimes.sd.installed || st.image_busy}
-        >
-          {st.image_busy ? "Gerando…" : "Gerar"}
-        </button>
-        {perguntando && (
-          <div className="rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-amber-200">
-            <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
-            <p className="mt-1 text-amber-200/80">
-              O sd.cpp precisa dessa memória, então o Forja vai descarregá-lo antes de gerar. O que muda para uma
-              conversa aberta: o llama-server guarda o contexto já processado em cache; ao descarregar, esse cache
-              vai junto. A próxima mensagem reprocessa o histórico inteiro — a primeira resposta demora mais, e uma
-              resposta em andamento é cortada. O histórico da conversa em si não se perde.
-            </p>
-            <div className="mt-2 flex gap-2">
-              <button className={btnPrimary} onClick={() => gerar(true)}>
-                Descarregar e gerar
-              </button>
-              <button className={btn} onClick={() => setPerguntando(false)}>
-                Cancelar
-              </button>
-            </div>
-          </div>
-        )}
-        <p className="text-faint">
-          O agente também gera imagens com esses padrões, pela ferramenta <code>image_generate</code>.
-        </p>
-        {pronta?.result && (
-          <>
-            <img
-              src={`/api/local/image/file?path=${encodeURIComponent(pronta.result)}`}
-              alt={pronta.name}
-              className="mt-1 w-full rounded-lg border border-line"
-            />
-            <div className="flex items-center gap-2">
-              <button className={btn} onClick={() => mostrarNaPasta(pronta.result!)}>
-                <FolderOpen className="mr-1 inline size-3.5" />
-                Mostrar na pasta
-              </button>
-              <span className="min-w-0 flex-1 truncate text-faint" title={pronta.result}>
-                {pronta.result}
-              </span>
-            </div>
-          </>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-fg">
+          <Film className="size-3.5" /> {props.auto ? `Kits automáticos${kits ? ` (${kits.length})` : ""}` : "Geração de vídeo"}
+        </span>
+        {props.onProcurar && (
+          <button className="text-muted underline hover:text-fg" onClick={props.onProcurar}>
+            Procurar outros
+          </button>
         )}
       </div>
+      <p className="mb-2 text-faint">
+        {props.auto
+          ? "Da busca do Hugging Face (os repositórios de Wan em GGUF mais baixados), sem curadoria: o nome do arquivo diz a variante, e dela saem as peças. O que a lista curada já tem fica de fora."
+          : "Modelos Wan, que o stable-diffusion.cpp gera em vídeo. Cada kit traz o modelo e o VAE e codificador que ele pede; os caminhos se configuram sozinhos."}
+      </p>
+      {!kits && <p className="text-muted">{props.auto ? "Buscando no Hugging Face…" : "Carregando…"}</p>}
+      <div className="flex flex-col gap-1.5">
+        {kits?.map((k) => {
+          const completo = k.gb_falta === 0;
+          const emCurso = k.arquivos.some((a) => !a.presente && baixando.some((n) => n.endsWith(a.path.split("/").pop()!)));
+          const c = cabe(k);
+          return (
+            <div key={k.id} className={`rounded-lg border px-2.5 py-2 ${k.id === recomendado ? "border-sky-500/40 bg-sky-500/5" : "border-line"}`}>
+              <div className="flex items-center gap-2">
+                <button className="min-w-0 flex-1 text-left" onClick={() => setAberto(aberto === k.id ? null : k.id)} title="Ver os arquivos do kit">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-fg">{k.nome}</span>
+                    {k.id === recomendado && <span className="shrink-0 rounded-full bg-sky-400/15 px-1.5 text-[10px] text-sky-300">recomendado</span>}
+                  </span>
+                  <span className="block text-faint">{k.resumo}</span>
+                </button>
+                {k.auto && k.repo && (
+                  <a
+                    href={`https://huggingface.co/${k.repo}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Abrir ${k.repo} no Hugging Face`}
+                    className="shrink-0 text-faint hover:text-fg"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                )}
+                <SelosModo modos={k.modos} />
+              </div>
+              {k.erro ? (
+                <p className="mt-1.5 text-amber-400">{k.erro}</p>
+              ) : (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-faint">
+                {k.opcoes.length > 1 && (
+                  <select
+                    aria-label={`Quantização do ${k.nome}`}
+                    title="Menor = mais leve e menos fiel. O Forja sugere a maior que cabe na VRAM. Trocar para uma que não está no disco baixa essa também."
+                    className="rounded-md border border-line bg-raised px-1.5 py-0.5 text-[11px] text-fg"
+                    value={k.quant}
+                    // com o kit completo também: é assim que se baixa outra quantização do mesmo modelo
+                    disabled={emCurso}
+                    onChange={(e) => setQuants((q) => ({ ...q, [k.id]: e.target.value }))}
+                  >
+                    {k.opcoes.map((o) => (
+                      <option key={o.quant} value={o.quant}>
+                        {o.quant} · {o.gb.toFixed(1).replace(".", ",")} GB{o.presente ? " · no disco" : o.cabe === false ? " · não cabe" : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <span>{completo ? `${k.gb_total.toFixed(1).replace(".", ",")} GB no disco` : `${k.gb_falta.toFixed(1).replace(".", ",")} GB para baixar`}</span>
+                {c !== null && (
+                  <span className={c ? "text-emerald-400" : "text-amber-400"} title={`Maior modelo de difusão: ${k.gb_modelo} GB; VRAM da GPU do sd.cpp: ${vram.toFixed(1)} GB`}>
+                    {c ? "cabe na GPU" : "maior que a VRAM: vai com pesos na RAM, mais lento"}
+                  </span>
+                )}
+                <span className="ml-auto">
+                  {completo ? (
+                    <span className="text-emerald-400"><Check className="mr-0.5 inline size-3" />pronto</span>
+                  ) : emCurso ? (
+                    <span className="text-sky-300">baixando…</span>
+                  ) : (
+                    <button className={btn} onClick={() => baixar(k)}>
+                      <Download className="mr-1 inline size-3" />
+                      {k.gb_falta < k.gb_total ? "Baixar o que falta" : "Baixar kit"}
+                    </button>
+                  )}
+                </span>
+              </div>
+              )}
+              {aberto === k.id && (
+                <ul className="mt-2 flex flex-col gap-0.5 border-t border-line pt-1.5">
+                  {k.arquivos.map((a) => (
+                    <li key={a.path} className="flex items-center gap-2" title={`${a.repo}/${a.path}`}>
+                      <span className={a.presente ? "text-emerald-400" : "text-faint"}>{a.presente ? "✓" : "○"}</span>
+                      <span className="min-w-0 flex-1 truncate text-muted">{a.path.split("/").pop()}</span>
+                      <span className="shrink-0 text-faint">{ROTULO[a.papel] ?? (a.papel === "modelo" ? "modelo" : a.papel)}</span>
+                      <span className="w-12 shrink-0 text-right text-faint">{a.gb.toFixed(1).replace(".", ",")} GB</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------- aba Imagem
+
+/** O runtime do sd.cpp mora aqui (fica acima, no card de runtime); gerar é nas abas próprias. */
+function ImageTab() {
+  return (
+    <section className={card}>
+      <p className="text-fg">Imagem</p>
+      <p className="mt-1 text-muted">
+        Acima fica o stable-diffusion.cpp. Para gerar, use a aba <b>Imagens</b> no topo da barra lateral; os modelos e
+        os ajustes de cada um ficam em Modelos. Vídeo tem aba própria aqui ao lado.
+      </p>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------- aba Vídeo
+
+/** Tudo do vídeo num lugar: os dois motores (acima), os modelos e os ajustes de cada um, os kits e a ampliação. */
+function VideoTab(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
+  return (
+    <>
+      <ModelosDeImagem st={props.st} onDone={props.onDone} onError={props.onError} video />
+      <KitsVideo
+        st={props.st}
+        destino={props.st.download_dir}
+        onDone={props.onDone}
+        onError={props.onError}
+        onProcurar={() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Baixar" }))}
+      />
+      <KitsVideo st={props.st} destino={props.st.download_dir} onDone={props.onDone} onError={props.onError} auto />
+      <section className={card}>
+        <span className="mb-1 flex items-center gap-1.5 text-fg">
+          <Film className="size-3.5" /> Ampliação de vídeo
+        </span>
+        <p className="mb-2 text-faint">
+          Mais resolução para as tomadas prontas e para vídeos do PC (aba Vídeo › Ampliar vídeo). O ffmpeg, o motor acima,
+          lê e grava o vídeo; os ESRGAN ampliam quadro a quadro na GPU. Sem ESRGAN, amplia por Lanczos.
+        </p>
+        <BaixarAmpliacao onError={props.onError} soModelos />
+      </section>
+    </>
   );
 }

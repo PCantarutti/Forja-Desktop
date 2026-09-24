@@ -119,7 +119,7 @@ def describe(i: dict | None = None) -> str:
 # Documento e mídia abrem no programa do sistema (Word, Excel, leitor de PDF). O VS Code só faz
 # sentido para o que é texto — abrir um .docx nele mostra XML zipado, que não serve para ninguém.
 DO_SISTEMA = {".docx", ".xlsx", ".xlsm", ".pptx", ".pdf", ".odt", ".ods", ".odp", ".csv",
-              ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".mp4", ".zip"}
+              ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".mp4", ".webm", ".zip"}
 
 
 def open_path(path: str, mode: str) -> str:

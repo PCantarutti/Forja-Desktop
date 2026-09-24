@@ -1,6 +1,9 @@
 import asyncio
+import base64
 import hashlib
 import json
+import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -10,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -19,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
-               mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -100,7 +103,7 @@ async def fronteira(request, call_next):
     path = request.url.path
     if (config.API_TOKEN and path.startswith("/api/") and not path.startswith(SEM_TOKEN)
             and not path.endswith(SUFIXO_SEM_TOKEN)
-            and request.headers.get("x-forja-token") != config.API_TOKEN):
+            and request.headers.get("x-forja-token") not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
 
@@ -451,12 +454,6 @@ class DownloadBody(BaseModel):
     folder: str = ""
 
 
-class ImageBody(BaseModel):
-    prompt: str = ""
-    opts: dict = {}
-    confirm: bool = False  # sim, pode descarregar o modelo que está na VRAM
-
-
 class PathsBody(BaseModel):
     models_dir: str = ""
     image_dir: str = ""
@@ -644,17 +641,6 @@ def local_cancel(job_id: str):
     return {"ok": True}
 
 
-@app.post("/api/local/image")
-def local_image(body: ImageBody):
-    try:
-        return imagegen.start_job(body.prompt, body.opts, body.confirm)
-    except imagegen.ModeloCarregado as e:
-        # 409: a interface pergunta se pode descarregar e repete com confirm=true.
-        raise HTTPException(409, str(e))
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
 @app.put("/api/local/paths")
 async def local_paths(body: PathsBody):
     """Pastas padrão: modelos baixados e imagens geradas."""
@@ -668,6 +654,114 @@ async def local_paths(body: PathsBody):
 async def local_image_defaults(body: dict):
     try:
         return await asyncio.to_thread(localai.set_image, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/video/defaults")
+async def local_video_defaults(body: dict):
+    try:
+        return await asyncio.to_thread(localai.set_video, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/kits")
+async def local_video_kits(quants: str = "", auto: bool = False):
+    """`quants`: JSON {id do kit: quantização} com o que foi trocado no cartão. `auto`: os montados da busca."""
+    try:
+        escolhas = json.loads(quants) if quants else {}
+    except ValueError:
+        escolhas = {}
+    try:
+        kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video, escolhas, auto),
+                                          asyncio.to_thread(localai.vram_video_gb))
+    except ToolError as e:
+        raise HTTPException(502, str(e))
+    return {"kits": kits, "vram_gb": vram}
+
+
+class KitBody(BaseModel):
+    id: str
+    folder: str = ""
+    quant: str = ""  # vazio = a maior que cabe na VRAM
+
+
+@app.post("/api/local/video/kit")
+async def local_video_kit(body: KitBody):
+    try:
+        return {"jobs": await asyncio.to_thread(localai.baixar_kit, body.id, body.folder, body.quant)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/aceleradores")
+async def local_video_aceleradores(model: str):
+    return await asyncio.to_thread(localai.aceleradores, model)
+
+
+class AceleradorBody(BaseModel):
+    model: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/acelerador")
+async def local_video_acelerador(body: AceleradorBody):
+    try:
+        return {"jobs": await asyncio.to_thread(localai.baixar_acelerador, body.model, body.folder)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/ampliadores")
+async def local_video_ampliadores():
+    from . import ampliar
+    return await asyncio.to_thread(ampliar.catalogo)
+
+
+class AmpliadorBody(BaseModel):
+    nome: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/ampliador")
+async def local_video_ampliador(body: AmpliadorBody):
+    from . import ampliar
+    try:
+        return await asyncio.to_thread(ampliar.baixar_modelo, body.nome, body.folder)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class AmpliarBody(BaseModel):
+    path: str
+    fator: int = 2
+    modelo: str = ""  # vazio = Lanczos, sem IA
+    suavizar: bool = False
+
+
+@app.post("/api/imagens/{message_id}/ampliar")
+async def imagens_ampliar(message_id: int, body: AmpliarBody):
+    try:
+        return await asyncio.to_thread(lotes.ampliar, message_id, body.path, body.fator, body.modelo, body.suavizar)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/{conv_id}/ampliar-arquivo")
+async def imagens_ampliar_arquivo(conv_id: int, body: AmpliarBody):
+    """Um vídeo qualquer do disco (não uma tomada): vira uma tomada ampliada nesta conversa."""
+    try:
+        return await asyncio.to_thread(lotes.ampliar_arquivo, conv_id, body.path, body.fator, body.modelo, body.suavizar)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/sondar")
+async def local_video_sondar(path: str):
+    from . import ampliar
+    try:
+        return await asyncio.to_thread(ampliar.sondar, path)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -706,6 +800,12 @@ MELHORAR_PROMPT = (
     "reescrito, em inglês, numa linha, com termos visuais concretos: assunto, composição, luz, "
     "material, lente, estilo. Sem explicação, sem aspas, sem 'prompt:', sem negativos."
 )
+MELHORAR_PROMPT_VIDEO = (
+    "Você reescreve descrições para um gerador de vídeo curto (Wan, 2 a 5 segundos, sem áudio). "
+    "Devolva SÓ o prompt reescrito, em inglês, numa linha: o sujeito, UMA ação contínua que caiba em "
+    "poucos segundos, o movimento de câmera (static, slow dolly in, pan left, tracking shot...), luz, "
+    "ambiente e estilo. Sem cortes de cena, sem explicação, sem aspas, sem 'prompt:', sem negativos."
+)
 
 
 class LoteBody(BaseModel):
@@ -716,7 +816,7 @@ class LoteBody(BaseModel):
     seed: int = 0
     seed_mode: str = "incremental"  # incremental | aleatoria | fixa
     confirm: bool = False
-    refs: list[str] = []  # imagens a editar (-r do sd.cpp); vazio = gerar do zero
+    refs: list[str] = []  # imagens a editar (-r do sd.cpp); no vídeo, [início] ou [início, fim]
     slots_de: int = 0  # mensagem da ferramenta imagens_pendentes: um item por slot, no caminho do projeto
     variar: dict = {}  # {message_id, path, prompt?} de uma imagem de slot: variações dela para escolher
     estilo: str | None = None  # variações de todos os slots do site com este estilo no lugar do antigo
@@ -724,12 +824,14 @@ class LoteBody(BaseModel):
 
 class DecidirBody(BaseModel):
     keep: list[str] = []
+    apenas: list[str] = []  # vazio = decide o lote inteiro
 
 
 class PromptBody(BaseModel):
     prompt: str
     provider: str
     model: str
+    video: bool = False
 
 
 @app.post("/api/imagens/referencia")
@@ -820,7 +922,7 @@ async def imagens_escolher(conv_id: int, body: EscolherBody):
 @app.post("/api/imagens/{message_id}/decidir")
 async def imagens_decidir(message_id: int, body: DecidirBody):
     try:
-        return await asyncio.to_thread(lotes.decidir, message_id, body.keep)
+        return await asyncio.to_thread(lotes.decidir, message_id, body.keep, body.apenas or None)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -868,7 +970,8 @@ async def imagens_prompt(body: PromptBody):
     out = ""
     try:
         async for kind, val in llm.chat_stream(body.provider, body.model,
-                                               [{"role": "system", "content": MELHORAR_PROMPT},
+                                               [{"role": "system",
+                                                 "content": MELHORAR_PROMPT_VIDEO if body.video else MELHORAR_PROMPT},
                                                 {"role": "user", "content": body.prompt}], None, 8192):
             if kind == "content":
                 out += val
@@ -892,6 +995,7 @@ class CompararBody(BaseModel):
     cego: bool = False
     confirm: bool = False
     bateria: str = ""               # teste pronto de especialidade (baterias.BATERIAS): anexo e gabarito
+    revisor: dict | None = None     # {"provider","model"}: o servidor roda o revisor quando todas terminarem
 
 
 class TestarBody(BaseModel):
@@ -934,7 +1038,7 @@ def _sse_comparar(message_id: int) -> StreamingResponse:
 async def comparar_rodar(conv_id: int, body: CompararBody):
     try:
         msg = comparar.start(conv_id, body.prompt, body.itens, body.modo, body.system, body.effort,
-                             body.cego, body.confirm, body.bateria)
+                             body.cego, body.confirm, body.bateria, body.revisor)
     except comparar.ModeloCarregado as e:
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
     except ToolError as e:
@@ -1041,6 +1145,15 @@ async def comparar_julgar(message_id: int, body: JuizBody):
 def comparar_julgar_acompanhar(message_id: int):
     """Reconectar à análise (voltou à página): o andamento, ou {"status": "nenhum"}."""
     return _sse_analise(message_id)
+
+
+@app.post("/api/comparar/{message_id}/revisor")
+def comparar_revisor(message_id: int, body: dict):
+    """Liga ({"revisor": {"provider","model"}}) ou desliga ({"revisor": null}) a revisão automática."""
+    try:
+        return comparar.definir_revisor(message_id, body.get("revisor"))
+    except ToolError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.post("/api/comparar/{message_id}/julgar/parar")
@@ -1182,6 +1295,32 @@ def _sess(conv: str):
 @app.get("/api/browser")
 async def get_browser(conv: str = "0"):
     return await _sess(conv).state_with_title()
+
+
+@app.get("/api/browser/shot")
+async def browser_shot(conv: str = "0"):
+    """Foto da aba ativa como está (JPEG), para o celular.
+
+    No modo nativo o espelho não manda frames (a página é uma view do Electron), e o browser_screenshot
+    muda o viewport para fotografar, o que mexeria no painel do desktop. Aqui é CDP direto, sem tocar em tamanho.
+    """
+    s = _sess(conv)
+    if not s.open:
+        raise HTTPException(404, "Nenhuma página aberta nesta conversa")
+    try:
+        cdp = await s.active.context.new_cdp_session(s.active)
+        try:
+            # Uma view nativa que não está na janela do desktop (painel Navegador fechado, outra conversa
+            # aberta) não desenha: a captura nunca volta, com qualquer opção ou override de tamanho.
+            r = await asyncio.wait_for(
+                cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": 60, "fromSurface": True}), 5)
+        finally:
+            await cdp.detach()
+    except asyncio.TimeoutError:
+        raise HTTPException(503, "A aba não está visível no desktop, então não há imagem para mostrar")
+    except Exception as e:  # aba fechando no meio, CDP caiu
+        raise HTTPException(502, f"Falha na foto: {e}")
+    return Response(base64.b64decode(r["data"]), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/browser/stream")
@@ -1356,8 +1495,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "comparar", "pesquisa"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, comparar ou pesquisa")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar ou pesquisa")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)
@@ -1844,6 +1983,7 @@ async def start_run(conv_id: int, body: RunBody):
         raise HTTPException(409, "Esta conversa já tem uma execução em andamento")
     with db.session() as s:
         kind = _get_conv(s, conv_id).kind or "agent"  # o tipo é da conversa, não do pedido
+    mobile.lembra({k: getattr(body, k) for k in ("provider", "model", "permission", "effort")})
     run = Run(conv_id)
     RUNS[run.id] = run
     run.start(RunRequest(mode=kind, **body.model_dump()))
@@ -1924,6 +2064,46 @@ def approve(run_id: str, body: ApproveBody):
                 "answer": body.answer, "answers": body.answers}
     if not _get_run(run_id).resolve(body.call_id, decision):
         raise HTTPException(409, "Nenhuma aprovação pendente para esta chamada")
+    return {"ok": True}
+
+
+@app.get("/api/mobile")
+def mobile_info():
+    """O que a aba Celular põe no QR: endereço na tailnet (se o Tailscale estiver no PC) e o token."""
+    return {"token": mobile.token(), "url": mobile.tailnet_url(), "devices": len(mobile.devices()),
+            "defaults": mobile.defaults()}
+
+
+@app.post("/api/mobile/rotate")
+def mobile_rotate():
+    mobile.rotate()
+    return mobile_info()
+
+
+@app.post("/api/mobile/expose/{name}")
+def mobile_expose(name: str):
+    """Site que o agente subiu (serve_start) visto do celular: só porta de servidor vivo, nunca uma qualquer."""
+    srv = next((x for x in shell.list_servers() if x["name"] == name and x["alive"] and x["url"]), None)
+    port = re.search(r":(\d+)", srv["url"]) if srv else None
+    if not port:
+        raise HTTPException(404, "Servidor não está rodando ou não tem URL")
+    try:
+        return {"url": mobile.expose(int(port.group(1)))}
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/mobile/register")
+def mobile_register(body: dict):
+    if not str(body.get("expo_token") or "").startswith("ExponentPushToken["):
+        raise HTTPException(400, "Token de push inválido")
+    mobile.register(body["expo_token"])
+    return {"ok": True}
+
+
+@app.post("/api/mobile/unregister")
+def mobile_unregister(body: dict):
+    mobile.unregister(str(body.get("expo_token") or ""))
     return {"ok": True}
 
 

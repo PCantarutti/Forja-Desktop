@@ -6,6 +6,7 @@ import BrowserPanel from "./components/BrowserPanel";
 import ServersPanel from "./components/ServersPanel";
 import LocalPanel, { LocalLoading } from "./components/LocalPanel";
 import ImagensView from "./components/ImagensView";
+import VideoView from "./components/VideoView";
 import CompararView from "./components/CompararView";
 import PesquisaView from "./components/PesquisaView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
@@ -273,6 +274,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   forget: (a) => `Apagando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
   update_tasks: () => "Atualizando a lista de tarefas",
   image_generate: (a) => `Gerando a imagem “${trecho(a.prompt, 40) ?? "pedida"}”`,
+  video_generate: (a) => `Gerando o vídeo “${trecho(a.prompt, 40) ?? "pedido"}”`,
   imagens_pendentes: (a) => `Registrando ${Array.isArray(a.slots) ? a.slots.length : ""} slots de imagem`,
   delegate_task: (a) => `Delegando: ${trecho(a.task, 44) ?? "uma tarefa"}`,
   exit_plan_mode: () => "Montando o plano",
@@ -2169,6 +2171,20 @@ export default function App() {
             model={settings.model}
             onError={setError}
             onConversationChanged={refreshConversations}
+          />
+        ) : section === "video" ? (
+          <VideoView
+            conv={currentId}
+            ensureConversation={ensureConversation}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
+            onAbrirBaixar={() => {
+              abrir("local");
+              // o painel IA local escuta e abre direto na aba Vídeo (kits, modelos e ampliação)
+              setTimeout(() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Vídeo" })), 0);
+            }}
           />
         ) : (
         <>

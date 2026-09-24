@@ -121,17 +121,18 @@ def test_fetch_url_nao_avisa_em_artigo(monkeypatch):
 
 # ------------------------------------------------ o modo Chat so leva a web
 
-def test_chat_leva_so_as_ferramentas_de_web():
+def test_chat_leva_so_as_ferramentas_de_web_e_memoria():
     from app import agent
 
-    assert [t.name for t in agent.chat_tools()] == ["web_search", "fetch_url"]
+    assert sorted(t.name for t in agent.chat_tools()) == ["fetch_url", "recall", "remember", "web_search"]
 
 
 def test_chat_respeita_ferramenta_desligada(monkeypatch):
     from app import agent, config
 
     monkeypatch.setattr(config, "DISABLED_TOOLS", ["web_search"])
-    assert [t.name for t in agent.chat_tools()] == ["fetch_url"]
+    assert "web_search" not in {t.name for t in agent.chat_tools()}
+    assert "fetch_url" in {t.name for t in agent.chat_tools()}
 
 
 # ------------------------------------------------ run_command em background

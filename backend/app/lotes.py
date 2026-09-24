@@ -1,4 +1,5 @@
-"""Lotes de imagem: várias variações de um prompt, divididas entre modelos, com aprovação depois.
+"""Lotes de imagem (e de vídeo): várias variações de um prompt, divididas entre modelos, com aprovação
+depois. Numa Conversation(kind="video") cada item é um .webm do Wan; o resto do caminho é o mesmo.
 
 O `sd-cli` gera uma imagem por processo, então um lote é uma fila numa thread só — e o mutex de VRAM
 (`localai.set_image_busy`) vale para o lote inteiro, não por imagem.
@@ -365,19 +366,24 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     if not prompt:
         raise ToolError("Descreva a imagem (prompt vazio).")
     count = max(1, min(int(count or 1), MAX_VARIACOES))
+    if localai.image_busy():
+        raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
     opts = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
     escolhidos = _distribuir(list(models or []), count)
     refs = [str(r) for r in (refs or [])]
+    with db.session() as s:
+        conv = s.get(db.Conversation, conv_id)
+        ext = ".webm" if conv and conv.kind == "video" else ".png"
     exe = imagegen._exe()
     for m in dict.fromkeys(escolhidos):  # valida runtime e modelo ANTES de descarregar o LLM por nada
-        imagegen.argv(exe, prompt, imagegen.OUT_DIR / "x.png", imagegen._opts({**opts, "model": m}), refs)
+        imagegen.argv(exe, prompt, imagegen.OUT_DIR / f"x{ext}", imagegen._opts({**opts, "model": m}), refs)
 
     _liberar_vram(confirm)
 
     sementes = _sementes(count, seed, seed_mode)
     pasta = imagegen.out_dir()
     marca = time.strftime("%Y%m%d-%H%M%S")
-    imagens = [{"path": str(pasta / f"{marca}-{i:02d}-s{s}.png"), "seed": s, "model": m,
+    imagens = [{"path": str(pasta / f"{marca}-{i:02d}-s{s}{ext}"), "seed": s, "model": m,
                 "model_name": _nome(m), "status": "pendente", "error": ""}
                for i, (m, s) in enumerate(zip(escolhidos, sementes))]
     for item, slot in zip(imagens, slots):
@@ -449,7 +455,9 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             # Já no começo (carregando o modelo, antes da 1ª prévia): o card sabe que não vai de líquido.
             item["com_previa"] = imagegen.modo_previa(imagegen._opts({**opts, "model": item["model"]})) is not None
             _patch(message_id, meta={"images": imagens})
-            previa = previas_dir() / Path(item["path"]).name
+            # Prévia de vídeo tem vários quadros: com .png o sd-cli grava .avi, que o Chromium não toca;
+            # WebP animado ele grava e o <img> do card anima sozinho.
+            previa = previas_dir() / (Path(item["path"]).stem + (".webp" if item["path"].endswith(".webm") else ".png"))
             previa.parent.mkdir(parents=True, exist_ok=True)
 
             def progresso(passo: int, total_passos: int, s_passo: float = 0.0, item=item, previa=previa) -> None:
@@ -474,9 +482,10 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                     area = projeto.area_nativa(item["model"], (localai.requisitos(item["model"]) or {}).get("sugere"))
                     w, h = projeto.ajustar(item.get("width"), item.get("height"), area)
                     tamanho = {k: v for k, v in (("width", w), ("height", h)) if v}
+                medido: dict = {}
                 imagegen.generate(item.get("prompt") or prompt, saida,
                                   {**opts, **tamanho, "model": item["model"], "seed": item["seed"]},
-                                  job_id, refs or [], progresso, previa)
+                                  job_id, refs or [], progresso, previa, medido)
                 if saida != arquivo:
                     # a versão anterior do site vai para descartadas/; o PNG provisório só some
                     if arquivo.is_file() and not projeto.eh_placeholder(arquivo):
@@ -486,6 +495,9 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                     if web:
                         projeto.webp(arquivo)
                 item["status"] = "pronta"
+                if item.get("s_passo") and medido.get("segundos"):  # base do "≈ N min", em qualquer conversa
+                    localai.anotar_tempo(item["model"], imagegen._opts({**opts, "model": item["model"]}),
+                                         float(item["s_passo"]), float(medido["segundos"]))
             except Exception as e:
                 if saida != arquivo:
                     saida.unlink(missing_ok=True)
@@ -524,6 +536,112 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
     _patch(message_id, status=status, meta={"images": imagens})
 
 
+# ------------------------------------------------------------------ ampliação
+
+def _validar_ampliacao(fator: int, modelo: str) -> None:
+    from . import ampliar as amp
+    if int(fator) not in (2, 4):
+        raise ToolError("Amplie em 2× ou 4×.")
+    if modelo and not amp.eh_ampliador(modelo):
+        raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN).")
+    amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada
+    if localai.image_busy():
+        raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
+
+
+def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: dict, seed: int,
+                    fator: int, modelo: str, suavizar: bool) -> dict:
+    """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem."""
+    nome = Path(modelo).stem if modelo else "Lanczos"
+    amp_meta = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar)}
+    opts = {**opts, "width": int(opts.get("width") or 0) * int(fator), "height": int(opts.get("height") or 0) * int(fator),
+            "ampliacao": amp_meta}
+    if suavizar and opts.get("fps"):
+        opts.update(fps=int(opts["fps"]) * 2, frames=int(opts.get("frames") or 0) * 2 - 1)
+    imagens = [{"path": str(saida), "seed": seed, "model": modelo, "model_name": f"{nome} · {fator}×",
+                "status": "pendente", "error": "", "unidade": "quadro"}]
+    _save(conv_id, role="user", content=prompt, meta={"refs": [], "models": [modelo], "ampliacao": amp_meta})
+    job = downloads.create("lote", f"ampliar {Path(origem).name}")
+    nova = _save(conv_id, role="assistant", content="", status="running",
+                 meta={"job": job["id"], "count": 1, "seed_mode": "fixa", "opts": opts, "images": imagens})
+    threading.Thread(target=_ampliar_trabalho, args=(conv_id, nova.id, job["id"]), daemon=True).start()
+    return nova.to_dict()
+
+
+def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+    """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
+    progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
+    msg = _mensagem(message_id)
+    item = next((i for i in msg["meta"]["images"] if i["path"] == path), None)
+    if not item or not Path(path).is_file():
+        raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
+    _validar_ampliacao(fator, modelo)
+    saida = Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm")
+    with db.session() as s:
+        pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
+                                             db.Message.id < message_id).order_by(db.Message.id.desc()).first())
+        prompt = pedido.content if pedido else ""
+    return _nova_ampliacao(msg["conversation_id"], path, saida, prompt, dict(msg["meta"].get("opts") or {}), item["seed"],
+                           fator, modelo, suavizar)
+
+
+def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+    """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
+    para a pasta de imagens; o original não é tocado."""
+    from . import ampliar as amp
+    if not Path(path).is_file():
+        raise ToolError("Esse arquivo não existe (ou não está acessível).")
+    _validar_ampliacao(fator, modelo)
+    info = amp.sondar(path)
+    pasta = imagegen.out_dir()
+    pasta.mkdir(parents=True, exist_ok=True)
+    saida = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"
+    opts = {"width": info["w"], "height": info["h"], "fps": round(info["fps"]), "frames": info["quadros"]}
+    return _nova_ampliacao(conv_id, path, saida, Path(path).name, opts, 0, fator, modelo, suavizar)
+
+
+def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
+    from . import ampliar as amp
+    meta = _mensagem(message_id)["meta"]
+    imagens = list(meta["images"])
+    a = meta["opts"]["ampliacao"]
+    item = imagens[0]
+    localai.set_image_busy(True)
+    previa = previas_dir() / (Path(item["path"]).stem + ".png")
+    previa.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        item.update(status="gerando", progress=0.0, com_previa=bool(a["modelo"]))
+        _patch(message_id, meta={"images": imagens})
+
+        def progresso(feitos: int, total: int, s_quadro: float) -> None:
+            if previa.is_file():
+                item["preview"] = str(previa)
+            item.update(progress=round(feitos / total, 3) if total else 0.0, s_passo=round(s_quadro, 2),
+                        restante=round(max(0, total - feitos) * s_quadro))
+            _patch(message_id, meta={"images": imagens})
+
+        r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
+        # o que saiu de fato (o minterpolate não inventa quadro depois do último): o player conta com isso
+        if r:
+            _patch(message_id, meta={"opts": {**meta["opts"], "width": r["w"], "height": r["h"], "fps": round(r["fps"]),
+                                              "frames": r["quadros"] or meta["opts"].get("frames")}})
+        item["status"] = "pronta"
+    except Exception as e:
+        cancelada = downloads.cancelled(job_id)
+        item["status"] = "cancelada" if cancelada else "erro"
+        item["error"] = "" if cancelada else str(e)
+    finally:
+        localai.set_image_busy(False)
+        for k in ("preview", "com_previa"):
+            item.pop(k, None)
+        previa.unlink(missing_ok=True)
+    pronta = item["status"] == "pronta"
+    downloads.finish(job_id, error="" if pronta else item["error"])
+    mirror.write(conv_id)
+    _patch(message_id, status="pronto" if pronta else ("cancelado" if item["status"] == "cancelada" else "erro"),
+           meta={"images": imagens})
+
+
 # O que o lote ainda não entregou e "Continuar" gera de novo.
 A_REFAZER = ("interrompida", "pendente", "cancelada", "erro")
 
@@ -534,6 +652,7 @@ def reap() -> int:
     imagem que estava no meio perde os passos (o sd-cli não salva estado parcial); se o PNG chegou a
     ser gravado antes da queda, ela conta como pronta."""
     shutil.rmtree(previas_dir(), ignore_errors=True)  # prévias de imagens que não terminaram
+    shutil.rmtree(imagegen.out_dir() / ".ampliando", ignore_errors=True)  # quadros de ampliações que caíram
     with db.session() as s:
         presos = s.query(db.Message).filter(db.Message.role == "assistant", db.Message.status == "running").all()
         n = 0
@@ -545,7 +664,12 @@ def reap() -> int:
                 if i.get("destino"):
                     _temporario(Path(i["destino"])).unlink(missing_ok=True)
                 if i["status"] in ("gerando", "pendente"):
-                    feita = Path(i["path"]).is_file() and not projeto.eh_placeholder(i["path"])
+                    f = Path(i["path"])
+                    # a ampliação grava o webm aos poucos (ffmpeg): arquivo lá não quer dizer que terminou
+                    if i.get("unidade") == "quadro":
+                        f.unlink(missing_ok=True)
+                    # o PNG provisório de um slot também não é imagem pronta
+                    feita = f.is_file() and f.stat().st_size > 0 and not projeto.eh_placeholder(f)
                     i["status"] = "pronta" if feita else "interrompida"
                     i.pop("progress", None)
                     i.pop("preview", None)
@@ -566,6 +690,14 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
     imagens = list(msg["meta"]["images"])
     if not any(i["status"] in A_REFAZER for i in imagens):
         raise ToolError("Nada a continuar: todas as imagens deste lote já saíram.")
+    if (msg["meta"].get("opts") or {}).get("ampliacao"):  # é uma ampliação: refaz a ampliação
+        _liberar_vram(confirm)
+        for i in imagens:
+            i.update(status="pendente", error="")
+        job = downloads.create("lote", f"ampliar {Path(imagens[0]['path']).name}")
+        _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
+        threading.Thread(target=_ampliar_trabalho, args=(msg["conversation_id"], message_id, job["id"]), daemon=True).start()
+        return {"ok": True}
     with db.session() as s:
         pedido = (s.query(db.Message)
                   .filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
@@ -596,14 +728,20 @@ def cancelar(message_id: int) -> dict:
 
 # ------------------------------------------------------------------ aprovação
 
-def decidir(message_id: int, keep: list[str]) -> dict:
-    """As aprovadas ficam onde estão; o resto vai para descartadas/ (some sozinho no expurgo)."""
+def decidir(message_id: int, keep: list[str], apenas: list[str] | None = None) -> dict:
+    """As aprovadas ficam onde estão; o resto vai para descartadas/ (some sozinho no expurgo).
+
+    `apenas`: só estas mudam, as outras ficam como estão. O foco do vídeo decide uma tomada por vez, e
+    mandar as demais como "keep" as marcava todas como mantidas."""
     m = _mensagem(message_id)
     imagens = [dict(i) for i in m["meta"]["images"]]
     manter = {str(p) for p in (keep or [])}
+    so = {str(p) for p in apenas} if apenas else None
     destino = descartadas_dir()
     for item in imagens:
         if item["status"] not in ("pronta", "mantida", "descartada"):
+            continue
+        if so is not None and item["path"] not in so:
             continue
         if item["path"] in manter:
             if item["status"] == "descartada":  # desfazer: volta para a pasta de saída
@@ -745,7 +883,7 @@ def limpar_descartadas(dias: int | None = None) -> int:
             return 0
     limite = time.time() - dias * 86400 if dias > 0 else time.time() + 1
     apagados = 0
-    for f in pasta.glob("*.png"):
+    for f in [*pasta.glob("*.png"), *pasta.glob("*.webm")]:
         try:
             if f.stat().st_mtime < limite:
                 f.unlink()

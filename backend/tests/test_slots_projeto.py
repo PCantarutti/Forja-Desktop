@@ -22,7 +22,7 @@ def pastas(tmp_path, monkeypatch):
     (tmp_path / "imagens").mkdir()
     chamadas: list[dict] = []
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None, medir=None):
         chamadas.append({"prompt": prompt, "out": Path(out), **(opts or {})})
         Image.new("RGB", (64, 64), (200, 100, 50)).save(out)  # PNG de verdade: o .webp sai dele
         return Path(out)

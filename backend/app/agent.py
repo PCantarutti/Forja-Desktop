@@ -18,7 +18,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, modelctl, projstate, qualidade, taskdb
+from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -224,6 +224,7 @@ class Run:
         async with self._changed:
             self.events.append(ev)
             self._changed.notify_all()
+        mobile.notify(ev, self.conv_id, self.id)  # push para o celular pareado (aprovação, fim do turno)
 
     async def subscribe(self, cursor: int = 0) -> AsyncIterator[dict]:
         while True:
@@ -456,7 +457,18 @@ MAESTRO_HERDA = ("- Tabela na resposta", "- Se uma ferramenta devolver erro", "-
                  "- Navegador:", "- Conferir página", "- O print é sempre", "- " + NO_COUNTING,
                  "- Leia o arquivo antes de editar", "- Use read_file", "- Palavras começando com @",
                  "- Para achar código use grep", "- Resultado grande demais", "- O modo de permissão e as regras",
-                 "- Terminal persistente", "- Comando demorado", "- Conversas anteriores desta pasta", "- lsp dá")
+                 "- Terminal persistente", "- Comando demorado", "- Conversas anteriores desta pasta", "- lsp dá",
+                 "- Memória sobre o usuário")
+
+# Vale no Agente, no Chat e na Maestro. Modelo local não faz nada disso sem ser mandado com todas as
+# letras: "quando ele contar algo" sozinho só gravava se o usuário ditasse o fato.
+REGRA_MEMORIA = (
+    "- Memória sobre o usuário: o bloco \"O que você já sabe sobre o usuário\" vale em toda resposta — chame-o "
+    "pelo nome e siga as preferências dele sem esperar ser perguntado; o que estiver marcado com recall, leia "
+    "quando o assunto aparecer. Chame remember NA MESMA resposta, sem pedir licença, quando ele disser o nome, "
+    "do que gosta ou não gosta, como quer as respostas, ou corrigir o seu jeito ('não faça X', 'prefiro Y'). "
+    "A description traz o próprio fato ('Nome: Pedro', não 'Nome do usuário'); fato que mudou, grave de novo "
+    "com o mesmo name. Nada de segredo, nada de efêmero, nada que já esteja na memória do projeto.")
 
 
 def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
@@ -560,6 +572,7 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
             "com menu: diga que não conseguiu ler e abra outra fonte. Nunca complete de memória e nunca cite "
             "uma página como fonte de algo que não estava nela.",
             "- Se o usuário pedir para criar ou editar arquivos, peça para ele trocar para o modo Agente.",
+            *([REGRA_MEMORIA] if any(t.name == "remember" for t in web) else []),
             "- " + NO_COUNTING,
             "Responda no idioma do usuário.",
         ]), via, web))
@@ -671,10 +684,7 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
                      "algo duradouro (decisões, convenções, comandos do projeto), atualize esse arquivo. Não guarde "
                      "segredos nem coisas efêmeras.")
     if "remember" in names:
-        rules.append("- Memória sobre o usuário: o índice acima é tudo o que você já sabe dele. Leia uma com recall "
-                     "quando o assunto aparecer. Quando ele contar algo duradouro sobre si (como gosta de trabalhar, "
-                     "que ferramentas usa, o que já decidiu), guarde com remember — uma linha de descrição que se "
-                     "explique sozinha. Nada de segredo, nada de efêmero, nada que já esteja na memória do projeto.")
+        rules.append(REGRA_MEMORIA)
     if "update_tasks" in names:
         rules.append("- Trabalho com 3 ou mais passos: crie a lista com update_tasks no início e atualize a cada "
                      "passo (doing ao começar, done ao terminar). O usuário acompanha essa lista.")
@@ -849,11 +859,11 @@ def bloqueada_no_plano(name: str) -> bool:
         return False
 
 
-CHAT_TOOLS = ("web_search", "fetch_url")
+CHAT_TOOLS = ("web_search", "fetch_url", "remember", "recall")
 
 
 def chat_tools(caps: set[str] | None = None) -> list[Tool]:
-    """Modo Chat: só a web. `active()` já respeita o que o usuário desligou nas Configurações."""
+    """Modo Chat: a web e a memória sobre o usuário. `active()` já respeita o que o usuário desligou nas Configurações."""
     return [t for t in active(caps) if t.name in CHAT_TOOLS]
 
 

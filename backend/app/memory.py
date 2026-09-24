@@ -161,12 +161,14 @@ def project_write(content: str) -> dict:
 
 
 # ------------------------------------------------------------------ memória sobre o usuário
-# Um arquivo por fato. No prompt entra só o índice (nome + uma linha); o corpo o modelo pede com
-# `recall` quando o assunto aparecer. É o que mantém o custo em ~300 tokens em vez de milhares.
+# Um arquivo por fato. No prompt entra o índice: fato curto vai inteiro (modelo local quase nunca
+# chama `recall`, e "Nome do usuário" sem o nome não serve para nada); o longo vai só com a
+# descrição, e o corpo o modelo pede com `recall`. Mantém o custo em centenas de tokens.
 
 TIPOS = ("usuario", "preferencia", "projeto", "referencia")
 INDEX_MAX = 8000          # caracteres de índice no prompt (~2k tokens)
 BODY_MAX = 4000           # corpo de uma memória
+INLINE_MAX = 300          # corpo até este tamanho entra inteiro no índice
 _INDEX: str | None = None  # congelado durante o turno: mexer no system prompt mata o cache do llama.cpp
 
 
@@ -255,7 +257,13 @@ def index(refresh: bool = False) -> str:
     """
     global _INDEX
     if refresh or _INDEX is None:
-        linhas = [f"- {m['name']} ({m['type']}) — {m['description']}" for m in personal_list()]
+        linhas = []
+        for m in personal_list():
+            if m["size"] <= INLINE_MAX:
+                corpo = " ".join(personal_read(m["slug"])["content"].split())
+                linhas.append(f"- {m['name']} ({m['type']}): {corpo or m['description']}")
+            else:
+                linhas.append(f"- {m['name']} ({m['type']}) — {m['description']} (detalhes: recall)")
         texto = chr(10).join(linhas)
         _INDEX = texto[:INDEX_MAX]
     return _INDEX
@@ -267,7 +275,7 @@ def prompt_block() -> str:
     idx = index()
     if not idx:
         return ""
-    return ("\n\n--- Memória sobre o usuário (índice; use recall para ler uma) ---\n" + idx)
+    return ("\n\n--- O que você já sabe sobre o usuário (use sem ele pedir) ---\n" + idx)
 
 
 # ------------------------------------------------------------------ ferramentas do agente
@@ -297,15 +305,17 @@ def _disponivel() -> bool:
 
 register(Tool(
     "remember",
-    "Guarda algo duradouro sobre o usuário (preferência de trabalho, contexto pessoal, ferramenta que ele usa). "
-    "Só vale a partir da próxima conversa. Não guarde segredo, senha, nem coisa efêmera; o que é do projeto vai "
-    "para o arquivo de memória do projeto.",
+    "Guarda algo duradouro sobre o usuário: nome, gostos, como ele quer as respostas, correções do seu jeito "
+    "de trabalhar, ferramentas que usa. Chame por conta própria assim que ele revelar isso, sem pedir licença; "
+    "o mesmo name sobrescreve. Não guarde segredo, senha, nem coisa efêmera; o que é do projeto vai para o "
+    "arquivo de memória do projeto.",
     _obj({"name": {"type": "string", "description": "Nome curto, serve de identificador"},
-          "description": {"type": "string", "description": "Uma linha: é o que aparece no índice de toda conversa"},
+          "description": {"type": "string", "description": "Uma linha com o próprio fato (ex.: 'Nome: Pedro', não 'Nome do usuário')"},
           "content": {"type": "string", "description": "O fato em si, com o porquê"},
           "type": {"type": "string", "enum": list(TIPOS), "description": "usuario | preferencia | projeto | referencia"}},
          ["name", "description", "content"]),
-    _remember, mutating=True, available=_disponivel))
+    # ponytail: sem card de aprovação (é um .md local, apagável nas Configurações); forget segue perguntando
+    _remember, mutating=False, available=_disponivel))
 
 register(Tool(
     "recall",

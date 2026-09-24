@@ -7,6 +7,7 @@ import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench } from "./icons";
 import ModelPicker from "./ModelPicker";
+import qrcode from "qrcode-generator";
 
 export type Provider = {
   id: string;
@@ -62,7 +63,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória"] as const;
+const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular"] as const;
 type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
@@ -199,6 +200,8 @@ export default function Settings(props: {
               <RuntimeTab onError={setError} />
             ) : tab === "Hardware" ? (
               <HardwareTab onError={setError} />
+            ) : tab === "Celular" ? (
+              <CelularTab onError={setError} />
             ) : !s ? (
               <div className="text-muted">Carregando…</div>
             ) : tab === "Geral" ? (
@@ -274,6 +277,48 @@ export default function Settings(props: {
   );
 }
 
+// ------------------------------------------------------------------ celular (app Forja Mobile)
+
+/** QR que o app do celular lê para parear: endereço na tailnet + token estável (backend/app/mobile.py). */
+function CelularTab(props: { onError: (e: string) => void }) {
+  const [m, setM] = useState<{ token: string; url: string | null; devices: number } | null>(null);
+  useEffect(() => {
+    api.get<typeof m>("/mobile").then(setM).catch((e) => props.onError(e.message));
+  }, []);
+  if (!m) return <div className="text-muted">Carregando…</div>;
+  if (!m.url)
+    return (
+      <div className="space-y-2 text-sm text-muted">
+        <p className="text-fg">Tailscale não encontrado ou sem login neste PC.</p>
+        <p>Instale o Tailscale (grátis) aqui e no celular, entre com a mesma conta e reabra esta aba.</p>
+      </div>
+    );
+  const qr = qrcode(0, "M");
+  qr.addData(JSON.stringify({ url: m.url, token: m.token }));
+  qr.make();
+  const porta = location.port || "80";
+  return (
+    <div className="space-y-4 text-sm">
+      <p className="text-muted">
+        Leia com o app Forja Mobile. Antes, publique o Forja na sua tailnet (uma vez, no PowerShell):
+      </p>
+      <code className="block rounded-lg bg-raised px-3 py-2 text-xs text-fg">
+        tailscale serve --bg --https=443 http://127.0.0.1:{porta}
+      </code>
+      <div className="inline-block rounded-xl bg-white p-3" dangerouslySetInnerHTML={{ __html: qr.createSvgTag({ cellSize: 5, margin: 0 }) }} />
+      <p className="text-muted">
+        {m.url} · {m.devices} aparelho(s) com notificação
+      </p>
+      <Confirma
+        className={btn}
+        rotulo="Revogar e gerar novo QR"
+        pergunta="O celular pareado perde o acesso. Continuar?"
+        onSim={() => api.post<typeof m>("/mobile/rotate").then(setM).catch((e) => props.onError(e.message))}
+      />
+    </div>
+  );
+}
+
 // ------------------------------------------------------------------ aplicativo (Electron)
 
 function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
@@ -303,7 +348,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
 
   const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
 
-  const bloco = (kind: "llama" | "sd", titulo: string, descricao: string) => {
+  const bloco = (kind: "llama" | "sd" | "ffmpeg", titulo: string, descricao: string) => {
     const r = st.runtimes[kind];
     return (
       <Field key={kind} label={titulo} hint={descricao}>
@@ -333,9 +378,9 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
                   key={b}
                   className={btn}
                   onClick={() => acao(api.post("/local/runtime", { kind, backend: b }))}
-                  title={b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
+                  title={kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
                 >
-                  {tem ? `Atualizar ${b}` : `Baixar ${b}`}
+                  {kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
                 </button>
               );
             })}
@@ -348,7 +393,8 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
   return (
     <div className="max-w-2xl space-y-5">
       {bloco("llama", "Motor de chat (llama.cpp)", "CPU, Vulkan e CUDA convivem no disco: dá para trocar a qualquer momento, sem baixar de novo.")}
-      {bloco("sd", "Motor de imagem (stable-diffusion.cpp)", "Mesma ideia, para a geração de imagem.")}
+      {bloco("sd", "Motor de imagem e vídeo (stable-diffusion.cpp)", "Mesma ideia, para gerar imagem e vídeo (e o ESRGAN da ampliação).")}
+      {bloco("ffmpeg", "Motor de ampliação de vídeo (ffmpeg)", "Separa os quadros, junta de volta com o áudio e interpola o movimento. Só existe o build de CPU: o pesado (ESRGAN) é na GPU pelo sd.cpp.")}
       {!!st.jobs?.filter((j: any) => j.kind === "runtime").length && (
         <div className="space-y-1 text-xs text-muted">
           {st.jobs
@@ -530,6 +576,22 @@ function PastasTab(props: { onError: (e: string) => void }) {
     }
   }
 
+  // A 1ª da lista é a padrão (models_dir); as outras são as "a mais", que o PUT /local/dirs recebe.
+  async function pastas(extras: string[]) {
+    try {
+      const r = await api.put<{ dirs: string[] }>("/local/dirs", { dirs: extras });
+      setSt({ ...st!, dirs: r.dirs });
+      setSalvo("Salvo.");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function adicionarPasta() {
+    const escolhida = window.forja ? await window.forja.pickFolder("") : prompt("Caminho da pasta com os modelos:");
+    if (escolhida) pastas([...st!.dirs.slice(1), escolhida]);
+  }
+
   async function escolher(campo: "models_dir" | "image_dir") {
     const atual = st![campo];
     const escolhida = window.forja ? await window.forja.pickFolder(atual) : prompt("Caminho da pasta:", atual);
@@ -558,6 +620,32 @@ function PastasTab(props: { onError: (e: string) => void }) {
         hint="Para onde vão os downloads do painel IA local. As outras pastas continuam sendo varridas; troque lá quem é a padrão do download."
       >
         {linha("models_dir")}
+      </Field>
+      <Field
+        label="Pastas de modelos instalados"
+        hint="Todas são varridas (com as subpastas): o que estiver nelas aparece no IA local, sem copiar nada. A primeira é a de cima."
+      >
+        <div className="space-y-1.5">
+          {st.dirs.map((d, i) => (
+            <div key={d} className="flex items-center gap-2 rounded-lg border border-line bg-raised px-3 py-1.5 text-sm">
+              <span className="min-w-0 flex-1 truncate text-fg" title={d}>{d}</span>
+              {i === 0 ? (
+                <span className="shrink-0 text-xs text-faint">padrão</span>
+              ) : (
+                <button
+                  className="shrink-0 text-xs text-muted hover:text-red-400"
+                  title="Parar de varrer esta pasta (os arquivos ficam no disco)"
+                  onClick={() => pastas(st.dirs.slice(1).filter((x) => x !== d))}
+                >
+                  Remover
+                </button>
+              )}
+            </div>
+          ))}
+          <button className={btn} onClick={adicionarPasta}>
+            Adicionar pasta…
+          </button>
+        </div>
       </Field>
       <Field label="Imagens geradas" hint="Onde o painel salva as imagens. As geradas pelo agente vão para a pasta de trabalho da conversa.">
         {linha("image_dir")}

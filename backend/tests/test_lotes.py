@@ -32,7 +32,7 @@ def _fake_sd(monkeypatch, falhar=()):
     """Troca o sd-cli por um PNG de mentira; guarda o que cada chamada recebeu."""
     chamadas: list[dict] = []
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None, medir=None):
         o = dict(opts or {})
         chamadas.append({"prompt": prompt, "out": Path(out), "refs": list(refs), **o})
         if o.get("model") in falhar:
@@ -161,7 +161,7 @@ def test_lote_com_llm_carregado_pede_confirmacao(monkeypatch):
 def test_cancelar_marca_as_restantes(monkeypatch):
     conv = _conversa()
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None, medir=None):
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"\x89PNG")
         downloads.cancel(job_id)  # cancela logo na primeira, como o botão faria
@@ -292,7 +292,7 @@ def test_previa_entra_no_card_e_some_no_fim(monkeypatch):
     _fake_sd(monkeypatch)
     vistas: list = []
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None, medir=None):
         progresso(1, 4, 1.0)  # antes da primeira prévia: nada no card, mas ele já sabe que vem prévia
         vistas.append(lotes._mensagem(msg_id[0])["meta"]["images"][0].get("preview"))
         assert lotes._mensagem(msg_id[0])["meta"]["images"][0]["com_previa"] is True

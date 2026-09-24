@@ -263,11 +263,11 @@ def test_conversation_kind_defaults_to_agent():
         assert c.kind == "agent"
 
 
-def test_chat_mode_sends_only_web_tools(monkeypatch):
-    """O Chat não mexe em arquivos nem no shell, mas busca na web quando precisa."""
+def test_chat_mode_sends_only_web_and_memory_tools(monkeypatch):
+    """O Chat não mexe em arquivos nem no shell, mas busca na web e guarda o que sabe do usuário."""
 
     async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
-        assert [t["function"]["name"] for t in tools] == ["web_search", "fetch_url"]
+        assert sorted(t["function"]["name"] for t in tools) == ["fetch_url", "recall", "remember", "web_search"]
         assert "web_search" in messages[0]["content"]
         yield "content", "oi"
         yield "done", {"tool_calls": []}
@@ -291,7 +291,7 @@ def test_chat_mode_sends_only_web_tools(monkeypatch):
 
     events = asyncio.run(scenario())
     sent = next(e for e in events if e["type"] == "tools_sent")
-    assert [t["name"] for t in sent["tools"]] == ["web_search", "fetch_url"]
+    assert sorted(t["name"] for t in sent["tools"]) == ["fetch_url", "recall", "remember", "web_search"]
     assert all(not t["mutating"] for t in sent["tools"])  # nada no Chat pede aprovação
 
 

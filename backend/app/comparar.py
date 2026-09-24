@@ -123,11 +123,19 @@ def _mensagens(prompt: str, system: str) -> list[dict]:
 # ------------------------------------------------------------------ execução
 
 def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "paralelo", system: str = "",
-          effort: str = "medio", cego: bool = False, confirm: bool = False, bateria: str = "") -> dict:
-    """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente."""
+          effort: str = "medio", cego: bool = False, confirm: bool = False, bateria: str = "",
+          revisor: dict | None = None) -> dict:
+    """Cria as duas mensagens, registra a corrida e dispara a task. Devolve a msg do assistente.
+
+    `revisor` ({"provider","model"}): quando todas as respostas terminarem, o próprio servidor começa a
+    análise — antes era a tela que disparava, e com o app fechado (ou o celular bloqueado) nada acontecia.
+    Fica no meta, então vale também para Refazer e Adicionar.
+    """
     prompt = (prompt or "").strip()
     if not prompt:
         raise ToolError("Escreva o prompt da comparação.")
+    revisor = ({"provider": str(revisor["provider"]), "model": str(revisor["model"])}
+               if revisor and revisor.get("provider") and revisor.get("model") else None)
     itens = _preparar(itens, modo)
 
     descarregado = ""
@@ -154,7 +162,7 @@ def start(conv_id: int, prompt: str, itens: list[dict] | None, modo: str = "para
           meta={"modo": modo, "cego": cego, "modelos": [i["nome"] for i in itens], "bateria": bateria})
     msg = _save(conv_id, role="assistant", content="", status="running",
                 meta={"modo": modo, "cego": cego, "revelado": False, "voto": "", "system": system,
-                      "effort": effort, "descarregado": descarregado, "itens": itens})
+                      "effort": effort, "descarregado": descarregado, "revisor": revisor, "itens": itens})
     run = _RUNS[msg.id] = {"message_id": msg.id, "conv_id": conv_id, "status": "rodando", "modo": modo,
                            "cego": cego, "cancelar": False, "itens": itens, "fila": []}
     # O loop só guarda referência fraca para a task: sem manter a nossa, o coletor de lixo pode
@@ -287,6 +295,28 @@ async def _rodar(run: dict, mensagens: list[dict], effort: str, so_fila: bool = 
         mirror.write(run["conv_id"])
         # sai do ar por último: daqui em diante o `estado()` vem do banco, já final
         _RUNS.pop(run["message_id"], None)
+        if run["status"] == "pronto":
+            _revisar_sozinho(run["message_id"])
+
+
+def definir_revisor(message_id: int, revisor: dict | None) -> dict:
+    """Liga/desliga o "revisar ao terminar" de uma comparação que já existe (vale no próximo Refazer/Adicionar)."""
+    _mensagem(message_id)  # 404 se não for comparação
+    rev = ({"provider": str(revisor["provider"]), "model": str(revisor["model"])}
+           if revisor and revisor.get("provider") and revisor.get("model") else None)
+    _patch(message_id, meta={"revisor": rev})
+    return {"revisor": rev}
+
+
+def _revisar_sozinho(message_id: int) -> None:
+    """"Revisar ao terminar": a comparação acabou com resposta, e o meta pede revisor — ele começa aqui."""
+    from . import baterias
+    try:
+        rev = (_mensagem(message_id).get("meta") or {}).get("revisor")
+        if rev:
+            baterias.iniciar_analise(message_id, rev["provider"], rev["model"])
+    except Exception as e:  # revisor que não sobe não pode derrubar a comparação, que já está pronta
+        print(f"Forja: revisão automática da comparação {message_id} falhou: {e}", flush=True)
 
 
 LACO = "**[Parado pelo Forja: o modelo entrou em laço, repetindo o mesmo trecho]**"
