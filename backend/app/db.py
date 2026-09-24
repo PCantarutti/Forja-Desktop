@@ -46,8 +46,9 @@ class Message(Base):
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
 
     def to_dict(self) -> dict:
-        return {k: getattr(self, k) for k in (
-            "id", "role", "content", "thinking", "tool_calls", "tool_call_id", "name", "status", "meta")}
+        return {**{k: getattr(self, k) for k in (
+            "id", "role", "content", "thinking", "tool_calls", "tool_call_id", "name", "status", "meta")},
+                "created_at": self.created_at.isoformat() if self.created_at else None}  # aba Trajetória
 
 
 class ModelSetting(Base):

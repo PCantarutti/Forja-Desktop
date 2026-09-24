@@ -15,6 +15,7 @@ import json
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from . import native
@@ -32,11 +33,17 @@ ESPERA = 45.0   # primeira consulta pode indexar o projeto inteiro
 MAX_ITENS = 60
 
 
+_ACHADOS: dict[str, tuple[float, list[str] | None]] = {}
+CACHE_PATH = 60.0  # shutil.which varre o PATH inteiro (~40 ms no Windows) e a lista de ferramentas é montada várias vezes por passo
+
+
 def _comando(lingua: str) -> list[str] | None:
-    for exe, args in SERVIDORES.get(lingua, []):
-        if caminho := shutil.which(exe):
-            return [caminho, *args]
-    return None
+    agora = time.monotonic()
+    if (achado := _ACHADOS.get(lingua)) and agora - achado[0] < CACHE_PATH:
+        return achado[1]
+    cmd = next(([c, *args] for exe, args in SERVIDORES.get(lingua, []) if (c := shutil.which(exe))), None)
+    _ACHADOS[lingua] = (agora, cmd)
+    return cmd
 
 
 def _uri(p: Path) -> str:
