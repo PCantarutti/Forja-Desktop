@@ -108,6 +108,18 @@ def test_modo_que_o_modelo_nao_faz_e_barrado(isolado):
         imagegen.argv(Path("sd.exe"), "x", isolado / "o.webm", _o(isolado, "Wan2.2-TI2V-5B-Q8_0.gguf", vae=""))
 
 
+def test_erro_de_vram_ocupada_explica_em_portugues():
+    ocupada = ["[WARN ] model manager memory on Vulkan1: reported free 65.43 MB / total 12118.00 MB, tracked",
+               "[ERROR] conditioner.hpp:1573: GGML_ASSERT(!chunk_hidden_states.empty()) failed",
+               "[WARN ] model manager cannot make enough memory available on Vulkan1: need 809.00 MB"]
+    assert imagegen.dica_de_falha(ocupada).startswith("A GPU estava com só 65 MB livres de 12 GB")
+    grande = ["reported free 11313.05 MB / total 12118.00 MB", "cannot make enough memory available"]
+    assert "Pesos na RAM" in imagegen.dica_de_falha(grande, video=True)  # livre e mesmo assim não coube
+    assert imagegen.dica_de_falha(["qualquer outro erro"]) == ""
+    assert imagegen.rotulo_codigo(3221226505) == "3221226505, 0xC0000409"
+    assert imagegen.rotulo_codigo(1) == "1"
+
+
 def test_quadros_sao_4k_mais_1():
     assert imagegen.quadros(2, 16) == 33
     assert imagegen.quadros(3, 24) == 73

@@ -31,7 +31,8 @@ export type Activity = {
   local?: boolean;  // modelo local carregado no llama-server
 };
 
-export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video" };
+export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video";
+  fps?: number; quadros?: number }; // só em vídeo gerado (video_generate): o player conta quadros com isso
 
 export type Message = {
   id: number;

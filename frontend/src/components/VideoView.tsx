@@ -1289,16 +1289,17 @@ function Foco(props: {
     }
   }
 
+  // Na pasta de imagens, com nome que diz de onde veio: o <a download> do Electron abria um "Salvar como"
+  // e o aviso de "salvo em Downloads" nem sempre era verdade.
   async function salvarQuadro() {
     const b = await player.current?.capturar();
-    if (!b) return;
-    const url = URL.createObjectURL(b);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${atual.path.split(/[\\/]/).pop()?.replace(/\.webm$/, "")}-quadro.png`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    setSalvo("Quadro salvo em Downloads.");
+    if (!b) return props.onError("Não deu para tirar o quadro deste vídeo.");
+    try {
+      const base = atual.path.split(/[\\/]/).pop()?.replace(/\.webm$/, "") ?? "video";
+      setSalvo(await subirQuadro(b, `${base}-quadro.png`));
+    } catch (e: any) {
+      props.onError(e.message);
+    }
   }
 
   const acao = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs text-muted hover:bg-raised hover:text-fg";
@@ -1404,7 +1405,15 @@ function Foco(props: {
           <button className={acao} onClick={() => props.onAbrir(atual.path, "open")}>
             <ExternalLink className="size-3.5" /> Abrir no player do sistema
           </button>
-          {salvo && <p className="px-2.5 pt-1 text-[11px] text-emerald-400">{salvo}</p>}
+          {salvo && (
+            <p className="flex items-center gap-1.5 px-2.5 pt-1 text-[11px] text-emerald-400" title={salvo}>
+              <Check className="size-3 shrink-0" />
+              <span className="min-w-0 truncate">Salvo: {salvo.split(/[\\/]/).pop()}</span>
+              <button className="shrink-0 text-muted underline hover:text-fg" onClick={() => props.onAbrir(salvo, "reveal")}>
+                Mostrar na pasta
+              </button>
+            </p>
+          )}
         </div>
         <div className="border-t border-line px-3 py-2 text-[11px] text-faint">
           <span className="font-mono">←→</span> quadro · <span className="font-mono">Espaço</span> tocar · <span className="font-mono">↑↓</span> tomada ·{" "}

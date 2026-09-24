@@ -262,13 +262,38 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
         raise ToolError("Geração cancelada.")
     if proc.returncode != 0 or not out.exists():
         log = "\n".join(tail[-12:])
-        dica = ""
-        if "DeviceLost" in log or "OutOfDeviceMemory" in log or "out of memory" in log.lower():
-            dica = ("A GPU ficou sem memória. Em IA local › Modelos › ajustes deste modelo, ligue "
-                    "\"Pesos na RAM\", \"Flash attention\" e \"VAE em blocos\", ou diminua a resolução"
-                    + (" e a duração" if video else "") + ".\n\n")
-        raise ToolError(f"{dica}sd falhou (código {proc.returncode}):\n{log}")
+        raise ToolError(f"{dica_de_falha(tail, video)}sd falhou (código {rotulo_codigo(proc.returncode)}):\n{log}")
     return out
+
+
+# "model manager memory on Vulkan1: reported free 65.43 MB / total 12118.00 MB"
+MEMORIA_LIVRE = re.compile(r"reported free ([\d.]+) MB / total ([\d.]+) MB")
+
+
+def dica_de_falha(tail: list[str], video: bool = False) -> str:
+    """A primeira linha do erro, em português: é ela que o card mostra, e o log cru não explica nada."""
+    texto = "\n".join(tail)
+    baixo = texto.lower()
+    if not any(x in baixo for x in ("devicelost", "outofdevicememory", "out of memory",
+                                    "cannot make enough memory available")):
+        return ""
+    livres = MEMORIA_LIVRE.findall(texto)
+    if livres and float(livres[-1][0]) < 0.25 * float(livres[-1][1]):
+        # Quase nada livre antes de começar: não é o modelo que é grande, é outro programa segurando a VRAM.
+        livre, total = float(livres[-1][0]), float(livres[-1][1])
+        return (f"A GPU estava com só {livre:.0f} MB livres de {total / 1024:.0f} GB: outro programa está "
+                "ocupando a VRAM (um modelo carregado no chat, outra instância do Forja, um jogo). Libere e use "
+                "Continuar.\n\n")
+    return ("A GPU ficou sem memória. Em IA local › Modelos › ajustes deste modelo, ligue "
+            "\"Pesos na RAM\", \"Flash attention\" e \"VAE em blocos\", ou diminua a resolução"
+            + (" e a duração" if video else "") + ".\n\n")
+
+
+def rotulo_codigo(rc: int | None) -> str:
+    """3221226505 não diz nada; 0xC0000409 (o processo se derrubou) dá para procurar."""
+    if rc is None or 0 <= rc < 256:
+        return str(rc)
+    return f"{rc}, 0x{rc & 0xFFFFFFFF:08X}"
 
 
 # ---------------------------------------------------------------- ferramenta
@@ -327,6 +352,8 @@ async def video_generate(root: Path, args: dict) -> dict:
     dados = out.read_bytes()
     out.unlink(missing_ok=True)
     att = uploads.save("video.webm", dados, "video/webm", root)
+    o = _opts(opts)
+    att.update(fps=int(o["fps"]), quadros=int(o["frames"]))  # o player do chat conta quadros com isso
     return {"text": f"Vídeo gerado em {att['path']} ({len(dados) // 1024} KB).", "attachments": [att]}
 
 

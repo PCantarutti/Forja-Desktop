@@ -298,7 +298,7 @@ export function ToolVideos({ list, bare }: { list: Attachment[]; bare?: boolean 
   return (
     <div className={bare ? "my-2 space-y-2" : "space-y-2 border-t border-line p-3"}>
       {videos.map((a) => (
-        <VideoPlayer key={a.path} src={fileUrl(a)} fps={16} compacto className="max-w-md rounded-xl border border-line" />
+        <VideoPlayer key={a.path} src={fileUrl(a)} fps={a.fps ?? 16} quadros={a.quadros} compacto className="max-w-md rounded-xl border border-line" />
       ))}
     </div>
   );
