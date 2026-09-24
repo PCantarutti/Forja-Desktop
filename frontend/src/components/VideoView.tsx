@@ -1559,11 +1559,12 @@ function Foco(props: {
     return () => window.removeEventListener("keydown", k);
   }, [pos, prontos.length, props.onFechar, props.onIndice]);
 
-  // Foco de teclado: entra no botão de fechar e volta para onde estava (o cartão) quando o foco fecha.
-  const fechar = useRef<HTMLButtonElement>(null);
+  // Foco de teclado: entra no diálogo e volta para onde estava (o cartão) quando o foco fecha. No diálogo, não
+  // no botão de fechar: com o foco nele, o Espaço (pausar) "clicava" o Fechar.
+  const dialogo = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const antes = document.activeElement as HTMLElement | null;
-    fechar.current?.focus();
+    dialogo.current?.focus();
     return () => antes?.focus?.();
   }, []);
 
@@ -1600,7 +1601,9 @@ function Foco(props: {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex bg-black/85 backdrop-blur-md"
+      ref={dialogo}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex bg-black/85 outline-none backdrop-blur-md"
       role="dialog"
       aria-modal="true"
       aria-label="Player de vídeo"
@@ -1637,7 +1640,7 @@ function Foco(props: {
             <button disabled={pos >= prontos.length - 1} onClick={() => props.onIndice(prontos[pos + 1].i)} title="Próxima (↓)" className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg disabled:opacity-30">
               <ArrowUp className="size-3.5 rotate-180" />
             </button>
-            <button ref={fechar} onClick={props.onFechar} title="Fechar (Esc)" aria-label="Fechar o player" className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+            <button onClick={props.onFechar} title="Fechar (Esc)" aria-label="Fechar o player" className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
               <X className="size-3.5" />
             </button>
           </div>

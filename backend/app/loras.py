@@ -122,6 +122,9 @@ def tags(loras: list[dict], com_alto_ruido: bool) -> tuple[str, str]:
 ACELERADORES = {
     "wan21_t2v": [("lightx2v/Wan2.1-Distill-Loras", "wan2.1_t2v_14b_lora_*step*.safetensors")],
     "wan21_i2v": [("lightx2v/Wan2.1-Distill-Loras", "wan2.1_i2v_lora_*step*.safetensors")],
+    # FLF2V não tem destilado próprio; o do T2V 14B (mesma base) funciona: validado em 24/09/2026, 4 passos,
+    # CFG 1, início e fim respeitados.
+    "wan21_flf2v": [("lightx2v/Wan2.1-Distill-Loras", "wan2.1_t2v_14b_lora_*step*.safetensors")],
     "wan22_a14b_t2v": [("lightx2v/Wan2.2-Distill-Loras", "wan2.2_t2v_A14b_high_noise_lora_*step*.safetensors"),
                        ("lightx2v/Wan2.2-Distill-Loras", "wan2.2_t2v_A14b_low_noise_lora_*step*.safetensors")],
     "wan22_a14b_i2v": [("lightx2v/Wan2.2-Distill-Loras", "wan2.2_i2v_A14b_high_noise_lora_*step*.safetensors"),
