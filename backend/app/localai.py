@@ -1984,6 +1984,16 @@ KITS_VIDEO = [
      "modelo": (_QS_I2V, "LowNoise/Wan2.2-I2V-A14B-LowNoise-*.gguf"),
      "par": (_QS_I2V, "HighNoise/Wan2.2-I2V-A14B-HighNoise-*.gguf"), "pecas": ["vae21", "umt5"]},
 ]
+# Onde cada arquivo do kit cai, dentro da pasta de modelos escolhida: o modelo numa subpasta com o nome do kit;
+# a peça que mais de um kit usa (umt5, VAE do 2.1, clip_vision) numa pasta comum, para não baixar duas vezes.
+PASTA_COMUM = "Compartilhados"
+_USO_PECA = {x: sum(x in k["pecas"] for k in KITS_VIDEO) for x in _KIT_PECAS}
+
+
+def subpasta_kit(kit: dict, peca: str = "") -> str:
+    return PASTA_COMUM if peca and _USO_PECA.get(peca, 0) > 1 else kit["nome"]
+
+
 # Quanto da VRAM um arquivo pode ocupar e ainda "caber": o resto vai para as ativações. Com 15% livres a
 # amostragem do TI2V passou na B580; com o VAE do 2.2 inteiro não (ver o bloco do VAE no imagegen).
 FOLGA_VRAM = 0.85
@@ -2044,14 +2054,14 @@ def kits_video(quants: dict[str, str] | None = None) -> list[dict]:
             for x in k["pecas"]:
                 repo, glob = _KIT_PECAS[x]
                 ops = _opcoes(repo, glob, vram)
-                arquivos += [next((o for o in ops if Path(o["path"]).name.lower() in presentes), None)
-                             or escolher_quant(ops)] if ops else []
+                escolhida = next((o for o in ops if Path(o["path"]).name.lower() in presentes), None) or escolher_quant(ops)
+                arquivos += [{**escolhida, "subpasta": subpasta_kit(k, x)}] if escolhida else []
         except (ToolError, httpx.HTTPError) as e:
             out.append({**base, "erro": f"Não deu para consultar o Hugging Face: {e}", "arquivos": [], "opcoes": [],
                         "quant": "", "gb_modelo": 0, "gb_total": 0, "gb_falta": 0})
             continue
-        arquivos = [{**a, "papel": papel_video(a["path"]), "presente": Path(a["path"]).name.lower() in presentes}
-                    for a in arquivos]
+        arquivos = [{"subpasta": subpasta_kit(k), **a, "papel": papel_video(a["path"]),
+                     "presente": Path(a["path"]).name.lower() in presentes} for a in arquivos]
         out.append({**base, "arquivos": arquivos, "quant": modelo["quant"],
                     "opcoes": [{"quant": o["quant"], "gb": o["gb"], "cabe": o["cabe"]} for o in opcoes],
                     # o que precisa caber na VRAM é o maior modelo de difusão (o A14B carrega um de cada vez)
@@ -2144,10 +2154,14 @@ def baixar_acelerador(model: str, folder: str = "") -> list[dict]:
     ac = aceleradores(model)
     if not ac["arquivos"]:
         raise ToolError(ac["motivo"])
-    # na pasta de modelos em que o modelo está: as LoRAs de uma geração precisam dividir o disco (loras.tags)
+    # ao lado do modelo (a subpasta dele), dentro da mesma pasta de modelos: as LoRAs de uma geração precisam
+    # dividir o disco (loras.tags)
     dono = Path(os.path.normcase(os.path.abspath(model)))
-    pasta = folder or next((d for d in dirs() if Path(os.path.normcase(os.path.abspath(d))) in dono.parents), "")
-    return [download(a["repo"], a["path"], pasta) for a in ac["arquivos"] if not a["presente"]]
+    raiz = folder or next((d for d in dirs() if Path(os.path.normcase(os.path.abspath(d))) in dono.parents), "")
+    rel = ""
+    if raiz and not folder:
+        rel = str(Path(os.path.abspath(model)).parent.relative_to(os.path.abspath(raiz)))
+    return [download(a["repo"], a["path"], raiz, "" if rel == "." else rel) for a in ac["arquivos"] if not a["presente"]]
 
 
 def baixar_kit(kit_id: str, folder: str = "", quant: str = "") -> list[dict]:
@@ -2157,7 +2171,7 @@ def baixar_kit(kit_id: str, folder: str = "", quant: str = "") -> list[dict]:
         raise ToolError("Kit não encontrado.")
     if kit.get("erro"):
         raise ToolError(kit["erro"])
-    return [download(a["repo"], a["path"], folder) for a in kit["arquivos"] if not a["presente"]]
+    return [download(a["repo"], a["path"], folder, a["subpasta"]) for a in kit["arquivos"] if not a["presente"]]
 
 
 def _mesma_pasta(a, b) -> bool:
@@ -2173,13 +2187,17 @@ def dentro_das_pastas(path) -> bool:
                for raiz in (Path(os.path.normcase(os.path.normpath(d))) for d in dirs()))
 
 
-def download(repo: str, path: str, folder: str = "") -> dict:
-    """Baixa o arquivo (e todos os shards do conjunto) para a pasta escolhida."""
-    dest_dir = Path(folder) if folder else Path(read_config().get("download_dir") or models_dir())
-    if not any(_mesma_pasta(dest_dir, d) for d in dirs()):
-        raise ToolError(f"'{dest_dir}' não está na lista de pastas de modelos. Adicione-a primeiro.")
+def download(repo: str, path: str, folder: str = "", subpasta: str = "") -> dict:
+    """Baixa o arquivo (e todos os shards do conjunto) para a pasta escolhida; `subpasta`, dentro dela
+    (os kits de vídeo: uma por modelo)."""
+    raiz = Path(folder) if folder else Path(read_config().get("download_dir") or models_dir())
+    if not any(_mesma_pasta(raiz, d) for d in dirs()):
+        raise ToolError(f"'{raiz}' não está na lista de pastas de modelos. Adicione-a primeiro.")
+    if subpasta and (Path(subpasta).is_absolute() or ".." in Path(subpasta).parts):
+        raise ToolError("Subpasta inválida.")
+    dest_dir = raiz / subpasta if subpasta else raiz
     dest_dir.mkdir(parents=True, exist_ok=True)
-    _patch("download_dir", str(dest_dir))  # a próxima vez já vem com a mesma pasta
+    _patch("download_dir", str(raiz))  # a próxima vez já vem com a mesma pasta (a raiz, não a subpasta)
     names = [path]
     m = SHARD.match(Path(path).name)
     if m:

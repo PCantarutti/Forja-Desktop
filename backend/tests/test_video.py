@@ -243,9 +243,15 @@ def test_kit_escolhe_a_maior_quantizacao_que_cabe_e_lista_so_o_que_falta(isolado
     assert faltam == ["Wan2.2-TI2V-5B-Q5_K_M.gguf", "wan2.2_vae.safetensors"]
     assert kit["gb_falta"] == round(3.81 + 1.41, 2)
     baixados = []
-    monkeypatch.setattr(localai, "download", lambda repo, path, folder="": baixados.append(path) or {"id": path})
+    monkeypatch.setattr(localai, "download",
+                        lambda repo, path, folder="", subpasta="": baixados.append((path, subpasta)) or {"id": path})
     localai.baixar_kit("wan22_ti2v_5b", quant="Q8_0")  # trocada no cartão
-    assert [Path(p).name for p in baixados] == ["Wan2.2-TI2V-5B-Q8_0.gguf", "wan2.2_vae.safetensors"]
+    # o modelo e a peça só dele (o VAE do 2.2) na subpasta com o nome do kit
+    assert [(Path(p).name, sp) for p, sp in baixados] == [("Wan2.2-TI2V-5B-Q8_0.gguf", "Wan2.2 TI2V 5B"),
+                                                           ("wan2.2_vae.safetensors", "Wan2.2 TI2V 5B")]
+    # a peça que vários kits usam vai para a pasta comum
+    kit = next(k for k in localai.kits_video() if k["id"] == "wan22_a14b_t2v")
+    assert {Path(a["path"]).name: a["subpasta"] for a in kit["arquivos"]}["wan_2.1_vae.safetensors"] == localai.PASTA_COMUM
 
 
 def test_kit_a14b_leva_o_par_na_mesma_quantizacao(isolado, monkeypatch):

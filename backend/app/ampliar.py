@@ -35,6 +35,7 @@ REPO_ESRGAN = "xinntao/Real-ESRGAN"
 # buffer do Vulkan). Se outra GPU pedir outro valor, vira medida por máquina como o bloco do VAE.
 TILE_ESRGAN = 256
 GH_TTL = 3600
+PASTA = "Ampliação (ESRGAN)"  # subpasta da pasta de modelos onde os ESRGAN baixados caem
 
 
 def eh_ampliador(path: str) -> bool:
@@ -88,7 +89,7 @@ def baixar_modelo(nome: str, folder: str = "") -> dict:
     asset = _assets_esrgan(int(time.time() // GH_TTL)).get(nome)
     if not asset:
         raise ToolError(f"{nome} não está mais nos releases do Real-ESRGAN.")
-    pasta = Path(folder or localai.models_dir())
+    pasta = Path(folder or localai.models_dir()) / PASTA
     pasta.mkdir(parents=True, exist_ok=True)
     return downloads.start("modelo", nome, [asset["url"]], pasta / nome)
 

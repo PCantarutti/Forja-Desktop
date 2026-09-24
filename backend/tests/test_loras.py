@@ -115,8 +115,15 @@ def test_acelerador_da_variante_e_o_que_ja_esta_no_disco(isolado, monkeypatch):
     assert nomes == [("wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors", False),  # a mais nova
                      ("wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors", True)]
     baixados = []
-    monkeypatch.setattr(localai, "download", lambda repo, path, folder="": baixados.append((path, folder)) or {"id": path})
+    monkeypatch.setattr(localai, "download",
+                        lambda repo, path, folder="", subpasta="": baixados.append((path, folder, subpasta)) or {"id": path})
     localai.baixar_acelerador(str(modelo))
-    assert [Path(p).name for p, _ in baixados] == ["wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors"]
-    assert Path(baixados[0][1]) == m  # na pasta de modelos do próprio modelo
+    assert [Path(p).name for p, _, _ in baixados] == ["wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors"]
+    assert Path(baixados[0][1]) == m and baixados[0][2] == ""  # na pasta de modelos do próprio modelo
+    # modelo numa subpasta (kit): o acelerador vai para a mesma subpasta
+    (m / "Wan2.2 T2V A14B").mkdir()
+    modelo.rename(m / "Wan2.2 T2V A14B" / modelo.name)
+    baixados.clear()
+    localai.baixar_acelerador(str(m / "Wan2.2 T2V A14B" / modelo.name))
+    assert (Path(baixados[0][1]), baixados[0][2]) == (m, "Wan2.2 T2V A14B")
     assert localai.aceleradores(str(m / "Wan2.2-TI2V-5B-Q8_0.gguf"))["motivo"].startswith("Não há acelerador")
