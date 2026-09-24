@@ -125,7 +125,7 @@ export default function LocalPanel(props: {
         {tab === "Modelos" && <Models st={st} onDone={refresh} onError={setError} />}
         {tab === "Inferência" && <Inferencia st={st} chatModel={props.chatModel} onError={setError} />}
         {tab === "Baixar" && <Downloader st={st} onDone={refresh} onError={setError} />}
-        {tab === "Imagem" && <ImageTab st={st} onDone={refresh} onError={setError} />}
+        {tab === "Imagem" && <ImageTab />}
       </div>
     </div>
   );
@@ -1433,151 +1433,15 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
 
 // ---------------------------------------------------------------- aba Imagem
 
-function ImageTab(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
-  const { st } = props;
-  const [o, setO] = useState<ImageOpts>(st.image);
-  const [prompt, setPrompt] = useState("");
-  const [seed, setSeed] = useState(0);
-  const set = <K extends keyof ImageOpts>(k: K, v: ImageOpts[K]) => setO((c) => ({ ...c, [k]: v }));
-  const pronta = st.jobs.filter((j) => j.kind === "imagem" && j.status === "pronto" && j.result).pop();
-  const atual = st.image_models.find((m) => m.path === o.model);
-  const [perguntando, setPerguntando] = useState(false);
-
-  async function gerar(confirm = false) {
-    try {
-      await api.put("/local/image/defaults", o); // o que está na tela vira o padrão da ferramenta do agente
-      await api.post("/local/image", { prompt, opts: { seed }, confirm });
-      setPerguntando(false);
-      props.onDone();
-    } catch (e: any) {
-      // 409 = tem um LLM na VRAM; a conta de descarregar é do usuário, não nossa.
-      if (e.status === 409) setPerguntando(true);
-      else props.onError(e.message);
-    }
-  }
-
-  async function mostrarNaPasta(caminho: string) {
-    try {
-      await api.post("/open", { path: caminho, mode: "reveal" });
-    } catch (e: any) {
-      props.onError(e.message);
-    }
-  }
-
+/** O runtime do sd.cpp mora aqui (fica acima, no card de runtime); gerar é nas abas próprias. */
+function ImageTab() {
   return (
     <section className={card}>
-      <div className="flex flex-col gap-2.5">
-        <Field label="Modelo" hint="Baixe .safetensors/.gguf de imagem para uma pasta de modelos.">
-          <select className={input} value={o.model} onChange={(e) => set("model", e.target.value)}>
-            <option value="">— escolher —</option>
-            {st.image_models.map((m) => (
-              <option key={m.path} value={m.path}>
-                {m.name} ({size(m.size)})
-              </option>
-            ))}
-          </select>
-        </Field>
-        {atual ? (
-          <p className="text-faint">
-            Em uso: <span className="text-muted">{atual.name}</span> · {size(atual.size)} · {atual.folder}
-            <br />O sd.cpp carrega o modelo a cada imagem e libera a memória no fim — nada fica preso na GPU.
-          </p>
-        ) : (
-          <p className="text-faint">Nenhum modelo escolhido: a ferramenta do agente também não vai gerar.</p>
-        )}
-        <Field label="Prompt">
-          <textarea
-            className={`${input} h-20 resize-none`}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="a red fox in the snow, cinematic lighting"
-          />
-        </Field>
-        <Field label="Negativo">
-          <input className={input} value={o.negative} onChange={(e) => set("negative", e.target.value)} />
-        </Field>
-        <div className="grid grid-cols-2 gap-2">
-          <Num label="Passos" value={o.steps} onChange={(v) => set("steps", v)} />
-          <Num label="CFG" value={o.cfg} onChange={(v) => set("cfg", v)} />
-          <Num label="Largura" value={o.width} onChange={(v) => set("width", v)} />
-          <Num label="Altura" value={o.height} onChange={(v) => set("height", v)} />
-        </div>
-        <Field label="Amostrador">
-          <select className={input} value={o.sampler} onChange={(e) => set("sampler", e.target.value)}>
-            {SAMPLERS.map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
-        </Field>
-        <Num label="Semente" value={seed} onChange={setSeed} hint="0 = aleatória" />
-        <Field label="Salvar imagens em" hint="As do agente continuam indo para a pasta de trabalho da conversa.">
-          <div className="flex items-center gap-2">
-            <input
-              className={input}
-              value={o.out_dir || st.image_dir}
-              onChange={(e) => set("out_dir", e.target.value)}
-              spellCheck={false}
-            />
-            <button
-              className={btn}
-              title="Escolher pasta"
-              onClick={async () => {
-                const escolhida = window.forja ? await window.forja.pickFolder(o.out_dir || st.image_dir) : "";
-                if (escolhida) set("out_dir", escolhida);
-              }}
-            >
-              <FolderOpen className="size-3.5" />
-            </button>
-          </div>
-        </Field>
-        <button
-          className={btnPrimary}
-          onClick={() => gerar()}
-          disabled={!prompt.trim() || !st.runtimes.sd.installed || st.image_busy}
-        >
-          {st.image_busy ? "Gerando…" : "Gerar"}
-        </button>
-        {perguntando && (
-          <div className="rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-amber-200">
-            <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
-            <p className="mt-1 text-amber-200/80">
-              O sd.cpp precisa dessa memória, então o Forja vai descarregá-lo antes de gerar. O que muda para uma
-              conversa aberta: o llama-server guarda o contexto já processado em cache; ao descarregar, esse cache
-              vai junto. A próxima mensagem reprocessa o histórico inteiro — a primeira resposta demora mais, e uma
-              resposta em andamento é cortada. O histórico da conversa em si não se perde.
-            </p>
-            <div className="mt-2 flex gap-2">
-              <button className={btnPrimary} onClick={() => gerar(true)}>
-                Descarregar e gerar
-              </button>
-              <button className={btn} onClick={() => setPerguntando(false)}>
-                Cancelar
-              </button>
-            </div>
-          </div>
-        )}
-        <p className="text-faint">
-          O agente também gera imagens com esses padrões, pela ferramenta <code>image_generate</code>.
-        </p>
-        {pronta?.result && (
-          <>
-            <img
-              src={`/api/local/image/file?path=${encodeURIComponent(pronta.result)}`}
-              alt={pronta.name}
-              className="mt-1 w-full rounded-lg border border-line"
-            />
-            <div className="flex items-center gap-2">
-              <button className={btn} onClick={() => mostrarNaPasta(pronta.result!)}>
-                <FolderOpen className="mr-1 inline size-3.5" />
-                Mostrar na pasta
-              </button>
-              <span className="min-w-0 flex-1 truncate text-faint" title={pronta.result}>
-                {pronta.result}
-              </span>
-            </div>
-          </>
-        )}
-      </div>
+      <p className="text-fg">Imagem e vídeo</p>
+      <p className="mt-1 text-muted">
+        Acima fica o stable-diffusion.cpp, que gera as duas coisas. Para gerar, use as abas <b>Imagens</b> e{" "}
+        <b>Vídeo</b> no topo da barra lateral; os modelos e os ajustes de cada um ficam em Modelos.
+      </p>
     </section>
   );
 }

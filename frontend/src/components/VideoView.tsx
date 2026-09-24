@@ -1254,6 +1254,9 @@ function Foco(props: {
   const pos = Math.max(0, prontos.findIndex(({ i }) => i === props.indice));
   const atual = prontos[pos]?.x;
   const player = useRef<VideoPlayerApi>(null);
+  // Fecha no clique fora do vídeo, mas só se o clique também COMEÇOU fora: arrastar a linha do tempo e
+  // soltar no fundo escuro não pode fechar o player no meio do scrub.
+  const comecouFora = useRef(false);
   const w = meta.opts.width ?? 832;
   const h = meta.opts.height ?? 480;
   const fps = meta.opts.fps ?? 16;
@@ -1301,8 +1304,17 @@ function Foco(props: {
   const acao = "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs text-muted hover:bg-raised hover:text-fg";
 
   return createPortal(
-    <div className="fixed inset-0 z-50 flex bg-black/85 backdrop-blur-md" role="dialog" aria-label="Player de vídeo" onClick={props.onFechar}>
-      <div className="flex min-w-0 flex-1 items-center justify-center p-6" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex bg-black/85 backdrop-blur-md"
+      role="dialog"
+      aria-label="Player de vídeo"
+      onPointerDown={(e) => (comecouFora.current = e.target === e.currentTarget || (e.target as HTMLElement).dataset.fundo === "1")}
+      onClick={(e) => {
+        const fora = e.target === e.currentTarget || (e.target as HTMLElement).dataset.fundo === "1";
+        if (fora && comecouFora.current) props.onFechar();
+      }}
+    >
+      <div data-fundo="1" className="flex min-w-0 flex-1 cursor-zoom-out items-center justify-center p-6" title="Clique fora do vídeo para fechar">
         <VideoPlayer
           key={atual.path}
           ref={player}

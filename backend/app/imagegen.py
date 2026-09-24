@@ -1,8 +1,8 @@
 """Geração de imagem e de vídeo com stable-diffusion.cpp.
 
 Sem servidor: cada imagem é uma chamada do `sd-cli.exe` que termina e libera a VRAM. Dois caminhos
-para a mesma função — a ferramenta `image_generate` (o agente gera e a imagem aparece no chat) e
-POST /api/local/image (o painel, com prompt e parâmetros na mão).
+para a mesma função — a ferramenta `image_generate` (o agente gera e a imagem aparece no chat) e os
+lotes das abas Imagens e Vídeo (`lotes.py`).
 
 Vídeo é o mesmo binário em `-M vid_gen` com um modelo Wan, gravando .webm direto (o Electron toca
 sem ffmpeg). Nos lotes e no argv, `refs` do vídeo são os quadros: nenhum = texto → vídeo, um = a
@@ -269,34 +269,6 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
                     + (" e a duração" if video else "") + ".\n\n")
         raise ToolError(f"{dica}sd falhou (código {proc.returncode}):\n{log}")
     return out
-
-
-def start_job(prompt: str, opts: dict | None = None, confirm: bool = False) -> dict:
-    """Versão do painel: job com progresso, na pasta escolhida na aba Imagem.
-
-    Com um LLM carregado, os dois disputam a VRAM — então descarregamos antes, mas só depois de a
-    pessoa confirmar, porque isso derruba o cache de contexto do chat que estiver aberto.
-    """
-    argv(_exe(), prompt or " ", OUT_DIR / "x.png", _opts(opts))  # valida runtime, modelo e prompt ANTES
-    if localai.status()["running"]:                                # de descarregar o LLM por nada
-        if not confirm:
-            raise ModeloCarregado(localai.status().get("alias") or "um modelo")
-        localai.unload()
-    localai.set_image_busy(True)
-    job = downloads.create("imagem", prompt[:60])
-    out = out_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}.png"
-
-    def work():
-        try:
-            generate(prompt, out, opts, job["id"])
-            downloads.finish(job["id"], result=str(out))
-        except Exception as e:
-            downloads.finish(job["id"], error=str(e))
-        finally:
-            localai.set_image_busy(False)
-
-    threading.Thread(target=work, daemon=True).start()
-    return job
 
 
 # ---------------------------------------------------------------- ferramenta

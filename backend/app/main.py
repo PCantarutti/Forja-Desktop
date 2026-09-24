@@ -451,12 +451,6 @@ class DownloadBody(BaseModel):
     folder: str = ""
 
 
-class ImageBody(BaseModel):
-    prompt: str = ""
-    opts: dict = {}
-    confirm: bool = False  # sim, pode descarregar o modelo que está na VRAM
-
-
 class PathsBody(BaseModel):
     models_dir: str = ""
     image_dir: str = ""
@@ -642,17 +636,6 @@ async def local_log_clear():
 def local_cancel(job_id: str):
     downloads.cancel(job_id)
     return {"ok": True}
-
-
-@app.post("/api/local/image")
-def local_image(body: ImageBody):
-    try:
-        return imagegen.start_job(body.prompt, body.opts, body.confirm)
-    except imagegen.ModeloCarregado as e:
-        # 409: a interface pergunta se pode descarregar e repete com confirm=true.
-        raise HTTPException(409, str(e))
-    except ToolError as e:
-        raise HTTPException(400, str(e))
 
 
 @app.put("/api/local/paths")
