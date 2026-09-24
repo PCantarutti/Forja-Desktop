@@ -33,6 +33,7 @@ import {
   Attachments,
   CopyButton,
   EventNotice,
+  NOTA_DO_AGENTE,
   Markdown,
   setFileConv,
   ActivityGroup,
@@ -1390,7 +1391,8 @@ export default function App() {
                     )}
                   </div>
                 );
-              if (m.role === "event") return <EventNotice key={m.id} m={m} />;
+              if (m.role === "event")
+                return String(m.meta?.kind ?? "") in NOTA_DO_AGENTE ? null : <EventNotice key={m.id} m={m} />; // essas vão no bloco de atividade
               if (m.role !== "assistant") return null;
               const turn = tur.get(i);
               const showTurn = turn && !(vivo && i > lu);

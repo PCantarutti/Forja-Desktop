@@ -789,7 +789,18 @@ export function ToolBlock(props: {
 
 export type ActivityPiece =
   | { kind: "thinking"; id: string; text: string }
-  | { kind: "tool"; id: string; call: ToolCall };
+  | { kind: "tool"; id: string; call: ToolCall }
+  | { kind: "note"; id: string; title: string; text: string };
+
+/** Eventos que o Forja manda ao MODELO (rodada de goal, aviso de segundo plano, contexto, hook,
+ * lembrete): não são conversa com o usuário, então vão dentro do bloco recolhível de atividade. */
+export const NOTA_DO_AGENTE: Record<string, string> = {
+  goal: "Nova rodada da goal",
+  aviso: "Aviso de segundo plano",
+  contexto: "Contexto de execução",
+  hook: "Hook do projeto",
+  nudge: "Lembrete automático",
+};
 
 // Primeira ferramenta do grupo vira a frase de abertura do resumo.
 const ACTION: Record<string, string> = {
@@ -833,12 +844,25 @@ export function groupActivity(messages: Message[]): Map<number, ActivitySeg[]> {
     cur = [];
     at = -1;
   };
+  let notas: ActivityPiece[] = []; // avisos ao modelo esperando o próximo grupo abrir
   const open = (i: number) => {
     if (at < 0) at = i;
+    if (notas.length) {
+      cur.push(...notas);
+      notas = [];
+    }
   };
   messages.forEach((m, i) => {
     if (m.role === "tool") return; // resultado é desenhado dentro do bloco da ferramenta, não corta o grupo
+    const kind = m.role === "event" ? String(m.meta?.kind ?? "") : "";
+    if (kind in NOTA_DO_AGENTE) {  // aviso ao modelo: entra no grupo aberto (ou no próximo), não corta
+      const nota: ActivityPiece = { kind: "note", id: `nota-${m.id}`, title: NOTA_DO_AGENTE[kind], text: m.content };
+      if (at >= 0) cur.push(nota);
+      else notas.push(nota);
+      return;
+    }
     if (m.role !== "assistant") return flush();
+    if (notas.length && m.content && !m.thinking && !(m.tool_calls ?? []).length) open(i); // resposta direta: as notas ficam num grupo antes dela
     if (m.thinking) {
       open(i);
       cur.push({ kind: "thinking", id: `think-${m.id}`, text: m.thinking });
@@ -893,8 +917,10 @@ export function ActivityGroup(props: {
   // Screenshot e arquivo gerado são resposta, não detalhe de execução: saem do grupo e ficam
   // visíveis mesmo com ele colapsado.
   const shots = tools.flatMap((c) => props.results.get(c.id)?.meta?.attachments ?? []);
+  const soNotas = props.items.every((p) => p.kind === "note");
   const summary =
-    (props.live && !tools.length ? "Trabalhando" : tools.length > 1 ? `${head}, usou ${tools.length} ferramentas` : head) +
+    (props.live && !tools.length ? "Trabalhando" : soNotas ? "Avisos ao agente"
+      : tools.length > 1 ? `${head}, usou ${tools.length} ferramentas` : head) +
     (fails ? ` (${fails} falha${fails > 1 ? "s" : ""})` : "") +
     (props.live ? "…" : "");
 
@@ -912,6 +938,11 @@ export function ActivityGroup(props: {
           {props.items.map((p, k) =>
             p.kind === "thinking" ? (
               <Thinking key={p.id} text={p.text} />
+            ) : p.kind === "note" ? (
+              <details key={p.id} className="my-1.5 text-xs text-faint">
+                <summary className="cursor-pointer select-none hover:text-muted">{p.title}</summary>
+                <div className="mt-1 whitespace-pre-wrap text-muted">{p.text}</div>
+              </details>
             ) : (
               <div key={p.id}>
                 {props.renderTool(
@@ -933,8 +964,6 @@ const EVENT_STYLE: Record<string, string> = {
   warning: "border-amber-500/30 text-amber-200",
   error: "border-red-500/30 text-red-200",
   nudge: "border-sky-500/30 text-sky-200",
-  aviso: "border-emerald-500/30 text-emerald-200",
-  goal: "border-violet-500/30 text-violet-200",
   info: "border-line text-muted",
 };
 
@@ -952,24 +981,11 @@ export function EventNotice({ m }: { m: Message }) {
         </div>
       </details>
     );
-  if (kind === "contexto")
-    // O que o modelo recebe como modo/plano/memórias vigentes. Fechado por padrão: é para ele, não para a conversa.
-    return (
-      <details className="my-2 text-xs text-muted">
-        <summary className="cursor-pointer select-none">
-          Contexto de execução atualizado ({/Modo de permissão: ([^.\n]+)/.exec(m.content)?.[1] ?? "modo"})
-        </summary>
-        <div className="mt-1 whitespace-pre-wrap rounded-xl border border-line bg-surface px-3 py-2">{m.content}</div>
-      </details>
-    );
   const title = {
     warning: "Aviso",
     error: "Erro",
     nudge: "Lembrete automático ao modelo",
     info: "Info",
-    aviso: "Segundo plano",
-    goal: "Nova rodada da goal",
-    hook: "Hook do projeto",
   }[kind as string];
   return (
     <div className={`my-3 rounded-2xl border bg-surface px-4 py-2.5 text-sm ${EVENT_STYLE[kind] ?? EVENT_STYLE.info}`}>
