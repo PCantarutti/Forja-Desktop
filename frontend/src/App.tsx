@@ -2153,8 +2153,8 @@ export default function App() {
             onConversationChanged={refreshConversations}
             onAbrirBaixar={() => {
               abrir("local");
-              // o painel IA local escuta e abre direto na aba Baixar, já na seção de vídeo
-              setTimeout(() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Baixar" })), 0);
+              // o painel IA local escuta e abre direto na aba Vídeo (kits, modelos e ampliação)
+              setTimeout(() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Vídeo" })), 0);
             }}
           />
         ) : (

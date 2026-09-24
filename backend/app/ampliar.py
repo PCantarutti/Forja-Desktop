@@ -98,7 +98,7 @@ def baixar_modelo(nome: str, folder: str = "") -> dict:
 def _ffmpeg() -> Path:
     exe = localai.find_exe("ffmpeg")
     if not exe:
-        raise ToolError("Falta o ffmpeg: baixe em Ampliar, no player, ou em IA local › Baixar › Ampliação de vídeo (uns 80 MB).")
+        raise ToolError("Falta o ffmpeg: baixe em IA local › Vídeo, ou em Configurações › Runtime (uns 80 MB).")
     return exe
 
 

@@ -527,7 +527,7 @@ export type Hardware = {
 };
 
 export type LocalState = {
-  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo };
+  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo; ffmpeg: RuntimeInfo };
   models: LocalModel[];
   server: {
     running: boolean;

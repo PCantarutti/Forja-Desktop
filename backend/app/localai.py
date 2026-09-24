@@ -397,8 +397,8 @@ def runtime_version(exe: str) -> str:
     m = re.search(r"version:\s*(\S+).*?build\s+(\w+)", r.stdout + r.stderr, re.S)
     if m:
         return f"{m.group(1)} (build {m.group(2)})"
-    m = re.search(r"(master-\S+|b\d+)", r.stdout + r.stderr)
-    return m.group(1) if m else ""
+    m = re.search(r"ffmpeg version (\S+)|(master-\S+|b\d+)", r.stdout + r.stderr)
+    return (m.group(1) or m.group(2)) if m else ""
 
 
 def runtimes() -> dict:
@@ -408,13 +408,14 @@ def runtimes() -> dict:
     for kind in EXE:
         exe = find_exe(kind)
         instalados = []
-        for backend in BACKENDS:
+        backends = [b for b in BACKENDS if b in ASSETS[kind]]  # o ffmpeg só tem o build de CPU
+        for backend in backends:
             achado = exe_em(kind, backend)
             if achado:
                 instalados.append({"backend": backend, "exe": str(achado),
-                                   "version": runtime_version(str(achado)) if kind == "llama" else ""})
+                                   "version": runtime_version(str(achado)) if kind in ("llama", "ffmpeg") else ""})
         out[kind] = {"installed": bool(exe), "exe": str(exe) if exe else "",
-                     "backend": exe.parent.name if exe else "", "backends": list(BACKENDS),
+                     "backend": exe.parent.name if exe else "", "backends": backends,
                      "available": instalados, "chosen": escolha.get(kind, "")}
     return out
 
@@ -452,15 +453,15 @@ def install_runtime(kind: str, backend: str) -> dict:
     """Acha o asset do último release e baixa em background. Devolve o job."""
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
-    if backend not in BACKENDS:
-        raise ToolError(f"Backend desconhecido: {backend}")
+    if backend not in BACKENDS or backend not in ASSETS[kind]:
+        raise ToolError(f"Não há build de {backend} para o {kind}.")
     if not SUPPORTED:
         raise ToolError("Download automático de runtime só está pronto para Windows. "
                         "Compile o llama.cpp/sd.cpp e aponte a pasta manualmente.")
     # O llama-server em uso trava as DLLs; atualizar por baixo dele não tem como dar certo.
     if kind == "llama" and status()["running"]:
         raise ToolError("Descarregue o modelo antes de atualizar o llama.cpp: o llama-server em uso trava os arquivos.")
-    if kind == "sd" and image_busy():
+    if kind in ("sd", "ffmpeg") and image_busy():
         raise ToolError("Espere a imagem em andamento terminar antes de atualizar o stable-diffusion.cpp.")
     tag, urls = _find_assets(kind, backend)
     dest = runtime_dir(kind, backend)

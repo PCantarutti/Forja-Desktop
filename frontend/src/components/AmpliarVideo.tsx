@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { Check, Download, Film } from "./icons";
+import { Check, Download, Film, X } from "./icons";
 import { btn, btnPrimary } from "./LocalPanel";
 
 /** O que o backend diz da ampliação: ffmpeg instalado, ESRGAN do catálogo e todos os que estão no disco. */
@@ -41,7 +41,12 @@ function useCatalogo(onError: (e: string) => void) {
 }
 
 /** Os downloads da ampliação: o ffmpeg (obrigatório) e os ESRGAN (opcionais: sem eles, é Lanczos). */
-export function BaixarAmpliacao(props: { onError: (e: string) => void; soFaltando?: boolean; estado?: ReturnType<typeof useCatalogo> }) {
+export function BaixarAmpliacao(props: {
+  onError: (e: string) => void;
+  soFaltando?: boolean;
+  soModelos?: boolean; // o ffmpeg já aparece como motor (card de runtime) acima
+  estado?: ReturnType<typeof useCatalogo>;
+}) {
   const proprio = useCatalogo(props.onError);
   const { cat, baixando, baixar } = props.estado ?? proprio;
   if (!cat) return <p className="text-xs text-muted">Carregando…</p>;
@@ -53,7 +58,7 @@ export function BaixarAmpliacao(props: { onError: (e: string) => void; soFaltand
       resumo: `${m.resumo}${m.mb ? ` · ${Math.round(m.mb)} MB` : ""}`,
       presente: !!m.presente,
     })),
-  ].filter((l) => !props.soFaltando || !l.presente);
+  ].filter((l) => (!props.soFaltando || !l.presente) && (!props.soModelos || l.nome !== "ffmpeg"));
   return (
     <div className="flex flex-col gap-1.5 text-xs">
       {cat.erro && <p className="text-amber-400">{cat.erro}</p>}
@@ -176,6 +181,12 @@ export function AmpliarArquivo(props: {
     if (arq) URL.revokeObjectURL(arq.url);
   }, [arq]);
 
+  function remover() {
+    setArq(null);
+    setInfo(null);
+    setLendo(false);
+  }
+
   async function escolher(f: File | undefined) {
     if (!f) return;
     const path = window.forja?.caminhoDe?.(f);
@@ -220,9 +231,10 @@ export function AmpliarArquivo(props: {
           e.target.value = "";
         }}
       />
+      <div className="relative w-56 shrink-0">
       <button
         onClick={() => entrada.current?.click()}
-        className={`relative grid w-56 shrink-0 place-items-center overflow-hidden rounded-xl border border-dashed text-xs transition-colors ${
+        className={`relative grid w-full place-items-center overflow-hidden rounded-xl border border-dashed text-xs transition-colors ${
           sobre ? "border-sky-400 bg-sky-400/10 text-sky-200" : "border-line text-muted hover:border-[#454545] hover:text-fg"
         }`}
         style={{ aspectRatio: info ? info.w / info.h : 16 / 9 }}
@@ -232,7 +244,11 @@ export function AmpliarArquivo(props: {
           semPrevia ? (
             <span className="px-3 text-center text-faint">Sem prévia neste formato: a ampliação funciona igual (o ffmpeg lê).</span>
           ) : (
-            <video src={arq.url} muted loop autoPlay playsInline onError={() => setSemPrevia(true)} className="size-full bg-black object-contain" />
+            <video src={arq.url} muted loop autoPlay playsInline onError={() => setSemPrevia(true)}
+              // codec que o Chromium não decodifica (MPEG-4 part 2, HEVC): abre, toca o áudio e não dá erro, só não tem imagem
+              onLoadedMetadata={(e) => !e.currentTarget.videoWidth && setSemPrevia(true)}
+              className="size-full bg-black object-contain"
+            />
           )
         ) : (
           <span className="flex flex-col items-center gap-1.5 px-3 text-center">
@@ -242,6 +258,18 @@ export function AmpliarArquivo(props: {
           </span>
         )}
       </button>
+      {arq && (
+        // fora do botão da prévia (botão dentro de botão não vale), sempre visível: é o jeito de desistir
+        <button
+          onClick={remover}
+          title="Remover este vídeo"
+          aria-label="Remover o vídeo anexado"
+          className="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full border border-white/15 bg-[#161616]/85 text-fg shadow backdrop-blur-sm hover:bg-[#2a2a2a] focus-visible:ring-2 focus-visible:ring-sky-400/60"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
+      </div>
       <div className="min-w-56 flex-1">
         {!arq && (
           <p className="text-xs leading-relaxed text-muted">

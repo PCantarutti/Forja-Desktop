@@ -301,7 +301,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
 
   const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
 
-  const bloco = (kind: "llama" | "sd", titulo: string, descricao: string) => {
+  const bloco = (kind: "llama" | "sd" | "ffmpeg", titulo: string, descricao: string) => {
     const r = st.runtimes[kind];
     return (
       <Field key={kind} label={titulo} hint={descricao}>
@@ -331,9 +331,9 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
                   key={b}
                   className={btn}
                   onClick={() => acao(api.post("/local/runtime", { kind, backend: b }))}
-                  title={b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
+                  title={kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
                 >
-                  {tem ? `Atualizar ${b}` : `Baixar ${b}`}
+                  {kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
                 </button>
               );
             })}
@@ -346,7 +346,8 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
   return (
     <div className="max-w-2xl space-y-5">
       {bloco("llama", "Motor de chat (llama.cpp)", "CPU, Vulkan e CUDA convivem no disco: dá para trocar a qualquer momento, sem baixar de novo.")}
-      {bloco("sd", "Motor de imagem (stable-diffusion.cpp)", "Mesma ideia, para a geração de imagem.")}
+      {bloco("sd", "Motor de imagem e vídeo (stable-diffusion.cpp)", "Mesma ideia, para gerar imagem e vídeo (e o ESRGAN da ampliação).")}
+      {bloco("ffmpeg", "Motor de ampliação de vídeo (ffmpeg)", "Separa os quadros, junta de volta com o áudio e interpola o movimento. Só existe o build de CPU: o pesado (ESRGAN) é na GPU pelo sd.cpp.")}
       {!!st.jobs?.filter((j: any) => j.kind === "runtime").length && (
         <div className="space-y-1 text-xs text-muted">
           {st.jobs

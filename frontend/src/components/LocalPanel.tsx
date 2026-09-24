@@ -21,7 +21,7 @@ export const input = `w-full ${campo}`;
 const CACHE_TYPES = ["f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
 export const SAMPLERS = ["euler_a", "euler", "heun", "dpm2", "dpm++2s_a", "dpm++2m", "dpm++2mv2", "ipndm", "lcm",
   "ddim_trailing", "tcd", "res_multistep", "er_sde", "dpm++2m_sde", "lms"];
-const SUBTABS = ["Modelos", "Inferência", "Baixar", "Imagem"] as const;
+const SUBTABS = ["Modelos", "Inferência", "Baixar", "Imagem", "Vídeo"] as const;
 type SubTab = (typeof SUBTABS)[number];
 
 /** O que cada controle faz, em uma frase — é o tooltip do (?), como no LM Studio. */
@@ -120,13 +120,15 @@ export default function LocalPanel(props: {
         {error && <Erro texto={error} onClose={() => setError("")} />}
         {st.server.error?.message && <ErroDeCarga erro={st.server.error} onDone={refresh} />}
         {tab !== "Inferência" && (
-          <Runtime st={st} kind={tab === "Imagem" ? "sd" : "llama"} onDone={refresh} onError={setError} />
+          <Runtime st={st} kind={tab === "Imagem" || tab === "Vídeo" ? "sd" : "llama"} onDone={refresh} onError={setError} />
         )}
+        {tab === "Vídeo" && <Runtime st={st} kind="ffmpeg" onDone={refresh} onError={setError} />}
         <Jobs jobs={st.jobs} onDone={refresh} />
         {tab === "Modelos" && <Models st={st} onDone={refresh} onError={setError} />}
         {tab === "Inferência" && <Inferencia st={st} chatModel={props.chatModel} onError={setError} />}
         {tab === "Baixar" && <Downloader st={st} onDone={refresh} onError={setError} />}
         {tab === "Imagem" && <ImageTab />}
+        {tab === "Vídeo" && <VideoTab st={st} onDone={refresh} onError={setError} />}
       </div>
     </div>
   );
@@ -220,11 +222,11 @@ function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["load
 
 // ---------------------------------------------------------------- runtime
 
-function Runtime(props: { st: LocalState; kind: "llama" | "sd"; onDone: () => void; onError: (e: string) => void }) {
+function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg"; onDone: () => void; onError: (e: string) => void }) {
   const info = props.st.runtimes[props.kind];
-  const [backend, setBackend] = useState("vulkan");
+  const [backend, setBackend] = useState(info.backends.includes("vulkan") ? "vulkan" : info.backends[0]);
   const [busy, setBusy] = useState(false);
-  const nome = props.kind === "llama" ? "llama.cpp" : "stable-diffusion.cpp";
+  const nome = { llama: "llama.cpp", sd: "stable-diffusion.cpp", ffmpeg: "ffmpeg" }[props.kind];
 
   async function install() {
     setBusy(true);
@@ -272,11 +274,13 @@ function Runtime(props: { st: LocalState; kind: "llama" | "sd"; onDone: () => vo
     <section className={card}>
       <p className="text-fg">{nome} não está instalado.</p>
       <p className="mt-1 text-muted">
-        Vulkan roda em qualquer GPU (NVIDIA, AMD, Intel) e é o menor download. CUDA só para NVIDIA, e baixa
-        também o runtime da NVIDIA (~370 MB). CPU funciona em qualquer máquina, devagar.
+        {props.kind === "ffmpeg"
+          ? "É o motor da ampliação de vídeo: separa os quadros, junta de volta com o áudio e interpola o movimento (~80 MB)."
+          : `Vulkan roda em qualquer GPU (NVIDIA, AMD, Intel) e é o menor download. CUDA só para NVIDIA, e baixa
+        também o runtime da NVIDIA (~370 MB). CPU funciona em qualquer máquina, devagar.`}
       </p>
       <div className="mt-2.5 flex items-center gap-2">
-        <select className={`${campo} w-auto`} value={backend} onChange={(e) => setBackend(e.target.value)}>
+        <select className={`${campo} w-auto ${info.backends.length < 2 ? "hidden" : ""}`} value={backend} onChange={(e) => setBackend(e.target.value)}>
           {info.backends.map((b) => (
             <option key={b} value={b}>
               {b}
@@ -636,7 +640,6 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       </section>
 
       <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} />
-      <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} video />
 
       {sel && form && view && (
         <section className={card}>
@@ -1311,16 +1314,6 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
         }}
       />
 
-      <section className={card}>
-        <span className="mb-1 flex items-center gap-1.5 text-fg">
-          <Film className="size-3.5" /> Ampliação de vídeo
-        </span>
-        <p className="mb-2 text-faint">
-          Mais resolução para as tomadas prontas (Ampliar, no player da aba Vídeo). O ffmpeg lê e grava o vídeo; os ESRGAN
-          ampliam quadro a quadro na GPU. Sem ESRGAN, amplia por Lanczos.
-        </p>
-        <BaixarAmpliacao onError={props.onError} />
-      </section>
 
       {buscando && (
         <ModelSearch
@@ -1472,11 +1465,39 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
 function ImageTab() {
   return (
     <section className={card}>
-      <p className="text-fg">Imagem e vídeo</p>
+      <p className="text-fg">Imagem</p>
       <p className="mt-1 text-muted">
-        Acima fica o stable-diffusion.cpp, que gera as duas coisas. Para gerar, use as abas <b>Imagens</b> e{" "}
-        <b>Vídeo</b> no topo da barra lateral; os modelos e os ajustes de cada um ficam em Modelos.
+        Acima fica o stable-diffusion.cpp. Para gerar, use a aba <b>Imagens</b> no topo da barra lateral; os modelos e
+        os ajustes de cada um ficam em Modelos. Vídeo tem aba própria aqui ao lado.
       </p>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------- aba Vídeo
+
+/** Tudo do vídeo num lugar: os dois motores (acima), os modelos e os ajustes de cada um, os kits e a ampliação. */
+function VideoTab(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
+  return (
+    <>
+      <ModelosDeImagem st={props.st} onDone={props.onDone} onError={props.onError} video />
+      <KitsVideo
+        st={props.st}
+        destino={props.st.download_dir}
+        onDone={props.onDone}
+        onError={props.onError}
+        onProcurar={() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Baixar" }))}
+      />
+      <section className={card}>
+        <span className="mb-1 flex items-center gap-1.5 text-fg">
+          <Film className="size-3.5" /> Ampliação de vídeo
+        </span>
+        <p className="mb-2 text-faint">
+          Mais resolução para as tomadas prontas e para vídeos do PC (aba Vídeo › Ampliar vídeo). O ffmpeg, o motor acima,
+          lê e grava o vídeo; os ESRGAN ampliam quadro a quadro na GPU. Sem ESRGAN, amplia por Lanczos.
+        </p>
+        <BaixarAmpliacao onError={props.onError} soModelos />
+      </section>
+    </>
   );
 }
