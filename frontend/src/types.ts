@@ -435,7 +435,7 @@ export type VideoKit = {
   modos: ModoVideo[];
   arquivos: { repo: string; path: string; gb: number; papel: string; presente: boolean; quant?: string }[];
   quant: string; // a quantização do modelo neste kit (a maior que cabe, a do disco ou a escolhida)
-  opcoes: { quant: string; gb: number; cabe: boolean | null }[];
+  opcoes: { quant: string; gb: number; cabe: boolean | null; presente?: boolean }[];
   erro?: string; // sem Hugging Face: não dá para saber tamanhos nem baixar
   gb_modelo: number; // o maior modelo de difusão: é o que precisa caber na VRAM
   gb_total: number;
@@ -566,6 +566,7 @@ export type LocalState = {
   // quanto cada vídeo levou nesta máquina, por modelo e tamanho: base da estimativa
   tempos_video: { model: string; w: number; h: number; frames: number; passos: number; s_passo: number; s_total: number }[];
   loras: LoraArquivo[]; // .safetensors que são LoRA, com o que os tensores dizem deles
+  ampliadores: LocalModel[]; // ESRGAN (.pth) da ampliação de vídeo
   port: number;
 };
 

@@ -640,6 +640,24 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       </section>
 
       <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} />
+      {/* também na aba Vídeo: aqui é "tudo o que está instalado", lá é tudo do vídeo */}
+      <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} video />
+      <ListaArquivos
+        titulo="LoRAs"
+        dica="aplicadas por cima de um modelo de vídeo"
+        itens={st.loras.map((l) => ({ ...l, extra: l.passos ? `${l.passos} passos` : l.dim ? `dim ${l.dim}` : "" }))}
+        dirs={st.dirs.length}
+        onDone={props.onDone}
+        onError={props.onError}
+      />
+      <ListaArquivos
+        titulo="Modelos de ampliação"
+        dica="ESRGAN, usados em Ampliar vídeo"
+        itens={st.ampliadores ?? []}
+        dirs={st.dirs.length}
+        onDone={props.onDone}
+        onError={props.onError}
+      />
 
       {sel && form && view && (
         <section className={card}>
@@ -785,6 +803,53 @@ const ROTULO: Record<string, string> = {
 
 /** Modelos de difusão que estão nas pastas. Não têm "Carregar": o sd.cpp sobe e desce a cada imagem —
  *  o que dá para guardar aqui são os ajustes de cada um (o Flux não quer o mesmo CFG que o SD 1.5). */
+/** Arquivos que não têm ajustes próprios (LoRA, ESRGAN): nome, pasta, tamanho e apagar. */
+function ListaArquivos(props: {
+  titulo: string;
+  dica: string;
+  itens: { path: string; name: string; folder?: string; size: number; extra?: string }[];
+  dirs: number;
+  onDone: () => void;
+  onError: (e: string) => void;
+}) {
+  if (!props.itens.length) return null;
+  async function apagar(path: string) {
+    try {
+      await api.post("/local/model/delete", { path });
+      props.onDone();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  return (
+    <section className={card}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-fg">{props.titulo} ({props.itens.length})</span>
+        <span className="text-faint">{props.dica}</span>
+      </div>
+      <div className="flex flex-col">
+        {props.itens.map((m) => (
+          <div key={m.path} className="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-raised" title={m.path}>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-fg">{m.name}</span>
+              {props.dirs > 1 && m.folder && <span className="block truncate text-faint">{m.folder}</span>}
+            </span>
+            {m.extra && <span className="shrink-0 text-faint">{m.extra}</span>}
+            <span className="shrink-0 text-faint">{size(m.size)}</span>
+            <Confirma
+              rotulo={<Trash className="size-3.5" />}
+              pergunta="Apagar do disco? Não dá para desfazer"
+              titulo={`Apagar do disco: ${m.path}`}
+              className="shrink-0 text-faint hover:text-red-400"
+              onSim={() => void apagar(m.path)}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void; video?: boolean }) {
   const [sel, setSel] = useState("");
   const [form, setForm] = useState<ImageParams | null>(null);
@@ -1406,15 +1471,16 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
                 {k.opcoes.length > 1 && (
                   <select
                     aria-label={`Quantização do ${k.nome}`}
-                    title="Menor = mais leve e menos fiel. O Forja sugere a maior que cabe na VRAM."
+                    title="Menor = mais leve e menos fiel. O Forja sugere a maior que cabe na VRAM. Trocar para uma que não está no disco baixa essa também."
                     className="rounded-md border border-line bg-raised px-1.5 py-0.5 text-[11px] text-fg"
                     value={k.quant}
-                    disabled={completo || emCurso}
+                    // com o kit completo também: é assim que se baixa outra quantização do mesmo modelo
+                    disabled={emCurso}
                     onChange={(e) => setQuants((q) => ({ ...q, [k.id]: e.target.value }))}
                   >
                     {k.opcoes.map((o) => (
                       <option key={o.quant} value={o.quant}>
-                        {o.quant} · {o.gb.toFixed(1).replace(".", ",")} GB{o.cabe === false ? " · não cabe" : ""}
+                        {o.quant} · {o.gb.toFixed(1).replace(".", ",")} GB{o.presente ? " · no disco" : o.cabe === false ? " · não cabe" : ""}
                       </option>
                     ))}
                   </select>

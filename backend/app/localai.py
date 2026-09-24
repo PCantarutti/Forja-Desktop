@@ -2063,7 +2063,8 @@ def kits_video(quants: dict[str, str] | None = None) -> list[dict]:
         arquivos = [{"subpasta": subpasta_kit(k), **a, "papel": papel_video(a["path"]),
                      "presente": Path(a["path"]).name.lower() in presentes} for a in arquivos]
         out.append({**base, "arquivos": arquivos, "quant": modelo["quant"],
-                    "opcoes": [{"quant": o["quant"], "gb": o["gb"], "cabe": o["cabe"]} for o in opcoes],
+                    "opcoes": [{"quant": o["quant"], "gb": o["gb"], "cabe": o["cabe"],
+                                "presente": Path(o["path"]).name.lower() in presentes} for o in opcoes],
                     # o que precisa caber na VRAM é o maior modelo de difusão (o A14B carrega um de cada vez)
                     "gb_modelo": max(a["gb"] for a in arquivos if a["papel"] in ("modelo", "high_noise_model")),
                     "gb_total": round(sum(a["gb"] for a in arquivos), 2),
