@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { createPortal } from "react-dom";
-import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCall, Stats } from "../types";
+import type { Approval, AskQuestion, Attachment, Message, Preview, SlotImagem, SlotsPendentes, Task, ToolCall, Stats } from "../types";
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
 import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Download, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
@@ -905,6 +905,7 @@ export function ActivityGroup(props: {
   forceOpen?: boolean;
   renderTool: (call: ToolCall, queued: boolean) => React.ReactNode;
   onOpen?: (path: string, mode: "editor" | "reveal") => void;
+  onGerarImagens?: (p: SlotsPendentes) => void; // imagens_pendentes: leva a fila para a tela Imagens
 }) {
   const [open, setOpen] = useState(false);
   const isOpen = !!props.forceOpen || open;
@@ -960,6 +961,26 @@ export function ActivityGroup(props: {
       )}
       <ToolImages list={shots} bare />
       <ToolFiles list={shots} onOpen={props.onOpen} />
+      {/* Como o screenshot: é resposta ao usuário, fica fora do grupo colapsado. */}
+      {props.onGerarImagens && tools.map((c) => {
+        const r = props.results.get(c.id);
+        const slots: SlotImagem[] | undefined = r?.meta?.imagens_pendentes?.slots;
+        const geradas = !!r?.meta?.imagens_pendentes?.geradas; // a fila já saiu: o botão só leva até elas
+        return r && slots ? (
+          <div key={c.id} className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+            <button
+              onClick={() => props.onGerarImagens!({ message_id: r.id, slots })}
+              title={geradas ? "Abre a conversa de Imagens destas imagens (não gera de novo)" : "Abre a tela Imagens com a fila dos slots"}
+              className={geradas
+                ? "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                : "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white"}
+            >
+              {geradas ? `Ver as ${slots.length} imagens` : `Gerar ${slots.length} imagens`}
+            </button>
+            <span className="min-w-0 truncate font-mono text-faint">{slots.map((s) => s.nome).join(" · ")}</span>
+          </div>
+        ) : null;
+      })}
     </div>
   );
 }
@@ -969,6 +990,7 @@ const EVENT_STYLE: Record<string, string> = {
   error: "border-red-500/30 text-red-200",
   nudge: "border-sky-500/30 text-sky-200",
   info: "border-line text-muted",
+  imagens: "border-sky-500/30 text-muted whitespace-pre-wrap", // uma linha por imagem
 };
 
 export function EventNotice({ m }: { m: Message }) {
@@ -990,6 +1012,9 @@ export function EventNotice({ m }: { m: Message }) {
     error: "Erro",
     nudge: "Lembrete automático ao modelo",
     info: "Info",
+    // a tela Imagens gerou, trocou ou otimizou as imagens que este chat pediu. Fica à vista (e não no
+    // grupo de avisos ao agente) porque chega com o chat parado, e é notícia para a pessoa também.
+    imagens: "Imagens do site",
   }[kind as string];
   return (
     <div className={`my-3 rounded-2xl border bg-surface px-4 py-2.5 text-sm ${EVENT_STYLE[kind] ?? EVENT_STYLE.info}`}>

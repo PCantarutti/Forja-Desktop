@@ -2013,6 +2013,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
             meta["attachments"] = res.get("attachments") or []
             if res.get("sources"):  # web_search/fetch_url: a UI desenha a lista de sites visitados
                 meta["sources"] = res["sources"]
+            if res.get("imagens_pendentes"):  # a UI desenha o botão que leva os slots para a tela Imagens
+                meta["imagens_pendentes"] = res["imagens_pendentes"]
             res = res.get("text", "")
             images = [a for a in meta["attachments"] if a.get("kind") == "image"]
             if images:

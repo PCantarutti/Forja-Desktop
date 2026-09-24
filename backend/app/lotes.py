@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from . import db, downloads, imagegen, localai, mirror
+from . import slots as projeto
 from .tools import ToolError
 
 DESCARTADAS = "descartadas"
@@ -99,6 +100,7 @@ def _mensagem(message_id: int) -> dict:
 
 EXT_REFERENCIA = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
 MAX_REFERENCIAS = 500  # ponytail: lista no local.json; as mais antigas saem (a miniatura delas some)
+MAX_SLOTS_LIBERADOS = 2000  # caminhos de slot que a rota de arquivo serve (lista própria, não a das referências)
 
 
 def registrar_referencia(path: str) -> str:
@@ -125,19 +127,241 @@ def eh_referencia(path: str) -> bool:
 
 # ------------------------------------------------------------------ geração
 
+class GpuOcupada(imagegen.ModeloCarregado):
+    """Outro programa (o llama-server de outra janela ou instância do Forja) segura a VRAM: o sd.cpp
+    falharia imagem por imagem, por falta de memória. A tela avisa antes e a pessoa decide."""
+
+
 def _liberar_vram(confirm: bool) -> None:
     """LLM na VRAM: sem confirmação a tela pergunta (409); com ela, descarrega."""
-    if localai.status()["running"]:
+    st = localai.status()
+    if not confirm and (outros := projeto.gpu_alheia(st.get("pid"))):
+        raise GpuOcupada(f"Outro programa está usando a GPU: {', '.join(outros)}, provavelmente outra janela "
+                         "ou instância do Forja. O sd.cpp pode ficar sem memória e falhar em cada imagem."
+                         + (f" O modelo {st.get('alias')} desta janela também será descarregado." if st["running"] else ""))
+    if st["running"]:
         if not confirm:
-            raise imagegen.ModeloCarregado(localai.status().get("alias") or "um modelo")
+            raise imagegen.ModeloCarregado(st.get("alias") or "um modelo")
         localai.unload()
+
+
+def _sem_estilo(prompt: str, estilo: str) -> str:
+    return prompt[: -len(estilo) - 2] if estilo and prompt.endswith(f", {estilo}") else prompt
+
+
+def _slots(message_id: int) -> list[dict]:
+    """Slots que a ferramenta imagens_pendentes registrou (caminhos já confinados na pasta da conversa).
+    Cada um sai com o prompt sem o estilo (prompt_base): "regerar todas com outro estilo" troca só o fim."""
+    with db.session() as s:
+        m = s.get(db.Message, message_id)
+        pedido = ((m.meta or {}).get("imagens_pendentes") or {}) if m else {}
+    if not pedido.get("slots"):
+        raise ToolError("Slots de imagem não encontrados.")
+    out = []
+    for sl in pedido["slots"]:
+        estilo = sl.get("estilo", pedido.get("estilo") or "")
+        out.append({**sl, "estilo": estilo, "prompt_base": sl.get("prompt_base") or _sem_estilo(sl["prompt"], estilo)})
+    return out
+
+
+def _ids(origem_: dict) -> list[int]:
+    """Os pedidos da IA (chamadas imagens_pendentes) que esta conversa reúne, do mais velho ao mais novo."""
+    return list(origem_.get("message_ids") or [origem_["message_id"]])
+
+
+def _todos_slots(origem_: dict) -> list[dict]:
+    """Os slots de todos os pedidos; o mesmo caminho pedido de novo fica com o pedido mais novo."""
+    por: dict[str, dict] = {}
+    for mid in _ids(origem_):
+        try:
+            for sl in _slots(mid):
+                por[sl["caminho"]] = {**sl, "message_id": mid}
+        except ToolError:
+            continue  # o chat que pediu foi apagado: os slots dele saem junto
+    return list(por.values())
+
+
+def _lotes_da_conversa(conv_id: int) -> list[tuple[int, str | None, list[dict]]]:
+    """(id, status, imagens) de cada lote da conversa, com as imagens copiadas (pode editar)."""
+    # ponytail: lê todos os lotes da conversa (dezenas); índice por slot se virarem milhares
+    with db.session() as s:
+        msgs = (s.query(db.Message)
+                .filter(db.Message.conversation_id == conv_id, db.Message.role == "assistant").all())
+        return [(m.id, m.status, [dict(i) for i in (m.meta or {}).get("images") or []]) for m in msgs]
+
+
+def _gerados(conv_id: int) -> set[str]:
+    return {i.get("destino") or i.get("slot") for _, _, imgs in _lotes_da_conversa(conv_id) for i in imgs
+            if i.get("destino") or i.get("slot")}
+
+
+def conversa_dos_slots(tool_message_id: int) -> dict:
+    """A conversa de Imagens do projeto daquele pedido: uma por pasta, e cada pedido novo da IA (outra
+    seção do site, outro chat) entra nela. A mesma a cada clique no botão; criada no primeiro."""
+    _slots(tool_message_id)  # confere que é mesmo uma chamada imagens_pendentes
+    with db.session() as s:
+        tool = s.get(db.Message, tool_message_id)
+        chat = s.get(db.Conversation, tool.conversation_id)
+        # ponytail: varre as conversas de imagem com origem; coluna própria se virarem milhares
+        candidatas = [c for c in s.query(db.Conversation).filter(db.Conversation.kind == "imagem",
+                                                                  db.Conversation.origem.isnot(None))]
+        achada = (next((c for c in candidatas if tool_message_id in _ids(c.origem)), None)
+                  or next((c for c in candidatas if c.workspace == chat.workspace and not c.archived), None))
+        if not achada:
+            projeto_ = Path(chat.workspace).name if chat.workspace else "pasta padrão"
+            achada = db.Conversation(kind="imagem", title=f"Imagens · {projeto_}"[:200], workspace=chat.workspace,
+                                     origem={"conv_id": chat.id, "message_id": tool_message_id,
+                                             "message_ids": [tool_message_id]})
+            s.add(achada)
+        elif tool_message_id not in _ids(achada.origem):
+            # o "Ir para o chat" leva ao chat do pedido mais novo
+            achada.origem = {**achada.origem, "conv_id": chat.id,
+                             "message_ids": [*_ids(achada.origem), tool_message_id]}
+        s.commit()
+        return {"id": achada.id, "kind": "imagem"}
+
+
+def _raiz(conv_id: int) -> Path | None:
+    from . import workspace
+
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        pasta = c.workspace if c else None
+    try:
+        return workspace.resolve(pasta)
+    except Exception:  # pasta do projeto sumiu: a tela segue, só sem conferir o código
+        return None
+
+
+def origem(conv_id: int) -> dict | None:
+    """Para a tela: de qual chat e projeto vieram os slots, quais faltam gerar e quais o código não usa
+    mais (None = conversa comum)."""
+    from . import workspace
+
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        o = c.origem if c else None
+        if not o:
+            return None
+        chat = s.get(db.Conversation, o.get("conv_id") or 0)
+        info = {"message_id": _ids(o)[-1], "workspace": workspace.label(c.workspace), "web": bool(o.get("web")),
+                "projeto": Path(c.workspace).name if c.workspace else "pasta padrão",
+                "chat": {"id": chat.id, "title": chat.title, "kind": chat.kind} if chat else None}
+    todos = _todos_slots(o)
+    feitos = _gerados(conv_id)
+    raiz = _raiz(conv_id)
+    usados = projeto.referenciados(raiz, [sl["caminho"] for sl in todos]) if raiz else {sl["caminho"] for sl in todos}
+    info.update(slots=todos, pendentes=[sl for sl in todos if sl["caminho"] not in feitos],
+                fora_do_codigo=[sl["caminho"] for sl in todos if sl["caminho"] not in usados],
+                estilo=next((sl["estilo"] for sl in reversed(todos) if sl.get("estilo")), ""))
+    return info
+
+
+def _avisar(conv_id: int, texto: str) -> None:
+    """Nota para o chat que pediu as imagens: a IA lê no próximo turno (to_model) e pode conferir o site."""
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        chat_id = (c.origem or {}).get("conv_id") if c else None
+        if not chat_id or not s.get(db.Conversation, chat_id):
+            return
+    _save(chat_id, role="event", content=texto, meta={"kind": "imagens", "to_model": True})
+
+
+def _web(conv_id: int) -> bool:
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        return bool(c and (c.origem or {}).get("web"))
+
+
+def _liberar(paths: list[str]) -> None:
+    """A rota de arquivo só serve a pasta de imagens e o que foi registrado: o slot mora na pasta do
+    projeto, então entra numa lista própria (as referências anexadas têm a delas)."""
+    data = localai.read_config()
+    chaves = [localai._chave(p) for p in paths]
+    lista = [p for p in data.get("slots_liberados") or [] if p not in chaves] + chaves
+    data["slots_liberados"] = lista[-MAX_SLOTS_LIBERADOS:]
+    localai.write_config(data)
+
+
+def eh_slot(path: str) -> bool:
+    return localai._chave(path) in (localai.read_config().get("slots_liberados") or [])
+
+
+def _base_variacao(conv_id: int, variar: dict) -> dict:
+    """O slot de onde saem as variações: prompt e tamanho da imagem que a pessoa quer refazer."""
+    lote = _mensagem(int(variar.get("message_id") or 0))
+    if lote["conversation_id"] != conv_id:
+        raise ToolError("Essa imagem é de outra conversa.")
+    item = next((i for i in lote["meta"]["images"] if i["path"] == variar.get("path")), None)
+    slot = item and (item.get("destino") or item.get("slot"))
+    if not slot:
+        raise ToolError("Só imagem de slot (skill gerar-imagens) tem variações para escolher.")
+    editado = str(variar.get("prompt") or "").strip()  # a pessoa editou no modal antes de regerar
+    prompt = editado or item.get("prompt") or ""
+    return {"slot": slot, "nome": item.get("nome") or Path(slot).stem, "prompt": prompt,
+            "prompt_base": editado or item.get("prompt_base") or prompt, "estilo": "" if editado else item.get("estilo", ""),
+            "width": item.get("width"), "height": item.get("height")}
+
+
+def _bases_estilo(conv_id: int, estilo: str) -> list[dict]:
+    """Uma base por slot, da versão que o site mostra, com o estilo novo no lugar do antigo."""
+    estilo = estilo.strip()
+    bases = []
+    for _, _, imgs in _lotes_da_conversa(conv_id):
+        for i in imgs:
+            if i.get("destino"):
+                base = i.get("prompt_base") or _sem_estilo(i.get("prompt") or "", i.get("estilo", ""))
+                bases.append({"slot": i["destino"], "nome": i.get("nome") or Path(i["destino"]).stem,
+                              "prompt": f"{base}, {estilo}" if estilo else base, "prompt_base": base,
+                              "estilo": estilo, "width": i.get("width"), "height": i.get("height")})
+    if not bases:
+        raise ToolError("Nenhuma imagem do site gerada ainda para regerar.")
+    return bases
 
 
 def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str] | None = None,
           count: int = 1, seed: int = 0, seed_mode: str = "incremental", confirm: bool = False,
-          refs: list[str] | None = None) -> dict:
-    """Enfileira o lote e devolve a mensagem do assistente já criada (a thread preenche o resto)."""
-    prompt = (prompt or "").strip()
+          refs: list[str] | None = None, slots_de: int = 0, variar: dict | None = None,
+          estilo: str | None = None) -> dict:
+    """Enfileira o lote e devolve a mensagem do assistente já criada (a thread preenche o resto).
+
+    `slots_de`: um pedido da IA (chamada imagens_pendentes) desta conversa. Gera os slots do projeto que
+    ainda não saíram, cada um com prompt, tamanho e arquivo próprios (o caminho que o código aponta).
+    `variar`: {message_id, path, prompt?} de uma imagem de slot: `count` variações dela, na pasta de
+    saída; o site só muda quando a pessoa escolhe uma (escolher).
+    `estilo`: variações de TODOS os slots com este estilo no lugar do antigo (`count` por slot)."""
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        o = c.origem if c else None
+    ids = _ids(o) if o else []
+    # A conversa aberta pela IA só gera os slots dela (e variações); os slots só saem numa conversa assim.
+    if o and not variar and estilo is None and slots_de not in ids:
+        raise ToolError("Esta conversa é só para as imagens que o chat pediu para o site: use Regerar num "
+                        "card. Para uma imagem avulsa, abra uma conversa nova em Imagens.")
+    if slots_de and slots_de not in ids:
+        raise ToolError("Abra estas imagens pelo botão \"Gerar imagens\" do chat que as pediu.")
+    if estilo is not None and not o:
+        raise ToolError("Regerar com outro estilo é só para as imagens do site.")
+    slots: list[dict] = []
+    if slots_de:
+        feitos = _gerados(conv_id)
+        slots = [sl for sl in _todos_slots(o) if sl["caminho"] not in feitos]
+        if not slots:
+            raise ToolError("Todos os slots já foram gerados: use Regerar nos cards.")
+    bases = ([_base_variacao(conv_id, variar)] if variar
+             else _bases_estilo(conv_id, estilo) if estilo is not None else [])
+    prompt = (prompt or "").strip() or (f"{len(slots)} imagens para o projeto" if slots else "")
+    if slots:
+        count, refs = len(slots), []
+    por_base = 1
+    if bases:
+        refs = []
+        prompt = prompt or (f"Variações de {bases[0]['nome']}" if len(bases) == 1
+                            else f"Variações das {len(bases)} imagens do site")
+        por_base = max(1, min(int(count or 1), MAX_VARIACOES // len(bases)))
+        count = por_base * len(bases)
+        # incremental com a mesma base repetiria as imagens de antes: regerar é sempre semente nova
+        seed_mode = "aleatoria"
     if not prompt:
         raise ToolError("Descreva a imagem (prompt vazio).")
     count = max(1, min(int(count or 1), MAX_VARIACOES))
@@ -156,6 +380,17 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     imagens = [{"path": str(pasta / f"{marca}-{i:02d}-s{s}.png"), "seed": s, "model": m,
                 "model_name": _nome(m), "status": "pendente", "error": ""}
                for i, (m, s) in enumerate(zip(escolhidos, sementes))]
+    for item, slot in zip(imagens, slots):
+        item.update(path=slot["caminho"], destino=slot["caminho"], nome=slot["nome"], prompt=slot["prompt"],
+                    prompt_base=slot["prompt_base"], estilo=slot["estilo"],
+                    width=slot.get("largura"), height=slot.get("altura"))
+    if slots:
+        _liberar([s["caminho"] for s in slots])
+    for i, item in enumerate(imagens if bases else []):
+        b = bases[i // por_base]
+        item.update(path=str(pasta / f"{b['nome']}-{marca}-{i:02d}-s{item['seed']}.png"), slot=b["slot"],
+                    nome=b["nome"], prompt=b["prompt"], prompt_base=b["prompt_base"], estilo=b["estilo"],
+                    width=b["width"], height=b["height"])
 
     with db.session() as s:
         conv = s.get(db.Conversation, conv_id)
@@ -172,10 +407,24 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     downloads.update(job["id"], done=0, total=count)
     msg = _save(conv_id, role="assistant", content="", status="running",
                 meta={"job": job["id"], "count": count, "seed_mode": seed_mode,
-                      "opts": opts, "images": imagens})
+                      "opts": opts, "images": imagens,
+                      # variações de um slot moram no modal do slot, não viram um lote novo na tela
+                      **({"variacao_de": bases[0]["slot"] if len(bases) == 1 else "*"} if bases else {})})
+    if slots:  # o botão do chat passa de "Gerar N imagens" para "Ver as N imagens"
+        with db.session() as s:
+            for mid in ids:
+                pedido_ia = s.get(db.Message, mid)
+                if pedido_ia and pedido_ia.meta and pedido_ia.meta.get("imagens_pendentes"):
+                    pedido_ia.meta = {**pedido_ia.meta,
+                                      "imagens_pendentes": {**pedido_ia.meta["imagens_pendentes"], "geradas": True}}
+            s.commit()
 
     threading.Thread(target=_trabalhar, args=(conv_id, msg.id, prompt, opts, job["id"], refs), daemon=True).start()
     return msg.to_dict()
+
+
+def _temporario(arquivo: Path) -> Path:
+    return arquivo.with_name(f".{arquivo.stem}.gerando.png")
 
 
 def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: str,
@@ -183,7 +432,8 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
     imagens = list(_mensagem(message_id)["meta"]["images"])
     localai.set_image_busy(True)
     erro = ""
-    feitas, alvo = 0, sum(i["status"] == "pendente" for i in imagens)
+    web = _web(conv_id)
+    feitas, total = 0, sum(i["status"] == "pendente" for i in imagens)
     try:
         for i, item in enumerate(imagens):
             if item["status"] != "pendente":  # "Continuar": o que já saiu fica como está
@@ -202,23 +452,43 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             previa = previas_dir() / Path(item["path"]).name
             previa.parent.mkdir(parents=True, exist_ok=True)
 
-            def progresso(passo: int, total: int, s_passo: float = 0.0, item=item, previa=previa) -> None:
+            def progresso(passo: int, total_passos: int, s_passo: float = 0.0, item=item, previa=previa) -> None:
                 # Vai no meta porque a tela já consulta a conversa enquanto o lote roda: nada de rota nova.
                 # A prévia só entra quando o sd-cli já gravou a primeira: até lá o card mostra o que tinha
                 # (na edição, a imagem original).
                 if previa.is_file():
                     item["preview"] = str(previa)
-                item["progress"] = round(passo / total, 3) if total else 0.0
+                item["progress"] = round(passo / total_passos, 3) if total_passos else 0.0
                 item["s_passo"] = round(s_passo, 2)
-                item["restante"] = round(max(0, total - passo) * s_passo)  # só a amostragem; o VAE vem depois
+                item["restante"] = round(max(0, total_passos - passo) * s_passo)  # só a amostragem; o VAE vem depois
                 _patch(message_id, meta={"images": imagens})
 
+            arquivo = Path(item["path"])
+            # Slot: gera ao lado e só troca o arquivo do site se a imagem nova sair — gerar direto no
+            # caminho (ou tirar a antiga antes) deixava o site sem imagem quando o sd falhava.
+            saida = _temporario(arquivo) if item.get("destino") else arquivo
             try:
-                imagegen.generate(prompt, Path(item["path"]), {**opts, "model": item["model"],
-                                                               "seed": item["seed"]}, job_id, refs or [],
-                                  progresso, previa)
+                tamanho = {k: item[k] for k in ("width", "height") if item.get(k)}  # slot com tamanho próprio
+                if item.get("destino") or item.get("slot"):
+                    # a proporção é do slot; a área, a que o modelo sabe gerar (fora dela ele repete objetos)
+                    area = projeto.area_nativa(item["model"], (localai.requisitos(item["model"]) or {}).get("sugere"))
+                    w, h = projeto.ajustar(item.get("width"), item.get("height"), area)
+                    tamanho = {k: v for k, v in (("width", w), ("height", h)) if v}
+                imagegen.generate(item.get("prompt") or prompt, saida,
+                                  {**opts, **tamanho, "model": item["model"], "seed": item["seed"]},
+                                  job_id, refs or [], progresso, previa)
+                if saida != arquivo:
+                    # a versão anterior do site vai para descartadas/; o PNG provisório só some
+                    if arquivo.is_file() and not projeto.eh_placeholder(arquivo):
+                        descartadas_dir().mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(arquivo), str(descartadas_dir() / f"{arquivo.stem}-{time.strftime('%Y%m%d-%H%M%S')}.png"))
+                    shutil.move(str(saida), str(arquivo))
+                    if web:
+                        projeto.webp(arquivo)
                 item["status"] = "pronta"
             except Exception as e:
+                if saida != arquivo:
+                    saida.unlink(missing_ok=True)
                 # o próprio generate mata o sd-cli quando o job é cancelado no meio de uma imagem
                 cancelada = downloads.cancelled(job_id)
                 item["status"] = "cancelada" if cancelada else "erro"
@@ -230,7 +500,7 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             previa.unlink(missing_ok=True)
             # o generate move a barra por passo; aqui ela volta a contar imagens do lote
             feitas += 1
-            downloads.update(job_id, done=feitas, total=alvo)
+            downloads.update(job_id, done=feitas, total=total)
             _patch(message_id, meta={"images": imagens})
     finally:
         localai.set_image_busy(False)
@@ -241,6 +511,14 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
     downloads.finish(job_id, error="" if pronta else erro)
     mirror.write(conv_id)
     limpar_descartadas()
+    do_site = [i for i in imagens if i.get("destino")]
+    if do_site:  # só o lote que mexe no site avisa; variações ficam no modal até alguém escolher
+        linhas = "\n".join(f"- {i['nome']} → {Path(i['destino']).name}: "
+                           + ("pronta" if i["status"] == "pronta" else f"{i['status']} ({i['error'].splitlines()[0][:120]})"
+                              if i.get("error") else i["status"]) for i in do_site)
+        _avisar(conv_id, "Imagens do site geradas pela tela Imagens (os arquivos já estão nos caminhos dos slots):\n"
+                         f"{linhas}\n\nSe puder, abra a página no navegador e confira se as imagens encaixam no "
+                         "layout: proporção, recorte e contraste com o texto por cima.")
     # o status sai por último de propósito: é o sinal de "acabou" para quem espera o lote, e nada
     # pode acontecer depois dele (nos testes, o monkeypatch das pastas já teria sido desfeito).
     _patch(message_id, status=status, meta={"images": imagens})
@@ -264,8 +542,11 @@ def reap() -> int:
             if not imagens:
                 continue  # não é lote de imagem
             for i in imagens:
+                if i.get("destino"):
+                    _temporario(Path(i["destino"])).unlink(missing_ok=True)
                 if i["status"] in ("gerando", "pendente"):
-                    i["status"] = "pronta" if Path(i["path"]).is_file() else "interrompida"
+                    feita = Path(i["path"]).is_file() and not projeto.eh_placeholder(i["path"])
+                    i["status"] = "pronta" if feita else "interrompida"
                     i.pop("progress", None)
                     i.pop("preview", None)
                     i.pop("com_previa", None)
@@ -326,7 +607,8 @@ def decidir(message_id: int, keep: list[str]) -> dict:
             continue
         if item["path"] in manter:
             if item["status"] == "descartada":  # desfazer: volta para a pasta de saída
-                alvo = imagegen.out_dir() / Path(item["path"]).name
+                # slot volta para o caminho que o código aponta; variação, para a pasta de saída
+                alvo = Path(item["destino"]) if item.get("destino") else imagegen.out_dir() / Path(item["path"]).name
                 if Path(item["path"]).exists():
                     alvo.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(item["path"], alvo)
@@ -343,6 +625,80 @@ def decidir(message_id: int, keep: list[str]) -> dict:
     out = _patch(message_id, meta={"images": imagens})
     mirror.write(out["conversation_id"])
     return out
+
+
+def escolher(conv_id: int, slot: str, path: str) -> dict:
+    """Põe a variação `path` no site: ela vai para o caminho do slot e a que estava lá vai para a pasta de
+    saída, virando mais uma variação. Troca e não cópia: a imagem com `destino` é sempre a que o site mostra."""
+    lotes_ = _lotes_da_conversa(conv_id)
+    atual = nova = None
+    for mid, status, imgs in lotes_:
+        for i in imgs:
+            if i.get("destino") == slot:
+                atual = (mid, status, imgs, i)
+            if i["path"] == path and slot in (i.get("slot"), i.get("destino")):
+                nova = (mid, status, imgs, i)
+    if not atual or not nova:
+        raise ToolError("Variação não encontrada nesta conversa.")
+    if nova[3] is atual[3]:
+        return {"ok": True}  # já é a do site
+    if "running" in (atual[1], nova[1]):  # a thread do lote regrava o meta inteiro: a troca se perderia
+        raise ToolError("Espere o lote terminar para escolher.")
+    v, o = nova[3], atual[3]
+    if v["status"] not in ("pronta", "mantida") or not Path(v["path"]).is_file():
+        raise ToolError("Essa variação não está pronta.")
+    no_site = Path(slot)
+    if o["path"] == slot and no_site.is_file():  # a anterior sai do site, mas continua escolhível
+        guardada = imagegen.out_dir() / f"{no_site.stem}-s{o['seed']}-{time.strftime('%Y%m%d-%H%M%S')}.png"
+        guardada.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(no_site), str(guardada))
+        o["path"] = str(guardada)
+    o.pop("destino", None)
+    o["slot"] = slot
+    no_site.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(v["path"], str(no_site))
+    v.pop("slot", None)
+    v.update(path=slot, destino=slot, status="mantida")
+    for mid, _st, imgs, _i in {atual[0]: atual, nova[0]: nova}.values():
+        _patch(mid, meta={"images": imgs})
+    if _web(conv_id):
+        projeto.webp(no_site)
+    mirror.write(conv_id)
+    _avisar(conv_id, f"A imagem do slot {v.get('nome') or no_site.stem} ({no_site.name}) foi trocada no site por "
+                     f"outra versão, feita com o prompt: {v.get('prompt') or '(o mesmo)'}. O caminho é o mesmo; "
+                     "se puder, confira no navegador.")
+    return {"ok": True}
+
+
+def otimizar(conv_id: int) -> dict:
+    """Versão leve para a web: um .webp ao lado de cada imagem do site e o código apontando para ele. O PNG
+    fica como matriz (é ele que Regerar e Usar no site trocam) e o .webp é regravado a cada troca."""
+    raiz = _raiz(conv_id)
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        if not c or not c.origem:
+            raise ToolError("Otimizar é só para as imagens do site.")
+    if not raiz:
+        raise ToolError("A pasta do projeto não foi encontrada.")
+    atuais = [i for _, _, imgs in _lotes_da_conversa(conv_id) for i in imgs
+              if i.get("destino") and Path(i["destino"]).is_file() and not projeto.eh_placeholder(i["destino"])]
+    if not atuais:
+        raise ToolError("Nenhuma imagem do site gerada ainda.")
+    feitas = []
+    for i in atuais:
+        png, leve = projeto.webp(i["destino"])
+        feitas.append({"nome": i.get("nome") or Path(i["destino"]).stem, "png": png, "webp": leve})
+    alterados = projeto.trocar_referencias(raiz, [Path(i["destino"]).stem for i in atuais])
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        c.origem = {**c.origem, "web": True}
+        s.commit()
+    antes, depois = sum(f["png"] for f in feitas), sum(f["webp"] for f in feitas)
+    _avisar(conv_id, f"Otimizei as {len(feitas)} imagens do site para a web ({antes // 1024} KB → {depois // 1024} KB): "
+                     f"cada uma ganhou um .webp ao lado do PNG e troquei .png por .webp em "
+                     f"{', '.join(alterados) or 'nenhum arquivo (o código já apontava para .webp)'}. "
+                     "Daqui em diante, aponte para o .webp; o .png continua como matriz.")
+    return {"imagens": feitas, "arquivos": alterados}
 
 
 def imagens_da_conversa(conv_id: int) -> list[Path]:

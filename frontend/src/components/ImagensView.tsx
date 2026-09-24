@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, uploadReferencia } from "../api";
-import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, PedidoMeta, SeedMode } from "../types";
-import { ArrowUp, Check, Copy, Edit, FolderOpen, Image, Paperclip, Refresh, Search, Sliders, Square, Trash, X } from "./icons";
+import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, PedidoMeta, SeedMode, SlotImagem } from "../types";
+import type { Section } from "./Controls";
+import { ArrowRight, ArrowUp, Check, Copy, Edit, FolderOpen, Image, Paperclip, Refresh, Robo, Search, Sliders, Square, Trash, Undo, X } from "./icons";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada, redondo } from "./Composer";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
 import MascaraEditor, { type ModoPintura } from "./MascaraEditor";
+import { Modal } from "./Modal";
 import ModelPicker from "./ModelPicker";
 
 const POLL_MS = 1500; // só enquanto um lote roda; fora disso a tela fica parada
@@ -42,10 +44,13 @@ const A_REFAZER: LoteImagem["status"][] = ["interrompida", "pendente", "cancelad
 
 const MAX_REFS = 10;  // Qwen-Image 2.1; o backend barra também
 const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
+// O arquivo do slot troca de conteúdo sem trocar de caminho ("Usar no site"): a semente na URL fura o cache.
+const srcDe = (img: LoteImagem) => urlDa(img.path) + (img.destino ? `&v=${img.seed}` : "");
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
 
 export default function ImagensView(props: {
   conv: number | null;
+  onAbrirConversa: (id: number, kind: Section) => void; // "Ir para o chat" de uma conversa aberta pela IA
   ensureConversation: () => Promise<number>;
   provider: string;
   model: string;
@@ -67,7 +72,15 @@ export default function ImagensView(props: {
   const [count, setCount] = useState(4);
   const [seedMode, setSeedMode] = useState<SeedMode>("incremental");
   const [abrirAjustes, setAbrirAjustes] = useState(false);
-  const [perguntando, setPerguntando] = useState(false);
+  // Tem LLM na VRAM: guarda o pedido para repetir com confirm=true se a pessoa aceitar descarregar.
+  const [perguntando, setPerguntando] = useState<(() => void) | null>(null);
+  // 409: ou é o LLM deste Forja (o texto fixo abaixo) ou outro programa na GPU (a mensagem do backend)
+  const [motivo, setMotivo] = useState("");
+  const [aviso, setAviso] = useState("");  // resultado de ações do site (otimizar), sem cara de erro
+  const [trocandoEstilo, setTrocandoEstilo] = useState(false);
+  const [slotAberto, setSlotAberto] = useState<string | null>(null);  // modal de variações de um slot
+  // Conversa aberta pela IA (skill gerar-imagens): de qual chat e projeto vieram os slots. null = comum.
+  const [origem, setOrigem] = useState<Origem | null>(null);
   const [melhorando, setMelhorando] = useState(false);
   const [zoom, setZoom] = useState<string | null>(null);
   // Na primeira vez herda o par do Chat; a partir daí é escolha própria desta aba.
@@ -127,6 +140,26 @@ export default function ImagensView(props: {
     carregarConversa();
   }, [carregarConversa]);
 
+  const carregarOrigem = useCallback(() => {
+    if (props.conv === null) return setOrigem(null);
+    const conv = props.conv;
+    api
+      .get<{ origem: Origem | null }>(`/imagens/${conv}/origem`)
+      .then((r) => conv === props.conv && setOrigem(r.origem))
+      .catch((e) => mostrarErro(e.message));
+  }, [props.conv, mostrarErro]);
+
+  useEffect(() => {
+    setOrigem(null);
+    carregarOrigem();
+  }, [carregarOrigem]);
+
+  // Um lote que acabou muda o que falta gerar (e o código pode ter mudado): a faixa e a fila acompanham.
+  const lotesRodando = messages.filter(rodando).length;
+  useEffect(() => {
+    if (!lotesRodando) carregarOrigem();
+  }, [lotesRodando, carregarOrigem]);
+
   // Poll só enquanto há lote em andamento: a thread do backend preenche o meta imagem a imagem.
   useEffect(() => {
     if (!ocupado) return;
@@ -149,6 +182,28 @@ export default function ImagensView(props: {
     return out;
   }, [messages]);
 
+  // Todas as versões de cada slot, de todos os lotes: a que está no site (destino) e as variações (slot).
+  const variacoes = useMemo(() => {
+    const m = new Map<string, { img: LoteImagem; lote: Message }[]>();
+    for (const { resposta } of lotes)
+      for (const img of (resposta.meta as LoteMeta).images) {
+        const chave = img.destino ?? img.slot;
+        if (chave) m.set(chave, [...(m.get(chave) ?? []), { img, lote: resposta }]);
+      }
+    return m;
+  }, [lotes]);
+
+  // Variações de um slot moram no modal dele: não aparecem como lote na tela.
+  const visiveis = lotes.filter((l) => !(l.resposta.meta as LoteMeta).variacao_de);
+  // A fila dos slots aparece até sair o primeiro lote dela.
+  const slotsPendentes = origem?.pendentes.length ? { message_id: origem.message_id, slots: origem.pendentes } : null;
+  const foraDoCodigo = new Set(origem?.fora_do_codigo ?? []);
+  // O card do slot mostra a versão que o site usa agora, venha de qual lote vier.
+  const noSite = (img: LoteImagem) => {
+    const chave = img.destino ?? img.slot;
+    return (chave && variacoes.get(chave)?.find((v) => v.img.destino)?.img) || img;
+  };
+
   const set = <K extends keyof ImageOpts>(k: K, v: ImageOpts[K]) => setO((c) => c && { ...c, [k]: v });
 
   const divisao = useMemo(() => {
@@ -160,7 +215,9 @@ export default function ImagensView(props: {
   }, [models, count]);
 
   async function gerar(confirm = false) {
-    if (!o || !prompt.trim() || !models.length) return;
+    const slots = slotsPendentes;
+    if (!o || (!slots && !prompt.trim()) || !models.length) return;
+    if (slots) return gerarDoBackend({ slots_de: slots.message_id }, confirm);
     if (refs.some((r) => sumidas.has(r))) {
       mostrarErro("Uma imagem de referência não foi encontrada (movida ou apagada): reanexe ou tire da edição.");
       return;
@@ -184,14 +241,76 @@ export default function ImagensView(props: {
         confirm,
         refs,
       });
-      setPerguntando(false);
+      setPerguntando(null);
       setErro("");
       setPrompt(""); // "Reaproveitar" no lote traz o texto de volta
       props.onConversationChanged();
       carregarConversa(conv);
     } catch (e: any) {
-      if (e.status === 409) setPerguntando(true); // tem LLM na VRAM: a conta é do usuário
+      if (e.status === 409) { setMotivo(e.message); setPerguntando(() => () => gerar(true)); } // VRAM: a conta é do usuário
       else mostrarErro(e.message);
+    }
+  }
+
+  // Fila dos slots e variações de um slot: prompt, tamanho e arquivo vêm do backend; daqui só modelo e ajustes.
+  async function gerarDoBackend(
+    extra:
+      | { slots_de: number }
+      | { variar: { message_id: number; path: string; prompt?: string }; count: number }
+      | { estilo: string; count: number },
+    confirm = false,
+  ) {
+    if (!o) return;
+    if (!models.length) {
+      setAbrirAjustes(true);
+      return mostrarErro("Escolha nos ajustes o modelo que gera as imagens.");
+    }
+    try {
+      await api.put("/local/image/defaults", { ...o, model: models[0] });
+      const conv = await props.ensureConversation();
+      await api.post(`/imagens/${conv}/gerar`, {
+        opts: { ...o, model: undefined, seed: undefined, width: undefined, height: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined, te_cpu: undefined, preview: undefined, taesd: undefined },
+        models,
+        seed: o.seed,
+        seed_mode: seedMode,
+        confirm,
+        ...extra,
+      });
+      setPerguntando(null);
+      setErro("");
+      setTrocandoEstilo(false);
+      props.onConversationChanged();
+      carregarConversa(conv);
+    } catch (e: any) {
+      if (e.status === 409) { setMotivo(e.message); setPerguntando(() => () => gerarDoBackend(extra, true)); }
+      else mostrarErro(e.message);
+    }
+  }
+
+  // prompt: o texto editado no modal de variações; sem ele, o mesmo da imagem
+  const regerar = (message_id: number, path: string, prompt?: string) =>
+    gerarDoBackend({ variar: { message_id, path, ...(prompt ? { prompt } : {}) }, count });
+
+  async function otimizar() {
+    try {
+      const r = await api.post<{ imagens: { nome: string; png: number; webp: number }[]; arquivos: string[] }>(
+        `/imagens/${props.conv}/otimizar`, {});
+      const kb = (n: number) => Math.round(n / 1024);
+      const antes = r.imagens.reduce((t, i) => t + i.png, 0), depois = r.imagens.reduce((t, i) => t + i.webp, 0);
+      setAviso(`${r.imagens.length} imagens em .webp: ${kb(antes)} KB → ${kb(depois)} KB. `
+        + (r.arquivos.length ? `O código agora aponta para o .webp em ${r.arquivos.join(", ")}.` : "O código já apontava para .webp."));
+      carregarOrigem();
+    } catch (e: any) {
+      mostrarErro(e.message);
+    }
+  }
+
+  async function escolher(slot: string, path: string) {
+    try {
+      await api.post(`/imagens/${props.conv}/escolher`, { slot, path });
+      carregarConversa();
+    } catch (e: any) {
+      mostrarErro(e.message);
     }
   }
 
@@ -271,13 +390,48 @@ export default function ImagensView(props: {
 
   return (
     <>
+      {slotAberto && (
+        <Variacoes
+          slot={slotAberto}
+          itens={variacoes.get(slotAberto) ?? []}
+          count={count}
+          ocupado={ocupado || st.image_busy}
+          onZoom={setZoom}
+          onEscolher={(path) => escolher(slotAberto, path)}
+          onRegerar={(prompt) => {
+            const todas = variacoes.get(slotAberto) ?? [];
+            const base = todas.find((v) => v.img.destino) ?? todas[0];
+            if (base) regerar(base.lote.id, base.img.path, prompt);
+          }}
+          onClose={() => setSlotAberto(null)}
+        />
+      )}
       {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
       {pintando && (
         <MascaraEditor src={urlDa(pintando)} onClose={() => setPintando(null)} onPronta={(png, modo) => usarPintura(pintando, png, modo)} />
       )}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-5 py-6">
-          {!lotes.length && (
+          {origem && (
+            <Origem
+              origem={origem}
+              temImagens={visiveis.length > 0}
+              ocupado={ocupado || st.image_busy}
+              onAbrir={props.onAbrirConversa}
+              onOtimizar={otimizar}
+              onEstilo={() => setTrocandoEstilo(true)}
+            />
+          )}
+          {trocandoEstilo && origem && (
+            <EstiloTodas
+              estilo={origem.estilo}
+              count={count}
+              imagens={new Set([...variacoes.values()].flat().filter((v) => v.img.destino).map((v) => v.img.destino)).size}
+              onGerar={(estilo) => gerarDoBackend({ estilo, count })}
+              onClose={() => setTrocandoEstilo(false)}
+            />
+          )}
+          {!visiveis.length && !origem && (
             <div className="mt-[18vh] text-center">
               <div className="text-3xl font-semibold">Imagens</div>
               <div className="text-3xl text-faint">Descreva, gere várias, fique com as boas.</div>
@@ -291,12 +445,17 @@ export default function ImagensView(props: {
             </div>
           )}
 
-          {lotes.map(({ pedido, resposta }) => (
+          {visiveis.map(({ pedido, resposta }) => (
             <Lote
               key={resposta.id}
               pedido={pedido}
               resposta={resposta}
+              noSite={noSite}
+              foraDoCodigo={foraDoCodigo}
+              versoes={(chave) => variacoes.get(chave) ?? []}
               onZoom={setZoom}
+              onAbrirSlot={(chave) => ((variacoes.get(chave)?.length ?? 0) > 1 ? (setSlotAberto(chave), true) : false)}
+              onRegerar={regerar}
               onError={mostrarErro}
               onMudou={carregarConversa}
               onReaproveitar={() => reaproveitar(resposta.meta as LoteMeta, pedido)}
@@ -322,18 +481,32 @@ export default function ImagensView(props: {
               </button>
             </div>
           )}
+          {aviso && (
+            <div className="mb-2 flex items-start gap-2 rounded-xl border border-line bg-surface p-2.5 text-xs text-muted">
+              <p className="min-w-0 flex-1">{aviso}</p>
+              <button onClick={() => setAviso("")} title="Fechar" className="text-faint hover:text-fg">
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
           {perguntando && (
             <div className="mb-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
-              <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
-              <p className="mt-1 text-amber-200/80">
-                O sd.cpp precisa dessa memória. Descarregar derruba o cache de contexto do chat: a próxima
-                mensagem de lá reprocessa o histórico inteiro. A conversa em si não se perde.
-              </p>
+              {motivo.startsWith("Outro programa") ? (
+                <p className="font-medium">{motivo}</p>
+              ) : (
+                <>
+                  <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
+                  <p className="mt-1 text-amber-200/80">
+                    O sd.cpp precisa dessa memória. Descarregar derruba o cache de contexto do chat: a próxima
+                    mensagem de lá reprocessa o histórico inteiro. A conversa em si não se perde.
+                  </p>
+                </>
+              )}
               <div className="mt-2 flex gap-2">
-                <button className={btnPrimary} onClick={() => gerar(true)}>
-                  Descarregar e gerar
+                <button className={btnPrimary} onClick={() => perguntando?.()}>
+                  {motivo.startsWith("Outro programa") ? "Gerar mesmo assim" : "Descarregar e gerar"}
                 </button>
-                <button className={btn} onClick={() => setPerguntando(false)}>
+                <button className={btn} onClick={() => setPerguntando(null)}>
                   Cancelar
                 </button>
               </div>
@@ -355,6 +528,69 @@ export default function ImagensView(props: {
             />
           )}
 
+          {slotsPendentes && (
+            <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+              <div className="mb-2 flex items-center gap-2">
+                <span className="font-medium text-fg">
+                  {slotsPendentes.slots.length} {visiveis.length ? "imagens novas" : "imagens"} pedidas pelo chat
+                </span>
+                <span className="text-faint">cada uma vai direto para o arquivo que o código aponta</span>
+              </div>
+              <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
+                {slotsPendentes.slots.map((s) => (
+                  <li key={s.nome} className="flex items-baseline gap-2" title={s.caminho}>
+                    <span className="shrink-0 font-mono text-fg">{s.nome}</span>
+                    <span className="shrink-0 text-faint">{s.largura && s.altura ? `${s.largura}×${s.altura}` : `${o.width}×${o.height}`}</span>
+                    <span className="min-w-0 flex-1 truncate text-muted">{s.prompt}</span>
+                    <span className="shrink-0 font-mono text-faint">{s.rel}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  className={btnPrimary}
+                  onClick={() => gerar()}
+                  disabled={!models.length || semRuntime || st.image_busy || ocupado}
+                >
+                  Gerar {slotsPendentes.slots.length} imagens
+                </button>
+                <button className={btn} onClick={() => setAbrirAjustes(true)}>
+                  {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""} · ajustes` : "Escolher modelo"}
+                </button>
+                {st.image_busy || ocupado ? <span className="text-faint">Já tem imagem sendo gerada.</span> : null}
+              </div>
+            </div>
+          )}
+
+          {origem ? (
+            !slotsPendentes && (
+              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-xs text-muted">
+                <Robo className="size-4 shrink-0 text-sky-300/80" />
+                <span className="min-w-0 flex-1">
+                  Esta conversa gera só as imagens que o chat pediu para o site. Para refazer uma, use <Refresh className="inline size-3" /> no
+                  card ou clique na foto. Imagem avulsa: abra uma conversa nova em Imagens.
+                </span>
+                <label className={`${pilula} focus-within:border-[#555]`} title="Quantas versões cada Regerar gera">
+                  <Copy className="size-3.5" />
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={count}
+                    onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+                    className={numeroPilula}
+                    style={larguraNumero(count)}
+                  />
+                  {count === 1 ? "versão por vez" : "versões por vez"}
+                </label>
+                <button className={`${pilula} ${abrirAjustes ? pilulaLigada : ""}`} onClick={() => setAbrirAjustes((v) => !v)}>
+                  <Sliders className="size-3.5" />
+                  {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""}` : "Escolher modelo"}
+                </button>
+              </div>
+            )
+          ) : (
+          <>
           <CaixaPrompt>
             {refs.length > 0 && (
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
@@ -496,6 +732,8 @@ export default function ImagensView(props: {
           <p className="mt-1.5 text-center text-[11px] text-faint">
             O sd.cpp gera uma imagem por vez e libera a memória no fim — um lote é uma fila.
           </p>
+          </>
+          )}
         </div>
       </div>
     </>
@@ -677,6 +915,11 @@ function Lote(props: {
   pedido: Message;
   resposta: Message;
   onZoom: (src: string) => void;
+  noSite: (img: LoteImagem) => LoteImagem;
+  foraDoCodigo: Set<string>;
+  versoes: (slot: string) => { img: LoteImagem; lote: Message }[];
+  onAbrirSlot: (slot: string) => boolean; // true = abriu o modal de variações (não amplia)
+  onRegerar: (message_id: number, path: string) => void;
   onEditar: (path: string) => void;
   onError: (e: string) => void;
   onMudou: () => void;
@@ -688,13 +931,18 @@ function Lote(props: {
   const viva = props.resposta.status === "running";
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [salvando, setSalvando] = useState(false);
-  const [vram, setVram] = useState(false);  // Continuar esbarrou num LLM carregado: pergunta antes
+  const [vram, setVram] = useState("");  // Continuar esbarrou na VRAM ocupada: a mensagem do 409
   const faltam = imagens.filter((i) => A_REFAZER.includes(i.status)).length;
+  // Lote dos slots do site: o card mostra a versão em uso e as versões se escolhem no modal, então
+  // manter/descartar e reaproveitar (que joga no campo de prompt, que aqui não existe) ficam de fora.
+  const deSlots = imagens.every((i) => i.destino || i.slot);
 
   // Enquanto o lote roda os caminhos mudam de status; a seleção acompanha o que já ficou pronto.
+  // Slot do site já vem marcado: descartar tira a imagem do caminho que o código aponta.
+  const marcadaDePadrao = (i: LoteImagem) => i.status === "mantida" || (!!i.destino && i.status === "pronta");
   useEffect(() => {
-    setSel(new Set(imagens.filter((i) => i.status === "mantida").map((i) => i.path)));
-  }, [props.resposta.id, imagens.filter((i) => i.status === "mantida").length]);
+    setSel(new Set(imagens.filter(marcadaDePadrao).map((i) => i.path)));
+  }, [props.resposta.id, imagens.filter(marcadaDePadrao).length]);
 
   const decididas = imagens.filter((i) => i.status === "mantida" || i.status === "descartada").length;
   const aprovaveis = imagens.filter((i) => ["pronta", "mantida", "descartada"].includes(i.status));
@@ -724,10 +972,10 @@ function Lote(props: {
   async function continuar(confirm = false) {
     try {
       await api.post(`/imagens/${props.resposta.id}/continuar`, { confirm });
-      setVram(false);
+      setVram("");
       props.onMudou();
     } catch (e: any) {
-      if (e.status === 409) setVram(true);
+      if (e.status === 409) setVram(e.message || "x");
       else props.onError(e.message);
     }
   }
@@ -747,7 +995,7 @@ function Lote(props: {
         <span className="text-xs text-faint">
           {viva ? `gerando ${prontas + 1} de ${imagens.length}…`
             : props.resposta.status === "interrompido" ? `interrompido: ${imagens.length - faltam} de ${imagens.length} prontas`
-            : `${imagens.length} variações`}
+            : deSlots ? `${imagens.length} imagens do site` : `${imagens.length} variações`}
         </span>
       </div>
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
@@ -771,10 +1019,21 @@ function Lote(props: {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-        {imagens.map((img) => (
+        {imagens.map((img) => {
+          const chave = img.destino ?? img.slot;
+          const versoes = chave ? props.versoes(chave) : [];
+          const mostrada = deSlots ? props.noSite(img) : img;
+          const loteDaMostrada = versoes.find((v) => v.img === mostrada)?.lote.id ?? props.resposta.id;
+          const gerandoVersao = versoes.some((v) => v.lote.status === "running" && v.lote.id !== props.resposta.id
+            && ["pendente", "gerando"].includes(v.img.status));
+          return (
           <Cartao
             key={img.path}
-            img={img}
+            img={mostrada}
+            semMarcar={deSlots}
+            extra={gerandoVersao ? "gerando versão…"
+              : chave && props.foraDoCodigo.has(chave) ? "fora do código"
+              : versoes.length > 1 ? `${versoes.length} versões` : undefined}
             marcada={sel.has(img.path)}
             onMarcar={() =>
               setSel((s) => {
@@ -784,13 +1043,17 @@ function Lote(props: {
                 return novo;
               })
             }
-            onZoom={() => props.onZoom(urlDa(img.path))}
-            onSemente={() => props.onSemente(img.seed)}
-            onPasta={() => mostrarNaPasta(img.path)}
-            onEditar={() => props.onEditar(img.path)}
+            onZoom={() => {
+              if (!chave || !props.onAbrirSlot(chave)) props.onZoom(srcDe(mostrada));
+            }}
+            onRegerar={chave ? () => props.onRegerar(loteDaMostrada, mostrada.path) : undefined}
+            onSemente={() => props.onSemente(mostrada.seed)}
+            onPasta={() => mostrarNaPasta(mostrada.path)}
+            onEditar={() => props.onEditar(mostrada.path)}
             origem={(props.pedido.meta as PedidoMeta | null)?.refs?.[0]}
           />
-        ))}
+          );
+        })}
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
@@ -800,7 +1063,7 @@ function Lote(props: {
             Cancelar lote
           </button>
         ) : (
-          aprovaveis.length > 0 && (
+          aprovaveis.length > 0 && !deSlots && (
             <>
               <button
                 className={btnPrimary}
@@ -831,10 +1094,12 @@ function Lote(props: {
             Continuar ({faltam})
           </button>
         )}
-        <button className={btn} onClick={props.onReaproveitar} title="Traz prompt e ajustes deste lote para o campo">
-          <Refresh className="mr-1 inline size-3.5" />
-          Reaproveitar
-        </button>
+        {!deSlots && (
+          <button className={btn} onClick={props.onReaproveitar} title="Traz prompt e ajustes deste lote para o campo">
+            <Refresh className="mr-1 inline size-3.5" />
+            Reaproveitar
+          </button>
+        )}
         {decididas > 0 && (
           <span className="text-faint">
             {imagens.filter((i) => i.status === "mantida").length} mantida(s) ·{" "}
@@ -844,9 +1109,13 @@ function Lote(props: {
       </div>
       {vram && (
         <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
-          <span className="flex-1">Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória.</span>
-          <button className={btnPrimary} onClick={() => continuar(true)}>Descarregar e continuar</button>
-          <button className={btn} onClick={() => setVram(false)}>Cancelar</button>
+          <span className="flex-1">
+            {vram.startsWith("Outro programa") ? vram : "Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória."}
+          </span>
+          <button className={btnPrimary} onClick={() => continuar(true)}>
+            {vram.startsWith("Outro programa") ? "Continuar mesmo assim" : "Descarregar e continuar"}
+          </button>
+          <button className={btn} onClick={() => setVram("")}>Cancelar</button>
         </div>
       )}
     </section>
@@ -932,6 +1201,9 @@ function Cartao(props: {
   onSemente: () => void;
   onPasta: () => void;
   onEditar: () => void;
+  onRegerar?: () => void; // imagem de slot: variações com o mesmo prompt
+  semMarcar?: boolean; // slot do site: não se marca para manter/descartar
+  extra?: string; // "3 versões", "gerando versão…"
   origem?: string; // edição: a imagem que está sendo editada aparece por trás enquanto gera
 }) {
   const { img } = props;
@@ -949,7 +1221,7 @@ function Cartao(props: {
     >
       {temArquivo ? (
         <img
-          src={urlDa(img.path)}
+          src={srcDe(img)}
           alt={`semente ${img.seed}`}
           onClick={props.onZoom}
           className={`aspect-square w-full cursor-zoom-in object-cover ${
@@ -998,7 +1270,7 @@ function Cartao(props: {
           </text>
         </svg>
       )}
-      {temArquivo && (
+      {temArquivo && !props.semMarcar && (
         <button
           onClick={props.onMarcar}
           title={props.marcada ? "Desmarcar" : "Marcar para manter"}
@@ -1012,14 +1284,28 @@ function Cartao(props: {
 
       <figcaption className="flex items-center gap-1.5 px-2 py-1.5 text-[11px]">
         <span className={`min-w-0 flex-1 truncate ${CORES[img.status]}`} title={`${img.model_name} · ${img.path}`}>
-          {img.model_name || "—"}
+          {img.nome ?? (img.model_name || "—")}
         </span>
+        {props.extra && (
+          <span
+            title={props.extra === "fora do código" ? "Nenhum arquivo do projeto aponta mais para esta imagem" : undefined}
+            className={`shrink-0 ${props.extra.startsWith("gerando") ? "animate-pulse text-sky-300"
+              : props.extra === "fora do código" ? "text-amber-300" : "text-faint"}`}
+          >
+            {props.extra}
+          </span>
+        )}
         {temArquivo && (
           <>
             <button onClick={props.onSemente} title="Usar esta semente no próximo lote" className="text-faint hover:text-fg">
               <Search className="mr-0.5 inline size-3" />
               {img.seed}
             </button>
+            {props.onRegerar && (
+              <button onClick={props.onRegerar} title="Regerar: novas variações com o mesmo prompt, para escolher qual fica no site" className="text-faint hover:text-fg">
+                <Refresh className="size-3" />
+              </button>
+            )}
             <button onClick={props.onEditar} title="Editar esta imagem no próximo lote" className="text-faint hover:text-fg">
               <Edit className="size-3" />
             </button>
@@ -1038,5 +1324,264 @@ function Cartao(props: {
         )}
       </figcaption>
     </figure>
+  );
+}
+
+/** Todas as versões de um slot: a que o site mostra e as regeradas. Escolher troca o arquivo do site. */
+function Variacoes(props: {
+  slot: string;
+  itens: { img: LoteImagem; lote: Message }[];
+  count: number;
+  ocupado: boolean;
+  onZoom: (src: string) => void;
+  onEscolher: (path: string) => void;
+  onRegerar: (prompt?: string) => void; // sem prompt = o mesmo da imagem do site
+  onClose: () => void;
+}) {
+  const nome = props.itens[0]?.img.nome ?? props.slot.split(/[\\/]/).pop();
+  // A do site primeiro; depois as mais novas (do último lote) no começo.
+  const ordem = [...props.itens].reverse().sort((a, b) => Number(!!b.img.destino) - Number(!!a.img.destino));
+  const original = ordem[0]?.img.prompt ?? "";  // o prompt da versão que o site mostra
+  const daIa = props.itens[0]?.img.prompt ?? "";  // o 1º lote do slot: o prompt que a IA escreveu
+  const [prompt, setPrompt] = useState(original);
+  const editado = prompt.trim() !== original.trim();
+  const rodando = [...new Set(props.itens.filter((v) => v.lote.status === "running").map((v) => v.lote.id))];
+  return (
+    <Modal onClose={props.onClose} label={`Variações de ${nome}`} className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-2xl border border-line bg-surface p-4 text-xs">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="font-mono text-sm text-fg">{nome}</span>
+        <span className="text-faint">{props.itens.length} versões · a de borda verde é a que o site mostra</span>
+        <button onClick={props.onClose} title="Fechar" className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+          <X className="size-3.5" />
+        </button>
+      </div>
+      <label className="mb-3 block">
+        <span className="mb-1 flex items-center gap-2 text-muted">
+          Prompt
+          {editado ? (
+            <span className="text-amber-300">editado: as próximas variações usam este texto</span>
+          ) : (
+            <span className="text-faint">o da imagem do site; edite para regerar diferente</span>
+          )}
+          <span className="ml-auto flex gap-1.5">
+            {/* iguais (o site ainda usa o texto da IA): um botão só basta */}
+            {editado && original.trim() !== daIa.trim() && (
+              <button onClick={() => setPrompt(original)} className={`${btn} py-0.5`} title={original}>
+                <Undo className="mr-1 inline size-3" />
+                O da imagem do site
+              </button>
+            )}
+            {daIa && prompt.trim() !== daIa.trim() && (
+              <button onClick={() => setPrompt(daIa)} className={`${btn} py-0.5`} title={daIa}>
+                <Robo className="mr-1 inline size-3" />
+                Prompt original da IA
+              </button>
+            )}
+          </span>
+        </span>
+        <textarea
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          rows={3}
+          spellCheck={false}
+          className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] leading-relaxed text-fg focus:border-[#555] focus:outline-none"
+        />
+      </label>
+      <div className="grid min-h-0 grid-cols-2 gap-3 overflow-y-auto md:grid-cols-3 xl:grid-cols-4">
+        {ordem.map(({ img, lote }) => {
+          const pronta = ["pronta", "mantida"].includes(img.status);
+          const noSite = !!img.destino;
+          return (
+            <figure key={img.path} className={`overflow-hidden rounded-xl border ${noSite ? "border-emerald-500" : "border-line"} bg-raised`}>
+              {pronta || img.status === "descartada" ? (
+                <img
+                  src={srcDe(img)}
+                  alt={`${nome}, semente ${img.seed}`}
+                  onClick={() => props.onZoom(srcDe(img))}
+                  className={`aspect-square w-full cursor-zoom-in object-cover ${img.status === "descartada" ? "opacity-40 grayscale" : ""}`}
+                />
+              ) : (
+                <div className="grid aspect-square w-full place-items-center px-3 text-center text-faint" title={img.error || undefined}>
+                  {img.status === "gerando" ? `gerando ${Math.round((img.progress ?? 0) * 100)}%`
+                    : img.status === "erro" ? <span className="text-red-300">{img.error.split("\n")[0].slice(0, 90) || "erro"}</span>
+                    : img.status}
+                </div>
+              )}
+              <figcaption className="flex items-center gap-1.5 px-2 py-1.5">
+                <span className="min-w-0 flex-1 truncate text-faint" title={`${img.model_name} · ${img.path}\n\n${img.prompt ?? ""}`}>
+                  semente {img.seed}
+                </span>
+                {img.prompt && img.prompt.trim() !== original.trim() && (
+                  <button
+                    onClick={() => setPrompt(img.prompt!)}
+                    title={`Feita com outro prompt:\n${img.prompt}\n\nClique para trazer este texto para o campo`}
+                    className="shrink-0 text-amber-300/80 hover:text-amber-200"
+                  >
+                    outro prompt
+                  </button>
+                )}
+                {noSite ? (
+                  <span className="text-emerald-300">no site</span>
+                ) : (
+                  pronta && (
+                    <button
+                      onClick={() => props.onEscolher(img.path)}
+                      disabled={lote.status === "running"}
+                      title={lote.status === "running" ? "Espere o lote terminar" : "Trocar a imagem do site por esta"}
+                      className="rounded-full border border-line px-2 py-0.5 text-fg hover:bg-raised disabled:opacity-40"
+                    >
+                      Usar no site
+                    </button>
+                  )
+                )}
+              </figcaption>
+            </figure>
+          );
+        })}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        {rodando.length > 0 && (
+          <button className={btn} onClick={() => rodando.forEach((id) => api.post(`/imagens/${id}/cancelar`, {}).catch(() => {}))}>
+            <Square className="mr-1 inline size-3" />
+            Parar
+          </button>
+        )}
+        <button
+          className={btn}
+          onClick={() => props.onRegerar(editado ? prompt.trim() : undefined)}
+          disabled={props.ocupado || !prompt.trim()}
+        >
+          <Refresh className="mr-1 inline size-3.5" />
+          Regerar mais {props.count}{editado ? " com o prompt editado" : ""}
+        </button>
+        <span className="text-faint">
+          {props.ocupado ? "Gerando…" : "Mesmo tamanho, sementes novas. A quantidade é a de “versões por vez”, embaixo; o site só muda quando você usar uma."}
+        </span>
+      </div>
+    </Modal>
+  );
+}
+
+type Origem = {
+  message_id: number; // o pedido mais novo da IA (é por ele que a fila dos pendentes sai)
+  workspace: string;
+  projeto: string;
+  chat: { id: number; title: string; kind: Section } | null;
+  slots: SlotImagem[];
+  pendentes: SlotImagem[]; // pedidos pela IA e ainda não gerados
+  fora_do_codigo: string[]; // caminhos de slot que nenhum arquivo do projeto cita mais
+  estilo: string;
+  web: boolean; // já otimizado: o código aponta para .webp e eles se regravam a cada troca
+};
+
+/** Topo da conversa aberta pela IA: qual projeto e qual chat pediram estas imagens. */
+function Origem(props: {
+  origem: Origem;
+  temImagens: boolean;
+  ocupado: boolean;
+  onAbrir: (id: number, kind: Section) => void;
+  onOtimizar: () => void;
+  onEstilo: () => void;
+}) {
+  const { origem } = props;
+  const acao = "flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-fg hover:bg-raised disabled:opacity-40";
+  // Duas linhas: quem pediu (identidade + volta ao chat) e o que dá para fazer com todas as imagens.
+  return (
+    <div className="mb-3 overflow-hidden rounded-2xl border border-sky-900/50 bg-sky-950/15 text-xs">
+      <div className="flex items-center gap-3 px-3.5 py-2.5">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-sky-500/10 text-sky-300">
+          <Robo className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13px] text-muted">
+            Aberta pela IA · projeto <span className="font-medium text-fg">{origem.projeto}</span>
+          </p>
+          <p className="truncate font-mono text-[11px] text-faint" title={origem.workspace}>{origem.workspace}</p>
+        </div>
+        {origem.chat ? (
+          <button
+            onClick={() => props.onAbrir(origem.chat!.id, origem.chat!.kind)}
+            title={`Abrir o chat que pediu estas imagens: “${origem.chat.title}”`}
+            className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+          >
+            <span className="shrink-0 text-faint">Chat</span>
+            <span className="truncate">{origem.chat.title}</span>
+            <ArrowRight className="size-3 shrink-0" />
+          </button>
+        ) : (
+          <span className="shrink-0 text-faint">o chat que pediu foi apagado</span>
+        )}
+      </div>
+      {props.temImagens && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-sky-900/40 px-3.5 py-2">
+          <span className="mr-auto text-faint">Todas as imagens do site</span>
+          <button
+            onClick={props.onEstilo}
+            disabled={props.ocupado}
+            title="Novas versões de todas as imagens do site com outro estilo (o site só muda quando você escolher)"
+            className={acao}
+          >
+            <Refresh className="size-3" />
+            Outro estilo
+          </button>
+          <button
+            onClick={props.onOtimizar}
+            disabled={props.ocupado}
+            title={origem.web
+              ? "Já otimizado: os .webp se regravam a cada troca. Clique para regravar todos agora"
+              : "Grava um .webp leve ao lado de cada PNG e troca .png por .webp no código do site"}
+            className={acao}
+          >
+            {origem.web ? (
+              <>
+                <Check className="size-3 text-emerald-300" />
+                Versão web (.webp)
+              </>
+            ) : (
+              "Otimizar para web"
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "Outro estilo": o texto que vai no fim de cada prompt, trocado em todas as imagens do site de uma vez. */
+function EstiloTodas(props: { estilo: string; count: number; imagens: number; onGerar: (estilo: string) => void; onClose: () => void }) {
+  const [estilo, setEstilo] = useState(props.estilo);
+  return (
+    <Modal onClose={props.onClose} label="Regerar todas com outro estilo" className="w-full max-w-xl rounded-2xl border border-line bg-surface p-4 text-xs">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-sm font-medium text-fg">Outro estilo para as {props.imagens} imagens do site</span>
+        <button onClick={props.onClose} title="Fechar" className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+          <X className="size-3.5" />
+        </button>
+      </div>
+      <p className="mb-2 text-muted">
+        Vai no fim do prompt de cada imagem, no lugar do estilo atual. Sai {props.count} versão(ões) de cada; o site só
+        muda quando você escolher, no card de cada uma.
+      </p>
+      <textarea
+        value={estilo}
+        onChange={(e) => setEstilo(e.target.value)}
+        rows={3}
+        spellCheck={false}
+        placeholder="cold blue night light, film grain, minimal"
+        className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] text-fg focus:border-[#555] focus:outline-none"
+      />
+      <div className="mt-3 flex items-center gap-2">
+        <button className={btnPrimary} onClick={() => props.onGerar(estilo.trim())}>
+          <Refresh className="mr-1 inline size-3.5" />
+          Gerar {props.imagens * props.count} versões
+        </button>
+        {estilo.trim() !== props.estilo.trim() && props.estilo && (
+          <button className={btn} onClick={() => setEstilo(props.estilo)}>
+            <Undo className="mr-1 inline size-3" />
+            Estilo original
+          </button>
+        )}
+      </div>
+    </Modal>
   );
 }

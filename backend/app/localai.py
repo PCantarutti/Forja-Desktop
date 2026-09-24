@@ -161,7 +161,8 @@ def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
             "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
-            "sem_proj": [], "referencias": []}
+            "sem_proj": [], "referencias": [],
+            "slots_liberados": []}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
 
 
 def read_config() -> dict:

@@ -121,3 +121,34 @@ def test_maestro_recebe_as_regras_novas():
     for trecho in ("Para achar código use grep", "Resultado grande demais", "Contexto atual de execução",
                    "Terminal persistente"):
         assert trecho in p
+
+
+def test_skill_inline_no_meio_do_texto(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "dados")
+    d = tmp_path / ".forja" / "skills" / "seo"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("Use meta tags.", encoding="utf-8")
+    bloco = skills.invocada(tmp_path, "landing de velas /skill:gerar-imagens com /skill:seo e /skill:nada")
+    assert "/skill:gerar-imagens, /skill:seo" in bloco and "imagens_pendentes" in bloco and "Use meta tags." in bloco
+    assert "nada" not in bloco.split("\n")[0]
+    assert skills.invocada(tmp_path, "url a/skill:seo") is None  # só conta com espaço antes
+
+
+def test_skills_do_usuario_pelas_configuracoes(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "dados")
+    skills.salvar_do_usuario("revisar-textos", "Revisa\nortografia", "Corrija a ortografia de $ARGUMENTS.")
+    lista = {s["name"]: s for s in skills.para_configuracoes(tmp_path)}
+    minha = lista["revisar-textos"]
+    assert minha["origem"] == "usuario" and minha["editavel"] and minha["description"] == "Revisa ortografia"
+    assert lista["gerar-imagens"]["origem"] == "forja" and not lista["gerar-imagens"]["editavel"]
+    assert "Corrija a ortografia de a ata." in skills.invocada(tmp_path, "/revisar-textos a ata")  # já vale no chat
+    skills.salvar_do_usuario("revisar-texto", "", "Outra coisa.", antigo="revisar-textos")  # renomear
+    assert not (tmp_path / "dados" / "skills" / "revisar-textos").exists()
+    with pytest.raises(ValueError, match="comando do Forja"):
+        skills.salvar_do_usuario("commit", "", "x")
+    with pytest.raises(ValueError, match="minúsculas"):
+        skills.salvar_do_usuario("../fora", "", "x")
+    skills.apagar_do_usuario("revisar-texto")
+    assert "revisar-texto" not in {s["name"] for s in skills.para_configuracoes(tmp_path)}
+    with pytest.raises(ValueError, match="não é sua"):
+        skills.apagar_do_usuario("gerar-imagens")

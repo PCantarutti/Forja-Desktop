@@ -61,6 +61,7 @@ export const Sliders = base(<><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle 
 export const Clipboard = base(<><rect x="6" y="4" width="12" height="16" rx="2" /><path d="M9 4h6v3H9z" /><path d="M9 11h6M9 15h4" /></>);
 export const Wrench = base(<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z" />);
 export const Cpu = base(<><rect x="7" y="7" width="10" height="10" rx="1.5" /><rect x="4" y="4" width="16" height="16" rx="2.5" /><path d="M9 1.5v2.5M15 1.5v2.5M9 20v2.5M15 20v2.5M1.5 9H4M1.5 15H4M20 9h2.5M20 15h2.5" /></>);
+export const Robo = base(<><rect x="5" y="8" width="14" height="11" rx="2.5" /><path d="M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5M3 13v2M21 13v2" /><circle cx="12" cy="3.5" r="1" /></>);
 export const Image = base(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10" r="1.5" /><path d="m4 17 5-5 4 4 3-3 4 4" /></>);
 export const Recolher = base(<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />);
 export const Expandir = base(<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />);

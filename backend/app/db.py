@@ -23,6 +23,9 @@ class Conversation(Base):
     workspace: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # pasta do Windows; None = padrão
     pinned: Mapped[bool] = mapped_column(default=False)    # fixada no topo da lista
     archived: Mapped[bool] = mapped_column(default=False)  # fora da lista principal
+    # Conversa de Imagens aberta pela IA (skill gerar-imagens): {conv_id, message_id} do chat e da
+    # chamada imagens_pendentes que pediu. Só gera os slots dela; None = conversa comum.
+    origem: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=_now)
     updated_at: Mapped[datetime] = mapped_column(default=_now)
     messages: Mapped[list["Message"]] = relationship(
@@ -230,6 +233,8 @@ def _migrate() -> None:
             c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN pinned BOOLEAN DEFAULT 0")
         if "archived" not in cols:
             c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN archived BOOLEAN DEFAULT 0")
+        if "origem" not in cols:
+            c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN origem JSON")
         if "kind" not in cols:
             # Conversas antigas: quem usou ferramenta era Agente; o resto vira Chat.
             c.exec_driver_sql("ALTER TABLE conversations ADD COLUMN kind VARCHAR(10) DEFAULT 'agent'")

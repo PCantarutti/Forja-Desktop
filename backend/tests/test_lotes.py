@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from app import config, db, downloads, imagegen, localai, lotes, mirror
+from app import config, db, downloads, imagegen, localai, lotes, mirror, slots
 
 
 @pytest.fixture(autouse=True)
@@ -13,6 +13,7 @@ def pastas(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOCAL_CONFIG", tmp_path / "local.json")
     monkeypatch.setattr(imagegen, "OUT_DIR", tmp_path / "imagens")
     monkeypatch.setattr(mirror, "ROOT", tmp_path / "conversas")
+    monkeypatch.setattr(lotes.projeto, "gpu_alheia", lambda pid: [])  # a GPU de verdade desta máquina não entra
     localai.write_config({**localai._blank(), "image": {**localai.DEFAULT_IMAGE,
                                                         "out_dir": str(tmp_path / "imagens")}})
     (tmp_path / "imagens").mkdir()
@@ -370,3 +371,129 @@ def test_apagar_conversa_leva_as_imagens_dela_e_so_elas(monkeypatch, tmp_path):
         assert c.delete(f"/api/conversations/{conv}").status_code == 200
     assert not any(f.exists() for f in geradas)
     assert ref.exists() and Path(fica["meta"]["images"][0]["path"]).exists()
+
+
+# ------------------------------------------------------------------ slots (skill gerar-imagens)
+
+def test_slots_viram_fila_no_caminho_do_projeto(tmp_path, monkeypatch):
+    chamadas = _fake_sd(monkeypatch)
+    projeto = tmp_path / "site"
+    projeto.mkdir()
+    r = imagegen.imagens_pendentes(projeto, {"estilo": "warm light", "slots": [
+        {"nome": "vela-3141", "caminho": "img/vela-3141.png", "prompt": "soy candle", "largura": 1000, "altura": 1000},
+        {"nome": "hero-8027", "caminho": "img/hero-8027.png", "prompt": "candles on a table"}]})
+    with pytest.raises(imagegen.ToolError, match="fora da pasta"):
+        imagegen.imagens_pendentes(projeto, {"slots": [{"nome": "x-1", "caminho": "../x.png", "prompt": "p"}]})
+    with pytest.raises(imagegen.ToolError, match="repetido"):
+        imagegen.imagens_pendentes(projeto, {"slots": [{"nome": "x-1", "caminho": "a.png", "prompt": "p"}] * 2})
+
+    conv = _conversa("agent")
+    with db.session() as s:
+        m = db.Message(conversation_id=conv, role="tool", content=r["text"],
+                       meta={"imagens_pendentes": r["imagens_pendentes"]})
+        s.add(m)
+        s.commit()
+        tool_id = m.id
+    # até gerar, o caminho tem um PNG provisório com o nome do slot (e ele não vai para descartadas/)
+    assert slots.eh_placeholder(projeto / "img" / "hero-8027.png")
+    (projeto / "img" / "vela-3141.png").write_bytes(b"velha")  # versão anterior: vai para descartadas/
+
+    with pytest.raises(lotes.ToolError, match="botão"):  # slots só saem na conversa aberta pelo botão
+        lotes.start(_conversa(), "", {}, ["m.gguf"], slots_de=tool_id)
+    img_conv = lotes.conversa_dos_slots(tool_id)["id"]
+    assert lotes.conversa_dos_slots(tool_id)["id"] == img_conv  # clicar de novo volta para a mesma
+    info = lotes.origem(img_conv)
+    assert info["chat"]["id"] == conv and info["projeto"] == "pasta padrão" and len(info["slots"]) == 2
+    with pytest.raises(lotes.ToolError, match="só para as imagens"):  # nada de imagem avulsa aqui
+        lotes.start(img_conv, "a fox", {}, ["m.gguf"])
+    msg = lotes.start(img_conv, "", {}, ["m.gguf"], slots_de=tool_id)
+    feito = _esperar(msg["id"])
+    with db.session() as s:  # o botão do chat vira "Ver as N imagens"
+        assert s.get(db.Message, tool_id).meta["imagens_pendentes"]["geradas"] is True
+    # gera ao lado (.nome.gerando.png) e só então troca o arquivo do site
+    assert [c["out"] for c in chamadas] == [projeto / "img" / ".vela-3141.gerando.png", projeto / "img" / ".hero-8027.gerando.png"]
+    assert not list((projeto / "img").glob(".*.gerando.png"))
+    assert chamadas[0]["prompt"] == "soy candle, warm light" and chamadas[0]["width"] == 1024
+    assert "width" not in chamadas[1]  # sem tamanho: o do painel
+    assert (projeto / "img" / "vela-3141.png").read_bytes() == b"\x89PNG"
+    assert list(lotes.descartadas_dir().glob("vela-3141-*.png"))
+    assert lotes.eh_slot(str(projeto / "img" / "hero-8027.png"))  # a rota de arquivo serve o slot
+
+    # descartar e desfazer: o slot volta para o caminho que o código aponta
+    lotes.decidir(feito["id"], [])
+    assert not (projeto / "img" / "hero-8027.png").exists()
+    descartado = next(i["path"] for i in lotes._mensagem(feito["id"])["meta"]["images"] if i["nome"] == "hero-8027")
+    lotes.decidir(feito["id"], [descartado])
+    assert (projeto / "img" / "hero-8027.png").exists()
+
+
+def test_regerar_slot_e_escolher_variacao(tmp_path, monkeypatch):
+    chamadas = _fake_sd(monkeypatch)
+    projeto = tmp_path / "site"
+    projeto.mkdir()
+    r = imagegen.imagens_pendentes(projeto, {"slots": [
+        {"nome": "vela-3141", "caminho": "img/vela-3141.png", "prompt": "soy candle", "largura": 768, "altura": 512}]})
+    conv_agente = _conversa("agent")
+    with db.session() as s:
+        m = db.Message(conversation_id=conv_agente, role="tool", content="", meta={"imagens_pendentes": r["imagens_pendentes"]})
+        s.add(m)
+        s.commit()
+        tool_id = m.id
+    conv = lotes.conversa_dos_slots(tool_id)["id"]
+    slot = str(projeto / "img" / "vela-3141.png")
+    original = _esperar(lotes.start(conv, "", {}, ["m.gguf"], slots_de=tool_id)["id"])
+    Path(slot).write_bytes(b"original")
+
+    avulsa = _conversa()
+    comum = _esperar(lotes.start(avulsa, "gato", {}, ["m.gguf"])["id"])
+    with pytest.raises(lotes.ToolError, match="slot"):  # variação comum não tem slot para refazer
+        lotes.start(avulsa, "", {}, ["m.gguf"], count=2, variar={"message_id": comum["id"], "path": comum["meta"]["images"][0]["path"]})
+    with pytest.raises(lotes.ToolError, match="outra conversa"):
+        lotes.start(avulsa, "", {}, ["m.gguf"], variar={"message_id": original["id"], "path": slot})
+
+    var = _esperar(lotes.start(conv, "", {}, ["m.gguf"], count=3, variar={"message_id": original["id"], "path": slot})["id"])
+    imgs = var["meta"]["images"]
+    assert var["meta"]["variacao_de"] == slot  # a tela mostra no modal do slot, não como lote novo
+    assert len(imgs) == 3 and all(i["slot"] == slot and "destino" not in i for i in imgs)
+    assert all(c["prompt"] == "soy candle" and c["width"] == 768 for c in chamadas[-3:])
+    assert Path(slot).read_bytes() == b"original"  # gerar variações não mexe no site
+
+    escolhida = imgs[1]["path"]
+    Path(escolhida).write_bytes(b"nova")
+    lotes.escolher(conv, slot, escolhida)
+    assert Path(slot).read_bytes() == b"nova"
+    velha = lotes._mensagem(original["id"])["meta"]["images"][0]
+    assert velha["slot"] == slot and "destino" not in velha and Path(velha["path"]).read_bytes() == b"original"
+    nova = lotes._mensagem(var["id"])["meta"]["images"][1]
+    assert nova["destino"] == slot and nova["path"] == slot and nova["status"] == "mantida"
+
+    lotes.escolher(conv, slot, velha["path"])  # e dá para voltar atrás
+    assert Path(slot).read_bytes() == b"original"
+
+    # prompt editado no modal: as variações novas usam o texto novo; o site continua igual
+    editado = _esperar(lotes.start(conv, "", {}, ["m.gguf"], count=1, variar={
+        "message_id": original["id"], "path": slot, "prompt": "  beeswax candle  "})["id"])
+    assert chamadas[-1]["prompt"] == "beeswax candle" and editado["meta"]["images"][0]["prompt"] == "beeswax candle"
+    assert editado["meta"]["seed_mode"] == "aleatoria"  # regerar com a semente de antes repetiria a imagem
+    assert Path(slot).read_bytes() == b"original"
+    with pytest.raises(lotes.ToolError, match="não encontrada"):
+        lotes.escolher(conv, slot, str(tmp_path / "qualquer.png"))
+
+
+def test_slot_que_falha_nao_tira_a_imagem_do_site(tmp_path, monkeypatch):
+    _fake_sd(monkeypatch, falhar={"sem-vram.gguf"})
+    projeto = tmp_path / "site"
+    (projeto / "img").mkdir(parents=True)
+    no_site = projeto / "img" / "vela-3141.png"
+    no_site.write_bytes(b"a que o site mostra")
+    r = imagegen.imagens_pendentes(projeto, {"slots": [{"nome": "vela-3141", "caminho": "img/vela-3141.png", "prompt": "p"}]})
+    with db.session() as s:
+        m = db.Message(conversation_id=_conversa("agent"), role="tool", content="", meta={"imagens_pendentes": r["imagens_pendentes"]})
+        s.add(m)
+        s.commit()
+        tool_id = m.id
+    conv = lotes.conversa_dos_slots(tool_id)["id"]
+    feito = _esperar(lotes.start(conv, "", {}, ["sem-vram.gguf"], slots_de=tool_id)["id"])
+    assert feito["meta"]["images"][0]["status"] == "erro"
+    assert no_site.read_bytes() == b"a que o site mostra"  # o sd falhou: o site fica como estava
+    assert not list(lotes.descartadas_dir().glob("vela-3141-*.png"))

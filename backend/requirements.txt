@@ -22,3 +22,4 @@ winrt-Windows.Storage.Streams==3.2.*; sys_platform == "win32"
 # os traz sozinho: sem declarar, o app empacotado quebra com ModuleNotFoundError no primeiro OCR.
 winrt-Windows.Foundation==3.2.*; sys_platform == "win32"
 winrt-Windows.Foundation.Collections==3.2.*; sys_platform == "win32"
+Pillow>=10.1  # placeholder e versão web dos slots de imagem (app/slots.py)

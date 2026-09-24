@@ -218,8 +218,11 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
     if proc.returncode != 0 or not out.exists():
         log = "\n".join(tail[-12:])
         dica = ""
-        if "DeviceLost" in log or "OutOfDeviceMemory" in log or "out of memory" in log.lower():
-            dica = ("A GPU ficou sem memória. Em IA local › Modelos › ajustes deste modelo, ligue "
+        # "available 0.00 MB device ... workspace capacity check": outro programa (um LLM carregado) tomou a VRAM
+        if ("DeviceLost" in log or "OutOfDeviceMemory" in log or "out of memory" in log.lower()
+                or "workspace capacity check" in log):
+            dica = ("A GPU ficou sem memória (outro programa, como um LLM carregado noutra janela do Forja, "
+                    "pode estar usando a VRAM). Em IA local › Modelos › ajustes deste modelo, ligue "
                     "\"Pesos na RAM\", \"Flash attention\" e \"VAE em blocos\", ou diminua a resolução.\n\n")
         raise ToolError(f"{dica}sd falhou (código {proc.returncode}):\n{log}")
     return out
@@ -305,3 +308,79 @@ register(Tool(
          ["prompt"]),
     image_generate, mutating=True, preview=_preview, timeout=None,  # geração longa, com progresso próprio
     available=lambda: bool(localai.find_exe("sd"))))
+
+
+# ---------------------------------------------------------------- slots (skill gerar-imagens)
+
+NOME_SLOT = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+MAX_SLOTS = 50  # o mesmo teto de um lote
+
+
+def _lado(v, nome: str) -> int | None:
+    if v in (None, "", 0):
+        return None  # fica o tamanho do painel
+    n = int(v)
+    if not 256 <= n <= 2048:
+        raise ToolError(f"{nome} {n} fora de 256–2048.")
+    return round(n / 64) * 64  # o sd.cpp pede múltiplos de 64
+
+
+def imagens_pendentes(root: Path, args: dict) -> dict:
+    """Só registra: os slots vão no meta do resultado e a UI desenha o botão que leva a fila para a tela
+    Imagens (lotes.start com slots_de). Nada é gerado aqui."""
+    from .tools import resolve_path
+
+    estilo = str(args.get("estilo") or "").strip()
+    slots_in = args.get("slots") or []
+    if not isinstance(slots_in, list) or not slots_in:
+        raise ToolError("Passe pelo menos um slot em `slots`.")
+    if len(slots_in) > MAX_SLOTS:
+        raise ToolError(f"No máximo {MAX_SLOTS} slots por chamada.")
+    slots, vistos = [], set()
+    for s in slots_in:
+        nome = str(s.get("nome") or "").strip()
+        if not NOME_SLOT.match(nome):
+            raise ToolError(f"Nome de slot inválido: '{nome}'. Use minúsculas, números e hífens (ex.: vela-3141).")
+        alvo = resolve_path(root, str(s.get("caminho") or ""))  # confina na pasta da conversa
+        if alvo.suffix.lower() != ".png":
+            raise ToolError(f"{s.get('caminho')}: o arquivo do slot tem que ser .png (é o que o sd.cpp grava).")
+        prompt = str(s.get("prompt") or "").strip()
+        if not prompt:
+            raise ToolError(f"Slot {nome} sem prompt.")
+        if nome in vistos or str(alvo) in vistos:
+            raise ToolError(f"Slot repetido: {nome} ({s.get('caminho')}).")
+        vistos |= {nome, str(alvo)}
+        slots.append({"nome": nome, "caminho": str(alvo), "rel": alvo.relative_to(root.resolve()).as_posix(),
+                      "prompt": f"{prompt}, {estilo}" if estilo else prompt,
+                      "prompt_base": prompt, "estilo": estilo,  # "regerar todas com outro estilo" troca só o fim
+                      "largura": _lado(s.get("largura"), "largura"), "altura": _lado(s.get("altura"), "altura")})
+    from . import slots as projeto
+
+    # Até gerar, o site mostra um PNG neutro com o nome do slot em vez de imagem quebrada.
+    for s in slots:
+        projeto.placeholder(s["caminho"], s["largura"], s["altura"], s["nome"])
+    lista = "\n".join(f"- {s['nome']} → {s['rel']}" for s in slots)
+    avisos = projeto.conferir(root, slots)
+    conferencia = ("\n\nConferi o código contra os slots e achei problemas; corrija agora (o caminho no código "
+                   "tem que ser o `caminho` do slot) e chame imagens_pendentes de novo se mudar algum slot:\n"
+                   + "\n".join(f"- {a}" for a in avisos)) if avisos else "\n\nConferi o código: todo slot é usado."
+    return {"text": f"{len(slots)} slot(s) de imagem registrados. O chat mostra ao usuário um botão que abre a "
+                    f"tela Imagens com a fila. Até ele gerar, cada caminho tem um PNG provisório com o nome do "
+                    f"slot:\n{lista}{conferencia}\n\nQuando as imagens ficarem prontas, chega um aviso nesta conversa.",
+            "imagens_pendentes": {"estilo": estilo, "slots": slots}}
+
+
+register(Tool(
+    "imagens_pendentes",
+    "Registra os slots de imagem que o código criado aponta (arquivos PNG que ainda não existem). O usuário "
+    "recebe um botão no chat que abre a tela Imagens com uma fila para gerar cada slot no caminho certo. "
+    "Chame uma vez, no fim, com todos os slots (skill gerar-imagens).",
+    _obj({"estilo": {"type": "string", "description": "Estilo comum a todas, somado a cada prompt (em inglês)"},
+          "slots": {"type": "array", "items": _obj({
+              "nome": {"type": "string", "description": "nome-codigo, ex.: vela-3141"},
+              "caminho": {"type": "string", "description": "PNG relativo à pasta da conversa, ex.: img/vela-3141.png"},
+              "prompt": {"type": "string", "description": "Descrição da imagem, em inglês"},
+              "largura": {"type": "integer"}, "altura": {"type": "integer"}},
+              ["nome", "caminho", "prompt"])}},
+         ["slots"]),
+    imagens_pendentes))

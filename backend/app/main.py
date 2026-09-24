@@ -693,7 +693,8 @@ def local_image_file(path: str):
     f = Path(path).resolve()
     pastas = {imagegen.OUT_DIR.resolve(), imagegen.out_dir().resolve()}
     # ...ou uma imagem que a pessoa anexou do disco para editar (só as registradas, nada mais do disco)
-    if not ((pastas & set(f.parents)) or lotes.eh_referencia(str(f))) or not f.is_file():
+    # ...ou o arquivo de um slot do site (skill gerar-imagens), registrado quando a fila dele saiu
+    if not ((pastas & set(f.parents)) or lotes.eh_referencia(str(f)) or lotes.eh_slot(str(f))) or not f.is_file():
         raise HTTPException(404, "Imagem não encontrada")
     return FileResponse(f)
 
@@ -716,6 +717,9 @@ class LoteBody(BaseModel):
     seed_mode: str = "incremental"  # incremental | aleatoria | fixa
     confirm: bool = False
     refs: list[str] = []  # imagens a editar (-r do sd.cpp); vazio = gerar do zero
+    slots_de: int = 0  # mensagem da ferramenta imagens_pendentes: um item por slot, no caminho do projeto
+    variar: dict = {}  # {message_id, path, prompt?} de uma imagem de slot: variações dela para escolher
+    estilo: str | None = None  # variações de todos os slots do site com este estilo no lugar do antigo
 
 
 class DecidirBody(BaseModel):
@@ -765,9 +769,50 @@ def imagens_referencia_caminho(body: CaminhoBody):
 async def imagens_gerar(conv_id: int, body: LoteBody):
     try:
         return await asyncio.to_thread(lotes.start, conv_id, body.prompt, body.opts, body.models,
-                                       body.count, body.seed, body.seed_mode, body.confirm, body.refs)
+                                       body.count, body.seed, body.seed_mode, body.confirm, body.refs,
+                                       body.slots_de, body.variar or None, body.estilo)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/slots/{tool_message_id}/conversa")
+def imagens_conversa_dos_slots(tool_message_id: int):
+    """Botão "Gerar N imagens" do chat: a conversa de Imagens daquele pedido (a mesma a cada clique)."""
+    try:
+        return lotes.conversa_dos_slots(tool_message_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/imagens/{conv_id}/origem")
+def imagens_origem(conv_id: int):
+    """Chat, projeto e slots de uma conversa aberta pela IA; {"origem": null} numa conversa comum."""
+    try:
+        return {"origem": lotes.origem(conv_id)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/{conv_id}/otimizar")
+async def imagens_otimizar(conv_id: int):
+    """Imagens do site mais leves: .webp ao lado de cada PNG e o código apontando para o .webp."""
+    try:
+        return await asyncio.to_thread(lotes.otimizar, conv_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class EscolherBody(BaseModel):
+    slot: str  # caminho do slot no projeto
+    path: str  # a variação que vai para o site
+
+
+@app.post("/api/imagens/{conv_id}/escolher")
+async def imagens_escolher(conv_id: int, body: EscolherBody):
+    try:
+        return await asyncio.to_thread(lotes.escolher, conv_id, body.slot, body.path)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -1265,7 +1310,7 @@ async def browser_host_popup(body: NavigateBody, conv: str = "0"):
 def _conv_dict(c: db.Conversation) -> dict:
     return {"id": c.id, "title": c.title, "updated_at": c.updated_at.isoformat(), "kind": c.kind or "agent",
             "workspace": c.workspace, "workspace_label": workspace.label(c.workspace),
-            "pinned": bool(c.pinned), "archived": bool(c.archived)}
+            "pinned": bool(c.pinned), "archived": bool(c.archived), "origem": c.origem}
 
 
 @app.get("/api/conversations")
@@ -1499,6 +1544,37 @@ def conversation_changes(conv_id: int):
 def conversation_skills(conv_id: int | str):
     """Comandos `/`: ações do Forja + skills da pasta da conversa (.forja/skills/*.md)."""
     return {"skills": skills.list_for(_conv_root(conv_id))}
+
+
+class SkillBody(BaseModel):
+    name: str
+    description: str = ""
+    prompt: str
+    antigo: str = ""  # nome anterior, quando a pessoa renomeia na tela
+
+
+@app.get("/api/skills")
+def skills_config():
+    """Configurações › Skills: as do Forja, as do usuário (editáveis) e as do projeto da pasta padrão."""
+    return {"skills": skills.para_configuracoes(workspace.default_root()),
+            "pasta": str(skills.pastas(Path("."))[0])}
+
+
+@app.put("/api/skills")
+def skills_salvar(body: SkillBody):
+    try:
+        return skills.salvar_do_usuario(body.name, body.description, body.prompt, body.antigo)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/skills/{nome}")
+def skills_apagar(nome: str):
+    try:
+        skills.apagar_do_usuario(nome)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 class OpenBody(BaseModel):

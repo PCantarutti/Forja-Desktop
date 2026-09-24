@@ -32,6 +32,27 @@ BUILTIN = [
      "description": "Descobre e roda os testes do projeto, corrigindo falhas",
      "prompt": "Descubra como rodar os testes deste projeto (package.json, pytest, etc.), rode-os e corrija as falhas "
                "que forem causadas por alterações desta conversa. Relate o resultado final. $ARGUMENTS"},
+    {"name": "gerar-imagens", "kind": "prompt",
+     "description": "Deixa slots de imagem no código e um botão para gerar todas na tela Imagens",
+     "prompt": "Enquanto cria ou edita o que foi pedido, cada imagem que o resultado precisar (foto, ilustração, "
+               "banner, ícone grande) vira um SLOT em vez de imagem de banco ou placeholder externo:\n"
+               "1. Dê a cada slot um nome em minúsculas com hífens e um código de 4 dígitos, único no projeto: "
+               "`vela-3141`, `hero-velas-8027`.\n"
+               "2. No código, aponte direto para o arquivo final PNG numa pasta de imagens do projeto, ex.: "
+               "`<img src=\"img/vela-3141.png\" alt=\"...\">` ou `url(img/hero-velas-8027.png)`. O arquivo ainda não "
+               "existe; vai existir depois, com esse nome e nesse lugar.\n"
+               "3. No fim, chame `imagens_pendentes` UMA vez com todos os slots: `caminho` relativo à pasta da "
+               "conversa (o mesmo arquivo do código, visto da raiz), `prompt` em inglês descrevendo só a imagem "
+               "(assunto, composição, luz, material), `largura`/`altura` na proporção de onde ela aparece "
+               "(banner 16:9 ≈ 1344×768, card quadrado 1024×1024, retrato 768×1024) e um `estilo` comum a todas, "
+               "para o conjunto parecer do mesmo site.\n"
+               "4. A ferramenta confere o código contra os slots: se ela apontar um problema, corrija no mesmo "
+               "turno. Até a imagem sair, cada caminho tem um PNG provisório com o nome do slot.\n"
+               "5. Quando chegar o aviso \"Imagens do site geradas\" (ou de troca/otimização), confira a página no "
+               "navegador, se tiver a ferramenta, e ajuste o layout (recorte, proporção, contraste do texto). Se o "
+               "aviso disser que as imagens viraram .webp, aponte para o .webp daí em diante.\n"
+               "Não gere as imagens você mesmo e não chame image_generate: o usuário gera a fila pela tela "
+               "Imagens a partir do botão que a ferramenta mostra no chat. $ARGUMENTS"},
     {"name": "explicar", "kind": "prompt",
      "description": "Explica a estrutura do projeto da pasta da conversa",
      "prompt": "Explore a pasta da conversa (list_dir, read_file) e explique em tópicos: o que o projeto faz, "
@@ -154,22 +175,32 @@ def conteudo(root: Path, nome: str) -> str:
     return _bloco(s, root)
 
 
+INLINE = re.compile(r"(?<!\S)/skill:([\w.-]+)")
+
+
 def invocada(root: Path, mensagem: str | None) -> str | None:
-    """`/nome argumentos` digitado pelo usuário → o bloco da skill para o modelo (ou None).
+    """`/nome argumentos` no começo, ou `/skill:nome` em qualquer ponto (várias) → os blocos das skills.
 
     Como no DeepSeek Harness, a mensagem fica como o usuário escreveu e a skill entra inteira logo
     depois — antes o front trocava o `/nome` pelo texto da skill, e a pasta dos recursos se perdia.
     """
     texto = (mensagem or "").strip()
-    if not texto.startswith("/") or "\n" in texto.split(" ", 1)[0]:
-        return None
-    nome, _, argumentos = texto[1:].partition(" ")
-    s = next((x for x in list_for(root) if x["name"] == nome and x.get("kind") == "prompt"), None)
-    if not s:
-        return None
-    return (f"O usuário chamou a skill /{nome}" + (f" com: {argumentos.strip()}" if argumentos.strip() else "")
-            + ". Siga as instruções dela; não a carregue de novo com a ferramenta skill.\n\n"
-            + _bloco(s, root, argumentos))
+    prompts = {x["name"]: x for x in list_for(root) if x.get("kind") == "prompt"}
+    blocos: list[str] = []
+    if texto.startswith("/") and not texto.startswith("/skill:") and "\n" not in texto.split(" ", 1)[0]:
+        nome, _, argumentos = texto[1:].partition(" ")
+        if s := prompts.get(nome):
+            blocos.append(f"O usuário chamou a skill /{nome}"
+                          + (f" com: {argumentos.strip()}" if argumentos.strip() else "")
+                          + ". Siga as instruções dela; não a carregue de novo com a ferramenta skill.\n\n"
+                          + _bloco(s, root, argumentos))
+    inline = [n for n in dict.fromkeys(INLINE.findall(texto)) if n in prompts]
+    if inline:
+        # $ARGUMENTS fica vazio: no meio do texto não há "o que vem depois"; o pedido inteiro é o contexto
+        blocos.append(f"O usuário citou as skills {', '.join('/skill:' + n for n in inline)} no pedido. "
+                      "Siga as instruções de todas ao mesmo tempo; não as carregue de novo com a ferramenta skill.\n\n"
+                      + "\n\n".join(_bloco(prompts[n], root) for n in inline))
+    return "\n\n".join(blocos) or None
 
 
 def expand(prompt: str, arguments: str) -> str:
@@ -201,3 +232,58 @@ def _registra() -> None:
 
 
 _registra()
+
+
+# ------------------------------------------------------------------ Configurações › Skills
+
+NOME_SKILL = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+
+def _do_usuario() -> Path:
+    return pastas(Path("."))[0]  # config.DATA_DIR / "skills": a mesma pasta que descobrir() já lê
+
+
+def para_configuracoes(root: Path) -> list[dict]:
+    """Todas as skills com a origem: as do Forja (embutidas), as do usuário (editáveis na tela) e as do
+    projeto da pasta padrão. Uma skill de projeto com o mesmo nome sobrepõe as outras na conversa."""
+    usuario = _do_usuario().resolve()
+    out = [{**b, "origem": "forja", "editavel": False} for b in BUILTIN]
+    for s in descobrir(root):
+        base = Path(s.get("base") or Path(s.get("source") or "").parent)
+        do_usuario = usuario in base.resolve().parents or base.resolve() == usuario
+        out.append({**s, "origem": "usuario" if do_usuario else "projeto", "editavel": do_usuario})
+    return out
+
+
+def salvar_do_usuario(nome: str, descricao: str, instrucoes: str, antigo: str = "") -> dict:
+    """Cria ou atualiza `<dados>/skills/<nome>/SKILL.md` (o formato Agent Skills que descobrir() lê)."""
+    nome, instrucoes = nome.strip(), instrucoes.strip()
+    if not NOME_SKILL.match(nome):
+        raise ValueError("Nome: minúsculas, números e hífens (ex.: revisar-textos).")
+    if not instrucoes:
+        raise ValueError("Escreva as instruções da skill.")
+    if nome in {b["name"] for b in BUILTIN}:
+        raise ValueError(f"/{nome} já é um comando do Forja: escolha outro nome.")
+    pasta = _do_usuario() / nome
+    if antigo and antigo != nome:
+        if pasta.exists():
+            raise ValueError(f"Já existe uma skill {nome}.")
+        velha = _do_usuario() / antigo
+        if velha.is_dir():
+            velha.rename(pasta)  # renomear leva os arquivos de recurso junto
+    pasta.mkdir(parents=True, exist_ok=True)
+    desc = " ".join(descricao.split())  # o frontmatter é uma linha por campo
+    (pasta / "SKILL.md").write_text(f"---\nname: {nome}\ndescription: {desc}\n---\n{instrucoes}\n", encoding="utf-8")
+    return {"name": nome}
+
+
+def apagar_do_usuario(nome: str) -> None:
+    """Só as do usuário: as do Forja são código e as do projeto moram no repositório dele."""
+    import shutil
+
+    if not NOME_SKILL.match(nome or ""):
+        raise ValueError("Skill inválida.")
+    pasta = _do_usuario() / nome
+    if not (pasta / "SKILL.md").is_file():
+        raise ValueError(f"A skill {nome} não é sua (ou não existe).")
+    shutil.rmtree(pasta)

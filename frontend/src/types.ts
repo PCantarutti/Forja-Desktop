@@ -56,6 +56,7 @@ export type Conversation = {
   pinned?: boolean;
   archived?: boolean;
   snippet?: string; // trecho que casou na busca por conteúdo
+  origem?: { conv_id: number; message_id: number } | null; // Imagens aberta pela IA (skill gerar-imagens)
 };
 
 /** Arquivo alterado pelo agente nesta conversa (checkpoints), com diff do antes para o agora. */
@@ -438,7 +439,15 @@ export type LoteImagem = {
   com_previa?: boolean; // o modelo gera com prévia: o card não usa o líquido, nem antes da 1ª
   s_passo?: number; // segundos por passo, lido do sd-cli
   restante?: number; // segundos até o fim da amostragem
+  nome?: string; // slot da skill gerar-imagens: o arquivo mora no projeto, no caminho que o código aponta
+  destino?: string; // presente = é a versão que o site mostra (o arquivo está no caminho do slot)
+  slot?: string; // variação de um slot, fora do site: "Usar no site" troca com a do destino
+  prompt?: string; // prompt próprio do slot/variação (o do pedido do lote vale para as demais)
 };
+
+/** Um slot registrado pela ferramenta imagens_pendentes (meta.imagens_pendentes do resultado). */
+export type SlotImagem = { nome: string; caminho: string; rel: string; prompt: string; largura: number | null; altura: number | null };
+export type SlotsPendentes = { message_id: number; slots: SlotImagem[] };
 
 /** meta da mensagem do assistente num lote (a thread do backend vai preenchendo `images`). */
 export type LoteMeta = {
@@ -447,6 +456,7 @@ export type LoteMeta = {
   seed_mode: SeedMode;
   opts: Partial<ImageOpts>;
   images: LoteImagem[];
+  variacao_de?: string; // variações de um slot: vivem no modal dele, não como lote na tela
 };
 
 /** meta da mensagem do usuário num lote. */

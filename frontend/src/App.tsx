@@ -273,6 +273,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   forget: (a) => `Apagando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
   update_tasks: () => "Atualizando a lista de tarefas",
   image_generate: (a) => `Gerando a imagem “${trecho(a.prompt, 40) ?? "pedida"}”`,
+  imagens_pendentes: (a) => `Registrando ${Array.isArray(a.slots) ? a.slots.length : ""} slots de imagem`,
   delegate_task: (a) => `Delegando: ${trecho(a.task, 44) ?? "uma tarefa"}`,
   exit_plan_mode: () => "Montando o plano",
   // Maestro: sem frase aqui, a linha de status viraria "Usando run_task" e esconderia o alvo.
@@ -1074,8 +1075,13 @@ export default function App() {
   }
 
   // Menu `/`: aparece quando o campo começa com "/" e ainda é uma linha só.
-  const slashQuery = input.startsWith("/") && !input.includes("\n") ? input.slice(1).split(" ")[0].toLowerCase() : null;
-  const slashMatches = slashQuery === null ? [] : skills.filter((s) => s.name.toLowerCase().startsWith(slashQuery));
+  const slashQuery = input.startsWith("/") && !input.startsWith("/skill:") && !input.includes("\n") ? input.slice(1).split(" ")[0].toLowerCase() : null;
+  // `/skill:nome` em qualquer ponto do texto (várias por mensagem): só skills de prompt; o menu completa o nome.
+  const inlineQuery = /(?:^|\s)\/skill:([\w.-]*)$/.exec(input)?.[1]?.toLowerCase() ?? null;
+  const slashMatches = inlineQuery !== null
+    ? skills.filter((s) => s.kind === "prompt" && s.name.toLowerCase().startsWith(inlineQuery))
+    : slashQuery === null ? [] : skills.filter((s) => s.name.toLowerCase().startsWith(slashQuery));
+  const menuSkill = slashQuery !== null || inlineQuery !== null;
 
   // Menu `@`: caminhos da pasta da conversa, enquanto o @ é a última coisa digitada.
   const mentionQuery = /(?:^|\s)@(\S*)$/.exec(input)?.[1] ?? null;
@@ -1118,6 +1124,12 @@ export default function App() {
       : [];
 
   async function applySkill(s: Skill): Promise<void> {
+    if (inlineQuery !== null) {
+      setInput((v) => v.replace(/\/skill:[\w.-]*$/, `/skill:${s.name} `));
+      setSlashIndex(0);
+      requestAnimationFrame(() => composer.current?.focus());
+      return;
+    }
     const args = input.slice(1).split(" ").slice(1).join(" ");
     setInput("");
     setSlashIndex(0);
@@ -1136,7 +1148,7 @@ export default function App() {
 
   async function send(texto?: string, skill = false): Promise<void> {
     const content = (texto ?? input).trim();
-    if (!skill && slashQuery !== null && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
+    if (!skill && menuSkill && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
     if (!content && !attachments.length) return;
     colar();  // mandar mensagem é dizer "quero ver o que vem agora": volta para o fim da conversa
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
@@ -1295,6 +1307,14 @@ export default function App() {
     const partes = (ctx as { partes?: Stats["partes"] } | null)?.partes ?? lastStats?.partes ?? null;
     return { used, max, out: lastTurn?.tokens ?? null, avg, models, sessao, partes };
   }, [messages, turns, ctx]);
+
+  /** Abre uma conversa de outra seção (ex.: Imagens ⇄ o chat que pediu as imagens). */
+  function irParaConversa(id: number, kind: Section) {
+    secaoEscolhida.current = true;
+    if (kind !== section) setSection(kind);
+    openConversation(id);
+    refreshConversations(kind);
+  }
 
   function changeSection(next: Section) {
     secaoEscolhida.current = true;
@@ -1530,6 +1550,13 @@ export default function App() {
                         forceOpen={seg.items.some((p) => p.kind === "tool" && !!approvals[p.call.id] && !res.has(p.call.id))}
                         renderTool={toolNode}
                         onOpen={openPath}
+                        onGerarImagens={(p) =>
+                          // a conversa de Imagens daquele pedido: a mesma a cada clique, criada no primeiro
+                          api
+                            .post<{ id: number; kind: Section }>(`/imagens/slots/${p.message_id}/conversa`, {})
+                            .then((c) => irParaConversa(c.id, c.kind))
+                            .catch((e) => setError(e.message))
+                        }
                       />
                     ),
                   )}
@@ -1778,7 +1805,7 @@ export default function App() {
             ))}
           </div>
         )}
-        {slashQuery !== null && slashMatches.length > 0 && (
+        {menuSkill && slashMatches.length > 0 && (
           <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-bg py-1 text-sm">
             {slashMatches.map((s, i) => (
               <button
@@ -1827,7 +1854,7 @@ export default function App() {
                 return setMentionHits([]);
               }
             }
-            if (slashQuery !== null && slashMatches.length) {
+            if (menuSkill && slashMatches.length) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
                 return setSlashIndex((i) => (i + 1) % slashMatches.length);
@@ -1838,9 +1865,10 @@ export default function App() {
               }
               if (e.key === "Tab") {
                 e.preventDefault();
+                if (inlineQuery !== null) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
                 return setInput(`/${slashMatches[slashIndex]?.name ?? slashMatches[0].name} `);
               }
-              if (e.key === "Escape") {
+              if (e.key === "Escape" && inlineQuery === null) {
                 e.preventDefault();
                 return setInput("");
               }
@@ -2135,6 +2163,7 @@ export default function App() {
         ) : section === "imagem" ? (
           <ImagensView
             conv={currentId}
+            onAbrirConversa={irParaConversa}
             ensureConversation={ensureConversation}
             provider={settings.provider}
             model={settings.model}

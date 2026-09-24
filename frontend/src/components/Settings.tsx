@@ -62,7 +62,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
+const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória"] as const;
 type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
@@ -178,7 +178,7 @@ export default function Settings(props: {
               </span>
             )}
             {saved && <span className="text-sm text-emerald-400">{saved}</span>}
-            {!["MCP", "Memória", "Aplicativo", "Pastas", "Runtime", "Hardware"].includes(tab) && (
+            {!["MCP", "Memória", "Aplicativo", "Pastas", "Runtime", "Hardware", "Skills"].includes(tab) && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
                 Salvar
               </button>
@@ -191,6 +191,8 @@ export default function Settings(props: {
           <div className="flex-1 overflow-y-auto p-5">
             {tab === "Aplicativo" ? (
               <AppTab />
+            ) : tab === "Skills" ? (
+              <SkillsTab onError={setError} />
             ) : tab === "Pastas" ? (
               <PastasTab onError={setError} />
             ) : tab === "Runtime" ? (
@@ -1731,6 +1733,134 @@ function MemoryTab() {
         ))}
       </ul>
       {!entities.length && <div className="text-muted">Nada encontrado.</div>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- skills
+
+type SkillCfg = {
+  name: string;
+  kind: "action" | "prompt";
+  description: string;
+  prompt?: string;
+  origem: "forja" | "usuario" | "projeto";
+  editavel: boolean;
+  source?: string;
+};
+
+const ORIGEM: Record<SkillCfg["origem"], string> = { usuario: "Suas skills", projeto: "Do projeto (pasta padrão)", forja: "Do Forja" };
+const vazia = { name: "", description: "", prompt: "", antigo: "" };
+
+/** Skills: as do Forja e as do projeto só aparecem; as do usuário se criam, editam e apagam aqui. */
+function SkillsTab({ onError }: { onError: (e: string) => void }) {
+  const [lista, setLista] = useState<SkillCfg[] | null>(null);
+  const [pasta, setPasta] = useState("");
+  const [editando, setEditando] = useState<typeof vazia | null>(null);
+  const [aberta, setAberta] = useState<string | null>(null);
+
+  const carregar = () =>
+    api.get<{ skills: SkillCfg[]; pasta: string }>("/skills")
+      .then((r) => { setLista(r.skills); setPasta(r.pasta); })
+      .catch((e) => onError(e.message));
+  useEffect(() => { carregar(); }, []);
+
+  async function salvar() {
+    if (!editando) return;
+    try {
+      await api.put("/skills", editando);
+      setEditando(null);
+      carregar();
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
+
+  async function apagar(nome: string) {
+    try {
+      await api.del(`/skills/${encodeURIComponent(nome)}`);
+      carregar();
+    } catch (e: any) {
+      onError(e.message);
+    }
+  }
+
+  if (!lista) return <div className="text-muted">Carregando…</div>;
+  return (
+    <div className="max-w-2xl space-y-5 text-sm">
+      <p className="text-xs text-muted">
+        Uma skill é um conjunto de instruções que o agente segue. Chame no começo da mensagem com{" "}
+        <code className="text-fg">/nome</code> ou em qualquer ponto com <code className="text-fg">/skill:nome</code>, várias
+        por mensagem. As suas ficam em <code className="break-all text-faint">{pasta}</code>, uma pasta por skill com um{" "}
+        <code className="text-fg">SKILL.md</code>; arquivos que você puser na pasta viram recurso que a skill pode mandar ler.
+      </p>
+
+      {editando ? (
+        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+          <div className="text-sm font-medium">{editando.antigo ? `Editar /${editando.antigo}` : "Nova skill"}</div>
+          <Field label="Nome" hint="Vira o comando: minúsculas, números e hífens.">
+            <input className={input} value={editando.name} placeholder="revisar-textos" spellCheck={false}
+                   onChange={(e) => setEditando({ ...editando, name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-") })} />
+          </Field>
+          <Field label="Descrição" hint="Aparece no menu do / e diz ao agente quando usar.">
+            <input className={input} value={editando.description} placeholder="Revisa ortografia e clareza de um texto"
+                   onChange={(e) => setEditando({ ...editando, description: e.target.value })} />
+          </Field>
+          <Field label="Instruções" hint="O que o agente deve fazer. $ARGUMENTS vira o que vier depois do /nome.">
+            <textarea rows={9} className={`${input} font-mono text-xs`} value={editando.prompt}
+                      placeholder={"Revise o texto de $ARGUMENTS: corrija ortografia e concordância,\nsem mudar o tom. Liste as mudanças no fim."}
+                      onChange={(e) => setEditando({ ...editando, prompt: e.target.value })} />
+          </Field>
+          <div className="flex gap-2">
+            <button className={btnPrimary} disabled={!editando.name || !editando.prompt.trim()} onClick={salvar}>Salvar skill</button>
+            <button className={btn} onClick={() => setEditando(null)}>Cancelar</button>
+          </div>
+        </div>
+      ) : (
+        <button className={btn} onClick={() => setEditando({ ...vazia })}>+ Nova skill</button>
+      )}
+
+      {(["usuario", "projeto", "forja"] as const).map((origem) => {
+        const grupo = lista.filter((sk) => sk.origem === origem);
+        if (!grupo.length && origem !== "usuario") return null;
+        return (
+          <section key={origem}>
+            <div className="mb-1.5 text-xs font-medium text-muted">{ORIGEM[origem]}</div>
+            {!grupo.length && <div className="rounded-xl border border-dashed border-line px-3 py-2.5 text-xs text-faint">Nenhuma ainda.</div>}
+            <ul className="divide-y divide-line overflow-hidden rounded-xl border border-line">
+              {grupo.map((sk) => (
+                <li key={sk.name} className="bg-surface">
+                  <div className="flex items-center gap-3 px-3 py-2">
+                    <button onClick={() => setAberta(aberta === sk.name ? null : sk.name)} className="min-w-0 flex-1 text-left"
+                            title={sk.kind === "prompt" ? "Ver as instruções" : undefined}>
+                      <span className="font-mono text-fg">/{sk.name}</span>
+                      <span className="ml-2 text-xs text-muted">{sk.description}</span>
+                    </button>
+                    <span className="shrink-0 text-[11px] text-faint">
+                      {sk.kind === "action" ? "ação da interface" : `/skill:${sk.name}`}
+                    </span>
+                    {sk.editavel && (
+                      <>
+                        <button className="shrink-0 text-xs text-muted hover:text-fg"
+                                onClick={() => setEditando({ name: sk.name, description: sk.description, prompt: sk.prompt ?? "", antigo: sk.name })}>
+                          Editar
+                        </button>
+                        <Confirma rotulo="Apagar" pergunta={`Apagar a skill ${sk.name} e a pasta dela?`}
+                                  className="shrink-0 text-xs text-muted hover:text-red-300" onSim={() => void apagar(sk.name)} />
+                      </>
+                    )}
+                  </div>
+                  {aberta === sk.name && sk.prompt && (
+                    <pre className="max-h-60 overflow-auto border-t border-line bg-bg px-3 py-2 text-[11px] whitespace-pre-wrap text-muted">
+                      {sk.prompt}
+                    </pre>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        );
+      })}
     </div>
   );
 }
