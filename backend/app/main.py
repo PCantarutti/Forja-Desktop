@@ -454,12 +454,6 @@ class DownloadBody(BaseModel):
     folder: str = ""
 
 
-class ImageBody(BaseModel):
-    prompt: str = ""
-    opts: dict = {}
-    confirm: bool = False  # sim, pode descarregar o modelo que está na VRAM
-
-
 class PathsBody(BaseModel):
     models_dir: str = ""
     image_dir: str = ""
@@ -647,17 +641,6 @@ def local_cancel(job_id: str):
     return {"ok": True}
 
 
-@app.post("/api/local/image")
-def local_image(body: ImageBody):
-    try:
-        return imagegen.start_job(body.prompt, body.opts, body.confirm)
-    except imagegen.ModeloCarregado as e:
-        # 409: a interface pergunta se pode descarregar e repete com confirm=true.
-        raise HTTPException(409, str(e))
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
 @app.put("/api/local/paths")
 async def local_paths(body: PathsBody):
     """Pastas padrão: modelos baixados e imagens geradas."""
@@ -671,6 +654,114 @@ async def local_paths(body: PathsBody):
 async def local_image_defaults(body: dict):
     try:
         return await asyncio.to_thread(localai.set_image, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/video/defaults")
+async def local_video_defaults(body: dict):
+    try:
+        return await asyncio.to_thread(localai.set_video, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/kits")
+async def local_video_kits(quants: str = "", auto: bool = False):
+    """`quants`: JSON {id do kit: quantização} com o que foi trocado no cartão. `auto`: os montados da busca."""
+    try:
+        escolhas = json.loads(quants) if quants else {}
+    except ValueError:
+        escolhas = {}
+    try:
+        kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video, escolhas, auto),
+                                          asyncio.to_thread(localai.vram_video_gb))
+    except ToolError as e:
+        raise HTTPException(502, str(e))
+    return {"kits": kits, "vram_gb": vram}
+
+
+class KitBody(BaseModel):
+    id: str
+    folder: str = ""
+    quant: str = ""  # vazio = a maior que cabe na VRAM
+
+
+@app.post("/api/local/video/kit")
+async def local_video_kit(body: KitBody):
+    try:
+        return {"jobs": await asyncio.to_thread(localai.baixar_kit, body.id, body.folder, body.quant)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/aceleradores")
+async def local_video_aceleradores(model: str):
+    return await asyncio.to_thread(localai.aceleradores, model)
+
+
+class AceleradorBody(BaseModel):
+    model: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/acelerador")
+async def local_video_acelerador(body: AceleradorBody):
+    try:
+        return {"jobs": await asyncio.to_thread(localai.baixar_acelerador, body.model, body.folder)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/ampliadores")
+async def local_video_ampliadores():
+    from . import ampliar
+    return await asyncio.to_thread(ampliar.catalogo)
+
+
+class AmpliadorBody(BaseModel):
+    nome: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/ampliador")
+async def local_video_ampliador(body: AmpliadorBody):
+    from . import ampliar
+    try:
+        return await asyncio.to_thread(ampliar.baixar_modelo, body.nome, body.folder)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class AmpliarBody(BaseModel):
+    path: str
+    fator: int = 2
+    modelo: str = ""  # vazio = Lanczos, sem IA
+    suavizar: bool = False
+
+
+@app.post("/api/imagens/{message_id}/ampliar")
+async def imagens_ampliar(message_id: int, body: AmpliarBody):
+    try:
+        return await asyncio.to_thread(lotes.ampliar, message_id, body.path, body.fator, body.modelo, body.suavizar)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/{conv_id}/ampliar-arquivo")
+async def imagens_ampliar_arquivo(conv_id: int, body: AmpliarBody):
+    """Um vídeo qualquer do disco (não uma tomada): vira uma tomada ampliada nesta conversa."""
+    try:
+        return await asyncio.to_thread(lotes.ampliar_arquivo, conv_id, body.path, body.fator, body.modelo, body.suavizar)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/sondar")
+async def local_video_sondar(path: str):
+    from . import ampliar
+    try:
+        return await asyncio.to_thread(ampliar.sondar, path)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -708,6 +799,12 @@ MELHORAR_PROMPT = (
     "reescrito, em inglês, numa linha, com termos visuais concretos: assunto, composição, luz, "
     "material, lente, estilo. Sem explicação, sem aspas, sem 'prompt:', sem negativos."
 )
+MELHORAR_PROMPT_VIDEO = (
+    "Você reescreve descrições para um gerador de vídeo curto (Wan, 2 a 5 segundos, sem áudio). "
+    "Devolva SÓ o prompt reescrito, em inglês, numa linha: o sujeito, UMA ação contínua que caiba em "
+    "poucos segundos, o movimento de câmera (static, slow dolly in, pan left, tracking shot...), luz, "
+    "ambiente e estilo. Sem cortes de cena, sem explicação, sem aspas, sem 'prompt:', sem negativos."
+)
 
 
 class LoteBody(BaseModel):
@@ -718,17 +815,19 @@ class LoteBody(BaseModel):
     seed: int = 0
     seed_mode: str = "incremental"  # incremental | aleatoria | fixa
     confirm: bool = False
-    refs: list[str] = []  # imagens a editar (-r do sd.cpp); vazio = gerar do zero
+    refs: list[str] = []  # imagens a editar (-r do sd.cpp); no vídeo, [início] ou [início, fim]
 
 
 class DecidirBody(BaseModel):
     keep: list[str] = []
+    apenas: list[str] = []  # vazio = decide o lote inteiro
 
 
 class PromptBody(BaseModel):
     prompt: str
     provider: str
     model: str
+    video: bool = False
 
 
 @app.post("/api/imagens/referencia")
@@ -778,7 +877,7 @@ async def imagens_gerar(conv_id: int, body: LoteBody):
 @app.post("/api/imagens/{message_id}/decidir")
 async def imagens_decidir(message_id: int, body: DecidirBody):
     try:
-        return await asyncio.to_thread(lotes.decidir, message_id, body.keep)
+        return await asyncio.to_thread(lotes.decidir, message_id, body.keep, body.apenas or None)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -826,7 +925,8 @@ async def imagens_prompt(body: PromptBody):
     out = ""
     try:
         async for kind, val in llm.chat_stream(body.provider, body.model,
-                                               [{"role": "system", "content": MELHORAR_PROMPT},
+                                               [{"role": "system",
+                                                 "content": MELHORAR_PROMPT_VIDEO if body.video else MELHORAR_PROMPT},
                                                 {"role": "user", "content": body.prompt}], None, 8192):
             if kind == "content":
                 out += val
@@ -1350,8 +1450,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "comparar", "pesquisa"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, comparar ou pesquisa")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar ou pesquisa")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)

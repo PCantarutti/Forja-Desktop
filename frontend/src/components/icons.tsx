@@ -64,3 +64,25 @@ export const Cpu = base(<><rect x="7" y="7" width="10" height="10" rx="1.5" /><r
 export const Image = base(<><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="8.5" cy="10" r="1.5" /><path d="m4 17 5-5 4 4 3-3 4 4" /></>);
 export const Recolher = base(<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />);
 export const Expandir = base(<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />);
+// Vídeo: aba, player e composer.
+export const Film = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></>);
+export const Play = ({ className = "size-4" }: P) => (
+  <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
+    <path d="M8 5.1v13.8a1 1 0 0 0 1.5.9l10.6-6.9a1 1 0 0 0 0-1.7L9.5 4.2A1 1 0 0 0 8 5.1Z" />
+  </svg>
+);
+export const Pause = ({ className = "size-4" }: P) => (
+  <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>
+    <rect x="6" y="4.5" width="4" height="15" rx="1.2" />
+    <rect x="14" y="4.5" width="4" height="15" rx="1.2" />
+  </svg>
+);
+export const QuadroAntes = base(<><path d="M6 5v14" /><path d="m18 6-8 6 8 6z" /></>);
+export const QuadroDepois = base(<><path d="M18 5v14" /><path d="m6 6 8 6-8 6z" /></>);
+export const Repetir = base(<><path d="m17 2 3 3-3 3" /><path d="M4 11V9a4 4 0 0 1 4-4h12" /><path d="m7 22-3-3 3-3" /><path d="M20 13v2a4 4 0 0 1-4 4H4" /></>);
+export const TelaCheia = base(<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3" />);
+export const Pip = base(<><rect x="2.5" y="4.5" width="19" height="15" rx="2" /><rect x="12" y="11.5" width="7" height="5" rx="1" /></>);
+export const Trocar = base(<path d="M7 7h11l-3-3M17 17H6l3 3" />);
+export const Teclado = base(<><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h1M10.5 10h1M14.5 10h1M6.5 14h11" /></>);
+export const Raio = base(<path d="M13 2 4 14h7l-1 8 9-12h-7z" />);
+export const Camera = base(<><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.5" /></>);

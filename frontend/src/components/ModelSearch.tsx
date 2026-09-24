@@ -4,6 +4,7 @@ import { Modal } from "./Modal";
 import type { Hardware, HfFile, HfModel, HfRepo } from "../types";
 import { Markdown } from "./MessageView";
 import { Check, Copy, Download, Search, X } from "./icons";
+import SelosModo from "./SelosModo";
 
 const chip = "rounded-md bg-raised px-1.5 py-0.5 text-[11px] text-muted";
 
@@ -67,10 +68,10 @@ function quando(iso: string): string {
 
 /** Busca de modelos no Hugging Face: lista à esquerda, ficha do modelo à direita. */
 export default function ModelSearch(props: {
-  kind: "text" | "image";
+  kind: "text" | "image" | "video";
   destino: string;
   hardware?: Hardware;
-  onKind: (k: "text" | "image") => void;
+  onKind: (k: "text" | "image" | "video") => void;
   onDownload: (repo: string, file: string) => void;
   onClose: () => void;
   onError: (e: string) => void;
@@ -84,8 +85,9 @@ export default function ModelSearch(props: {
   const [baixados, setBaixados] = useState<string[]>([]);
   const pedido = useRef(0);
 
+  const semTermo = props.kind === "video"; // vídeo: vazio = "wan", a lista já abre cheia
   async function buscar() {
-    if (q.trim().length < 2) return;
+    if (q.trim().length < 2 && !semTermo) return;
     const meu = ++pedido.current;
     setBuscando(true);
     setSel("");
@@ -104,8 +106,8 @@ export default function ModelSearch(props: {
 
   // Busca sozinha quando a digitação para — sem Enter. 450 ms é o tempo de uma pausa entre palavras.
   useEffect(() => {
-    if (q.trim().length < 2) return;
-    const t = setTimeout(buscar, 450);
+    if (q.trim().length < 2 && !(semTermo && !q.trim())) return;
+    const t = setTimeout(buscar, q.trim() ? 450 : 0);
     return () => clearTimeout(t);
   }, [q, ordem, props.kind]);
 
@@ -134,14 +136,14 @@ export default function ModelSearch(props: {
           <input
             autoFocus
             className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
-            placeholder={props.kind === "text" ? "Buscar modelos no Hugging Face…" : "Buscar modelos de imagem…"}
+            placeholder={props.kind === "text" ? "Buscar modelos no Hugging Face…" : props.kind === "image" ? "Buscar modelos de imagem…" : "Buscar modelos de vídeo (Wan)…"}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && buscar()}
             spellCheck={false}
           />
           <div className="flex shrink-0 gap-0.5 rounded-full border border-line p-0.5">
-            {(["text", "image"] as const).map((k) => (
+            {(["text", "image", "video"] as const).map((k) => (
               <button
                 key={k}
                 onClick={() => {
@@ -151,7 +153,7 @@ export default function ModelSearch(props: {
                 }}
                 className={`rounded-full px-2 py-0.5 ${props.kind === k ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
               >
-                {k === "text" ? "chat" : "imagem"}
+                {k === "text" ? "chat" : k === "image" ? "imagem" : "vídeo"}
               </button>
             ))}
           </div>
@@ -185,7 +187,9 @@ export default function ModelSearch(props: {
           <aside className="w-80 shrink-0 overflow-y-auto border-r border-line">
             {buscando && <p className="p-3 text-faint">buscando…</p>}
             {!buscando && lista === null && (
-              <p className="p-3 text-faint">Digite o que procura e aperte Enter. Ex.: qwen3, gemma, sdxl.</p>
+              <p className="p-3 text-faint">
+                {semTermo ? "Só aparecem os Wan, que é o que o stable-diffusion.cpp gera em vídeo." : "Digite o que procura e aperte Enter. Ex.: qwen3, gemma, sdxl."}
+              </p>
             )}
             {!buscando && lista?.length === 0 && <p className="p-3 text-muted">Nada encontrado.</p>}
             {lista?.map((m) => (
@@ -196,8 +200,11 @@ export default function ModelSearch(props: {
                   sel === m.id ? "bg-raised" : ""
                 }`}
               >
-                <span className="truncate text-fg">{m.id.split("/").pop()}</span>
-                <span className="truncate text-faint">{m.author}</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="min-w-0 flex-1 truncate text-fg">{m.id.split("/").pop()}</span>
+                  {m.modos && <SelosModo modos={m.modos} />}
+                </span>
+                <span className="truncate text-faint">{m.variante_nome ? `${m.variante_nome} · ${m.author}` : m.author}</span>
                 <span className="flex items-center gap-2 text-faint">
                   <span>{milhares(m.downloads)} ↓</span>
                   <span>{milhares(m.likes)} ★</span>
@@ -235,7 +242,7 @@ export default function ModelSearch(props: {
                   {repo.ctx_train > 0 && props.kind === "text" && <span className={chip}>CTX {milhares(repo.ctx_train)}</span>}
                   {repo.license && <span className={chip}>{repo.license}</span>}
                   <span className="rounded-md bg-sky-900/50 px-1.5 py-0.5 text-[11px] text-sky-300">
-                    {props.kind === "text" ? "GGUF" : "imagem"}
+                    {props.kind === "text" ? "GGUF" : props.kind === "image" ? "imagem" : "vídeo"}
                   </span>
                 </div>
 
@@ -279,6 +286,11 @@ export default function ModelSearch(props: {
                     {repo.files.map((f) => (
                       <div key={f.path} className="flex items-center gap-2 rounded-lg border border-line px-2 py-1.5">
                         {f.quant && <span className={`${chip} shrink-0`}>{f.quant}</span>}
+                        {f.papel && f.papel !== "modelo" && (
+                          <span className="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[11px] text-muted" title="Peça que o modelo pede à parte">
+                            {({ vae: "VAE", t5xxl: "codificador", clip_vision: "CLIP Vision", high_noise_model: "HighNoise" } as Record<string, string>)[f.papel] ?? f.papel}
+                          </span>
+                        )}
                         <span className="min-w-0 flex-1 truncate text-fg" title={f.path}>
                           {f.path.split("/").pop()}
                           {f.shards > 1 ? ` · ${f.shards} partes` : ""}

@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, downloads, native
+from . import config, downloads, loras, native
 from .tools import ToolError
 
 RUNTIMES = config.DATA_DIR / "runtimes"
@@ -37,8 +37,9 @@ LOG_FILE = LOG_DIR / "llama-server.log"
 
 # Binários procurados dentro da pasta do runtime (o primeiro que existir) e repositório de origem.
 # O sd.cpp renomeou sd.exe para sd-cli.exe; aceitamos os dois para não quebrar com builds antigos.
-EXE = {"llama": ["llama-server"], "sd": ["sd-cli", "sd"]}
-REPO = {"llama": "ggml-org/llama.cpp", "sd": "leejet/stable-diffusion.cpp"}
+EXE = {"llama": ["llama-server"], "sd": ["sd-cli", "sd"], "ffmpeg": ["ffmpeg"]}
+# ffmpeg: só para ampliar vídeo (ampliar.py) — o sd.cpp não lê vídeo. Build LGPL "shared" do BtbN (~80 MB).
+REPO = {"llama": "ggml-org/llama.cpp", "sd": "leejet/stable-diffusion.cpp", "ffmpeg": "BtbN/FFmpeg-Builds"}
 BACKENDS = ("vulkan", "cpu", "cuda")
 
 # Regex do asset por runtime/backend. `extra` é baixado junto (runtime do CUDA).
@@ -53,6 +54,7 @@ ASSETS = {
         "vulkan": (r"^sd-.*-bin-win-vulkan-x64\.zip$", None),
         "cuda":   (r"^sd-.*-bin-win-cuda\d+-x64\.zip$", r"^cudart-sd-bin-win-cu\d+-x64\.zip$"),
     },
+    "ffmpeg": {"cpu": (r"^ffmpeg-(master-latest|N-[\w.-]+)-win64-lgpl-shared\.zip$", None)},
 }
 
 # ponytail: só Windows por enquanto — é o alvo do Forja Desktop. Linux/macOS: outro mapa de assets.
@@ -131,14 +133,24 @@ DEFAULT_IMAGE = {
     # rápida e fiel, precisa do arquivo em "taesd") ou "vae" (o VAE a cada passo: fiel e mais lenta).
     "preview": "",
     "taesd": "",
+    # Vídeo (Wan, -M vid_gen). Quadros = 4k+1: o VAE do Wan comprime 4 quadros em 1 no tempo.
+    "frames": 33, "fps": 16,
+    "flow_shift": 0.0,       # 0 = o automático do sd.cpp
+    "clip_vision": "",       # Wan2.1 I2V/FLF2V
+    "high_noise_model": "",  # Wan2.2 A14B: o par HighNoise do modelo LowNoise
+    "high_noise_steps": -1,  # -1 = automático
+    "high_noise_cfg": 0.0,   # 0 = o mesmo CFG
+    "variante": "",          # vazio = a que o nome do arquivo indica (variante_video)
+    "loras": [],             # [{"path", "peso"}] — ver loras.py
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
     "descarte_dias": 7,  # quanto tempo as imagens reprovadas ficam em descartadas/ antes do expurgo
 }
 
-_cfg_lock = threading.Lock()
+_cfg_lock = threading.RLock()
 
 
-CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd", "diffusion_model", "out_dir")
+CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd", "diffusion_model", "out_dir",
+                   "clip_vision", "high_noise_model")
 
 
 def _image_valores(patch: dict) -> dict:
@@ -161,7 +173,7 @@ def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
             "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
-            "sem_proj": [], "referencias": []}
+            "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0}
 
 
 def read_config() -> dict:
@@ -385,8 +397,8 @@ def runtime_version(exe: str) -> str:
     m = re.search(r"version:\s*(\S+).*?build\s+(\w+)", r.stdout + r.stderr, re.S)
     if m:
         return f"{m.group(1)} (build {m.group(2)})"
-    m = re.search(r"(master-\S+|b\d+)", r.stdout + r.stderr)
-    return m.group(1) if m else ""
+    m = re.search(r"ffmpeg version (\S+)|(master-\S+|b\d+)", r.stdout + r.stderr)
+    return (m.group(1) or m.group(2)) if m else ""
 
 
 def runtimes() -> dict:
@@ -396,13 +408,14 @@ def runtimes() -> dict:
     for kind in EXE:
         exe = find_exe(kind)
         instalados = []
-        for backend in BACKENDS:
+        backends = [b for b in BACKENDS if b in ASSETS[kind]]  # o ffmpeg só tem o build de CPU
+        for backend in backends:
             achado = exe_em(kind, backend)
             if achado:
                 instalados.append({"backend": backend, "exe": str(achado),
-                                   "version": runtime_version(str(achado)) if kind == "llama" else ""})
+                                   "version": runtime_version(str(achado)) if kind in ("llama", "ffmpeg") else ""})
         out[kind] = {"installed": bool(exe), "exe": str(exe) if exe else "",
-                     "backend": exe.parent.name if exe else "", "backends": list(BACKENDS),
+                     "backend": exe.parent.name if exe else "", "backends": backends,
                      "available": instalados, "chosen": escolha.get(kind, "")}
     return out
 
@@ -440,15 +453,15 @@ def install_runtime(kind: str, backend: str) -> dict:
     """Acha o asset do último release e baixa em background. Devolve o job."""
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
-    if backend not in BACKENDS:
-        raise ToolError(f"Backend desconhecido: {backend}")
+    if backend not in BACKENDS or backend not in ASSETS[kind]:
+        raise ToolError(f"Não há build de {backend} para o {kind}.")
     if not SUPPORTED:
         raise ToolError("Download automático de runtime só está pronto para Windows. "
                         "Compile o llama.cpp/sd.cpp e aponte a pasta manualmente.")
     # O llama-server em uso trava as DLLs; atualizar por baixo dele não tem como dar certo.
     if kind == "llama" and status()["running"]:
         raise ToolError("Descarregue o modelo antes de atualizar o llama.cpp: o llama-server em uso trava os arquivos.")
-    if kind == "sd" and image_busy():
+    if kind in ("sd", "ffmpeg") and image_busy():
         raise ToolError("Espere a imagem em andamento terminar antes de atualizar o stable-diffusion.cpp.")
     tag, urls = _find_assets(kind, backend)
     dest = runtime_dir(kind, backend)
@@ -459,6 +472,7 @@ def install_runtime(kind: str, backend: str) -> dict:
 
 SHARD = re.compile(r"^(?P<base>.+)-(?P<idx>\d{5})-of-(?P<total>\d{5})\.gguf$", re.I)
 WEIGHTS = (".gguf", ".safetensors", ".ckpt")
+WEIGHTS_TODOS = (*WEIGHTS, ".pth")  # .pth: os ESRGAN (ampliar.py); na busca do HF fica de fora
 
 
 def scan(exts: tuple[str, ...] = (".gguf",)) -> list[dict]:
@@ -647,10 +661,13 @@ def _gguf(path: str, _stamp: tuple) -> dict:
             if not (isinstance(value, list) and len(value) > 64):  # listas de tokens não interessam
                 kv[key] = value
         tensors = []
+        formas = {}  # só as do 1º bloco: é de onde sai a dimensão do modelo (a LoRA precisa bater com ela)
         for _ in range(n_tensors):
             name = _string(f)
             dims = struct.unpack("<I", f.read(4))[0]
             shape = struct.unpack(f"<{dims}Q", f.read(8 * dims))
+            if "blocks.0." in name:
+                formas[name] = list(shape)
             ttype = struct.unpack("<I", f.read(4))[0]
             f.read(8)  # offset
             bloco, bytes_bloco = _GGML.get(ttype, (1, 2))
@@ -658,7 +675,7 @@ def _gguf(path: str, _stamp: tuple) -> dict:
             for d in shape:
                 elementos *= d
             tensors.append((name, elementos // bloco * bytes_bloco))
-    return {"kv": kv, "tensors": tensors}
+    return {"kv": kv, "tensors": tensors, "formas": formas}
 
 
 def gguf_info(path: str) -> dict:
@@ -701,7 +718,7 @@ def gguf_info(path: str) -> dict:
             "attn_interval": get("full_attention_interval", 1),
             "ssm_inner": get("ssm.inner_size"), "ssm_state": get("ssm.state_size"),
             "ssm_conv": get("ssm.conv_kernel"), "ssm_groups": get("ssm.group_count"),
-            "size": st.st_size, "tensors": data["tensors"]}
+            "size": st.st_size, "tensors": data["tensors"], "formas": data.get("formas") or {}}
     info["layers"] = _camadas(info, kv, arch, bruto)
     return info
 
@@ -942,27 +959,85 @@ def remove_model(path: str) -> list[str]:
 _KINDS: dict[str, str] = {}
 
 
+ARCH_VIDEO = ("wan",)
+# Codificadores de texto em GGUF (o umt5 do Wan): têm camadas e cabeças como um LLM, mas não conversam.
+ARCH_CODIFICADOR = ("t5encoder", "t5", "umt5")
+FORA_DO_VIDEO = ("vae", "umt5", "clip", "lora", "lightx2v", "causvid")
+
+
 def kind_of(f: Path) -> str:
-    """chat ou image. Modelo de linguagem tem camadas e cabeças de atenção no cabeçalho; difusão não.
+    """chat, image ou video. Modelo de linguagem tem camadas e cabeças de atenção no cabeçalho; difusão
+    não; vídeo é a difusão com arquitetura de vídeo (Wan).
 
     Sem isso, um .gguf de chat aparecia na lista de modelos de imagem (e vice-versa). O resultado fica
     em cache por (caminho, tamanho): a varredura roda a cada 3 s e abrir 50 arquivos toda vez é caro.
     """
+    if f.suffix.lower() == ".safetensors" and loras.info_lora(str(f)):
+        return "lora"  # pelos tensores, não pelo nome: não é modelo, é ajuste por cima de um
+    if f.suffix.lower() in (".pth", ".safetensors"):
+        from .ampliar import eh_ampliador
+        if eh_ampliador(str(f)):
+            return "ampliador"  # ESRGAN: amplia quadro a quadro, não gera nada
+        if f.suffix.lower() == ".pth":
+            return "outro"  # .pth que não é ESRGAN não vira modelo de imagem
     if f.suffix.lower() != ".gguf":
-        return "image"  # .safetensors/.ckpt: só difusão usa por aqui
+        # .safetensors/.ckpt: só difusão usa por aqui. Wan pelo nome — o VAE e o umt5 dele não são modelo.
+        # "wan" como palavra: substring pegava "swan", "Taiwan" e as LoRAs do Wan
+        n = f.name.lower()
+        return "video" if WAN_NOME.search(f.name) and not any(x in n for x in FORA_DO_VIDEO) else "image"
     try:
         chave = f"{f}|{f.stat().st_size}"
     except OSError:
         return "chat"
     if chave not in _KINDS:
         info = gguf_info(str(f))
-        _KINDS[chave] = "chat" if info["n_layer"] and info["n_head"] else "image"
+        _KINDS[chave] = ("video" if info["arch"] in ARCH_VIDEO
+                         else "codificador" if info["arch"] in ARCH_CODIFICADOR
+                         else "chat" if info.get("n_layer") and info.get("n_head") else "image")
     return _KINDS[chave]
 
 
 # Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
 IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm", "llm_vision",
-                   "offload", "flash_attn", "vae_tiling", "te_cpu", "preview", "taesd")
+                   "offload", "flash_attn", "vae_tiling", "te_cpu", "preview", "taesd",
+                   "frames", "fps", "flow_shift", "clip_vision", "high_noise_model", "high_noise_steps",
+                   "high_noise_cfg", "variante", "loras")
+
+
+def eh_video(path: str) -> bool:
+    return bool(path) and kind_of(Path(path)) == "video"
+
+
+def _normal(path: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", Path(path).name.lower())
+
+
+def variante_video(path: str) -> str:
+    """Qual Wan é, pelo nome: o GGUF só diz `wan`, e cada um pede arquivos e modos diferentes."""
+    # ponytail: heurística pelo nome (é assim que todo repo publica); o ajuste "variante" passa por cima
+    n = _normal(path)
+    if "vace" in n:
+        return "wan21_vace"
+    if "flf2v" in n:
+        return "wan21_flf2v"
+    if "ti2v" in n or "5b" in n:
+        return "wan22_ti2v"
+    if "a14b" in n or "noise" in n:
+        return "wan22_a14b_i2v" if "i2v" in n else "wan22_a14b_t2v"
+    return "wan21_i2v" if "i2v" in n else "wan21_t2v"
+
+
+MARCAS_VARIANTE = ("vace", "flf2v", "ti2v", "5b", "a14b", "noise", "i2v", "t2v")
+
+
+def variante_clara(nome: str) -> str | None:
+    """A variante quando o nome diz qual é; None em repositório genérico ("WanVideo_comfy")."""
+    return variante_video(nome) if any(m in _normal(nome) for m in MARCAS_VARIANTE) else None
+
+
+def alto_ruido(path: str) -> bool:
+    """Metade HighNoise do Wan2.2 A14B: entra como par do LowNoise, não como modelo na lista."""
+    return "highnoise" in _normal(path)
 
 
 # GGUF só-unet traz a arquitetura no metadado, e sem os arquivos de fora o sd.cpp só cospe erro técnico.
@@ -1000,6 +1075,47 @@ REQUISITOS = {
         "sugere": {"sampler": "euler", "cfg": 1.0, "width": 1024, "height": 1024, "steps": 20,
                    "offload": True, "flash_attn": True, "vae_tiling": True}},
 }
+_VAE21 = ("wan_2.1_vae.safetensors",
+          "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/vae")
+_VAE22 = ("wan2.2_vae.safetensors (o VAE do 2.1 não serve)",
+          "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/vae")
+_UMT5 = ("umt5-xxl-encoder, GGUF (ex.: Q8_0)", "https://huggingface.co/city96/umt5-xxl-encoder-gguf/tree/main")
+_CLIPV = ("clip_vision_h.safetensors",
+          "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/clip_vision")
+# Valores do docs/wan.md do sd.cpp. 480p é o que cabe em 12 GB; o 720p fica na escolha de qualidade.
+_SUG_WAN = {"sampler": "euler", "cfg": 6.0, "steps": 20, "width": 832, "height": 480, "frames": 33, "fps": 16,
+            "flow_shift": 3.0, "flash_attn": True, "vae_tiling": True}
+# Dados de cada Wan (docs/wan.md do sd.cpp e cards dos modelos), não da máquina: resolução em que foi treinado,
+# múltiplo que o tamanho precisa ter (o VAE e o patch do modelo) e o clipe mais longo do treino.
+_R480, _R720 = (832, 480), (1280, 720)
+_WAN = {"doc": _SDDOC + "wan.md", "video": True, "multiplo": 16, "resolucoes": {"480p": _R480, "720p": _R720},
+        "quadros_treino": 81}
+_HIGH_T2V = ("Wan2.2-T2V-A14B-HighNoise (mesma quantização)",
+             "https://huggingface.co/QuantStack/Wan2.2-T2V-A14B-GGUF/tree/main/HighNoise")
+_HIGH_I2V = ("Wan2.2-I2V-A14B-HighNoise (mesma quantização)",
+             "https://huggingface.co/QuantStack/Wan2.2-I2V-A14B-GGUF/tree/main/HighNoise")
+_SUG_A14B = {**_SUG_WAN, "cfg": 3.5, "steps": 10, "high_noise_steps": 8, "high_noise_cfg": 3.5, "offload": True}
+REQUISITOS.update({
+    "wan21_t2v": {**_WAN, "nome": "Wan2.1 T2V", "modos": ["t2v"],
+                  "precisa": {"vae": _VAE21, "t5xxl": _UMT5}, "sugere": _SUG_WAN},
+    "wan21_i2v": {**_WAN, "nome": "Wan2.1 I2V", "modos": ["i2v"],
+                  "precisa": {"vae": _VAE21, "t5xxl": _UMT5, "clip_vision": _CLIPV},
+                  "sugere": {**_SUG_WAN, "offload": True}},
+    "wan21_flf2v": {**_WAN, "nome": "Wan2.1 FLF2V", "modos": ["flf2v"], "resolucoes": {"720p": _R720},
+                    "precisa": {"vae": _VAE21, "t5xxl": _UMT5, "clip_vision": _CLIPV},
+                    "sugere": {**_SUG_WAN, "offload": True}},
+    "wan21_vace": {**_WAN, "nome": "Wan2.1 VACE", "modos": ["t2v"],
+                   "precisa": {"vae": _VAE21, "t5xxl": _UMT5}, "sugere": {**_SUG_WAN, "offload": True}},
+    "wan22_ti2v": {**_WAN, "nome": "Wan2.2 TI2V 5B", "modos": ["t2v", "i2v"],
+                   # VAE do 2.2 comprime 16× e o modelo junta 2×2: múltiplo de 32; treinado em 1280×704, 121 q
+                   "multiplo": 32, "resolucoes": {"480p": _R480, "720p": (1280, 704)}, "quadros_treino": 121,
+                   "precisa": {"vae": _VAE22, "t5xxl": _UMT5},
+                   "sugere": {**_SUG_WAN, "frames": 49, "fps": 24, "cfg": 5.0, "offload": True}},
+    "wan22_a14b_t2v": {**_WAN, "nome": "Wan2.2 T2V A14B", "modos": ["t2v"],
+                       "precisa": {"vae": _VAE21, "t5xxl": _UMT5, "high_noise_model": _HIGH_T2V}, "sugere": _SUG_A14B},
+    "wan22_a14b_i2v": {**_WAN, "nome": "Wan2.2 I2V A14B", "modos": ["i2v"],
+                       "precisa": {"vae": _VAE21, "t5xxl": _UMT5, "high_noise_model": _HIGH_I2V}, "sugere": _SUG_A14B},
+})
 # Nomes que cada arquivo costuma ter (fnmatch, sem diferenciar maiúsculas). É só para achar e
 # sugerir: quem decide é a pessoa, no botão "Usar".
 PADROES = {
@@ -1008,6 +1124,14 @@ PADROES = {
     "flux": {"vae": ["ae.safetensors", "*flux*vae*", "*flux*ae.safetensors"], "clip_l": ["clip_l*"], "t5xxl": ["t5xxl*"],
              "taesd": ["taef1*"]},
 }
+_P21 = {"vae": ["wan_2.1_vae*", "wan2.1*vae*", "wan21*vae*"], "t5xxl": ["*umt5*"]}
+_PCLIPV = {"clip_vision": ["clip_vision_h*", "*clip*vision*"]}
+_PHIGH = {"high_noise_model": ["*high*noise*"]}
+PADROES.update({
+    "wan21_t2v": _P21, "wan21_vace": _P21, "wan21_i2v": {**_P21, **_PCLIPV}, "wan21_flf2v": {**_P21, **_PCLIPV},
+    "wan22_ti2v": {"vae": ["wan2.2_vae*", "wan_2.2_vae*", "wan22*vae*"], "t5xxl": ["*umt5*"]},
+    "wan22_a14b_t2v": {**_P21, **_PHIGH}, "wan22_a14b_i2v": {**_P21, **_PHIGH},
+})
 EXTENSOES_PESO = (".gguf", ".safetensors", ".sft")
 BUSCA_PROFUNDIDADE = 3   # níveis abaixo de cada raiz
 BUSCA_ANCESTRAIS = 3     # quantas pastas acima do modelo viram raiz (D:\Modelos-IA\lmstudio\autor\repo -> D:\Modelos-IA)
@@ -1020,8 +1144,7 @@ def achar_arquivos(path: str) -> dict[str, list[str]]:
     Raízes: a pasta do modelo, algumas acima (quem baixa o VAE costuma pôr numa pasta irmã) e as
     pastas de modelos. Roda sob demanda (ao abrir os ajustes), nunca na varredura de 3 s.
     """
-    info = gguf_info(path) if str(path).lower().endswith(".gguf") else {"arch": ""}
-    padroes = PADROES.get(info["arch"])
+    padroes = PADROES.get(_tipo(path))
     if not padroes:
         return {}
     pasta = Path(path).parent
@@ -1056,13 +1179,26 @@ def achar_arquivos(path: str) -> dict[str, list[str]]:
 
 
 ROTULO_ARQUIVO = {"vae": "VAE", "llm": "Codificador LLM", "llm_vision": "Visão do LLM (mmproj)",
-                  "clip_l": "clip_l", "t5xxl": "t5xxl", "taesd": "TAESD"}
+                  "clip_l": "clip_l", "t5xxl": "t5xxl", "taesd": "TAESD", "clip_vision": "CLIP Vision",
+                  "high_noise_model": "Modelo HighNoise"}
+
+
+def _tipo(path: str) -> str:
+    """Chave de REQUISITOS/PADROES: a variante nos modelos de vídeo, a arquitetura nos de imagem."""
+    if eh_video(path):
+        salvo = (read_config().get("image_models") or {}).get(os.path.normpath(str(path))) or {}
+        return salvo.get("variante") or variante_video(path)
+    return gguf_info(path)["arch"] if str(path).lower().endswith(".gguf") else ""
 
 
 def requisitos(path: str) -> dict | None:
-    if not str(path).lower().endswith(".gguf"):
-        return None
-    return REQUISITOS.get(gguf_info(path)["arch"])
+    req = REQUISITOS.get(_tipo(path))
+    if req and req.get("video"):
+        # "…-480P" / "…-720P" no nome: é a resolução daquele arquivo, e as outras não servem para ele
+        marcada = {q: r for q, r in req["resolucoes"].items() if q in Path(str(path)).name.lower()}
+        if marcada:
+            req = {**req, "resolucoes": marcada}
+    return req
 
 
 def faltando(path: str, o: dict, editar: bool = False) -> list[str]:
@@ -1076,7 +1212,7 @@ def faltando(path: str, o: dict, editar: bool = False) -> list[str]:
     return [k for k in chaves if not (o.get(k) and Path(o[k]).is_file())]
 
 
-COMPONENTES = ("vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd")
+COMPONENTES = ("vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd", "clip_vision", "high_noise_model")
 
 
 def _chave(path: str) -> str:
@@ -1093,23 +1229,108 @@ def acompanhantes(cfg: dict) -> set[str]:
     return {_chave(a[k]) for a in ajustes for k in COMPONENTES if a.get(k)}
 
 
+def _base_ajustes(path: str) -> dict:
+    """De onde os ajustes do modelo partem: a aba Imagem, ou a aba Vídeo nos modelos de vídeo — senão o
+    VAE e o codificador da imagem padrão vazavam para o Wan."""
+    cfg = read_config()
+    return {**DEFAULT_IMAGE, **(cfg.get("video") or {})} if eh_video(path) else cfg["image"]
+
+
 def image_params(path: str) -> dict:
-    base = read_config()["image"]
+    base = _base_ajustes(path)
     salvo = (read_config().get("image_models") or {}).get(os.path.normpath(str(path))) or {}
     return {**{k: base[k] for k in IMAGE_PER_MODEL}, **salvo}
 
 
+PECAS_VIDEO = ("vae", "t5xxl", "clip_vision", "high_noise_model")
+
+
 def save_image_params(path: str, patch: dict) -> dict:
-    """Guarda só o que sai do padrão geral da aba Imagem."""
-    base = read_config()["image"]
-    limpo = {k: v for k, v in set_image_valores(patch).items() if k in IMAGE_PER_MODEL}
-    data = read_config()
-    modelos = dict(data.get("image_models") or {})
-    fora = {k: v for k, v in {**(modelos.get(os.path.normpath(str(path))) or {}), **limpo}.items() if v != base[k]}
-    modelos[os.path.normpath(str(path))] = fora
-    data["image_models"] = modelos
-    write_config(data)
+    """Guarda só o que sai do padrão geral da aba (Imagem ou Vídeo)."""
+    with _cfg_lock:
+        base = _base_ajustes(path)
+        limpo = {k: v for k, v in set_image_valores(patch).items() if k in IMAGE_PER_MODEL}
+        data = read_config()
+        modelos = dict(data.get("image_models") or {})
+        antes = modelos.get(os.path.normpath(str(path))) or {}
+        if eh_video(path) and "variante" in limpo and limpo["variante"] != antes.get("variante", ""):
+            # Outra variante pede outras peças (o TI2V quer o VAE do 2.2) e outros ajustes: as peças saem, e o
+            # completar_componentes põe as da variante nova; os sugeridos dela entram por cima.
+            nova = REQUISITOS.get(limpo["variante"] or variante_video(path)) or {}
+            limpo = {**limpo, **{k: "" for k in PECAS_VIDEO}, **(nova.get("sugere") or {})}
+            antes = {k: v for k, v in antes.items() if k not in PECAS_VIDEO}
+        fora = {k: v for k, v in {**antes, **limpo}.items() if v != base[k]}
+        modelos[os.path.normpath(str(path))] = fora
+        data["image_models"] = modelos
+        write_config(data)
     return image_params(path)
+
+
+ACHADOS_TTL = 60  # s: a busca no disco é cara e a tela pergunta a cada 3 s
+
+
+@functools.lru_cache(maxsize=64)
+def _achados(path: str, _tipo: str, _janela: int) -> dict[str, list[str]]:
+    return achar_arquivos(path)
+
+
+def completar_componentes(path: str) -> dict:
+    """Modelo de vídeo baixado pelo kit: o VAE, o umt5, o CLIP Vision e o par HighNoise que estão por
+    perto entram sozinhos nos ajustes dele — ninguém precisa colar caminho para o primeiro vídeo sair.
+    Só preenche o que falta; o que a pessoa escolheu fica.
+
+    Na primeira vez que o modelo aparece, entram também os ajustes sugeridos da variante: sem flash
+    attention, VAE em blocos e pesos na RAM, o TI2V 5B passou a amostragem inteira e morreu no fim, no
+    VAE (pediu 8,7 GB com 6 livres na B580)."""
+    p = image_params(path)
+    novos = {}
+    if os.path.normpath(str(path)) not in (read_config().get("image_models") or {}):
+        novos.update((requisitos(path) or {}).get("sugere") or {})
+    falta = faltando(path, p)
+    if not falta:
+        return save_image_params(path, novos) if novos else p
+    achados = _achados(path, _tipo(path), int(time.time() // ACHADOS_TTL))
+    for k in falta:
+        opcoes = achados.get(k) or []
+        if k == "high_noise_model":
+            # Mesma família (T2V com T2V, I2V com I2V) e, dentro dela, o nome igual com High no lugar de Low.
+            familia = "i2v" if "i2v" in _normal(path) else "t2v"
+            opcoes = sorted((c for c in opcoes if familia in _normal(c)),
+                            key=lambda c: _normal(c).replace("highnoise", "lownoise") != _normal(path))
+        if opcoes:
+            novos[k] = opcoes[0]
+    return save_image_params(path, novos) if novos else p
+
+
+MAX_TEMPOS = 200  # medições guardadas; as mais antigas saem
+
+
+def anotar_tempo(model: str, o: dict, s_passo: float, s_total: float) -> None:
+    """Quanto um vídeo levou nesta máquina, por modelo e tamanho: é o que a estimativa usa (sem chute)."""
+    if not eh_video(model):
+        return
+    passos = int(o.get("steps") or 0) + max(0, int(o.get("high_noise_steps") or -1))
+    chave = f"{_chave(model)}|{int(o['width'])}x{int(o['height'])}x{int(o['frames'])}"
+    with _cfg_lock:
+        data = read_config()
+        tempos = {k: v for k, v in (data.get("tempos") or {}).items() if k != chave}
+        tempos[chave] = {"model": _chave(model), "w": int(o["width"]), "h": int(o["height"]), "frames": int(o["frames"]),
+                         "passos": passos, "s_passo": round(s_passo, 3), "s_total": round(s_total, 1)}
+        data["tempos"] = dict(list(tempos.items())[-MAX_TEMPOS:])
+        write_config(data)
+
+
+def set_video(patch: dict) -> dict:
+    """Padrões da aba Vídeo: o modelo da vez (é o da ferramenta video_generate) e o negativo.
+
+    Só isso: os ajustes do modelo (quadros, fps, passos...) moram no modelo. Guardados aqui, viravam a
+    base dos outros e o 1.3B abria com os 24 fps do TI2V; a semente daqui ia parar nos vídeos do agente."""
+    with _cfg_lock:
+        data = read_config()
+        data["video"] = {**(data.get("video") or {}),
+                         **{k: v for k, v in _image_valores(patch).items() if k in ("model", "negative")}}
+        write_config(data)
+    return data["video"]
 
 
 def sem_proj(path: str) -> bool:
@@ -1539,23 +1760,44 @@ ORDENS = {"relevancia": "", "curtidas": "likes", "downloads": "downloads", "rece
 IMAGEM_FORA = ("lora", "controlnet", "ip-adapter", "textual-inversion", "embedding", "upscaler", "adapter")
 
 
+# Vídeo que o sd-cli não roda (só o Wan tem -M vid_gen aqui) e peças do Wan que não são modelo.
+VIDEO_FORA = ("hunyuan", "ltx", "cogvideo", "mochi", "animatediff", "stable-video", "svd", "vae", "umt5",
+              # Wan que o Forja não roda: Animate e S2V pedem vídeo/áudio de entrada; Diffusers é repo espalhado
+              "animate", "s2v", "diffusers")
+
+
+WAN_NOME = re.compile(r"(?<![a-z])wan(?=[\d_.\- ]|video|$)", re.I)
+
+
 def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia") -> list[dict]:
-    """kind=text: repos com .gguf (chat). kind=image: modelos de difusão (.safetensors também)."""
-    tipo = {"pipeline_tag": "text-to-image"} if kind == "image" else {"filter": "gguf"}
+    """kind=text: repos com .gguf (chat). kind=image: modelos de difusão (.safetensors também).
+    kind=video: só Wan, que é o que o sd.cpp gera em vídeo."""
+    tipo = ({"pipeline_tag": "text-to-image"} if kind == "image" else {} if kind == "video"
+            else {"filter": "gguf"})
+    if kind == "video":
+        q = q.strip() or "wan"
     ordem = ORDENS.get(sort, "")
     r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True, headers=hf_headers(),
-                  params={"search": q, "limit": limit * 2 if kind == "image" else limit, "full": "true", **tipo,
-                          **({"sort": ordem, "direction": -1} if ordem else {})})
+                  params={"search": q, "limit": limit * {"image": 2, "video": 4}.get(kind, 1), "full": "true",
+                          **tipo, **({"sort": ordem, "direction": -1} if ordem else {})})
     if r.status_code >= 400:
         raise ToolError(f"Hugging Face respondeu {r.status_code}.")
     saida = []
     for m in r.json():
         tags = m.get("tags") or []
-        if kind == "image" and _peca_solta(m["id"], tags):
+        if kind in ("image", "video") and _peca_solta(m["id"], tags):
             continue  # LoRA, ControlNet e afins: o sd.cpp quer o modelo inteiro
+        extra = {}
+        if kind == "video":
+            # "wan" como palavra no nome (Wan2.1, Wan_2.2, WanVideo): substring pegava "wanli" e tags soltas
+            if not WAN_NOME.search(m["id"].split("/")[-1]) or any(x in m["id"].lower() for x in VIDEO_FORA):
+                continue
+            var = variante_clara(m["id"])
+            extra = ({"variante": var, "variante_nome": REQUISITOS[var]["nome"], "modos": REQUISITOS[var]["modos"]}
+                     if var else {"variante_nome": "Wan · ver os arquivos", "modos": []})
         saida.append({"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0),
                       "likes": m.get("likes", 0), "updated": m.get("lastModified", ""),
-                      "gated": bool(m.get("gated")), "tags": _tags(tags)})
+                      "gated": bool(m.get("gated")), "tags": _tags(tags), **extra})
     return saida[:limit]
 
 
@@ -1669,7 +1911,7 @@ def _serve_para_sd(caminho: str, tamanho: int) -> bool:
 
 
 def files(repo: str, kind: str = "text") -> list[dict]:
-    exts = WEIGHTS if kind == "image" else (".gguf",)
+    exts = WEIGHTS if kind in ("image", "video", "lora") else (".gguf",)
     r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True,
                   headers=hf_headers(), params={"recursive": "true"})
     if r.status_code == 401:
@@ -1685,12 +1927,365 @@ def files(repo: str, kind: str = "text") -> list[dict]:
             continue  # shard do meio: baixar o primeiro já traz o conjunto inteiro
         quant = QUANT.search(Path(f["path"]).stem)
         tamanho = f.get("size") or (f.get("lfs") or {}).get("size") or 0
-        if kind == "image" and not _serve_para_sd(f["path"], tamanho):
+        # "lora" é a listagem dos aceleradores: o filtro de modelo de difusão jogaria justamente eles fora
+        if kind in ("image", "video") and not _serve_para_sd(f["path"], tamanho):
             continue
         out.append({"path": f["path"], "size": tamanho,
-                    "quant": quant.group(0).upper() if quant else "", "shards": int(m.group("total")) if m else 1})
+                    "quant": quant.group(0).upper() if quant else "", "shards": int(m.group("total")) if m else 1,
+                    **({"papel": papel_video(f["path"])} if kind == "video" else {})})
     # Do menor para o maior: é assim que se escolhe quantização, e o LM Studio faz igual.
     return sorted(out, key=lambda f: (f["size"], f["path"]))
+
+
+def papel_video(nome: str) -> str:
+    """O que um arquivo de um repo de Wan é no kit: o modelo, ou uma das peças que ele pede."""
+    n = Path(nome).name.lower()
+    if "vae" in n:
+        return "vae"
+    if "umt5" in n or "t5xxl" in n:
+        return "t5xxl"
+    if "clip_vision" in n:
+        return "clip_vision"
+    return "high_noise_model" if alto_ruido(nome) else "modelo"
+
+
+# Kit = o modelo + as peças que a variante pede. Aqui só o que é curadoria (quais repositórios, qual
+# família de arquivo); tamanhos e quantizações vêm do Hugging Face na hora, e a escolhida é a maior que
+# cabe na VRAM da GPU do sd.cpp — dá para trocar no cartão.
+_KIT_PECAS = {
+    "vae21": ("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/vae/wan_2.1_vae.safetensors"),
+    "vae22": ("Comfy-Org/Wan_2.2_ComfyUI_Repackaged", "split_files/vae/wan2.2_vae.safetensors"),
+    "umt5": ("city96/umt5-xxl-encoder-gguf", "umt5-xxl-encoder-*.gguf"),
+    "clipv": ("Comfy-Org/Wan_2.1_ComfyUI_repackaged", "split_files/clip_vision/clip_vision_h.safetensors"),
+}
+_QS_T2V, _QS_I2V = "QuantStack/Wan2.2-T2V-A14B-GGUF", "QuantStack/Wan2.2-I2V-A14B-GGUF"
+KITS_VIDEO = [
+    {"id": "wan22_ti2v_5b", "variante": "wan22_ti2v", "nome": "Wan2.2 TI2V 5B",
+     "resumo": "Texto e imagem em vídeo, 24 fps. O melhor equilíbrio entre qualidade e tempo.",
+     "modelo": ("QuantStack/Wan2.2-TI2V-5B-GGUF", "Wan2.2-TI2V-5B-*.gguf"), "pecas": ["vae22", "umt5"]},
+    {"id": "wan21_t2v_1_3b", "variante": "wan21_t2v", "nome": "Wan2.1 T2V 1.3B",
+     "resumo": "O mais leve e rápido. Só texto em vídeo, para rascunhar ideias.",
+     "modelo": ("samuelchristlie/Wan2.1-T2V-1.3B-GGUF", "Wan2.1-T2V-1.3B-*.gguf"), "pecas": ["vae21", "umt5"]},
+    {"id": "wan21_t2v_14b", "variante": "wan21_t2v", "nome": "Wan2.1 T2V 14B",
+     "resumo": "Texto em vídeo com mais detalhe e movimento.",
+     "modelo": ("city96/Wan2.1-T2V-14B-gguf", "wan2.1-t2v-14b-*.gguf"), "pecas": ["vae21", "umt5"]},
+    {"id": "wan21_i2v_14b", "variante": "wan21_i2v", "nome": "Wan2.1 I2V 14B 480p",
+     "resumo": "Anima uma imagem com mais fidelidade ao quadro original.",
+     "modelo": ("city96/Wan2.1-I2V-14B-480P-gguf", "wan2.1-i2v-14b-480p-*.gguf"), "pecas": ["vae21", "umt5", "clipv"]},
+    {"id": "wan21_flf2v_14b", "variante": "wan21_flf2v", "nome": "Wan2.1 FLF2V 14B",
+     "resumo": "Liga um quadro inicial a um final: o modelo inventa o caminho entre os dois.",
+     "modelo": ("city96/Wan2.1-FLF2V-14B-720P-gguf", "wan2.1-flf2v-14b-720p-*.gguf"), "pecas": ["vae21", "umt5", "clipv"]},
+    {"id": "wan22_a14b_t2v", "variante": "wan22_a14b_t2v", "nome": "Wan2.2 T2V A14B",
+     "resumo": "A melhor qualidade em texto → vídeo. Dois modelos de 14B que se revezam; lento.",
+     "modelo": (_QS_T2V, "LowNoise/Wan2.2-T2V-A14B-LowNoise-*.gguf"),
+     "par": (_QS_T2V, "HighNoise/Wan2.2-T2V-A14B-HighNoise-*.gguf"), "pecas": ["vae21", "umt5"]},
+    {"id": "wan22_a14b_i2v", "variante": "wan22_a14b_i2v", "nome": "Wan2.2 I2V A14B",
+     "resumo": "A melhor qualidade animando imagem. Dois modelos de 14B que se revezam; lento.",
+     "modelo": (_QS_I2V, "LowNoise/Wan2.2-I2V-A14B-LowNoise-*.gguf"),
+     "par": (_QS_I2V, "HighNoise/Wan2.2-I2V-A14B-HighNoise-*.gguf"), "pecas": ["vae21", "umt5"]},
+]
+# Onde cada arquivo do kit cai, dentro da pasta de modelos escolhida: o modelo numa subpasta com o nome do kit;
+# a peça que mais de um kit usa (umt5, VAE do 2.1, clip_vision) numa pasta comum, para não baixar duas vezes.
+PASTA_COMUM = "Compartilhados"
+_USO_PECA = {x: sum(x in k["pecas"] for k in KITS_VIDEO) for x in _KIT_PECAS}
+
+
+def subpasta_kit(kit: dict, peca: str = "") -> str:
+    return PASTA_COMUM if peca and _USO_PECA.get(peca, 0) > 1 else kit["nome"]
+
+
+# Quanto da VRAM um arquivo pode ocupar e ainda "caber": o resto vai para as ativações. Com 15% livres a
+# amostragem do TI2V passou na B580; com o VAE do 2.2 inteiro não (ver o bloco do VAE no imagegen).
+FOLGA_VRAM = 0.85
+HF_TTL = 3600  # s: a lista de arquivos de um repositório quase nunca muda
+
+
+@functools.lru_cache(maxsize=32)
+def _arquivos_hf(repo: str, kind: str, _janela: int) -> tuple[dict, ...]:
+    return tuple(files(repo, kind))
+
+
+def arquivos_do_repo(repo: str, kind: str = "video") -> list[dict]:
+    return list(_arquivos_hf(repo, kind, int(time.time() // HF_TTL)))
+
+
+def _quant_de(caminho: str) -> str:
+    q = QUANT.search(Path(caminho).stem)
+    return q.group(0).upper() if q else ""
+
+
+def _opcoes(repo: str, glob: str, vram_gb: float) -> list[dict]:
+    """As versões de um arquivo no repositório (uma por quantização), do menor para o maior."""
+    return [{"repo": repo, "path": f["path"], "gb": round(f["size"] / 1e9, 2), "quant": _quant_de(f["path"]),
+             "cabe": (f["size"] / 1e9 <= vram_gb * FOLGA_VRAM) if vram_gb else None}
+            for f in arquivos_do_repo(repo) if fnmatch.fnmatch(f["path"].lower(), glob.lower())]
+
+
+def escolher_quant(opcoes: list[dict]) -> dict | None:
+    """A maior que cabe (mais fiel); se nenhuma cabe, a menor (vai com pesos na RAM)."""
+    if not opcoes:
+        return None
+    cabem = [o for o in opcoes if o["cabe"]]
+    return max(cabem, key=lambda o: o["gb"]) if cabem else min(opcoes, key=lambda o: o["gb"])
+
+
+def kits_video(quants: dict[str, str] | None = None, auto: bool = False) -> list[dict]:
+    """Os kits com tamanhos do Hugging Face e o que já está no disco (pelo nome, em qualquer pasta).
+
+    `quants`: {id do kit: quantização escolhida no cartão}; sem ela, vale a maior que cabe.
+    `auto`: em vez da lista curada, os kits montados sozinhos a partir da busca do Hugging Face."""
+    try:
+        lista = kits_descobertos() if auto else KITS_VIDEO
+    except (ToolError, httpx.HTTPError) as e:
+        raise ToolError(f"Não deu para buscar no Hugging Face: {e}")
+    return _montar_kits(lista, quants)
+
+
+def _montar_kits(lista: list[dict], quants: dict[str, str] | None) -> list[dict]:
+    presentes = {Path(m["path"]).name.lower() for m in scan(WEIGHTS)}
+    vram = vram_video_gb()
+    out = []
+    for k in lista:
+        req = REQUISITOS[k["variante"]]
+        base = {"id": k["id"], "nome": k["nome"], "resumo": k["resumo"], "variante": k["variante"], "modos": req["modos"],
+                "auto": bool(k.get("auto")), "repo": k["modelo"][0]}
+        try:
+            opcoes = _opcoes(*k["modelo"], vram)
+            # quantização já no disco manda: não faz sentido baixar outra por cima
+            no_disco = next((o for o in opcoes if Path(o["path"]).name.lower() in presentes), None)
+            pedida = next((o for o in opcoes if o["quant"] == (quants or {}).get(k["id"])), None)
+            modelo = pedida or no_disco or escolher_quant(opcoes)
+            if not modelo:
+                raise ToolError("nenhum arquivo do modelo no repositório")
+            arquivos = [modelo]
+            if k.get("par"):  # o HighNoise na mesma quantização do LowNoise
+                par = next((o for o in _opcoes(*k["par"], vram) if o["quant"] == modelo["quant"]), None)
+                arquivos += [par] if par else []
+            for x in k["pecas"]:
+                repo, glob = _KIT_PECAS[x]
+                ops = _opcoes(repo, glob, vram)
+                escolhida = next((o for o in ops if Path(o["path"]).name.lower() in presentes), None) or escolher_quant(ops)
+                arquivos += [{**escolhida, "subpasta": subpasta_kit(k, x)}] if escolhida else []
+        except (ToolError, httpx.HTTPError) as e:
+            out.append({**base, "erro": f"Não deu para consultar o Hugging Face: {e}", "arquivos": [], "opcoes": [],
+                        "quant": "", "gb_modelo": 0, "gb_total": 0, "gb_falta": 0})
+            continue
+        arquivos = [{"subpasta": subpasta_kit(k), **a, "papel": papel_video(a["path"]),
+                     "presente": Path(a["path"]).name.lower() in presentes} for a in arquivos]
+        out.append({**base, "arquivos": arquivos, "quant": modelo["quant"],
+                    "opcoes": [{"quant": o["quant"], "gb": o["gb"], "cabe": o["cabe"],
+                                "presente": Path(o["path"]).name.lower() in presentes} for o in opcoes],
+                    # o que precisa caber na VRAM é o maior modelo de difusão (o A14B carrega um de cada vez)
+                    "gb_modelo": max(a["gb"] for a in arquivos if a["papel"] in ("modelo", "high_noise_model")),
+                    "gb_total": round(sum(a["gb"] for a in arquivos), 2),
+                    "gb_falta": round(sum(a["gb"] for a in arquivos if not a["presente"]), 2)})
+    return out
+
+
+# Kits automáticos: repositórios de Wan da busca do Hugging Face (os mais baixados), cada família de GGUF
+# (o mesmo nome com quantizações diferentes) vira um kit. A variante sai do nome do arquivo (variante_clara) e
+# as peças, dos requisitos dela. Sem curadoria: o que a lista curada já tem fica de fora.
+KITS_AUTO_REPOS = 40  # repositórios consultados (um pedido de lista de arquivos cada; o resultado fica em cache)
+_PECA_DE = {"t5xxl": "umt5", "clip_vision": "clipv"}
+# Arquiteturas do Wan que o sd.cpp não roda (docs/wan.md lista T2V, I2V, FLF2V, VACE, TI2V e A14B): o nome
+# delas cairia numa variante errada (Animate "vira" I2V) e o kit baixaria gigas para dar erro na geração.
+FORA_DO_SD = ("animate", "s2v", "fun", "control", "camera")
+
+
+def _familia_duvidosa(nome: str) -> bool:
+    """Família que não dá para montar com segurança só pelo nome: melhor sumir da lista que dar erro na geração.
+    Shard (o inteiro do mesmo repositório já aparece), só o módulo (VACE module), nome que diz T2V e I2V ao mesmo
+    tempo, ou metade High/Low de um A14B que não segue o "HighNoise/LowNoise" (não dá para achar o par)."""
+    n = _normal(nome)
+    return (bool(re.search(r"\d{5}-of-\d{5}", nome)) or "module" in n or ("t2v" in n and "i2v" in n)
+            or (("high" in n or "low" in n) and "noise" not in n))
+
+
+def _repos_wan_gguf() -> list[dict]:
+    """Os repositórios de Wan com GGUF mais baixados (filter=gguf: a busca de vídeo traz os de safetensors)."""
+    r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True, headers=hf_headers(),
+                  params={"search": "wan", "filter": "gguf", "sort": "downloads", "direction": -1,
+                          "limit": KITS_AUTO_REPOS})
+    if r.status_code >= 400:
+        raise ToolError(f"Hugging Face respondeu {r.status_code}.")
+    return [{"id": m["id"], "downloads": m.get("downloads", 0), "variante": variante_clara(m["id"])}
+            for m in r.json() if WAN_NOME.search(m["id"].split("/")[-1])
+            and not any(x in m["id"].lower() for x in (*VIDEO_FORA, *FORA_DO_SD))]
+
+
+def _familia(caminho: str) -> str | None:
+    """"sub/wan2.1-i2v-14b-480p-Q4_K_M.gguf" -> "sub/wan2.1-i2v-14b-480p-*.gguf" (None sem quantização no nome)."""
+    p = Path(caminho)
+    q = list(QUANT.finditer(p.stem))
+    if not q:
+        return None
+    ultima = q[-1]
+    glob = p.stem[:ultima.start()] + "*" + p.stem[ultima.end():] + p.suffix
+    return f"{p.parent.as_posix()}/{glob}" if p.parent.as_posix() not in (".", "") else glob
+
+
+def _nome_kit(glob: str) -> str:
+    """Nome de pasta a partir da família: "wan2.1-i2v-14b-480p-*.gguf" -> "wan2.1-i2v-14b-480p"."""
+    nome = Path(glob).name.replace("*", "").removesuffix(".gguf")
+    nome = re.sub(r"[_\- ]?low[_\- ]?noise", "", nome, flags=re.I).strip("-_. ")  # o kit leva as duas metades
+    return re.sub(r'[<>:"/\\|?*]', "", nome) or "Wan"
+
+
+@functools.lru_cache(maxsize=4)
+def _descobrir(_janela: int) -> tuple[dict, ...]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    curados = {k[x][0].lower() for k in KITS_VIDEO for x in ("modelo", "par") if k.get(x)}
+    # o mesmo arquivo publicado em outro repositório (a unsloth republica o TI2V): o curado já cobre
+    familias_curadas = {Path(k["modelo"][1]).name.lower() for k in KITS_VIDEO}
+    repos = [r for r in _repos_wan_gguf() if r["id"].lower() not in curados]
+
+    def listar(repo: dict) -> list[dict]:
+        try:
+            return arquivos_do_repo(repo["id"])
+        except (ToolError, httpx.HTTPError):
+            return []  # um repositório fora do ar não derruba a lista
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        listas = list(pool.map(listar, repos))
+    kits, vistos = [], set()
+    for repo, arquivos in zip(repos, listas):
+        for glob in sorted({g for f in arquivos if f["path"].lower().endswith(".gguf") and (g := _familia(f["path"]))}):
+            nome_arq = Path(glob).name
+            var = variante_clara(nome_arq) or repo.get("variante")
+            if (not var or alto_ruido(nome_arq) or papel_video(nome_arq) != "modelo"
+                    or any(x in _normal(nome_arq) for x in FORA_DO_SD) or _familia_duvidosa(nome_arq)):
+                continue  # o HighNoise entra como par do LowNoise; VAE/umt5 soltos não são modelo
+            chave = _nome_kit(glob).lower()  # o mesmo modelo em dois repositórios: fica o mais baixado (vem antes)
+            if chave in vistos or nome_arq.lower() in familias_curadas:
+                continue
+            req = REQUISITOS[var]
+            pecas = []
+            for papel in req.get("precisa", {}):
+                if papel == "vae":
+                    pecas.append("vae22" if var == "wan22_ti2v" else "vae21")
+                elif papel in _PECA_DE:
+                    pecas.append(_PECA_DE[papel])
+            kit = {"id": f"auto:{repo['id']}:{glob}", "variante": var, "nome": _nome_kit(glob), "auto": True,
+                   "resumo": f"{req['nome']} · {repo['id']} · {repo.get('downloads', 0):,} downloads".replace(",", "."),
+                   "modelo": (repo["id"], glob), "pecas": pecas}
+            if "high_noise_model" in req.get("precisa", {}):
+                # LowNoise, low_noise, low-noise (e a pasta low_noise/ também): o par é o mesmo nome com "high"
+                par = re.sub(r"low([_\- ]?)noise", r"high\1noise", glob, flags=re.I)
+                if par == glob or not any(fnmatch.fnmatch(f["path"].lower(), par.lower()) for f in arquivos):
+                    continue  # A14B sem o par no repositório: não dá para montar
+                kit["par"] = (repo["id"], par)
+            vistos.add(chave)
+            kits.append(kit)
+    return tuple(kits)
+
+
+def kits_descobertos() -> list[dict]:
+    return list(_descobrir(int(time.time() // HF_TTL)))
+
+
+def gpu_video() -> dict:
+    """A GPU que o sd-cli vai usar: nome e VRAM em GB ({} sem runtime). A soma de todas não serve: a
+    integrada do Ryzen informa 16 GB de memória compartilhada, e o kit de 14B "cabia" numa Arc de 12."""
+    from .imagegen import _gpu
+    sd, llama = find_exe("sd"), find_exe("llama")
+    if not sd or not llama:
+        return {}
+    alvo = _gpu(str(sd))
+    gpu = next((g for g in devices(str(llama)) if g["id"].lower() == alvo), None)
+    return {"nome": gpu["name"], "gb": round(gpu["total"] / 2**30, 1), "folga": FOLGA_VRAM} if gpu else {}
+
+
+def vram_video_gb() -> float:
+    return gpu_video().get("gb", 0.0)
+
+
+def anotar_vae(vae: str, bloco: int, pedido_mb: float) -> None:
+    """Quanto este VAE pediu para um bloco nesta máquina (do log de uma falha): a conta do bloco passa a usar isso."""
+    with _cfg_lock:
+        data = read_config()
+        medidas = dict(data.get("vae_mem") or {})
+        medidas[_chave(vae)] = {**(medidas.get(_chave(vae)) or {}), str(int(bloco)): round(float(pedido_mb), 1)}
+        data["vae_mem"] = medidas
+        write_config(data)
+
+
+def vae_medidas(vae: str) -> dict[int, float]:
+    if not vae:
+        return {}
+    return {int(t): float(mb) for t, mb in ((read_config().get("vae_mem") or {}).get(_chave(vae)) or {}).items()}
+
+
+def vram_livre_para_vae(model: str, offload: bool) -> float:
+    """VRAM que sobra para o VAE no fim: a livre agora, menos o modelo de difusão se ele fica na GPU."""
+    from .imagegen import _gpu
+    sd, llama = find_exe("sd"), find_exe("llama")
+    if not sd or not llama:
+        return 0.0
+    gpu = next((g for g in devices(str(llama)) if g["id"].lower() == _gpu(str(sd))), None)
+    if not gpu:
+        return 0.0
+    ocupado = 0 if offload else (Path(model).stat().st_size if Path(model).is_file() else 0)
+    # O llama.cpp e o sd.cpp não enxergam a mesma memória livre (na B580: ~12 GB contra 11,3 GB): vale a menor
+    # entre a de agora e a maior que o sd.cpp já disse ter (anotada quando um bloco estourou).
+    livre = gpu["free"]
+    visto = float(read_config().get("livre_sd_mb") or 0)
+    if visto:
+        livre = min(livre, int(visto * 2**20))
+    return max(0.0, (livre - ocupado) / 2**30)
+
+
+def anotar_livre_sd(livre_mb: float) -> None:
+    """A maior memória livre que o sd.cpp já reportou: é o teto do que ele consegue usar nesta GPU."""
+    with _cfg_lock:
+        data = read_config()
+        if float(livre_mb) > float(data.get("livre_sd_mb") or 0):
+            data["livre_sd_mb"] = round(float(livre_mb), 1)
+            write_config(data)
+
+
+def aceleradores(model: str) -> dict:
+    """As LoRAs de poucos passos publicadas para a variante deste modelo, com o que já está no disco."""
+    alvos = loras.ACELERADORES.get(_tipo(model)) or []
+    if not alvos:
+        return {"arquivos": [], "motivo": "Não há acelerador publicado para esta variante."}
+    presentes = {Path(m["path"]).name.lower(): m["path"] for m in scan((".safetensors",))}
+    arquivos = []
+    try:
+        for repo, glob in alvos:
+            f = loras.mais_recente(arquivos_do_repo(repo, "lora"), glob)
+            if f:
+                nome = Path(f["path"]).name
+                arquivos.append({"repo": repo, "path": f["path"], "gb": round(f["size"] / 1e9, 2),
+                                 "presente": presentes.get(nome.lower(), "")})
+    except (ToolError, httpx.HTTPError) as e:
+        return {"arquivos": [], "motivo": f"Não deu para consultar o Hugging Face: {e}"}
+    return {"arquivos": arquivos, "motivo": "" if arquivos else "Nenhum arquivo do acelerador no repositório."}
+
+
+def baixar_acelerador(model: str, folder: str = "") -> list[dict]:
+    ac = aceleradores(model)
+    if not ac["arquivos"]:
+        raise ToolError(ac["motivo"])
+    # ao lado do modelo (a subpasta dele), dentro da mesma pasta de modelos: as LoRAs de uma geração precisam
+    # dividir o disco (loras.tags)
+    dono = Path(os.path.normcase(os.path.abspath(model)))
+    raiz = folder or next((d for d in dirs() if Path(os.path.normcase(os.path.abspath(d))) in dono.parents), "")
+    rel = ""
+    if raiz and not folder:
+        rel = str(Path(os.path.abspath(model)).parent.relative_to(os.path.abspath(raiz)))
+    return [download(a["repo"], a["path"], raiz, "" if rel == "." else rel) for a in ac["arquivos"] if not a["presente"]]
+
+
+def baixar_kit(kit_id: str, folder: str = "", quant: str = "") -> list[dict]:
+    """Um download por arquivo que falta (entram na fila de downloads como qualquer outro)."""
+    kit = next((k for k in kits_video({kit_id: quant} if quant else None, auto=kit_id.startswith("auto:"))
+                if k["id"] == kit_id), None)
+    if not kit:
+        raise ToolError("Kit não encontrado.")
+    if kit.get("erro"):
+        raise ToolError(kit["erro"])
+    return [download(a["repo"], a["path"], folder, a["subpasta"]) for a in kit["arquivos"] if not a["presente"]]
 
 
 def _mesma_pasta(a, b) -> bool:
@@ -1706,13 +2301,17 @@ def dentro_das_pastas(path) -> bool:
                for raiz in (Path(os.path.normcase(os.path.normpath(d))) for d in dirs()))
 
 
-def download(repo: str, path: str, folder: str = "") -> dict:
-    """Baixa o arquivo (e todos os shards do conjunto) para a pasta escolhida."""
-    dest_dir = Path(folder) if folder else Path(read_config().get("download_dir") or models_dir())
-    if not any(_mesma_pasta(dest_dir, d) for d in dirs()):
-        raise ToolError(f"'{dest_dir}' não está na lista de pastas de modelos. Adicione-a primeiro.")
+def download(repo: str, path: str, folder: str = "", subpasta: str = "") -> dict:
+    """Baixa o arquivo (e todos os shards do conjunto) para a pasta escolhida; `subpasta`, dentro dela
+    (os kits de vídeo: uma por modelo)."""
+    raiz = Path(folder) if folder else Path(read_config().get("download_dir") or models_dir())
+    if not any(_mesma_pasta(raiz, d) for d in dirs()):
+        raise ToolError(f"'{raiz}' não está na lista de pastas de modelos. Adicione-a primeiro.")
+    if subpasta and (Path(subpasta).is_absolute() or ".." in Path(subpasta).parts):
+        raise ToolError("Subpasta inválida.")
+    dest_dir = raiz / subpasta if subpasta else raiz
     dest_dir.mkdir(parents=True, exist_ok=True)
-    _patch("download_dir", str(dest_dir))  # a próxima vez já vem com a mesma pasta
+    _patch("download_dir", str(raiz))  # a próxima vez já vem com a mesma pasta (a raiz, não a subpasta)
     names = [path]
     m = SHARD.match(Path(path).name)
     if m:
@@ -1813,11 +2412,20 @@ def visao_do_alias(alias: str) -> bool | None:
 
 def state() -> dict:
     cfg = read_config()
-    todos = scan(WEIGHTS)
+    todos = scan(WEIGHTS_TODOS)
     # `ctx` por modelo: o seletor da Maestro e dos Workers barra quem tem janela pequena demais.
     # `vision`: o seletor mostra o olho, como o LM Studio.
     models = [{**m, "ctx": ctx_de(m["path"]), "vision": tem_visao(m["path"])} for m in todos if m["kind"] == "chat"]
-    comp = acompanhantes(cfg)
+    # Vídeo primeiro: ele se autoconfigura, e o VAE/umt5 que acabou de ganhar dono sai da lista de imagem
+    # já nesta resposta, e não só na seguinte.
+    videos = []
+    for m in todos:
+        if m["kind"] != "video" or alto_ruido(m["path"]) or _chave(m["path"]) in acompanhantes(cfg):
+            continue
+        p = completar_componentes(m["path"])
+        videos.append({**m, "params": p, "req": requisitos(m["path"]), "variante": _tipo(m["path"]),
+                       "falta": faltando(m["path"], p), "chave": _chave(m["path"]), "dim": loras.dim_do_modelo(m["path"])})
+    comp = acompanhantes(read_config())
     from .imagegen import previa_automatica
     imagens = [{**m, "params": image_params(m["path"]), "req": requisitos(m["path"]),
                 "previa_auto": previa_automatica(m["path"], image_params(m["path"])),
@@ -1830,5 +2438,9 @@ def state() -> dict:
             "hf_token": bool(hf_token()),
             "jobs": downloads.list_jobs(), "defaults": defaults_for(""), "last": cfg["last"],
             "image": cfg["image"], "image_models": imagens, "port": config.LOCAL_PORT,
+            "video": {**DEFAULT_IMAGE, **(cfg.get("video") or {})}, "video_models": videos,
+            "gpu_video": gpu_video(), "tempos_video": list((cfg.get("tempos") or {}).values()),
+            "loras": [{**m, **(loras.info_lora(m["path"]) or {})} for m in todos if m["kind"] == "lora"],
+            "ampliadores": [m for m in todos if m["kind"] == "ampliador"],
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

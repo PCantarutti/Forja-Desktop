@@ -679,24 +679,6 @@ license: apache-2.0
 
 # ---------------------------------------------------------------- imagem x modelo carregado
 
-def test_imagem_pede_confirmacao_com_modelo_na_vram(isolado, monkeypatch):
-    """sd.cpp e llama-server brigam pela VRAM: descarregar é preciso, mas derruba o cache do chat."""
-    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "qwen3"})
-    monkeypatch.setattr(localai, "find_exe", lambda kind: Path("sd-cli"))
-    localai.set_image({"model": str(gguf(isolado / "modelos", "sd.gguf"))})
-    descarregou = []
-    monkeypatch.setattr(localai, "unload", lambda: descarregou.append(True))
-    monkeypatch.setattr(imagegen.threading, "Thread", lambda target, daemon: type("T", (), {"start": lambda _s: None})())
-
-    with pytest.raises(imagegen.ModeloCarregado):
-        imagegen.start_job("gato")
-    assert not descarregou
-
-    imagegen.start_job("gato", confirm=True)
-    assert descarregou and localai.image_busy()
-    localai.set_image_busy(False)
-
-
 def test_nao_carrega_modelo_durante_a_geracao(isolado, monkeypatch):
     localai.set_image_busy(True)
     try:

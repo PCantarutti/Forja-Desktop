@@ -21,13 +21,13 @@ const PROPORCOES: { label: string; width: number; height: number }[] = [
   { label: "16:9", width: 896, height: 512 },
 ];
 
-const SEEDS: { id: SeedMode; label: string; hint: string }[] = [
+export const SEEDS: { id: SeedMode; label: string; hint: string }[] = [
   { id: "incremental", label: "Incremental", hint: "base, base+1, base+2… variações próximas e repetíveis" },
   { id: "aleatoria", label: "Aleatória", hint: "uma semente sorteada por imagem (mas anotada, dá para repetir)" },
   { id: "fixa", label: "Fixa", hint: "a mesma em todas: compara modelos com a variável travada" },
 ];
 
-const CORES: Record<LoteImagem["status"], string> = {
+export const CORES: Record<LoteImagem["status"], string> = {
   pendente: "text-faint",
   gerando: "text-sky-300",
   pronta: "text-muted",
@@ -38,10 +38,10 @@ const CORES: Record<LoteImagem["status"], string> = {
   interrompida: "text-amber-300",
 };
 // O que "Continuar" gera de novo (mesma lista do backend, lotes.A_REFAZER).
-const A_REFAZER: LoteImagem["status"][] = ["interrompida", "pendente", "cancelada", "erro"];
+export const A_REFAZER: LoteImagem["status"][] = ["interrompida", "pendente", "cancelada", "erro"];
 
 const MAX_REFS = 10;  // Qwen-Image 2.1; o backend barra também
-const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
+export const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
 
 export default function ImagensView(props: {
@@ -855,13 +855,13 @@ function Lote(props: {
 
 /** Nível sobe com o passo da amostragem; antes do 1º passo (carregando pesos) fica uma lâmina no fundo. */
 /** "32 s/passo" quando lento, "2,5 passos/s" quando rápido — como o sd.cpp decide a unidade. */
-const velocidade = (s: number) =>
-  s >= 1 ? `${Math.round(s)} s/passo` : `${(1 / s).toFixed(1).replace(".", ",")} passos/s`;
+export const velocidade = (s: number, unidade = "passo") =>
+  s >= 1 ? `${Math.round(s)} s/${unidade}` : `${(1 / s).toFixed(1).replace(".", ",")} ${unidade}s/s`;
 
-const duracao = (s: number) =>
+export const duracao = (s: number) =>
   s < 60 ? `~${Math.max(1, Math.round(s))} s` : `~${Math.floor(s / 60)} min${s % 60 >= 30 && s < 600 ? " 30 s" : ""}`;
 
-function Liquido({ fracao, sPasso, restante }: { fracao: number; sPasso?: number; restante?: number }) {
+export function Liquido({ fracao, sPasso, restante }: { fracao: number; sPasso?: number; restante?: number }) {
   const pct = Math.round(Math.min(1, Math.max(0, fracao)) * 100);
   return (
     <>
@@ -893,7 +893,7 @@ function Liquido({ fracao, sPasso, restante }: { fracao: number; sPasso?: number
 
 /** Imagem de fundo do card que troca só quando a próxima já carregou: o sd-cli regrava a prévia a cada
  *  passo, e pegar o arquivo no meio da gravação mostraria uma imagem quebrada. */
-function Fundo(props: { src?: string; inicial?: string }) {
+export function Fundo(props: { src?: string; inicial?: string }) {
   const [visivel, setVisivel] = useState(props.inicial);
   useEffect(() => {
     if (!props.src) return;
@@ -910,7 +910,7 @@ function Fundo(props: { src?: string; inicial?: string }) {
 
 /** "semente 4 · fixa", "sementes 4–7 · incremental", "sementes 12, 98, 551 · aleatória": o número é o
  *  que permite repetir a imagem, então ele aparece, e não só o modo. */
-function rotuloSementes(sementes: number[], modo: SeedMode): string {
+export function rotuloSementes(sementes: number[], modo: SeedMode): string {
   const unicas = [...new Set(sementes)];
   const ordenadas = [...unicas].sort((a, b) => a - b);
   const seguidas = ordenadas.every((s, i) => !i || s === ordenadas[i - 1] + 1);
@@ -920,8 +920,34 @@ function rotuloSementes(sementes: number[], modo: SeedMode): string {
   return `${numeros} · ${modo === "aleatoria" ? "aleatória" : modo}`;
 }
 
-function Chip({ children }: { children: React.ReactNode }) {
+export function Chip({ children }: { children: React.ReactNode }) {
   return <span className="rounded-full bg-raised px-2 py-0.5">{children}</span>;
+}
+
+/** A bolinha (24 px, onde fica a de marcar) com a % dentro; o anel contorna por fora. */
+export function AnelProgresso({ pct }: { pct: number }) {
+  return (
+    <svg
+      viewBox="0 0 30 30"
+      role="progressbar"
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      className="absolute left-[5px] top-[5px] size-[30px]"
+    >
+      <circle cx="15" cy="15" r="12" className="fill-black/60" />
+      <circle cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" className="stroke-white/20" />
+      <circle
+        cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" strokeLinecap="round" pathLength={100}
+        strokeDasharray={`${pct} 100`} transform="rotate(-90 15 15)"
+        className="stroke-sky-400 transition-[stroke-dasharray] duration-1000 ease-out"
+      />
+      <text x="15" y="15" textAnchor="middle" dominantBaseline="central" fontSize="10" fontWeight="600"
+            className="fill-white tabular-nums">
+        {pct}
+      </text>
+    </svg>
+  );
 }
 
 function Cartao(props: {
@@ -975,29 +1001,7 @@ function Cartao(props: {
         </div>
       )}
 
-      {comPrevia && (
-        // A bolinha (24 px, onde fica a de marcar) com a % dentro; o anel contorna por fora.
-        <svg
-          viewBox="0 0 30 30"
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          className="absolute left-[5px] top-[5px] size-[30px]"
-        >
-          <circle cx="15" cy="15" r="12" className="fill-black/60" />
-          <circle cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" className="stroke-white/20" />
-          <circle
-            cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" strokeLinecap="round" pathLength={100}
-            strokeDasharray={`${pct} 100`} transform="rotate(-90 15 15)"
-            className="stroke-sky-400 transition-[stroke-dasharray] duration-1000 ease-out"
-          />
-          <text x="15" y="15" textAnchor="middle" dominantBaseline="central" fontSize="10" fontWeight="600"
-                className="fill-white tabular-nums">
-            {pct}
-          </text>
-        </svg>
-      )}
+      {comPrevia && <AnelProgresso pct={pct} />}
       {temArquivo && (
         <button
           onClick={props.onMarcar}

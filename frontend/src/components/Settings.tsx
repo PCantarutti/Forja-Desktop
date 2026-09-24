@@ -346,7 +346,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
 
   const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
 
-  const bloco = (kind: "llama" | "sd", titulo: string, descricao: string) => {
+  const bloco = (kind: "llama" | "sd" | "ffmpeg", titulo: string, descricao: string) => {
     const r = st.runtimes[kind];
     return (
       <Field key={kind} label={titulo} hint={descricao}>
@@ -376,9 +376,9 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
                   key={b}
                   className={btn}
                   onClick={() => acao(api.post("/local/runtime", { kind, backend: b }))}
-                  title={b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
+                  title={kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
                 >
-                  {tem ? `Atualizar ${b}` : `Baixar ${b}`}
+                  {kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
                 </button>
               );
             })}
@@ -391,7 +391,8 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
   return (
     <div className="max-w-2xl space-y-5">
       {bloco("llama", "Motor de chat (llama.cpp)", "CPU, Vulkan e CUDA convivem no disco: dá para trocar a qualquer momento, sem baixar de novo.")}
-      {bloco("sd", "Motor de imagem (stable-diffusion.cpp)", "Mesma ideia, para a geração de imagem.")}
+      {bloco("sd", "Motor de imagem e vídeo (stable-diffusion.cpp)", "Mesma ideia, para gerar imagem e vídeo (e o ESRGAN da ampliação).")}
+      {bloco("ffmpeg", "Motor de ampliação de vídeo (ffmpeg)", "Separa os quadros, junta de volta com o áudio e interpola o movimento. Só existe o build de CPU: o pesado (ESRGAN) é na GPU pelo sd.cpp.")}
       {!!st.jobs?.filter((j: any) => j.kind === "runtime").length && (
         <div className="space-y-1 text-xs text-muted">
           {st.jobs
@@ -573,6 +574,22 @@ function PastasTab(props: { onError: (e: string) => void }) {
     }
   }
 
+  // A 1ª da lista é a padrão (models_dir); as outras são as "a mais", que o PUT /local/dirs recebe.
+  async function pastas(extras: string[]) {
+    try {
+      const r = await api.put<{ dirs: string[] }>("/local/dirs", { dirs: extras });
+      setSt({ ...st!, dirs: r.dirs });
+      setSalvo("Salvo.");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function adicionarPasta() {
+    const escolhida = window.forja ? await window.forja.pickFolder("") : prompt("Caminho da pasta com os modelos:");
+    if (escolhida) pastas([...st!.dirs.slice(1), escolhida]);
+  }
+
   async function escolher(campo: "models_dir" | "image_dir") {
     const atual = st![campo];
     const escolhida = window.forja ? await window.forja.pickFolder(atual) : prompt("Caminho da pasta:", atual);
@@ -601,6 +618,32 @@ function PastasTab(props: { onError: (e: string) => void }) {
         hint="Para onde vão os downloads do painel IA local. As outras pastas continuam sendo varridas; troque lá quem é a padrão do download."
       >
         {linha("models_dir")}
+      </Field>
+      <Field
+        label="Pastas de modelos instalados"
+        hint="Todas são varridas (com as subpastas): o que estiver nelas aparece no IA local, sem copiar nada. A primeira é a de cima."
+      >
+        <div className="space-y-1.5">
+          {st.dirs.map((d, i) => (
+            <div key={d} className="flex items-center gap-2 rounded-lg border border-line bg-raised px-3 py-1.5 text-sm">
+              <span className="min-w-0 flex-1 truncate text-fg" title={d}>{d}</span>
+              {i === 0 ? (
+                <span className="shrink-0 text-xs text-faint">padrão</span>
+              ) : (
+                <button
+                  className="shrink-0 text-xs text-muted hover:text-red-400"
+                  title="Parar de varrer esta pasta (os arquivos ficam no disco)"
+                  onClick={() => pastas(st.dirs.slice(1).filter((x) => x !== d))}
+                >
+                  Remover
+                </button>
+              )}
+            </div>
+          ))}
+          <button className={btn} onClick={adicionarPasta}>
+            Adicionar pasta…
+          </button>
+        </div>
       </Field>
       <Field label="Imagens geradas" hint="Onde o painel salva as imagens. As geradas pelo agente vão para a pasta de trabalho da conversa.">
         {linha("image_dir")}

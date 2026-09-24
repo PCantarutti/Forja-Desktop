@@ -32,7 +32,7 @@ function ItemMenu(props: {
   // Conversa de imagem: apagar leva as imagens geradas; o aviso diz quantas, antes do "Sim".
   const [imagens, setImagens] = useState<{ count: number; primeira: string } | null>(null);
   useEffect(() => {
-    if (!confirming || props.c.kind !== "imagem") return;
+    if (!confirming || (props.c.kind !== "imagem" && props.c.kind !== "video")) return;
     api.get<{ count: number; primeira: string }>(`/imagens/${props.c.id}/arquivos`).then(setImagens).catch(() => {});
   }, [confirming]);
   const ref = useRef<HTMLDivElement>(null);
@@ -60,8 +60,10 @@ function ItemMenu(props: {
       </a>
       {confirming && !!imagens?.count && (
         <div className="px-3 pt-1.5 text-xs leading-relaxed text-amber-300">
-          Apaga também {imagens.count === 1 ? "a imagem gerada" : `as ${imagens.count} imagens geradas`} nesta conversa, da
-          pasta de imagens. Copie ou mova antes as que quiser guardar.
+          Apaga também {props.c.kind === "video"
+            ? imagens.count === 1 ? "o vídeo gerado" : `os ${imagens.count} vídeos gerados`
+            : imagens.count === 1 ? "a imagem gerada" : `as ${imagens.count} imagens geradas`} nesta conversa, da
+          pasta de imagens. Copie ou mova antes o que quiser guardar.
           <button className="mt-1 block underline text-fg" onClick={() => api.post("/open", { path: imagens.primeira, mode: "reveal" }).catch(() => {})}>
             Abrir a pasta
           </button>
@@ -121,7 +123,7 @@ export default function Sidebar(props: {
   useEffect(() => {
     setImagensLote(0);
     if (!confirmDelete) return;
-    const deImagem = [...props.conversations, ...archived].filter((c) => selected.has(c.id) && c.kind === "imagem");
+    const deImagem = [...props.conversations, ...archived].filter((c) => selected.has(c.id) && (c.kind === "imagem" || c.kind === "video"));
     Promise.all(deImagem.map((c) => api.get<{ count: number }>(`/imagens/${c.id}/arquivos`).then((r) => r.count).catch(() => 0)))
       .then((n) => setImagensLote(n.reduce((a, b) => a + b, 0)));
   }, [confirmDelete]);
@@ -379,8 +381,8 @@ export default function Sidebar(props: {
           <div className="mb-1.5 text-muted">{selected.size} selecionada{selected.size === 1 ? "" : "s"}</div>
           {confirmDelete && imagensLote > 0 && (
             <p className="mb-1.5 leading-relaxed text-amber-300">
-              Apaga também {imagensLote === 1 ? "a imagem gerada" : `as ${imagensLote} imagens geradas`} nas conversas de imagem
-              selecionadas, da pasta de imagens. Copie ou mova antes as que quiser guardar.
+              Apaga também {imagensLote === 1 ? "o arquivo gerado" : `os ${imagensLote} arquivos gerados`} nas conversas de
+              imagem e vídeo selecionadas, da pasta de imagens. Copie ou mova antes o que quiser guardar.
             </p>
           )}
           {confirmDelete ? (
