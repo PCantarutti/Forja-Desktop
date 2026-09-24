@@ -1901,7 +1901,7 @@ def _serve_para_sd(caminho: str, tamanho: int) -> bool:
 
 
 def files(repo: str, kind: str = "text") -> list[dict]:
-    exts = WEIGHTS if kind in ("image", "video") else (".gguf",)
+    exts = WEIGHTS if kind in ("image", "video", "lora") else (".gguf",)
     r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True,
                   headers=hf_headers(), params={"recursive": "true"})
     if r.status_code == 401:
@@ -1917,6 +1917,7 @@ def files(repo: str, kind: str = "text") -> list[dict]:
             continue  # shard do meio: baixar o primeiro já traz o conjunto inteiro
         quant = QUANT.search(Path(f["path"]).stem)
         tamanho = f.get("size") or (f.get("lfs") or {}).get("size") or 0
+        # "lora" é a listagem dos aceleradores: o filtro de modelo de difusão jogaria justamente eles fora
         if kind in ("image", "video") and not _serve_para_sd(f["path"], tamanho):
             continue
         out.append({"path": f["path"], "size": tamanho,
@@ -1980,12 +1981,12 @@ HF_TTL = 3600  # s: a lista de arquivos de um repositório quase nunca muda
 
 
 @functools.lru_cache(maxsize=32)
-def _arquivos_hf(repo: str, _janela: int) -> tuple[dict, ...]:
-    return tuple(files(repo, "video"))
+def _arquivos_hf(repo: str, kind: str, _janela: int) -> tuple[dict, ...]:
+    return tuple(files(repo, kind))
 
 
-def arquivos_do_repo(repo: str) -> list[dict]:
-    return list(_arquivos_hf(repo, int(time.time() // HF_TTL)))
+def arquivos_do_repo(repo: str, kind: str = "video") -> list[dict]:
+    return list(_arquivos_hf(repo, kind, int(time.time() // HF_TTL)))
 
 
 def _quant_de(caminho: str) -> str:
@@ -2088,7 +2089,7 @@ def aceleradores(model: str) -> dict:
     arquivos = []
     try:
         for repo, glob in alvos:
-            f = loras.mais_recente(arquivos_do_repo(repo), glob)
+            f = loras.mais_recente(arquivos_do_repo(repo, "lora"), glob)
             if f:
                 nome = Path(f["path"]).name
                 arquivos.append({"repo": repo, "path": f["path"], "gb": round(f["size"] / 1e9, 2),

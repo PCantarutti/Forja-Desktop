@@ -88,12 +88,24 @@ def test_argv_leva_as_loras(isolado, monkeypatch):
     assert Path(a[a.index("--lora-model-dir") + 1]) == m
 
 
+def test_listagem_do_hf_para_lora_nao_joga_as_loras_fora(monkeypatch):
+    class R:
+        status_code = 200
+
+        def json(self):
+            return [{"type": "file", "path": "wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors", "size": 631_000_000},
+                    {"type": "file", "path": "README.md", "size": 100}]
+    monkeypatch.setattr(localai.httpx, "get", lambda *a, **k: R())
+    assert [f["path"] for f in localai.files("x/y", "lora")] == ["wan2.1_t2v_14b_lora_rank64_lightx2v_4step.safetensors"]
+    assert localai.files("x/y", "video") == []  # na de modelos ela sai, como antes
+
+
 def test_acelerador_da_variante_e_o_que_ja_esta_no_disco(isolado, monkeypatch):
     m = isolado / "modelos"
     monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "wan", "n_layer": 0, "n_head": 0, "formas": {}})
     modelo = m / "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf"
     modelo.write_bytes(b"\0" * 64)
-    monkeypatch.setattr(localai, "arquivos_do_repo", lambda repo: [
+    monkeypatch.setattr(localai, "arquivos_do_repo", lambda repo, kind="video": [
         {"path": "wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1022.safetensors", "size": 600_000_000},
         {"path": "wan2.2_t2v_A14b_high_noise_lora_rank64_lightx2v_4step_1217.safetensors", "size": 614_000_000},
         {"path": "wan2.2_t2v_A14b_low_noise_lora_rank64_lightx2v_4step_1217.safetensors", "size": 614_000_000}])
