@@ -1400,6 +1400,9 @@ def load(path: str, patch: dict | None = None, temporario: dict | None = None) -
 
     ponytail: um modelo por vez; multi-modelo simultâneo é caso de llama-swap, não deste projeto.
     """
+    # Os parâmetros salvos são chaveados pelo caminho: "D:/x.gguf" e "D:\x.gguf" são o mesmo arquivo,
+    # mas sem normalizar o primeiro subia com o padrão e ganhava uma entrada duplicada no local.json.
+    path = os.path.normpath(path)
     if image_busy():
         raise ToolError("Uma imagem está sendo gerada agora. Espere terminar para carregar um modelo — "
                         "os dois disputam a mesma VRAM.")
