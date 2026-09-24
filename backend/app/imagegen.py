@@ -172,7 +172,7 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
         if video:
             # O corte no tempo segura os clipes longos, em que cada bloco carrega todos os quadros; o tamanho do
             # bloco vai pela VRAM livre na hora (bloco maior = menos emendas, mais rápido).
-            t = bloco_vae(o.get("_vram_livre_gb"))
+            t = o.get("_bloco") or bloco_vae(o.get("_vram_livre_gb"))
             a += ["--vae-tile-size", f"{t}x{t}", "--temporal-tiling"]
     if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
         # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
@@ -192,18 +192,43 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
     return a
 
 
-# Medido na B580: o bloco padrão do sd.cpp (32×32 no latente) do VAE do Wan2.2 pediu 15,4 GB num só, e o 5B
-# morria no fim da amostragem; 16×16 decodificou 17 quadros em 23 s. A memória do bloco cresce com a área.
-VAE_GB_BLOCO_32 = 15.4
+# Quanto o VAE do Wan pede para decodificar um bloco, lido do log do sd.cpp ("need 15432.83 MB device"). Não
+# cresce só com a área: tem um custo fixo grande. Parte das duas medições da B580 com o VAE do Wan2.2 (bloco 32:
+# 15.432 MB; 24: 11.446 MB → ~6,3 GB fixos + ~8,9 MB por unidade de área) e passa a usar as da máquina, por
+# arquivo de VAE, a cada vez que um bloco estoura (localai.anotar_vae).
+VAE_MEDIDO_MB = {32: 15432.0, 24: 11446.0}
+MARGEM_SD_MB = 512  # o sd.cpp deixa 512 MB fora do orçamento ("budget" = livre − 512, visto no log)
 BLOCOS_VAE = (32, 24, 16)
+PEDIU_VAE = re.compile(r"need ([\d.]+) MB device")
 
 
-def bloco_vae(livre_gb: float | None) -> int:
-    """O maior bloco cuja conta cabe na VRAM livre; sem saber quanto há livre, o menor (o que sempre passou)."""
+def _ajuste_vae(medidas: dict[int, float]) -> tuple[float, float]:
+    """(custo fixo, MB por unidade de área). Com duas medições da máquina, só elas; com uma, ela ancora o fixo
+    e a inclinação vem das de referência; sem nenhuma, as de referência."""
+    ref = sorted(VAE_MEDIDO_MB)
+    k_ref = (VAE_MEDIDO_MB[ref[-1]] - VAE_MEDIDO_MB[ref[0]]) / (ref[-1] ** 2 - ref[0] ** 2)
+    if len(medidas) >= 2:
+        ts = sorted(medidas)
+        k = (medidas[ts[-1]] - medidas[ts[0]]) / (ts[-1] ** 2 - ts[0] ** 2)
+        return medidas[ts[-1]] - k * ts[-1] ** 2, k
+    base = medidas or VAE_MEDIDO_MB
+    t = max(base)
+    return base[t] - k_ref * t * t, k_ref
+
+
+def necessidade_vae(t: int, medidas: dict[int, float] | None = None) -> float:
+    fixo, k = _ajuste_vae(medidas or {})
+    return fixo + k * t * t
+
+
+def bloco_vae(livre_gb: float | None, medidas: dict[int, float] | None = None, teto: int | None = None) -> int:
+    """O maior bloco (abaixo de `teto`, se houver) cuja conta cabe na VRAM livre; sem saber quanto há
+    livre, o menor (o que sempre passou)."""
     if not livre_gb:
         return BLOCOS_VAE[-1]
+    orcamento = livre_gb * 1024 - MARGEM_SD_MB
     for t in BLOCOS_VAE:
-        if VAE_GB_BLOCO_32 * (t / 32) ** 2 <= livre_gb * localai.FOLGA_VRAM:
+        if (teto is None or t < teto) and necessidade_vae(t, medidas) <= orcamento:
             return t
     return BLOCOS_VAE[-1]
 
@@ -231,17 +256,20 @@ def _exe() -> Path:
 
 
 def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
-             refs: list[str] | tuple = (), progresso=None, previa: Path | None = None) -> Path:
+             refs: list[str] | tuple = (), progresso=None, previa: Path | None = None, medir: dict | None = None) -> Path:
     """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread.
 
     `progresso(passo, total, s_passo)` a cada passo da amostragem (o card do lote enche com isso).
-    `previa`: onde o sd-cli grava a prévia de cada passo, se o modelo tiver o modo de prévia ligado."""
+    `previa`: onde o sd-cli grava a prévia de cada passo, se o modelo tiver o modo de prévia ligado.
+    `medir`: recebe {"segundos": ...} da execução que deu certo (sem a tentativa que estourou o VAE)."""
+    comeco = time.monotonic()
     exe = _exe()
     if not prompt.strip():
         raise ToolError("Descreva a imagem (prompt vazio).")
     o = {**_opts(opts), "_preview": previa} if previa else _opts(opts)
     if localai.eh_video(str(o.get("model") or "")) and o.get("vae_tiling"):
-        o["_vram_livre_gb"] = localai.vram_livre_para_vae(str(o["model"]), bool(o.get("offload")))
+        livre = localai.vram_livre_para_vae(str(o["model"]), bool(o.get("offload")))
+        o["_bloco"] = bloco_vae(livre, localai.vae_medidas(str(o.get("vae") or "")), o.get("_teto_bloco"))
     out.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(argv(exe, prompt, out, o, refs), cwd=str(exe.parent), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
@@ -309,8 +337,23 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
         raise ToolError(f"O sd-cli parou de responder (nada por {max(SEM_SINAL, PASSOS_SEM_SINAL * visto[1]) / 60:.0f} "
                         "min) e foi encerrado. A GPU pode ter travado; se repetir, reinicie o Forja.")
     if proc.returncode != 0 or not out.exists():
+        texto = "\n".join(tail)
+        bloco = o.get("_bloco")
+        if bloco and "vae decode compute failed" in texto:
+            # O VAE não coube no bloco escolhido: o que ele pediu fica anotado (a próxima conta já sai certa) e a
+            # geração vai de novo com o bloco menor — refaz a amostragem, mas entrega o vídeo em vez do erro.
+            pedidos = PEDIU_VAE.findall(texto)
+            if pedidos and o.get("vae"):
+                localai.anotar_vae(str(o["vae"]), int(bloco), float(pedidos[-1]))
+            livres = MEMORIA_LIVRE.findall(texto)
+            if livres:
+                localai.anotar_livre_sd(max(float(l) for l, _ in livres))
+            if bloco > BLOCOS_VAE[-1] and not (job_id and downloads.cancelled(job_id)):
+                return generate(prompt, out, {**(opts or {}), "_teto_bloco": bloco}, job_id, refs, progresso, previa, medir)
         log = "\n".join(tail[-12:])
         raise ToolError(f"{dica_de_falha(tail, video)}sd falhou (código {rotulo_codigo(proc.returncode)}):\n{log}")
+    if medir is not None:
+        medir["segundos"] = time.monotonic() - comeco
     return out
 
 

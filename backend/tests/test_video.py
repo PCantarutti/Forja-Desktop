@@ -269,9 +269,53 @@ def test_kit_sem_hugging_face_avisa_em_vez_de_quebrar(isolado, monkeypatch):
 
 def test_bloco_do_vae_pela_vram_livre():
     assert imagegen.bloco_vae(None) == 16  # sem saber, o que sempre passou
-    assert imagegen.bloco_vae(4.0) == 16
-    assert imagegen.bloco_vae(11.0) == 24  # 15,4 × (24/32)² = 8,7 GB cabem em 11 × 0,85
+    # 11,05 GB livres (a B580 no fim da amostragem, com pesos na RAM): o 24 pediu 11.446 MB e estourou
+    assert imagegen.bloco_vae(11312.8 / 1024) == 16
+    assert imagegen.bloco_vae(13.0) == 24
     assert imagegen.bloco_vae(20.0) == 32
+    assert imagegen.bloco_vae(20.0, teto=32) == 24  # a nova tentativa depois de um estouro vai abaixo do que falhou
+    # as referências voltam exatas, e o 16 fica bem abaixo do que a B580 tinha livre (e passou)
+    assert round(imagegen.necessidade_vae(24)) == 11446 and imagegen.necessidade_vae(16) < 11312.8 - 512
+
+
+def test_vae_estourado_anota_e_tenta_de_novo_com_bloco_menor(isolado, monkeypatch):
+    chamadas = []
+
+    class Proc:
+        def __init__(self, a, **k):
+            chamadas.append(a)
+            self.out = Path(a[a.index("-o") + 1])
+            self.falha = len(chamadas) == 1
+            self.stdout = iter(["[WARN] model manager memory on Vulkan1: reported free 11312.80 MB / total 12118.00 MB\n",
+                                "[WARN] model manager cannot make enough memory available on Vulkan1: need 11445.82 MB device\n",
+                                "[ERROR] vae.hpp:312  - vae decode compute failed\n"] if self.falha else ["ok\n"])
+            self.returncode = 1 if self.falha else 0
+
+        def wait(self):
+            if not self.falha:
+                self.out.write_bytes(b"webm")
+    monkeypatch.setattr(imagegen.subprocess, "Popen", Proc)
+    monkeypatch.setattr(imagegen, "_exe", lambda: Path("sd-cli.exe"))
+    monkeypatch.setattr(localai, "vram_livre_para_vae", lambda model, offload: 13.0)  # a conta de referência dá 24
+    o = _o(isolado, "Wan2.2-TI2V-5B-Q8_0.gguf", vae=arquivo(isolado / "modelos", "wan2.2_vae.safetensors"),
+           vae_tiling=True, offload=True)
+    medido = {}
+    out = imagegen.generate("a boat", isolado / "o.webm", o, medir=medido)
+    assert out.exists() and medido["segundos"] >= 0
+    blocos = [a[a.index("--vae-tile-size") + 1] for a in chamadas]
+    assert blocos == ["24x24", "16x16"]
+    assert localai.vae_medidas(o["vae"]) == {24: 11445.8}  # a próxima conta já sai com o número desta máquina
+    assert localai.read_config()["livre_sd_mb"] == 11312.8  # e com a memória que o sd.cpp enxerga de fato
+
+
+def test_bloco_aprende_com_a_maquina(isolado):
+    vae = arquivo(isolado / "modelos", "wan_2.1_vae.safetensors")
+    localai.anotar_vae(vae, 32, 9000.0)  # um VAE menor, numa máquina qualquer
+    localai.anotar_vae(vae, 24, 7000.0)
+    medidas = localai.vae_medidas(vae)
+    assert medidas == {32: 9000.0, 24: 7000.0}
+    assert round(imagegen.necessidade_vae(32, medidas)) == 9000  # a conta passa a ser a da máquina
+    assert imagegen.bloco_vae(11.0, medidas) == 32  # e o bloco grande volta a caber
 
 
 def test_resolucao_do_i2v_sai_do_nome(isolado):
@@ -297,7 +341,7 @@ def test_tempo_medido_vai_para_o_estado(isolado):
 def test_lote_em_conversa_de_video_grava_webm(isolado, monkeypatch):
     saidas = []
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None, medir=None):
         saidas.append((Path(out), previa))
         Path(out).write_bytes(b"webm")
         return Path(out)

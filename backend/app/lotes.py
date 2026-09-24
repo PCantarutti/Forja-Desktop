@@ -222,14 +222,14 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                 _patch(message_id, meta={"images": imagens})
 
             try:
-                comeco = time.monotonic()
+                medido: dict = {}
                 imagegen.generate(prompt, Path(item["path"]), {**opts, "model": item["model"],
                                                                "seed": item["seed"]}, job_id, refs or [],
-                                  progresso, previa)
+                                  progresso, previa, medido)
                 item["status"] = "pronta"
-                if item.get("s_passo"):  # vira base da estimativa "≈ N min" das próximas, em qualquer conversa
+                if item.get("s_passo") and medido.get("segundos"):  # base do "≈ N min", em qualquer conversa
                     localai.anotar_tempo(item["model"], imagegen._opts({**opts, "model": item["model"]}),
-                                         float(item["s_passo"]), time.monotonic() - comeco)
+                                         float(item["s_passo"]), float(medido["segundos"]))
             except Exception as e:
                 # o próprio generate mata o sd-cli quando o job é cancelado no meio de uma imagem
                 cancelada = downloads.cancelled(job_id)

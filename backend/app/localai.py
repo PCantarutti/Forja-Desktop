@@ -171,7 +171,7 @@ def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
             "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
-            "sem_proj": [], "referencias": [], "video": {}, "tempos": {}}
+            "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0}
 
 
 def read_config() -> dict:
@@ -2067,6 +2067,22 @@ def vram_video_gb() -> float:
     return gpu_video().get("gb", 0.0)
 
 
+def anotar_vae(vae: str, bloco: int, pedido_mb: float) -> None:
+    """Quanto este VAE pediu para um bloco nesta máquina (do log de uma falha): a conta do bloco passa a usar isso."""
+    with _cfg_lock:
+        data = read_config()
+        medidas = dict(data.get("vae_mem") or {})
+        medidas[_chave(vae)] = {**(medidas.get(_chave(vae)) or {}), str(int(bloco)): round(float(pedido_mb), 1)}
+        data["vae_mem"] = medidas
+        write_config(data)
+
+
+def vae_medidas(vae: str) -> dict[int, float]:
+    if not vae:
+        return {}
+    return {int(t): float(mb) for t, mb in ((read_config().get("vae_mem") or {}).get(_chave(vae)) or {}).items()}
+
+
 def vram_livre_para_vae(model: str, offload: bool) -> float:
     """VRAM que sobra para o VAE no fim: a livre agora, menos o modelo de difusão se ele fica na GPU."""
     from .imagegen import _gpu
@@ -2077,7 +2093,22 @@ def vram_livre_para_vae(model: str, offload: bool) -> float:
     if not gpu:
         return 0.0
     ocupado = 0 if offload else (Path(model).stat().st_size if Path(model).is_file() else 0)
-    return max(0.0, (gpu["free"] - ocupado) / 2**30)
+    # O llama.cpp e o sd.cpp não enxergam a mesma memória livre (na B580: ~12 GB contra 11,3 GB): vale a menor
+    # entre a de agora e a maior que o sd.cpp já disse ter (anotada quando um bloco estourou).
+    livre = gpu["free"]
+    visto = float(read_config().get("livre_sd_mb") or 0)
+    if visto:
+        livre = min(livre, int(visto * 2**20))
+    return max(0.0, (livre - ocupado) / 2**30)
+
+
+def anotar_livre_sd(livre_mb: float) -> None:
+    """A maior memória livre que o sd.cpp já reportou: é o teto do que ele consegue usar nesta GPU."""
+    with _cfg_lock:
+        data = read_config()
+        if float(livre_mb) > float(data.get("livre_sd_mb") or 0):
+            data["livre_sd_mb"] = round(float(livre_mb), 1)
+            write_config(data)
 
 
 def aceleradores(model: str) -> dict:
