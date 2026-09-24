@@ -160,6 +160,11 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
         a += ["--diffusion-fa"]
     if o.get("vae_tiling"):
         a += ["--vae-tiling"]
+        if video:
+            # O bloco padrão (32×32 no latente) do VAE do Wan2.2 pediu 15 GB num só na B580, e o 5B morria
+            # no fim da amostragem. 16×16 decodificou 17 quadros em 23 s; o corte no tempo segura os clipes
+            # mais longos, em que cada bloco carrega todos os quadros.
+            a += ["--vae-tile-size", "16x16", "--temporal-tiling"]
     if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
         # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
         a += ["--backend", f"{_gpu(str(exe))},te=cpu"]

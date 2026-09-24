@@ -1225,13 +1225,19 @@ def _achados(path: str, _janela: int) -> dict[str, list[str]]:
 def completar_componentes(path: str) -> dict:
     """Modelo de vídeo baixado pelo kit: o VAE, o umt5, o CLIP Vision e o par HighNoise que estão por
     perto entram sozinhos nos ajustes dele — ninguém precisa colar caminho para o primeiro vídeo sair.
-    Só preenche o que falta; o que a pessoa escolheu fica."""
+    Só preenche o que falta; o que a pessoa escolheu fica.
+
+    Na primeira vez que o modelo aparece, entram também os ajustes sugeridos da variante: sem flash
+    attention, VAE em blocos e pesos na RAM, o TI2V 5B passou a amostragem inteira e morreu no fim, no
+    VAE (pediu 8,7 GB com 6 livres na B580)."""
     p = image_params(path)
+    novos = {}
+    if os.path.normpath(str(path)) not in (read_config().get("image_models") or {}):
+        novos.update((requisitos(path) or {}).get("sugere") or {})
     falta = faltando(path, p)
     if not falta:
-        return p
+        return save_image_params(path, novos) if novos else p
     achados = _achados(path, int(time.time() // ACHADOS_TTL))
-    novos = {}
     for k in falta:
         opcoes = achados.get(k) or []
         if k == "high_noise_model":  # o par certo: mesmo nome, High no lugar de Low (mesma quantização)

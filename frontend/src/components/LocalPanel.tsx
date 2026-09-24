@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView }
-  from "../types";
-import { Download, FolderOpen, Search, Square, Trash, X } from "./icons";
+import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView,
+  VideoKit } from "../types";
+import { Check, Download, Film, FolderOpen, Search, Square, Trash, X } from "./icons";
 import Confirma from "./Confirma";
 import ModelSearch from "./ModelSearch";
+import SelosModo from "./SelosModo";
 import { useStickyBottom } from "../useStickyBottom";
 
 const POLL_MS = 3000;
@@ -86,6 +87,16 @@ export default function LocalPanel(props: {
     refresh();
     const t = setInterval(refresh, POLL_MS);
     return () => clearInterval(t);
+  }, []);
+
+  // A aba Vídeo sem modelo manda abrir aqui direto em Baixar.
+  useEffect(() => {
+    const abrir = (e: Event) => {
+      const aba = (e as CustomEvent<SubTab>).detail;
+      if (SUBTABS.includes(aba)) setTab(aba);
+    };
+    window.addEventListener("forja:ia-local", abrir);
+    return () => window.removeEventListener("forja:ia-local", abrir);
   }, []);
 
   if (!st) return <div className="p-3 text-xs text-muted">{error || "Carregando…"}</div>;
@@ -624,6 +635,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       </section>
 
       <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} />
+      <ModelosDeImagem st={st} onDone={props.onDone} onError={props.onError} video />
 
       {sel && form && view && (
         <section className={card}>
@@ -763,15 +775,17 @@ const ROTULO: Record<string, string> = {
   clip_l: "clip_l",
   t5xxl: "t5xxl",
   taesd: "TAESD",
+  clip_vision: "CLIP Vision",
+  high_noise_model: "Modelo HighNoise",
 };
 
 /** Modelos de difusão que estão nas pastas. Não têm "Carregar": o sd.cpp sobe e desce a cada imagem —
  *  o que dá para guardar aqui são os ajustes de cada um (o Flux não quer o mesmo CFG que o SD 1.5). */
-function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
+function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (e: string) => void; video?: boolean }) {
   const [sel, setSel] = useState("");
   const [form, setForm] = useState<ImageParams | null>(null);
   const [salvo, setSalvo] = useState("");
-  const lista = props.st.image_models;
+  const lista = props.video ? props.st.video_models : props.st.image_models;
   const atual = lista.find((m) => m.path === sel);
   // VAE/codificador/mmproj achados perto do modelo (busca no disco, só ao abrir os ajustes).
   // Guardado com o caminho buscado: trocar de modelo não mostra os achados do anterior.
@@ -789,7 +803,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
       vivo = false;
     };
   }, [sel, temReq]);
-  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl" | "taesd";
+  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl" | "taesd" | "clip_vision" | "high_noise_model";
   const achadoDe = (k: string) => {
     const f = achados[k]?.[0];
     return f && form && form[k as Arquivo] !== f ? f : "";
@@ -845,8 +859,8 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
   return (
     <section className={card}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-fg">Modelos de imagem ({lista.length})</span>
-        <span className="text-faint">usados na aba Imagem</span>
+        <span className="text-fg">{props.video ? "Modelos de vídeo" : "Modelos de imagem"} ({lista.length})</span>
+        <span className="text-faint">{props.video ? "usados na aba Vídeo" : "usados na aba Imagem"}</span>
       </div>
       <div className="flex flex-col">
         {lista.map((m) => (
@@ -872,7 +886,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                 falta arquivo
               </span>
             )}
-            {props.st.image.model === m.path && <span className="shrink-0 text-faint">em uso</span>}
+            {(props.video ? props.st.video.model : props.st.image.model) === m.path && <span className="shrink-0 text-faint">em uso</span>}
             <span className="shrink-0 text-faint">{size(m.size)}</span>
             <Confirma
               rotulo={<Trash className="size-3.5" />}
@@ -941,7 +955,17 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
             <Num label="CFG" value={form.cfg} onChange={(v) => set("cfg", v)} />
             <Num label="Largura" value={form.width} onChange={(v) => set("width", v)} />
             <Num label="Altura" value={form.height} onChange={(v) => set("height", v)} />
+            {props.video && (
+              <>
+                <Num label="Quadros" value={form.frames} onChange={(v) => set("frames", Math.max(1, Math.round((v - 1) / 4)) * 4 + 1)} step={4} hint="4k+1" />
+                <Num label="FPS" value={form.fps} onChange={(v) => set("fps", v)} />
+                <Num label="Flow shift" value={form.flow_shift} onChange={(v) => set("flow_shift", v)} step={0.5} hint="0 = automático" />
+              </>
+            )}
           </div>
+          {props.video ? (
+            <CamposVideo form={form} set={set} req={atual?.req} achado={achado} variante={atual?.variante} />
+          ) : (
           <div className="mt-2.5 flex flex-col gap-2.5">
             <Field label="Amostrador">
               <select className={input} value={form.sampler} onChange={(e) => set("sampler", e.target.value)}>
@@ -1013,16 +1037,87 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
               </Field>
             )}
           </div>
+          )}
           <div className="mt-3 flex items-center gap-2">
             <button className={btnPrimary} onClick={salvar}>
               Salvar
             </button>
             {salvo && <span className="text-emerald-400">{salvo}</span>}
-            <span className="text-faint">Valem quando este modelo estiver escolhido na aba Imagem.</span>
+            <span className="text-faint">Valem quando este modelo estiver escolhido na aba {props.video ? "Vídeo" : "Imagem"}.</span>
           </div>
         </div>
       )}
     </section>
+  );
+}
+
+const VARIANTES_WAN: [string, string][] = [
+  ["", "Pelo nome do arquivo"], ["wan21_t2v", "Wan2.1 T2V"], ["wan21_i2v", "Wan2.1 I2V"], ["wan21_flf2v", "Wan2.1 FLF2V"],
+  ["wan21_vace", "Wan2.1 VACE"], ["wan22_ti2v", "Wan2.2 TI2V 5B"], ["wan22_a14b_t2v", "Wan2.2 T2V A14B"],
+  ["wan22_a14b_i2v", "Wan2.2 I2V A14B"],
+];
+
+/** Os arquivos e ligações de memória de um modelo de vídeo (Wan). Os caminhos se preenchem sozinhos
+ *  quando o kit baixa tudo junto; aqui é para conferir e trocar. */
+function CamposVideo(props: {
+  form: ImageParams;
+  set: <K extends keyof ImageParams>(k: K, v: ImageParams[K]) => void;
+  req?: LocalModel["req"];
+  variante?: string;
+  achado: (k: string) => React.ReactNode;
+}) {
+  const { form, set } = props;
+  const pede = (k: string) => !!props.req?.precisa?.[k];
+  const caminho = (k: "vae" | "t5xxl" | "clip_vision" | "high_noise_model", rotulo: string, dica: string) => (
+    <Field label={rotulo} hint={dica}>
+      <input className={input} value={form[k] ?? ""} onChange={(e) => set(k, e.target.value)} placeholder="caminho do arquivo" spellCheck={false} />
+      {props.achado(k)}
+    </Field>
+  );
+  return (
+    <div className="mt-2.5 flex flex-col gap-2.5">
+      <Field label="Amostrador">
+        <select className={input} value={form.sampler} onChange={(e) => set("sampler", e.target.value)}>
+          {SAMPLERS.map((s) => <option key={s}>{s}</option>)}
+        </select>
+      </Field>
+      <Field label="Negativo padrão">
+        <input className={input} value={form.negative} onChange={(e) => set("negative", e.target.value)} />
+      </Field>
+      <Field label="Variante" hint={`Qual Wan é este arquivo: decide os arquivos que ele pede e os modos. Detectada: ${props.variante ?? "?"}.`}>
+        <select className={input} value={form.variante ?? ""} onChange={(e) => set("variante", e.target.value)}>
+          {VARIANTES_WAN.map(([v, n]) => <option key={v} value={v}>{n}</option>)}
+        </select>
+      </Field>
+      {caminho("vae", "VAE", "wan_2.1_vae (Wan2.1 e A14B) ou wan2.2_vae (TI2V 5B).")}
+      {caminho("t5xxl", "Codificador de texto (umt5-xxl)", "O mesmo para todos os Wan; GGUF Q8 é o equilíbrio.")}
+      {pede("clip_vision") && caminho("clip_vision", "CLIP Vision", "clip_vision_h: o Wan2.1 I2V e o FLF2V leem a imagem com ele.")}
+      {pede("high_noise_model") && (
+        <>
+          {caminho("high_noise_model", "Modelo HighNoise", "A outra metade do A14B, da mesma quantização.")}
+          <div className="grid grid-cols-2 gap-2">
+            <Num label="Passos (alto ruído)" value={form.high_noise_steps} onChange={(v) => set("high_noise_steps", v)} hint="-1 = automático" />
+            <Num label="CFG (alto ruído)" value={form.high_noise_cfg} onChange={(v) => set("high_noise_cfg", v)} step={0.5} hint="0 = o mesmo" />
+          </div>
+        </>
+      )}
+      <label className="flex items-center gap-2 text-muted" title="--offload-to-cpu: pesos na RAM, sobem à GPU sob demanda">
+        <input type="checkbox" checked={!!form.offload} onChange={(e) => set("offload", e.target.checked)} />
+        Pesos na RAM (modelo maior que a VRAM)
+      </label>
+      <label className="flex items-center gap-2 text-muted" title="--diffusion-fa: bem menos memória na atenção">
+        <input type="checkbox" checked={!!form.flash_attn} onChange={(e) => set("flash_attn", e.target.checked)} />
+        Flash attention na difusão
+      </label>
+      <label className="flex items-center gap-2 text-muted" title="--vae-tiling: decodifica em blocos; com dezenas de quadros, quase obrigatório">
+        <input type="checkbox" checked={!!form.vae_tiling} onChange={(e) => set("vae_tiling", e.target.checked)} />
+        VAE em blocos (evita estourar a VRAM no fim)
+      </label>
+      <label className="flex items-center gap-2 text-muted" title="--backend te=cpu: o umt5 (6 GB) sai da VRAM; roda uma vez por vídeo">
+        <input type="checkbox" checked={!!form.te_cpu} onChange={(e) => set("te_cpu", e.target.checked ? "sempre" : "")} />
+        Codificador de texto na CPU
+      </label>
+    </div>
   );
 }
 
@@ -1131,7 +1226,7 @@ function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: st
 // ---------------------------------------------------------------- aba Baixar
 
 function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
-  const [kind, setKind] = useState<"text" | "image">("text");
+  const [kind, setKind] = useState<"text" | "image" | "video">("text");
   const [buscando, setBuscando] = useState(false);
   // Se a pasta salva saiu da lista (removida), cai na primeira em vez de deixar o select vazio.
   const [destino, setDestino] = useState(
@@ -1204,6 +1299,17 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
         Procurar modelos
       </button>
 
+      <KitsVideo
+        st={props.st}
+        destino={destino}
+        onDone={props.onDone}
+        onError={props.onError}
+        onProcurar={() => {
+          setKind("video");
+          setBuscando(true);
+        }}
+      />
+
       {buscando && (
         <ModelSearch
           kind={kind}
@@ -1216,6 +1322,106 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
         />
       )}
     </>
+  );
+}
+
+/** Kits do Wan: o modelo e as peças que a variante pede, num clique. O que já está no disco não baixa
+ *  de novo; o selo diz se o modelo cabe na GPU desta máquina. */
+function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void; onError: (e: string) => void; onProcurar: () => void }) {
+  const [kits, setKits] = useState<VideoKit[] | null>(null);
+  const [aberto, setAberto] = useState<string | null>(null);
+  const baixando = props.st.jobs.filter((j) => j.kind === "modelo" && j.status === "running").map((j) => j.name);
+
+  const carregar = useCallback(() => {
+    api.get<{ kits: VideoKit[] }>("/local/video/kits").then((r) => setKits(r.kits)).catch((e) => props.onError(e.message));
+  }, []);
+  useEffect(carregar, [carregar, baixando.length]);
+
+  const vram = (props.st.hardware.gpus.filter((g) => g.enabled).map((g) => g.total).sort((a, b) => b - a)[0] ?? 0) / 1024; // MiB → GiB
+  const cabe = (k: VideoKit) => (vram ? k.gb_modelo * 1.15 < vram : null); // ~15% de folga para ativações
+  const recomendado = kits
+    ?.filter((k) => cabe(k) && k.modos.length > 1)
+    .sort((a, b) => b.gb_modelo - a.gb_modelo)[0]?.id;
+
+  async function baixar(k: VideoKit) {
+    try {
+      await api.post("/local/video/kit", { id: k.id, folder: props.destino });
+      props.onDone();
+      carregar();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  return (
+    <section className={card}>
+      <div className="mb-1 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-fg">
+          <Film className="size-3.5" /> Geração de vídeo
+        </span>
+        <button className="text-muted underline hover:text-fg" onClick={props.onProcurar}>
+          Procurar outros
+        </button>
+      </div>
+      <p className="mb-2 text-faint">
+        Modelos Wan, que o stable-diffusion.cpp gera em vídeo. Cada kit traz o modelo e o VAE e codificador que ele pede;
+        os caminhos se configuram sozinhos.
+      </p>
+      {!kits && <p className="text-muted">Carregando…</p>}
+      <div className="flex flex-col gap-1.5">
+        {kits?.map((k) => {
+          const completo = k.gb_falta === 0;
+          const emCurso = k.arquivos.some((a) => !a.presente && baixando.some((n) => n.endsWith(a.path.split("/").pop()!)));
+          const c = cabe(k);
+          return (
+            <div key={k.id} className={`rounded-lg border px-2.5 py-2 ${k.id === recomendado ? "border-sky-500/40 bg-sky-500/5" : "border-line"}`}>
+              <div className="flex items-center gap-2">
+                <button className="min-w-0 flex-1 text-left" onClick={() => setAberto(aberto === k.id ? null : k.id)} title="Ver os arquivos do kit">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-fg">{k.nome}</span>
+                    {k.id === recomendado && <span className="shrink-0 rounded-full bg-sky-400/15 px-1.5 text-[10px] text-sky-300">recomendado</span>}
+                  </span>
+                  <span className="block text-faint">{k.resumo}</span>
+                </button>
+                <SelosModo modos={k.modos} />
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-faint">
+                <span>{completo ? `${k.gb_total.toFixed(1).replace(".", ",")} GB no disco` : `${k.gb_falta.toFixed(1).replace(".", ",")} GB para baixar`}</span>
+                {c !== null && (
+                  <span className={c ? "text-emerald-400" : "text-amber-400"} title={`Maior modelo de difusão: ${k.gb_modelo} GB; VRAM: ${vram.toFixed(1)} GB`}>
+                    {c ? "cabe na GPU" : "maior que a VRAM: vai com pesos na RAM, mais lento"}
+                  </span>
+                )}
+                <span className="ml-auto">
+                  {completo ? (
+                    <span className="text-emerald-400"><Check className="mr-0.5 inline size-3" />pronto</span>
+                  ) : emCurso ? (
+                    <span className="text-sky-300">baixando…</span>
+                  ) : (
+                    <button className={btn} onClick={() => baixar(k)}>
+                      <Download className="mr-1 inline size-3" />
+                      {k.gb_falta < k.gb_total ? "Baixar o que falta" : "Baixar kit"}
+                    </button>
+                  )}
+                </span>
+              </div>
+              {aberto === k.id && (
+                <ul className="mt-2 flex flex-col gap-0.5 border-t border-line pt-1.5">
+                  {k.arquivos.map((a) => (
+                    <li key={a.path} className="flex items-center gap-2" title={`${a.repo}/${a.path}`}>
+                      <span className={a.presente ? "text-emerald-400" : "text-faint"}>{a.presente ? "✓" : "○"}</span>
+                      <span className="min-w-0 flex-1 truncate text-muted">{a.path.split("/").pop()}</span>
+                      <span className="shrink-0 text-faint">{ROTULO[a.papel] ?? (a.papel === "modelo" ? "modelo" : a.papel)}</span>
+                      <span className="w-12 shrink-0 text-right text-faint">{a.gb.toFixed(1).replace(".", ",")} GB</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

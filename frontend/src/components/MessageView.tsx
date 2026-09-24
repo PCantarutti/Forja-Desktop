@@ -7,6 +7,7 @@ import type { Approval, AskQuestion, Attachment, Message, Preview, Task, ToolCal
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
 import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Download, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+import { VideoPlayer } from "./VideoPlayer";
 
 /** Quem fornece isto ganha o botão "Testar" nos blocos de código (código, linguagem do bloco).
  * Só o Comparar fornece: no chat o bloco continua só com o copiar. */
@@ -286,6 +287,19 @@ export function ToolImages({ list, bare, modelSees }: { list: Attachment[]; bare
         />
       ))}
       {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
+    </div>
+  );
+}
+
+/** Vídeo devolvido por uma ferramenta (video_generate): o mesmo player da aba Vídeo, compacto. */
+export function ToolVideos({ list, bare }: { list: Attachment[]; bare?: boolean }) {
+  const videos = list.filter((a) => a.kind === "video");
+  if (!videos.length) return null;
+  return (
+    <div className={bare ? "my-2 space-y-2" : "space-y-2 border-t border-line p-3"}>
+      {videos.map((a) => (
+        <VideoPlayer key={a.path} src={fileUrl(a)} fps={16} compacto className="max-w-md rounded-xl border border-line" />
+      ))}
     </div>
   );
 }
@@ -707,6 +721,7 @@ export function ToolBlock(props: {
       {!props.hideImages && result?.meta?.attachments && (
         <ToolImages list={result.meta.attachments} modelSees={result.meta.model_sees} />
       )}
+      {!props.hideImages && result?.meta?.attachments && <ToolVideos list={result.meta.attachments} />}
       {!props.hideImages && result?.meta?.attachments && (
         <div className="border-t border-line px-3 py-1">
           <ToolFiles list={result.meta.attachments} onOpen={props.onOpen} />
@@ -959,6 +974,7 @@ export function ActivityGroup(props: {
         </div>
       )}
       <ToolImages list={shots} bare />
+      <ToolVideos list={shots} bare />
       <ToolFiles list={shots} onOpen={props.onOpen} />
     </div>
   );

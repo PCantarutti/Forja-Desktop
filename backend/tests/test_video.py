@@ -72,6 +72,8 @@ def test_argv_texto_para_video(isolado):
     assert a[a.index("--video-frames") + 1] == "33" and a[a.index("--fps") + 1] == "16"
     assert a[a.index("--flow-shift") + 1] == "3.0"
     assert "--diffusion-model" in a and "--t5xxl" in a and "-i" not in a and "-r" not in a
+    a = imagegen.argv(Path("sd.exe"), "a cat", isolado / "o.webm", _o(isolado, "wan2.1-t2v-14b-Q4_K_M.gguf", vae_tiling=True))
+    assert a[a.index("--vae-tile-size") + 1] == "16x16" and "--temporal-tiling" in a  # sem isso o VAE do 2.2 estoura
 
 
 def test_argv_imagem_e_quadros(isolado):
@@ -180,6 +182,6 @@ def test_lote_em_conversa_de_video_grava_webm(isolado, monkeypatch):
     while lotes._mensagem(msg["id"])["status"] == "running" and time.time() < fim:
         time.sleep(0.02)
     assert [o.suffix for o, _ in saidas] == [".webm", ".webm"]
-    assert all(p.suffix == ".png" for _, p in saidas)  # a prévia é um quadro, não um vídeo
+    assert all(p.suffix == ".webp" for _, p in saidas)  # prévia animada: .png viraria .avi, que não toca
     lotes.decidir(msg["id"], keep=[])
     assert lotes.limpar_descartadas(dias=0) == 2  # o expurgo leva webm também

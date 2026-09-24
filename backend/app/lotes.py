@@ -203,7 +203,9 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             # Já no começo (carregando o modelo, antes da 1ª prévia): o card sabe que não vai de líquido.
             item["com_previa"] = imagegen.modo_previa(imagegen._opts({**opts, "model": item["model"]})) is not None
             _patch(message_id, meta={"images": imagens})
-            previa = previas_dir() / (Path(item["path"]).stem + ".png")  # vídeo também: um quadro
+            # Prévia de vídeo tem vários quadros: com .png o sd-cli grava .avi, que o Chromium não toca;
+            # WebP animado ele grava e o <img> do card anima sozinho.
+            previa = previas_dir() / (Path(item["path"]).stem + (".webp" if item["path"].endswith(".webm") else ".png"))
             previa.parent.mkdir(parents=True, exist_ok=True)
 
             def progresso(passo: int, total: int, s_passo: float = 0.0, item=item, previa=previa) -> None:

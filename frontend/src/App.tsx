@@ -6,6 +6,7 @@ import BrowserPanel from "./components/BrowserPanel";
 import ServersPanel from "./components/ServersPanel";
 import LocalPanel, { LocalLoading } from "./components/LocalPanel";
 import ImagensView from "./components/ImagensView";
+import VideoView from "./components/VideoView";
 import CompararView from "./components/CompararView";
 import PesquisaView from "./components/PesquisaView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
@@ -2141,6 +2142,20 @@ export default function App() {
             model={settings.model}
             onError={setError}
             onConversationChanged={refreshConversations}
+          />
+        ) : section === "video" ? (
+          <VideoView
+            conv={currentId}
+            ensureConversation={ensureConversation}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
+            onAbrirBaixar={() => {
+              abrir("local");
+              // o painel IA local escuta e abre direto na aba Baixar, já na seção de vídeo
+              setTimeout(() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Baixar" })), 0);
+            }}
           />
         ) : (
         <>
