@@ -801,6 +801,7 @@ export const NOTA_DO_AGENTE: Record<string, string> = {
   hook: "Hook do projeto",
   nudge: "Lembrete automático",
   skill: "Skill carregada",
+  mudanca: "Mudança de modo ou modelo",
 };
 
 // Primeira ferramenta do grupo vira a frase de abertura do resumo.

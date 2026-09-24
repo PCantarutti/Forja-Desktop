@@ -875,6 +875,19 @@ def _memorias() -> str:
     return texto + memory.prompt_block()
 
 
+def _modo_do_contexto(texto: str) -> str:
+    return (texto.split("Modo de permissão: ", 1)[1].split(".\n", 1)[0].rstrip(".")
+            if "Modo de permissão: " in texto else "")
+
+
+def _modelo_anterior(msgs) -> str | None:
+    """Modelo que gerou a última resposta da conversa (meta.stats.model), para o aviso de troca."""
+    for m in reversed(msgs):
+        if m.role == "assistant" and (modelo := ((m.meta or {}).get("stats") or {}).get("model")):
+            return modelo
+    return None
+
+
 def _ultimo_contexto(msgs) -> "db.Message | None":
     return next((m for m in reversed(msgs) if m.role == "event" and (m.meta or {}).get("kind") == "contexto"),
                 None)
@@ -1254,6 +1267,10 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 "tools": [{"name": t.name, "mutating": t.mutating} for t in current_tools()]}
 
     yield tools_sent()
+    # DeepSeek Harness (model-selection): o modelo novo precisa saber que as respostas acima não são dele.
+    if (anterior := _modelo_anterior(_load(conv_id))) and anterior != req.model:
+        yield _event(conv_id, "mudanca", f"[modelo trocado: as respostas acima foram geradas por {anterior}; a "
+                                         f"conversa continua com {req.model}]", to_model=True)
 
     while not run.cancel.is_set():
         if run.paused:  # Pausar: o passo anterior terminou; o próximo espera o Continuar
@@ -1283,6 +1300,10 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             ctx = contexto_runtime(run.permission, run.plan, maestro_mode, [t.name for t in current_tools()])
             ultimo = _ultimo_contexto(msgs)
             if not ultimo or ultimo.content != ctx:
+                if ultimo and (antes := _modo_do_contexto(ultimo.content)) != (agora := MODE_LABEL.get(
+                        run.permission, run.permission)):
+                    yield _event(conv_id, "mudanca", f"O modo de permissão mudou de {antes} para {agora}. As regras "
+                                                     "do contexto abaixo substituem as anteriores.", to_model=True)
                 m = _save(conv_id, role="event", content=ctx, meta={"kind": "contexto", "to_model": True})
                 yield {"type": "event", "message": m.to_dict()}
                 msgs = _load(conv_id)
