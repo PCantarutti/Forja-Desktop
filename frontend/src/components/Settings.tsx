@@ -529,6 +529,22 @@ function PastasTab(props: { onError: (e: string) => void }) {
     }
   }
 
+  // A 1ª da lista é a padrão (models_dir); as outras são as "a mais", que o PUT /local/dirs recebe.
+  async function pastas(extras: string[]) {
+    try {
+      const r = await api.put<{ dirs: string[] }>("/local/dirs", { dirs: extras });
+      setSt({ ...st!, dirs: r.dirs });
+      setSalvo("Salvo.");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function adicionarPasta() {
+    const escolhida = window.forja ? await window.forja.pickFolder("") : prompt("Caminho da pasta com os modelos:");
+    if (escolhida) pastas([...st!.dirs.slice(1), escolhida]);
+  }
+
   async function escolher(campo: "models_dir" | "image_dir") {
     const atual = st![campo];
     const escolhida = window.forja ? await window.forja.pickFolder(atual) : prompt("Caminho da pasta:", atual);
@@ -557,6 +573,32 @@ function PastasTab(props: { onError: (e: string) => void }) {
         hint="Para onde vão os downloads do painel IA local. As outras pastas continuam sendo varridas; troque lá quem é a padrão do download."
       >
         {linha("models_dir")}
+      </Field>
+      <Field
+        label="Pastas de modelos instalados"
+        hint="Todas são varridas (com as subpastas): o que estiver nelas aparece no IA local, sem copiar nada. A primeira é a de cima."
+      >
+        <div className="space-y-1.5">
+          {st.dirs.map((d, i) => (
+            <div key={d} className="flex items-center gap-2 rounded-lg border border-line bg-raised px-3 py-1.5 text-sm">
+              <span className="min-w-0 flex-1 truncate text-fg" title={d}>{d}</span>
+              {i === 0 ? (
+                <span className="shrink-0 text-xs text-faint">padrão</span>
+              ) : (
+                <button
+                  className="shrink-0 text-xs text-muted hover:text-red-400"
+                  title="Parar de varrer esta pasta (os arquivos ficam no disco)"
+                  onClick={() => pastas(st.dirs.slice(1).filter((x) => x !== d))}
+                >
+                  Remover
+                </button>
+              )}
+            </div>
+          ))}
+          <button className={btn} onClick={adicionarPasta}>
+            Adicionar pasta…
+          </button>
+        </div>
       </Field>
       <Field label="Imagens geradas" hint="Onde o painel salva as imagens. As geradas pelo agente vão para a pasta de trabalho da conversa.">
         {linha("image_dir")}
