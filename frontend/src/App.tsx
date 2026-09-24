@@ -1076,6 +1076,13 @@ export default function App() {
   function applyMention(path: string) {
     setInput((v) => v.replace(/@\S*$/, `${path} `));
     setMentionHits([]);
+    // Clicar no menu tira o foco do campo; sem isto o próximo texto digitado ia para o começo.
+    requestAnimationFrame(() => {
+      const t = composer.current;
+      if (!t) return;
+      t.focus();
+      t.selectionStart = t.selectionEnd = t.value.length;
+    });
   }
   // Conversas citáveis por @: título que casa com o que foi digitado depois do @ (da mesma seção).
   const conversasCitaveis =
