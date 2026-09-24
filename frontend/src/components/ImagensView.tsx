@@ -5,6 +5,7 @@ import { ArrowUp, Check, Copy, Edit, FolderOpen, Image, Paperclip, Refresh, Sear
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada, redondo } from "./Composer";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
+import MascaraEditor, { type ModoPintura } from "./MascaraEditor";
 import ModelPicker from "./ModelPicker";
 
 const POLL_MS = 1500; // só enquanto um lote roda; fora disso a tela fica parada
@@ -39,6 +40,7 @@ const CORES: Record<LoteImagem["status"], string> = {
 // O que "Continuar" gera de novo (mesma lista do backend, lotes.A_REFAZER).
 const A_REFAZER: LoteImagem["status"][] = ["interrompida", "pendente", "cancelada", "erro"];
 
+const MAX_REFS = 10;  // Qwen-Image 2.1; o backend barra também
 const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
 
@@ -60,7 +62,8 @@ export default function ImagensView(props: {
   const arquivo = useRef<HTMLInputElement>(null);
   // Referências cujo arquivo não está mais lá (a miniatura não carregou): pedem para reanexar.
   const [sumidas, setSumidas] = useState<Set<string>>(new Set());
-  const trocar = useRef<string | null>(null);  // "Reanexar": o próximo arquivo escolhido entra no lugar desta
+  const trocar = useRef<string | null>(null);
+  const [pintando, setPintando] = useState<string | null>(null);  // referência aberta no editor de máscara  // "Reanexar": o próximo arquivo escolhido entra no lugar desta
   const [count, setCount] = useState(4);
   const [seedMode, setSeedMode] = useState<SeedMode>("incremental");
   const [abrirAjustes, setAbrirAjustes] = useState(false);
@@ -162,6 +165,10 @@ export default function ImagensView(props: {
       mostrarErro("Uma imagem de referência não foi encontrada (movida ou apagada): reanexe ou tire da edição.");
       return;
     }
+    if (refs.length > MAX_REFS) {
+      mostrarErro(`No máximo ${MAX_REFS} imagens de referência (limite do Qwen-Image 2.1), máscaras incluídas.`);
+      return;
+    }
     try {
       // O que está na tela também vira o padrão da ferramenta image_generate do agente.
       await api.put("/local/image/defaults", { ...o, model: models[0] });
@@ -227,6 +234,21 @@ export default function ImagensView(props: {
     }
   }
 
+  // Qwen-Image 2.1. Máscara (branco = muda): vai logo depois da original. O modelo a reconhece sozinho —
+  // dizer "black-and-white mask" no prompt deixou a imagem inteira em preto e branco no teste.
+  // Anotação: a imagem com os traços entra no lugar da original.
+  async function usarPintura(original: string, png: Blob, modo: ModoPintura) {
+    setPintando(null);
+    try {
+      const nova = await uploadReferencia(new File([png], `${modo}.png`, { type: "image/png" }));
+      const sem = refs.filter((x) => x !== nova);
+      const n = sem.indexOf(original) + 1;
+      setRefs(modo === "mascara" ? [...sem.slice(0, n), nova, ...sem.slice(n)] : sem.map((x) => (x === original ? nova : x)));
+    } catch (e: any) {
+      mostrarErro(e.message);
+    }
+  }
+
   function reaproveitar(meta: LoteMeta, pedido: Message) {
     const usados: string[] = (pedido.meta as PedidoMeta | null)?.models ?? [];
     setRefs((pedido.meta as PedidoMeta | null)?.refs ?? []);
@@ -250,6 +272,9 @@ export default function ImagensView(props: {
   return (
     <>
       {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
+      {pintando && (
+        <MascaraEditor src={urlDa(pintando)} onClose={() => setPintando(null)} onPronta={(png, modo) => usarPintura(pintando, png, modo)} />
+      )}
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-5 py-6">
           {!lotes.length && (
@@ -354,6 +379,15 @@ export default function ImagensView(props: {
                         className="size-14 rounded-lg border border-line object-cover"
                       />
                     )}
+                    {!sumidas.has(r) && (
+                      <button
+                        onClick={() => setPintando(r)}
+                        title="Marcar onde editar: máscara, círculos ou pintura (Qwen-Image 2.1)"
+                        className="absolute -bottom-1.5 -left-1.5 grid size-5 place-items-center rounded-full border border-line bg-surface text-faint hover:text-fg"
+                      >
+                        <Edit className="size-3" />
+                      </button>
+                    )}
                     <button
                       onClick={() => setRefs((atual) => atual.filter((x) => x !== r))}
                       title="Tirar da edição"
@@ -363,12 +397,14 @@ export default function ImagensView(props: {
                     </button>
                   </div>
                 ))}
-                <span className={naoEditam.length || refs.some((r) => sumidas.has(r)) ? "text-amber-400" : "text-muted"}>
+                <span className={naoEditam.length || refs.length > MAX_REFS || refs.some((r) => sumidas.has(r)) ? "text-amber-400" : "text-muted"}>
                   {refs.some((r) => sumidas.has(r))
                     ? "Imagem de referência não encontrada no lugar de antes (movida ou apagada): reanexe ou tire da edição."
                     : naoEditam.length
                     ? `${naoEditam.join(", ")} não edita imagem — escolha um modelo que edita (ex.: Qwen-Image 2.1).`
-                    : "Editando: descreva a mudança no campo abaixo."}
+                    : refs.length > MAX_REFS
+                    ? `${refs.length} imagens: o máximo são ${MAX_REFS}, máscaras incluídas.`
+                    : `Editando ${refs.length} imagem(ns): descreva a mudança abaixo (o lápis marca onde mudar).`}
                 </span>
               </div>
             )}

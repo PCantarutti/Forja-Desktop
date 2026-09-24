@@ -55,12 +55,17 @@ def _flag_modelo(path: str) -> str:
     return "-m"
 
 
+MAX_REFS = 10  # limite do Qwen-Image 2.1
+
+
 def _confere_arquivos(model: str, o: dict, refs: list[str]) -> None:
     """Barra antes de rodar: sem VAE/codificador o sd-cli falha com erro que ninguém entende."""
     req = localai.requisitos(model) or {}
     if refs and not req.get("edita"):
         editam = ", ".join(r["nome"] for r in localai.REQUISITOS.values() if r.get("edita"))
         raise ToolError(f"{Path(model).stem} não edita imagem (só gera). Edição funciona com: {editam}.")
+    if len(refs) > MAX_REFS:
+        raise ToolError(f"No máximo {MAX_REFS} imagens de referência (máscaras incluídas); vieram {len(refs)}.")
     for r in refs:
         if not Path(r).is_file():
             raise ToolError(f"Imagem de referência não encontrada: {r}\nEla foi movida, renomeada ou apagada: "
@@ -292,7 +297,11 @@ register(Tool(
           "seed": {"type": "integer", "description": "Semente para repetir a mesma imagem"},
           "refs": {"type": "array", "items": {"type": "string"},
                    "description": "Imagens a editar (caminhos na pasta de trabalho). Com isso o prompt "
-                                  "descreve a edição. Só em modelos que editam, como o Qwen-Image 2.1"}},
+                                  "descreve a edição. Só em modelos que editam, como o Qwen-Image 2.1. "
+                                  "Até 10. Edição local no Qwen-Image 2.1: a original e, logo depois, uma "
+                                  "máscara do mesmo tamanho (branco = muda, preto = fica), com o prompt só "
+                                  "descrevendo o que entra ali; ou círculos coloridos pintados na imagem, "
+                                  "citados no prompt (\"remove the watch in the blue circle\")"}},
          ["prompt"]),
     image_generate, mutating=True, preview=_preview, timeout=None,  # geração longa, com progresso próprio
     available=lambda: bool(localai.find_exe("sd"))))
