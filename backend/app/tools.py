@@ -245,12 +245,17 @@ def spill(texto: str, nome: str) -> str:
             "procure nele com grep.)")
 
 
+SKILLS_DIR = (config.DATA_DIR / "skills").resolve()  # skills do usuário: recursos que a skill manda ler
+
+
 def resolve_leitura(root: Path, path: str | None) -> Path:
-    """resolve_path, mais a pasta de spill: o único lugar fora da raiz que dá para ler."""
+    """resolve_path, mais a pasta de spill e a de skills do usuário: os únicos lugares fora da raiz
+    que dá para ler."""
     raw = (path or "").strip()
     if raw:
         alvo = Path(raw).expanduser()
-        if alvo.is_absolute() and (alvo := alvo.resolve()).is_relative_to(SPILL_DIR):
+        if alvo.is_absolute() and ((alvo := alvo.resolve()).is_relative_to(SPILL_DIR)
+                                   or alvo.is_relative_to(SKILLS_DIR)):
             return alvo
     return resolve_path(root, path)
 

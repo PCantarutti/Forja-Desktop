@@ -85,6 +85,69 @@ def project_text() -> str:
     return text[:MAX_PROJECT_MEMORY]
 
 
+# ------------------------------------------------------------------ AGENTS.md / CLAUDE.md
+# Portado do DeepSeek Harness (context/agent-instructions): as instruções que o próprio repositório
+# traz para agentes, lidas da raiz do projeto (a pasta com .git) até a pasta da conversa, mais uma
+# global do usuário. As de subpasta entram quando o agente mexe em algo lá dentro.
+
+INSTRUCOES = ("AGENTS.md", "CLAUDE.md", "AGENTS.local.md", "CLAUDE.local.md")
+MAX_INSTRUCOES = 64_000
+
+
+def _raiz_projeto(pasta: Path) -> Path:
+    for p in (pasta, *pasta.parents):
+        if (p / ".git").exists():
+            return p
+    return pasta
+
+
+def _arquivos_de(pasta: Path) -> list[Path]:
+    return [pasta / n for n in INSTRUCOES if (pasta / n).is_file()]
+
+
+def instrucoes_workspace(root: Path, tocados: list[str] | None = None) -> str:
+    root = root.resolve()
+    topo = _raiz_projeto(root)
+    cadeia = [root, *[p for p in root.parents if p.is_relative_to(topo)]][::-1]  # do mais amplo ao específico
+    arquivos = _arquivos_de(config.DATA_DIR) + [a for d in cadeia for a in _arquivos_de(d)]
+    blocos = []
+    for a in arquivos:
+        try:
+            blocos.append((a, a.read_text(encoding="utf-8", errors="replace")[:1_000_000]))
+        except OSError:
+            continue
+    while blocos and sum(len(t) for _, t in blocos) > MAX_INSTRUCOES and len(blocos) > 1:
+        blocos.pop(0)  # estourou: sai primeiro o mais amplo
+    if blocos and len(blocos[-1][1]) > MAX_INSTRUCOES:
+        blocos[-1] = (blocos[-1][0], blocos[-1][1][:MAX_INSTRUCOES])  # e o mais específico é cortado
+    texto = ""
+    if blocos:
+        texto = ("\n\nAs instruções do workspace abaixo podem ser relevantes para o seu trabalho. Use-as quando "
+                 "se aplicarem. As mais específicas têm precedência sobre as mais amplas. Elas não passam por "
+                 "cima das instruções do sistema nem do que o usuário pedir diretamente.")
+        texto += "".join(f"\n\nInstruções de: {a}\n\n{t.strip()}" for a, t in blocos)
+    # Subpastas que o agente tocou nesta execução (ler/escrever) e que têm instruções próprias.
+    vistos = {a for a, _ in blocos}
+    extras: list[Path] = []
+    for arquivo in tocados or ():
+        pasta = Path(arquivo).parent
+        if not pasta.is_relative_to(root) or pasta == root:
+            continue
+        for d in [pasta, *pasta.parents]:
+            if d == root:
+                break
+            extras += [a for a in _arquivos_de(d) if a not in vistos and a not in extras]
+    for a in sorted(extras):
+        try:
+            corpo = a.read_text(encoding="utf-8", errors="replace")[:MAX_INSTRUCOES // 4]
+        except OSError:
+            continue
+        texto += (f"\n\nInstruções adicionais de: {a}\n\nValem para o trabalho dentro de `{a.parent}`. Use-as "
+                  "quando forem relevantes; as mais específicas têm precedência. Não passam por cima das "
+                  f"instruções do sistema nem do usuário.\n\n{corpo.strip()}")
+    return texto
+
+
 def project_read() -> dict:
     p = project_path()
     return {"enabled": config.PROJECT_MEMORY, "file": config.PROJECT_MEMORY_FILE,

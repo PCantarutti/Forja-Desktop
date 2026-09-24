@@ -68,17 +68,112 @@ def _parse(path: Path) -> dict | None:
             "prompt": prompt, "source": f"{DIR}/{path.name}"}
 
 
+def _sim(v: str | None) -> bool:
+    return str(v or "").strip().lower() in ("true", "yes", "sim", "1")
+
+
+def _parse_dir(skill_md: Path) -> dict | None:
+    """Formato do DeepSeek Harness / Agent Skills: `<nome>/SKILL.md`, com a pasta como recurso."""
+    try:
+        campos, corpo = frontmatter(skill_md.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    if not corpo.strip():
+        return None
+    nome = campos.get("name") or skill_md.parent.name
+    return {"name": nome, "kind": "prompt", "description": campos.get("description", "")[:500],
+            "prompt": corpo.strip(), "source": str(skill_md), "base": str(skill_md.parent),
+            "model": not _sim(campos.get("disable-model-invocation")),
+            "user": campos.get("user-invocable", "true").lower() not in ("false", "no", "nao", "não", "0")}
+
+
+def pastas(root: Path) -> list[Path]:
+    """De onde vêm skills, da mais geral para a mais específica (a última sobrepõe)."""
+    from . import config  # tardio: config importa pouco, mas skills é importado cedo
+
+    return [config.DATA_DIR / "skills", root / ".agents" / "skills", root / DIR]
+
+
+def descobrir(root: Path) -> list[dict]:
+    """Skills do usuário e do projeto: `.forja/skills/*.md` (formato antigo) e `*/SKILL.md`."""
+    achadas: dict[str, dict] = {}
+    for pasta in pastas(root):
+        if not pasta.is_dir():
+            continue
+        for p in sorted(pasta.glob("*/SKILL.md")):
+            if s := _parse_dir(p):
+                achadas[s["name"]] = s
+        if pasta == root / DIR:
+            for p in sorted(pasta.glob("*.md")):
+                if s := _parse(p):
+                    achadas[s["name"]] = {**s, "model": True, "user": True}
+    return list(achadas.values())[:MAX_SKILLS]
+
+
 def list_for(root: Path) -> list[dict]:
-    """Ações do Forja + skills da pasta da conversa (nome do arquivo = comando)."""
+    """Ações do Forja + skills que o usuário pode chamar com `/` (nome = comando)."""
     out = list(BUILTIN)
-    folder = root / DIR
-    if folder.is_dir():
-        for p in sorted(folder.glob("*.md"))[:MAX_SKILLS]:
-            s = _parse(p)
-            if s:
-                out = [x for x in out if x["name"] != s["name"]] + [s]  # skill do projeto sobrepõe a padrão
+    for s in descobrir(root):
+        if s.get("user", True):
+            out = [x for x in out if x["name"] != s["name"]] + [s]  # skill do projeto sobrepõe a padrão
     return out
+
+
+def do_modelo(root: Path) -> list[dict]:
+    return [s for s in descobrir(root) if s.get("model")]
+
+
+def catalogo(root: Path) -> str:
+    """Bloco do contexto de execução com as skills que o modelo pode carregar (texto do harness)."""
+    lista = do_modelo(root)
+    if not lista:
+        return ""
+    itens = "\n".join(f"- `{s['name']}`: {s['description'] or s['prompt'].splitlines()[0][:200]}" for s in lista)
+    return ("\n\nSkill é um conjunto de instruções reutilizáveis para um tipo de tarefa. Skills disponíveis:\n"
+            f"{itens}\nSe o usuário citar uma skill, ou se a tarefa casar claramente com a descrição de uma, "
+            "chame a ferramenta `skill` com o nome exato ANTES de agir e siga as instruções completas. Este "
+            "catálogo tem só resumos: não siga nem deduza as instruções de uma skill antes de carregá-la. Se a "
+            "skill já veio na conversa (o usuário a chamou com /), siga-a e não a carregue de novo.")
+
+
+def conteudo(root: Path, nome: str) -> str:
+    s = next((x for x in do_modelo(root) if x["name"] == nome), None)
+    if not s:
+        nomes = ", ".join(x["name"] for x in do_modelo(root)) or "nenhuma"
+        from .tools import ToolError
+
+        raise ToolError(f"Skill '{nome}' não existe. Disponíveis: {nomes}.")
+    base = s.get("base") or str(root / DIR)
+    return (f'<skill_content name="{s["name"]}">\n<skill_resources>Pasta base desta skill: {base}'
+            f"</skill_resources>\n\n<skill_instructions>\n{s['prompt']}\n</skill_instructions>\n</skill_content>")
 
 
 def expand(prompt: str, arguments: str) -> str:
     return prompt.replace("$ARGUMENTS", arguments.strip()).strip()
+
+
+def _skill(root: Path, args: dict) -> str:
+    return conteudo(root, str(args.get("name") or "").strip())
+
+
+def _tem_skill() -> bool:
+    from . import workspace
+
+    try:
+        return bool(do_modelo(workspace.root()))
+    except Exception:  # pasta da conversa inacessível: a ferramenta só some
+        return False
+
+
+def _registra() -> None:
+    from .tools import Tool, _obj, register
+
+    register(Tool(
+        "skill",
+        "Carrega as instruções completas de uma skill do catálogo (veja 'Skills disponíveis' no contexto). "
+        "Chame antes de começar a tarefa que casa com a skill e siga o que ela disser.",
+        _obj({"name": {"type": "string", "description": "Nome exato da skill"}}, ["name"]),
+        _skill, available=_tem_skill))
+
+
+_registra()

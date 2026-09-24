@@ -20,7 +20,7 @@ from typing import AsyncIterator
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import hooks
+from . import hooks, skills
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -132,7 +132,7 @@ def _estourou_contexto(e: "llm.LLMError") -> bool:
 TOOL_TAIL = 4000    # cauda dos argumentos guardada para quem reconectar no meio de uma escrita longa
 # Chamadas de leitura que o modelo pede juntas rodam juntas: a inferência já terminou, o que sobra é I/O.
 # Escrita, shell, aprovação e o resto do navegador continuam em fila, na ordem em que o modelo pediu.
-PARALLEL_OK = {"read_file", "list_dir", "glob", "grep", "web_search", "fetch_url", "browser_read", "delegate_task"}
+PARALLEL_OK = {"read_file", "list_dir", "glob", "grep", "skill", "web_search", "fetch_url", "browser_read", "delegate_task"}
 PARALLEL_READS = 4        # leituras simultâneas no total
 PARALLEL_SUBAGENTS = 2    # delegações simultâneas por destino remoto (local é sempre 1)
 KEEP_FINISHED_RUN = 120  # segundos que uma execução terminada continua consultável
@@ -502,7 +502,9 @@ def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, name
     texto = "\n".join(partes)
     if maestro_mode:
         texto += projstate.bloco()
-    return texto + _memorias()
+    root = workspace.root()
+    return (texto + _memorias() + memory.instrucoes_workspace(root, list(LIDOS.get() or ()))
+            + (skills.catalogo(root) if "skill" in names else ""))
 
 
 def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
@@ -549,6 +551,9 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
     if "read_file" in names:
         rules.append("- Use read_file, não comandos de shell (cat, type, Get-Content), para ler arquivos. Arquivo "
                      "grande: continue com start_line.")
+        rules.append("- Palavras começando com @ são caminhos que o usuário citou, relativos à pasta da conversa. "
+                     "Terminado em / é pasta: liste quando o conteúdo importar. O resto é arquivo: leia com "
+                     "read_file quando precisar, e não diga que viu um arquivo antes de lê-lo.")
     if "grep" in names or "glob" in names:
         rules.append("- Para achar código use grep (conteúdo) e glob (nomes de arquivo), não findstr, "
                      "Select-String, find ou dir pelo shell. Depois leia o que achou com read_file.")
