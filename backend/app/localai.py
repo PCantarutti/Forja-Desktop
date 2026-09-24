@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, downloads, native
+from . import config, downloads, loras, native
 from .tools import ToolError
 
 RUNTIMES = config.DATA_DIR / "runtimes"
@@ -139,6 +139,7 @@ DEFAULT_IMAGE = {
     "high_noise_steps": -1,  # -1 = automático
     "high_noise_cfg": 0.0,   # 0 = o mesmo CFG
     "variante": "",          # vazio = a que o nome do arquivo indica (variante_video)
+    "loras": [],             # [{"path", "peso"}] — ver loras.py
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
     "descarte_dias": 7,  # quanto tempo as imagens reprovadas ficam em descartadas/ antes do expurgo
 }
@@ -656,10 +657,13 @@ def _gguf(path: str, _stamp: tuple) -> dict:
             if not (isinstance(value, list) and len(value) > 64):  # listas de tokens não interessam
                 kv[key] = value
         tensors = []
+        formas = {}  # só as do 1º bloco: é de onde sai a dimensão do modelo (a LoRA precisa bater com ela)
         for _ in range(n_tensors):
             name = _string(f)
             dims = struct.unpack("<I", f.read(4))[0]
             shape = struct.unpack(f"<{dims}Q", f.read(8 * dims))
+            if "blocks.0." in name:
+                formas[name] = list(shape)
             ttype = struct.unpack("<I", f.read(4))[0]
             f.read(8)  # offset
             bloco, bytes_bloco = _GGML.get(ttype, (1, 2))
@@ -667,7 +671,7 @@ def _gguf(path: str, _stamp: tuple) -> dict:
             for d in shape:
                 elementos *= d
             tensors.append((name, elementos // bloco * bytes_bloco))
-    return {"kv": kv, "tensors": tensors}
+    return {"kv": kv, "tensors": tensors, "formas": formas}
 
 
 def gguf_info(path: str) -> dict:
@@ -710,7 +714,7 @@ def gguf_info(path: str) -> dict:
             "attn_interval": get("full_attention_interval", 1),
             "ssm_inner": get("ssm.inner_size"), "ssm_state": get("ssm.state_size"),
             "ssm_conv": get("ssm.conv_kernel"), "ssm_groups": get("ssm.group_count"),
-            "size": st.st_size, "tensors": data["tensors"]}
+            "size": st.st_size, "tensors": data["tensors"], "formas": data.get("formas") or {}}
     info["layers"] = _camadas(info, kv, arch, bruto)
     return info
 
@@ -964,6 +968,8 @@ def kind_of(f: Path) -> str:
     Sem isso, um .gguf de chat aparecia na lista de modelos de imagem (e vice-versa). O resultado fica
     em cache por (caminho, tamanho): a varredura roda a cada 3 s e abrir 50 arquivos toda vez é caro.
     """
+    if f.suffix.lower() == ".safetensors" and loras.info_lora(str(f)):
+        return "lora"  # pelos tensores, não pelo nome: não é modelo, é ajuste por cima de um
     if f.suffix.lower() != ".gguf":
         # .safetensors/.ckpt: só difusão usa por aqui. Wan pelo nome — o VAE e o umt5 dele não são modelo.
         # "wan" como palavra: substring pegava "swan", "Taiwan" e as LoRAs do Wan
@@ -985,7 +991,7 @@ def kind_of(f: Path) -> str:
 IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm", "llm_vision",
                    "offload", "flash_attn", "vae_tiling", "te_cpu", "preview", "taesd",
                    "frames", "fps", "flow_shift", "clip_vision", "high_noise_model", "high_noise_steps",
-                   "high_noise_cfg", "variante")
+                   "high_noise_cfg", "variante", "loras")
 
 
 def eh_video(path: str) -> bool:
@@ -2073,6 +2079,35 @@ def vram_livre_para_vae(model: str, offload: bool) -> float:
     return max(0.0, (gpu["free"] - ocupado) / 2**30)
 
 
+def aceleradores(model: str) -> dict:
+    """As LoRAs de poucos passos publicadas para a variante deste modelo, com o que já está no disco."""
+    alvos = loras.ACELERADORES.get(_tipo(model)) or []
+    if not alvos:
+        return {"arquivos": [], "motivo": "Não há acelerador publicado para esta variante."}
+    presentes = {Path(m["path"]).name.lower(): m["path"] for m in scan((".safetensors",))}
+    arquivos = []
+    try:
+        for repo, glob in alvos:
+            f = loras.mais_recente(arquivos_do_repo(repo), glob)
+            if f:
+                nome = Path(f["path"]).name
+                arquivos.append({"repo": repo, "path": f["path"], "gb": round(f["size"] / 1e9, 2),
+                                 "presente": presentes.get(nome.lower(), "")})
+    except (ToolError, httpx.HTTPError) as e:
+        return {"arquivos": [], "motivo": f"Não deu para consultar o Hugging Face: {e}"}
+    return {"arquivos": arquivos, "motivo": "" if arquivos else "Nenhum arquivo do acelerador no repositório."}
+
+
+def baixar_acelerador(model: str, folder: str = "") -> list[dict]:
+    ac = aceleradores(model)
+    if not ac["arquivos"]:
+        raise ToolError(ac["motivo"])
+    # na pasta de modelos em que o modelo está: as LoRAs de uma geração precisam dividir o disco (loras.tags)
+    dono = Path(os.path.normcase(os.path.abspath(model)))
+    pasta = folder or next((d for d in dirs() if Path(os.path.normcase(os.path.abspath(d))) in dono.parents), "")
+    return [download(a["repo"], a["path"], pasta) for a in ac["arquivos"] if not a["presente"]]
+
+
 def baixar_kit(kit_id: str, folder: str = "", quant: str = "") -> list[dict]:
     """Um download por arquivo que falta (entram na fila de downloads como qualquer outro)."""
     kit = next((k for k in kits_video({kit_id: quant} if quant else None) if k["id"] == kit_id), None)
@@ -2215,7 +2250,7 @@ def state() -> dict:
             continue
         p = completar_componentes(m["path"])
         videos.append({**m, "params": p, "req": requisitos(m["path"]), "variante": _tipo(m["path"]),
-                       "falta": faltando(m["path"], p), "chave": _chave(m["path"])})
+                       "falta": faltando(m["path"], p), "chave": _chave(m["path"]), "dim": loras.dim_do_modelo(m["path"])})
     comp = acompanhantes(read_config())
     from .imagegen import previa_automatica
     imagens = [{**m, "params": image_params(m["path"]), "req": requisitos(m["path"]),
@@ -2231,5 +2266,6 @@ def state() -> dict:
             "image": cfg["image"], "image_models": imagens, "port": config.LOCAL_PORT,
             "video": {**DEFAULT_IMAGE, **(cfg.get("video") or {})}, "video_models": videos,
             "gpu_video": gpu_video(), "tempos_video": list((cfg.get("tempos") or {}).values()),
+            "loras": [{**m, **(loras.info_lora(m["path"]) or {})} for m in todos if m["kind"] == "lora"],
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

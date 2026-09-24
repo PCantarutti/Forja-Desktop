@@ -19,7 +19,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, downloads, localai, native, uploads
+from . import config, downloads, localai, loras, native, uploads
 from .tools import Tool, ToolError, register
 
 OUT_DIR = config.DATA_DIR / "imagens"   # padrão; a tela Imagem pode apontar outra pasta
@@ -121,6 +121,10 @@ def modo_previa(o: dict) -> str | None:
 
 
 def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = ()) -> list[str]:
+    pasta_lora = ""
+    if o.get("loras"):  # vão no prompt; o sd.cpp as tira de lá e aplica (ver loras.py)
+        pasta_lora, sufixo = loras.tags(list(o["loras"]), bool(o.get("high_noise_model")))
+        prompt = prompt + sufixo
     # Sem -M: o modo padrão do sd.cpp é a geração de imagem (img_gen nas builds novas, txt2img nas antigas).
     a = [str(exe), "-p", prompt, "-o", str(out),
          "--steps", str(int(o["steps"])), "--cfg-scale", str(float(o["cfg"])),
@@ -179,6 +183,8 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
         a += ["--preview", modo, "--preview-path", str(o["_preview"])]
         if modo == "tae":  # só a prévia: a imagem final continua saindo do VAE de verdade
             a += ["--taesd", str(o["taesd"]), "--taesd-preview-only"]
+    if pasta_lora:
+        a += ["--lora-model-dir", pasta_lora]
     if o.get("negative"):
         a += ["-n", str(o["negative"])]
     # -s 0 é uma semente válida para o sd.cpp (o padrão dele é 42, sempre a mesma imagem): 0 aqui = aleatória.

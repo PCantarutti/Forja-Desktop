@@ -291,6 +291,7 @@ export type LocalModel = {
   params?: ImageParams; // só nos modelos de imagem e vídeo: ajustes próprios daquele modelo
   variante?: string; // só nos de vídeo: qual Wan é (chave de REQUISITOS no backend)
   chave?: string; // caminho normalizado, o mesmo das medições de tempo
+  dim?: number; // dimensão do modelo de vídeo (a LoRA precisa ter a mesma)
   req?: ImageReq | null; // GGUF só-unet (Qwen-Image, Flux): arquivos que ele precisa à parte
   falta?: string[]; // chaves de `req.precisa` sem arquivo configurado
   falta_edicao?: string[]; // idem, contando o que a edição (-r) pede a mais
@@ -325,6 +326,7 @@ export type ImageParams = {
   high_noise_steps: number; // -1 = automático
   high_noise_cfg: number; // 0 = o mesmo CFG
   variante: string; // "" = pelo nome do arquivo
+  loras: { path: string; peso: number }[]; // LoRAs aplicadas (vídeo)
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -421,6 +423,9 @@ export type ImageReq = {
 /** Texto → vídeo, imagem → vídeo, primeiro e último quadro (pelo número de quadros dados: 0, 1, 2). */
 export type ModoVideo = "t2v" | "i2v" | "flf2v";
 
+/** LoRA nas pastas: `dim` casa com o `dim` do modelo; `passos` > 0 = destilada (acelerador). */
+export type LoraArquivo = LocalModel & { wan: boolean; dim: number; rank: number; ruido: "" | "high" | "low"; passos: number };
+
 /** Kit de download de um Wan: o modelo e as peças que a variante pede, com o que já está no disco. */
 export type VideoKit = {
   id: string;
@@ -467,6 +472,7 @@ export type ImageOpts = {
   high_noise_steps: number; // -1 = automático
   high_noise_cfg: number; // 0 = o mesmo CFG
   variante: string; // "" = pelo nome do arquivo
+  loras: { path: string; peso: number }[]; // LoRAs aplicadas (vídeo)
 };
 
 /** Uma variação dentro de um lote da seção Imagens. */
@@ -557,6 +563,7 @@ export type LocalState = {
   gpu_video: { nome?: string; gb?: number; folga?: number }; // a GPU que o sd.cpp usa ({} sem runtime)
   // quanto cada vídeo levou nesta máquina, por modelo e tamanho: base da estimativa
   tempos_video: { model: string; w: number; h: number; frames: number; passos: number; s_passo: number; s_total: number }[];
+  loras: LoraArquivo[]; // .safetensors que são LoRA, com o que os tensores dizem deles
   port: number;
 };
 

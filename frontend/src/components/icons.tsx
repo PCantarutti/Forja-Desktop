@@ -84,4 +84,5 @@ export const TelaCheia = base(<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2
 export const Pip = base(<><rect x="2.5" y="4.5" width="19" height="15" rx="2" /><rect x="12" y="11.5" width="7" height="5" rx="1" /></>);
 export const Trocar = base(<path d="M7 7h11l-3-3M17 17H6l3 3" />);
 export const Teclado = base(<><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h1M10.5 10h1M14.5 10h1M6.5 14h11" /></>);
+export const Raio = base(<path d="M13 2 4 14h7l-1 8 9-12h-7z" />);
 export const Camera = base(<><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.5" /></>);

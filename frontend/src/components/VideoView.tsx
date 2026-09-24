@@ -4,7 +4,7 @@ import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
 import {
   ArrowUp, Camera, Check, ChevronDown, Copy, Download, ExternalLink, Film, FolderOpen, Image, Plus, Refresh,
-  Sliders, Square, Trocar, X,
+  Raio, Sliders, Square, Trocar, X,
 } from "./icons";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
 import { btn, btnPrimary, Field, input, Num, SAMPLERS } from "./LocalPanel";
@@ -93,6 +93,9 @@ export default function VideoView(props: {
   const [foco, setFoco] = useState<{ lote: number; item: number } | null>(null);
   const [erro, setErro] = useState("");
   const [aviso, setAviso] = useState(""); // troca automática de modelo: dizer, não fazer em silêncio
+  // Acelerador (LoRA de poucos passos) publicado para o modelo da vez, e os ajustes de antes de ligá-lo
+  const [acelerador, setAcelerador] = useState<{ arquivos: { path: string; gb: number; presente: string }[]; motivo: string } | null>(null);
+  const antesDoAcelerador = useRef<Partial<ImageOpts> | null>(null);
   const [llm, setLlm] = useState(() => {
     try {
       const salvo = JSON.parse(localStorage.getItem(KEY_LLM) ?? "null");
@@ -125,6 +128,7 @@ export default function VideoView(props: {
     setO((c) => c && {
       ...c, steps: p.steps, cfg: p.cfg, sampler: p.sampler, width: p.width, height: p.height, frames: p.frames,
       fps: p.fps, flow_shift: p.flow_shift, high_noise_steps: p.high_noise_steps, high_noise_cfg: p.high_noise_cfg,
+      loras: p.loras ?? [],
     });
     const modos = m.req?.modos ?? ["t2v"];
     setModo((atual) => (modos.includes(atual) ? atual : modos[0]));
@@ -159,6 +163,23 @@ export default function VideoView(props: {
     const t = setInterval(carregarLocal, 4000);
     return () => clearInterval(t);
   }, [precisaVigiar, carregarLocal]);
+  // O acelerador do modelo da vez; de novo quando a lista de LoRAs muda (download terminou)
+  const nLoras = st?.loras?.length ?? 0;
+  useEffect(() => {
+    setAcelerador(null);
+    if (!modelo) return;
+    let vivo = true;
+    api
+      .get<{ arquivos: { path: string; gb: number; presente: string }[]; motivo: string }>(
+        `/local/video/aceleradores?model=${encodeURIComponent(modelo)}`,
+      )
+      .then((r) => vivo && setAcelerador(r))
+      .catch(() => {}); // sem acelerador a pílula só não aparece
+    return () => {
+      vivo = false;
+    };
+  }, [modelo, nLoras]);
+
   // e quando a tomada desta aba termina, o estado da GPU e os ajustes podem ter mudado
   useEffect(() => {
     if (!ocupado) carregarLocal();
@@ -290,6 +311,36 @@ export default function VideoView(props: {
     }
   }
 
+  /** Liga a LoRA de poucos passos com os ajustes que ela pede (os passos saem do arquivo; CFG 1, que é o
+   *  que a destilação troca) e, ao desligar, devolve os ajustes de antes. */
+  function alternarAcelerador() {
+    if (!o || !acelerador || !st) return;
+    const caminhos = acelArquivos;
+    if (acelerando) {
+      const antes = antesDoAcelerador.current ?? {};
+      setO({ ...o, ...antes, loras: (o.loras ?? []).filter((l) => !caminhos.some((p) => mesmo(p, l.path))) });
+      antesDoAcelerador.current = null;
+      return;
+    }
+    const info = st.loras.filter((l) => caminhos.some((p) => mesmo(p, l.path)));
+    const passos = Math.max(0, ...info.map((l) => l.passos)) || o.steps;
+    antesDoAcelerador.current = { steps: o.steps, cfg: o.cfg, high_noise_steps: o.high_noise_steps, high_noise_cfg: o.high_noise_cfg };
+    setO({
+      ...o, steps: passos, cfg: 1, high_noise_cfg: 1, high_noise_steps: -1,  // -1: o sd.cpp divide os passos entre os dois
+      loras: [...(o.loras ?? []).filter((l) => !caminhos.some((p) => mesmo(p, l.path))), ...caminhos.map((path) => ({ path, peso: 1 }))],
+    });
+  }
+
+  async function baixarAcelerador() {
+    try {
+      await api.post("/local/video/acelerador", { model: modelo });
+      setAviso("Baixando o acelerador: quando terminar, o ⚡ liga com um clique.");
+      carregarLocal();
+    } catch (e: any) {
+      mostrarErro(e.message);
+    }
+  }
+
   async function melhorar() {
     if (!prompt.trim() || !llm.model) return;
     setMelhorando(true);
@@ -333,6 +384,11 @@ export default function VideoView(props: {
   const qualidades = Object.keys(tamanhos);
   const { prop, qual } = tamanhoAtual(o, tamanhos);
   const duracoes = duracoesDe(atual?.req, o.fps);
+  const compativeis = (st.loras ?? []).filter((l) => l.wan && !!atual?.dim && l.dim === atual.dim);
+  const mesmo = (a: string, b: string) => a.replace(/\//g, "\\").toLowerCase() === b.replace(/\//g, "\\").toLowerCase();
+  const acelArquivos = (acelerador?.arquivos ?? []).map((a) => a.presente).filter(Boolean) as string[];
+  const acelPronto = !!acelerador?.arquivos.length && acelArquivos.length === acelerador.arquivos.length;
+  const acelerando = acelPronto && acelArquivos.every((p) => o.loras?.some((l) => mesmo(l.path, p)));
   const seg = segundosDe(o.frames, o.fps);
   const focoLote = foco && lotes[foco.lote];
 
@@ -425,6 +481,7 @@ export default function VideoView(props: {
               onModelo={(p) => aplicarModelo(st.video_models.find((m) => m.path === p))}
               seedMode={seedMode}
               onSeedMode={setSeedMode}
+              compativeis={compativeis}
               llm={llm}
               onLlm={setLlm}
               onFechar={() => setAbrirAjustes(false)}
@@ -623,6 +680,34 @@ export default function VideoView(props: {
                   />
                   {count === 1 ? "variação" : "variações"}
                 </label>
+                {acelerador && acelerador.arquivos.length > 0 && (() => {
+                  const faltaGb = acelerador.arquivos.filter((a) => !a.presente).reduce((s, a) => s + a.gb, 0);
+                  const baixandoAcel = st.jobs.some((j) => j.status === "running" && acelerador.arquivos.some((a) => j.name.endsWith(a.path.split("/").pop()!)));
+                  const passos = Math.max(0, ...st.loras.filter((l) => acelArquivos.some((p) => mesmo(p, l.path))).map((l) => l.passos));
+                  return acelPronto ? (
+                    <button
+                      onClick={alternarAcelerador}
+                      aria-pressed={acelerando}
+                      title={acelerando
+                        ? `LoRA de ${passos} passos ligada (CFG 1). Clique para voltar aos ajustes de antes.`
+                        : `Liga a LoRA de ${passos || "poucos"} passos do lightx2v: bem mais rápido, com qualidade próxima.`}
+                      className={`${pilula} ${acelerando ? "border-amber-400/50 bg-amber-400/10 text-amber-200 hover:bg-amber-400/15" : ""}`}
+                    >
+                      <Raio className="size-3.5" />
+                      {acelerando ? `${passos} passos` : "Acelerar"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={baixarAcelerador}
+                      disabled={baixandoAcel}
+                      title="LoRA de destilação do lightx2v para este modelo: gera em poucos passos"
+                      className={pilula}
+                    >
+                      <Raio className="size-3.5" />
+                      {baixandoAcel ? "Baixando acelerador…" : `Baixar acelerador (${faltaGb.toFixed(1).replace(".", ",")} GB)`}
+                    </button>
+                  );
+                })()}
                 <button
                   onClick={melhorar}
                   disabled={!prompt.trim() || !llm.model || melhorando}
@@ -963,11 +1048,16 @@ function AjustesVideo(props: {
   onModelo: (p: string) => void;
   seedMode: SeedMode;
   onSeedMode: (s: SeedMode) => void;
+  compativeis: LocalState["loras"];
   llm: { provider: string; model: string };
   onLlm: (l: { provider: string; model: string }) => void;
   onFechar: () => void;
 }) {
   const { o, set, st } = props;
+  const ativa = (path: string) => (o.loras ?? []).find((l) => l.path.toLowerCase() === path.toLowerCase());
+  const alternar = (path: string) =>
+    set("loras", ativa(path) ? (o.loras ?? []).filter((l) => l.path.toLowerCase() !== path.toLowerCase()) : [...(o.loras ?? []), { path, peso: 1 }]);
+  const peso = (path: string, v: number) => set("loras", (o.loras ?? []).map((l) => (l.path.toLowerCase() === path.toLowerCase() ? { ...l, peso: v } : l)));
   const atual = st.video_models.find((m) => m.path === props.modelo);
   const a14b = !!atual?.params?.high_noise_model || atual?.variante?.includes("a14b");
   return (
@@ -998,6 +1088,42 @@ function AjustesVideo(props: {
             <Num label="Quadros" value={o.frames} onChange={(v) => set("frames", Math.max(1, Math.round((v - 1) / 4)) * 4 + 1)} step={4} hint="Sempre 4k+1." />
             <Num label="FPS" value={o.fps} onChange={(v) => set("fps", v)} hint={`${fmtS(segundosDe(o.frames, o.fps))} de vídeo`} />
           </div>
+          <Field
+            label="LoRAs"
+            hint={props.compativeis.length
+              ? "Só as que servem para este modelo (pela dimensão dos tensores). Peso 1 = como foi treinada."
+              : "Nenhuma LoRA nas pastas serve para este modelo."}
+          >
+            {props.compativeis.length > 0 && (
+              <div className="flex max-h-36 flex-col gap-1 overflow-y-auto rounded-lg border border-line p-1.5">
+                {props.compativeis.map((l) => {
+                  const a = ativa(l.path);
+                  return (
+                    <div key={l.path} className="flex items-center gap-2 rounded-md px-1 py-0.5 hover:bg-raised">
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                        <input type="checkbox" checked={!!a} onChange={() => alternar(l.path)} className="accent-white" />
+                        <span className={`min-w-0 flex-1 truncate ${a ? "text-fg" : "text-muted"}`} title={l.path}>{l.name}</span>
+                      </label>
+                      {l.passos > 0 && <span className="shrink-0 rounded-full bg-amber-400/10 px-1.5 text-[10px] text-amber-200">{l.passos} passos</span>}
+                      {l.ruido && <span className="shrink-0 text-[10px] text-faint">{l.ruido === "high" ? "HighNoise" : "LowNoise"}</span>}
+                      {a && (
+                        <input
+                          type="number"
+                          step={0.1}
+                          min={0}
+                          max={2}
+                          value={a.peso}
+                          onChange={(e) => peso(l.path, Number(e.target.value) || 0)}
+                          aria-label={`Peso de ${l.name}`}
+                          className="w-14 rounded-md border border-line bg-raised px-1.5 py-0.5 text-right tabular-nums text-fg"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Field>
           <Field label="Modelo do “Melhorar”" hint="O que reescreve o prompt: um LLM rápido basta. Não é o que gera o vídeo.">
             <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
           </Field>
@@ -1118,6 +1244,13 @@ function Tomada(props: {
           {rotuloSementes(itens.map((i) => i.seed), meta.seed_mode)}
         </button>
         {[...new Set(itens.map((i) => i.model_name))].map((n) => <Chip key={n}>{n}</Chip>)}
+        {(meta.opts.loras ?? []).length > 0 && (
+          <Chip>
+            <span title={(meta.opts.loras ?? []).map((l) => `${l.path} × ${l.peso}`).join("\n")}>
+              {(meta.opts.loras ?? []).length === 1 ? "1 LoRA" : `${(meta.opts.loras ?? []).length} LoRAs`}
+            </span>
+          </Chip>
+        )}
       </div>
 
       <div className={`grid gap-3 ${retrato ? "grid-cols-2 md:grid-cols-3 xl:grid-cols-4" : itens.length === 1 ? "grid-cols-1 md:max-w-3xl" : "grid-cols-1 md:grid-cols-2"}`}>

@@ -689,6 +689,24 @@ async def local_video_kit(body: KitBody):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/local/video/aceleradores")
+async def local_video_aceleradores(model: str):
+    return await asyncio.to_thread(localai.aceleradores, model)
+
+
+class AceleradorBody(BaseModel):
+    model: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/acelerador")
+async def local_video_acelerador(body: AceleradorBody):
+    try:
+        return {"jobs": await asyncio.to_thread(localai.baixar_acelerador, body.model, body.folder)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/local/image/achados")
 async def local_image_achados(path: str):
     """VAE/codificador/mmproj com cara de ser deste modelo, perto dele no disco (para o botão Usar)."""
