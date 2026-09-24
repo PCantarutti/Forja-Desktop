@@ -111,12 +111,14 @@ function backendDir() {
   return fs.existsSync(path.join(packaged, "app")) ? packaged : path.join(ROOT, "backend");
 }
 
-/** Porta livre: pede 0 ao sistema e devolve a que ele deu. */
-function freePort() {
+const PORTA_PADRAO = 47810;
+
+/** Porta livre: tenta `pref` e, ocupada, pede 0 ao sistema e devolve a que ele deu. */
+function freePort(pref = 0) {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
-    srv.once("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
+    srv.once("error", (e) => (pref ? freePort().then(resolve, reject) : reject(e)));
+    srv.listen(pref, "127.0.0.1", () => {
       const p = srv.address().port;
       srv.close(() => resolve(p));
     });
@@ -588,7 +590,8 @@ if (!app.requestSingleInstanceLock()) {
     syncTray();
     syncAutoStart();
     try {
-      port = Number(process.env.FORJA_PORT) || (await freePort());
+      // Porta fixa quando dá: o `tailscale serve` do celular (aba Celular) aponta para ela.
+      port = Number(process.env.FORJA_PORT) || (await freePort(PORTA_PADRAO));
       startBackend(await cdpEndpoint());
       await waitForBackend();
       // --hidden: subiu junto com o Windows e fica só na bandeja até o usuário chamar.

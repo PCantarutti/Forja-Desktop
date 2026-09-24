@@ -650,3 +650,34 @@ async def _adiciona(mid, cru):
     comparar.adicionar(mid, cru)
     await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
     return comparar.estado(mid)["itens"][-1]
+
+
+# ------------------------------------------------------------------ revisar ao terminar
+
+def test_revisor_roda_sozinho_quando_todas_terminam(monkeypatch):
+    """Com `revisor`, o servidor começa a análise no fim, sem depender da tela aberta (celular bloqueado)."""
+    from app import baterias
+    _fake_llm(monkeypatch)
+    chamadas = []
+    monkeypatch.setattr(baterias, "iniciar_analise", lambda mid, p, m: chamadas.append((mid, p, m)))
+    est = _rodar(conv_id=_conversa(), prompt="teste", itens=[{"provider": "ollama", "model": m} for m in ("a", "b")],
+                 revisor={"provider": "ollama", "model": "juiz"})
+    assert est["status"] == "pronto"
+    assert chamadas == [(est["message_id"], "ollama", "juiz")]
+    assert comparar._mensagem(est["message_id"])["meta"]["revisor"] == {"provider": "ollama", "model": "juiz"}
+
+
+def test_sem_revisor_nao_analisa_e_desligar_vale_depois(monkeypatch):
+    from app import baterias
+    _fake_llm(monkeypatch)
+    chamadas = []
+    monkeypatch.setattr(baterias, "iniciar_analise", lambda *a: chamadas.append(a))
+    est = _rodar(conv_id=_conversa(), prompt="teste", itens=[{"provider": "ollama", "model": m} for m in ("a", "b")])
+    assert chamadas == []
+    mid = est["message_id"]
+    assert comparar.definir_revisor(mid, {"provider": "ollama", "model": "j"}) == {"revisor": {"provider": "ollama", "model": "j"}}
+    comparar._revisar_sozinho(mid)
+    assert chamadas == [(mid, "ollama", "j")]
+    comparar.definir_revisor(mid, None)
+    comparar._revisar_sozinho(mid)
+    assert len(chamadas) == 1  # desligado: o próximo fim (Refazer/Adicionar) não revisa

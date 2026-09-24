@@ -7,6 +7,7 @@ import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench } from "./icons";
 import ModelPicker from "./ModelPicker";
+import qrcode from "qrcode-generator";
 
 export type Provider = {
   id: string;
@@ -62,7 +63,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Permissões", "MCP", "Memória"] as const;
+const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Permissões", "MCP", "Memória", "Celular"] as const;
 type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
@@ -197,6 +198,8 @@ export default function Settings(props: {
               <RuntimeTab onError={setError} />
             ) : tab === "Hardware" ? (
               <HardwareTab onError={setError} />
+            ) : tab === "Celular" ? (
+              <CelularTab onError={setError} />
             ) : !s ? (
               <div className="text-muted">Carregando…</div>
             ) : tab === "Geral" ? (
@@ -269,6 +272,48 @@ export default function Settings(props: {
           </div>
         </div>
     </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ celular (app Forja Mobile)
+
+/** QR que o app do celular lê para parear: endereço na tailnet + token estável (backend/app/mobile.py). */
+function CelularTab(props: { onError: (e: string) => void }) {
+  const [m, setM] = useState<{ token: string; url: string | null; devices: number } | null>(null);
+  useEffect(() => {
+    api.get<typeof m>("/mobile").then(setM).catch((e) => props.onError(e.message));
+  }, []);
+  if (!m) return <div className="text-muted">Carregando…</div>;
+  if (!m.url)
+    return (
+      <div className="space-y-2 text-sm text-muted">
+        <p className="text-fg">Tailscale não encontrado ou sem login neste PC.</p>
+        <p>Instale o Tailscale (grátis) aqui e no celular, entre com a mesma conta e reabra esta aba.</p>
+      </div>
+    );
+  const qr = qrcode(0, "M");
+  qr.addData(JSON.stringify({ url: m.url, token: m.token }));
+  qr.make();
+  const porta = location.port || "80";
+  return (
+    <div className="space-y-4 text-sm">
+      <p className="text-muted">
+        Leia com o app Forja Mobile. Antes, publique o Forja na sua tailnet (uma vez, no PowerShell):
+      </p>
+      <code className="block rounded-lg bg-raised px-3 py-2 text-xs text-fg">
+        tailscale serve --bg --https=443 http://127.0.0.1:{porta}
+      </code>
+      <div className="inline-block rounded-xl bg-white p-3" dangerouslySetInnerHTML={{ __html: qr.createSvgTag({ cellSize: 5, margin: 0 }) }} />
+      <p className="text-muted">
+        {m.url} · {m.devices} aparelho(s) com notificação
+      </p>
+      <Confirma
+        className={btn}
+        rotulo="Revogar e gerar novo QR"
+        pergunta="O celular pareado perde o acesso. Continuar?"
+        onSim={() => api.post<typeof m>("/mobile/rotate").then(setM).catch((e) => props.onError(e.message))}
+      />
+    </div>
   );
 }
 

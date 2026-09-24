@@ -1,6 +1,9 @@
 import asyncio
+import base64
 import hashlib
 import json
+import re
+import subprocess
 import sys
 import tempfile
 import time
@@ -10,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -19,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
-               mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -100,7 +103,7 @@ async def fronteira(request, call_next):
     path = request.url.path
     if (config.API_TOKEN and path.startswith("/api/") and not path.startswith(SEM_TOKEN)
             and not path.endswith(SUFIXO_SEM_TOKEN)
-            and request.headers.get("x-forja-token") != config.API_TOKEN):
+            and request.headers.get("x-forja-token") not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
 
@@ -847,6 +850,7 @@ class CompararBody(BaseModel):
     cego: bool = False
     confirm: bool = False
     bateria: str = ""               # teste pronto de especialidade (baterias.BATERIAS): anexo e gabarito
+    revisor: dict | None = None     # {"provider","model"}: o servidor roda o revisor quando todas terminarem
 
 
 class TestarBody(BaseModel):
@@ -889,7 +893,7 @@ def _sse_comparar(message_id: int) -> StreamingResponse:
 async def comparar_rodar(conv_id: int, body: CompararBody):
     try:
         msg = comparar.start(conv_id, body.prompt, body.itens, body.modo, body.system, body.effort,
-                             body.cego, body.confirm, body.bateria)
+                             body.cego, body.confirm, body.bateria, body.revisor)
     except comparar.ModeloCarregado as e:
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
     except ToolError as e:
@@ -996,6 +1000,15 @@ async def comparar_julgar(message_id: int, body: JuizBody):
 def comparar_julgar_acompanhar(message_id: int):
     """Reconectar à análise (voltou à página): o andamento, ou {"status": "nenhum"}."""
     return _sse_analise(message_id)
+
+
+@app.post("/api/comparar/{message_id}/revisor")
+def comparar_revisor(message_id: int, body: dict):
+    """Liga ({"revisor": {"provider","model"}}) ou desliga ({"revisor": null}) a revisão automática."""
+    try:
+        return comparar.definir_revisor(message_id, body.get("revisor"))
+    except ToolError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.post("/api/comparar/{message_id}/julgar/parar")
@@ -1137,6 +1150,32 @@ def _sess(conv: str):
 @app.get("/api/browser")
 async def get_browser(conv: str = "0"):
     return await _sess(conv).state_with_title()
+
+
+@app.get("/api/browser/shot")
+async def browser_shot(conv: str = "0"):
+    """Foto da aba ativa como está (JPEG), para o celular.
+
+    No modo nativo o espelho não manda frames (a página é uma view do Electron), e o browser_screenshot
+    muda o viewport para fotografar, o que mexeria no painel do desktop. Aqui é CDP direto, sem tocar em tamanho.
+    """
+    s = _sess(conv)
+    if not s.open:
+        raise HTTPException(404, "Nenhuma página aberta nesta conversa")
+    try:
+        cdp = await s.active.context.new_cdp_session(s.active)
+        try:
+            # Uma view nativa que não está na janela do desktop (painel Navegador fechado, outra conversa
+            # aberta) não desenha: a captura nunca volta, com qualquer opção ou override de tamanho.
+            r = await asyncio.wait_for(
+                cdp.send("Page.captureScreenshot", {"format": "jpeg", "quality": 60, "fromSurface": True}), 5)
+        finally:
+            await cdp.detach()
+    except asyncio.TimeoutError:
+        raise HTTPException(503, "A aba não está visível no desktop, então não há imagem para mostrar")
+    except Exception as e:  # aba fechando no meio, CDP caiu
+        raise HTTPException(502, f"Falha na foto: {e}")
+    return Response(base64.b64decode(r["data"]), media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/browser/stream")
@@ -1768,6 +1807,7 @@ async def start_run(conv_id: int, body: RunBody):
         raise HTTPException(409, "Esta conversa já tem uma execução em andamento")
     with db.session() as s:
         kind = _get_conv(s, conv_id).kind or "agent"  # o tipo é da conversa, não do pedido
+    mobile.lembra({k: getattr(body, k) for k in ("provider", "model", "permission", "effort")})
     run = Run(conv_id)
     RUNS[run.id] = run
     run.start(RunRequest(mode=kind, **body.model_dump()))
@@ -1848,6 +1888,46 @@ def approve(run_id: str, body: ApproveBody):
                 "answer": body.answer, "answers": body.answers}
     if not _get_run(run_id).resolve(body.call_id, decision):
         raise HTTPException(409, "Nenhuma aprovação pendente para esta chamada")
+    return {"ok": True}
+
+
+@app.get("/api/mobile")
+def mobile_info():
+    """O que a aba Celular põe no QR: endereço na tailnet (se o Tailscale estiver no PC) e o token."""
+    return {"token": mobile.token(), "url": mobile.tailnet_url(), "devices": len(mobile.devices()),
+            "defaults": mobile.defaults()}
+
+
+@app.post("/api/mobile/rotate")
+def mobile_rotate():
+    mobile.rotate()
+    return mobile_info()
+
+
+@app.post("/api/mobile/expose/{name}")
+def mobile_expose(name: str):
+    """Site que o agente subiu (serve_start) visto do celular: só porta de servidor vivo, nunca uma qualquer."""
+    srv = next((x for x in shell.list_servers() if x["name"] == name and x["alive"] and x["url"]), None)
+    port = re.search(r":(\d+)", srv["url"]) if srv else None
+    if not port:
+        raise HTTPException(404, "Servidor não está rodando ou não tem URL")
+    try:
+        return {"url": mobile.expose(int(port.group(1)))}
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/mobile/register")
+def mobile_register(body: dict):
+    if not str(body.get("expo_token") or "").startswith("ExponentPushToken["):
+        raise HTTPException(400, "Token de push inválido")
+    mobile.register(body["expo_token"])
+    return {"ok": True}
+
+
+@app.post("/api/mobile/unregister")
+def mobile_unregister(body: dict):
+    mobile.unregister(str(body.get("expo_token") or ""))
     return {"ok": True}
 
 

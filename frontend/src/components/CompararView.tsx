@@ -100,7 +100,15 @@ export default function CompararView(props: {
   const [copiado, setCopiado] = useState(false);
   // Teste pronto (vindo do "Testar" da doca Modelo · VRAM) e a análise do juiz.
   const [bateria, setBateria] = useState<{ id: string; b: Bateria } | null>(null);
-  const [juiz, setJuiz] = useState({ provider: props.provider, model: props.model });
+  const [juiz, setJuizEstado] = useState<{ provider: string; model: string }>(() => {
+    try {
+      const salvo = JSON.parse(localStorage.getItem("forja.comparar.juiz") ?? "null");
+      if (salvo?.model) return salvo;
+    } catch {
+      /* sem armazenamento: começa pelo modelo do chat */
+    }
+    return { provider: props.provider, model: props.model };
+  });
   // passos: o que o revisor está fazendo (carregar o modelo, abrir cada página, ler), como as
   // chamadas de ferramenta no chat — sem isso a análise parecia travada.
   const [analise, setAnalise] = useState<Analise | null>(null);
@@ -275,7 +283,8 @@ export default function CompararView(props: {
       setEnviado(texto);
       setPrompt(""); // o prompt vai para o cartão no topo; o campo fica livre para o próximo
       await streamSSE(`/comparar/${id}/rodar`,
-        { method: "POST", body: JSON.stringify({ prompt: texto, itens, modo, cego, confirm, bateria: bateria?.id ?? "" }) },
+        { method: "POST", body: JSON.stringify({ prompt: texto, itens, modo, cego, confirm, bateria: bateria?.id ?? "",
+                                           revisor: autoAnalise && juiz.model ? juiz : null }) },
         (ev) => (ev.erro ? onError(ev.erro) : setEstado(ev)));
       props.onConversationChanged();
       carregarConversa(id);
@@ -351,8 +360,10 @@ export default function CompararView(props: {
     if (!estado) return;
     const antes = statusAnterior.current;
     statusAnterior.current = { id: estado.message_id, status: estado.status };
+    // Quem começa a análise é o servidor (o revisor vai no /rodar): a tela só se liga nela. Assim a revisão
+    // acontece mesmo com o app fechado ou em outra conversa quando a comparação termina.
     if (autoAnalise && antes?.id === estado.message_id && antes.status === "rodando" && estado.status === "pronto")
-      void analisar();
+      void acompanharAnalise(estado.message_id);
     // só a transição rodando → pronto dispara; analisar muda a cada render
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [estado?.status, estado?.message_id]);
@@ -364,6 +375,23 @@ export default function CompararView(props: {
     } catch {
       /* sem armazenamento: vale só nesta sessão */
     }
+    avisarRevisor(v, juiz);
+  }
+
+  function setJuiz(j: { provider: string; model: string }) {
+    setJuizEstado(j);
+    try {
+      localStorage.setItem("forja.comparar.juiz", JSON.stringify(j));
+    } catch {
+      /* idem */
+    }
+    avisarRevisor(autoAnalise, j);
+  }
+
+  /** Comparação já aberta: o servidor passa a revisar (ou não) no próximo fim — Refazer, Adicionar. */
+  function avisarRevisor(ligado: boolean, j: { provider: string; model: string }) {
+    if (estado)
+      api.post(`/comparar/${estado.message_id}/revisor`, { revisor: ligado && j.model ? j : null }).catch(() => {});
   }
 
   async function analisar() {
@@ -556,7 +584,7 @@ export default function CompararView(props: {
             </div>
           )}
 
-          {estado && (
+          {(estado || itens.length > 0) && (
             <div className={`${card} flex flex-col gap-3 px-4 py-3 text-xs`}>
               <div className="flex flex-wrap items-center gap-2">
                 <Balanca className="size-4 text-faint" />
@@ -564,9 +592,9 @@ export default function CompararView(props: {
                 <span className="text-faint">um modelo que você confia lê as respostas e as estatísticas e compara</span>
                 <div className="ml-auto flex items-center gap-1.5">
                   <label className="mr-1 flex items-center gap-1.5 text-muted"
-                         title="Quando todas as respostas forem entregues, o revisor começa sozinho">
+                         title="Quando todas as respostas forem entregues, o servidor começa o revisor sozinho — mesmo com o app fechado">
                     <input type="checkbox" checked={autoAnalise} onChange={(e) => trocarAutoAnalise(e.target.checked)} />
-                    Analisar ao terminar
+                    Revisar ao terminar
                   </label>
                   <ModelPicker provider={juiz.provider} model={juiz.model} loadLocal={false}
                                onChange={(provider, model) => setJuiz({ provider, model })} />
@@ -576,8 +604,8 @@ export default function CompararView(props: {
                       Parar
                     </button>
                   ) : (
-                    <button className={btnPrimary} disabled={!juiz.model || rodando} onClick={analisar}
-                            title={rodando ? "Espere as respostas terminarem" : undefined}>
+                    <button className={btnPrimary} disabled={!estado || !juiz.model || rodando} onClick={analisar}
+                            title={!estado ? "Rode a comparação primeiro" : rodando ? "Espere as respostas terminarem" : undefined}>
                       {analise ? "Analisar de novo" : "Analisar"}
                     </button>
                   )}
@@ -666,6 +694,13 @@ export default function CompararView(props: {
                     title="Modo cego: as respostas aparecem sem o nome do modelo até você votar">
               {cego ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
               Modo cego
+            </button>
+            <button className={`${pilula} ${autoAnalise ? pilulaLigada : ""}`} aria-pressed={autoAnalise}
+                    disabled={!juiz.model} onClick={() => trocarAutoAnalise(!autoAnalise)}
+                    title={juiz.model ? `Quando todas as respostas terminarem, ${juiz.model} analisa sozinho (escolha o revisor no cartão "Analisar com IA")`
+                                      : "Escolha o modelo revisor no cartão Analisar com IA"}>
+              <Balanca className="size-3.5" />
+              Revisar ao terminar
             </button>
             {!!ggufs.length && (
               <select className={`${pilula} w-24 bg-transparent`} value="" disabled={itens.length >= MAX_MODELOS}

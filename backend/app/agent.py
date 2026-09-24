@@ -18,7 +18,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, modelctl, projstate, qualidade, taskdb
+from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -224,6 +224,7 @@ class Run:
         async with self._changed:
             self.events.append(ev)
             self._changed.notify_all()
+        mobile.notify(ev, self.conv_id, self.id)  # push para o celular pareado (aprovação, fim do turno)
 
     async def subscribe(self, cursor: int = 0) -> AsyncIterator[dict]:
         while True:
