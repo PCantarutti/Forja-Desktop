@@ -672,6 +672,32 @@ async def local_image_defaults(body: dict):
         raise HTTPException(400, str(e))
 
 
+@app.put("/api/local/video/defaults")
+async def local_video_defaults(body: dict):
+    try:
+        return await asyncio.to_thread(localai.set_video, body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/kits")
+async def local_video_kits():
+    return {"kits": await asyncio.to_thread(localai.kits_video)}
+
+
+class KitBody(BaseModel):
+    id: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/kit")
+async def local_video_kit(body: KitBody):
+    try:
+        return {"jobs": await asyncio.to_thread(localai.baixar_kit, body.id, body.folder)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/local/image/achados")
 async def local_image_achados(path: str):
     """VAE/codificador/mmproj com cara de ser deste modelo, perto dele no disco (para o botão Usar)."""
@@ -705,6 +731,12 @@ MELHORAR_PROMPT = (
     "reescrito, em inglês, numa linha, com termos visuais concretos: assunto, composição, luz, "
     "material, lente, estilo. Sem explicação, sem aspas, sem 'prompt:', sem negativos."
 )
+MELHORAR_PROMPT_VIDEO = (
+    "Você reescreve descrições para um gerador de vídeo curto (Wan, 2 a 5 segundos, sem áudio). "
+    "Devolva SÓ o prompt reescrito, em inglês, numa linha: o sujeito, UMA ação contínua que caiba em "
+    "poucos segundos, o movimento de câmera (static, slow dolly in, pan left, tracking shot...), luz, "
+    "ambiente e estilo. Sem cortes de cena, sem explicação, sem aspas, sem 'prompt:', sem negativos."
+)
 
 
 class LoteBody(BaseModel):
@@ -715,7 +747,7 @@ class LoteBody(BaseModel):
     seed: int = 0
     seed_mode: str = "incremental"  # incremental | aleatoria | fixa
     confirm: bool = False
-    refs: list[str] = []  # imagens a editar (-r do sd.cpp); vazio = gerar do zero
+    refs: list[str] = []  # imagens a editar (-r do sd.cpp); no vídeo, [início] ou [início, fim]
 
 
 class DecidirBody(BaseModel):
@@ -726,6 +758,7 @@ class PromptBody(BaseModel):
     prompt: str
     provider: str
     model: str
+    video: bool = False
 
 
 @app.post("/api/imagens/referencia")
@@ -823,7 +856,8 @@ async def imagens_prompt(body: PromptBody):
     out = ""
     try:
         async for kind, val in llm.chat_stream(body.provider, body.model,
-                                               [{"role": "system", "content": MELHORAR_PROMPT},
+                                               [{"role": "system",
+                                                 "content": MELHORAR_PROMPT_VIDEO if body.video else MELHORAR_PROMPT},
                                                 {"role": "user", "content": body.prompt}], None, 8192):
             if kind == "content":
                 out += val
@@ -1311,8 +1345,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "comparar", "pesquisa"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, comparar ou pesquisa")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar ou pesquisa")
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)

@@ -18,7 +18,7 @@ import re
 from . import config, db, workspace
 
 ROOT = config.DATA_DIR / "conversas"
-DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens",
+DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens", "video": "forja-videos",
         "comparar": "forja-comparacoes", "pesquisa": "forja-pesquisas"}
 
 # Proibidos em nome de arquivo no Windows, mais os de controle.
@@ -49,7 +49,8 @@ def markdown(c) -> str:
             linhas += [f"## Imagens ({m.status or 'pendente'})", ""]
             for img in m.meta["images"]:
                 etiqueta = f"semente {img['seed']} · {img.get('model_name') or '?'} · {img['status']}"
-                linhas += [f"- {etiqueta}", f"  ![{etiqueta}]({img['path']})"]
+                marca = "" if img["path"].endswith(".webm") else "!"  # vídeo vira link: Markdown não toca webm
+                linhas += [f"- {etiqueta}", f"  {marca}[{etiqueta}]({img['path']})"]
             linhas.append("")
         elif m.role == "assistant" and (m.meta or {}).get("pesquisa"):  # pesquisa profunda
             p = m.meta["pesquisa"]

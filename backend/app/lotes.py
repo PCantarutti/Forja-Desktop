@@ -1,4 +1,5 @@
-"""Lotes de imagem: várias variações de um prompt, divididas entre modelos, com aprovação depois.
+"""Lotes de imagem (e de vídeo): várias variações de um prompt, divididas entre modelos, com aprovação
+depois. Numa Conversation(kind="video") cada item é um .webm do Wan; o resto do caminho é o mesmo.
 
 O `sd-cli` gera uma imagem por processo, então um lote é uma fila numa thread só — e o mutex de VRAM
 (`localai.set_image_busy`) vale para o lote inteiro, não por imagem.
@@ -144,16 +145,19 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     opts = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
     escolhidos = _distribuir(list(models or []), count)
     refs = [str(r) for r in (refs or [])]
+    with db.session() as s:
+        conv = s.get(db.Conversation, conv_id)
+        ext = ".webm" if conv and conv.kind == "video" else ".png"
     exe = imagegen._exe()
     for m in dict.fromkeys(escolhidos):  # valida runtime e modelo ANTES de descarregar o LLM por nada
-        imagegen.argv(exe, prompt, imagegen.OUT_DIR / "x.png", imagegen._opts({**opts, "model": m}), refs)
+        imagegen.argv(exe, prompt, imagegen.OUT_DIR / f"x{ext}", imagegen._opts({**opts, "model": m}), refs)
 
     _liberar_vram(confirm)
 
     sementes = _sementes(count, seed, seed_mode)
     pasta = imagegen.out_dir()
     marca = time.strftime("%Y%m%d-%H%M%S")
-    imagens = [{"path": str(pasta / f"{marca}-{i:02d}-s{s}.png"), "seed": s, "model": m,
+    imagens = [{"path": str(pasta / f"{marca}-{i:02d}-s{s}{ext}"), "seed": s, "model": m,
                 "model_name": _nome(m), "status": "pendente", "error": ""}
                for i, (m, s) in enumerate(zip(escolhidos, sementes))]
 
@@ -199,7 +203,7 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             # Já no começo (carregando o modelo, antes da 1ª prévia): o card sabe que não vai de líquido.
             item["com_previa"] = imagegen.modo_previa(imagegen._opts({**opts, "model": item["model"]})) is not None
             _patch(message_id, meta={"images": imagens})
-            previa = previas_dir() / Path(item["path"]).name
+            previa = previas_dir() / (Path(item["path"]).stem + ".png")  # vídeo também: um quadro
             previa.parent.mkdir(parents=True, exist_ok=True)
 
             def progresso(passo: int, total: int, s_passo: float = 0.0, item=item, previa=previa) -> None:
@@ -389,7 +393,7 @@ def limpar_descartadas(dias: int | None = None) -> int:
             return 0
     limite = time.time() - dias * 86400 if dias > 0 else time.time() + 1
     apagados = 0
-    for f in pasta.glob("*.png"):
+    for f in [*pasta.glob("*.png"), *pasta.glob("*.webm")]:
         try:
             if f.stat().st_mtime < limite:
                 f.unlink()

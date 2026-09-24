@@ -25,11 +25,14 @@ NOVA_LINHA = chr(10)
 UPLOAD_DIR = ".forja/uploads"
 MAX_IMAGE_BYTES = 8_000_000  # imagem maior que isso não vira data URL (estoura o contexto)
 IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+MAX_VIDEO_BYTES = 500_000_000  # vídeo nunca vai ao contexto: o teto é só de sanidade
 
 
 def kind_of(mime: str) -> str:
     if mime in IMAGE_TYPES:
         return "image"
+    if mime.startswith("video/"):
+        return "video"
     if mime.startswith("text/") or mime in ("application/json", "application/xml", "application/javascript"):
         return "text"
     return "file"
@@ -45,6 +48,8 @@ def save(name: str, data: bytes, mime: str | None = None, root: Path | None = No
     # arquivo que vai INTEIRO ao contexto, e um PDF ou .xlsx de verdade passa disso sem esforço —
     # anexar qualquer documento real esbarrava nesse limite e parecia que o anexo não funcionava.
     teto = config.MAX_DOC_BYTES if Path(name).suffix.lower() in documentos.LEITURA else config.MAX_FILE_BYTES
+    if (mime or mimetypes.guess_type(name)[0] or "").startswith("video/"):
+        teto = MAX_VIDEO_BYTES
     if len(data) > teto:
         raise ValueError(f"Arquivo maior que o limite ({teto // 1024} KB). "
                          "Aumente em Configurações › Geral se precisar.")

@@ -1,8 +1,12 @@
-"""Geração de imagem com stable-diffusion.cpp.
+"""Geração de imagem e de vídeo com stable-diffusion.cpp.
 
 Sem servidor: cada imagem é uma chamada do `sd-cli.exe` que termina e libera a VRAM. Dois caminhos
 para a mesma função — a ferramenta `image_generate` (o agente gera e a imagem aparece no chat) e
 POST /api/local/image (o painel, com prompt e parâmetros na mão).
+
+Vídeo é o mesmo binário em `-M vid_gen` com um modelo Wan, gravando .webm direto (o Electron toca
+sem ffmpeg). Nos lotes e no argv, `refs` do vídeo são os quadros: nenhum = texto → vídeo, um = a
+imagem inicial (-i), dois = início e fim (--end-img).
 """
 from __future__ import annotations
 
@@ -32,6 +36,9 @@ def out_dir() -> Path:
 # usam MB/s e ficam de fora — senão a barra da UI andaria para trás.
 PROGRESS = re.compile(r"\|\s*(\d+)/(\d+) - ([\d.]+)\s*(it/s|s/it)")
 TIMEOUT = 1800  # 30 min: CPU puro com modelo grande é lento mesmo
+TIMEOUT_VIDEO = 4 * 3600  # vídeo 720p num 14B com pesos na RAM passa de uma hora fácil
+MODOS_VIDEO = ("t2v", "i2v", "flf2v")  # pelo número de quadros dados: 0, 1 ou 2
+ROTULO_MODO = {"t2v": "texto → vídeo", "i2v": "imagem → vídeo", "flf2v": "primeiro e último quadro"}
 
 
 def _opts(patch: dict | None = None) -> dict:
@@ -40,6 +47,8 @@ def _opts(patch: dict | None = None) -> dict:
     # Os ajustes são do modelo que vai gerar — num lote multi-modelo o patch troca o modelo a cada
     # imagem, e usar os ajustes do padrão vazaria o VAE/clip do modelo errado.
     alvo = (patch or {}).get("model") or base.get("model", "")
+    if localai.eh_video(alvo):  # o padrão do vídeo é o da aba Vídeo: o VAE da imagem não serve ao Wan
+        base = {**localai.DEFAULT_IMAGE, **(localai.read_config().get("video") or {})}
     do_modelo = localai.image_params(alvo) if alvo else {}
     return {**base, **do_modelo, **{k: v for k, v in (patch or {}).items() if v not in (None, "")}}
 
@@ -61,7 +70,14 @@ MAX_REFS = 10  # limite do Qwen-Image 2.1
 def _confere_arquivos(model: str, o: dict, refs: list[str]) -> None:
     """Barra antes de rodar: sem VAE/codificador o sd-cli falha com erro que ninguém entende."""
     req = localai.requisitos(model) or {}
-    if refs and not req.get("edita"):
+    if req.get("video"):
+        if len(refs) > 2:
+            raise ToolError("Vídeo aceita no máximo dois quadros: o inicial e o final.")
+        modo = MODOS_VIDEO[len(refs)]
+        if modo not in req["modos"]:
+            fazem = ", ".join(r["nome"] for r in localai.REQUISITOS.values() if modo in (r.get("modos") or []))
+            raise ToolError(f"{req['nome']} não faz {ROTULO_MODO[modo]}. Esse modo funciona com: {fazem}.")
+    elif refs and not req.get("edita"):
         editam = ", ".join(r["nome"] for r in localai.REQUISITOS.values() if r.get("edita"))
         raise ToolError(f"{Path(model).stem} não edita imagem (só gera). Edição funciona com: {editam}.")
     if len(refs) > MAX_REFS:
@@ -75,7 +91,7 @@ def _confere_arquivos(model: str, o: dict, refs: list[str]) -> None:
         arquivos = {**req.get("precisa", {}), **req.get("edita", {})}
         itens = "\n".join(f"- {localai.ROTULO_ARQUIVO[k]}: {arquivos[k][0]} — {arquivos[k][1]}" for k in falta)
         raise ToolError(f"{req.get('nome')} precisa de arquivos que não estão configurados (ou não existem):\n"
-                        f"{itens}\nBaixe e informe os caminhos em IA local › Imagem › ajustes deste modelo. "
+                        f"{itens}\nBaixe e informe os caminhos em IA local › Modelos › ajustes deste modelo. "
                         f"Guia: {req.get('doc')}")
 
 
@@ -111,10 +127,29 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
         a += [_flag_modelo(str(o["model"])), str(o["model"])]
     else:
         raise ToolError("Escolha um modelo de imagem no painel IA local › Imagem.")
-    for key, flag in (("vae", "--vae"), ("clip_l", "--clip_l"), ("t5xxl", "--t5xxl"), ("llm", "--llm")):
+    video = localai.eh_video(str(o.get("model") or ""))
+    if video:
+        a[1:1] = ["-M", "vid_gen"]
+        a += ["--video-frames", str(int(o["frames"])), "--fps", str(int(o["fps"]))]
+        if float(o.get("flow_shift") or 0):
+            a += ["--flow-shift", str(float(o["flow_shift"]))]
+        if o.get("high_noise_model"):  # Wan2.2 A14B: o HighNoise abre a amostragem, o LowNoise fecha
+            a += ["--high-noise-diffusion-model", str(o["high_noise_model"]),
+                  "--high-noise-sampling-method", str(o["sampler"])]
+            if int(o.get("high_noise_steps") or -1) > 0:
+                a += ["--high-noise-steps", str(int(o["high_noise_steps"]))]
+            if float(o.get("high_noise_cfg") or 0):
+                a += ["--high-noise-cfg-scale", str(float(o["high_noise_cfg"]))]
+    for key, flag in (("vae", "--vae"), ("clip_l", "--clip_l"), ("t5xxl", "--t5xxl"), ("llm", "--llm"),
+                      ("clip_vision", "--clip_vision")):
         if o.get(key):
             a += [flag, str(o[key])]
-    if refs:  # edição: cada -r é uma imagem de referência, na ordem
+    if video:
+        if refs:
+            a += ["-i", str(refs[0])]
+        if len(refs) > 1:
+            a += ["--end-img", str(refs[1])]
+    elif refs:  # edição: cada -r é uma imagem de referência, na ordem
         for r in refs:
             a += ["-r", str(r)]
         if o.get("llm_vision"):
@@ -178,7 +213,10 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())
     tail: list[str] = []
-    timer = threading.Timer(TIMEOUT, lambda: native.kill_tree(proc))
+    video = localai.eh_video(str(o.get("model") or ""))
+    timer = threading.Timer(TIMEOUT_VIDEO if video else TIMEOUT, lambda: native.kill_tree(proc))
+    # O Wan2.2 A14B amostra em dois passes (HighNoise e LowNoise), cada um com a sua barra.
+    passos = {int(o.get("steps") or 0), int(o.get("high_noise_steps") or -1) if video else -1}
     timer.start()
     # Vigia à parte: carregando pesos o sd-cli passa minutos sem imprimir nada, e conferir o
     # cancelamento só a cada linha deixava o processo vivo (e a GPU ocupada) depois do "Cancelar".
@@ -201,7 +239,7 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
             m = PROGRESS.search(line)
             # Só a barra da amostragem (total = passos): o VAE em blocos também imprime barra em s/it, e
             # na edição ele codifica a referência antes de amostrar — o card ia a 100% e voltava a 0.
-            if m and int(m.group(2)) != int(o["steps"]):
+            if m and int(m.group(2)) not in passos:
                 m = None
             if job_id and m:
                 downloads.update(job_id, done=int(m.group(1)), total=int(m.group(2)))
@@ -220,7 +258,8 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
         dica = ""
         if "DeviceLost" in log or "OutOfDeviceMemory" in log or "out of memory" in log.lower():
             dica = ("A GPU ficou sem memória. Em IA local › Modelos › ajustes deste modelo, ligue "
-                    "\"Pesos na RAM\", \"Flash attention\" e \"VAE em blocos\", ou diminua a resolução.\n\n")
+                    "\"Pesos na RAM\", \"Flash attention\" e \"VAE em blocos\", ou diminua a resolução"
+                    + (" e a duração" if video else "") + ".\n\n")
         raise ToolError(f"{dica}sd falhou (código {proc.returncode}):\n{log}")
     return out
 
@@ -277,6 +316,45 @@ async def image_generate(root: Path, args: dict) -> dict:
     return {"text": f"Imagem gerada em {att['path']} ({len(dados) // 1024} KB).", "attachments": [att]}
 
 
+def _modelo_de_video() -> str:
+    """O da aba Vídeo; sem ele, o primeiro modelo de vídeo das pastas."""
+    escolhido = (localai.read_config().get("video") or {}).get("model") or ""
+    if escolhido and Path(escolhido).is_file():
+        return escolhido
+    return next((m["path"] for m in localai.scan(localai.WEIGHTS)
+                 if m["kind"] == "video" and not localai.alto_ruido(m["path"])), "")
+
+
+def quadros(segundos: float, fps: int) -> int:
+    """Duração em quadros que o Wan aceita: 4k+1 (o VAE junta 4 quadros em 1 no tempo)."""
+    return max(1, round(segundos * fps / 4)) * 4 + 1
+
+
+async def video_generate(root: Path, args: dict) -> dict:
+    model = _modelo_de_video()
+    if not model:
+        raise ToolError("Nenhum modelo de vídeo nas pastas. Baixe um kit em IA local › Baixar › Vídeo.")
+    o = _opts({"model": model})
+    opts = {"model": model, **{k: args.get(k) for k in ("negative", "seed")}}
+    if args.get("segundos"):
+        opts["frames"] = quadros(float(args["segundos"]), int(o["fps"]))
+    refs = [str((root / r).resolve()) for r in (args.get("imagem_inicial"), args.get("imagem_final")) if r]
+    localai.set_image_busy(True)
+    out = Path(tempfile.gettempdir()) / "forja-sd" / f"{time.strftime('%Y%m%d-%H%M%S')}.webm"
+    try:
+        await asyncio.to_thread(generate, str(args.get("prompt") or ""), out, opts, "", refs)
+    finally:
+        localai.set_image_busy(False)
+    dados = out.read_bytes()
+    out.unlink(missing_ok=True)
+    att = uploads.save("video.webm", dados, "video/webm", root)
+    return {"text": f"Vídeo gerado em {att['path']} ({len(dados) // 1024} KB).", "attachments": [att]}
+
+
+def _preview_video(_root: Path, args: dict) -> dict:
+    return {"kind": "new", "path": "video.webm", "text": str(args.get("prompt") or "")}
+
+
 def _preview(_root: Path, args: dict) -> dict:
     """`kind` tem que ser um dos três que o front conhece (diff | new | command).
 
@@ -305,3 +383,18 @@ register(Tool(
          ["prompt"]),
     image_generate, mutating=True, preview=_preview, timeout=None,  # geração longa, com progresso próprio
     available=lambda: bool(localai.find_exe("sd"))))
+
+register(Tool(
+    "video_generate",
+    "Gera um vídeo curto (2 a 5 s, sem áudio) com o Wan local no stable-diffusion.cpp. Três modos: só o "
+    "prompt (texto → vídeo), com imagem_inicial (anima a imagem) ou com imagem_inicial e imagem_final "
+    "(liga os dois quadros). O vídeo é salvo na pasta de trabalho e aparece no chat. Leva minutos.",
+    _obj({"prompt": {"type": "string", "description": "A cena: sujeito, ação, câmera, luz. Em inglês funciona melhor"},
+          "imagem_inicial": {"type": "string", "description": "Imagem a animar (caminho na pasta de trabalho)"},
+          "imagem_final": {"type": "string", "description": "Último quadro; exige imagem_inicial e um modelo FLF2V"},
+          "segundos": {"type": "number", "description": "Duração (padrão: a da aba Vídeo)"},
+          "negative": {"type": "string", "description": "O que evitar"},
+          "seed": {"type": "integer", "description": "Semente para repetir o mesmo vídeo"}},
+         ["prompt"]),
+    video_generate, mutating=True, preview=_preview_video, timeout=None,
+    available=lambda: bool(localai.find_exe("sd")) and bool(_modelo_de_video())))

@@ -273,6 +273,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   forget: (a) => `Apagando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
   update_tasks: () => "Atualizando a lista de tarefas",
   image_generate: (a) => `Gerando a imagem “${trecho(a.prompt, 40) ?? "pedida"}”`,
+  video_generate: (a) => `Gerando o vídeo “${trecho(a.prompt, 40) ?? "pedido"}”`,
   delegate_task: (a) => `Delegando: ${trecho(a.task, 44) ?? "uma tarefa"}`,
   exit_plan_mode: () => "Montando o plano",
   // Maestro: sem frase aqui, a linha de status viraria "Usando run_task" e esconderia o alvo.
