@@ -34,12 +34,25 @@ def test_run_command_propagates_exit_code(tmp_path):
         run_tool("run_command", {"command": "exit 3"}, tmp_path)
 
 
-def test_run_command_timeout_kills_tree(tmp_path):
-    started = time.monotonic()
-    sleep = "Start-Sleep -Seconds 30" if WIN else "sleep 30"
-    with pytest.raises(ToolError, match="Timeout"):
-        run_tool("run_command", {"command": sleep, "timeout": 1}, tmp_path)
-    assert time.monotonic() - started < 20  # morreu no timeout, não esperou os 30 s
+def test_run_command_timeout_vira_processo_de_fundo(tmp_path):
+    """DeepSeek Harness: passou do timeout, não morre — vira processo em segundo plano e avisa no fim."""
+    avisos = []
+    token = shell.AO_TERMINAR.set(avisos.append)
+    try:
+        started = time.monotonic()
+        cmd = "Start-Sleep -Seconds 3; echo fim" if WIN else "sleep 3; echo fim"
+        out = run_tool("run_command", {"command": cmd, "timeout": 1, "name": "demorado"}, tmp_path)
+        assert time.monotonic() - started < 3  # devolveu no timeout, não esperou o fim
+        assert "movido para o processo em segundo plano 'demorado'" in out
+        assert any(s["name"] == "demorado" and s["alive"] for s in shell.list_servers())
+        limite = time.monotonic() + 20
+        while not avisos and time.monotonic() < limite:
+            time.sleep(0.2)
+        assert avisos and "'demorado' terminou [código de saída: 0]" in avisos[0]
+        assert "fim" in shell.server_log("demorado")
+    finally:
+        shell.AO_TERMINAR.reset(token)
+        shell.clear_finished()
 
 
 def test_run_command_streams_output_live(tmp_path):

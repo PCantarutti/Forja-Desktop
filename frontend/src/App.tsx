@@ -182,7 +182,9 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   write_file: (a) => `Escrevendo ${arquivo(a.path) ?? "um arquivo"}`,
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
-  skill: (a) => `Carregando a skill ${trecho(a.name, 30) ?? ""}`.trim(),
+  list_agents: () => "Conferindo os subagentes",
+  interrupt_agent: (a) => `Parando o subagente ${trecho(a.id, 20) ?? ""}`.trim(),
+  skill: (a) =>`Carregando a skill ${trecho(a.name, 30) ?? ""}`.trim(),
   glob: (a) =>`Procurando arquivos ${trecho(a.pattern, 36) ?? ""}`.trim(),
   grep: (a) => (trecho(a.pattern, 36) ? `Procurando “${trecho(a.pattern, 36)}”` : "Procurando no código"),
 
@@ -487,6 +489,9 @@ export default function App() {
       }
     }
     const agora = new Set(activity.conversations.filter((c) => c.running).map((c) => c.id));
+    // Turno aberto pelo servidor (aviso de processo em segundo plano que terminou) na conversa da tela:
+    // conecta no stream dele, como no F5.
+    if (currentId && !running && agora.has(currentId) && !rodandoAntes.has(currentId)) openConversation(currentId);
     for (const id of rodandoAntes.keys()) {
       if (agora.has(id) || conv(id)?.kind !== "maestro") continue;
       api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {

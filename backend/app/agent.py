@@ -167,6 +167,9 @@ class Run:
         self.mode_note: str | None = None   # o que dizer na conversa quando o modo muda
         self.waiting: dict[str, tuple] = {}  # call_id -> (tool, args) das aprovações abertas
         self.queue: list[str] = []      # mensagens enviadas pelo usuário durante a execução (entram no próximo passo)
+        self.avisos: list[str] = []     # término de processo/subagente em segundo plano (entram no próximo passo)
+        self.filhos: dict[str, dict] = {}  # subagentes em segundo plano: id -> {task, tarefa, inicio}
+        self.acorda = asyncio.Event()   # algo chegou em `avisos` (o fim do turno espera por isso)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
         self.nudged: set[str] = set()   # já levaram o freio do esforço extremo (um aviso cada): caminhos
                                        # de arquivo e "delegate_task" para a delegação rasa
@@ -305,9 +308,15 @@ class Run:
             return True
         return False
 
+    def avisar(self, texto: str) -> None:
+        self.avisos.append(texto)
+        self.acorda.set()
+
     def stop(self) -> None:
         self.cancel.set()
         self.rodando.set()
+        for f in self.filhos.values():
+            f["task"].cancel()
         for fut in self.pending.values():
             if not fut.done():
                 fut.set_result(False)
@@ -648,9 +657,11 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
         rules.append("- Trabalho com 3 ou mais passos: crie a lista com update_tasks no início e atualize a cada "
                      "passo (doing ao começar, done ao terminar). O usuário acompanha essa lista.")
     if "serve_status" in names and "run_command" in names:  # a regra cita as duas; ferramenta desligada não entra
-        rules.append("- Comando demorado: run_command com background=true e depois "
-                     "serve_status(name=..., wait=60) para esperar o fim. Responda só quando terminar — não "
-                     "comente o andamento a cada consulta.")
+        rules.append("- Comando demorado: run_command com background=true (ou deixe passar do timeout: ele vira "
+                     "processo em segundo plano sozinho). Você recebe um aviso quando ele terminar — não fique "
+                     "consultando nem dormindo; siga com o que não depende dele e não rode o mesmo trabalho de "
+                     "novo. Travado esperando o resultado? serve_status(name=..., wait=60). Antes da resposta "
+                     "final, leia o resultado do que ainda importa e encerre com serve_stop o que deixou de importar.")
     if "delegate_task" in names and (personas := subagents.agents_for(workspace.root())):
         lista = "; ".join(f"{a['name']} ({a['description']})" for a in personas.values())
         rules.append(f"- Subagentes prontos deste projeto: {lista}. Chame delegate_task(agent='NOME', task=...) "
@@ -674,6 +685,10 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
                      "e level='capaz' para raciocínio difícil (depurar, projetar, código complexo). Descreva a tarefa "
                      "por completo: o subagente não vê esta conversa. Em 'files', os arquivos que ele precisa ler (o "
                      "conteúdo vai junto); em 'done_when', o comando que prova que ficou pronto.")
+        rules.append("- Delegação roda em segundo plano por padrão: dispare as independentes juntas, na mesma "
+                     "resposta, e siga trabalhando; o relatório de cada uma chega como aviso. "
+                     "run_in_background=false só quando o seu próximo passo depende do resultado. O turno não "
+                     "termina com subagente rodando: se não houver mais nada a fazer, ele espera o relatório.")
     if maestro_mode:
         rules = [r if "browser_validate" in names else r.replace(NAVEGADOR_NA_VALIDACAO, "")
                  for r in MAESTRO_RULES if "browser_validate" in names or not r.startswith("- Projeto com tela")] + [r for r in rules if r.startswith(("- Tabela na resposta",
@@ -782,6 +797,8 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
     # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
     # schema com uma ferramenta que só devolveria erro.
     fixas = [t for t in (ASK_USER, EXIT_PLAN) if t.name not in exclude]
+    if any(t.name == "delegate_task" for t in tools):
+        fixas += [t for t in (LIST_AGENTS, INTERRUPT_AGENT) if t.name not in exclude]
     return tools + extras + fixas
 
 
@@ -1066,6 +1083,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     shell.CONV.set(str(conv_id))           # processo de fundo fica marcado com a conversa que o subiu
     memory.index(refresh=True)  # congela o índice do turno: system prompt estável = cache do llama.cpp vivo
     LIDOS.set({})  # ler antes de editar vale por execução (tools._observado)
+    laco = asyncio.get_running_loop()
+    # Processo de fundo que termina avisa esta conversa: entra no turno em andamento ou abre outro.
+    shell.AO_TERMINAR.set(lambda texto: laco.call_soon_threadsafe(acordar, conv_id, texto, req))
     yield {"type": "run_started", "run_id": run.id}
 
     with db.session() as s:
@@ -1329,7 +1349,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         yield {"type": "assistant_end", "message": msg.to_dict()}
 
         if not calls:
-            if run.queue:  # o usuário mandou mais mensagens enquanto o agente trabalhava: continua com elas
+            if not run.queue and not run.avisos and _filhos_vivos(run) and not run.cancel.is_set():
+                # Subagente em segundo plano ainda rodando: o turno espera o relatório em vez de acabar.
+                yield {"type": "status", "text": "Esperando subagente em segundo plano…"}
+                await _espera_aviso(run)
+                yield {"type": "status", "text": ""}
+            if run.queue or run.avisos:  # mensagem do usuário ou aviso de segundo plano: continua com eles
                 for ev in _flush_queue(conv_id, run):
                     yield ev
                 nudges = 0
@@ -1442,6 +1467,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if stop:
             break
 
+    for f in run.filhos.values():  # o turno acabou (parado, limite, erro): filho órfão não teria a quem avisar
+        f["task"].cancel()
     if run.cancel.is_set():
         yield _event(conv_id, "info", "Geração interrompida pelo usuário.")
     if run.tasks:  # estado final da lista de tarefas fica no histórico
@@ -1527,7 +1554,38 @@ def _flush_queue(conv_id: int, run: Run) -> list[dict]:
         m = _save(conv_id, role="user", content=run.queue.pop(0))
         run.turn_id = m.id
         events.append({"type": "message", "message": m.to_dict()})
+    run.acorda.clear()
+    while run.avisos:  # processo ou subagente em segundo plano que terminou
+        m = _save(conv_id, role="event", content=run.avisos.pop(0), meta={"kind": "aviso", "to_model": True})
+        events.append({"type": "event", "message": m.to_dict()})
     return events
+
+
+def _filhos_vivos(run: Run) -> list[str]:
+    return [i for i, f in run.filhos.items() if not f["task"].done()]
+
+
+async def _espera_aviso(run: Run) -> None:
+    esperas = [asyncio.ensure_future(run.acorda.wait()), asyncio.ensure_future(run.cancel.wait())]
+    try:
+        await asyncio.wait(esperas, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for f in esperas:
+            f.cancel()
+
+
+def acordar(conv_id: int, texto: str, req: RunRequest) -> None:
+    """Aviso de segundo plano chegou com a conversa parada: abre um turno novo com ele.
+
+    Como no DeepSeek Harness, o término de um job acorda o agente ocioso — ele lê o resultado e
+    segue, em vez de o resultado ficar esquecido até o usuário voltar a falar.
+    """
+    if (viva := active_run(conv_id)) is not None:
+        viva.avisar(texto)
+        return
+    run = Run(conv_id)
+    RUNS[run.id] = run
+    run.start(dataclasses.replace(req, content=f"[Aviso automático do Forja] {texto}", attachments=None))
 
 
 async def _execute(conv_id: int, call: dict, req: RunRequest, run: Run,
@@ -1710,8 +1768,21 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         if parent:
             result("erro", "Um subagente não pode delegar tarefas.")
             return
+        if _em_fundo(call, req):
+            if len(_filhos_vivos(run)) >= MAX_FILHOS:
+                result("erro", f"Já há {MAX_FILHOS} subagentes rodando. Espere um terminar (o aviso chega "
+                               "sozinho) ou pare um com interrupt_agent.")
+                return
+            _delegar_em_fundo(conv_id, call, req, run, caps)
+            result("ok", f"Subagente '{call['id']}' iniciado em segundo plano. Siga com o que não depende dele; "
+                         "o relatório chega sozinho quando ele terminar. list_agents mostra quem está rodando, "
+                         "interrupt_agent(id) para um.")
+            return
         async for ev in subagents.run(conv_id, call, req, run, out, _run_call):
             yield ev
+        return
+    if name in ("list_agents", "interrupt_agent"):
+        result("ok", _agentes(run, name, args))
         return
     if name == "run_task":
         # Como o delegate_task: precisa emitir eventos e chamar de volta este mesmo _run_call, para
@@ -1804,6 +1875,64 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         result("erro", str(e))
     except Exception as e:  # nunca derrubar o loop
         result("erro", f"Erro inesperado: {e.__class__.__name__}: {e}")
+
+
+# ------------------------------------------------------------------ subagentes em segundo plano
+# DeepSeek Harness: a delegação roda em segundo plano por padrão; o pai segue trabalhando e recebe o
+# relatório como aviso. Aqui com uma trava a mais: modelo local só roda um GGUF por vez, e um
+# subagente que precisasse trocar o modelo derrubaria o turno do pai no meio — esse roda em primeiro
+# plano, como antes.
+MAX_FILHOS = 8
+
+
+def _em_fundo(call: dict, req: RunRequest) -> bool:
+    args = call["arguments"]
+    if args.get("run_in_background") is False:
+        return False
+    level = str(args.get("level") or "rapido")
+    if args.get("agent"):
+        level = (subagents.agents_for(workspace.root()).get(str(args["agent"])) or {}).get("level") or level
+    spec = subagents.slot(level) or {}
+    local = (config.PROVIDERS.get(str(spec.get("provider") or "")) or {}).get("type") == "llamacpp"
+    return not local or (spec.get("provider") == req.provider and spec.get("model") == req.model)
+
+
+def _delegar_em_fundo(conv_id: int, call: dict, req: RunRequest, run: Run, caps: set[str] | None) -> None:
+    async def filho() -> None:
+        out: dict = {}
+        try:
+            async with _limite(call):
+                async for ev in subagents.run(conv_id, call, req, run, out, _run_call):
+                    await run.publish(ev)
+        except asyncio.CancelledError:
+            out.update(status="cancelada", text="Interrompido.")
+        except Exception as e:  # o filho não derruba o pai
+            out.update(status="erro", text=f"Erro inesperado: {e.__class__.__name__}: {e}")
+        estado = {"ok": "terminou"}.get(out.get("status") or "", f"terminou com status '{out.get('status')}'")
+        run.avisar(f"Subagente '{call['id']}' em segundo plano {estado} e não faz mais nada a menos que você "
+                   f"delegue de novo. Relatório final:\n{out.get('text') or '(vazio)'}")
+
+    run.filhos[call["id"]] = {"task": asyncio.create_task(filho()), "tarefa": str(call["arguments"].get("task") or ""),
+                              "inicio": time.monotonic()}
+
+
+def _agentes(run: Run, name: str, args: dict) -> str:
+    if name == "interrupt_agent":
+        f = run.filhos.get(str(args.get("id") or ""))
+        if not f or f["task"].done():
+            return f"Não há subagente rodando com id '{args.get('id')}'. Veja list_agents."
+        f["task"].cancel()
+        return f"Subagente '{args['id']}' interrompido."
+    linhas = [f"- {i}: {'rodando' if not f['task'].done() else 'terminado'} há "
+              f"{int(time.monotonic() - f['inicio'])}s — {f['tarefa'][:120]}" for i, f in run.filhos.items()]
+    return "\n".join(linhas) or "Nenhum subagente em segundo plano nesta execução."
+
+
+LIST_AGENTS = Tool("list_agents", "Lista os subagentes em segundo plano desta execução e o estado de cada um.",
+                   {"type": "object", "properties": {}, "required": []}, lambda *_: "")
+INTERRUPT_AGENT = Tool("interrupt_agent", "Interrompe um subagente em segundo plano que deixou de importar.",
+                       {"type": "object", "properties": {"id": {"type": "string", "description": "Id do subagente"}},
+                        "required": ["id"]}, lambda *_: "")
 
 
 def ask_questions(args: dict) -> list[dict]:

@@ -275,7 +275,11 @@ register(Tool(
                                  "junto com a tarefa, ele não precisa procurar."},
         "done_when": {"type": "string",
                       "description": "Comando que prova que ficou pronto (ex.: pytest -q tests/test_x.py). É "
-                                     "executado depois que ele termina e o resultado entra no relatório."}},
+                                     "executado depois que ele termina e o resultado entra no relatório."},
+        "run_in_background": {"type": "boolean",
+                              "description": "Padrão true: devolve na hora e o relatório chega como aviso quando "
+                                             "ele terminar. false só quando o seu próximo passo depende do "
+                                             "resultado."}},
      "required": ["task"]},
     _unused, available=lambda: bool(configured())))
 

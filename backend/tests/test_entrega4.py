@@ -150,7 +150,8 @@ def test_delegation_runs_subagent_and_returns_report(monkeypatch, tmp_path):
             step["main"] += 1
             if step["main"] == 1:
                 yield "done", {"tool_calls": [{"id": "d1", "name": "delegate_task",
-                                               "arguments": {"task": "crie nota.txt", "level": "rapido"}}]}
+                                               "arguments": {"task": "crie nota.txt", "level": "rapido",
+                                                             "run_in_background": False}}]}
             else:
                 assert any("Relatório do subagente" in (m.get("content") or "") for m in messages)
                 yield "content", "Feito pelo subagente."

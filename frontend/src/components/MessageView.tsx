@@ -933,6 +933,7 @@ const EVENT_STYLE: Record<string, string> = {
   warning: "border-amber-500/30 text-amber-200",
   error: "border-red-500/30 text-red-200",
   nudge: "border-sky-500/30 text-sky-200",
+  aviso: "border-emerald-500/30 text-emerald-200",
   info: "border-line text-muted",
 };
 
@@ -960,7 +961,13 @@ export function EventNotice({ m }: { m: Message }) {
         <div className="mt-1 whitespace-pre-wrap rounded-xl border border-line bg-surface px-3 py-2">{m.content}</div>
       </details>
     );
-  const title = { warning: "Aviso", error: "Erro", nudge: "Lembrete automático ao modelo", info: "Info" }[kind as string];
+  const title = {
+    warning: "Aviso",
+    error: "Erro",
+    nudge: "Lembrete automático ao modelo",
+    info: "Info",
+    aviso: "Segundo plano",
+  }[kind as string];
   return (
     <div className={`my-3 rounded-2xl border bg-surface px-4 py-2.5 text-sm ${EVENT_STYLE[kind] ?? EVENT_STYLE.info}`}>
       <span className="font-medium">{title}:</span> {m.content}

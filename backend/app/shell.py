@@ -73,7 +73,60 @@ def background(root: Path, args: dict) -> str:
     """Comando demorado (build, suíte de teste) vira processo em segundo plano, o mesmo mecanismo dos
     servidores: o turno não fica preso e o modelo acompanha com serve_status."""
     nome = _safe_name(str(args.get("name") or "").strip() or args["command"].split()[0])
-    return serve_start(root, {**args, "name": nome}, kind="Processo")
+    texto = serve_start(root, {**args, "name": nome}, kind="Processo")
+    if _info(nome)["alive"]:  # já terminou dentro da espera do serve_start: o resultado está no texto
+        _vigia(nome)
+    return texto
+
+
+def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> tuple[int | None, str]:
+    """Roda gravando num log. Terminou no prazo: (exit code, saída). Não terminou: (None, saída até
+    aqui) e o processo SEGUE vivo, registrado como processo em segundo plano `nome`.
+
+    Do DeepSeek Harness: comando que passa do timeout não é morto, vira job. Matar jogava fora um
+    build ou uma instalação quase pronta, e o modelo rodava tudo de novo com timeout maior.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log = LOG_DIR / f"fg-{nome}-{time.time_ns()}.log"
+    fh = open(log, "wb")
+    proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, **native.popen_kwargs())
+    lidos, resto, pedacos = 0, b"", []
+    limite = time.monotonic() + timeout
+
+    def puxa() -> None:
+        nonlocal lidos, resto
+        with open(log, "rb") as f:
+            f.seek(lidos)
+            novo = f.read()
+        lidos += len(novo)
+        *linhas, resto = (resto + novo).split(b"\n")
+        for raw in linhas:
+            linha = native.decode(raw + b"\n")
+            pedacos.append(linha)
+            if sink:
+                sink(linha)
+
+    while proc.poll() is None and time.monotonic() < limite:
+        time.sleep(0.2)
+        puxa()
+    puxa()
+    if proc.poll() is None:  # passou do prazo: vira processo de fundo, com o mesmo log
+        with _servers_lock:
+            if nome in _SERVERS:
+                _drop(_SERVERS.pop(nome))
+            _SERVERS[nome] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
+                              "started": time.time() - timeout, "conv": CONV.get(), "kind": "Processo"}
+        _vigia(nome)
+        return None, "".join(pedacos)
+    fh.close()
+    if resto:
+        pedacos.append(native.decode(resto))
+    try:
+        log.unlink()
+    except OSError:
+        pass
+    return proc.returncode, "".join(pedacos)
 
 
 def run_command(root: Path, args: dict) -> str:
@@ -88,13 +141,45 @@ def run_command(root: Path, args: dict) -> str:
                         "um servidor igual que já esteja rodando) e serve_status para ver o que está de pé.")
     cwd = resolve_path(root, args.get("cwd"))
     timeout = max(1, min(int(args.get("timeout") or 60), config.SHELL_TIMEOUT_MAX))
-    code, out, timed_out = _execute(command, cwd, timeout, OUTPUT_SINK.get())
-    if timed_out:
-        raise ToolError(f"Timeout: o comando passou de {timeout}s e foi encerrado.\nSaída parcial:\n{_truncate(out)}")
+    nome = _safe_name(str(args.get("name") or "").strip() or command.split()[0])
+    code, out = _primeiro_plano(command, cwd, timeout, OUTPUT_SINK.get(), nome)
+    if code is None:
+        return (f"[ainda rodando após {timeout}s; movido para o processo em segundo plano '{nome}']\n"
+                "O comando continua rodando. Você recebe um aviso quando ele terminar; enquanto isso siga com o "
+                f"que não depende dele. serve_status(name='{nome}') mostra o log, serve_stop encerra.\n"
+                f"Saída até aqui:\n{_truncate(out) or '(sem saída)'}")
     body = f"exit code: {code}\n{_truncate(out) or '(sem saída)'}"
     if code != 0:
         raise ToolError(body)
     return body
+
+
+# ------------------------------------------------------------------ aviso de término
+# Quem ligou o comando recebe um aviso quando ele termina (DeepSeek Harness: background job notice),
+# sem precisar ficar consultando. O agente define o destino por execução.
+AO_TERMINAR: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    "forja_ao_terminar", default=None)
+
+
+def _vigia(nome: str) -> None:
+    destino = AO_TERMINAR.get()
+    if destino is None:
+        return
+    with _servers_lock:
+        s = _SERVERS.get(nome)
+    if not s:
+        return
+    proc = s["proc"]
+
+    def espera() -> None:
+        code = proc.wait()
+        with _servers_lock:
+            if _SERVERS.get(nome, {}).get("proc") is not proc:  # reiniciado ou encerrado por serve_stop
+                return
+        destino(f"O processo em segundo plano '{nome}' terminou [código de saída: {code}]. "
+                f"Leia o resultado com serve_status(name='{nome}').")
+
+    threading.Thread(target=espera, daemon=True, name=f"vigia-{nome}").start()
 
 
 def command_preview(root: Path, args: dict) -> dict:
