@@ -37,8 +37,9 @@ LOG_FILE = LOG_DIR / "llama-server.log"
 
 # Binários procurados dentro da pasta do runtime (o primeiro que existir) e repositório de origem.
 # O sd.cpp renomeou sd.exe para sd-cli.exe; aceitamos os dois para não quebrar com builds antigos.
-EXE = {"llama": ["llama-server"], "sd": ["sd-cli", "sd"]}
-REPO = {"llama": "ggml-org/llama.cpp", "sd": "leejet/stable-diffusion.cpp"}
+EXE = {"llama": ["llama-server"], "sd": ["sd-cli", "sd"], "ffmpeg": ["ffmpeg"]}
+# ffmpeg: só para ampliar vídeo (ampliar.py) — o sd.cpp não lê vídeo. Build LGPL "shared" do BtbN (~80 MB).
+REPO = {"llama": "ggml-org/llama.cpp", "sd": "leejet/stable-diffusion.cpp", "ffmpeg": "BtbN/FFmpeg-Builds"}
 BACKENDS = ("vulkan", "cpu", "cuda")
 
 # Regex do asset por runtime/backend. `extra` é baixado junto (runtime do CUDA).
@@ -53,6 +54,7 @@ ASSETS = {
         "vulkan": (r"^sd-.*-bin-win-vulkan-x64\.zip$", None),
         "cuda":   (r"^sd-.*-bin-win-cuda\d+-x64\.zip$", r"^cudart-sd-bin-win-cu\d+-x64\.zip$"),
     },
+    "ffmpeg": {"cpu": (r"^ffmpeg-(master-latest|N-[\w.-]+)-win64-lgpl-shared\.zip$", None)},
 }
 
 # ponytail: só Windows por enquanto — é o alvo do Forja Desktop. Linux/macOS: outro mapa de assets.
@@ -469,6 +471,7 @@ def install_runtime(kind: str, backend: str) -> dict:
 
 SHARD = re.compile(r"^(?P<base>.+)-(?P<idx>\d{5})-of-(?P<total>\d{5})\.gguf$", re.I)
 WEIGHTS = (".gguf", ".safetensors", ".ckpt")
+WEIGHTS_TODOS = (*WEIGHTS, ".pth")  # .pth: os ESRGAN (ampliar.py); na busca do HF fica de fora
 
 
 def scan(exts: tuple[str, ...] = (".gguf",)) -> list[dict]:
@@ -970,6 +973,12 @@ def kind_of(f: Path) -> str:
     """
     if f.suffix.lower() == ".safetensors" and loras.info_lora(str(f)):
         return "lora"  # pelos tensores, não pelo nome: não é modelo, é ajuste por cima de um
+    if f.suffix.lower() in (".pth", ".safetensors"):
+        from .ampliar import eh_ampliador
+        if eh_ampliador(str(f)):
+            return "ampliador"  # ESRGAN: amplia quadro a quadro, não gera nada
+        if f.suffix.lower() == ".pth":
+            return "outro"  # .pth que não é ESRGAN não vira modelo de imagem
     if f.suffix.lower() != ".gguf":
         # .safetensors/.ckpt: só difusão usa por aqui. Wan pelo nome — o VAE e o umt5 dele não são modelo.
         # "wan" como palavra: substring pegava "swan", "Taiwan" e as LoRAs do Wan
@@ -2270,7 +2279,7 @@ def visao_do_alias(alias: str) -> bool | None:
 
 def state() -> dict:
     cfg = read_config()
-    todos = scan(WEIGHTS)
+    todos = scan(WEIGHTS_TODOS)
     # `ctx` por modelo: o seletor da Maestro e dos Workers barra quem tem janela pequena demais.
     # `vision`: o seletor mostra o olho, como o LM Studio.
     models = [{**m, "ctx": ctx_de(m["path"]), "vision": tem_visao(m["path"])} for m in todos if m["kind"] == "chat"]
@@ -2299,5 +2308,6 @@ def state() -> dict:
             "video": {**DEFAULT_IMAGE, **(cfg.get("video") or {})}, "video_models": videos,
             "gpu_video": gpu_video(), "tempos_video": list((cfg.get("tempos") or {}).values()),
             "loras": [{**m, **(loras.info_lora(m["path"]) or {})} for m in todos if m["kind"] == "lora"],
+            "ampliadores": [m for m in todos if m["kind"] == "ampliador"],
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

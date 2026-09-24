@@ -258,6 +258,87 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
     _patch(message_id, status=status, meta={"images": imagens})
 
 
+# ------------------------------------------------------------------ ampliação
+
+def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+    """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
+    progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
+    from . import ampliar as amp
+    msg = _mensagem(message_id)
+    item = next((i for i in msg["meta"]["images"] if i["path"] == path), None)
+    if not item or not Path(path).is_file():
+        raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
+    if int(fator) not in (2, 4):
+        raise ToolError("Amplie em 2× ou 4×.")
+    if modelo and not amp.eh_ampliador(modelo):
+        raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN).")
+    amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada
+    if localai.image_busy():
+        raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
+    opts = dict(msg["meta"].get("opts") or {})
+    nome = Path(modelo).stem if modelo else "Lanczos"
+    amp_meta = {"origem": path, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar)}
+    opts.update(width=int(opts.get("width") or 0) * int(fator), height=int(opts.get("height") or 0) * int(fator),
+                ampliacao=amp_meta)
+    if suavizar and opts.get("fps"):
+        opts.update(fps=int(opts["fps"]) * 2, frames=int(opts.get("frames") or 0) * 2 - 1)
+    saida = Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm")
+    imagens = [{"path": str(saida), "seed": item["seed"], "model": modelo, "model_name": f"{nome} · {fator}×",
+                "status": "pendente", "error": "", "unidade": "quadro"}]
+    with db.session() as s:
+        pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
+                                             db.Message.id < message_id).order_by(db.Message.id.desc()).first())
+        prompt = pedido.content if pedido else ""
+    _save(msg["conversation_id"], role="user", content=prompt, meta={"refs": [], "models": [modelo], "ampliacao": amp_meta})
+    job = downloads.create("lote", f"ampliar {Path(path).name}")
+    nova = _save(msg["conversation_id"], role="assistant", content="", status="running",
+                 meta={"job": job["id"], "count": 1, "seed_mode": "fixa", "opts": opts, "images": imagens})
+    threading.Thread(target=_ampliar_trabalho, args=(msg["conversation_id"], nova.id, job["id"]), daemon=True).start()
+    return nova.to_dict()
+
+
+def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
+    from . import ampliar as amp
+    meta = _mensagem(message_id)["meta"]
+    imagens = list(meta["images"])
+    a = meta["opts"]["ampliacao"]
+    item = imagens[0]
+    localai.set_image_busy(True)
+    previa = previas_dir() / (Path(item["path"]).stem + ".png")
+    previa.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        item.update(status="gerando", progress=0.0, com_previa=bool(a["modelo"]))
+        _patch(message_id, meta={"images": imagens})
+
+        def progresso(feitos: int, total: int, s_quadro: float) -> None:
+            if previa.is_file():
+                item["preview"] = str(previa)
+            item.update(progress=round(feitos / total, 3) if total else 0.0, s_passo=round(s_quadro, 2),
+                        restante=round(max(0, total - feitos) * s_quadro))
+            _patch(message_id, meta={"images": imagens})
+
+        r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
+        # o que saiu de fato (o minterpolate não inventa quadro depois do último): o player conta com isso
+        if r:
+            _patch(message_id, meta={"opts": {**meta["opts"], "width": r["w"], "height": r["h"], "fps": round(r["fps"]),
+                                              "frames": r["quadros"] or meta["opts"].get("frames")}})
+        item["status"] = "pronta"
+    except Exception as e:
+        cancelada = downloads.cancelled(job_id)
+        item["status"] = "cancelada" if cancelada else "erro"
+        item["error"] = "" if cancelada else str(e)
+    finally:
+        localai.set_image_busy(False)
+        for k in ("preview", "com_previa"):
+            item.pop(k, None)
+        previa.unlink(missing_ok=True)
+    pronta = item["status"] == "pronta"
+    downloads.finish(job_id, error="" if pronta else item["error"])
+    mirror.write(conv_id)
+    _patch(message_id, status="pronto" if pronta else ("cancelado" if item["status"] == "cancelada" else "erro"),
+           meta={"images": imagens})
+
+
 # O que o lote ainda não entregou e "Continuar" gera de novo.
 A_REFAZER = ("interrompida", "pendente", "cancelada", "erro")
 
@@ -297,6 +378,14 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
     imagens = list(msg["meta"]["images"])
     if not any(i["status"] in A_REFAZER for i in imagens):
         raise ToolError("Nada a continuar: todas as imagens deste lote já saíram.")
+    if (msg["meta"].get("opts") or {}).get("ampliacao"):  # é uma ampliação: refaz a ampliação
+        _liberar_vram(confirm)
+        for i in imagens:
+            i.update(status="pendente", error="")
+        job = downloads.create("lote", f"ampliar {Path(imagens[0]['path']).name}")
+        _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
+        threading.Thread(target=_ampliar_trabalho, args=(msg["conversation_id"], message_id, job["id"]), daemon=True).start()
+        return {"ok": True}
     with db.session() as s:
         pedido = (s.query(db.Message)
                   .filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",

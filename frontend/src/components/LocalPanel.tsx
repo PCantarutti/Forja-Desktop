@@ -6,6 +6,7 @@ import { Check, Download, Film, FolderOpen, Search, Square, Trash, X } from "./i
 import Confirma from "./Confirma";
 import ModelSearch from "./ModelSearch";
 import SelosModo from "./SelosModo";
+import { BaixarAmpliacao } from "./AmpliarVideo";
 import { useStickyBottom } from "../useStickyBottom";
 
 const POLL_MS = 3000;
@@ -1309,6 +1310,17 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
           setBuscando(true);
         }}
       />
+
+      <section className={card}>
+        <span className="mb-1 flex items-center gap-1.5 text-fg">
+          <Film className="size-3.5" /> Ampliação de vídeo
+        </span>
+        <p className="mb-2 text-faint">
+          Mais resolução para as tomadas prontas (Ampliar, no player da aba Vídeo). O ffmpeg lê e grava o vídeo; os ESRGAN
+          ampliam quadro a quadro na GPU. Sem ESRGAN, amplia por Lanczos.
+        </p>
+        <BaixarAmpliacao onError={props.onError} />
+      </section>
 
       {buscando && (
         <ModelSearch

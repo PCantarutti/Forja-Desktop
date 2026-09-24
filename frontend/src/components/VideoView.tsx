@@ -4,7 +4,7 @@ import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
 import {
   ArrowUp, Camera, Check, ChevronDown, Copy, Download, ExternalLink, Film, FolderOpen, Image, Plus, Refresh,
-  Raio, Sliders, Square, Trocar, X,
+  Raio, Sliders, Square, TelaCheia, Trocar, X,
 } from "./icons";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
 import { btn, btnPrimary, Field, input, Num, SAMPLERS } from "./LocalPanel";
@@ -13,6 +13,7 @@ import { PROPORCOES, duracoesDe, estimarTempo, quadrosDe, tamanhosDe, type Propo
 import { A_REFAZER, AnelProgresso, Chip, CORES, duracao, Fundo, Liquido, rotuloSementes, SEEDS, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
+import { PainelAmpliar } from "./AmpliarVideo";
 
 /** Aba Vídeo: o Wan no stable-diffusion.cpp. O motor é o dos lotes de imagem (um lote = uma tomada,
  *  com variações, manter/descartar e "Continuar"); a tela é outra porque vídeo se olha tocando. */
@@ -1244,6 +1245,7 @@ function Tomada(props: {
           {rotuloSementes(itens.map((i) => i.seed), meta.seed_mode)}
         </button>
         {[...new Set(itens.map((i) => i.model_name))].map((n) => <Chip key={n}>{n}</Chip>)}
+        {meta.opts.ampliacao && <Chip>{`ampliado ${meta.opts.ampliacao.fator}×${meta.opts.ampliacao.suavizar ? " · suavizado" : ""}`}</Chip>}
         {(meta.opts.loras ?? []).length > 0 && (
           <Chip>
             <span title={(meta.opts.loras ?? []).map((l) => `${l.path} × ${l.peso}`).join("\n")}>
@@ -1500,7 +1502,7 @@ function CartaoVideo(props: {
         )}
         {comPrevia ? (
           <span className="shrink-0 tabular-nums text-sky-300">
-            {item.s_passo ? `${velocidade(item.s_passo)} · ${duracao(item.restante ?? 0)}` : "preparando"}
+            {item.s_passo ? `${velocidade(item.s_passo, item.unidade)} · ${duracao(item.restante ?? 0)}` : "preparando"}
           </span>
         ) : (
           !temArquivo && item.status !== "gerando" && <span className={CORES[item.status]}>{item.status}</span>
@@ -1541,10 +1543,11 @@ function Foco(props: {
   const frames = meta.opts.frames ?? 33;
   const refs = pm?.refs ?? [];
   const [salvo, setSalvo] = useState("");
+  const [ampliar, setAmpliar] = useState(false);
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).closest("input, textarea")) return;
+      if ((e.target as HTMLElement).closest("input, textarea, select")) return;
       if (e.key === "Escape" && !document.fullscreenElement) props.onFechar();
       else if (e.key === "ArrowUp" && pos > 0) (e.preventDefault(), props.onIndice(prontos[pos - 1].i));
       else if (e.key === "ArrowDown" && pos < prontos.length - 1) (e.preventDefault(), props.onIndice(prontos[pos + 1].i));
@@ -1687,6 +1690,23 @@ function Foco(props: {
           <button className={acao} onClick={() => props.onReaproveitar(atual.seed)}>
             <Refresh className="size-3.5" /> Refazer com esta semente
           </button>
+
+          <p className="mb-1 mt-4 px-1 text-[11px] uppercase tracking-wider text-faint">Ampliar</p>
+          {ampliar ? (
+            <PainelAmpliar
+              messageId={props.resposta.id}
+              path={atual.path}
+              w={w}
+              h={h}
+              fps={fps}
+              onPronto={() => (props.onMudou(), props.onFechar())}
+              onError={props.onError}
+            />
+          ) : (
+            <button className={acao} onClick={() => setAmpliar(true)} title="Mais resolução (ESRGAN quadro a quadro, ou Lanczos) e, se quiser, o dobro de quadros">
+              <TelaCheia className="size-3.5" /> Ampliar resolução…
+            </button>
+          )}
 
           <p className="mb-1 mt-4 px-1 text-[11px] uppercase tracking-wider text-faint">Arquivo</p>
           <button className={acao} onClick={salvarQuadro}>

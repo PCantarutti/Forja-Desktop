@@ -473,6 +473,7 @@ export type ImageOpts = {
   high_noise_cfg: number; // 0 = o mesmo CFG
   variante: string; // "" = pelo nome do arquivo
   loras: { path: string; peso: number }[]; // LoRAs aplicadas (vídeo)
+  ampliacao?: { origem: string; fator: number; modelo: string; suavizar: boolean }; // tomada que é ampliação de outra
 };
 
 /** Uma variação dentro de um lote da seção Imagens. */
@@ -489,6 +490,7 @@ export type LoteImagem = {
   com_previa?: boolean; // o modelo gera com prévia: o card não usa o líquido, nem antes da 1ª
   s_passo?: number; // segundos por passo, lido do sd-cli
   restante?: number; // segundos até o fim da amostragem
+  unidade?: string; // "quadro" na ampliação (s/quadro); sem ela, passo
 };
 
 /** meta da mensagem do assistente num lote (a thread do backend vai preenchendo `images`). */

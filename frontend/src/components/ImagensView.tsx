@@ -855,8 +855,8 @@ function Lote(props: {
 
 /** Nível sobe com o passo da amostragem; antes do 1º passo (carregando pesos) fica uma lâmina no fundo. */
 /** "32 s/passo" quando lento, "2,5 passos/s" quando rápido — como o sd.cpp decide a unidade. */
-export const velocidade = (s: number) =>
-  s >= 1 ? `${Math.round(s)} s/passo` : `${(1 / s).toFixed(1).replace(".", ",")} passos/s`;
+export const velocidade = (s: number, unidade = "passo") =>
+  s >= 1 ? `${Math.round(s)} s/${unidade}` : `${(1 / s).toFixed(1).replace(".", ",")} ${unidade}s/s`;
 
 export const duracao = (s: number) =>
   s < 60 ? `~${Math.max(1, Math.round(s))} s` : `~${Math.floor(s / 60)} min${s % 60 >= 30 && s < 600 ? " 30 s" : ""}`;

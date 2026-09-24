@@ -707,6 +707,41 @@ async def local_video_acelerador(body: AceleradorBody):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/local/video/ampliadores")
+async def local_video_ampliadores():
+    from . import ampliar
+    return await asyncio.to_thread(ampliar.catalogo)
+
+
+class AmpliadorBody(BaseModel):
+    nome: str
+    folder: str = ""
+
+
+@app.post("/api/local/video/ampliador")
+async def local_video_ampliador(body: AmpliadorBody):
+    from . import ampliar
+    try:
+        return await asyncio.to_thread(ampliar.baixar_modelo, body.nome, body.folder)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class AmpliarBody(BaseModel):
+    path: str
+    fator: int = 2
+    modelo: str = ""  # vazio = Lanczos, sem IA
+    suavizar: bool = False
+
+
+@app.post("/api/imagens/{message_id}/ampliar")
+async def imagens_ampliar(message_id: int, body: AmpliarBody):
+    try:
+        return await asyncio.to_thread(lotes.ampliar, message_id, body.path, body.fator, body.modelo, body.suavizar)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/local/image/achados")
 async def local_image_achados(path: str):
     """VAE/codificador/mmproj com cara de ser deste modelo, perto dele no disco (para o botão Usar)."""
