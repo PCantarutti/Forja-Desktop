@@ -20,7 +20,7 @@ from typing import AsyncIterator
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import hooks, skills
+from . import goals, hooks, skills
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -512,6 +512,8 @@ def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, name
     if maestro_mode:
         texto += projstate.bloco()
     root = workspace.root()
+    if (conv := goals.CONV.get()) is not None:
+        texto += goals.contexto(conv)
     return (texto + _memorias() + memory.instrucoes_workspace(root, list(LIDOS.get() or ()))
             + (skills.catalogo(root) if "skill" in names else ""))
 
@@ -656,6 +658,16 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
     if "update_tasks" in names:
         rules.append("- Trabalho com 3 ou mais passos: crie a lista com update_tasks no início e atualize a cada "
                      "passo (doing ao começar, done ao terminar). O usuário acompanha essa lista.")
+    if "create_goal" in names:
+        rules.append("- Goal é para UM objetivo longo desta conversa: crie com create_goal quando o usuário pedir, em "
+                     "qualquer idioma, um objetivo de várias etapas para você perseguir até o fim — não para "
+                     "trabalho de um turno. Chame get_goal antes de update_goal e copie goal_id e revision. Marque "
+                     "completa só quando o objetivo foi de fato atingido. Bloqueada só depois de 3 rodadas seguidas "
+                     "no mesmo impedimento, com o impedimento concreto; dificuldade, dúvida ou trabalho útil "
+                     "restante não é bloqueio.")
+    if "workflow" in names:
+        rules.append("- workflow SÓ quando o usuário pedir um workflow ou uma orquestração grande de muitos "
+                     "subagentes, em fases. Para uma ou duas delegações, delegate_task.")
     if "serve_status" in names and "run_command" in names:  # a regra cita as duas; ferramenta desligada não entra
         rules.append("- Comando demorado: run_command com background=true (ou deixe passar do timeout: ele vira "
                      "processo em segundo plano sozinho). Você recebe um aviso quando ele terminar — não fique "
@@ -758,6 +770,8 @@ def environment_block(names: list[str]) -> list[str]:
 MAESTRO_FORA = frozenset({
     "update_tasks",     # a lista efêmera competia com as tarefas persistidas; o modelo escolhia a errada
     "delegate_task",    # segundo jeito de delegar, sem contrato nem tentativa: o dela é run_task
+    "create_goal", "get_goal", "update_goal",  # o ciclo dela já é o objetivo longo, com tarefas no banco
+    "workflow",         # idem: a orquestração dela é plan_feature → run_task
 })
 
 
@@ -798,7 +812,7 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
     # schema com uma ferramenta que só devolveria erro.
     fixas = [t for t in (ASK_USER, EXIT_PLAN) if t.name not in exclude]
     if any(t.name == "delegate_task" for t in tools):
-        fixas += [t for t in (LIST_AGENTS, INTERRUPT_AGENT) if t.name not in exclude]
+        fixas += [t for t in (LIST_AGENTS, INTERRUPT_AGENT, WORKFLOW) if t.name not in exclude]
     return tools + extras + fixas
 
 
@@ -1116,6 +1130,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
     # As ferramentas do Task Manager não recebem conv_id; o contextvar diz de qual conversa elas são.
     taskdb.CONV.set(conv_id if req.mode == "maestro" else None)
+    goals.CONV.set(conv_id)
+    if req.content is not None and not req.content.startswith("[Aviso automático do Forja]"):
+        goals.desarmar(conv_id)  # conversa retomada pelo usuário: a goal só volta a girar com resume
     taskdb.SINK.set(_board_sink if req.mode == "maestro" else None)
     projstate.BLOCO.set(None)
     if req.mode == "maestro":  # .forja/ só nasce no modo Maestro, e o bloco fica fixo na execução
@@ -1412,6 +1429,11 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 yield _event(conv_id, "nudge", "Antes de encerrar, há trabalho aberto: " + "; ".join(abertas)
                              + ". Resolva (run_task, update_task ou cancelar com o motivo) ou diga por que vai parar.",
                              to_model=True)
+                continue
+            # Goal ativa e armada: o turno não acaba, começa a próxima rodada (DeepSeek Harness).
+            if agent and not maestro_mode and not run.cancel.is_set() and (rodada := goals.proxima_rodada(conv_id)):
+                yield _event(conv_id, "goal", rodada, to_model=True)
+                iterations = 0  # o teto de passos vale por rodada; o de rodadas é goals.MAX_RODADAS
                 continue
             break
 
@@ -1784,6 +1806,17 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
     if name in ("list_agents", "interrupt_agent"):
         result("ok", _agentes(run, name, args))
         return
+    if parent and name in ("create_goal", "get_goal", "update_goal", "workflow"):
+        result("erro", "Subagente não mexe na goal nem abre workflow: faça a tarefa pedida e relate.")
+        return
+    if name == "workflow":
+        try:
+            fases = _fases(args)
+        except ToolError as e:
+            result("erro", str(e))
+            return
+        result("ok", await _workflow(conv_id, call, fases, req, run))
+        return
     if name == "run_task":
         # Como o delegate_task: precisa emitir eventos e chamar de volta este mesmo _run_call, para
         # que a verificação da tarefa passe pela policy e pelo card de aprovação.
@@ -1926,6 +1959,94 @@ def _agentes(run: Run, name: str, args: dict) -> str:
     linhas = [f"- {i}: {'rodando' if not f['task'].done() else 'terminado'} há "
               f"{int(time.monotonic() - f['inicio'])}s — {f['tarefa'][:120]}" for i, f in run.filhos.items()]
     return "\n".join(linhas) or "Nenhum subagente em segundo plano nesta execução."
+
+
+# ------------------------------------------------------------------ workflow
+# O workflow do DeepSeek Harness é um script JS; aqui é declarativo — fases em sequência, agentes da
+# mesma fase em paralelo, e `{{fase.agente}}` no texto de uma tarefa vira o relatório daquele agente.
+# Mesmo fan-out e pipeline, sem rodar código gerado pelo modelo.
+MAX_FASES, MAX_AGENTES_FASE, MAX_RELATO = 8, 8, 6000
+
+
+def _fases(args: dict) -> list[dict]:
+    fases = args.get("phases")
+    if not isinstance(fases, list) or not fases:
+        raise ToolError("Envie 'phases': [{name, agents: [{name, task, level?, agent?, files?, done_when?}]}].")
+    if len(fases) > MAX_FASES:
+        raise ToolError(f"No máximo {MAX_FASES} fases.")
+    vistos: set[str] = set()
+    for f in fases:
+        if not isinstance(f, dict) or not str(f.get("name") or "").strip() or not isinstance(f.get("agents"), list) \
+                or not f["agents"]:
+            raise ToolError("Cada fase precisa de 'name' e de uma lista 'agents' não vazia.")
+        if len(f["agents"]) > MAX_AGENTES_FASE:
+            raise ToolError(f"No máximo {MAX_AGENTES_FASE} agentes por fase.")
+        for a in f["agents"]:
+            if not isinstance(a, dict) or not str(a.get("name") or "").strip() or not str(a.get("task") or "").strip():
+                raise ToolError(f"Agente da fase '{f['name']}' sem 'name' ou 'task'.")
+            chave = f"{f['name']}.{a['name']}"
+            if chave in vistos:
+                raise ToolError(f"Nome repetido: {chave}.")
+            vistos.add(chave)
+    return fases
+
+
+async def _workflow(conv_id: int, call: dict, fases: list[dict], req: RunRequest, run: Run) -> str:
+    import re
+
+    relatos: dict[str, str] = {}
+    saida: list[str] = []
+
+    def troca(texto: str) -> str:
+        return re.sub(r"\{\{\s*([^}]+?)\s*\}\}", lambda m: relatos.get(m.group(1), m.group(0)), texto)
+
+    for f in fases:
+        saida.append(f"## Fase {f['name']}")
+
+        async def um(a: dict) -> tuple[str, dict]:
+            args = {"task": troca(str(a["task"])), "level": a.get("level") or "rapido",
+                    **{k: a[k] for k in ("agent", "files", "done_when") if a.get(k)}}
+            sub = {"id": f"{call['id']}.{f['name']}.{a['name']}", "name": "delegate_task", "arguments": args}
+            o: dict = {}
+            try:
+                async with _limite(sub):
+                    async for ev in subagents.run(conv_id, sub, req, run, o, _run_call):
+                        await run.publish(ev)
+            except Exception as e:  # um agente não derruba a fase
+                o.update(status="erro", text=f"{e.__class__.__name__}: {e}")
+            return a["name"], o
+
+        for nome, o in await asyncio.gather(*(um(a) for a in f["agents"])):
+            texto = (o.get("text") or "(sem relatório)")[:MAX_RELATO]
+            relatos[f"{f['name']}.{nome}"] = texto
+            saida.append(f"### {nome} [{o.get('status') or 'erro'}]\n{texto}")
+        if run.cancel.is_set():
+            saida.append("(workflow interrompido pelo usuário)")
+            break
+    return "\n\n".join(saida)
+
+
+WORKFLOW = Tool(
+    "workflow",
+    "Orquestra muitos subagentes em fases: as fases rodam em sequência e os agentes de uma fase em paralelo. "
+    "No 'task' de um agente, {{fase.agente}} é trocado pelo relatório daquele agente de uma fase anterior. "
+    "Devolve os relatórios de todos, por fase. Use SÓ quando o usuário pedir um workflow ou uma orquestração "
+    "grande; para uma ou duas delegações, use delegate_task.",
+    {"type": "object", "properties": {"phases": {
+        "type": "array", "description": "Fases em ordem",
+        "items": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "Nome curto da fase, ex.: levantar"},
+            "agents": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "Nome curto do agente, ex.: backend"},
+                "task": {"type": "string", "description": "Tarefa completa; pode citar {{fase.agente}}"},
+                "level": {"type": "string", "enum": list(subagents.DELEGABLE)},
+                "agent": {"type": "string", "description": "Persona do projeto (.forja/agents)"},
+                "files": {"type": "array", "items": {"type": "string"}},
+                "done_when": {"type": "string", "description": "Comando que prova que ficou pronto"}},
+                "required": ["name", "task"]}}},
+            "required": ["name", "agents"]}}},
+     "required": ["phases"]},
+    lambda *_: "")
 
 
 LIST_AGENTS = Tool("list_agents", "Lista os subagentes em segundo plano desta execução e o estado de cada um.",

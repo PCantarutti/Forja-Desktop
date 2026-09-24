@@ -59,6 +59,22 @@ class ModelSetting(Base):
     inference: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class Goal(Base):
+    """Objetivo longo de uma conversa (goals.py): o agente segue em rodadas até provar que terminou."""
+    __tablename__ = "goals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id", ondelete="CASCADE"), index=True)
+    objective: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(12), default="ativa")  # ativa|pausada|completa|bloqueada
+    armada: Mapped[bool] = mapped_column(default=True)   # False depois de retomar a conversa, até resume
+    rodada: Mapped[int] = mapped_column(default=0)
+    revisao: Mapped[int] = mapped_column(default=1)
+    bloqueios: Mapped[int] = mapped_column(default=0)    # rodadas seguidas relatando bloqueio
+    rodada_bloqueio: Mapped[int] = mapped_column(default=-1)
+    motivo: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 class Checkpoint(Base):
     """Conteúdo de um arquivo ANTES da primeira alteração feita pelo agente num turno.
 

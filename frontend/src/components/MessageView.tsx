@@ -934,6 +934,7 @@ const EVENT_STYLE: Record<string, string> = {
   error: "border-red-500/30 text-red-200",
   nudge: "border-sky-500/30 text-sky-200",
   aviso: "border-emerald-500/30 text-emerald-200",
+  goal: "border-violet-500/30 text-violet-200",
   info: "border-line text-muted",
 };
 
@@ -967,6 +968,7 @@ export function EventNotice({ m }: { m: Message }) {
     nudge: "Lembrete automático ao modelo",
     info: "Info",
     aviso: "Segundo plano",
+    goal: "Nova rodada da goal",
   }[kind as string];
   return (
     <div className={`my-3 rounded-2xl border bg-surface px-4 py-2.5 text-sm ${EVENT_STYLE[kind] ?? EVENT_STYLE.info}`}>

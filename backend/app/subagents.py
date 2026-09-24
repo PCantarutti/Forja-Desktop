@@ -345,7 +345,8 @@ async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = No
     setting = db.get_model_setting(model)
     via = "prompt" if setting["tool_mode"] == "text" else "native"
     caps = vision_caps(await llm.capabilities(provider, model), setting["vision"])
-    excluir = {"delegate_task"}
+    # Coisa da conversa principal: plano, goal e orquestração não são papel de quem recebe a tarefa.
+    excluir = {"delegate_task", "exit_plan_mode", "create_goal", "get_goal", "update_goal"}
     permitidas = set(persona["tools"]) if persona and persona["tools"] else (
         set(WORKER_TOOLS) if focado else None)
     if permitidas is not None:  # tudo o que não está na lista nem aparece para ele

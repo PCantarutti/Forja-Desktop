@@ -183,6 +183,13 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
   list_agents: () => "Conferindo os subagentes",
+  workflow: (a) => `Orquestrando ${Array.isArray(a.phases) ? a.phases.length : ""} fases de subagentes`.replace("  ", " "),
+  create_goal: () => "Definindo o objetivo",
+  get_goal: () => "Conferindo o objetivo",
+  update_goal: (a) =>
+    ({ complete: "Marcando o objetivo como completo", blocked: "Relatando bloqueio do objetivo",
+       resume: "Retomando o objetivo", pause: "Pausando o objetivo" } as Record<string, string>)[String(a.action)] ??
+    "Atualizando o objetivo",
   interrupt_agent: (a) => `Parando o subagente ${trecho(a.id, 20) ?? ""}`.trim(),
   skill: (a) =>`Carregando a skill ${trecho(a.name, 30) ?? ""}`.trim(),
   glob: (a) =>`Procurando arquivos ${trecho(a.pattern, 36) ?? ""}`.trim(),
