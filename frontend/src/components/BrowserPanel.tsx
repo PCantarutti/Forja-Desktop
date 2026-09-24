@@ -15,6 +15,9 @@ const KEYS: Record<string, string> = { " ": "Space" };
  *
  * A sessão continua viva no backend quando esta aba não está montada; só o stream fecha.
  */
+/** Aba nova (a URL-marcador da view nativa, ou about:blank): mostra a tela inicial do painel no lugar. */
+const emBranco = (url?: string) => !url || url.startsWith("about:blank");
+
 export default function BrowserPanel(props: { conv: string; onState: (s: BrowserState) => void }) {
   const { conv } = props;
   const q = `?conv=${encodeURIComponent(conv)}`;
@@ -70,11 +73,11 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
       setConnected(true);
       if (ev.type === "frame") {
         setFrame(`data:${ev.mime ?? "image/jpeg"};base64,${ev.data}`);
-        if (!editing.current) setUrlInput(ev.url);
+        if (!editing.current) setUrlInput(emBranco(ev.url) ? "" : ev.url);
       } else if (ev.type === "state") {
         setState(ev);
         onState.current(ev);
-        if (!editing.current) setUrlInput(ev.url);
+        if (!editing.current) setUrlInput(emBranco(ev.url) ? "" : ev.url);
         if (!ev.open) setFrame(null);
         // Sessão (re)aberta com outro tamanho: manda o tamanho do painel.
         if (ev.open && (!wanted.current || ev.width !== wanted.current.width || ev.height !== wanted.current.height)) {
@@ -122,6 +125,10 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     };
   }, [conv]);
 
+  const abaBranca = state.open && emBranco(state.url);
+  const branca = useRef(abaBranca);
+  branca.current = abaBranca;
+
   // Nativo: diz ao Electron onde a view deve ficar. Some quando o painel encolhe ou algo cobre a área.
   useEffect(() => {
     const el = box.current;
@@ -129,6 +136,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
     if (!native || !el || !bridge) return;
     const report = () => {
       const r = el.getBoundingClientRect();
+      if (branca.current) return bridge.view({ key: conv, bounds: null }); // aba nova: a lista de servidores aparece
       // ponytail: elementFromPoint no centro detecta modal/lightbox por cima do painel; a view nativa não
       // está no DOM, então uma cobertura só pode ser da própria interface.
       const mid = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
@@ -267,7 +275,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
               t.active ? "border-line bg-surface text-fg" : "border-transparent text-muted hover:bg-raised/60 hover:text-fg"
             }`}
           >
-            <span className="truncate">{t.title || t.url.replace(/^https?:\/\//, "") || "nova aba"}</span>
+            <span className="truncate">{emBranco(t.url) ? "Nova aba" : t.title || t.url.replace(/^https?:\/\//, "")}</span>
             <button
               title="Fechar aba"
               onClick={(e) => {
@@ -346,7 +354,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
         }
         className="min-h-0 flex-1 overflow-hidden bg-black outline-none focus:ring-1 focus:ring-sky-500/60 focus:ring-inset"
       >
-        {native && state.open ? null /* a view nativa cobre esta área */ : frame ? (
+        {native && state.open && !abaBranca ? null /* a view nativa cobre esta área */ : frame && !abaBranca ? (
           <img
             ref={img}
             src={frame}
@@ -375,7 +383,9 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
           />
         ) : (
           <div className="p-4 text-muted">
-            {state.open
+            {abaBranca
+              ? "Aba nova. Digite uma URL acima ou abra um servidor abaixo."
+              : state.open
               ? "Aguardando a primeira tela…"
               : connected
                 ? conv === "0"
