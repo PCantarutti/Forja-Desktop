@@ -31,7 +31,7 @@ export const nextPermission = (p: Permission, running = false): Permission => {
 };
 
 /** Menu que abre para cima, no rodapé do campo de mensagem (como no Claude). */
-function Menu<T extends string>(props: {
+export function Menu<T extends string>(props: {
   title: string;
   items: { id: T; label: string; hint: string }[];
   value: T;

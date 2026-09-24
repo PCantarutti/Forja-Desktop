@@ -1,4 +1,5 @@
-/** Cockpit do Maestro: a árvore de tarefas, a Maestro e o Worker lado a lado, com uma doca embaixo.
+/** Cockpit do Maestro: a árvore de tarefas, a Maestro e o Worker lado a lado, numa grade de tiles em
+ * que os painéis da barra do topo (navegador, terminal, Tarefa, Modelo...) entram em qualquer lugar.
  *
  * Por que uma tela própria e não o chat com um painel a mais: numa execução autônoma longa as três
  * coisas acontecem ao mesmo tempo — a Maestro decide, um Worker implementa e o navegador valida — e
@@ -20,12 +21,12 @@ import {
 } from "../types";
 import Confirma from "./Confirma";
 import ContextRing from "./ContextRing";
-import { Balanca, Check, Clock, Cube, Expandir, Recolher, Split, X } from "./icons";
+import { Balanca, Check, Clock, Cube, Split, X } from "./icons";
 import { Modal } from "./Modal";
 import { aggregate, type TurnStats } from "./MessageView";
-import { layoutDe, mover, type Alvo, type Bloco, type Layout } from "./layout";
 import ModelPicker from "./ModelPicker";
-import { TABS as ABAS_DIREITA, seloDaAba, type EstadoAbas, type RightTab } from "./RightPanel";
+import Tiles, { type Cabeca, type RightTab, type Rotulo } from "./RightPanel";
+import { abertos, abrir as abrirTile, type Grade } from "./tiles";
 
 const POLL_MS = 2000;
 
@@ -78,14 +79,30 @@ const titulo = "px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-f
 const gb = (n?: number | null) => (n == null ? "—" : `${(n / 1024 ** 3).toFixed(1)} GB`);
 const dur = (s?: number | null) => (s == null ? "" : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}`);
 
-// ------------------------------------------------------------------ layout redimensionável
+// ------------------------------------------------------------------ grade da tela
 
-const NOMES: Record<Bloco, string> = { arvore: "Tarefas", maestro: "Maestro", worker: "Worker", doca: "Painéis" };
+// Os três blocos do cockpit são tiles fixos (não fecham, não contam no limite); o resto da grade são
+// os painéis da barra do topo, que aqui também tem Tarefa e Modelo · VRAM.
+const COCKPIT = ["arvore", "maestro", "worker"];
+const NOMES: Record<string, string> = { arvore: "Tarefas", maestro: "Maestro", worker: "Worker" };
+/** Os itens da grade que só existem na Maestro: fora dela (o rascunho troca de tela sem trocar de
+ * grade) eles não aparecem. */
+export const SO_MAESTRO = ["arvore", "maestro", "worker", "task", "model"];
+export const ABAS_MAESTRO = [
+  { id: "task", label: "Tarefa", icon: <Split className="size-4" /> },
+  { id: "model", label: "Modelo · VRAM", icon: <Cube className="size-4" /> },
+];
+// Mesma chave do cockpit antigo: o "_padrao" continua lá (e Configurações › Maestro o apaga); os
+// layouts por conversa do formato antigo são lidos uma vez, na primeira abertura depois da mudança.
 const LAYOUT_CHAVE = "forja.maestro.layout";
-const COL_MIN = 10;              // % mínimo de cada coluna
-const DOCK_MIN = 12, DOCK_MAX = 75;
+// larguras em peso (px de referência numa tela de ~1400 px): 14 · 56 · 30 como no cockpit antigo
+const PADRAO: Grade<string> = {
+  colunas: [{ tabs: ["arvore"], largura: 200, alturas: [1] }, { tabs: ["maestro"], largura: 780, alturas: [1] },
+            { tabs: ["worker"], largura: 420, alturas: [1] }],
+  recolhidos: [], fixos: COCKPIT,
+};
 
-function lerLayouts(): Record<string, Layout> {
+function lerLayouts(): Record<string, any> {
   try {
     return JSON.parse(localStorage.getItem(LAYOUT_CHAVE) || "{}");
   } catch {
@@ -93,61 +110,38 @@ function lerLayouts(): Record<string, Layout> {
   }
 }
 
-function useLayout(convId: number | null) {
-  const chave = convId === null ? "_nova" : String(convId);
-  const [st, setSt] = useState(() => ({ chave, layout: layoutDe(chave, lerLayouts()) }));
-  // Trocou de conversa: ajusta no próprio render (padrão do React para "estado derivado de prop"),
-  // sem um efeito que desenharia um quadro com o layout da conversa anterior.
-  // A conversa nova ganha id no primeiro envio: o que foi ajustado antes disso vai junto com ela.
-  const herda = st.chave === "_nova" && chave !== "_nova" && !lerLayouts()[chave];
-  if (st.chave !== chave) setSt({ chave, layout: herda ? st.layout : layoutDe(chave, lerLayouts()) });
-  const layout = st.chave === chave || herda ? st.layout : layoutDe(chave, lerLayouts());
-  const setLayout = (f: (l: Layout) => Layout) => setSt((s) => ({ ...s, layout: f(s.layout) }));
-  const grava = (k: string, l: Layout) => {
-    try {
-      localStorage.setItem(LAYOUT_CHAVE, JSON.stringify({ ...lerLayouts(), [k]: l }));
-    } catch {
-      /* sem storage: vale só nesta sessão */
-    }
-  };
-  // "_nova" não é gravado: cada conversa nova parte do padrão, não do rascunho da anterior.
-  const salvar = (l: Layout) => chave !== "_nova" && grava(chave, l);
-  const salvarPadrao = (l: Layout) => grava("_padrao", l);
-  const ehPadrao = (l: Layout) => JSON.stringify(l) === JSON.stringify(layoutDe("_nova", lerLayouts()));
-  return { layout, setLayout, salvar, salvarPadrao, ehPadrao };
+/** Layout do cockpit antigo (colunas de um bloco + uma faixa) na grade: a faixa, se era um bloco do
+ * cockpit, desce para baixo da Maestro; a doca, que virou Tarefa e Modelo na barra do topo, some. */
+function doAntigo(l: any): Grade<string> | null {
+  if (!Array.isArray(l?.colunas) || typeof l.colunas[0] !== "string") return null;
+  const cols = (l.colunas as string[]).map((b, i) => ({ b, peso: Number(l.larguras?.[i]) || 30 })).filter((x) => COCKPIT.includes(x.b));
+  const colunas = cols.map((x) => ({ tabs: [x.b], largura: Math.round(x.peso * 14), alturas: [1] }));
+  const falta = COCKPIT.filter((b) => !cols.some((x) => x.b === b));
+  const alvo = colunas.find((c) => c.tabs[0] === "maestro") ?? colunas[0];
+  for (const b of falta) {
+    if (alvo) {
+      alvo.tabs.push(b);
+      alvo.alturas.push(l.faixa === b ? Math.max(1, Number(l.dock) || 36) / 64 : 1);
+    } else colunas.push({ tabs: [b], largura: 400, alturas: [1] });
+  }
+  return { colunas, recolhidos: (l.recolhidos ?? []).filter((b: string) => COCKPIT.includes(b)), fixos: COCKPIT };
 }
 
-/** Faixa de arrasto entre dois blocos. Só reporta o deslocamento; quem sabe o que fazer é o pai. */
-function Divisor(props: { eixo: "x" | "y"; onArrasto: (e: PointerEvent) => void; onFim: () => void }) {
-  return (
-    <div
-      role="separator"
-      aria-orientation={props.eixo === "x" ? "vertical" : "horizontal"}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        const mover = (ev: PointerEvent) => props.onArrasto(ev);
-        const soltar = () => {
-          window.removeEventListener("pointermove", mover);
-          window.removeEventListener("pointerup", soltar);
-          document.body.style.cursor = "";
-          document.body.style.userSelect = "";
-          props.onFim();
-        };
-        // cursor e seleção no body: arrastando rápido o ponteiro sai da faixa estreita
-        document.body.style.cursor = props.eixo === "x" ? "col-resize" : "row-resize";
-        document.body.style.userSelect = "none";
-        window.addEventListener("pointermove", mover);
-        window.addEventListener("pointerup", soltar);
-      }}
-      className={`group shrink-0 ${props.eixo === "x" ? "w-2 cursor-col-resize" : "h-2 cursor-row-resize"} flex items-center justify-center`}
-    >
-      <div className={`rounded-full bg-line transition-colors group-hover:bg-muted ${props.eixo === "x" ? "h-8 w-0.5" : "h-0.5 w-8"}`} />
-    </div>
-  );
+/** O layout com que uma conversa sem grade da Maestro começa: o salvo como padrão, ou o original. */
+function padrao(): Grade<string> {
+  const p = lerLayouts()._padrao;
+  if (Array.isArray(p?.colunas) && Array.isArray(p.colunas[0]?.tabs)) return { ...p, fixos: COCKPIT };
+  return doAntigo(p) ?? PADRAO;
 }
 
-// Ordem da doca: a mesma do painel direito do chat e do agente, e no fim as duas só da Maestro.
-type DocaTab = RightTab | "model" | "task";
+/** A grade da conversa com o cockpit dentro. Sem ele (conversa nova, ou salva antes da mudança), o
+ * cockpit vem do layout antigo dela ou do padrão, e os painéis que já estavam abertos entram depois. */
+function comCockpit(g: Grade<string>, convId: number | null): Grade<string> {
+  if (COCKPIT.every((b) => abertos(g).includes(b))) return g.fixos ? g : { ...g, fixos: COCKPIT };
+  const base = (convId !== null && doAntigo(lerLayouts()[String(convId)])) || padrao();
+  const mesmos = abertos(base);
+  return abertos(g).filter((t) => !mesmos.includes(t)).reduce((x, t) => abrirTile(x, t, 420), base);
+}
 
 export default function MaestroView(props: {
   convId: number | null;
@@ -169,11 +163,12 @@ export default function MaestroView(props: {
   // O composer do App: modos, esforço, anexos, anel de contexto e seletor de modelo idênticos aos do
   // chat e do agente, porque é o mesmo bloco — não uma cópia que vai divergindo.
   composer: React.ReactNode;
-  // Conteúdo das abas do painel direito, montado pelo App: a doca mostra os mesmos painéis.
+  // A grade da tela (a mesma que a barra do topo abre e fecha, guardada por conversa pelo App) e o
+  // conteúdo dos painéis dela, que é o mesmo das outras telas.
+  grade: Grade<string>;
+  onGrade: (g: Grade<string>) => void;
   painel: (tab: RightTab) => React.ReactNode;
   onDecide: (callId: string, aprovado: boolean) => void;
-  // Selos das abas (ponto verde, contadores): os mesmos do painel direito do chat e do agente.
-  estadoAbas: EstadoAbas;
   // Intervenção humana (§27): pausar a execução e pedir algo à Maestro (reenviar uma tarefa).
   pausado: boolean;
   onPausar: (sim: boolean) => void;
@@ -183,13 +178,13 @@ export default function MaestroView(props: {
   onTestarWorker: (id: string, nome: string, spec?: { provider: string; model: string }) => void;
 }) {
   const { convId, board, onBoard } = props;
-  const { layout, setLayout, salvar: gravar, salvarPadrao, ehPadrao } = useLayout(convId);
+  const grade = comCockpit(props.grade, convId);
   // Toda mudança de layout feita pela pessoa mostra por alguns segundos, no cabeçalho, o botão
   // discreto de "salvar como padrão" (se já não for o padrão).
   const [avisoEm, setAvisoEm] = useState(0);
   const [perguntaPadrao, setPerguntaPadrao] = useState(false);
-  const salvar = (l: Layout) => {
-    gravar(l);
+  const mudaGrade = (g: Grade<string>) => {
+    props.onGrade(g);
     setAvisoEm((n) => n + 1);  // contador: cada mudança reinicia os segundos do aviso
   };
   useEffect(() => {
@@ -197,151 +192,15 @@ export default function MaestroView(props: {
     const t = setTimeout(() => setAvisoEm(0), 8000);
     return () => clearTimeout(t);
   }, [avisoEm]);
-  const mostraSalvarPadrao = (!!avisoEm || perguntaPadrao) && !ehPadrao(layout);
-  function recolher(id: Bloco, sim: boolean) {
-    setLayout((l) => {
-      const novo = { ...l, recolhidos: sim ? [...l.recolhidos, id] : l.recolhidos.filter((b) => b !== id) };
-      salvar(novo);
-      return novo;
-    });
-  }
-  const botaoRecolher = (id: Bloco) => (
-    <button
-      onClick={() => recolher(id, true)}
-      title={`Recolher ${NOMES[id]} numa barra fina`}
-      className="ml-auto shrink-0 rounded p-0.5 text-faint hover:bg-raised hover:text-fg"
-    >
-      <Recolher className="size-3.5" />
-    </button>
-  );
-  const area = useRef<HTMLDivElement>(null);     // tudo abaixo do cabeçalho: colunas + doca
-  const colunas = useRef<HTMLDivElement>(null);
-  // O último layout, para gravar quando o arrasto termina (o handler do pointerup foi criado no
-  // pointerdown e enxergaria o estado daquele instante).
-  const atual = useRef(layout);
-  useEffect(() => {
-    atual.current = layout;
-  }, [layout]);
-
-  function arrastaColuna(i: number, e: PointerEvent) {
-    // Pelos retângulos das duas colunas vizinhas: com colunas recolhidas (largura fixa) no meio, a
-    // conta pela soma das partes da grade inteira erraria.
-    const els = colunas.current?.querySelectorAll<HTMLElement>(":scope > [data-bloco]");
-    if (!els?.[i + 1]) return;
-    const esq = els[i].getBoundingClientRect(), dir = els[i + 1].getBoundingClientRect();
-    setLayout((l) => {
-      const larguras = [...l.larguras];
-      const total = larguras.reduce((a, b) => a + b, 0);
-      const par = larguras[i] + larguras[i + 1];
-      const minimo = Math.min((COL_MIN / 100) * total, par / 2);
-      const pos = ((e.clientX - esq.left) / (dir.right - esq.left)) * par;
-      larguras[i] = Math.min(Math.max(pos, minimo), par - minimo);
-      larguras[i + 1] = par - larguras[i];
-      return { ...l, larguras };
-    });
-  }
-
-  function arrastaDoca(e: PointerEvent) {
-    const box = area.current?.getBoundingClientRect();
-    if (!box) return;
-    setLayout((l) => {
-      const dock = ((l.faixaEmCima ? e.clientY - box.top : box.bottom - e.clientY) / box.height) * 100;
-      return { ...l, dock: Math.min(Math.max(dock, DOCK_MIN), DOCK_MAX) };
-    });
-  }
-
-  // Reposicionar: segurar o cabeçalho de um bloco "descola" o bloco da tela (sombra, leve aumento) e
-  // ele segue o ponteiro; o indicador azul mostra onde vai cair. Solto: lateral de uma coluna insere
-  // ali, o meio troca os dois de lugar, a borda de cima/baixo da área vira a faixa de largura inteira.
-  // Salvo na hora, por conversa, junto com o redimensionamento.
-  type Caixa = { left: number; top: number; width: number; height: number };
-  const [arrastando, setArrastando] = useState<Bloco | null>(null);
-  const [indicador, setIndicador] = useState<{ alvo: Alvo; caixa: Caixa } | null>(null);
-
-  function alvoEm(id: Bloco, x: number, y: number): { alvo: Alvo; caixa: Caixa } | null {
-    const a = area.current?.getBoundingClientRect();
-    if (!a) return null;
-    const l = atual.current;
-    const achado = ((): { alvo: Alvo; caixa: Caixa } | null => {
-      const borda = Math.min(40, a.height * 0.08);
-      if (y < a.top + borda || y > a.bottom - borda) {
-        const emCima = y < a.top + borda;
-        return { alvo: { tipo: "faixa", emCima }, caixa: { left: 0, top: emCima ? 0 : a.height - 4, width: a.width, height: 4 } };
-      }
-      // elementsFromPoint: o bloco levantado não recebe ponteiro e a cortina do arrasto é ignorada
-      const el = document.elementsFromPoint(x, y)
-        .map((e) => (e as HTMLElement).closest<HTMLElement>("[data-bloco]")).find(Boolean);
-      const com = el?.dataset.bloco as Bloco | undefined;
-      if (!el || !com) return null;
-      const r = el.getBoundingClientRect();
-      const caixa = { left: r.left - a.left, top: r.top - a.top, width: r.width, height: r.height };
-      const j = l.colunas.indexOf(com);
-      const fx = (x - r.left) / r.width;
-      if (j >= 0 && (fx < 0.25 || fx > 0.75)) {
-        const depois = fx > 0.75;
-        return { alvo: { tipo: "coluna", pos: j + (depois ? 1 : 0) },
-                 caixa: { ...caixa, left: caixa.left + (depois ? r.width : 0) - 2, width: 4 } };
-      }
-      return { alvo: { tipo: "trocar", com }, caixa };
-    })();
-    // soltar ali não mudaria nada: sem indicador
-    return achado && mover(l, id, achado.alvo) !== l ? achado : null;
-  }
-
-  /** Alça (cabeçalho) de um bloco: segurar e arrastar. Os botões dentro dela continuam clicáveis. */
-  const alca = (id: Bloco): React.HTMLAttributes<HTMLDivElement> => ({
-    title: "Segure e arraste para mudar este bloco de lugar",
-    style: { cursor: arrastando ? "grabbing" : "grab", userSelect: "none" },
-    onPointerDown: (e) => {
-      if (e.button !== 0) return;
-      const bloco = e.currentTarget.closest<HTMLElement>("[data-bloco]");
-      if (!bloco) return;
-      const x0 = e.clientX, y0 = e.clientY, estilo = bloco.style.cssText;
-      let ativo = false;
-      let ultimo: { alvo: Alvo; caixa: Caixa } | null = null;
-      const mexe = (ev: PointerEvent) => {
-        const dx = ev.clientX - x0, dy = ev.clientY - y0;
-        if (!ativo) {
-          if (Math.hypot(dx, dy) < 6) return;  // clique comum num botão da alça não vira arrasto
-          ativo = true;
-          setArrastando(id);
-          document.body.style.userSelect = "none";
-          bloco.style.cssText = estilo + ";position:relative;z-index:50;pointer-events:none;border-radius:12px;"
-            + "opacity:.94;scale:1.025;transition:scale .15s ease-out,box-shadow .15s ease-out;"
-            + "box-shadow:0 28px 60px -12px rgb(0 0 0/.65),0 0 0 1px rgb(56 189 248/.55);";
-        }
-        bloco.style.setProperty("translate", `${dx}px ${dy}px`);
-        ultimo = alvoEm(id, ev.clientX, ev.clientY);
-        setIndicador(ultimo);
-      };
-      const solta = () => {
-        window.removeEventListener("pointermove", mexe);
-        window.removeEventListener("pointerup", solta);
-        window.removeEventListener("pointercancel", solta);
-        if (!ativo) return;
-        bloco.style.cssText = estilo;
-        document.body.style.userSelect = "";
-        // o clique que o navegador dispara depois do arrasto não pode trocar a aba sob o ponteiro
-        const engole = (c: MouseEvent) => c.stopPropagation();
-        window.addEventListener("click", engole, { capture: true, once: true });
-        setTimeout(() => window.removeEventListener("click", engole, { capture: true }), 0);
-        setArrastando(null);
-        setIndicador(null);
-        const alvo = ultimo?.alvo;
-        if (alvo) {
-          setLayout((l) => {
-            const novo = mover(l, id, alvo);
-            if (novo !== l) salvar(novo);
-            return novo;
-          });
-        }
-      };
-      window.addEventListener("pointermove", mexe);
-      window.addEventListener("pointerup", solta);
-      window.addEventListener("pointercancel", solta);
-    },
-  });
-  const [doca, setDoca] = useState<DocaTab>("browser");
+  const mostraSalvarPadrao = (!!avisoEm || perguntaPadrao) && JSON.stringify(grade) !== JSON.stringify(padrao());
+  const salvarPadrao = () => {
+    try {
+      localStorage.setItem(LAYOUT_CHAVE, JSON.stringify({ ...lerLayouts(), _padrao: grade }));
+    } catch {
+      /* sem storage: vale só nesta sessão */
+    }
+  };
+  const modeloAberto = abertos(grade).includes("model");
   const [selecionada, setSelecionada] = useState<string | null>(null);
   const [detalhe, setDetalhe] = useState<MaestroTask | null>(null);
   const [modelos, setModelos] = useState<MaestroModels | null>(null);
@@ -364,10 +223,10 @@ export default function MaestroView(props: {
   useEffect(() => {
     const puxa = () => api.get<MaestroModels>("/maestro/models").then(setModelos).catch(() => {});
     puxa();  // uma vez sempre: o painel da tarefa mostra o nome do especialista
-    if (doca !== "model") return;
+    if (!modeloAberto) return;
     const t = setInterval(puxa, 3000);
     return () => clearInterval(t);
-  }, [doca]);
+  }, [modeloAberto]);
 
   // Detalhe da tarefa selecionada (contrato, tentativas e a conversa gravada de cada Worker). Enquanto
   // ela está em andamento, relê no ritmo do board: depois de um F5 no meio da tarefa a SSE não tem o
@@ -441,17 +300,18 @@ export default function MaestroView(props: {
 
   function abrirTarefa(code: string) {
     setSelecionada(code);
-    setDoca("task");
+    if (!abertos(grade).includes("task")) mudaGrade(abrirTile(grade, "task", 420));  // o contrato dela, num tile
     const vivo = workers.find((x) => x.code === code && x.w.status);
     setAbaWorker(vivo ? vivo.id : "hist");
   }
 
-  // Conteúdo de cada bloco, para desenhar como coluna ou como faixa.
-  const bloco = (id: Bloco) =>
+  // Conteúdo de cada item da grade: os blocos do cockpit trazem o próprio cabeçalho (com a alça e o
+  // recolher que a grade manda); Tarefa e Modelo são tiles comuns; o resto são os painéis do App.
+  const item = (id: string, cab: Cabeca) =>
     id === "arvore" ? (
-      <Arvore board={board} selecionada={selecionada} onSelect={abrirTarefa} alca={alca("arvore")} acao={botaoRecolher("arvore")} />
+      <Arvore board={board} selecionada={selecionada} onSelect={abrirTarefa} alca={cab.alca} acao={cab.acao} />
     ) : id === "maestro" ? (
-      <ColunaMaestro conversa={props.conversa} composer={props.composer} alca={alca("maestro")} acao={botaoRecolher("maestro")} />
+      <ColunaMaestro conversa={props.conversa} composer={props.composer} alca={cab.alca} acao={cab.acao} />
     ) : id === "worker" ? (
       <ColunaWorker
         key={foco ?? ""}
@@ -461,119 +321,69 @@ export default function MaestroView(props: {
         detalhe={detalhe}
         approvals={props.approvals}
         conversar={props.renderConversa}
-        alca={alca("worker")}
-        acao={botaoRecolher("worker")}
+        alca={cab.alca}
+        acao={cab.acao}
       />
-    ) : (
-      <div className={`${card} flex min-h-[120px] flex-col`}>
-        <div {...alca("doca")} className="@container flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-2 py-1">
-          {([
-            ...ABAS_DIREITA.map((t) => abaDireita(t.id)),
-            ["task", selecionada ?? "Tarefa", <Split className="size-3.5" />],
-            ["model", "Modelo · VRAM", <Cube className="size-3.5" />],
-          ] as [DocaTab, string, React.ReactNode][]).map(([id, label, icone]) => (
-            <button
-              key={id}
-              onClick={() => setDoca(id as DocaTab)}
-              title={label}
-              className={`flex min-w-0 flex-initial items-center gap-1.5 rounded-md px-2 py-1 text-xs @max-[40rem]:flex-1 @max-[40rem]:justify-center ${
-                doca === id ? "bg-raised text-fg" : "text-faint hover:text-fg"
-              }`}
-            >
-              <span className="flex shrink-0">{icone}</span>
-              {/* Doca apertando: as abas encolhem por igual e o nome corta com "…"; abaixo de ~40rem
-                  ("Nav…" já não cabe) fica só o ícone, com as abas espalhadas pela largura. O nome
-                  inteiro fica no title. */}
-              <span className="min-w-[3.2em] truncate @max-[40rem]:hidden">{label}</span>
-              {id !== "model" && id !== "task" && (() => {
-                const selo = seloDaAba(id as RightTab, props.estadoAbas);
-                return selo && <span className="flex shrink-0">{selo}</span>;
-              })()}
-            </button>
-          ))}
-          {botaoRecolher("doca")}
-        </div>
-        <div className="min-h-0 flex-1 overflow-hidden">
-          {/* BrowserPanel reporta o próprio retângulo ao Electron, então a WebContentsView nativa
-              segue a doca sem nenhuma ligação extra daqui. O painel direito fica escondido nesta
-              tela: dois BrowserPanel da mesma conversa brigariam pela mesma view nativa. */}
-          {doca !== "model" && doca !== "task" ? (
-            <div className="h-full overflow-auto">{props.painel(doca)}</div>
-          ) : doca === "model" ? (
-            <PainelModelos
-              modelos={modelos}
-              onSlot={async (nivel, provider, model) => {
-                const slots = { ...(modelos?.slots ?? {}), [nivel]: { provider, model } };
-                setModelos((m) => (m ? { ...m, slots } : m));  // reflete antes do próximo polling
-                await api.put("/settings", { subagents: slots }).catch(() => {});
-              }}
-              onWorkers={async (n) => {
-                setModelos((m) => (m ? { ...m, max_workers: n, can_swap: n <= 1 } : m));
-                await api.put("/settings", { max_workers: n }).catch(() => {});
-              }}
-              onMesmoModelo={async (sim) => {
-                setModelos((m) => (m ? { ...m, workers_do_maestro: sim } : m));
-                await api.put("/settings", { workers_do_maestro: sim }).catch(() => {});
-              }}
-              onTestar={props.onTestarWorker}
-              onEspecialidade={async (id, provider, model) => {
-                const lista = (modelos?.especialidades ?? []).map((e) => (e.id === id ? { ...e, provider, model } : e));
-                setModelos((m) => (m ? { ...m, especialidades: lista } : m));
-                await api.put("/settings", { worker_especialidades: lista }).catch(() => {});
-              }}
-            />
-          ) : (
-            <PainelTarefa
-              tarefa={detalhe}
-              especialidades={modelos?.especialidades ?? []}
-              convId={convId}
-              onAtualizada={setDetalhe}
-              onPedir={props.onPedir}
-            />
-          )}
-        </div>
+    ) : id === "model" ? (
+      <div className="h-full overflow-auto">
+        <PainelModelos
+          modelos={modelos}
+          onSlot={async (nivel, provider, model) => {
+            const slots = { ...(modelos?.slots ?? {}), [nivel]: { provider, model } };
+            setModelos((m) => (m ? { ...m, slots } : m));  // reflete antes do próximo polling
+            await api.put("/settings", { subagents: slots }).catch(() => {});
+          }}
+          onWorkers={async (n) => {
+            setModelos((m) => (m ? { ...m, max_workers: n, can_swap: n <= 1 } : m));
+            await api.put("/settings", { max_workers: n }).catch(() => {});
+          }}
+          onMesmoModelo={async (sim) => {
+            setModelos((m) => (m ? { ...m, workers_do_maestro: sim } : m));
+            await api.put("/settings", { workers_do_maestro: sim }).catch(() => {});
+          }}
+          onTestar={props.onTestarWorker}
+          onEspecialidade={async (id, provider, model) => {
+            const lista = (modelos?.especialidades ?? []).map((e) => (e.id === id ? { ...e, provider, model } : e));
+            setModelos((m) => (m ? { ...m, especialidades: lista } : m));
+            await api.put("/settings", { worker_especialidades: lista }).catch(() => {});
+          }}
+        />
       </div>
+    ) : id === "task" ? (
+      <div className="h-full overflow-auto">
+        <PainelTarefa
+          tarefa={detalhe}
+          especialidades={modelos?.especialidades ?? []}
+          convId={convId}
+          onAtualizada={setDetalhe}
+          onPedir={props.onPedir}
+        />
+      </div>
+    ) : (
+      <div className="h-full overflow-auto">{props.painel(id as RightTab)}</div>
     );
-  const recolhido = (id: Bloco) => layout.recolhidos.includes(id);
-  // Todas as colunas recolhidas: a faixa ocupa o resto da altura; faixa recolhida: as colunas ocupam.
-  const colunasFechadas = layout.colunas.every(recolhido);
-  const faixaFechada = !!layout.faixa && recolhido(layout.faixa);
-  const barra = (id: Bloco, vertical: boolean) => (
-    <BarraRecolhida
-      nome={NOMES[id]}
-      vertical={vertical}
-      alca={alca(id)}
-      resumo={id === "arvore" && board?.total ? `${board.done}/${board.total}` : undefined}
-      ativo={(id === "maestro" && props.running) || (id === "worker" && workers.some((x) => x.w.status))}
-      onAbrir={() => recolher(id, false)}
-    />
-  );
-  // A faixa de largura inteira (em cima ou embaixo das colunas), com o divisor do lado das colunas.
-  const divisorFaixa = !faixaFechada && !colunasFechadas && (
-    <Divisor key="divisor-faixa" eixo="y" onArrasto={arrastaDoca} onFim={() => salvar(atual.current)} />
-  );
-  const faixa = layout.faixa && [
-    ...(layout.faixaEmCima ? [] : [divisorFaixa || <div key="divisor-faixa" className="h-2 shrink-0" />]),
-    <div key="faixa" data-bloco={layout.faixa}
-         className={`flex flex-col ${faixaFechada ? "" : "min-h-[120px] [&>*]:min-h-0 [&>*]:flex-1"}`}
-         style={{ flex: faixaFechada ? "0 0 auto" : colunasFechadas ? "1 1 0" : `${layout.dock} 1 0` }}>
-      {faixaFechada ? barra(layout.faixa, false) : bloco(layout.faixa)}
-    </div>,
-    ...(layout.faixaEmCima ? [divisorFaixa || <div key="divisor-faixa" className="h-2 shrink-0" />] : []),
-  ];
+  const rotulo = (id: string): Rotulo | undefined =>
+    id === "arvore" ? { label: NOMES.arvore, resumo: board?.total ? `${board.done}/${board.total}` : undefined }
+    : id === "maestro" ? { label: NOMES.maestro, ativo: props.running }
+    : id === "worker" ? { label: NOMES.worker, ativo: workers.some((x) => x.w.status) }
+    : id === "task" ? { label: selecionada ?? "Tarefa", icon: <Split className="size-3.5" /> }
+    : id === "model" ? { label: "Modelo · VRAM", icon: <Cube className="size-3.5" /> }
+    : undefined;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
-      <Cabecalho board={board} running={props.running} tarefa={emAndamento} modelPhase={props.modelPhase}
-                 model={props.model} pausado={props.pausado} onPausar={props.onPausar}
-                 onNovaSessao={props.convId === null ? undefined : props.onNovaSessao}
-                 onSalvarLayout={mostraSalvarPadrao ? () => setPerguntaPadrao(true) : undefined} />
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
+      <div className="px-2">
+        <Cabecalho board={board} running={props.running} tarefa={emAndamento} modelPhase={props.modelPhase}
+                   model={props.model} pausado={props.pausado} onPausar={props.onPausar}
+                   onNovaSessao={props.convId === null ? undefined : props.onNovaSessao}
+                   onSalvarLayout={mostraSalvarPadrao ? () => setPerguntaPadrao(true) : undefined} />
+      </div>
       {perguntaPadrao && (
         <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] rounded-2xl border border-line bg-surface p-5 shadow-2xl">
           <h2 className="text-sm font-medium">Salvar este layout como padrão?</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted">
-            Conversas novas da Maestro vão começar com os blocos nesta posição, neste tamanho e com os
-            mesmos recolhidos. As conversas que já têm layout próprio continuam como estão. Para voltar
+            Conversas novas da Maestro vão começar com os blocos e os painéis nesta posição, neste tamanho e
+            com os mesmos recolhidos. As conversas que já têm layout próprio continuam como estão. Para voltar
             ao original: Configurações › Maestro › Layout do cockpit.
           </p>
           <div className="mt-4 flex justify-end gap-2 text-xs">
@@ -583,7 +393,7 @@ export default function MaestroView(props: {
             <button
               className="rounded-full bg-fg px-3 py-1.5 font-medium text-black hover:bg-white"
               onClick={() => {
-                salvarPadrao(layout);
+                salvarPadrao();
                 setPerguntaPadrao(false);
                 setAvisoEm(0);
               }}
@@ -593,81 +403,9 @@ export default function MaestroView(props: {
           </div>
         </Modal>
       )}
-
-      <div ref={area} className="relative flex min-h-0 flex-1 flex-col">
-        {layout.faixa && layout.faixaEmCima && faixa}
-        <div
-          ref={colunas}
-          className="grid min-h-0"
-          style={{
-            flex: colunasFechadas && layout.faixa && !faixaFechada ? "0 0 auto"
-              : layout.faixa && !faixaFechada ? `${100 - layout.dock} 1 0` : "1 1 0",
-            gridTemplateColumns: layout.colunas
-              .map((id, i) => (recolhido(id) ? "2rem" : `minmax(0,${layout.larguras[i]}fr)`)).join(" auto "),
-          }}
-        >
-          {layout.colunas.flatMap((id, i) => [
-            // divisor só entre duas colunas abertas; ao lado de uma recolhida fica só o espaço
-            ...(i > 0 ? [recolhido(id) || recolhido(layout.colunas[i - 1])
-              ? <div key={`d${i}`} className="w-2" />
-              : <Divisor key={`d${i}`} eixo="x" onArrasto={(e) => arrastaColuna(i - 1, e)} onFim={() => salvar(atual.current)} />] : []),
-            <div key={id} data-bloco={id} className="flex min-h-0 min-w-0 flex-col [&>*]:min-h-0 [&>*]:flex-1">
-              {recolhido(id) ? barra(id, true) : bloco(id)}
-            </div>,
-          ])}
-        </div>
-        {layout.faixa && !layout.faixaEmCima && faixa}
-
-        {arrastando && (
-          <>
-            {/* cortina: segura o ponteiro durante o arrasto (inclusive sobre a view nativa do
-                navegador, que se esconde quando algo cobre o painel) */}
-            <div className="fixed inset-0 z-40 cursor-grabbing" />
-            {indicador && (
-              <div
-                className={`pointer-events-none absolute z-[60] rounded-xl transition-all duration-100 ${
-                  indicador.alvo.tipo === "trocar" ? "bg-sky-500/10 ring-2 ring-sky-500/70" : "bg-sky-500"
-                }`}
-                style={indicador.caixa}
-              />
-            )}
-          </>
-        )}
-      </div>
+      <Tiles grade={grade} onGrade={mudaGrade} painel={item} rotulo={rotulo} proprio={(t) => COCKPIT.includes(t)} />
     </div>
   );
-}
-
-/** Bloco recolhido: barra fina com o nome (em pé, se for coluna). Clique abre; segurar arrasta. */
-function BarraRecolhida(props: {
-  nome: string;
-  vertical: boolean;
-  alca: React.HTMLAttributes<HTMLDivElement>;
-  resumo?: string;
-  ativo?: boolean;
-  onAbrir: () => void;
-}) {
-  return (
-    <div
-      {...props.alca}
-      onClick={props.onAbrir}
-      title={`${props.nome} — clique para abrir, segure para mudar de lugar`}
-      className={`${card} group flex items-center gap-2 text-[11px] font-medium uppercase tracking-wide text-faint hover:bg-raised hover:text-fg ${
-        props.vertical ? "h-full flex-col py-2" : "h-8 px-3"
-      }`}
-    >
-      <Expandir className="size-3.5 shrink-0" />
-      {props.ativo && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" />}
-      <span className={props.vertical ? "[writing-mode:vertical-rl]" : ""}>{props.nome}</span>
-      {props.resumo && <span className={`normal-case text-muted ${props.vertical ? "[writing-mode:vertical-rl]" : ""}`}>{props.resumo}</span>}
-    </div>
-  );
-}
-
-/** Rótulo e ícone de uma aba do painel direito, no tamanho da doca. */
-function abaDireita(id: RightTab): [DocaTab, string, React.ReactNode] {
-  const t = ABAS_DIREITA.find((x) => x.id === id)!;
-  return [id, t.label, <span className="[&>svg]:size-3.5">{t.icon}</span>];
 }
 
 // ------------------------------------------------------------------ cabeçalho

@@ -152,7 +152,7 @@ export default function ModelPicker(props: {
           setOpen(!open);
         }}
         title={`Trocar provedor e modelo — ${providerName} · ${props.model}`}
-        className="flex max-w-56 items-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2.5 py-1 text-xs whitespace-nowrap text-muted hover:text-fg"
+        className="flex max-w-[min(14rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2.5 py-1 text-xs whitespace-nowrap text-muted hover:text-fg"
       >
         <Cube className="size-3.5 shrink-0" />
         <span className="hidden max-w-24 shrink truncate text-faint sm:inline-block">{providerName} ·</span>

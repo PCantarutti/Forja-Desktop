@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import { useStickyBottom } from "../useStickyBottom";
 import type { CompararEntrada, CompararEstado, CompararItem, Message, PlacarLinha } from "../types";
-import { ArrowUp, Balanca, Check, Copy, Cube, Gauge, Refresh, Square, Trash, X } from "./icons";
+import { ArrowUp, Balanca, Check, Copy, Cube, Eye, EyeOff, Gauge, Plus, Refresh, Split, Square, Trash, X } from "./icons";
 import { Markdown, TestarCodigo, Thinking } from "./MessageView";
 import ModelPicker from "./ModelPicker";
+import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada } from "./Composer";
+import { Menu } from "./Controls";
 
 // Mesma linguagem visual do cockpit da Maestro: cartões escuros com borda fina e títulos em caixa
 // alta pequena. Repetidas aqui para esta aba viajar inteira num cherry-pick para o forja-web.
@@ -588,7 +590,7 @@ export default function CompararView(props: {
         </div>
       </div>
 
-      <div className="shrink-0 px-4 pb-3">
+      <div className="mx-auto w-full max-w-3xl shrink-0 px-5 pb-4">
         {perguntando && (
           <div className="mb-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
             <p className="font-medium">O modelo {st?.server.alias} está carregado na VRAM.</p>
@@ -603,8 +605,9 @@ export default function CompararView(props: {
           </div>
         )}
 
-        <div className={`${card} flex flex-col gap-2.5 p-3`}>
-          <div className="flex flex-wrap items-center gap-1.5">
+        <CaixaPrompt>
+          {/* Os modelos da comparação, como os anexos do chat: em cima do campo. */}
+          <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
             {itens.map((i) => (
               <span key={`${i.provider}:${i.nome}`}
                     className="flex items-center gap-1 rounded-full border border-line bg-raised px-2 py-0.5 text-xs text-fg">
@@ -616,77 +619,76 @@ export default function CompararView(props: {
                 </button>
               </span>
             ))}
-            {!itens.length && <span className="text-xs text-faint">Escolha de 2 a {MAX_MODELOS} modelos.</span>}
+            {!itens.length && <span className="text-xs text-faint">Escolha de 2 a {MAX_MODELOS} modelos no seletor abaixo.</span>}
             {!!itens.length && (
               <button className="text-faint hover:text-fg" title="Limpar" onClick={() => setItens([])}>
                 <Trash className="size-3.5" />
               </button>
             )}
           </div>
-
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <div className="flex items-center gap-1">
-              <ModelPicker provider={escolha.provider} model={escolha.model} loadLocal={false}
-                           onChange={(provider, model) => setEscolha({ provider, model })} />
-              <button className={btn} disabled={!escolha.model || itens.length >= MAX_MODELOS}
-                      onClick={() => adicionar(entradaDe(escolha))}>
-                Adicionar
-              </button>
-            </div>
-
+          <textarea
+            rows={bateria && !estado ? 5 : 2}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (!rodando) rodar();
+              }
+            }}
+            placeholder={estado ? "Novo prompt para comparar…" : "O prompt que todos os modelos vão responder…"}
+            className={campoPrompt}
+          />
+          <RodapePrompt>
+            {temGguf ? (
+              <span className={pilula} title=".gguf roda sempre em sequencial: um llama-server por vez">
+                <Split className="size-3.5" />
+                Sequencial
+              </span>
+            ) : (
+              <Menu
+                title="Modo"
+                items={[
+                  { id: "paralelo" as const, label: "Paralelo", hint: "Todos ao mesmo tempo" },
+                  { id: "sequencial" as const, label: "Sequencial", hint: "Um de cada vez" },
+                ]}
+                value={modo}
+                onChange={setModo}
+                button={(label) => (
+                  <>
+                    <Split className="size-3.5" />
+                    {label}
+                  </>
+                )}
+              />
+            )}
+            <button className={`${pilula} ${cego ? pilulaLigada : ""}`} aria-pressed={cego} onClick={() => setCego((v) => !v)}
+                    title="Modo cego: as respostas aparecem sem o nome do modelo até você votar">
+              {cego ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+              Modo cego
+            </button>
             {!!ggufs.length && (
-              <select className={campo} value="" disabled={itens.length >= MAX_MODELOS}
+              <select className={`${pilula} w-24 bg-transparent`} value="" disabled={itens.length >= MAX_MODELOS}
+                      title="Adicionar um arquivo .gguf à comparação"
                       onChange={(e) => e.target.value && adicionar({ path: e.target.value, nome: nomeDoArquivo(e.target.value) })}>
-                <option value="">Adicionar arquivo .gguf…</option>
+                <option value="">+ .gguf</option>
                 {ggufs.map((m) => <option key={m.path} value={m.path}>{m.name}</option>)}
               </select>
             )}
-
-            <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Modo">
-              {(["paralelo", "sequencial"] as const).map((m) => (
-                <button key={m} role="radio" aria-checked={modo === m} disabled={temGguf && m === "paralelo"}
-                        title={m === "paralelo" ? "Todos ao mesmo tempo" : "Um de cada vez (carrega e descarrega os .gguf)"}
-                        onClick={() => setModo(m)}
-                        className={`rounded-full px-2.5 py-0.5 ${modo === m ? "bg-raised text-fg" : "text-faint hover:text-fg disabled:opacity-40"}`}>
-                  {m === "paralelo" ? "Paralelo" : "Sequencial"}
-                </button>
-              ))}
-            </div>
-
-            <label className="flex items-center gap-1.5 text-muted">
-              <input type="checkbox" checked={cego} onChange={(e) => setCego(e.target.checked)} />
-              Modo cego
-            </label>
-
-            {temGguf && <span className="text-faint">.gguf roda sempre em sequencial: um llama-server por vez.</span>}
-          </div>
-
-          <div className="flex items-end gap-2">
-            <textarea
-              rows={bateria && !estado ? 5 : 2}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  if (!rodando) rodar();
-                }
-              }}
-              placeholder={estado ? "Novo prompt para comparar…" : "O prompt que todos os modelos vão responder…"}
-              className="flex-1 resize-none rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:border-[#555] focus:outline-none"
-            />
-            {rodando ? (
-              <button className={btnPrimary} onClick={parar} title="Parar">
-                <Square className="size-3.5" />
-              </button>
-            ) : (
-              <button className={btnPrimary} disabled={itens.length < 2 || !prompt.trim()}
-                      onClick={() => rodar()} title="Comparar">
-                <ArrowUp className="size-4" />
-              </button>
-            )}
-          </div>
-        </div>
+            {/* À direita, como no chat: o seletor de modelo (aqui, o que entra na comparação) e o enviar. */}
+            <DireitaPrompt>
+            <ModelPicker provider={escolha.provider} model={escolha.model} loadLocal={false}
+                         onChange={(provider, model) => setEscolha({ provider, model })} />
+            <button className={pilula} disabled={!escolha.model || itens.length >= MAX_MODELOS}
+                    title="Pôr o modelo escolhido na comparação" onClick={() => adicionar(entradaDe(escolha))}>
+              <Plus className="size-3.5" />
+              Adicionar
+            </button>
+            <BotaoEnviar rodando={rodando} onParar={parar} onEnviar={() => rodar()} titulo="Comparar"
+                         desabilitado={itens.length < 2 || !prompt.trim()} />
+            </DireitaPrompt>
+          </RodapePrompt>
+        </CaixaPrompt>
       </div>
     </div>
   );

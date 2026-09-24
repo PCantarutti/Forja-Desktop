@@ -4,9 +4,11 @@ import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato, PesquisaP
   from "../types";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import type { CloudUsage } from "../types";
-import { ArrowUp, Check, Copy, ExternalLink, Search, Square, X } from "./icons";
+import { ArrowUp, Check, Clipboard, Clock, Copy, Cube, ExternalLink, Refresh, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
+import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
+import { Menu } from "./Controls";
 import Sinapse from "./Sinapse";
 
 // Estas classes moram no LocalPanel.tsx, que é só do desktop. Repetidas aqui para esta aba viajar
@@ -96,14 +98,13 @@ type Modelos = { escritor: Par; extrator: Par | null };  // extrator null = slot
 
 /** Número com a unidade dentro da mesma pílula, para a linha não virar caixinha solta + texto solto. */
 function Numero(props: { valor: number; min: number; max: number; unidade: string; dica: string;
-                         onChange: (v: number) => void }) {
+                         onChange: (v: number) => void; icone?: React.ReactNode }) {
   return (
-    <label title={props.dica}
-           className="flex items-center gap-1 rounded-full border border-line bg-raised px-2 py-0.5
-                      text-muted focus-within:border-[#555]">
+    <label title={props.dica} className={`${pilula} focus-within:border-[#555]`}>
+      {props.icone}
       <input type="number" min={props.min} max={props.max} value={props.valor}
              onChange={(e) => props.onChange(Number(e.target.value) || props.min)}
-             className="w-8 bg-transparent text-right text-fg outline-none" />
+             className={numeroPilula} style={larguraNumero(props.valor)} />
       {props.unidade}
     </label>
   );
@@ -178,6 +179,7 @@ export default function PesquisaView(props: {
   // Tempo máximo: começa no do preset e acompanha a troca de preset até você digitar o seu.
   const [minutos, setMinutos] = useState(10);
   const [perguntarAntes, setPerguntarAntes] = useState(false);
+  const [abrirModelos, setAbrirModelos] = useState(false);  // painel dos dois modelos, acima da caixa
   const [esclarecer, setEsclarecer] =
     useState<{ pergunta: string; perguntas: string[]; respostas: string[] } | null>(null);
   const [preparando, setPreparando] = useState(false);
@@ -512,7 +514,7 @@ export default function PesquisaView(props: {
       </div>
 
       <div className="shrink-0 px-5 pb-4">
-        <div className="mx-auto max-w-4xl">
+        <div className="mx-auto max-w-3xl">
           {esclarecer && (
             <div className={`${card} mb-2 flex flex-col gap-2`}>
               <div className="flex items-center justify-between text-xs">
@@ -536,119 +538,133 @@ export default function PesquisaView(props: {
             </div>
           )}
 
-          <div className={`${card} flex flex-col gap-2.5`}>
-            {/* Duas linhas com papéis distintos: "como pesquisar" em cima, "com quais modelos"
-                embaixo. Numa linha só isso quebrava em qualquer largura e virava salada. */}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
-              <div className="flex shrink-0 rounded-full border border-line p-0.5" role="radiogroup"
-                   aria-label="Profundidade">
-                {PROFUNDIDADES.map((p) => (
-                  <button key={p.id} role="radio" aria-checked={profundidade === p.id} title={p.hint}
-                          onClick={() => {
-                            setProfundidade(p.id);
-                            if (p.id !== "personalizado") {
-                              setMinutos(p.minutos);
-                              setRodadas(p.rodadas);
-                            }
-                          }}
-                          className={`rounded-full px-2.5 py-0.5 ${profundidade === p.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                    {p.label}
-                  </button>
-                ))}
+          {abrirModelos && (
+            // Como os ajustes da tela Imagem: um painel acima da caixa, em vez de seletores no rodapé.
+            <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+              <div className="mb-2.5 flex items-center gap-2">
+                <span className="font-medium text-fg">Modelos da pesquisa</span>
+                <button onClick={() => setAbrirModelos(false)} title="Fechar"
+                        className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+                  <X className="size-3.5" />
+                </button>
               </div>
-
-              <div className="flex shrink-0 items-center gap-2">
-                {profundidade === "personalizado" && (
-                  <Numero valor={rodadas} min={1} max={MAX_RODADAS} unidade="rodadas"
-                          dica="Quantas rodadas de busca" onChange={setRodadas} />
-                )}
-                <Numero valor={minutos} min={MIN_MINUTOS} max={MAX_MINUTOS} unidade="min"
-                        dica="Tempo máximo da pesquisa" onChange={setMinutos} />
-              </div>
-
-              <span className="h-4 w-px shrink-0 bg-line" />
-
-              <label className="flex shrink-0 items-center gap-1.5 text-faint" title="Feitio do relatório">
-                formato
-                <select className={campo} value={formato}
-                        onChange={(e) => setFormato(e.target.value as PesquisaFormato)}>
-                  {FORMATOS.map((f) => <option key={f.id} value={f.id} title={f.hint}>{f.label}</option>)}
-                </select>
-              </label>
-
-              <label className="flex shrink-0 items-center gap-1.5 text-muted"
-                     title="O modelo faz 2 ou 3 perguntas curtas antes de sair buscando">
-                <input type="checkbox" checked={perguntarAntes}
-                       onChange={(e) => setPerguntarAntes(e.target.checked)} />
-                Perguntar antes
-              </label>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
-              {/* Div à parte em cada um: o ModelPicker traz ml-auto por dentro. */}
-              <div className="flex shrink-0 items-center gap-1.5" title="Modelo que escreve o relatório">
-                <span className="text-faint">relatório</span>
-                <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
-                             onChange={(provider, model) =>
-                               setModelos((m) => ({ ...m, escritor: { provider, model } }))} />
-              </div>
-
-              <span className="h-4 w-px shrink-0 bg-line" />
-
-              <div className="flex shrink-0 items-center gap-1.5" title="Modelo que lê e resume cada página">
-                <span className="text-faint">extração</span>
-                {modelos.extrator ? (
-                  <>
-                    <ModelPicker provider={modelos.extrator.provider} model={modelos.extrator.model}
+              {/* [&>div]:ml-0: o ModelPicker traz ml-auto, que aqui o jogaria para a direita */}
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-muted">Relatório</span>
+                  <div className="flex [&>div]:ml-0">
+                    <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
                                  onChange={(provider, model) =>
-                                   setModelos((m) => ({ ...m, extrator: { provider, model } }))} />
-                    <button className="text-faint hover:text-fg" title="Voltar ao automático"
-                            onClick={() => setModelos((m) => ({ ...m, extrator: null }))}>
-                      <X className="size-3" />
-                    </button>
-                  </>
-                ) : (
-                  <button className={`${campo} text-muted`}
-                          title="Automático: usa o subagente Rápido, ou o mesmo modelo do relatório"
-                          onClick={() => setModelos((m) => ({ ...m, extrator: { ...m.escritor } }))}>
-                    automático
-                  </button>
-                )}
-              </div>
-
-              {!!nuvem.length && (
-                <div className="ml-auto shrink-0">
-                  <AnelCota dados={nuvem} />
+                                   setModelos((m) => ({ ...m, escritor: { provider, model } }))} />
+                  </div>
+                  <span className="text-faint">Planeja as buscas e escreve o relatório. Numa pesquisa funda, prefira um modelo grande.</span>
                 </div>
-              )}
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-muted">Extração</span>
+                  <div className="flex items-center gap-2 [&>div]:ml-0">
+                    <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Extração">
+                      {([["auto", "Automática"], ["propria", "Escolher"]] as const).map(([id, rotulo]) => {
+                        const ligado = (id === "propria") === !!modelos.extrator;
+                        return (
+                          <button key={id} role="radio" aria-checked={ligado}
+                                  onClick={() => setModelos((m) => ({ ...m, extrator: id === "auto" ? null : m.extrator ?? { ...m.escritor } }))}
+                                  className={`rounded-full px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                            {rotulo}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {modelos.extrator && (
+                      <ModelPicker provider={modelos.extrator.provider} model={modelos.extrator.model}
+                                   onChange={(provider, model) =>
+                                     setModelos((m) => ({ ...m, extrator: { provider, model } }))} />
+                    )}
+                  </div>
+                  <span className="text-faint">
+                    Lê e resume cada página encontrada. Automática: o subagente Rápido, ou o mesmo modelo do relatório.
+                  </span>
+                </div>
+              </div>
             </div>
+          )}
 
-            <div className="flex items-end gap-2">
-              <textarea
-                rows={2}
-                value={texto}
-                onChange={(e) => setTexto(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    enviar();
+          <CaixaPrompt>
+            <textarea
+              rows={2}
+              value={texto}
+              onChange={(e) => setTexto(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  enviar();
+                }
+              }}
+              placeholder="O que você quer descobrir?"
+              className={campoPrompt}
+            />
+            <RodapePrompt>
+              <Menu
+                title="Profundidade"
+                items={PROFUNDIDADES}
+                value={profundidade}
+                onChange={(id) => {
+                  setProfundidade(id);
+                  const p = PROFUNDIDADES.find((x) => x.id === id)!;
+                  if (id !== "personalizado") {
+                    setMinutos(p.minutos);
+                    setRodadas(p.rodadas);
                   }
                 }}
-                placeholder="O que você quer descobrir?"
-                className="flex-1 resize-none rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:border-[#555] focus:outline-none"
+                button={(label) => (
+                  <>
+                    <Search className="size-3.5" />
+                    {label}
+                  </>
+                )}
               />
-              {rodando ? (
-                <button className={btnPrimary} onClick={parar} title="Parar">
-                  <Square className="size-3.5" />
-                </button>
-              ) : (
-                <button className={btnPrimary} disabled={!texto.trim() || preparando}
-                        onClick={enviar} title="Pesquisar">
-                  {preparando ? <Search className="size-4 animate-pulse" /> : <ArrowUp className="size-4" />}
-                </button>
+              {profundidade === "personalizado" && (
+                <Numero valor={rodadas} min={1} max={MAX_RODADAS} unidade="rodadas"
+                        dica="Quantas rodadas de busca" onChange={setRodadas} icone={<Refresh className="size-3.5" />} />
               )}
-            </div>
-          </div>
+              <Numero valor={minutos} min={MIN_MINUTOS} max={MAX_MINUTOS} unidade="min"
+                      dica="Tempo máximo da pesquisa" onChange={setMinutos} icone={<Clock className="size-3.5" />} />
+              <Menu
+                title="Formato do relatório"
+                items={FORMATOS}
+                value={formato}
+                onChange={setFormato}
+                button={(label) => (
+                  <>
+                    <Clipboard className="size-3.5" />
+                    {label}
+                  </>
+                )}
+              />
+              <button className={`${pilula} ${perguntarAntes ? pilulaLigada : ""}`} aria-pressed={perguntarAntes}
+                      title="O modelo faz 2 ou 3 perguntas curtas antes de sair buscando"
+                      onClick={() => setPerguntarAntes((v) => !v)}>
+                <Check className={`size-3.5 ${perguntarAntes ? "" : "opacity-30"}`} />
+                Perguntar antes
+              </button>
+              {!!nuvem.length && <AnelCota dados={nuvem} />}
+              {/* À direita, como no chat: um botão só para os dois modelos (abre o painel acima) e o enviar. */}
+              <DireitaPrompt>
+              <button
+                onClick={() => setAbrirModelos((v) => !v)}
+                title={`Modelos da pesquisa\nRelatório: ${modelos.escritor.model || "—"}\nExtração: ${modelos.extrator?.model ?? "automática"}`}
+                className={`flex min-w-0 max-w-[min(18rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg px-2.5 py-1 text-xs whitespace-nowrap ${
+                  abrirModelos ? "bg-[#333] text-fg" : "bg-raised text-muted hover:text-fg"}`}
+              >
+                <Cube className="size-3.5 shrink-0" />
+                <span className="min-w-0 truncate">{modelos.escritor.model || "escolher modelo"}</span>
+                <span className="shrink-0 text-faint">{modelos.extrator ? "+ extração" : "· extração auto"}</span>
+              </button>
+              <BotaoEnviar rodando={rodando} onParar={parar} onEnviar={enviar} titulo="Pesquisar"
+                           desabilitado={!texto.trim() || preparando}
+                           icone={preparando ? <Search className="size-4 animate-pulse" /> : undefined} />
+              </DireitaPrompt>
+            </RodapePrompt>
+          </CaixaPrompt>
         </div>
       </div>
     </div>

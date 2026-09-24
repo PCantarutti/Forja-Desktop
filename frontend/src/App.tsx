@@ -12,7 +12,9 @@ import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
 import InfoPanel, { type McpStatus, type ToolInfo } from "./components/InfoPanel";
-import RightPanel, { RightTabsBar, type RightTab } from "./components/RightPanel";
+import Tiles, { RightTabsBar, WIDTH, type RightTab } from "./components/RightPanel";
+import { CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, enviarClasse, pararClasse, redondo } from "./components/Composer";
+import { GRADE_VAZIA, abertos, abrir as abrirTile, fechar as fecharTile, soltos, type Grade } from "./components/tiles";
 import { executarNoTerminal } from "./components/TerminalPanel";
 import SettingsDialog from "./components/Settings";
 import FolderPicker, { folderName } from "./components/FolderPicker";
@@ -20,6 +22,7 @@ import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
 import GoalStrip from "./components/GoalStrip";
 import Trajetoria from "./components/Trajetoria";
+import TodosBar from "./components/TodosBar";
 import Confirma from "./components/Confirma";
 import { LogoMark } from "./components/Logo";
 import {
@@ -56,7 +59,7 @@ import {
 } from "./components/MessageView";
 import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip, Refresh, Square, Undo } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
-import MaestroView from "./components/MaestroView";
+import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
 
 /** Notificação do sistema quando o Forja não está em foco (execução terminou, aprovação pendente).
  * "Sem foco", não "minimizada": com a janela só atrás de outro programa, document.hidden é falso e o
@@ -118,15 +121,30 @@ function enfileirar<T>(fn: () => Promise<T>): Promise<T> {
   return proxima;
 }
 
-type RightState = { tab: RightTab; collapsed: boolean };
+/** Tiles abertos à direita, em colunas (ver components/tiles.ts). */
+// string e não RightTab: na Maestro a grade também tem os blocos do cockpit, a Tarefa e o Modelo.
+type RightState = Grade<string>;
 
-/** Coluna direita: nova conversa sempre recolhida; cada conversa lembra se estava aberta e em qual aba. */
-const RIGHT_DEFAULT: RightState = { tab: "info", collapsed: true };
+/** Nova conversa começa sem tiles; cada conversa lembra os dela, no lugar e no tamanho. */
+const RIGHT_DEFAULT: RightState = GRADE_VAZIA;
 const RIGHT_KEY = "forja.right.byConv";
+
+/** Largura inicial do tile (as abas da Maestro, Tarefa e Modelo, não estão em WIDTH). */
+const larguraDe = (t: string) => WIDTH[t as RightTab] ?? 420;
 
 function loadRightMap(): Record<string, RightState> {
   try {
-    return JSON.parse(localStorage.getItem(RIGHT_KEY) ?? "{}");
+    const map = JSON.parse(localStorage.getItem(RIGHT_KEY) ?? "{}");
+    // formatos anteriores: { tab, collapsed } (uma aba só) e { abertos } (lista)
+    for (const [k, v] of Object.entries<any>(map))
+      if (!Array.isArray(v?.colunas)) {
+        const lista: string[] = Array.isArray(v?.abertos) ? v.abertos : v?.collapsed === false && v.tab ? [v.tab] : [];
+        map[k] = lista.reduce<RightState>((g, t) => abrirTile(g, t, larguraDe(t)), GRADE_VAZIA);
+      }
+    // Aba que deixou de existir (a Trajetória virou alternância do chat) sai do que ficou salvo.
+    for (const [k, v] of Object.entries<RightState>(map))
+      map[k] = abertos(v).filter((t) => !(t in WIDTH)).reduce((g, t) => fecharTile(g, t), v);
+    return map;
   } catch {
     return {};
   }
@@ -295,6 +313,10 @@ export default function App() {
   const [toolMode, setToolMode] = useState("auto");
   const [vision, setVision] = useState("auto");
   const [right, setRight] = useState<RightState>(RIGHT_DEFAULT);
+  // A grade desta tela: fora da Maestro, sem os blocos e as abas que são só dela.
+  const gradeTela = section === "maestro" ? right : SO_MAESTRO.reduce((g, t) => fecharTile({ ...g, fixos: [] }, t), right);
+  // Abre o tile (já aberto fica onde está; com o máximo aberto, não abre).
+  const abrir = (tab: RightTab) => setRight((r) => abrirTile(r, tab, larguraDe(tab)));
   const [activity, setActivity] = useState<Activity>({ conversations: [], servers: 0 });
   const prevConv = useRef<number | null | undefined>(undefined);
   const [browserOpen, setBrowserOpen] = useState(false);
@@ -317,6 +339,9 @@ export default function App() {
   }
   const [liveOutput, setLiveOutput] = useState<Record<string, string>>({}); // saída ao vivo por chamada (run_command)
   const [liveTasks, setLiveTasks] = useState<Task[] | null>(null); // lista de tarefas do run atual
+  // Alternância Chat | Trajetória: vale só para a página em que foi escolhida. Guardar a chave (seção +
+  // conversa) em vez de "trajetoria" solto faz qualquer navegação voltar ao Chat sem efeito nenhum.
+  const [trajetoriaEm, setTrajetoriaEm] = useState<string | null>(null);
   const [queued, setQueued] = useState<string[]>([]); // mensagens na fila (enviadas durante a execução)
   const [unread, setUnread] = useState<Set<number>>(new Set()); // conversas que terminaram em segundo plano
   const [changesKey, setChangesKey] = useState(0); // muda quando um turno termina: aba Alterações recarrega
@@ -800,7 +825,7 @@ export default function App() {
       }
       if (ev.type === "tool_call" && typeof ev.call?.name === "string" && ev.call.name.startsWith("browser_")) {
         setBrowserOpen(true);
-        setRight({ tab: "browser", collapsed: false });
+        abrir("browser");
       }
       return;
     }
@@ -812,7 +837,7 @@ export default function App() {
         // O agente foi ao navegador: mostra a aba Navegador para o usuário acompanhar ao vivo.
         if (typeof ev.call?.name === "string" && ev.call.name.startsWith("browser_")) {
           setBrowserOpen(true);
-          setRight({ tab: "browser", collapsed: false });
+          abrir("browser");
         }
         break;
       case "tools_sent":
@@ -1103,10 +1128,10 @@ export default function App() {
     if (s.action === "compact") return compactNow();
     if (s.action === "commit" || s.action === "pr") {
       setChangesAction(s.action);
-      setRight({ tab: "changes", collapsed: false });
+      abrir("changes");
       return;
     }
-    if (s.action === "changes") setRight({ tab: "changes", collapsed: false });
+    if (s.action === "changes") abrir("changes");
   }
 
   async function send(texto?: string, skill = false): Promise<void> {
@@ -1198,6 +1223,21 @@ export default function App() {
   const results = useMemo(() => resultadosDe(messages), [messages]);
 
   const segments = useMemo(() => groupActivity(messages), [messages]);
+  const paginaAtual = `${section}:${currentId ?? "nova"}`;
+  // Mudou de página (outra conversa, outra seção): a escolha é esquecida, e voltar abre no Chat.
+  const [paginaVista, setPaginaVista] = useState(paginaAtual);
+  if (paginaVista !== paginaAtual) {
+    setPaginaVista(paginaAtual);
+    setTrajetoriaEm(null);
+  }
+  const vista: "chat" | "trajetoria" = trajetoriaEm === paginaAtual ? "trajetoria" : "chat";
+  const setVista = (v: "chat" | "trajetoria") => setTrajetoriaEm(v === "trajetoria" ? paginaAtual : null);
+  // Tarefas da barra acima do campo: a do turno em andamento, ou a última que a conversa registrou.
+  const tarefasAtuais = useMemo<Task[]>(() => {
+    if (running && liveTasks) return liveTasks;
+    const ultima = [...messages].reverse().find((m) => m.role === "event" && m.meta?.kind === "tasks");
+    return (ultima?.meta?.tasks as Task[] | undefined) ?? [];
+  }, [messages, running, liveTasks]);
 
   // Instâncias desta conversa (delegações) + processos vivos, para o indicador embaixo da resposta.
   const daConversa = activity.conversations.find((c) => c.id === currentId);
@@ -1427,7 +1467,7 @@ export default function App() {
                   </div>
                 );
               if (m.role === "event")
-                return String(m.meta?.kind ?? "") in NOTA_DO_AGENTE ? null : <EventNotice key={m.id} m={m} />; // essas vão no bloco de atividade
+                return String(m.meta?.kind ?? "") in NOTA_DO_AGENTE || m.meta?.kind === "tasks" ? null : <EventNotice key={m.id} m={m} />; // essas vão no bloco de atividade
               if (m.role !== "assistant") return null;
               const turn = tur.get(i);
               const showTurn = turn && !(vivo && i > lu);
@@ -1500,7 +1540,7 @@ export default function App() {
                           s={turn.stats}
                           instances={i === la ? (so ? 0 : instancias) : 0}
                           instancesLabel={rotuloInstancias}
-                          onInstances={() => setRight({ tab: "servers", collapsed: false })}
+                          onInstances={() => abrir("servers")}
                         />
                       )}
                       {!so && <div className="flex items-center">
@@ -1577,7 +1617,7 @@ export default function App() {
                   phase={o.fase}
                   instances={(so ? 0 : instancias)}
                   instancesLabel={rotuloInstancias}
-                  onInstances={() => setRight({ tab: "servers", collapsed: false })}
+                  onInstances={() => abrir("servers")}
                 />
               </div>
             )}
@@ -1611,8 +1651,6 @@ export default function App() {
           if (currentId !== null) openConversation(currentId);
         }}
       />
-    ) : tab === "trajetoria" ? (
-      <Trajetoria messages={messages} />
     ) : tab === "plans" ? (
       <PlansPanel
         plans={plans}
@@ -1647,6 +1685,9 @@ export default function App() {
     />
   )}
 
+  {vista === "trajetoria" && section !== "maestro" ? (
+    <Trajetoria messages={messages} />
+  ) : (
   <div
     ref={scroller}
     className="flex-1 overflow-y-auto"
@@ -1681,10 +1722,10 @@ export default function App() {
       )}
 
       {conversaDe(messages, { draft, status, stats: running ? liveStats : null, fase })}
-      {running && liveTasks && <TasksCard tasks={liveTasks} live />}
       <div ref={fimDoChat} />
     </div>
   </div>
+  )}
   </>
   );
   const composerBlock = (
@@ -1693,7 +1734,7 @@ export default function App() {
       {agentica && <ModeWarning permission={settings.permission} />}
       {error && <div className="mb-2 text-sm text-red-300">{error}</div>}
 
-      <div className="rounded-3xl border border-line bg-surface px-4 pt-3 pb-2.5 focus-within:border-[#454545]">
+      <CaixaPrompt>
         {(attachments.length > 0 || uploading) && (
           <div className="mb-1 flex flex-wrap items-center gap-2">
             <Attachments list={attachments} onRemove={(a) => setAttachments((l) => l.filter((x) => x !== a))} />
@@ -1701,6 +1742,7 @@ export default function App() {
           </div>
         )}
         {section === "agent" && <GoalStrip convId={currentId} refreshKey={messages.length} />}
+        <TodosBar tasks={tarefasAtuais} live={running} />
         {queued.length > 0 && (
           <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
             <span className="text-faint">na fila:</span>
@@ -1815,13 +1857,10 @@ export default function App() {
           ref={composer}
           rows={2}
           placeholder={running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "maestro" ? "Qual é o objetivo? A Maestro planeja e delega ( / para comandos, @ para arquivos )" : section === "agent" ? "Peça algo ao agente... ( / para comandos, @ para arquivos )" : "Digite uma mensagem..."}
-          className="w-full resize-none overflow-y-auto bg-transparent text-[15px] text-fg placeholder:text-faint focus:outline-none"
+          className={campoPrompt}
         />
-        <div className="mt-1 flex items-center gap-2">
-          <label
-            title="Anexar arquivos ou imagens"
-            className="grid size-8 cursor-pointer place-items-center rounded-full border border-line text-muted hover:bg-raised hover:text-fg"
-          >
+        <RodapePrompt>
+          <label title="Anexar arquivos ou imagens" className={redondo}>
             <Paperclip className="size-4" />
             <input
               type="file"
@@ -1837,13 +1876,6 @@ export default function App() {
             <PermissionMenu value={settings.permission} onChange={changePermission} running={running} />
           )}
           <EffortMenu value={settings.effort} onChange={(effort) => update({ effort })} semExtremo={section === "maestro"} />
-          {summary.sessao.passos > 0 && (
-            <span className="hidden whitespace-nowrap font-mono text-[11px] text-faint xl:inline" title="Turnos, passos, média de tokens/s, tokens somados e acerto de cache desta conversa">
-              {summary.sessao.turnos} turnos · {summary.sessao.passos} passos
-              {summary.avg != null ? ` · ${summary.avg.toFixed(0)} t/s` : ""}
-              {summary.sessao.cache != null ? ` · cache ${Math.round(summary.sessao.cache * 100)}%` : ""}
-            </span>
-          )}
           <ContextRing
             used={summary.used}
             max={summary.max}
@@ -1856,6 +1888,7 @@ export default function App() {
             provider={settings.provider}
             models={summary.models}
           />
+          <DireitaPrompt>
           <ModelPicker
             provider={settings.provider}
             model={settings.model}
@@ -1875,7 +1908,7 @@ export default function App() {
                   <ArrowUp />
                 </button>
               )}
-              <button onClick={stop} title="Parar" className="grid size-9 place-items-center rounded-full bg-raised text-fg hover:bg-[#3a3a3a]">
+              <button onClick={stop} title="Parar" className={pararClasse}>
                 <Square />
               </button>
             </>
@@ -1884,13 +1917,14 @@ export default function App() {
               onClick={() => send()}
               disabled={!input.trim() && !attachments.length}
               title="Enviar"
-              className="grid size-9 place-items-center rounded-full bg-fg text-black hover:bg-white disabled:bg-raised disabled:text-faint"
+              className={enviarClasse}
             >
               <ArrowUp />
             </button>
           )}
-        </div>
-      </div>
+          </DireitaPrompt>
+        </RodapePrompt>
+      </CaixaPrompt>
     </div>
   </div>
   );
@@ -1932,7 +1966,10 @@ export default function App() {
           patchConversation(id, { archived });
           if (archived && id === currentId) newConversation();
         }}
-        onSettings={() => setShowSettings(true)}
+        onSettings={() => {
+          setTrajetoriaEm(null); // voltar das Configurações abre no Chat
+          setShowSettings(true);
+        }}
       />
       )}
       {showSettings && (
@@ -1946,12 +1983,16 @@ export default function App() {
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
           {sidebarHidden && (
-            <SectionTabs
-              value={section}
-              onChange={changeSection}
-              sidebarHidden={sidebarHidden}
-              onToggleSidebar={() => setSidebarHidden(false)}
-            />
+            // Ocupa a largura da barra lateral (w-64) menos o px-3 e o gap-2 desta faixa: o título fica
+            // no mesmo x com a barra aberta ou fechada.
+            <div className="w-[calc(16rem-0.5rem)] shrink-0">
+              <SectionTabs
+                value={section}
+                onChange={changeSection}
+                sidebarHidden={sidebarHidden}
+                onToggleSidebar={() => setSidebarHidden(false)}
+              />
+            </div>
           )}
           <Laptop className="size-4 shrink-0 text-muted" />
           <span className="truncate text-sm font-medium text-fg" title={conv?.title}>
@@ -1980,22 +2021,36 @@ export default function App() {
               </button>
             </>
           )}
+          {agentica && section !== "maestro" && currentId !== null && (
+            <div className="ml-1 flex shrink-0 items-center rounded-md border border-line p-0.5 text-xs" role="tablist" aria-label="Visão da conversa">
+              {(["chat", "trajetoria"] as const).map((v) => (
+                <button key={v} role="tab" aria-selected={vista === v} onClick={() => setVista(v)}
+                  className={`rounded px-2 py-0.5 ${vista === v ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+                  {v === "chat" ? "Chat" : "Trajetória"}
+                </button>
+              ))}
+            </div>
+          )}
           {picking && <span className="text-xs text-muted">Escolha a pasta na janela do sistema (pode estar atrás do navegador).</span>}
           </div>
-          {section !== "maestro" && <RightTabsBar
-            tab={right.tab}
-            collapsed={right.collapsed}
-            onSelect={(tab) => setRight((r) => (r.collapsed || r.tab !== tab ? { tab, collapsed: false } : { ...r, collapsed: true }))}
+          <RightTabsBar
+            abertos={soltos(gradeTela)}
+            onSelect={(tab) => setRight((r) => (abertos(r).includes(tab) ? fecharTile(r, tab) : abrirTile(r, tab, larguraDe(tab))))}
+            extras={section === "maestro" ? ABAS_MAESTRO : undefined}
             browserOpen={browserOpen}
             serversRunning={Math.max(serversRunning, activity.servers)}
             localRunning={localRunning || !!activity.local}
             plansPending={plans.filter((p) => p.status === "pendente").length}
             plansTotal={plans.length}
             changesCount={changesCount}
-          />}
+          />
         </div>
-        <div className="flex min-h-0 flex-1">
-      <main className="flex min-w-0 flex-1 flex-col bg-bg">
+        <Tiles
+          soPrincipal={section === "maestro"}
+          grade={gradeTela}
+          onGrade={setRight}
+          painel={(t) => painelDe(t as RightTab)}
+        >
         {section === "maestro" ? (
           <MaestroView
             convId={currentId}
@@ -2012,14 +2067,10 @@ export default function App() {
             conversa={conversaBlock}
             renderConversa={conversaDe}
             composer={composerBlock}
+            grade={right}
+            onGrade={setRight}
             painel={painelDe}
             onDecide={decide}
-            estadoAbas={{
-              browserOpen, changesCount,
-              // da atividade (a cada 4 s), e não só do painel: fechado, ele não informaria nada
-              serversRunning: Math.max(serversRunning, activity.servers), localRunning: localRunning || !!activity.local,
-              plansPending: plans.filter((p) => p.status === "pendente").length, plansTotal: plans.length,
-            }}
             pausado={pausado}
             onPausar={pausar}
             onPedir={(texto) => send(texto)}
@@ -2072,12 +2123,12 @@ export default function App() {
             onConversationChanged={refreshConversations}
             onAbrirNoNavegador={(url) => {
               // a página do teste abre no navegador integrado desta conversa, com o painel à vista
-              setRight({ tab: "browser", collapsed: false });
+              abrir("browser");
               // aba própria para cada página testada; testar de novo volta para ela (não duplica)
               api.post(`/browser/abrir?conv=${browserKey}`, { url }).catch((e) => setError(e.message));
             }}
             onRodarNoTerminal={(comando) => {
-              setRight({ tab: "terminal", collapsed: false });
+              abrir("terminal");
               executarNoTerminal(browserKey, comando).catch((e) => setError(e.message));
             }}
           />
@@ -2097,15 +2148,9 @@ export default function App() {
         {composerBlock}
         </>
         )}
-      </main>
-
-      <LocalLoading />
-
-      {section !== "maestro" && <RightPanel tab={right.tab} collapsed={right.collapsed} onCollapse={(collapsed) => setRight((r) => ({ ...r, collapsed }))}>
-        {painelDe(right.tab)}
-      </RightPanel>}
-        </div>
+        </Tiles>
       </div>
+      <LocalLoading />
     </div>
   );
 }
