@@ -290,9 +290,8 @@ def test_ferramentas_do_maestro_so_existem_no_modo_maestro():
 
 def test_modo_plano_so_deixa_ler_as_tarefas():
     """Planejar não é hora de criar, mudar nem despachar tarefa."""
-    nomes = [t.name for t in agent.available_tools(set(), "plan", maestro_mode=True)]
-    assert "list_tasks" in nomes
-    assert not ({"run_task", "update_task", "plan_feature"} & set(nomes))
+    assert not agent.bloqueada_no_plano("list_tasks")
+    assert all(agent.bloqueada_no_plano(n) for n in ("run_task", "update_task", "plan_feature", "session_note"))
 
 
 def test_prompt_do_maestro_proibe_implementar():

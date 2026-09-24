@@ -116,12 +116,14 @@ def test_qwen_no_think_on_low_effort():
 
 # ------------------------------------------------ modo Plano
 
-def test_plan_mode_only_sends_readonly_tools():
+def test_plan_mode_keeps_catalog_and_blocks_writes_in_code():
+    """Prefixo estável: o catálogo é o mesmo em todo modo; quem segura a escrita é o _run_call."""
     names = [t.name for t in agent.available_tools(None, "plan")]
+    assert names == [t.name for t in agent.available_tools(None, "edits")]
     assert "exit_plan_mode" in names
-    assert not any(REGISTRY[n].mutating for n in names if n in REGISTRY)
-    assert "write_file" not in names and "run_command" not in names
-    assert "exit_plan_mode" not in REGISTRY  # não vaza para os outros modos nem para as Configurações
+    assert agent.bloqueada_no_plano("write_file") and agent.bloqueada_no_plano("run_command")
+    assert not agent.bloqueada_no_plano("read_file") and not agent.bloqueada_no_plano("ask_user")
+    assert "exit_plan_mode" not in REGISTRY  # não vaza para as Configurações
 
 
 def test_plan_prompt_forbids_changes():
@@ -131,16 +133,18 @@ def test_plan_prompt_forbids_changes():
 
 def test_plan_approved_switches_mode_and_tools(monkeypatch):
     step = {"n": 0}
+    prefixos: list = []
 
     async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         step["n"] += 1
         names = [t["function"]["name"] for t in (tools or [])]
+        prefixos.append((messages[0]["content"], names))
         if step["n"] == 1:
-            assert "exit_plan_mode" in names and "write_file" not in names
+            assert "exit_plan_mode" in names and "MODO PLANO" in messages[-1]["content"]
             yield "done", {"tool_calls": [{"id": "p1", "name": "exit_plan_mode",
                                            "arguments": {"plan": "## Plano\n1. criar a.txt"}}]}
         elif step["n"] == 2:
-            assert "write_file" in names  # depois de aprovado, as ferramentas de escrita voltam
+            assert "Modo de permissão: Aceitar edições" in messages[-1]["content"]  # o contexto novo vem no fim
             yield "done", {"tool_calls": [{"id": "w1", "name": "write_file",
                                            "arguments": {"path": "a.txt", "content": "oi"}}]}
         else:
@@ -175,6 +179,42 @@ def test_plan_approved_switches_mode_and_tools(monkeypatch):
     assert (config.WORKSPACE_ROOT / "a.txt").read_text() == "oi"  # escreveu sem pedir aprovação (modo edits)
     sent = [e for e in events if e["type"] == "tools_sent"]
     assert sent[0]["permission"] == "plan" and sent[-1]["permission"] == "edits"
+    assert len({p for p, _ in prefixos}) == 1   # system prompt idêntico antes e depois de aprovar
+    assert len({tuple(n) for _, n in prefixos}) == 1  # e o catálogo também
+
+
+def test_plan_mode_refuses_write_in_code(monkeypatch):
+    step = {"n": 0}
+
+    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        step["n"] += 1
+        if step["n"] == 1:
+            yield "done", {"tool_calls": [{"id": "w1", "name": "write_file",
+                                           "arguments": {"path": "x.txt", "content": "oi"}}]}
+        else:
+            yield "content", "ok"
+            yield "done", {"tool_calls": []}
+
+    async def none(*a):
+        return None
+
+    monkeypatch.setattr(llm, "chat_stream", fake_stream)
+    monkeypatch.setattr(llm, "context_limit", none)
+    monkeypatch.setattr(llm, "capabilities", none)
+
+    async def scenario():
+        with db.session() as s:
+            c = db.Conversation(kind="agent")
+            s.add(c)
+            s.commit()
+            conv = c.id
+        run = agent.Run(conv)
+        req = agent.RunRequest(content="faça", provider="lmstudio", model="m", mode="agent", permission="plan")
+        return [ev async for ev in agent.run_agent(conv, req, run)]
+
+    res = [e["message"] for e in asyncio.run(scenario()) if e["type"] == "tool_result"]
+    assert res[0]["status"] == "erro" and "Modo Plano" in res[0]["content"]
+    assert not (config.WORKSPACE_ROOT / "x.txt").exists()
 
 
 def test_plan_rejected_keeps_plan_mode(monkeypatch):

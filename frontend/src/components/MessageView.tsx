@@ -950,6 +950,16 @@ export function EventNotice({ m }: { m: Message }) {
         </div>
       </details>
     );
+  if (kind === "contexto")
+    // O que o modelo recebe como modo/plano/memórias vigentes. Fechado por padrão: é para ele, não para a conversa.
+    return (
+      <details className="my-2 text-xs text-muted">
+        <summary className="cursor-pointer select-none">
+          Contexto de execução atualizado ({/Modo de permissão: ([^.\n]+)/.exec(m.content)?.[1] ?? "modo"})
+        </summary>
+        <div className="mt-1 whitespace-pre-wrap rounded-xl border border-line bg-surface px-3 py-2">{m.content}</div>
+      </details>
+    );
   const title = { warning: "Aviso", error: "Erro", nudge: "Lembrete automático ao modelo", info: "Info" }[kind as string];
   return (
     <div className={`my-3 rounded-2xl border bg-surface px-4 py-2.5 text-sm ${EVENT_STYLE[kind] ?? EVENT_STYLE.info}`}>

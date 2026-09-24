@@ -128,11 +128,11 @@ def test_approved_plan_survives_into_next_turn(monkeypatch):
             yield "done", {"tool_calls": [{"id": "p1", "name": "exit_plan_mode",
                                            "arguments": {"plan": "## Passos\n1. escrever a.txt"}}]}
         elif step["n"] == 2:
-            assert "1. escrever a.txt" in messages[0]["content"]  # plano preso no system prompt após aprovar
+            assert any("Plano aprovado" in str(m["content"]) and "1. escrever a.txt" in str(m["content"]) for m in messages)  # plano no contexto após aprovar
             yield "content", "Feito."
             yield "done", {"tool_calls": []}
         else:
-            assert "1. escrever a.txt" in messages[0]["content"]  # e no turno seguinte, em outro run
+            assert any("Plano aprovado" in str(m["content"]) and "1. escrever a.txt" in str(m["content"]) for m in messages)  # e no turno seguinte, em outro run
             yield "content", "Continuando."
             yield "done", {"tool_calls": []}
 

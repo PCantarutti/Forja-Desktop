@@ -23,7 +23,7 @@ from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: 
 from . import hooks
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
-from .tools import (LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
+from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
                     resolve_path, spill, vision_caps)
 
 MAX_NUDGES = 2
@@ -439,6 +439,75 @@ MAESTRO_RULES = [
 def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
                   chat: bool = False, maestro_mode: bool = False) -> str:
+    """Prompt inteiro: a base fixa mais o contexto de execução. É o que o subagente recebe.
+
+    O agente principal NÃO manda isto: manda só `prompt_base` como system e o contexto como mensagem
+    à parte, reemitida quando muda (`contexto_runtime`). Assim trocar de modo, aprovar um plano ou
+    editar o FORJA.md não reescreve o começo do prompt e o cache do llama.cpp continua valendo.
+    """
+    base = prompt_base(via, caps, exclude, effort, chat, maestro_mode)
+    if via == "none" or chat:
+        return base
+    names = [t.name for t in available_tools(caps, permission, exclude, maestro_mode)]
+    return base + "\n\n" + contexto_runtime(permission, plan, maestro_mode, names)
+
+
+# Modo Plano: as regras do Forja mais a plan:policy do DeepSeek Harness. Vão no contexto de execução,
+# não no system prompt: o catálogo de ferramentas é o mesmo nos dois modos e o bloqueio da escrita é
+# feito no código (_run_call), então a troca de modo não mexe no prefixo.
+def regras_plano(names: list[str]) -> list[str]:
+    regras = [
+        "MODO PLANO ATIVO. Estas regras valem por cima de qualquer outra regra ou descrição de ferramenta que "
+        "sugira alterar algo. Você continua no modo Plano até o exit_plan_mode ser aprovado ou o usuário trocar "
+        "o modo. Pedido no imperativo para implementar quer dizer planejar a implementação, não executar.",
+        "- Você NÃO pode alterar nada: sem escrever ou editar arquivos, sem comandos que mudem estado, sem agir "
+        "na página, sem commit. As ferramentas de escrita continuam listadas só para o catálogo não mudar; "
+        "chamadas a elas são recusadas.",
+        "- Investigue primeiro, com leituras, buscas e checagens que não alteram nada: leia os arquivos que o "
+        "plano vai tocar, não planeje de memória. Prefira funções e padrões que já existem a criar mecanismo "
+        "novo. Não use update_tasks nesta fase: ela acompanha a execução depois do plano aprovado.",
+    ]
+    if "delegate_task" in names:
+        regras.append("- Para varrer muitos arquivos ou pastas, use delegate_task level='rapido' com perguntas "
+                      "objetivas (onde está X, como Y é usado) e siga lendo enquanto ele responde.")
+    regras += [
+        "- Descubra por inspeção o que dá para descobrir. ask_user só para escolha que é do usuário ou "
+        "ambiguidade que o código não resolve — nunca para perguntar onde algo está ou como funciona hoje. "
+        "Junte as dúvidas e chame ask_user UMA vez, com todas (até 4), ANTES de fechar o plano. Não chute e "
+        "não pergunte de uma em uma.",
+        "- Em cada pergunta do ask_user dê 2 a 4 opções, a sua recomendação primeiro e com '(Recomendado)' no "
+        "fim do rótulo, cada uma com uma linha explicando o que implica.",
+        "- Concordar na conversa não aprova nada e não encerra o modo Plano — nem uma resposta sua confirmando "
+        "algo que você perguntou. Incorpore a decisão ao plano e apresente pelo exit_plan_mode.",
+        "- O plano fecha todas as decisões: objetivo e critério de sucesso, mudanças agrupadas por parte do "
+        "sistema, mudanças de API/esquema/fluxo de dados, casos de borda, falhas, testes e premissas. Curto para "
+        "revisar, detalhado para outra pessoa implementar sem ter que decidir nada.",
+        "- Quando estiver pronto, chame exit_plan_mode com o plano completo em markdown, começando por um "
+        "título '# ...'. Ela é a ÚNICA e ÚLTIMA chamada dessa resposta: não cole o plano como texto e não "
+        "pergunte 'posso seguir?'. Se o usuário pedir ajustes, incorpore e apresente de novo.",
+        "- " + PLAN_FORMAT,
+    ]
+    return regras
+
+
+def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, names: list[str]) -> str:
+    """O que muda durante a conversa, numa mensagem só (DeepSeek Harness: runtime-context snapshot)."""
+    partes = ["Contexto atual de execução. Substitui os contextos anteriores.",
+              f"- Modo de permissão: {MODE_LABEL.get(permission, permission)}."]
+    if permission == "plan":
+        partes += regras_plano(names)
+    elif plan:  # o plano aprovado acompanha o resto do trabalho, mesmo após compactar
+        partes.append("Plano aprovado pelo usuário. Siga-o passo a passo; se precisar desviar, diga o porquê "
+                      "antes. Se o pedido atual não tiver relação com ele, ignore-o.\n" + plan)
+    texto = "\n".join(partes)
+    if maestro_mode:
+        texto += projstate.bloco()
+    return texto + _memorias()
+
+
+def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
+                effort: str = "medio", chat: bool = False, maestro_mode: bool = False) -> str:
+    """A parte fixa do prompt: identidade, ambiente, ferramentas e regras. Não depende do modo."""
     if via == "none":
         return _extra("Você é o Forja, um assistente de programação. Você está no modo Chat: NÃO tem ferramentas "
                       "e não acessa arquivos. Se o usuário pedir para criar ou editar arquivos, peça para ele "
@@ -467,7 +536,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
             "- " + NO_COUNTING,
             "Responda no idioma do usuário.",
         ]), via, web))
-    tools = available_tools(caps, permission, exclude, maestro_mode)
+    tools = available_tools(caps, "manual", exclude, maestro_mode)  # o catálogo é o mesmo em todo modo
     names = [t.name for t in tools]
     # Regras só das ferramentas ligadas: citar uma desativada confunde o modelo.
     rules = ['- Execute, não descreva. Para mexer em arquivos, CHAME a ferramenta na mesma resposta. Nunca diga "vou criar/editar" sem fazer a chamada.',
@@ -619,27 +688,12 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
             rules.append("- Workers especialistas (model_slot = id): " + "; ".join(
                 f"{e['id']} = {e['nome']}" + (f" ({e['quando']})" if e.get("quando") else "") for e in esp)
                 + ". Sem model_slot, o Forja escolhe pelo 'type' do contrato e pelos arquivos.")
-    if permission == "plan":
-        rules = ["- MODO PLANO: você NÃO pode alterar nada (sem escrever arquivos, sem comandos, sem agir na página).",
-                 "- Investigue com as ferramentas de leitura o quanto precisar: leia os arquivos que o plano vai "
-                 "tocar, não planeje de memória."]
-        if "delegate_task" in names:
-            rules.append("- Para varrer muitos arquivos ou pastas, use delegate_task level='rapido' com perguntas "
-                         "objetivas (onde está X, como Y é usado) e siga lendo enquanto ele responde.")
-        rules += ["- Decisão que muda o trabalho (duas abordagens válidas, requisito ambíguo)? Junte as dúvidas e "
-                  "chame ask_user UMA vez, com todas (até 4), ANTES de fechar o plano. Não chute e não pergunte "
-                  "de uma em uma.",
-                  "- Em cada pergunta do ask_user dê 2 a 4 opções, a sua recomendação primeiro e com "
-                  "'(Recomendado)' no fim do rótulo, cada uma com uma linha explicando o que implica. Só "
-                  "pergunte sem opções quando não houver alternativa a listar.",
-                  "- Quando souber o que fazer, chame exit_plan_mode com o plano em markdown e PARE. "
-                  "O usuário aprova (e escolhe o modo de execução) ou pede mudanças.",
-                  "- " + PLAN_FORMAT]
-    else:
-        rules.append("- Dúvida que muda o resultado e não dá para inferir do código: ask_user com todas as "
-                     "perguntas de uma vez, cada uma com 2 a 4 opções (a recomendada primeiro, com "
-                     "'(Recomendado)' no rótulo) e uma linha de explicação em cada. Não pergunte o óbvio.")
-        rules.append("- Ao terminar, responda com um resumo curto do que foi feito.")
+    rules.append("- Dúvida que muda o resultado e não dá para inferir do código: ask_user com todas as "
+                 "perguntas de uma vez, cada uma com 2 a 4 opções (a recomendada primeiro, com "
+                 "'(Recomendado)' no rótulo) e uma linha de explicação em cada. Não pergunte o óbvio.")
+    rules.append("- O modo de permissão e as regras que valem agora chegam numa mensagem 'Contexto atual de "
+                 "execução'; a mais recente substitui as anteriores e vale por cima destas regras.")
+    rules.append("- Ao terminar, responda com um resumo curto do que foi feito.")
     dica = EFFORT.get(effort, EFFORT["medio"])[1]
     if dica:
         rules.append(f"- {dica}")
@@ -650,12 +704,7 @@ def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | No
               *environment_block(names),
               f"Ferramentas disponíveis: {', '.join(names)}.", "Regras:"]
     prompt = "\n".join(header + rules + ["Responda no idioma do usuário."])
-    if maestro_mode:
-        prompt += projstate.bloco()
-    if plan and permission != "plan":  # o plano aprovado acompanha o resto do trabalho, mesmo após compactar
-        prompt += ("\n\nPlano aprovado pelo usuário. Siga-o passo a passo; se precisar desviar, diga o porquê antes. "
-                   "Se o pedido atual não tiver relação com ele, ignore-o.\n" + plan)
-    return _extra(_com_schemas(prompt, via, tools))
+    return _instrucoes(_com_schemas(prompt, via, tools))
 
 
 def environment_block(names: list[str]) -> list[str]:
@@ -704,7 +753,9 @@ def _so_memoria(t: Tool) -> Tool:
 
 def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | None = None,
                     maestro_mode: bool = False) -> list[Tool]:
-    """Ferramentas desta requisição. No modo Plano: só leitura + exit_plan_mode.
+    """Ferramentas desta requisição. O catálogo NÃO muda com o modo (`permission` fica só por
+    compatibilidade): no modo Plano as de escrita continuam listadas e é o _run_call que as recusa —
+    tirar e pôr ferramenta a cada troca de modo reescrevia o começo do prompt e derrubava o cache.
 
     `maestro_mode` acrescenta as ferramentas do Task Manager (taskdb.TOOLS). Elas ficam fora do
     REGISTRY, como exit_plan_mode e ask_user: assim não aparecem nos outros modos nem nas
@@ -725,12 +776,18 @@ def available_tools(caps: set[str] | None, permission: str, exclude: set[str] | 
     # ask_user/exit_plan_mode entram sempre, MENOS quando quem chamou as excluiu de propósito — é o
     # caso do Worker de contrato, que não fala com o usuário (_run_call recusa) e não pode gastar
     # schema com uma ferramenta que só devolveria erro.
-    fixas = [t for t in (ASK_USER,) if t.name not in exclude]
-    if permission == "plan":
-        planos = [t for t in (ASK_USER, EXIT_PLAN) if t.name not in exclude]
-        return ([t for t in tools if not t.mutating]
-                + [t for t in extras if t.name in taskdb.PLAN_SAFE] + planos)
+    fixas = [t for t in (ASK_USER, EXIT_PLAN) if t.name not in exclude]
     return tools + extras + fixas
+
+
+def bloqueada_no_plano(name: str) -> bool:
+    """O que o modo Plano recusa na hora de rodar: escrita e o trabalho do Task Manager que não é leitura."""
+    if name in EXTRA:  # ferramentas da Maestro: no plano só as de leitura (taskdb.PLAN_SAFE)
+        return name not in taskdb.PLAN_SAFE
+    try:
+        return get_tool(name).mutating
+    except ToolError:
+        return False
 
 
 CHAT_TOOLS = ("web_search", "fetch_url")
@@ -750,16 +807,32 @@ def last_plan(msgs) -> str | None:
     return None
 
 
-def _extra(prompt: str) -> str:
-    """Instruções personalizadas e memória do projeto no fim do system prompt."""
+def _instrucoes(prompt: str) -> str:
+    """Instruções personalizadas do usuário: mudam raramente, ficam no fim do system prompt."""
     extra = config.CUSTOM_INSTRUCTIONS.strip()
     if extra:
         prompt += f"\n\nInstruções do usuário (valem sempre):\n{extra}"
+    return prompt
+
+
+def _memorias() -> str:
+    """Memória do projeto e índice da memória pessoal: mudam no meio da conversa (o próprio agente
+    edita o FORJA.md), por isso vão no contexto de execução e não no system prompt."""
+    texto = ""
     mem = memory.project_text().strip()
     if mem:
-        prompt += f"\n\n--- {config.PROJECT_MEMORY_FILE} (memória do projeto, escrita por você) ---\n{mem}"
-    prompt += memory.prompt_block()
-    return prompt
+        texto += f"\n\n--- {config.PROJECT_MEMORY_FILE} (memória do projeto, escrita por você) ---\n{mem}"
+    return texto + memory.prompt_block()
+
+
+def _ultimo_contexto(msgs) -> "db.Message | None":
+    return next((m for m in reversed(msgs) if m.role == "event" and (m.meta or {}).get("kind") == "contexto"),
+                None)
+
+
+def _extra(prompt: str) -> str:
+    """Modo Chat: instruções e memórias direto no system prompt (lá não há contexto à parte)."""
+    return _instrucoes(prompt) + _memorias()
 
 
 def nudge_text(via: str, mudo: bool = False) -> str:
@@ -796,8 +869,11 @@ def _join_user(a, b):
 def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
                   chat: bool = False, reasoning_back: bool = False, prefixo_estavel: bool = False,
-                  maestro_mode: bool = False, podar: bool = False) -> list[dict]:
+                  maestro_mode: bool = False, podar: bool = False, contexto: bool = False) -> list[dict]:
     """Histórico no formato do provider.
+
+    `contexto`: o system leva só a base fixa (`prompt_base`); modo, plano e memórias vêm dos eventos
+    'contexto' gravados na conversa pelo loop (DeepSeek Harness: prefixo estável para o cache).
 
     `reasoning_back`: devolve ao modelo, em `reasoning_content`, o raciocínio dos passos do turno atual
     (mensagens do assistente depois da última do usuário). Sem isso, um modelo pensante (Qwen3.6, GLM)
@@ -810,12 +886,17 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
     qualquer mudança no meio do histórico provoca no cache de prompt dele.
     """
     native = via == "native"
-    out: list[dict] = [{"role": "system",
-                        "content": system_prompt(via, caps, permission=permission, effort=effort, plan=plan,
-                                                 chat=chat, maestro_mode=maestro_mode)}]
+    contexto = contexto and via != "none" and not chat
+    sistema = (prompt_base(via, caps, effort=effort, maestro_mode=maestro_mode) if contexto else
+               system_prompt(via, caps, permission=permission, effort=effort, plan=plan,
+                             chat=chat, maestro_mode=maestro_mode))
+    out: list[dict] = [{"role": "system", "content": sistema}]
     summary = compact.last_summary(msgs)
     if summary:
         out.append({"role": "user", "content": compact.retomada(summary[0])})
+        ultimo = _ultimo_contexto(msgs)
+        if contexto and ultimo and ultimo.id <= summary[1]:  # o resumo engoliu o contexto vigente
+            out.append({"role": "user", "content": ultimo.content})
         msgs = [m for m in msgs if m.id > summary[1]]
     # `podar`: antes de gastar uma chamada de resumo, os resultados de ferramenta antigos e grandes
     # ficam com cabeça e cauda (compact.podar). Os últimos seguem inteiros.
@@ -1134,11 +1215,19 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         mode_at_start = run.permission
         if run.plan is None:
             run.plan = last_plan(msgs)
+        if agent:  # contexto de execução: só grava quando muda, e aí entra no fim do histórico
+            ctx = contexto_runtime(run.permission, run.plan, maestro_mode, [t.name for t in current_tools()])
+            ultimo = _ultimo_contexto(msgs)
+            if not ultimo or ultimo.content != ctx:
+                m = _save(conv_id, role="event", content=ctx, meta={"kind": "contexto", "to_model": True})
+                yield {"type": "event", "message": m.to_dict()}
+                msgs = _load(conv_id)
+
         def historia(ms, podar: bool = False) -> list[dict]:
             return build_history(ms, via, caps, run.permission, req.effort, run.plan, chat,
                                  reasoning_back=llm.is_local(req.provider),
                                  prefixo_estavel=llm.is_local(req.provider),
-                                 maestro_mode=maestro_mode, podar=podar)
+                                 maestro_mode=maestro_mode, podar=podar, contexto=agent)
 
         messages = historia(msgs)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
@@ -1593,7 +1682,15 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
     if "__raw__" in args:
         result("erro", f"Argumentos não são JSON válido: {args['__raw__'][:200]}")
         return
+    if run.permission == "plan" and bloqueada_no_plano(name):
+        # O catálogo não muda no modo Plano (prefixo estável); quem segura a escrita é isto.
+        result("erro", "Modo Plano: esta ferramenta não roda até o plano ser aprovado. Termine de investigar "
+                       "e chame exit_plan_mode.")
+        return
     if name == "exit_plan_mode":
+        if run.permission != "plan" or parent:
+            result("erro", "exit_plan_mode só vale no modo Plano, e você não está nele: siga com o trabalho.")
+            return
         async for ev in _plan(call, run, out, meta):
             yield ev
         return
@@ -1632,9 +1729,6 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         result("erro", str(e))
         return
 
-    if run.permission == "plan" and tool.mutating:
-        result("erro", "Modo Plano: nada pode ser alterado. Termine de planejar e chame exit_plan_mode.")
-        return
     mode_now = run.permission
     needs_approval, rule = policy.decide(tool, args, run.permission)
     if rule:
