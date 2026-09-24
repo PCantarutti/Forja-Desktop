@@ -59,6 +59,8 @@ def _flag_modelo(path: str) -> str:
     Com -m o sd.cpp procura os pesos com o prefixo de checkpoint completo e não acha nada.
     """
     # ponytail: heurística pelo metadado; o `convert` do sd.cpp (checkpoint inteiro) não grava arquitetura
+    if localai.eh_video(path):  # Wan em .safetensors (Comfy-Org) também é só o unet
+        return "--diffusion-model"
     if path.lower().endswith(".gguf") and localai.gguf_info(path)["arch"]:
         return "--diffusion-model"
     return "-m"
@@ -220,8 +222,12 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
     tail: list[str] = []
     video = localai.eh_video(str(o.get("model") or ""))
     timer = threading.Timer(TIMEOUT_VIDEO if video else TIMEOUT, lambda: native.kill_tree(proc))
-    # O Wan2.2 A14B amostra em dois passes (HighNoise e LowNoise), cada um com a sua barra.
-    passos = {int(o.get("steps") or 0), int(o.get("high_noise_steps") or -1) if video else -1}
+    # O Wan2.2 A14B amostra em dois passes (HighNoise e LowNoise), cada um com a sua barra: o card soma
+    # os dois numa barra só, senão ia a 100% no meio e voltava a 0.
+    alto = int(o.get("high_noise_steps") or -1) if video and o.get("high_noise_model") else -1
+    passos = {int(o.get("steps") or 0), alto}
+    total_geral = int(o.get("steps") or 0) + max(0, alto)
+    feito_antes, ultimo, passe = 0, 0, 0
     timer.start()
     # Vigia à parte: carregando pesos o sd-cli passa minutos sem imprimir nada, e conferir o
     # cancelamento só a cada linha deixava o processo vivo (e a GPU ocupada) depois do "Cancelar".
@@ -248,12 +254,20 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
             # na edição ele codifica a referência antes de amostrar — o card ia a 100% e voltava a 0.
             if m and int(m.group(2)) not in passos:
                 m = None
-            if job_id and m:
-                downloads.update(job_id, done=int(m.group(1)), total=int(m.group(2)))
-            if progresso and m:
+            if not m:
+                continue
+            n, tot = int(m.group(1)), int(m.group(2))
+            if n < ultimo:  # a barra recomeçou: é o segundo passe do A14B
+                feito_antes += passe
+            ultimo, passe = n, tot
+            if alto > 0:
+                n, tot = feito_antes + n, total_geral
+            if job_id:
+                downloads.update(job_id, done=n, total=tot)
+            if progresso:
                 v = float(m.group(3))
                 # o sd.cpp troca a unidade conforme a velocidade: abaixo de 1 it/s ele passa a s/it
-                progresso(int(m.group(1)), int(m.group(2)), v if m.group(4) == "s/it" else (1 / v if v else 0.0))
+                progresso(n, tot, v if m.group(4) == "s/it" else (1 / v if v else 0.0))
         proc.wait()
     finally:
         parar.set()
@@ -338,8 +352,11 @@ async def video_generate(root: Path, args: dict) -> dict:
     model = _modelo_de_video()
     if not model:
         raise ToolError("Nenhum modelo de vídeo nas pastas. Baixe um kit em IA local › Baixar › Vídeo.")
+    if args.get("imagem_final") and not args.get("imagem_inicial"):
+        raise ToolError("imagem_final precisa de imagem_inicial: são o primeiro e o último quadro.")
     o = _opts({"model": model})
-    opts = {"model": model, **{k: args.get(k) for k in ("negative", "seed")}}
+    # semente 0 = sorteada: sem isso vinha a da tela (a última "Refazer com esta semente")
+    opts = {"model": model, "negative": args.get("negative"), "seed": int(args.get("seed") or 0)}
     if args.get("segundos"):
         opts["frames"] = quadros(float(args["segundos"]), int(o["fps"]))
     refs = [str((root / r).resolve()) for r in (args.get("imagem_inicial"), args.get("imagem_final")) if r]

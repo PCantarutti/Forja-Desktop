@@ -26,6 +26,7 @@ export const ATALHOS: [string, string][] = [
   ["F", "tela cheia"],
   ["P", "picture-in-picture"],
   ["R", "loop"],
+  ["< · >", "mais lento · mais rápido"],
   ["?", "estes atalhos"],
 ];
 
@@ -84,6 +85,8 @@ type Props = {
   tecladoGlobal?: boolean;
   /** Início→Fim: marca na linha do tempo onde estão os quadros dados. */
   marcas?: boolean;
+  /** Atalhos de quem usa o player (o foco: ↑↓, M/X, Esc), listados junto no painel "?". */
+  atalhosExtras?: [string, string][];
   className?: string;
   style?: React.CSSProperties;
   onTelaCheia?: () => void;
@@ -224,6 +227,9 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
     (e: KeyboardEvent | React.KeyboardEvent) => {
       const alvo = e.target as HTMLElement;
       if (alvo.closest("input, textarea, select, [contenteditable=true]")) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return; // Ctrl+0 (zoom), Ctrl+R etc. são do app, não do player
+      // Espaço/Enter num botão é do botão ("Manter", "Loop"...): senão tocava o vídeo e o botão não agia.
+      if ((e.key === " " || e.key === "Enter") && alvo.closest("button, a, [role=button]")) return;
       const v = video.current;
       if (!v) return;
       const k = e.key;
@@ -244,6 +250,8 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
       if (k === "p" || k === "P") return feito(), pip();
       if (k === "r" || k === "R") return feito(), setLoop((x) => !x);
       if (k === "?") return feito(), setAjuda((x) => !x);
+      if (k === ">" || k === ".") return feito(), setVel((x) => VELOCIDADES[Math.min(VELOCIDADES.length - 1, VELOCIDADES.indexOf(x) + 1)]);
+      if (k === "<" || k === ",") return feito(), setVel((x) => VELOCIDADES[Math.max(0, VELOCIDADES.indexOf(x) - 1)]);
     },
     [tocarPausar, irPara, passo, telaCheia, pip, mexeu],
   );
@@ -324,7 +332,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
               </button>
             </div>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
-              {ATALHOS.map(([k, o]) => (
+              {[...ATALHOS, ...(props.atalhosExtras ?? [])].map(([k, o]) => (
                 <div key={k} className="contents">
                   <dt className="font-mono text-white">{k}</dt>
                   <dd className="text-white/70">{o}</dd>
@@ -433,7 +441,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
                   e.preventDefault();
                   setVel((v) => VELOCIDADES[(VELOCIDADES.indexOf(v) - 1 + VELOCIDADES.length) % VELOCIDADES.length]);
                 }}
-                title="Velocidade (clique: mais rápido · botão direito: mais lento)"
+                title="Velocidade (clique ou >: mais rápido · botão direito ou <: mais lento)"
               >
                 {String(vel).replace(".", ",")}×
               </button>

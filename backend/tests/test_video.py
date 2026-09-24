@@ -87,6 +87,11 @@ def test_argv_imagem_e_quadros(isolado):
     assert a[a.index("-i") + 1] == ini and a[a.index("--end-img") + 1] == fim
 
 
+def test_wan_safetensors_vai_como_diffusion_model(isolado):
+    a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.webm", _o(isolado, "wan2.1_t2v_1.3B_fp16.safetensors"))
+    assert "--diffusion-model" in a and "-m" not in a
+
+
 def test_argv_a14b_leva_o_par_highnoise(isolado):
     alto = arquivo(isolado / "modelos", "Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf")
     o = _o(isolado, "Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf", high_noise_model=alto, high_noise_steps=8,
@@ -118,6 +123,35 @@ def test_erro_de_vram_ocupada_explica_em_portugues():
     assert imagegen.dica_de_falha(["qualquer outro erro"]) == ""
     assert imagegen.rotulo_codigo(3221226505) == "3221226505, 0xC0000409"
     assert imagegen.rotulo_codigo(1) == "1"
+
+
+def test_nomes_que_nao_sao_video(isolado):
+    m = isolado / "modelos"
+    for nome in ("swan_lake_xl.safetensors", "wan21_causvid_lora.safetensors", "Taiwan-landscape.safetensors"):
+        assert localai.kind_of(Path(arquivo(m, nome))) == "image", nome
+
+
+def test_codificador_gguf_nao_vira_modelo_de_chat(isolado, monkeypatch):
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "t5encoder", "n_layer": 24, "n_head": 64})
+    assert localai.kind_of(Path(arquivo(isolado / "modelos", "umt5-xxl-encoder-Q8_0.gguf"))) == "codificador"
+
+
+def test_trocar_variante_refaz_pecas_e_sugeridos(isolado):
+    m = isolado / "modelos"
+    modelo = arquivo(m, "wan-generico-Q8_0.gguf")  # sem marcador: cai em wan21_t2v
+    arquivo(m, "wan_2.1_vae.safetensors")
+    vae22 = arquivo(m, "wan2.2_vae.safetensors")
+    arquivo(m, "umt5-xxl-encoder-Q8_0.gguf")
+    assert localai.completar_componentes(modelo)["vae"].endswith("wan_2.1_vae.safetensors")
+    localai.save_image_params(modelo, {**localai.image_params(modelo), "variante": "wan22_ti2v"})
+    p = localai.completar_componentes(modelo)
+    assert p["vae"] == vae22 and p["fps"] == 24 and p["frames"] == 49
+
+
+def test_padrao_da_aba_video_nao_leva_ajustes_de_modelo(isolado):
+    localai.set_video({"model": "C:/m/x.gguf", "fps": 24, "frames": 49, "seed": 7, "negative": "blur"})
+    import os
+    assert localai.read_config()["video"] == {"model": os.path.normpath("C:/m/x.gguf"), "negative": "blur"}
 
 
 def test_quadros_sao_4k_mais_1():
@@ -205,5 +239,10 @@ def test_lote_em_conversa_de_video_grava_webm(isolado, monkeypatch):
         time.sleep(0.02)
     assert [o.suffix for o, _ in saidas] == [".webm", ".webm"]
     assert all(p.suffix == ".webp" for _, p in saidas)  # prévia animada: .png viraria .avi, que não toca
+    # o foco decide uma tomada: a outra fica pronta, sem virar "mantida" de carona
+    primeira, segunda = [i["path"] for i in lotes._mensagem(msg["id"])["meta"]["images"]]
+    lotes.decidir(msg["id"], keep=[primeira], apenas=[primeira])
+    estados = {i["path"]: i["status"] for i in lotes._mensagem(msg["id"])["meta"]["images"]}
+    assert estados == {primeira: "mantida", segunda: "pronta"}
     lotes.decidir(msg["id"], keep=[])
     assert lotes.limpar_descartadas(dias=0) == 2  # o expurgo leva webm também

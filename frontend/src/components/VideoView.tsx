@@ -4,7 +4,7 @@ import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
 import {
   ArrowUp, Camera, Check, ChevronDown, Copy, Download, ExternalLink, Film, FolderOpen, Image, Plus, Refresh,
-  Search, Sliders, Square, Trocar, X,
+  Sliders, Square, Trocar, X,
 } from "./icons";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
 import { btn, btnPrimary, Field, input, Num, SAMPLERS } from "./LocalPanel";
@@ -59,7 +59,8 @@ function quadroDe(src: string, tempo: number | "fim"): Promise<Blob | null> {
     v.preload = "auto";
     v.src = src;
     v.onloadeddata = () => {
-      v.currentTime = tempo === "fim" ? Math.max(0, v.duration - 0.001) : Math.min(tempo, v.duration - 0.001);
+      // até a duração exata: no webm ela é o início do último quadro, e "− 1 ms" pegava o penúltimo
+      v.currentTime = tempo === "fim" ? v.duration : Math.min(tempo, v.duration);
     };
     v.onseeked = () => {
       const c = document.createElement("canvas");
@@ -101,6 +102,7 @@ export default function VideoView(props: {
   const [melhorando, setMelhorando] = useState(false);
   const [foco, setFoco] = useState<{ lote: number; item: number } | null>(null);
   const [erro, setErro] = useState("");
+  const [aviso, setAviso] = useState(""); // troca automática de modelo: dizer, não fazer em silêncio
   const [llm, setLlm] = useState(() => {
     try {
       const salvo = JSON.parse(localStorage.getItem(KEY_LLM) ?? "null");
@@ -158,12 +160,19 @@ export default function VideoView(props: {
     carregarLocal();
   }, [carregarLocal]);
 
-  // Sem modelo, a tela fica de olho: o kit baixando na aba IA local aparece aqui sozinho quando termina.
+  // A tela fica de olho enquanto algo pode mudar o que ela mostra: sem modelo (o kit baixando aparece
+  // sozinho), GPU ocupada por outra geração (o Gerar destrava quando ela acaba) ou download em curso.
+  const precisaVigiar =
+    !!st && (!st.video_models.length || st.image_busy || st.jobs.some((j) => j.status === "running"));
   useEffect(() => {
-    if (!st || st.video_models.length) return;
-    const t = setInterval(carregarLocal, 5000);
+    if (!precisaVigiar) return;
+    const t = setInterval(carregarLocal, 4000);
     return () => clearInterval(t);
-  }, [st, carregarLocal]);
+  }, [precisaVigiar, carregarLocal]);
+  // e quando a tomada desta aba termina, o estado da GPU e os ajustes podem ter mudado
+  useEffect(() => {
+    if (!ocupado) carregarLocal();
+  }, [ocupado, carregarLocal]);
 
   const carregarConversa = useCallback(
     async (id: number | null = props.conv) => {
@@ -245,7 +254,10 @@ export default function VideoView(props: {
       const quer: ModoVideo = onde === "fim" || (modo === "flf2v" && slots[1]) ? "flf2v" : "i2v";
       if (!modos.includes(quer)) {
         const outro = st?.video_models.find((m) => m.req?.modos?.includes(quer));
-        if (outro) aplicarModelo(outro);
+        if (outro) {
+          aplicarModelo(outro);
+          setAviso(`Troquei para o ${outro.req?.nome ?? outro.name}, que faz ${quer === "i2v" ? "imagem → vídeo" : "primeiro e último quadro"}.`);
+        }
         else return mostrarErro(`Nenhum modelo de vídeo nas pastas faz ${quer === "i2v" ? "imagem → vídeo" : "primeiro e último quadro"}. Baixe um em IA local › Baixar.`);
       }
       setModo(quer);
@@ -256,7 +268,8 @@ export default function VideoView(props: {
   }
 
   async function gerar(confirm = false) {
-    if (!o || !prompt.trim() || !modelo) return;
+    // As mesmas travas do botão: pelo Enter, uma 2ª geração subia outro sd-cli disputando a VRAM.
+    if (!o || !st || !prompt.trim() || !modelo || ocupado || st.image_busy || !st.runtimes.sd.installed) return;
     if (refs.length < precisaQuadros) {
       mostrarErro(precisaQuadros === 1 ? "Escolha a imagem que vai ser animada." : "Escolha o quadro inicial e o final.");
       return;
@@ -424,6 +437,8 @@ export default function VideoView(props: {
               onModelo={(p) => aplicarModelo(st.video_models.find((m) => m.path === p))}
               seedMode={seedMode}
               onSeedMode={setSeedMode}
+              llm={llm}
+              onLlm={setLlm}
               onFechar={() => setAbrirAjustes(false)}
             />
           )}
@@ -459,7 +474,16 @@ export default function VideoView(props: {
                     );
                   })}
                 </div>
-                <span className="text-[11px] text-faint">{MODOS.find((m) => m.id === modo)?.dica}</span>
+                {aviso ? (
+                  <span className="flex items-center gap-1.5 text-[11px] text-sky-300" role="status">
+                    {aviso}
+                    <button onClick={() => setAviso("")} aria-label="Dispensar aviso" className="rounded p-0.5 text-sky-300/70 hover:text-sky-200">
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-muted">{MODOS.find((m) => m.id === modo)?.dica}</span>
+                )}
               </div>
 
               {precisaQuadros > 0 && (
@@ -491,7 +515,7 @@ export default function VideoView(props: {
                       />
                     </>
                   )}
-                  <p className="mb-7 ml-1 max-w-56 text-[11px] leading-snug text-faint">
+                  <p className="mb-7 ml-1 max-w-56 text-[11px] leading-snug text-muted">
                     Clique, solte um arquivo, cole (Ctrl+V) ou arraste um vídeo do feed — vale o quadro onde ele estiver.
                   </p>
                 </div>
@@ -576,9 +600,12 @@ export default function VideoView(props: {
                     <div className="w-56 space-y-2 p-1">
                       <Segmento
                         rotulo="Duração"
-                        opcoes={DURACOES.map((d) => `${d} s`)}
-                        valor={DURACOES.map((d) => `${d} s`).find((d) => quadrosDe(parseInt(d), o.fps) === o.frames) ?? null}
-                        onValor={(d) => set("frames", quadrosDe(parseInt(d), o.fps))}
+                        opcoes={[
+                          ...DURACOES.map((d) => `${d} s`),
+                          ...(DURACOES.some((d) => quadrosDe(d, o.fps) === o.frames) ? [] : [fmtS(seg)]),
+                        ]}
+                        valor={DURACOES.map((d) => `${d} s`).find((d) => quadrosDe(parseInt(d), o.fps) === o.frames) ?? fmtS(seg)}
+                        onValor={(d) => DURACOES.includes(parseInt(d)) && set("frames", quadrosDe(parseInt(d), o.fps))}
                       />
                       <p className="px-1 text-[11px] leading-snug text-faint">
                         {o.frames} quadros a {o.fps} fps. Cada segundo a mais é memória e tempo a mais — o Wan foi
@@ -603,7 +630,7 @@ export default function VideoView(props: {
                 <button
                   onClick={melhorar}
                   disabled={!prompt.trim() || !llm.model || melhorando}
-                  title={llm.model ? `Reescrever o prompt com ${llm.model}: sujeito, ação, câmera, luz` : "Escolha à direita o modelo que reescreve"}
+                  title={llm.model ? `Reescrever o prompt com ${llm.model}: sujeito, ação, câmera, luz (troque o modelo nos Ajustes)` : "Escolha nos Ajustes o modelo que reescreve"}
                   className={pilula}
                 >
                   <Refresh className={`size-3.5 ${melhorando ? "animate-spin" : ""}`} />
@@ -623,9 +650,6 @@ export default function VideoView(props: {
                       {duracao(estimativa).replace("~", "≈ ")}
                     </span>
                   )}
-                  <div className="min-w-0" title="Modelo que reescreve o prompt (não é o que gera o vídeo)">
-                    <ModelPicker provider={llm.provider} model={llm.model} onChange={(provider, model) => setLlm({ provider, model })} />
-                  </div>
                   <BotaoEnviar
                     onEnviar={() => gerar()}
                     desabilitado={!prompt.trim() || !modelo || semRuntime || st.image_busy || ocupado || refs.length < precisaQuadros}
@@ -743,7 +767,8 @@ function SlotQuadro(props: {
             <button
               onClick={props.onLimpar}
               title="Tirar"
-              className="absolute right-1 top-1 grid size-5 place-items-center rounded-full bg-black/70 text-white/80 opacity-0 transition group-hover:opacity-100 hover:text-white"
+              aria-label="Tirar esta imagem"
+              className="absolute right-1 top-1 grid size-5 place-items-center rounded-full bg-black/70 text-white/80 opacity-0 transition group-hover:opacity-100 hover:text-white focus-visible:opacity-100"
             >
               <X className="size-3" />
             </button>
@@ -852,6 +877,8 @@ function AjustesVideo(props: {
   onModelo: (p: string) => void;
   seedMode: SeedMode;
   onSeedMode: (s: SeedMode) => void;
+  llm: { provider: string; model: string };
+  onLlm: (l: { provider: string; model: string }) => void;
   onFechar: () => void;
 }) {
   const { o, set, st } = props;
@@ -885,6 +912,9 @@ function AjustesVideo(props: {
             <Num label="Quadros" value={o.frames} onChange={(v) => set("frames", Math.max(1, Math.round((v - 1) / 4)) * 4 + 1)} step={4} hint="Sempre 4k+1." />
             <Num label="FPS" value={o.fps} onChange={(v) => set("fps", v)} hint={`${fmtS(segundosDe(o.frames, o.fps))} de vídeo`} />
           </div>
+          <Field label="Modelo do “Melhorar”" hint="O que reescreve o prompt: um LLM rápido basta. Não é o que gera o vídeo.">
+            <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
+          </Field>
           <Field label="Negativo" hint="O que evitar no vídeo.">
             <input className={input} value={o.negative} onChange={(e) => set("negative", e.target.value)} placeholder="blurry, static, distorted…" />
           </Field>
@@ -1049,8 +1079,10 @@ function Tomada(props: {
                 }}
                 title="Os não marcados vão para a subpasta descartadas/"
               >
-                <Check className="mr-1 inline size-3.5" />
-                {sel.size ? `Manter ${sel.size} · descartar ${aprovaveis.length - sel.size}` : `Descartar ${aprovaveis.length === 1 ? "" : "todos "}(${aprovaveis.length})`}
+                {sel.size ? <Check className="mr-1 inline size-3.5" /> : <X className="mr-1 inline size-3.5" />}
+                {sel.size
+                  ? `Manter ${sel.size} · descartar ${aprovaveis.length - sel.size}`
+                  : aprovaveis.length === 1 ? "Descartar" : `Descartar todas (${aprovaveis.length})`}
               </button>
               {aprovaveis.length > 1 && (
                 <button className={btn} onClick={() => setSel(new Set(aprovaveis.map((i) => i.path)))}>Marcar todos</button>
@@ -1061,7 +1093,7 @@ function Tomada(props: {
         {!viva && faltam > 0 && (
           <button className={btn} onClick={() => chamar("continuar", { confirm: false })} title="Gera só o que faltou, com as mesmas sementes">
             <ArrowUp className="mr-1 inline size-3.5 rotate-90" />
-            Continuar ({faltam})
+            Gerar as que faltaram ({faltam})
           </button>
         )}
         <button className={btn} onClick={() => props.onReaproveitar()} title="Traz prompt, quadros e ajustes desta tomada para o campo">
@@ -1126,7 +1158,6 @@ function CartaoVideo(props: {
     >
       {temArquivo ? (
         <div
-          className="relative cursor-pointer bg-black"
           style={{ aspectRatio: props.aspecto }}
           draggable
           onDragStart={(e) => {
@@ -1146,7 +1177,17 @@ function CartaoVideo(props: {
             setPos(0);
           }}
           onClick={props.onAbrir}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              props.onAbrir();
+            }
+          }}
+          aria-label={`Abrir no player: tomada com semente ${item.seed}${props.marcado ? ", marcada para manter" : ""}`}
           title="Clique para abrir no player · arraste para usar o quadro como imagem inicial"
+          className="relative cursor-pointer bg-black outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
         >
           <video
             ref={v}
@@ -1174,9 +1215,18 @@ function CartaoVideo(props: {
             />
           )}
           {item.status === "erro" ? (
-            <span className="px-3 text-center text-[11px] text-red-300" title={item.error}>
-              {item.error.split("\n")[0].slice(0, 120)}
-            </span>
+            // A 1ª linha é a explicação em português (dica_de_falha no backend); o log inteiro vai no copiar.
+            <div className="flex max-w-[90%] flex-col items-center gap-2 text-center">
+              <span className="line-clamp-4 text-[11px] leading-snug text-red-300" title={item.error}>
+                {item.error.split("\n")[0]}
+              </span>
+              <button
+                onClick={() => navigator.clipboard.writeText(item.error).catch(() => {})}
+                className="rounded-full border border-red-900/70 px-2 py-0.5 text-[10px] text-red-200/80 hover:bg-red-950/40 hover:text-red-100"
+              >
+                Copiar o erro completo
+              </button>
+            </div>
           ) : item.status === "gerando" && !comPrevia ? (
             <Liquido fracao={item.progress ?? 0} sPasso={item.s_passo} restante={item.restante} />
           ) : item.status === "gerando" && !item.preview ? (
@@ -1191,13 +1241,16 @@ function CartaoVideo(props: {
         </div>
       )}
 
-      {comPrevia && <AnelProgresso pct={pct} />}
+      {/* Só com a prévia na tela: antes dela o spinner do centro já diz que está carregando (eram três indicadores). */}
+      {comPrevia && item.preview && <AnelProgresso pct={pct} />}
       {temArquivo && (
         <button
           onClick={props.onMarcar}
           title={props.marcado ? "Desmarcar" : "Marcar para manter"}
-          className={`absolute left-2 top-2 grid size-6 place-items-center rounded-full border ${
-            props.marcado ? "border-emerald-400 bg-emerald-500 text-black" : "border-white/20 bg-black/60 text-transparent hover:text-white"
+          aria-label="Manter esta tomada"
+          aria-pressed={props.marcado}
+          className={`absolute left-2 top-2 grid size-6 place-items-center rounded-full border outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70 ${
+            props.marcado ? "border-emerald-400 bg-emerald-500 text-black" : "border-white/25 bg-black/60 text-white/45 hover:text-white"
           }`}
         >
           <Check className="size-3.5" />
@@ -1210,15 +1263,19 @@ function CartaoVideo(props: {
         </span>
         {temArquivo && (
           <>
-            <button onClick={props.onSemente} title="Refazer com esta semente" className="text-faint hover:text-fg">
-              <Search className="mr-0.5 inline size-3" />
-              {item.seed}
+            <button onClick={props.onSemente} title="Refazer com esta semente" className="rounded px-1 py-0.5 tabular-nums text-faint hover:bg-raised hover:text-fg">
+              #{item.seed}
             </button>
-            <button onClick={props.onContinuar} title="Continuar a cena: o último quadro vira a imagem inicial" className="text-faint hover:text-fg">
-              <Camera className="size-3" />
+            <button
+              onClick={props.onContinuar}
+              title="Continuar a cena: o último quadro vira a imagem inicial"
+              aria-label="Continuar a cena a partir do último quadro"
+              className="rounded p-1 text-faint hover:bg-raised hover:text-fg"
+            >
+              <Camera className="size-3.5" />
             </button>
-            <button onClick={props.onPasta} title="Mostrar na pasta" className="text-faint hover:text-fg">
-              <FolderOpen className="size-3" />
+            <button onClick={props.onPasta} title="Mostrar na pasta" aria-label="Mostrar na pasta" className="rounded p-1 text-faint hover:bg-raised hover:text-fg">
+              <FolderOpen className="size-3.5" />
             </button>
           </>
         )}
@@ -1257,6 +1314,8 @@ function Foco(props: {
   // Fecha no clique fora do vídeo, mas só se o clique também COMEÇOU fora: arrastar a linha do tempo e
   // soltar no fundo escuro não pode fechar o player no meio do scrub.
   const comecouFora = useRef(false);
+  const [anuncio, setAnuncio] = useState(""); // leitor de tela: "Tomada 2 mantida"
+  const decidirRef = useRef<(manter: boolean, avancar?: boolean) => void>(() => {});
   const w = meta.opts.width ?? 832;
   const h = meta.opts.height ?? 480;
   const fps = meta.opts.fps ?? 16;
@@ -1270,24 +1329,37 @@ function Foco(props: {
       if (e.key === "Escape" && !document.fullscreenElement) props.onFechar();
       else if (e.key === "ArrowUp" && pos > 0) (e.preventDefault(), props.onIndice(prontos[pos - 1].i));
       else if (e.key === "ArrowDown" && pos < prontos.length - 1) (e.preventDefault(), props.onIndice(prontos[pos + 1].i));
+      // triagem sem mouse: decide e já passa para a próxima tomada
+      else if (e.key === "m" || e.key === "M") (e.preventDefault(), decidirRef.current(true, true));
+      else if (e.key === "x" || e.key === "X") (e.preventDefault(), decidirRef.current(false, true));
     };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);
   }, [pos, prontos.length, props.onFechar, props.onIndice]);
 
+  // Foco de teclado: entra no botão de fechar e volta para onde estava (o cartão) quando o foco fecha.
+  const fechar = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const antes = document.activeElement as HTMLElement | null;
+    fechar.current?.focus();
+    return () => antes?.focus?.();
+  }, []);
+
   if (!atual) return null;
 
-  async function decidir(manter: boolean) {
-    const mantidos = meta.images.filter((x) => x.status === "mantida" && x.path !== atual.path).map((x) => x.path);
+  async function decidir(manter: boolean, avancar = false) {
     try {
-      // só esta tomada muda: as outras continuam como estavam (prontas ficam prontas, sem decisão)
-      const pendentes = meta.images.filter((x) => x.status === "pronta" && x.path !== atual.path).map((x) => x.path);
-      await api.post(`/imagens/${props.resposta.id}/decidir`, { keep: [...mantidos, ...pendentes, ...(manter ? [atual.path] : [])] });
+      // `apenas`: só esta tomada muda. Mandar as outras em "keep" as marcava como mantidas de carona.
+      await api.post(`/imagens/${props.resposta.id}/decidir`, { keep: manter ? [atual.path] : [], apenas: [atual.path] });
+      setAnuncio(manter ? `Tomada ${pos + 1} mantida` : `Tomada ${pos + 1} descartada`);
       props.onMudou();
+      if (avancar && pos < prontos.length - 1) props.onIndice(prontos[pos + 1].i);
     } catch (e: any) {
       props.onError(e.message);
     }
   }
+
+  decidirRef.current = decidir;
 
   // Na pasta de imagens, com nome que diz de onde veio: o <a download> do Electron abria um "Salvar como"
   // e o aviso de "salvo em Downloads" nem sempre era verdade.
@@ -1308,6 +1380,7 @@ function Foco(props: {
     <div
       className="fixed inset-0 z-50 flex bg-black/85 backdrop-blur-md"
       role="dialog"
+      aria-modal="true"
       aria-label="Player de vídeo"
       onPointerDown={(e) => (comecouFora.current = e.target === e.currentTarget || (e.target as HTMLElement).dataset.fundo === "1")}
       onClick={(e) => {
@@ -1324,6 +1397,7 @@ function Foco(props: {
           quadros={frames}
           autoPlay
           tecladoGlobal
+          atalhosExtras={[["↑ · ↓", "tomada anterior · próxima"], ["M · X", "manter · descartar e ir à próxima"], ["Esc", "fechar"]]}
           marcas={refs.length === 2}
           className="rounded-xl shadow-2xl shadow-black"
           // o maior que cabe na área sem cortar nem deixar tarja: largura limitada pela altura da tela
@@ -1341,7 +1415,7 @@ function Foco(props: {
             <button disabled={pos >= prontos.length - 1} onClick={() => props.onIndice(prontos[pos + 1].i)} title="Próxima (↓)" className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg disabled:opacity-30">
               <ArrowUp className="size-3.5 rotate-180" />
             </button>
-            <button onClick={props.onFechar} title="Fechar (Esc)" className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+            <button ref={fechar} onClick={props.onFechar} title="Fechar (Esc)" aria-label="Fechar o player" className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
               <X className="size-3.5" />
             </button>
           </div>
@@ -1405,6 +1479,7 @@ function Foco(props: {
           <button className={acao} onClick={() => props.onAbrir(atual.path, "open")}>
             <ExternalLink className="size-3.5" /> Abrir no player do sistema
           </button>
+          <p className="sr-only" aria-live="polite">{anuncio}</p>
           {salvo && (
             <p className="flex items-center gap-1.5 px-2.5 pt-1 text-[11px] text-emerald-400" title={salvo}>
               <Check className="size-3 shrink-0" />
@@ -1417,7 +1492,7 @@ function Foco(props: {
         </div>
         <div className="border-t border-line px-3 py-2 text-[11px] text-faint">
           <span className="font-mono">←→</span> quadro · <span className="font-mono">Espaço</span> tocar · <span className="font-mono">↑↓</span> tomada ·{" "}
-          <span className="font-mono">?</span> atalhos
+          <span className="font-mono">M · X</span> manter · descartar · <span className="font-mono">?</span> atalhos
         </div>
       </aside>
     </div>,

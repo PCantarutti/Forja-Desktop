@@ -736,6 +736,7 @@ class LoteBody(BaseModel):
 
 class DecidirBody(BaseModel):
     keep: list[str] = []
+    apenas: list[str] = []  # vazio = decide o lote inteiro
 
 
 class PromptBody(BaseModel):
@@ -792,7 +793,7 @@ async def imagens_gerar(conv_id: int, body: LoteBody):
 @app.post("/api/imagens/{message_id}/decidir")
 async def imagens_decidir(message_id: int, body: DecidirBody):
     try:
-        return await asyncio.to_thread(lotes.decidir, message_id, body.keep)
+        return await asyncio.to_thread(lotes.decidir, message_id, body.keep, body.apenas or None)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

@@ -143,7 +143,7 @@ DEFAULT_IMAGE = {
     "descarte_dias": 7,  # quanto tempo as imagens reprovadas ficam em descartadas/ antes do expurgo
 }
 
-_cfg_lock = threading.Lock()
+_cfg_lock = threading.RLock()
 
 
 CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd", "diffusion_model", "out_dir",
@@ -952,6 +952,9 @@ _KINDS: dict[str, str] = {}
 
 
 ARCH_VIDEO = ("wan",)
+# Codificadores de texto em GGUF (o umt5 do Wan): têm camadas e cabeças como um LLM, mas não conversam.
+ARCH_CODIFICADOR = ("t5encoder", "t5", "umt5")
+FORA_DO_VIDEO = ("vae", "umt5", "clip", "lora", "lightx2v", "causvid")
 
 
 def kind_of(f: Path) -> str:
@@ -963,8 +966,9 @@ def kind_of(f: Path) -> str:
     """
     if f.suffix.lower() != ".gguf":
         # .safetensors/.ckpt: só difusão usa por aqui. Wan pelo nome — o VAE e o umt5 dele não são modelo.
+        # "wan" como palavra: substring pegava "swan", "Taiwan" e as LoRAs do Wan
         n = f.name.lower()
-        return "video" if "wan" in n and not any(x in n for x in ("vae", "umt5", "clip")) else "image"
+        return "video" if WAN_NOME.search(f.name) and not any(x in n for x in FORA_DO_VIDEO) else "image"
     try:
         chave = f"{f}|{f.stat().st_size}"
     except OSError:
@@ -972,6 +976,7 @@ def kind_of(f: Path) -> str:
     if chave not in _KINDS:
         info = gguf_info(str(f))
         _KINDS[chave] = ("video" if info["arch"] in ARCH_VIDEO
+                         else "codificador" if info["arch"] in ARCH_CODIFICADOR
                          else "chat" if info.get("n_layer") and info.get("n_head") else "image")
     return _KINDS[chave]
 
@@ -1209,16 +1214,27 @@ def image_params(path: str) -> dict:
     return {**{k: base[k] for k in IMAGE_PER_MODEL}, **salvo}
 
 
+PECAS_VIDEO = ("vae", "t5xxl", "clip_vision", "high_noise_model")
+
+
 def save_image_params(path: str, patch: dict) -> dict:
     """Guarda só o que sai do padrão geral da aba (Imagem ou Vídeo)."""
-    base = _base_ajustes(path)
-    limpo = {k: v for k, v in set_image_valores(patch).items() if k in IMAGE_PER_MODEL}
-    data = read_config()
-    modelos = dict(data.get("image_models") or {})
-    fora = {k: v for k, v in {**(modelos.get(os.path.normpath(str(path))) or {}), **limpo}.items() if v != base[k]}
-    modelos[os.path.normpath(str(path))] = fora
-    data["image_models"] = modelos
-    write_config(data)
+    with _cfg_lock:
+        base = _base_ajustes(path)
+        limpo = {k: v for k, v in set_image_valores(patch).items() if k in IMAGE_PER_MODEL}
+        data = read_config()
+        modelos = dict(data.get("image_models") or {})
+        antes = modelos.get(os.path.normpath(str(path))) or {}
+        if eh_video(path) and "variante" in limpo and limpo["variante"] != antes.get("variante", ""):
+            # Outra variante pede outras peças (o TI2V quer o VAE do 2.2) e outros ajustes: as peças saem, e o
+            # completar_componentes põe as da variante nova; os sugeridos dela entram por cima.
+            nova = REQUISITOS.get(limpo["variante"] or variante_video(path)) or {}
+            limpo = {**limpo, **{k: "" for k in PECAS_VIDEO}, **(nova.get("sugere") or {})}
+            antes = {k: v for k, v in antes.items() if k not in PECAS_VIDEO}
+        fora = {k: v for k, v in {**antes, **limpo}.items() if v != base[k]}
+        modelos[os.path.normpath(str(path))] = fora
+        data["image_models"] = modelos
+        write_config(data)
     return image_params(path)
 
 
@@ -1226,7 +1242,7 @@ ACHADOS_TTL = 60  # s: a busca no disco é cara e a tela pergunta a cada 3 s
 
 
 @functools.lru_cache(maxsize=64)
-def _achados(path: str, _janela: int) -> dict[str, list[str]]:
+def _achados(path: str, _tipo: str, _janela: int) -> dict[str, list[str]]:
     return achar_arquivos(path)
 
 
@@ -1245,21 +1261,29 @@ def completar_componentes(path: str) -> dict:
     falta = faltando(path, p)
     if not falta:
         return save_image_params(path, novos) if novos else p
-    achados = _achados(path, int(time.time() // ACHADOS_TTL))
+    achados = _achados(path, _tipo(path), int(time.time() // ACHADOS_TTL))
     for k in falta:
         opcoes = achados.get(k) or []
-        if k == "high_noise_model":  # o par certo: mesmo nome, High no lugar de Low (mesma quantização)
-            opcoes = sorted(opcoes, key=lambda c: _normal(c).replace("highnoise", "lownoise") != _normal(path))
+        if k == "high_noise_model":
+            # Mesma família (T2V com T2V, I2V com I2V) e, dentro dela, o nome igual com High no lugar de Low.
+            familia = "i2v" if "i2v" in _normal(path) else "t2v"
+            opcoes = sorted((c for c in opcoes if familia in _normal(c)),
+                            key=lambda c: _normal(c).replace("highnoise", "lownoise") != _normal(path))
         if opcoes:
             novos[k] = opcoes[0]
     return save_image_params(path, novos) if novos else p
 
 
 def set_video(patch: dict) -> dict:
-    """Padrões da aba Vídeo: o que a tela usou por último, e o modelo da ferramenta video_generate."""
-    data = read_config()
-    data["video"] = {**(data.get("video") or {}), **_image_valores(patch)}
-    write_config(data)
+    """Padrões da aba Vídeo: o modelo da vez (é o da ferramenta video_generate) e o negativo.
+
+    Só isso: os ajustes do modelo (quadros, fps, passos...) moram no modelo. Guardados aqui, viravam a
+    base dos outros e o 1.3B abria com os 24 fps do TI2V; a semente daqui ia parar nos vídeos do agente."""
+    with _cfg_lock:
+        data = read_config()
+        data["video"] = {**(data.get("video") or {}),
+                         **{k: v for k, v in _image_valores(patch).items() if k in ("model", "negative")}}
+        write_config(data)
     return data["video"]
 
 

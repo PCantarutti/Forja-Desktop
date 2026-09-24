@@ -142,6 +142,8 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     if not prompt:
         raise ToolError("Descreva a imagem (prompt vazio).")
     count = max(1, min(int(count or 1), MAX_VARIACOES))
+    if localai.image_busy():
+        raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
     opts = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
     escolhidos = _distribuir(list(models or []), count)
     refs = [str(r) for r in (refs or [])]
@@ -321,14 +323,20 @@ def cancelar(message_id: int) -> dict:
 
 # ------------------------------------------------------------------ aprovação
 
-def decidir(message_id: int, keep: list[str]) -> dict:
-    """As aprovadas ficam onde estão; o resto vai para descartadas/ (some sozinho no expurgo)."""
+def decidir(message_id: int, keep: list[str], apenas: list[str] | None = None) -> dict:
+    """As aprovadas ficam onde estão; o resto vai para descartadas/ (some sozinho no expurgo).
+
+    `apenas`: só estas mudam, as outras ficam como estão. O foco do vídeo decide uma tomada por vez, e
+    mandar as demais como "keep" as marcava todas como mantidas."""
     m = _mensagem(message_id)
     imagens = [dict(i) for i in m["meta"]["images"]]
     manter = {str(p) for p in (keep or [])}
+    so = {str(p) for p in apenas} if apenas else None
     destino = descartadas_dir()
     for item in imagens:
         if item["status"] not in ("pronta", "mantida", "descartada"):
+            continue
+        if so is not None and item["path"] not in so:
             continue
         if item["path"] in manter:
             if item["status"] == "descartada":  # desfazer: volta para a pasta de saída
