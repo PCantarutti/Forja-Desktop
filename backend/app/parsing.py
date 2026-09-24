@@ -154,13 +154,38 @@ def looks_like_plan(text: str) -> bool:
 # ------------------------------------------------------------------ loop
 
 class LoopDetector:
-    """Detecta a mesma chamada (nome + argumentos) repetida `limit` vezes seguidas."""
+    """Conta a mesma chamada (nome + argumentos) repetida seguidas vezes.
+
+    Como no DeepSeek Harness (guard/repeat-tool-reminder), a resposta é em degraus: lembrete leve na
+    3ª, forte na 5ª e na 8ª, e só então o freio (PARA_EM). `record` segue dizendo "chegou no limite".
+    """
+
+    LEVE, FORTES, PARA_EM = 3, (5, 8), 10
 
     def __init__(self, limit: int = 3):
         self.limit, self.last, self.count = limit, None, 0
 
-    def record(self, name: str, args: dict) -> bool:
+    def conta(self, name: str, args: dict) -> int:
         key = name + json.dumps(args, sort_keys=True, ensure_ascii=False)
         self.count = self.count + 1 if key == self.last else 1
         self.last = key
-        return self.count >= self.limit
+        return self.count
+
+    def record(self, name: str, args: dict) -> bool:
+        return self.conta(name, args) >= self.limit
+
+
+def aviso_repeticao(name: str, args: dict, n: int) -> str:
+    """Lembrete para o modelo na n-ésima repetição idêntica ("" quando não é degrau)."""
+    if n == LoopDetector.LEVE:
+        return ("Você está repetindo exatamente a mesma chamada com os mesmos argumentos. Analise o resultado "
+                "anterior antes de chamar de novo: se a tarefa não terminou, tente outra abordagem ou outros "
+                "argumentos em vez de repetir.")
+    if n in LoopDetector.FORTES:
+        return ("Chamada repetida detectada:\n"
+                f"- ferramenta: {name}\n- chamadas seguidas: {n}\n"
+                f"- argumentos: {json.dumps(args, ensure_ascii=False)[:500]}\n"
+                "As repetições não estão avançando. Não chame esta ferramenta com estes argumentos de novo. "
+                "Veja o último resultado e escolha outra ação, outros argumentos, ou termine se já tem "
+                "evidência suficiente.")
+    return ""

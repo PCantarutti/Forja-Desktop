@@ -111,6 +111,24 @@ def coerce_args(tool: Tool, args: dict) -> dict:
     return out
 
 
+def validar(tool: Tool, args: dict) -> None:
+    """Confere os argumentos contra o schema antes de rodar (DeepSeek Harness: `invalid arguments`).
+
+    Sem isto o modelo recebia um KeyError de dentro do handler, ou a ferramenta rodava com um campo
+    errado ignorado. Só o nível de cima, e só obrigatório + tipo primitivo: o interior (sheets,
+    edits…) alguns handlers aceitam de propósito em várias formas, porque é como o modelo manda.
+    """
+    props = tool.parameters.get("properties") or {}
+    tipos = {"string": str, "boolean": bool, "integer": int, "number": (int, float)}
+    erros = [f"falta '{k}'" for k in tool.parameters.get("required") or () if k not in args]
+    for k, v in args.items():
+        t = (props.get(k) or {}).get("type")
+        if t in tipos and v is not None and (not isinstance(v, tipos[t]) or (t != "boolean" and isinstance(v, bool))):
+            erros.append(f"'{k}' deveria ser {t}, veio {type(v).__name__}")
+    if erros:
+        raise ToolError(f"Argumentos inválidos para {tool.name}: {'; '.join(erros)}. Confira o schema da ferramenta.")
+
+
 def _falha(tool: "Tool", e: Exception) -> ToolError:
     """Erro de dentro da ferramenta não é erro de argumento.
 
@@ -134,6 +152,7 @@ def _call(name: str, fn_attr: str, args: dict, root: Path | None):
         argumentos = coerce_args(tool, args)
     except (KeyError, TypeError, ValueError) as e:
         raise ToolError(f"Argumentos inválidos para {name}: faltando ou incorreto {e}") from e
+    validar(tool, argumentos)
     try:
         return getattr(tool, fn_attr)(root or workspace.root(), argumentos)
     except (KeyError, TypeError, ValueError) as e:
@@ -153,6 +172,7 @@ async def execute(name: str, args: dict, root: Path | None = None) -> str:
         argumentos = coerce_args(tool, args)
     except (KeyError, TypeError, ValueError) as e:
         raise ToolError(f"Argumentos inválidos para {name}: faltando ou incorreto {e}") from e
+    validar(tool, argumentos)
     try:
         return await tool.handler(root or workspace.root(), argumentos)
     except (KeyError, TypeError, ValueError) as e:

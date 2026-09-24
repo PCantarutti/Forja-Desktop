@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import random
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,7 +21,8 @@ from . import checkpoints, compact, config, db, llm, memory, mirror, native, pol
 from . import maestro, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import hooks
-from .parsing import LoopDetector, detect_promise, looks_like_plan, parse_text_tool_calls, split_think
+from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
+                      split_think)
 from .tools import (LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
                     resolve_path, spill, vision_caps)
 
@@ -106,8 +108,27 @@ ASK_USER = Tool(
 
 def effort_iterations(effort: str) -> int:
     return max(3, round(config.MAX_ITERATIONS * EFFORT.get(effort, EFFORT["medio"])[0]))
-MAX_RETRIES = 1
-RETRY_DELAY = 2.0
+# Retry do modelo como no DeepSeek Harness (llm-retry): 5 tentativas, espera dobrando de 0,5s até 10s
+# com 10% de variação, para queda de conexão, 408/429/5xx e resposta vazia. Só enquanto nada saiu:
+# repetir depois de metade da resposta na tela duplicaria texto.
+MAX_RETRIES = 5
+RETRY_DELAY = 0.5
+RETRY_MAX = 10.0
+
+
+def _retry_espera(tentativa: int) -> float:
+    return min(RETRY_MAX, RETRY_DELAY * 2 ** (tentativa - 1)) * random.uniform(0.9, 1.1)
+
+
+def _transitorio(e: "llm.LLMError") -> bool:
+    return e.status is None or e.status in (408, 429) or e.status >= 500
+
+
+def _estourou_contexto(e: "llm.LLMError") -> bool:
+    corpo = str(e).lower()
+    return e.status in (400, 413) and any(t in corpo for t in (
+        "context length", "context_length", "context size", "context window", "maximum context",
+        "too many tokens", "exceeds the available context"))
 TOOL_TAIL = 4000    # cauda dos argumentos guardada para quem reconectar no meio de uma escrita longa
 # Chamadas de leitura que o modelo pede juntas rodam juntas: a inferência já terminou, o que sobra é I/O.
 # Escrita, shell, aprovação e o resto do navegador continuam em fila, na ordem em que o modelo pediu.
@@ -775,7 +796,7 @@ def _join_user(a, b):
 def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
                   chat: bool = False, reasoning_back: bool = False, prefixo_estavel: bool = False,
-                  maestro_mode: bool = False) -> list[dict]:
+                  maestro_mode: bool = False, podar: bool = False) -> list[dict]:
     """Histórico no formato do provider.
 
     `reasoning_back`: devolve ao modelo, em `reasoning_content`, o raciocínio dos passos do turno atual
@@ -794,8 +815,11 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
                                                  chat=chat, maestro_mode=maestro_mode)}]
     summary = compact.last_summary(msgs)
     if summary:
-        out.append({"role": "user", "content": f"[Resumo automático da conversa anterior]\n{summary[0]}"})
+        out.append({"role": "user", "content": compact.retomada(summary[0])})
         msgs = [m for m in msgs if m.id > summary[1]]
+    # `podar`: antes de gastar uma chamada de resumo, os resultados de ferramenta antigos e grandes
+    # ficam com cabeça e cauda (compact.podar). Os últimos seguem inteiros.
+    inteiros = {m.id for m in [m for m in msgs if m.role == "tool"][-compact.PODA_MANTEM:]} if podar else None
     # Imagens devolvidas por ferramentas (screenshot) entram como mensagem "user" com image_url logo
     # depois do bloco de resultados: é o único formato que OpenAI-compatível e Ollama aceitam.
     #
@@ -851,11 +875,12 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
                 if text.strip():
                     out.append({"role": "assistant", "content": text.strip()})
         elif m.role == "tool":
+            texto = m.content if inteiros is None or m.id in inteiros else compact.podar(m.content or "")
             if native:
-                out.append({"role": "tool", "tool_call_id": m.tool_call_id, "content": m.content})
+                out.append({"role": "tool", "tool_call_id": m.tool_call_id, "content": texto})
             else:
                 out.append({"role": "user",
-                            "content": f"<tool_response>\n[{m.name}: {m.status}]\n{m.content}\n</tool_response>"})
+                            "content": f"<tool_response>\n[{m.name}: {m.status}]\n{texto}\n</tool_response>"})
             imgs = _images(m)
             if imgs and m.id in recent:
                 pending.extend(imgs)
@@ -1064,6 +1089,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                      else "detectado" if detected is not None else "desconhecido")
     loop = LoopDetector()
     nudges = iterations = retries = 0
+    forcar_compactar = estourou = False
 
     def current_tools() -> list[Tool]:
         if agent:
@@ -1108,18 +1134,23 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         mode_at_start = run.permission
         if run.plan is None:
             run.plan = last_plan(msgs)
-        messages = build_history(msgs, via, caps, run.permission, req.effort, run.plan, chat,
+        def historia(ms, podar: bool = False) -> list[dict]:
+            return build_history(ms, via, caps, run.permission, req.effort, run.plan, chat,
                                  reasoning_back=llm.is_local(req.provider),
                                  prefixo_estavel=llm.is_local(req.provider),
-                                 maestro_mode=maestro_mode)
+                                 maestro_mode=maestro_mode, podar=podar)
+
+        messages = historia(msgs)
         tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
-        if _estimate(messages, tools) > config.COMPACT_AT * teto:
-            async for ev in _compact(conv_id, msgs, req, teto):
-                yield ev
-            messages = build_history(_load(conv_id), via, caps, run.permission, req.effort, run.plan, chat,
-                                     reasoning_back=llm.is_local(req.provider),
-                                     prefixo_estavel=llm.is_local(req.provider),
-                                     maestro_mode=maestro_mode)
+        if forcar_compactar or _estimate(messages, tools) > config.COMPACT_AT * teto:
+            # Primeiro a poda, que não custa modelo; o resumo só se ela não bastar (ou se o provedor
+            # já recusou por contexto estourado).
+            messages = historia(msgs, podar=True)
+            if forcar_compactar or _estimate(messages, tools) > config.COMPACT_AT * teto:
+                async for ev in _compact(conv_id, msgs, req, teto):
+                    yield ev
+                messages = historia(_load(conv_id), podar=True)
+            forcar_compactar = False
 
         content = reasoning = ""
         done: dict = {"tool_calls": [], "prompt_tokens": None, "completion_tokens": None}
@@ -1151,10 +1182,17 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 yield tools_sent()
                 iterations -= 1
                 continue
-            if e.status is None and not content and not reasoning and retries < MAX_RETRIES:
+            if _estourou_contexto(e) and not content and not estourou:
+                estourou = forcar_compactar = True  # uma vez: compacta e tenta de novo
+                yield _event(conv_id, "info", "O modelo recusou por contexto cheio. Compactando e tentando de novo...")
+                iterations -= 1
+                continue
+            if _transitorio(e) and not content and not reasoning and retries < MAX_RETRIES:
                 retries += 1
-                yield _event(conv_id, "info", f"{e} Tentando de novo...")
-                await asyncio.sleep(RETRY_DELAY)
+                espera = _retry_espera(retries)
+                yield _event(conv_id, "info", f"{e} Tentando de novo em {espera:.1f}s "
+                                              f"({retries}/{MAX_RETRIES})...")
+                await asyncio.sleep(espera)
                 iterations -= 1
                 continue
             yield _event(conv_id, "error", str(e))
@@ -1166,6 +1204,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if run.cancel.is_set():
             _save_partial(conv_id, content, reasoning)
             break
+        if t_first is None and not done["tool_calls"] and retries < MAX_RETRIES:
+            retries += 1  # resposta vazia: o harness trata como falha transitória (EMPTY_RESPONSE)
+            yield _event(conv_id, "info", f"O modelo devolveu uma resposta vazia. Tentando de novo "
+                                          f"({retries}/{MAX_RETRIES})...")
+            await asyncio.sleep(_retry_espera(retries))
+            iterations -= 1
+            continue
+        retries = 0
 
         stats = _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, req.model)
         yield {"type": "context", "used": stats["prompt_tokens"], "estimated": stats["estimated"], "max": ctx_max}
@@ -1193,6 +1239,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 for ev in _flush_queue(conv_id, run):
                     yield ev
                 nudges = 0
+                loop = LoopDetector()  # mensagem do usuário zera a contagem de repetição
                 continue
             # Turno mudo: nada visível e nenhuma chamada, mas o modelo pensou. Acontece com modelo
             # pensante quando o prompt é grande — ele monta o plano inteiro dentro do <think> e não
@@ -1255,21 +1302,19 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         cancelar: set[str] = set()
         aviso_loop = ""
         for call in calls:  # o detector olha a sequência inteira antes de executar qualquer coisa
-            if not stop and not _poll(call) and loop.record(call["name"], call["arguments"]):
-                if maestro_mode:
-                    # Maestro: executa e avisa (ela e o usuário). Quem decide parar é o usuário.
-                    chave = f"loop:{call['name']}:{json.dumps(call['arguments'], sort_keys=True)[:200]}"
-                    if chave not in run.nudged:
-                        run.nudged.add(chave)
-                        for ev in _alerta(run, conv_id, f"A Maestro repetiu {call['name']} 3 vezes com os mesmos "
-                                          "argumentos. Pode estar em loop: confira e pare se precisar."):
-                            yield ev
-                        aviso_loop = (f"Você chamou {call['name']} 3 vezes seguidas com os mesmos argumentos e "
-                                      "o resultado não muda. Mude a abordagem.")
-                    continue
+            n = 0 if stop or _poll(call) else loop.conta(call["name"], call["arguments"])
+            # Em degraus, como no DeepSeek Harness: lembrete ao modelo na 3ª, 5ª e 8ª repetição, e
+            # só na PARA_EM o agente comum para. A Maestro nunca para sozinha: avisa o usuário.
+            if lembrete := aviso_repeticao(call["name"], call["arguments"], n):
+                aviso_loop = lembrete
+                if maestro_mode and n == LoopDetector.LEVE:
+                    for ev in _alerta(run, conv_id, f"A Maestro repetiu {call['name']} {n} vezes com os mesmos "
+                                      "argumentos. Pode estar em loop: confira e pare se precisar."):
+                        yield ev
+            if n >= LoopDetector.PARA_EM and not maestro_mode:
                 stop = True
                 yield _event(conv_id, "warning",
-                             f"Loop detectado: {call['name']} pedida 3 vezes seguidas com os mesmos argumentos. "
+                             f"Loop detectado: {call['name']} pedida {n} vezes seguidas com os mesmos argumentos. "
                              "O agente foi interrompido.")
             if stop:
                 cancelar.add(call["id"])
@@ -1298,6 +1343,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             run.mode_note = None
             yield tools_sent()
         for ev in _flush_queue(conv_id, run):  # mensagens enviadas durante as ferramentas entram já no próximo passo
+            loop = LoopDetector()
             yield ev
         if stop:
             break

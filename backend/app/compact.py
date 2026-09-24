@@ -15,6 +15,26 @@ from .parsing import split_think
 
 KEEP_TURNS = 2
 MAX_RESULT_CHARS = 1500
+# Poda sem modelo, antes de gastar uma chamada de resumo (DeepSeek Harness, compaction-tool-result-pruner):
+# resultado de ferramenta antigo e grande fica com cabeça e cauda.
+PODA_ACIMA = 8192
+PODA_CABECA = 4096
+PODA_CAUDA = 1024
+PODA_MANTEM = 4   # os últimos resultados ficam inteiros: é neles que o modelo está trabalhando
+
+
+def podar(texto: str) -> str:
+    if len(texto) <= PODA_ACIMA:
+        return texto
+    return texto[:PODA_CABECA] + "\n\n[... meio do resultado podado ...]\n\n" + texto[-PODA_CAUDA:]
+
+
+def retomada(resumo: str) -> str:
+    """Como o resumo entra no histórico mandado ao modelo."""
+    return ("Este é um checkpoint gerado automaticamente, que condensa uma parte anterior da conversa para "
+            "liberar contexto. Trate o que ele registra como fato estabelecido e siga a partir dele sem "
+            "repeti-lo. Continue a tarefa direto das mensagens seguintes, sem comentar este checkpoint.\n\n"
+            f"<resumo-compactado>\n{resumo}\n</resumo-compactado>")
 
 
 def last_summary(msgs) -> tuple[str, int] | None:
@@ -56,10 +76,43 @@ def transcript(msgs, until: int, max_chars: int) -> str:
     return text[-max_chars:]  # se ainda for grande, fica com o fim (mais recente)
 
 
-PROMPT = ("Resuma a conversa abaixo entre um usuário e um agente de programação, para que o agente continue o "
-          "trabalho sem o histórico completo. Inclua: objetivo do usuário, decisões tomadas, arquivos criados ou "
-          "alterados (com caminhos), comandos executados e resultados relevantes, erros encontrados e o que falta "
-          "fazer. Seja factual e conciso, em tópicos, no idioma da conversa. Não invente nada.")
+# Modelo estruturado do DeepSeek Harness (compaction-basic/summarizer.ts), traduzido. Seção fixa em vez
+# de "resuma": o que some num resumo livre é justamente pendência, erro resolvido e pedido literal.
+PROMPT = """Você é o motor de compactação de um agente de programação. Condense a conversa que vem na próxima mensagem num checkpoint estruturado que permita a outro modelo retomar o trabalho sem perder nada essencial.
+
+Escreva EXATAMENTE a estrutura Markdown abaixo, com todas as seções, nesta ordem. Tópicos curtos, não parágrafos. Seção sem conteúdo leva "(nenhum)" — nunca a omita.
+
+## Pedido e intenção
+- [objetivos do usuário, originais e como evoluíram; cite literalmente quando a redação importa]
+
+## Conceitos técnicos
+- [tecnologias, frameworks, padrões e convenções em jogo]
+
+## Arquivos e código
+- [caminho exato: por que importa, mudanças ou trechos-chave]
+
+## Erros e correções
+- [erro: como foi resolvido, e o que o usuário disse sobre ele]
+
+## Pendências
+- [o que foi pedido explicitamente e ainda não foi feito]
+
+## Trabalho atual
+- [exatamente o que estava em andamento neste ponto]
+
+## Próximo passo
+- [a próxima ação, alinhada ao pedido mais recente, ou "(nenhum)"]
+
+## Contexto crítico
+- [decisões e motivos, restrições, preferências do usuário, dúvidas abertas, dados necessários para continuar]
+
+Regras:
+- Preserve exatamente caminhos, comandos, mensagens de erro, identificadores, números e assinaturas.
+- Registre com fidelidade o que o usuário pediu e corrigiu, principalmente as correções.
+- Não mencione este pedido de resumo nem que o contexto foi compactado.
+- Escreva só o checkpoint: não chame ferramenta nem faça mais nada.
+- Se a conversa começar com um [Resumo anterior], ele é um checkpoint ANTERIOR. Não o copie inteiro: mantenha o que ainda vale, descarte o que ficou velho e funda o novo num resumo só, com a mesma estrutura.
+- Escreva no idioma da conversa."""
 
 
 async def summarize(provider: str, model: str, text: str, num_ctx: int) -> str:
