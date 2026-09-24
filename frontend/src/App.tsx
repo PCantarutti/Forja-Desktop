@@ -19,6 +19,7 @@ import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
 import GoalStrip from "./components/GoalStrip";
+import Trajetoria from "./components/Trajetoria";
 import Confirma from "./components/Confirma";
 import { LogoMark } from "./components/Logo";
 import {
@@ -90,7 +91,7 @@ type Live = {
     cursor: number;
     draft: Draft | null;
     sent: ToolsSent | null;
-    approvals: { call: { id: string; name: string; arguments?: any }; preview: any; suggest?: string; parent?: string }[];
+    approvals: { call: { id: string; name: string; arguments?: any }; preview: any; suggest?: string; nota?: string | null; parent?: string }[];
     /** Geração em curso, em segundos decorridos — para remontar o contador de t/s ao reabrir. */
     geracao: { segundos: number; segundos_gerando: number; tokens: number } | null;
     paused?: boolean;
@@ -185,6 +186,9 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
   list_agents: () => "Conferindo os subagentes",
+  lsp: (a) => `Consultando o language server (${String(a.operation ?? "")})`,
+  session_search: (a) => `Procurando em conversas anteriores ${trecho(a.query, 30) ?? ""}`.trim(),
+  session_read: (a) => `Lendo a conversa ${String(a.id ?? "")}`.trim(),
   terminal_open: (a) => `Abrindo um terminal ${trecho(a.name, 20) ?? ""}`.trim(),
   terminal_send: (a) => `No terminal: ${trecho(a.command) ?? "enviando"}`,
   terminal_read: () => "Lendo o terminal",
@@ -705,7 +709,7 @@ export default function App() {
         : null;
       setDraft(run.draft);
       setSent(run.sent);
-      setApprovals(Object.fromEntries(run.approvals.map((a) => [a.call.id, { preview: a.preview, suggest: a.suggest, tool: a.call.name }])));
+      setApprovals(Object.fromEntries(run.approvals.map((a) => [a.call.id, { preview: a.preview, suggest: a.suggest, nota: a.nota, tool: a.call.name }])));
       // Aprovação pedida por um subagente: recria o passo dentro do bloco da delegação.
       const subs: Record<string, SubState> = {};
       for (const a of run.approvals.filter((a) => a.parent)) {
@@ -791,7 +795,7 @@ export default function App() {
       if (ev.type === "tool_output")  // saída ao vivo de comando do Worker, no bloco dele
         setLiveOutput((o) => ({ ...o, [ev.call_id]: ((o[ev.call_id] ?? "") + ev.text).slice(-20_000) }));
       if (ev.type === "approval_request") {
-        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, tool: ev.call.name } }));
+        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, nota: ev.nota, tool: ev.call.name } }));
         notify("Worker pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true);
       }
       if (ev.type === "tool_call" && typeof ev.call?.name === "string" && ev.call.name.startsWith("browser_")) {
@@ -902,7 +906,7 @@ export default function App() {
         setMessages((ms) => [...ms, ev.message]);
         break;
       case "approval_request":
-        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, tool: ev.call.name } }));
+        setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, nota: ev.nota, tool: ev.call.name } }));
         notify("Forja pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true);
         break;
       case "plan_request":
@@ -1067,11 +1071,19 @@ export default function App() {
     return () => clearTimeout(t);
   }, [mentionQuery, currentId]);
 
-  /** Escolher no menu troca o `@trecho` pelo caminho: o agente lê o arquivo se precisar. */
+  /** Escolher no menu troca o `@trecho` pelo caminho: o agente lê o arquivo se precisar. Conversa entra
+   *  como `@conversa:ID`, que o backend resolve (sessoes.mencionadas). */
   function applyMention(path: string) {
     setInput((v) => v.replace(/@\S*$/, `${path} `));
     setMentionHits([]);
   }
+  // Conversas citáveis por @: título que casa com o que foi digitado depois do @ (da mesma seção).
+  const conversasCitaveis =
+    mentionQuery && mentionQuery.length >= 2
+      ? conversations
+          .filter((c) => c.id !== currentId && c.title.toLowerCase().includes(mentionQuery.toLowerCase()))
+          .slice(0, 4)
+      : [];
 
   async function applySkill(s: Skill): Promise<void> {
     const args = input.slice(1).split(" ").slice(1).join(" ");
@@ -1592,6 +1604,8 @@ export default function App() {
           if (currentId !== null) openConversation(currentId);
         }}
       />
+    ) : tab === "trajetoria" ? (
+      <Trajetoria messages={messages} />
     ) : tab === "plans" ? (
       <PlansPanel
         plans={plans}
@@ -1690,8 +1704,19 @@ export default function App() {
             ))}
           </div>
         )}
-        {mentionHits.length > 0 && (
+        {(mentionHits.length > 0 || conversasCitaveis.length > 0) && (
           <div className="mb-2 max-h-56 overflow-y-auto rounded-xl border border-line bg-bg py-1 text-sm">
+            {conversasCitaveis.map((c) => (
+              <button
+                key={`conv-${c.id}`}
+                onClick={() => applyMention(`@conversa:${c.id}`)}
+                title="Cita esta conversa: o conteúdo dela vai junto para o agente, como referência"
+                className="flex w-full items-center gap-3 px-3 py-1.5 text-left hover:bg-raised/60"
+              >
+                <span className="shrink-0 text-xs text-faint">conversa</span>
+                <span className="truncate text-fg">{c.title}</span>
+              </button>
+            ))}
             {mentionHits.map((f, i) => (
               <button
                 key={f}

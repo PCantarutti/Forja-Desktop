@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Activity, Clipboard, Cpu, GitBranch, Globe, Info, PanelRight, Terminal } from "./icons";
+import { Activity, Clipboard, Clock, Cpu, GitBranch, Globe, Info, PanelRight, Terminal } from "./icons";
 
-export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "terminal" | "local";
+export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "terminal" | "local" | "trajetoria";
 
 // Largura de cada aba. Só o Navegador redimensiona (mínimo MIN_BROWSER, valor salvo).
-const WIDTH: Record<Exclude<RightTab, "browser">, number> = { info: 288, servers: 288, plans: 440, changes: 520, terminal: 560, local: 420 };
+const WIDTH: Record<Exclude<RightTab, "browser">, number> = { info: 288, servers: 288, plans: 440, changes: 520, terminal: 560, local: 420, trajetoria: 480 };
 const MIN_BROWSER = 320;
 const KEY = "forja.right.width";
 
@@ -16,6 +16,7 @@ export const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: "servers", label: "Instâncias", icon: <Activity className="size-4" /> },
   { id: "local", label: "IA local", icon: <Cpu className="size-4" /> },
   { id: "plans", label: "Planos", icon: <Clipboard className="size-4" /> },
+  { id: "trajetoria", label: "Trajetória", icon: <Clock className="size-4" /> },
 ];
 
 /** Botões das abas, sempre visíveis no topo direito do chat. Clicar abre o painel naquela aba; de novo, recolhe. */

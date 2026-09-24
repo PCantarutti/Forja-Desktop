@@ -17,7 +17,7 @@ from sqlalchemy import select
 from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
-               localai, lotes,
+               localai, lotes, lsp,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
@@ -54,6 +54,7 @@ async def lifespan(_app):
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
+    lsp.fechar_todos()
     localai.unload()  # o modelo local morre com o backend (no app o Electron já mata a árvore)
     await mcp_client.stop()
     await MANAGER.shutdown()

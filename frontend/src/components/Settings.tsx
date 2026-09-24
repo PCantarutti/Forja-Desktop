@@ -46,6 +46,7 @@ export type AppSettings = {
   model_lifecycle: string;
   maestro_model: { provider: string; model: string };
   maestro_browser: boolean;
+  auto_review: boolean;
   maestro_visual: { provider: string; model: string };
   worker_especialidades: Especialidade[];
 };
@@ -1392,6 +1393,12 @@ function Permissions({ s, save }: { s: AppSettings; save: (patch: Partial<AppSet
           <span className="font-mono">*</span> ou <span className="font-mono">git *</span>.
         </span>
       </div>
+      <Toggle
+        checked={s.auto_review}
+        onChange={(v) => save({ auto_review: v })}
+        label="Revisor automático no modo Automático"
+        hint="Antes de mostrar o card de aprovação, o próprio modelo da conversa avalia o risco da ação (baixo, médio, alto). Risco baixo roda sem perguntar; o resto continua pedindo sua aprovação, com o motivo no card. Comando destrutivo sempre pergunta. Custa uma chamada ao modelo por aprovação."
+      />
       <ListEditor
         title="Comandos liberados (run_command)"
         hint="Compara o comando inteiro. Ex.: pytest*, git status, ls *, npm run build"

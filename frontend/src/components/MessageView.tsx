@@ -726,6 +726,7 @@ export function ToolBlock(props: {
               {JSON.stringify(call.arguments, null, 2)}
             </pre>
           )}
+          {approval?.nota && <div className="mb-2 text-xs text-amber-200/90">{approval.nota}</div>}
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => props.onDecide(true)}
@@ -802,6 +803,7 @@ export const NOTA_DO_AGENTE: Record<string, string> = {
   nudge: "Lembrete automático",
   skill: "Skill carregada",
   mudanca: "Mudança de modo ou modelo",
+  referencia: "Conversa citada",
 };
 
 // Primeira ferramenta do grupo vira a frase de abertura do resumo.

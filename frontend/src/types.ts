@@ -17,6 +17,7 @@ export type AskQuestion = {
 export type Approval = {
   preview: Preview | null;
   suggest?: string;
+  nota?: string | null; // por que pediu: revisor automático ou hook do projeto
   tool?: string;
   plan?: string; // exit_plan_mode
   questions?: AskQuestion[]; // ask_user
