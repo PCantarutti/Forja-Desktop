@@ -9,6 +9,7 @@ import {
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
 import { btn, btnPrimary, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import SelosModo from "./SelosModo";
+import { PROPORCOES, duracoesDe, estimarTempo, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
 import { A_REFAZER, AnelProgresso, Chip, CORES, duracao, Fundo, Liquido, rotuloSementes, SEEDS, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
@@ -28,25 +29,14 @@ const MODOS: { id: ModoVideo; rotulo: string; curto: string; dica: string; exemp
     exemplo: "a smooth continuous transition, the flower slowly blossoms, static camera" },
 ];
 
-type Proporcao = "16:9" | "9:16" | "1:1";
-type Qualidade = "480p" | "720p";
-// Múltiplos de 16 (o que o Wan pede); 704 e não 720 porque o VAE do Wan2.2 comprime 32×.
-const TAMANHOS: Record<Qualidade, Record<Proporcao, [number, number]>> = {
-  "480p": { "16:9": [832, 480], "9:16": [480, 832], "1:1": [624, 624] },
-  "720p": { "16:9": [1280, 704], "9:16": [704, 1280], "1:1": [960, 960] },
-};
-const DURACOES = [2, 3, 5];
-
-/** Mesma conta do backend (imagegen.quadros): 4k+1, porque o VAE do Wan junta 4 quadros em 1 no tempo. */
-export const quadrosDe = (s: number, fps: number) => Math.max(1, Math.round((s * fps) / 4)) * 4 + 1;
 const segundosDe = (frames: number, fps: number) => (fps ? frames / fps : 0);
 const fmtS = (s: number) => `${s.toFixed(1).replace(".", ",")} s`;
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
 
-function tamanhoAtual(o: ImageOpts): { prop: Proporcao | null; qual: Qualidade | null } {
-  for (const q of Object.keys(TAMANHOS) as Qualidade[])
-    for (const p of Object.keys(TAMANHOS[q]) as Proporcao[])
-      if (TAMANHOS[q][p][0] === o.width && TAMANHOS[q][p][1] === o.height) return { prop: p, qual: q };
+function tamanhoAtual(o: ImageOpts, tamanhos: Tamanhos): { prop: Proporcao | null; qual: string | null } {
+  for (const q of Object.keys(tamanhos))
+    for (const p of PROPORCOES)
+      if (tamanhos[q][p][0] === o.width && tamanhos[q][p][1] === o.height) return { prop: p, qual: q };
   return { prop: null, qual: null };
 }
 
@@ -216,17 +206,12 @@ export default function VideoView(props: {
   const precisaQuadros = modo === "t2v" ? 0 : modo === "i2v" ? 1 : 2;
   const refs = slots.slice(0, precisaQuadros).filter(Boolean) as string[];
 
-  // Estimativa pelo que esta máquina já fez: o último s/passo do mesmo modelo, tamanho e duração.
+  // Estimativa pelo que esta máquina já mediu com este modelo, em qualquer conversa (ver estimarTempo).
   const estimativa = useMemo(() => {
-    if (!o) return null;
-    for (let i = lotes.length - 1; i >= 0; i--) {
-      const meta = lotes[i].resposta.meta as LoteMeta;
-      if (meta.opts.width !== o.width || meta.opts.height !== o.height || meta.opts.frames !== o.frames) continue;
-      const feita = [...meta.images].reverse().find((x) => x.model === modelo && x.s_passo);
-      if (feita?.s_passo) return (o.steps + Math.max(0, o.high_noise_steps)) * feita.s_passo * count + 20 * count;
-    }
-    return null;
-  }, [lotes, o, modelo, count]);
+    if (!o || !st || !atual?.chave) return null;
+    const e = estimarTempo(st.tempos_video ?? [], atual.chave, o);
+    return e && { s: e.s * count, minimo: e.minimo };
+  }, [st, atual, o, count]);
 
   function escolherQuadro(i: 0 | 1, path: string | null) {
     setSlots((s) => (i === 0 ? [path, s[1]] : [s[0], path]));
@@ -344,7 +329,10 @@ export default function VideoView(props: {
 
   const semRuntime = !st.runtimes.sd.installed;
   const semModelo = !st.video_models.length;
-  const { prop, qual } = tamanhoAtual(o);
+  const tamanhos = tamanhosDe(atual?.req);
+  const qualidades = Object.keys(tamanhos);
+  const { prop, qual } = tamanhoAtual(o, tamanhos);
+  const duracoes = duracoesDe(atual?.req, o.fps);
   const seg = segundosDe(o.frames, o.fps);
   const focoLote = foco && lotes[foco.lote];
 
@@ -571,35 +559,37 @@ export default function VideoView(props: {
                     <div className="w-60 space-y-2 p-1">
                       <Segmento
                         rotulo="Proporção"
-                        opcoes={["16:9", "9:16", "1:1"] as Proporcao[]}
+                        opcoes={PROPORCOES}
                         valor={prop}
                         onValor={(p) => {
-                          const [w, h] = TAMANHOS[qual ?? "480p"][p];
+                          const [w, h] = tamanhos[qual ?? qualidades[0]][p];
                           set("width", w);
                           set("height", h);
                         }}
                       />
-                      <Segmento
-                        rotulo="Qualidade"
-                        opcoes={["480p", "720p"] as Qualidade[]}
-                        valor={qual}
-                        onValor={(q) => {
-                          const [w, h] = TAMANHOS[q][prop ?? "16:9"];
-                          set("width", w);
-                          set("height", h);
-                        }}
-                      />
+                      {qualidades.length > 1 && (
+                        <Segmento
+                          rotulo="Qualidade"
+                          opcoes={qualidades}
+                          valor={qual}
+                          onValor={(q) => {
+                            const [w, h] = tamanhos[q][prop ?? "16:9"];
+                            set("width", w);
+                            set("height", h);
+                          }}
+                        />
+                      )}
                       <TamanhoLivre
                         w={o.width}
                         h={o.height}
-                        passo={atual?.variante === "wan22_ti2v" ? 32 : 16}
+                        passo={atual?.req?.multiplo ?? 16}
                         ativo={!prop}
                         onAplicar={(w, h) => {
                           set("width", w);
                           set("height", h);
                         }}
                       />
-                      <p className="px-1 text-[11px] leading-snug text-muted">{dicaQualidade(st.gpu_video)}</p>
+                      <p className="px-1 text-[11px] leading-snug text-muted">{dicaQualidade(st.gpu_video, atual, tamanhos)}</p>
                     </div>
                   )}
                 </Menu>
@@ -608,16 +598,14 @@ export default function VideoView(props: {
                     <div className="w-56 space-y-2 p-1">
                       <Segmento
                         rotulo="Duração"
-                        opcoes={[
-                          ...DURACOES.map((d) => `${d} s`),
-                          ...(DURACOES.some((d) => quadrosDe(d, o.fps) === o.frames) ? [] : [fmtS(seg)]),
-                        ]}
-                        valor={DURACOES.map((d) => `${d} s`).find((d) => quadrosDe(parseInt(d), o.fps) === o.frames) ?? fmtS(seg)}
-                        onValor={(d) => DURACOES.includes(parseInt(d)) && set("frames", quadrosDe(parseInt(d), o.fps))}
+                        opcoes={duracoes.map(fmtS)}
+                        valor={duracoes.map(fmtS).find((d, i) => quadrosDe(duracoes[i], o.fps) === o.frames) ?? null}
+                        onValor={(d) => set("frames", quadrosDe(duracoes[duracoes.map(fmtS).indexOf(d)], o.fps))}
                       />
-                      <p className="px-1 text-[11px] leading-snug text-faint">
-                        {o.frames} quadros a {o.fps} fps. Cada segundo a mais é memória e tempo a mais — o Wan foi
-                        treinado com clipes de até 5 s.
+                      <DuracaoLivre segundos={seg} fps={o.fps} onAplicar={(q) => set("frames", q)} />
+                      <p className="px-1 text-[11px] leading-snug text-muted">
+                        {o.frames} quadros a {o.fps} fps. {atual?.req?.nome ?? "O modelo"} foi treinado com clipes de até{" "}
+                        {fmtS((atual?.req?.quadros_treino ?? 81) / (o.fps || 16))}: mais que isso tende a repetir ou degradar.
                       </p>
                     </div>
                   )}
@@ -653,9 +641,14 @@ export default function VideoView(props: {
                   <Sliders className="size-3.5" />
                 </button>
                 <DireitaPrompt>
-                  {estimativa !== null && (
-                    <span className="shrink-0 text-[11px] tabular-nums text-faint" title="Pelo tempo por passo das tomadas anteriores iguais a esta">
-                      {duracao(estimativa).replace("~", "≈ ")}
+                  {estimativa && (
+                    <span
+                      className="shrink-0 text-[11px] tabular-nums text-muted"
+                      title={estimativa.minimo
+                        ? "Pelo tempo medido num tamanho diferente com este modelo; com mais medições a conta fica exata"
+                        : "Pelo tempo que este modelo levou nesta máquina"}
+                    >
+                      {estimativa.minimo ? "≥ " : "≈ "}{duracao(estimativa.s).replace("~", "")}
                     </span>
                   )}
                   <BotaoEnviar
@@ -726,17 +719,54 @@ function Segmento<T extends string>(props: { rotulo: string; opcoes: T[]; valor:
   );
 }
 
-/** O texto de qualidade pela GPU que o sd.cpp vai usar, e não pela máquina de quem escreveu o código. */
-function dicaQualidade(gpu: { nome?: string; gb?: number }): string {
-  if (!gpu.gb) return "720p pede bem mais memória e tempo que 480p.";
-  const quem = `${gpu.nome?.replace(/\(TM\)|\(R\)/g, "").replace(/\s+Graphics$/, "").trim() ?? "sua GPU"} (${String(gpu.gb).replace(".", ",")} GB)`;
-  if (gpu.gb >= 20) return `Na ${quem}, 720p vai bem; o que pesa é a duração e o tamanho do modelo.`;
-  if (gpu.gb >= 14) return `Na ${quem}, 720p cabe; 480p sai bem mais rápido para testar ideias.`;
-  return `Na ${quem}, 480p é o confortável; 720p pede pesos na RAM e bem mais tempo.`;
+/** A dica sai da conta, não de faixas fixas: o modelo cabe inteiro na VRAM da GPU do sd.cpp? E quanto a
+ *  qualidade maior multiplica os pixels (o tempo cresce pelo menos nessa proporção). */
+function dicaQualidade(gpu: LocalState["gpu_video"], modelo: LocalModel | undefined, tamanhos: Tamanhos): string {
+  const gb = (n: number) => `${n.toFixed(1).replace(".", ",")} GB`;
+  const partes: string[] = [];
+  if (gpu.gb && modelo) {
+    const quem = gpu.nome?.replace(/\(TM\)|\(R\)/g, "").replace(/\s+Graphics$/, "").trim() || "sua GPU";
+    const tamanho = modelo.size / 1e9;
+    partes.push(tamanho <= gpu.gb * (gpu.folga ?? 0.85)
+      ? `O modelo (${gb(tamanho)}) cabe inteiro na ${quem} (${gb(gpu.gb)}).`
+      : `O modelo (${gb(tamanho)}) é maior que a ${quem} (${gb(gpu.gb)}): vai com pesos na RAM, mais lento.`);
+  }
+  const qs = Object.keys(tamanhos);
+  if (qs.length > 1) {
+    const px = (q: string) => tamanhos[q]["16:9"][0] * tamanhos[q]["16:9"][1];
+    const [menor, maior] = [qs[0], qs[qs.length - 1]];
+    partes.push(`${maior} tem ${(px(maior) / px(menor)).toFixed(1).replace(".", ",")}× os pixels de ${menor}: pelo menos isso no tempo e na memória.`);
+  }
+  return partes.join(" ") || "Resolução maior pede mais memória e mais tempo.";
 }
 
-/** Tamanho livre: arredonda para o múltiplo que o modelo exige (16; 32 no TI2V 5B, cujo VAE comprime 32×)
- *  só ao confirmar, para não brigar com quem ainda está digitando. */
+/** Duração livre em segundos; vira quadros 4k+1 ao confirmar. */
+function DuracaoLivre(props: { segundos: number; fps: number; onAplicar: (quadros: number) => void }) {
+  const [v, setV] = useState(props.segundos.toFixed(1).replace(".", ","));
+  useEffect(() => setV(props.segundos.toFixed(1).replace(".", ",")), [props.segundos]);
+  const aplicar = () => {
+    const s = Number(v.replace(",", "."));
+    if (s > 0) props.onAplicar(quadrosDe(s, props.fps));
+  };
+  return (
+    <div className="flex items-center gap-1.5 px-1">
+      <span className="text-[11px] text-faint">Personalizada</span>
+      <input
+        aria-label="Duração em segundos"
+        inputMode="decimal"
+        value={v}
+        onChange={(e) => setV(e.target.value.replace(/[^\d,.]/g, ""))}
+        onBlur={aplicar}
+        onKeyDown={(e) => e.key === "Enter" && aplicar()}
+        className="w-14 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-[#555]"
+      />
+      <span className="text-[11px] text-faint">s</span>
+    </div>
+  );
+}
+
+/** Tamanho livre: arredonda para o múltiplo que o modelo exige (vem da variante) só ao confirmar, para não
+ *  brigar com quem ainda está digitando. */
 function TamanhoLivre(props: { w: number; h: number; passo: number; ativo: boolean; onAplicar: (w: number, h: number) => void }) {
   const [w, setW] = useState(String(props.w));
   const [h, setH] = useState(String(props.h));

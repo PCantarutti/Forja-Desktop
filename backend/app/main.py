@@ -664,20 +664,27 @@ async def local_video_defaults(body: dict):
 
 
 @app.get("/api/local/video/kits")
-async def local_video_kits():
-    kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video), asyncio.to_thread(localai.vram_video_gb))
+async def local_video_kits(quants: str = ""):
+    """`quants`: JSON {id do kit: quantização} com o que foi trocado no cartão."""
+    try:
+        escolhas = json.loads(quants) if quants else {}
+    except ValueError:
+        escolhas = {}
+    kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video, escolhas),
+                                      asyncio.to_thread(localai.vram_video_gb))
     return {"kits": kits, "vram_gb": vram}
 
 
 class KitBody(BaseModel):
     id: str
     folder: str = ""
+    quant: str = ""  # vazio = a maior que cabe na VRAM
 
 
 @app.post("/api/local/video/kit")
 async def local_video_kit(body: KitBody):
     try:
-        return {"jobs": await asyncio.to_thread(localai.baixar_kit, body.id, body.folder)}
+        return {"jobs": await asyncio.to_thread(localai.baixar_kit, body.id, body.folder, body.quant)}
     except ToolError as e:
         raise HTTPException(400, str(e))
 

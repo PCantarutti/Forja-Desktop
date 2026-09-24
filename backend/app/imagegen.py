@@ -35,8 +35,11 @@ def out_dir() -> Path:
 # Barra de amostragem do sd.cpp: "  |=====>   | 3/8 - 11.5it/s". As barras de carregamento do modelo
 # usam MB/s e ficam de fora — senão a barra da UI andaria para trás.
 PROGRESS = re.compile(r"\|\s*(\d+)/(\d+) - ([\d.]+)\s*(it/s|s/it)")
-TIMEOUT = 1800  # 30 min: CPU puro com modelo grande é lento mesmo
-TIMEOUT_VIDEO = 4 * 3600  # vídeo 720p num 14B com pesos na RAM passa de uma hora fácil
+# Sem teto de tempo total: um 14B em 720p com pesos na RAM leva horas, e CPU puro mais ainda. O que mata o
+# processo é ele parar de dar sinal: nenhuma linha por SEM_SINAL (a carga de pesos passa minutos calada),
+# ou por dez passos seguidos no ritmo medido, o que for maior.
+SEM_SINAL = 900
+PASSOS_SEM_SINAL = 10
 MODOS_VIDEO = ("t2v", "i2v", "flf2v")  # pelo número de quadros dados: 0, 1 ou 2
 ROTULO_MODO = {"t2v": "texto → vídeo", "i2v": "imagem → vídeo", "flf2v": "primeiro e último quadro"}
 
@@ -163,10 +166,10 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
     if o.get("vae_tiling"):
         a += ["--vae-tiling"]
         if video:
-            # O bloco padrão (32×32 no latente) do VAE do Wan2.2 pediu 15 GB num só na B580, e o 5B morria
-            # no fim da amostragem. 16×16 decodificou 17 quadros em 23 s; o corte no tempo segura os clipes
-            # mais longos, em que cada bloco carrega todos os quadros.
-            a += ["--vae-tile-size", "16x16", "--temporal-tiling"]
+            # O corte no tempo segura os clipes longos, em que cada bloco carrega todos os quadros; o tamanho do
+            # bloco vai pela VRAM livre na hora (bloco maior = menos emendas, mais rápido).
+            t = bloco_vae(o.get("_vram_livre_gb"))
+            a += ["--vae-tile-size", f"{t}x{t}", "--temporal-tiling"]
     if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
         # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
         a += ["--backend", f"{_gpu(str(exe))},te=cpu"]
@@ -181,6 +184,22 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
     # -s 0 é uma semente válida para o sd.cpp (o padrão dele é 42, sempre a mesma imagem): 0 aqui = aleatória.
     a += ["-s", str(int(o["seed"])) if int(o.get("seed") or 0) else "-1"]
     return a
+
+
+# Medido na B580: o bloco padrão do sd.cpp (32×32 no latente) do VAE do Wan2.2 pediu 15,4 GB num só, e o 5B
+# morria no fim da amostragem; 16×16 decodificou 17 quadros em 23 s. A memória do bloco cresce com a área.
+VAE_GB_BLOCO_32 = 15.4
+BLOCOS_VAE = (32, 24, 16)
+
+
+def bloco_vae(livre_gb: float | None) -> int:
+    """O maior bloco cuja conta cabe na VRAM livre; sem saber quanto há livre, o menor (o que sempre passou)."""
+    if not livre_gb:
+        return BLOCOS_VAE[-1]
+    for t in BLOCOS_VAE:
+        if VAE_GB_BLOCO_32 * (t / 32) ** 2 <= livre_gb * localai.FOLGA_VRAM:
+            return t
+    return BLOCOS_VAE[-1]
 
 
 def escolhe_gpu(listagem: str) -> str:
@@ -215,34 +234,40 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
     if not prompt.strip():
         raise ToolError("Descreva a imagem (prompt vazio).")
     o = {**_opts(opts), "_preview": previa} if previa else _opts(opts)
+    if localai.eh_video(str(o.get("model") or "")) and o.get("vae_tiling"):
+        o["_vram_livre_gb"] = localai.vram_livre_para_vae(str(o["model"]), bool(o.get("offload")))
     out.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(argv(exe, prompt, out, o, refs), cwd=str(exe.parent), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())
     tail: list[str] = []
     video = localai.eh_video(str(o.get("model") or ""))
-    timer = threading.Timer(TIMEOUT_VIDEO if video else TIMEOUT, lambda: native.kill_tree(proc))
+    visto = [time.monotonic(), 0.0]  # última linha do sd-cli, e o s/passo medido
     # O Wan2.2 A14B amostra em dois passes (HighNoise e LowNoise), cada um com a sua barra: o card soma
     # os dois numa barra só, senão ia a 100% no meio e voltava a 0.
     alto = int(o.get("high_noise_steps") or -1) if video and o.get("high_noise_model") else -1
     passos = {int(o.get("steps") or 0), alto}
     total_geral = int(o.get("steps") or 0) + max(0, alto)
     feito_antes, ultimo, passe = 0, 0, 0
-    timer.start()
+    travou = threading.Event()
     # Vigia à parte: carregando pesos o sd-cli passa minutos sem imprimir nada, e conferir o
     # cancelamento só a cada linha deixava o processo vivo (e a GPU ocupada) depois do "Cancelar".
     parar = threading.Event()
 
     def vigia():
         while not parar.wait(0.5):
-            if downloads.cancelled(job_id):
+            if job_id and downloads.cancelled(job_id):
+                native.kill_tree(proc)
+                return
+            if time.monotonic() - visto[0] > max(SEM_SINAL, PASSOS_SEM_SINAL * visto[1]):
+                travou.set()
                 native.kill_tree(proc)
                 return
 
-    if job_id:
-        threading.Thread(target=vigia, daemon=True).start()
+    threading.Thread(target=vigia, daemon=True).start()
     try:
         for line in proc.stdout:  # type: ignore[union-attr]
+            visto[0] = time.monotonic()
             # barra de carregamento ("|####   | 201/242 - 651MB/s") não explica erro nenhum e enchia o resumo
             if not line.lstrip().startswith("|"):
                 tail.append(line.rstrip())
@@ -264,16 +289,19 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
                 n, tot = feito_antes + n, total_geral
             if job_id:
                 downloads.update(job_id, done=n, total=tot)
+            v = float(m.group(3))
+            # o sd.cpp troca a unidade conforme a velocidade: abaixo de 1 it/s ele passa a s/it
+            visto[1] = v if m.group(4) == "s/it" else (1 / v if v else 0.0)
             if progresso:
-                v = float(m.group(3))
-                # o sd.cpp troca a unidade conforme a velocidade: abaixo de 1 it/s ele passa a s/it
-                progresso(n, tot, v if m.group(4) == "s/it" else (1 / v if v else 0.0))
+                progresso(n, tot, visto[1])
         proc.wait()
     finally:
         parar.set()
-        timer.cancel()
     if job_id and downloads.cancelled(job_id):
         raise ToolError("Geração cancelada.")
+    if travou.is_set():
+        raise ToolError(f"O sd-cli parou de responder (nada por {max(SEM_SINAL, PASSOS_SEM_SINAL * visto[1]) / 60:.0f} "
+                        "min) e foi encerrado. A GPU pode ter travado; se repetir, reinicie o Forja.")
     if proc.returncode != 0 or not out.exists():
         log = "\n".join(tail[-12:])
         raise ToolError(f"{dica_de_falha(tail, video)}sd falhou (código {rotulo_codigo(proc.returncode)}):\n{log}")

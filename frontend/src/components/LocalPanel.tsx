@@ -1331,27 +1331,30 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
   const [kits, setKits] = useState<VideoKit[] | null>(null);
   const [vram, setVram] = useState(0); // GB da GPU que o sd.cpp usa (a integrada não conta)
   const [aberto, setAberto] = useState<string | null>(null);
+  // Quantização trocada no cartão (id do kit → quant). Sem troca, vale a do backend: a maior que cabe.
+  const [quants, setQuants] = useState<Record<string, string>>({});
   const baixando = props.st.jobs.filter((j) => j.kind === "modelo" && j.status === "running").map((j) => j.name);
 
   const carregar = useCallback(() => {
     api
-      .get<{ kits: VideoKit[]; vram_gb: number }>("/local/video/kits")
+      .get<{ kits: VideoKit[]; vram_gb: number }>(`/local/video/kits?quants=${encodeURIComponent(JSON.stringify(quants))}`)
       .then((r) => {
         setKits(r.kits);
         setVram(r.vram_gb);
       })
       .catch((e) => props.onError(e.message));
-  }, []);
+  }, [quants]);
   useEffect(carregar, [carregar, baixando.length]);
 
-  const cabe = (k: VideoKit) => (vram ? k.gb_modelo * 1.15 < vram : null); // ~15% de folga para ativações
+  // "cabe" vem do backend, pela mesma folga que escolhe a quantização (nada de conta repetida aqui)
+  const cabe = (k: VideoKit) => k.opcoes.find((o) => o.quant === k.quant)?.cabe ?? null;
   const recomendado = kits
     ?.filter((k) => cabe(k) && k.modos.length > 1)
     .sort((a, b) => b.gb_modelo - a.gb_modelo)[0]?.id;
 
   async function baixar(k: VideoKit) {
     try {
-      await api.post("/local/video/kit", { id: k.id, folder: props.destino });
+      await api.post("/local/video/kit", { id: k.id, folder: props.destino, quant: k.quant });
       props.onDone();
       carregar();
     } catch (e: any) {
@@ -1391,10 +1394,29 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
                 </button>
                 <SelosModo modos={k.modos} />
               </div>
+              {k.erro ? (
+                <p className="mt-1.5 text-amber-400">{k.erro}</p>
+              ) : (
               <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-faint">
+                {k.opcoes.length > 1 && (
+                  <select
+                    aria-label={`Quantização do ${k.nome}`}
+                    title="Menor = mais leve e menos fiel. O Forja sugere a maior que cabe na VRAM."
+                    className="rounded-md border border-line bg-raised px-1.5 py-0.5 text-[11px] text-fg"
+                    value={k.quant}
+                    disabled={completo || emCurso}
+                    onChange={(e) => setQuants((q) => ({ ...q, [k.id]: e.target.value }))}
+                  >
+                    {k.opcoes.map((o) => (
+                      <option key={o.quant} value={o.quant}>
+                        {o.quant} · {o.gb.toFixed(1).replace(".", ",")} GB{o.cabe === false ? " · não cabe" : ""}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <span>{completo ? `${k.gb_total.toFixed(1).replace(".", ",")} GB no disco` : `${k.gb_falta.toFixed(1).replace(".", ",")} GB para baixar`}</span>
                 {c !== null && (
-                  <span className={c ? "text-emerald-400" : "text-amber-400"} title={`Maior modelo de difusão: ${k.gb_modelo} GB; VRAM: ${vram.toFixed(1)} GB`}>
+                  <span className={c ? "text-emerald-400" : "text-amber-400"} title={`Maior modelo de difusão: ${k.gb_modelo} GB; VRAM da GPU do sd.cpp: ${vram.toFixed(1)} GB`}>
                     {c ? "cabe na GPU" : "maior que a VRAM: vai com pesos na RAM, mais lento"}
                   </span>
                 )}
@@ -1411,6 +1433,7 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
                   )}
                 </span>
               </div>
+              )}
               {aberto === k.id && (
                 <ul className="mt-2 flex flex-col gap-0.5 border-t border-line pt-1.5">
                   {k.arquivos.map((a) => (

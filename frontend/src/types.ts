@@ -290,6 +290,7 @@ export type LocalModel = {
   kind: "chat" | "image" | "video";
   params?: ImageParams; // só nos modelos de imagem e vídeo: ajustes próprios daquele modelo
   variante?: string; // só nos de vídeo: qual Wan é (chave de REQUISITOS no backend)
+  chave?: string; // caminho normalizado, o mesmo das medições de tempo
   req?: ImageReq | null; // GGUF só-unet (Qwen-Image, Flux): arquivos que ele precisa à parte
   falta?: string[]; // chaves de `req.precisa` sem arquivo configurado
   falta_edicao?: string[]; // idem, contando o que a edição (-r) pede a mais
@@ -412,6 +413,9 @@ export type ImageReq = {
   sugere: Partial<ImageParams>;
   video?: boolean;
   modos?: ModoVideo[]; // só nos de vídeo: o que a variante sabe fazer
+  multiplo?: number; // largura e altura precisam ser múltiplos disto
+  resolucoes?: Record<string, [number, number]>; // de treino, na horizontal ("480p": [832, 480])
+  quadros_treino?: number; // o clipe mais longo do treino
 };
 
 /** Texto → vídeo, imagem → vídeo, primeiro e último quadro (pelo número de quadros dados: 0, 1, 2). */
@@ -424,7 +428,10 @@ export type VideoKit = {
   resumo: string;
   variante: string;
   modos: ModoVideo[];
-  arquivos: { repo: string; path: string; gb: number; papel: string; presente: boolean }[];
+  arquivos: { repo: string; path: string; gb: number; papel: string; presente: boolean; quant?: string }[];
+  quant: string; // a quantização do modelo neste kit (a maior que cabe, a do disco ou a escolhida)
+  opcoes: { quant: string; gb: number; cabe: boolean | null }[];
+  erro?: string; // sem Hugging Face: não dá para saber tamanhos nem baixar
   gb_modelo: number; // o maior modelo de difusão: é o que precisa caber na VRAM
   gb_total: number;
   gb_falta: number;
@@ -547,7 +554,9 @@ export type LocalState = {
   image_models: LocalModel[];
   video: ImageOpts; // padrões da aba Vídeo
   video_models: LocalModel[];
-  gpu_video: { nome?: string; gb?: number }; // a GPU que o sd.cpp usa ({} sem runtime)
+  gpu_video: { nome?: string; gb?: number; folga?: number }; // a GPU que o sd.cpp usa ({} sem runtime)
+  // quanto cada vídeo levou nesta máquina, por modelo e tamanho: base da estimativa
+  tempos_video: { model: string; w: number; h: number; frames: number; passos: number; s_passo: number; s_total: number }[];
   port: number;
 };
 

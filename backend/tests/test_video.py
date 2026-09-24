@@ -131,7 +131,8 @@ def test_gpu_do_video_e_a_do_sd_cpp(isolado, monkeypatch):
     monkeypatch.setattr(localai, "devices", lambda exe: [
         {"id": "Vulkan0", "name": "AMD Radeon(TM) Graphics", "total": 16 << 30, "free": 16 << 30},
         {"id": "Vulkan1", "name": "Intel(R) Arc(TM) B580 Graphics", "total": 12118 << 20, "free": 11 << 30}])
-    assert localai.gpu_video() == {"nome": "Intel(R) Arc(TM) B580 Graphics", "gb": 11.8}  # não a integrada
+    assert localai.gpu_video() == {"nome": "Intel(R) Arc(TM) B580 Graphics", "gb": 11.8,  # não a integrada
+                                   "folga": localai.FOLGA_VRAM}
 
 
 def test_nomes_que_nao_sao_video(isolado):
@@ -212,16 +213,83 @@ def test_busca_de_video_so_passa_wan(monkeypatch):
     assert localai.variante_clara("Wan-AI/Wan2.2-TI2V-5B") == "wan22_ti2v"
 
 
-def test_kit_lista_so_o_que_falta(isolado, monkeypatch):
-    arquivo(isolado / "modelos", "umt5-xxl-encoder-Q8_0.gguf")
+# O que o Hugging Face responde para cada repositório (tamanhos reais, conferidos em 2026-09-24).
+HF = {
+    "QuantStack/Wan2.2-TI2V-5B-GGUF": [("Wan2.2-TI2V-5B-Q4_K_M.gguf", 3.43), ("Wan2.2-TI2V-5B-Q5_K_M.gguf", 3.81),
+                                       ("Wan2.2-TI2V-5B-Q8_0.gguf", 5.40)],
+    "city96/umt5-xxl-encoder-gguf": [("umt5-xxl-encoder-Q4_K_M.gguf", 3.66), ("umt5-xxl-encoder-Q8_0.gguf", 6.04)],
+    "Comfy-Org/Wan_2.2_ComfyUI_Repackaged": [("split_files/vae/wan2.2_vae.safetensors", 1.41),
+                                             ("split_files/vae/wan_2.1_vae.safetensors", 0.25)],
+    "QuantStack/Wan2.2-T2V-A14B-GGUF": [("LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf", 9.65),
+                                        ("HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", 9.65),
+                                        ("LowNoise/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf", 15.4),
+                                        ("HighNoise/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf", 15.4)],
+    "Comfy-Org/Wan_2.1_ComfyUI_repackaged": [("split_files/vae/wan_2.1_vae.safetensors", 0.25)],
+}
+
+
+def _hf(monkeypatch, vram_gb):
+    monkeypatch.setattr(localai, "arquivos_do_repo", lambda repo: [
+        {"path": p, "size": int(gb * 1e9)} for p, gb in HF.get(repo, [])])
+    monkeypatch.setattr(localai, "vram_video_gb", lambda: vram_gb)
+
+
+def test_kit_escolhe_a_maior_quantizacao_que_cabe_e_lista_so_o_que_falta(isolado, monkeypatch):
+    _hf(monkeypatch, 5.0)  # 5 GB: o Q8 (5,4) não cabe, o Q5 (3,8) cabe
+    arquivo(isolado / "modelos", "umt5-xxl-encoder-Q8_0.gguf")  # já no disco: vale esse, mesmo sem caber
     kit = next(k for k in localai.kits_video() if k["id"] == "wan22_ti2v_5b")
+    assert kit["quant"] == "Q5_K_M" and [o["cabe"] for o in kit["opcoes"]] == [True, True, False]
     faltam = [Path(a["path"]).name for a in kit["arquivos"] if not a["presente"]]
-    assert faltam == ["Wan2.2-TI2V-5B-Q8_0.gguf", "wan2.2_vae.safetensors"]
-    assert kit["gb_falta"] == round(5.40 + 1.41, 2) and kit["gb_modelo"] == 5.40
+    assert faltam == ["Wan2.2-TI2V-5B-Q5_K_M.gguf", "wan2.2_vae.safetensors"]
+    assert kit["gb_falta"] == round(3.81 + 1.41, 2)
     baixados = []
     monkeypatch.setattr(localai, "download", lambda repo, path, folder="": baixados.append(path) or {"id": path})
-    localai.baixar_kit("wan22_ti2v_5b")
-    assert [Path(p).name for p in baixados] == faltam
+    localai.baixar_kit("wan22_ti2v_5b", quant="Q8_0")  # trocada no cartão
+    assert [Path(p).name for p in baixados] == ["Wan2.2-TI2V-5B-Q8_0.gguf", "wan2.2_vae.safetensors"]
+
+
+def test_kit_a14b_leva_o_par_na_mesma_quantizacao(isolado, monkeypatch):
+    _hf(monkeypatch, 24.0)  # cabe o Q8
+    kit = next(k for k in localai.kits_video() if k["id"] == "wan22_a14b_t2v")
+    nomes = [Path(a["path"]).name for a in kit["arquivos"]]
+    assert nomes[:2] == ["Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf", "Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf"]
+    assert kit["gb_modelo"] == 15.4  # um de cada vez na VRAM, não a soma
+
+
+def test_kit_sem_hugging_face_avisa_em_vez_de_quebrar(isolado, monkeypatch):
+    def falha(repo):
+        raise localai.httpx.ConnectError("sem rede")
+    monkeypatch.setattr(localai, "arquivos_do_repo", falha)
+    monkeypatch.setattr(localai, "vram_video_gb", lambda: 12.0)
+    kits = localai.kits_video()
+    assert kits and all("Hugging Face" in k["erro"] for k in kits)
+    with pytest.raises(localai.ToolError, match="Hugging Face"):
+        localai.baixar_kit("wan22_ti2v_5b")
+
+
+def test_bloco_do_vae_pela_vram_livre():
+    assert imagegen.bloco_vae(None) == 16  # sem saber, o que sempre passou
+    assert imagegen.bloco_vae(4.0) == 16
+    assert imagegen.bloco_vae(11.0) == 24  # 15,4 × (24/32)² = 8,7 GB cabem em 11 × 0,85
+    assert imagegen.bloco_vae(20.0) == 32
+
+
+def test_resolucao_do_i2v_sai_do_nome(isolado):
+    m = isolado / "modelos"
+    assert list(localai.requisitos(arquivo(m, "wan2.1-i2v-14b-480p-Q4_K_M.gguf"))["resolucoes"]) == ["480p"]
+    assert list(localai.requisitos(arquivo(m, "wan2.1-i2v-14b-720p-Q4_K_M.gguf"))["resolucoes"]) == ["720p"]
+    assert localai.requisitos(arquivo(m, "Wan2.2-TI2V-5B-Q8_0.gguf"))["multiplo"] == 32
+
+
+def test_tempo_medido_vai_para_o_estado(isolado):
+    modelo = arquivo(isolado / "modelos", "Wan2.2-TI2V-5B-Q8_0.gguf")
+    o = {**localai.DEFAULT_IMAGE, "width": 832, "height": 480, "frames": 17, "steps": 12}
+    localai.anotar_tempo(modelo, o, 3.35, 92.0)
+    localai.anotar_tempo(modelo, {**o, "frames": 49, "steps": 20}, 25.0, 560.0)
+    localai.anotar_tempo(modelo, o, 3.2, 90.0)  # mesmo tamanho: substitui, não acumula
+    tempos = localai.state()["tempos_video"]
+    assert sorted((t["frames"], t["s_passo"]) for t in tempos) == [(17, 3.2), (49, 25.0)]
+    assert all(t["model"] == localai._chave(modelo) for t in tempos)
 
 
 # ------------------------------------------------------------------ lote
