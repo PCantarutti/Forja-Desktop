@@ -568,7 +568,7 @@ export default function VideoView(props: {
                 </Menu>
                 <Menu rotulo={<>{prop ?? `${o.width}×${o.height}`}{qual && <span className="text-faint">· {qual}</span>}</>} titulo="Proporção e qualidade">
                   {() => (
-                    <div className="w-56 space-y-2 p-1">
+                    <div className="w-60 space-y-2 p-1">
                       <Segmento
                         rotulo="Proporção"
                         opcoes={["16:9", "9:16", "1:1"] as Proporcao[]}
@@ -589,9 +589,17 @@ export default function VideoView(props: {
                           set("height", h);
                         }}
                       />
-                      <p className="px-1 text-[11px] leading-snug text-faint">
-                        720p pede bem mais memória e tempo; numa GPU de 12 GB, 480p é o confortável.
-                      </p>
+                      <TamanhoLivre
+                        w={o.width}
+                        h={o.height}
+                        passo={atual?.variante === "wan22_ti2v" ? 32 : 16}
+                        ativo={!prop}
+                        onAplicar={(w, h) => {
+                          set("width", w);
+                          set("height", h);
+                        }}
+                      />
+                      <p className="px-1 text-[11px] leading-snug text-muted">{dicaQualidade(st.gpu_video)}</p>
                     </div>
                   )}
                 </Menu>
@@ -713,6 +721,54 @@ function Segmento<T extends string>(props: { rotulo: string; opcoes: T[]; valor:
             {op}
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** O texto de qualidade pela GPU que o sd.cpp vai usar, e não pela máquina de quem escreveu o código. */
+function dicaQualidade(gpu: { nome?: string; gb?: number }): string {
+  if (!gpu.gb) return "720p pede bem mais memória e tempo que 480p.";
+  const quem = `${gpu.nome?.replace(/\(TM\)|\(R\)/g, "").replace(/\s+Graphics$/, "").trim() ?? "sua GPU"} (${String(gpu.gb).replace(".", ",")} GB)`;
+  if (gpu.gb >= 20) return `Na ${quem}, 720p vai bem; o que pesa é a duração e o tamanho do modelo.`;
+  if (gpu.gb >= 14) return `Na ${quem}, 720p cabe; 480p sai bem mais rápido para testar ideias.`;
+  return `Na ${quem}, 480p é o confortável; 720p pede pesos na RAM e bem mais tempo.`;
+}
+
+/** Tamanho livre: arredonda para o múltiplo que o modelo exige (16; 32 no TI2V 5B, cujo VAE comprime 32×)
+ *  só ao confirmar, para não brigar com quem ainda está digitando. */
+function TamanhoLivre(props: { w: number; h: number; passo: number; ativo: boolean; onAplicar: (w: number, h: number) => void }) {
+  const [w, setW] = useState(String(props.w));
+  const [h, setH] = useState(String(props.h));
+  useEffect(() => {
+    setW(String(props.w));
+    setH(String(props.h));
+  }, [props.w, props.h]);
+  const encaixa = (v: string) => Math.min(1920, Math.max(props.passo * 8, Math.round((Number(v) || 0) / props.passo) * props.passo));
+  const aplicar = () => props.onAplicar(encaixa(w), encaixa(h));
+  const campo = "w-16 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-[#555]";
+  return (
+    <div>
+      <p className={`mb-1 px-1 text-[11px] ${props.ativo ? "text-fg" : "text-faint"}`}>Personalizada</p>
+      <div className="flex items-center gap-1.5 px-1">
+        {[
+          [w, setW, "Largura"],
+          [h, setH, "Altura"],
+        ].map(([valor, setValor, rotulo], i) => (
+          <label key={rotulo as string} className="contents">
+            {i === 1 && <span className="text-faint">×</span>}
+            <input
+              aria-label={rotulo as string}
+              inputMode="numeric"
+              value={valor as string}
+              onChange={(e) => (setValor as (v: string) => void)(e.target.value.replace(/\D/g, ""))}
+              onBlur={aplicar}
+              onKeyDown={(e) => e.key === "Enter" && aplicar()}
+              className={campo}
+            />
+          </label>
+        ))}
+        <span className="ml-1 text-[10px] leading-tight text-faint">múltiplos de {props.passo}</span>
       </div>
     </div>
   );

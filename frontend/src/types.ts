@@ -547,6 +547,7 @@ export type LocalState = {
   image_models: LocalModel[];
   video: ImageOpts; // padrões da aba Vídeo
   video_models: LocalModel[];
+  gpu_video: { nome?: string; gb?: number }; // a GPU que o sd.cpp usa ({} sem runtime)
   port: number;
 };
 

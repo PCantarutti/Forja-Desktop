@@ -1956,16 +1956,20 @@ def kits_video() -> list[dict]:
     return out
 
 
-def vram_video_gb() -> float:
-    """VRAM da GPU que o sd-cli vai usar. A soma de todas não serve: a integrada do Ryzen informa 16 GB
-    de memória compartilhada, e o kit de 14B "cabia" numa Arc de 12."""
+def gpu_video() -> dict:
+    """A GPU que o sd-cli vai usar: nome e VRAM em GB ({} sem runtime). A soma de todas não serve: a
+    integrada do Ryzen informa 16 GB de memória compartilhada, e o kit de 14B "cabia" numa Arc de 12."""
     from .imagegen import _gpu
     sd, llama = find_exe("sd"), find_exe("llama")
     if not sd or not llama:
-        return 0.0
+        return {}
     alvo = _gpu(str(sd))
     gpu = next((g for g in devices(str(llama)) if g["id"].lower() == alvo), None)
-    return round(gpu["total"] / 2**30, 1) if gpu else 0.0
+    return {"nome": gpu["name"], "gb": round(gpu["total"] / 2**30, 1)} if gpu else {}
+
+
+def vram_video_gb() -> float:
+    return gpu_video().get("gb", 0.0)
 
 
 def baixar_kit(kit_id: str, folder: str = "") -> list[dict]:
@@ -2123,5 +2127,6 @@ def state() -> dict:
             "jobs": downloads.list_jobs(), "defaults": defaults_for(""), "last": cfg["last"],
             "image": cfg["image"], "image_models": imagens, "port": config.LOCAL_PORT,
             "video": {**DEFAULT_IMAGE, **(cfg.get("video") or {})}, "video_models": videos,
+            "gpu_video": gpu_video(),
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

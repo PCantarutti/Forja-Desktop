@@ -125,6 +125,15 @@ def test_erro_de_vram_ocupada_explica_em_portugues():
     assert imagegen.rotulo_codigo(1) == "1"
 
 
+def test_gpu_do_video_e_a_do_sd_cpp(isolado, monkeypatch):
+    monkeypatch.setattr(localai, "find_exe", lambda kind: Path(f"{kind}.exe"))
+    monkeypatch.setattr(imagegen, "_gpu", lambda exe: "vulkan1")
+    monkeypatch.setattr(localai, "devices", lambda exe: [
+        {"id": "Vulkan0", "name": "AMD Radeon(TM) Graphics", "total": 16 << 30, "free": 16 << 30},
+        {"id": "Vulkan1", "name": "Intel(R) Arc(TM) B580 Graphics", "total": 12118 << 20, "free": 11 << 30}])
+    assert localai.gpu_video() == {"nome": "Intel(R) Arc(TM) B580 Graphics", "gb": 11.8}  # não a integrada
+
+
 def test_nomes_que_nao_sao_video(isolado):
     m = isolado / "modelos"
     for nome in ("swan_lake_xl.safetensors", "wan21_causvid_lora.safetensors", "Taiwan-landscape.safetensors"):
