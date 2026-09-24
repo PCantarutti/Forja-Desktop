@@ -2029,16 +2029,26 @@ def escolher_quant(opcoes: list[dict]) -> dict | None:
     return max(cabem, key=lambda o: o["gb"]) if cabem else min(opcoes, key=lambda o: o["gb"])
 
 
-def kits_video(quants: dict[str, str] | None = None) -> list[dict]:
+def kits_video(quants: dict[str, str] | None = None, auto: bool = False) -> list[dict]:
     """Os kits com tamanhos do Hugging Face e o que já está no disco (pelo nome, em qualquer pasta).
 
-    `quants`: {id do kit: quantização escolhida no cartão}; sem ela, vale a maior que cabe."""
+    `quants`: {id do kit: quantização escolhida no cartão}; sem ela, vale a maior que cabe.
+    `auto`: em vez da lista curada, os kits montados sozinhos a partir da busca do Hugging Face."""
+    try:
+        lista = kits_descobertos() if auto else KITS_VIDEO
+    except (ToolError, httpx.HTTPError) as e:
+        raise ToolError(f"Não deu para buscar no Hugging Face: {e}")
+    return _montar_kits(lista, quants)
+
+
+def _montar_kits(lista: list[dict], quants: dict[str, str] | None) -> list[dict]:
     presentes = {Path(m["path"]).name.lower() for m in scan(WEIGHTS)}
     vram = vram_video_gb()
     out = []
-    for k in KITS_VIDEO:
+    for k in lista:
         req = REQUISITOS[k["variante"]]
-        base = {"id": k["id"], "nome": k["nome"], "resumo": k["resumo"], "variante": k["variante"], "modos": req["modos"]}
+        base = {"id": k["id"], "nome": k["nome"], "resumo": k["resumo"], "variante": k["variante"], "modos": req["modos"],
+                "auto": bool(k.get("auto")), "repo": k["modelo"][0]}
         try:
             opcoes = _opcoes(*k["modelo"], vram)
             # quantização já no disco manda: não faz sentido baixar outra por cima
@@ -2070,6 +2080,108 @@ def kits_video(quants: dict[str, str] | None = None) -> list[dict]:
                     "gb_total": round(sum(a["gb"] for a in arquivos), 2),
                     "gb_falta": round(sum(a["gb"] for a in arquivos if not a["presente"]), 2)})
     return out
+
+
+# Kits automáticos: repositórios de Wan da busca do Hugging Face (os mais baixados), cada família de GGUF
+# (o mesmo nome com quantizações diferentes) vira um kit. A variante sai do nome do arquivo (variante_clara) e
+# as peças, dos requisitos dela. Sem curadoria: o que a lista curada já tem fica de fora.
+KITS_AUTO_REPOS = 40  # repositórios consultados (um pedido de lista de arquivos cada; o resultado fica em cache)
+_PECA_DE = {"t5xxl": "umt5", "clip_vision": "clipv"}
+# Arquiteturas do Wan que o sd.cpp não roda (docs/wan.md lista T2V, I2V, FLF2V, VACE, TI2V e A14B): o nome
+# delas cairia numa variante errada (Animate "vira" I2V) e o kit baixaria gigas para dar erro na geração.
+FORA_DO_SD = ("animate", "s2v", "fun", "control", "camera")
+
+
+def _familia_duvidosa(nome: str) -> bool:
+    """Família que não dá para montar com segurança só pelo nome: melhor sumir da lista que dar erro na geração.
+    Shard (o inteiro do mesmo repositório já aparece), só o módulo (VACE module), nome que diz T2V e I2V ao mesmo
+    tempo, ou metade High/Low de um A14B que não segue o "HighNoise/LowNoise" (não dá para achar o par)."""
+    n = _normal(nome)
+    return (bool(re.search(r"\d{5}-of-\d{5}", nome)) or "module" in n or ("t2v" in n and "i2v" in n)
+            or (("high" in n or "low" in n) and "noise" not in n))
+
+
+def _repos_wan_gguf() -> list[dict]:
+    """Os repositórios de Wan com GGUF mais baixados (filter=gguf: a busca de vídeo traz os de safetensors)."""
+    r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True, headers=hf_headers(),
+                  params={"search": "wan", "filter": "gguf", "sort": "downloads", "direction": -1,
+                          "limit": KITS_AUTO_REPOS})
+    if r.status_code >= 400:
+        raise ToolError(f"Hugging Face respondeu {r.status_code}.")
+    return [{"id": m["id"], "downloads": m.get("downloads", 0), "variante": variante_clara(m["id"])}
+            for m in r.json() if WAN_NOME.search(m["id"].split("/")[-1])
+            and not any(x in m["id"].lower() for x in (*VIDEO_FORA, *FORA_DO_SD))]
+
+
+def _familia(caminho: str) -> str | None:
+    """"sub/wan2.1-i2v-14b-480p-Q4_K_M.gguf" -> "sub/wan2.1-i2v-14b-480p-*.gguf" (None sem quantização no nome)."""
+    p = Path(caminho)
+    q = list(QUANT.finditer(p.stem))
+    if not q:
+        return None
+    ultima = q[-1]
+    glob = p.stem[:ultima.start()] + "*" + p.stem[ultima.end():] + p.suffix
+    return f"{p.parent.as_posix()}/{glob}" if p.parent.as_posix() not in (".", "") else glob
+
+
+def _nome_kit(glob: str) -> str:
+    """Nome de pasta a partir da família: "wan2.1-i2v-14b-480p-*.gguf" -> "wan2.1-i2v-14b-480p"."""
+    nome = Path(glob).name.replace("*", "").removesuffix(".gguf")
+    nome = re.sub(r"[_\- ]?low[_\- ]?noise", "", nome, flags=re.I).strip("-_. ")  # o kit leva as duas metades
+    return re.sub(r'[<>:"/\\|?*]', "", nome) or "Wan"
+
+
+@functools.lru_cache(maxsize=4)
+def _descobrir(_janela: int) -> tuple[dict, ...]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    curados = {k[x][0].lower() for k in KITS_VIDEO for x in ("modelo", "par") if k.get(x)}
+    # o mesmo arquivo publicado em outro repositório (a unsloth republica o TI2V): o curado já cobre
+    familias_curadas = {Path(k["modelo"][1]).name.lower() for k in KITS_VIDEO}
+    repos = [r for r in _repos_wan_gguf() if r["id"].lower() not in curados]
+
+    def listar(repo: dict) -> list[dict]:
+        try:
+            return arquivos_do_repo(repo["id"])
+        except (ToolError, httpx.HTTPError):
+            return []  # um repositório fora do ar não derruba a lista
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        listas = list(pool.map(listar, repos))
+    kits, vistos = [], set()
+    for repo, arquivos in zip(repos, listas):
+        for glob in sorted({g for f in arquivos if f["path"].lower().endswith(".gguf") and (g := _familia(f["path"]))}):
+            nome_arq = Path(glob).name
+            var = variante_clara(nome_arq) or repo.get("variante")
+            if (not var or alto_ruido(nome_arq) or papel_video(nome_arq) != "modelo"
+                    or any(x in _normal(nome_arq) for x in FORA_DO_SD) or _familia_duvidosa(nome_arq)):
+                continue  # o HighNoise entra como par do LowNoise; VAE/umt5 soltos não são modelo
+            chave = _nome_kit(glob).lower()  # o mesmo modelo em dois repositórios: fica o mais baixado (vem antes)
+            if chave in vistos or nome_arq.lower() in familias_curadas:
+                continue
+            req = REQUISITOS[var]
+            pecas = []
+            for papel in req.get("precisa", {}):
+                if papel == "vae":
+                    pecas.append("vae22" if var == "wan22_ti2v" else "vae21")
+                elif papel in _PECA_DE:
+                    pecas.append(_PECA_DE[papel])
+            kit = {"id": f"auto:{repo['id']}:{glob}", "variante": var, "nome": _nome_kit(glob), "auto": True,
+                   "resumo": f"{req['nome']} · {repo['id']} · {repo.get('downloads', 0):,} downloads".replace(",", "."),
+                   "modelo": (repo["id"], glob), "pecas": pecas}
+            if "high_noise_model" in req.get("precisa", {}):
+                # LowNoise, low_noise, low-noise (e a pasta low_noise/ também): o par é o mesmo nome com "high"
+                par = re.sub(r"low([_\- ]?)noise", r"high\1noise", glob, flags=re.I)
+                if par == glob or not any(fnmatch.fnmatch(f["path"].lower(), par.lower()) for f in arquivos):
+                    continue  # A14B sem o par no repositório: não dá para montar
+                kit["par"] = (repo["id"], par)
+            vistos.add(chave)
+            kits.append(kit)
+    return tuple(kits)
+
+
+def kits_descobertos() -> list[dict]:
+    return list(_descobrir(int(time.time() // HF_TTL)))
 
 
 def gpu_video() -> dict:
@@ -2167,7 +2279,8 @@ def baixar_acelerador(model: str, folder: str = "") -> list[dict]:
 
 def baixar_kit(kit_id: str, folder: str = "", quant: str = "") -> list[dict]:
     """Um download por arquivo que falta (entram na fila de downloads como qualquer outro)."""
-    kit = next((k for k in kits_video({kit_id: quant} if quant else None) if k["id"] == kit_id), None)
+    kit = next((k for k in kits_video({kit_id: quant} if quant else None, auto=kit_id.startswith("auto:"))
+                if k["id"] == kit_id), None)
     if not kit:
         raise ToolError("Kit não encontrado.")
     if kit.get("erro"):

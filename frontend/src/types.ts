@@ -428,6 +428,8 @@ export type LoraArquivo = LocalModel & { wan: boolean; dim: number; rank: number
 
 /** Kit de download de um Wan: o modelo e as peças que a variante pede, com o que já está no disco. */
 export type VideoKit = {
+  auto?: boolean; // montado sozinho da busca do Hugging Face (não é da lista curada)
+  repo?: string;
   id: string;
   nome: string;
   resumo: string;

@@ -664,14 +664,17 @@ async def local_video_defaults(body: dict):
 
 
 @app.get("/api/local/video/kits")
-async def local_video_kits(quants: str = ""):
-    """`quants`: JSON {id do kit: quantização} com o que foi trocado no cartão."""
+async def local_video_kits(quants: str = "", auto: bool = False):
+    """`quants`: JSON {id do kit: quantização} com o que foi trocado no cartão. `auto`: os montados da busca."""
     try:
         escolhas = json.loads(quants) if quants else {}
     except ValueError:
         escolhas = {}
-    kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video, escolhas),
-                                      asyncio.to_thread(localai.vram_video_gb))
+    try:
+        kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video, escolhas, auto),
+                                          asyncio.to_thread(localai.vram_video_gb))
+    except ToolError as e:
+        raise HTTPException(502, str(e))
     return {"kits": kits, "vram_gb": vram}
 
 

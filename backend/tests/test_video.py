@@ -373,3 +373,31 @@ def test_lote_em_conversa_de_video_grava_webm(isolado, monkeypatch):
     assert estados == {primeira: "mantida", segunda: "pronta"}
     lotes.decidir(msg["id"], keep=[])
     assert lotes.limpar_descartadas(dias=0) == 2  # o expurgo leva webm também
+
+
+
+def test_kits_automaticos_da_busca_do_hf(isolado, monkeypatch):
+    """Cada família de GGUF de um repositório de Wan vira um kit; o duvidoso e o que o curado cobre ficam de fora."""
+    repos = [{"id": "x/Wan2.1_14B_VACE-GGUF", "downloads": 30, "variante": "wan21_vace"},
+             {"id": "y/Wan2.2-I2V-A14B-GGUF", "downloads": 20, "variante": "wan22_a14b_i2v"},
+             {"id": "z/Wan2.2-TI2V-5B-GGUF", "downloads": 10, "variante": "wan22_ti2v"}]
+    arquivos = {
+        "x/Wan2.1_14B_VACE-GGUF": ["Wan2.1_14B_VACE-Q4_K_M.gguf", "Wan2.1_14B_VACE-Q8_0.gguf",
+                                   "Wan2_1-VACE_module_14B-Q4_K_M.gguf",  # só o módulo: fora
+                                   "wan2.1-vace-14b-00001-of-00002-Q8_0.gguf"],  # shard: fora
+        "y/Wan2.2-I2V-A14B-GGUF": ["low_noise/wan2.2_i2v_low_noise_14B_Q4_K_M.gguf",
+                                   "high_noise/wan2.2_i2v_high_noise_14B_Q4_K_M.gguf",
+                                   "wan2.2_i2v_animate_14B_Q4_K_M.gguf"],  # Animate: o sd.cpp não roda
+        "z/Wan2.2-TI2V-5B-GGUF": ["Wan2.2-TI2V-5B-Q8_0.gguf"],  # o mesmo arquivo do kit curado: fora
+    }
+    monkeypatch.setattr(localai, "_repos_wan_gguf", lambda: repos)
+    monkeypatch.setattr(localai, "arquivos_do_repo", lambda repo, kind="video": [
+        {"path": f, "size": 1} for f in arquivos.get(repo, [])])
+    localai._descobrir.cache_clear()
+    kits = {k["nome"]: k for k in localai.kits_descobertos()}
+    assert sorted(kits) == ["Wan2.1_14B_VACE", "wan2.2_i2v_14B"]
+    assert kits["Wan2.1_14B_VACE"]["modelo"] == ("x/Wan2.1_14B_VACE-GGUF", "Wan2.1_14B_VACE-*.gguf")
+    assert kits["Wan2.1_14B_VACE"]["pecas"] == ["vae21", "umt5"]
+    a14b = kits["wan2.2_i2v_14B"]  # o par HighNoise achado pelo nome, pasta inclusive
+    assert a14b["par"] == ("y/Wan2.2-I2V-A14B-GGUF", "high_noise/wan2.2_i2v_high_noise_14B_*.gguf")
+    assert all(k["id"].startswith("auto:") for k in kits.values())

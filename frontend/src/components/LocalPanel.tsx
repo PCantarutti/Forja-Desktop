@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView,
   VideoKit } from "../types";
-import { Check, Download, Film, FolderOpen, Search, Square, Trash, X } from "./icons";
+import { Check, ChevronDown, Download, ExternalLink, Film, FolderOpen, Search, Square, Trash, X } from "./icons";
 import Confirma from "./Confirma";
 import ModelSearch from "./ModelSearch";
 import SelosModo from "./SelosModo";
@@ -1378,6 +1378,7 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
           setBuscando(true);
         }}
       />
+      <KitsVideo st={props.st} destino={destino} onDone={props.onDone} onError={props.onError} auto />
 
 
       {buscando && (
@@ -1397,8 +1398,17 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
 
 /** Kits do Wan: o modelo e as peças que a variante pede, num clique. O que já está no disco não baixa
  *  de novo; o selo diz se o modelo cabe na GPU desta máquina. */
-function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void; onError: (e: string) => void; onProcurar: () => void }) {
+function KitsVideo(props: {
+  st: LocalState;
+  destino: string;
+  onDone: () => void;
+  onError: (e: string) => void;
+  onProcurar?: () => void;
+  auto?: boolean; // a lista montada sozinha da busca do Hugging Face, em vez da curada
+}) {
   const [kits, setKits] = useState<VideoKit[] | null>(null);
+  // a automática consulta dezenas de repositórios: só quando a pessoa abre (depois fica em cache no backend)
+  const [ligado, setLigado] = useState(!props.auto);
   const [vram, setVram] = useState(0); // GB da GPU que o sd.cpp usa (a integrada não conta)
   const [aberto, setAberto] = useState<string | null>(null);
   // Quantização trocada no cartão (id do kit → quant). Sem troca, vale a do backend: a maior que cabe.
@@ -1406,19 +1416,25 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
   const baixando = props.st.jobs.filter((j) => j.kind === "modelo" && j.status === "running").map((j) => j.name);
 
   const carregar = useCallback(() => {
+    if (!ligado) return;
     api
-      .get<{ kits: VideoKit[]; vram_gb: number }>(`/local/video/kits?quants=${encodeURIComponent(JSON.stringify(quants))}`)
+      .get<{ kits: VideoKit[]; vram_gb: number }>(
+        `/local/video/kits?quants=${encodeURIComponent(JSON.stringify(quants))}${props.auto ? "&auto=true" : ""}`,
+      )
       .then((r) => {
         setKits(r.kits);
         setVram(r.vram_gb);
       })
-      .catch((e) => props.onError(e.message));
-  }, [quants]);
+      .catch((e) => {
+        setKits([]);
+        props.onError(e.message);
+      });
+  }, [quants, ligado]);
   useEffect(carregar, [carregar, baixando.length]);
 
   // "cabe" vem do backend, pela mesma folga que escolhe a quantização (nada de conta repetida aqui)
   const cabe = (k: VideoKit) => k.opcoes.find((o) => o.quant === k.quant)?.cabe ?? null;
-  const recomendado = kits
+  const recomendado = props.auto ? undefined : kits
     ?.filter((k) => cabe(k) && k.modos.length > 1)
     .sort((a, b) => b.gb_modelo - a.gb_modelo)[0]?.id;
 
@@ -1432,21 +1448,38 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
     }
   }
 
+  if (props.auto && !ligado)
+    return (
+      <section className={card}>
+        <button className="flex w-full items-center gap-1.5 text-left text-fg" onClick={() => setLigado(true)} aria-expanded={false}>
+          <Film className="size-3.5" /> Kits automáticos
+          <ChevronDown className="ml-auto size-3.5 text-muted" />
+        </button>
+        <p className="mt-1 text-faint">
+          Montados sozinhos a partir dos repositórios de Wan em GGUF mais baixados do Hugging Face: cada família de arquivos
+          vira um kit, com as peças que a variante pede. Sem curadoria — confira o repositório antes de baixar.
+        </p>
+      </section>
+    );
+
   return (
     <section className={card}>
       <div className="mb-1 flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-fg">
-          <Film className="size-3.5" /> Geração de vídeo
+          <Film className="size-3.5" /> {props.auto ? `Kits automáticos${kits ? ` (${kits.length})` : ""}` : "Geração de vídeo"}
         </span>
-        <button className="text-muted underline hover:text-fg" onClick={props.onProcurar}>
-          Procurar outros
-        </button>
+        {props.onProcurar && (
+          <button className="text-muted underline hover:text-fg" onClick={props.onProcurar}>
+            Procurar outros
+          </button>
+        )}
       </div>
       <p className="mb-2 text-faint">
-        Modelos Wan, que o stable-diffusion.cpp gera em vídeo. Cada kit traz o modelo e o VAE e codificador que ele pede;
-        os caminhos se configuram sozinhos.
+        {props.auto
+          ? "Da busca do Hugging Face (os repositórios de Wan em GGUF mais baixados), sem curadoria: o nome do arquivo diz a variante, e dela saem as peças. O que a lista curada já tem fica de fora."
+          : "Modelos Wan, que o stable-diffusion.cpp gera em vídeo. Cada kit traz o modelo e o VAE e codificador que ele pede; os caminhos se configuram sozinhos."}
       </p>
-      {!kits && <p className="text-muted">Carregando…</p>}
+      {!kits && <p className="text-muted">{props.auto ? "Buscando no Hugging Face…" : "Carregando…"}</p>}
       <div className="flex flex-col gap-1.5">
         {kits?.map((k) => {
           const completo = k.gb_falta === 0;
@@ -1462,6 +1495,17 @@ function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void;
                   </span>
                   <span className="block text-faint">{k.resumo}</span>
                 </button>
+                {k.auto && k.repo && (
+                  <a
+                    href={`https://huggingface.co/${k.repo}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Abrir ${k.repo} no Hugging Face`}
+                    className="shrink-0 text-faint hover:text-fg"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                )}
                 <SelosModo modos={k.modos} />
               </div>
               {k.erro ? (
@@ -1554,6 +1598,7 @@ function VideoTab(props: { st: LocalState; onDone: () => void; onError: (e: stri
         onError={props.onError}
         onProcurar={() => window.dispatchEvent(new CustomEvent("forja:ia-local", { detail: "Baixar" }))}
       />
+      <KitsVideo st={props.st} destino={props.st.download_dir} onDone={props.onDone} onError={props.onError} auto />
       <section className={card}>
         <span className="mb-1 flex items-center gap-1.5 text-fg">
           <Film className="size-3.5" /> Ampliação de vídeo
