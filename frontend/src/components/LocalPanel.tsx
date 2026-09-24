@@ -973,6 +973,19 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
               <input type="checkbox" checked={!!form.vae_tiling} onChange={(e) => set("vae_tiling", e.target.checked)} />
               VAE em blocos (evita estourar a VRAM no fim)
             </label>
+            <div className="flex items-center gap-2 text-muted" title="--backend te=cpu: libera a VRAM para a difusão. Acelera a geração; na edição fica mais lento, porque a leitura da imagem de referência também vai para a CPU">
+              <label className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+                <input type="checkbox" checked={!!form.te_cpu} onChange={(e) => set("te_cpu", e.target.checked ? "gerar" : "")} />
+                Codificador de texto na CPU
+              </label>
+              {!!form.te_cpu && (
+                <select className={`${input} w-auto py-0.5`} value={form.te_cpu} onChange={(e) => set("te_cpu", e.target.value as ImageParams["te_cpu"])}>
+                  <option value="gerar">na geração</option>
+                  <option value="editar">na edição</option>
+                  <option value="sempre">nas duas</option>
+                </select>
+              )}
+            </div>
             <Field label="Visão do LLM (mmproj)" hint="Só para editar imagem com codificador em GGUF (Qwen-Image 2.1).">
               <input className={input} value={form.llm_vision ?? ""} onChange={(e) => set("llm_vision", e.target.value)} placeholder="opcional" />
             </Field>

@@ -158,7 +158,7 @@ export default function ImagensView(props: {
       await api.post(`/imagens/${conv}/gerar`, {
         prompt,
         // offload/flash attention são do modelo (IA local › Modelos): o global não passa por cima
-        opts: { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined },
+        opts: { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined, te_cpu: undefined },
         models,
         count,
         seed: o.seed,

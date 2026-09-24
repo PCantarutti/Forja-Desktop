@@ -7,6 +7,7 @@ POST /api/local/image (o painel, com prompt e parâmetros na mão).
 from __future__ import annotations
 
 import asyncio
+import functools
 import re
 import subprocess
 import tempfile
@@ -98,11 +99,29 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
         a += ["--diffusion-fa"]
     if o.get("vae_tiling"):
         a += ["--vae-tiling"]
+    if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
+        # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
+        a += ["--backend", f"{_gpu(str(exe))},te=cpu"]
     if o.get("negative"):
         a += ["-n", str(o["negative"])]
     # -s 0 é uma semente válida para o sd.cpp (o padrão dele é 42, sempre a mesma imagem): 0 aqui = aleatória.
     a += ["-s", str(int(o["seed"])) if int(o.get("seed") or 0) else "-1"]
     return a
+
+
+def escolhe_gpu(listagem: str) -> str:
+    """Nome da GPU dedicada na saída do `sd-cli --list-devices` (a que não é memória unificada)."""
+    nomes = [m.group(1).lower() for m in re.finditer(r"^((?:vulkan|cuda)\d+)\t", listagem, re.M | re.I)]
+    integradas = {f"vulkan{n}" for n in re.findall(r"^ggml_vulkan: (\d+) = .*\| uma: 1", listagem, re.M)}
+    dedicadas = [n for n in nomes if n not in integradas]
+    return (dedicadas or nomes or ["cpu"])[0]
+
+
+@functools.lru_cache(maxsize=4)  # ponytail: GPU trocada com o Forja aberto só vale depois de reiniciar
+def _gpu(exe: str) -> str:
+    r = subprocess.run([exe, "--list-devices"], cwd=str(Path(exe).parent), capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=60, **native.popen_kwargs())
+    return escolhe_gpu(r.stdout + r.stderr)
 
 
 def _exe() -> Path:

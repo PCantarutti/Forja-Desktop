@@ -261,13 +261,16 @@ def test_edicao_passa_referencias_e_mmproj(isolado, monkeypatch):
         imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), refs)
     assert "-r" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
 
+    monkeypatch.setattr(imagegen, "_gpu", lambda exe: "vulkan1")
     localai.set_image({"llm_vision": str(arq["mmproj.gguf"]), "offload": True, "flash_attn": True,
-                       "vae_tiling": True})
+                       "vae_tiling": True, "te_cpu": "editar"})
     a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts(), refs)
     assert [a[i + 1] for i, v in enumerate(a) if v == "-r"] == refs
     assert a[a.index("--llm_vision") + 1] == str(arq["mmproj.gguf"])
     assert "--offload-to-cpu" in a and "--diffusion-fa" in a  # sem isso a edição em 1024² vai à CPU
     assert "--vae-tiling" in a  # sem isso o VAE pede 4,7 GB de uma vez e a Arc perde o dispositivo
+    assert a[a.index("--backend") + 1] == "vulkan1,te=cpu"
+    assert "--backend" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())  # só na edição
 
 
 def test_modelo_que_so_gera_recusa_edicao(isolado, monkeypatch):
@@ -1046,3 +1049,14 @@ def test_argv_uma_previsao_simultanea_vai_explicita():
 def test_kv_unificado_cada_requisicao_ve_a_janela_toda():
     assert localai.ctx_por_requisicao(131072, {"parallel": 4, "kv_unified": True}) == 131072
     assert localai.ctx_por_requisicao(131072, {"parallel": 4}) == 32768
+
+
+def test_te_na_cpu_escolhe_a_gpu_dedicada():
+    # Saída real do sd-cli num Ryzen 7600X + Arc B580: o dispositivo 0 é a integrada.
+    listagem = ("ggml_vulkan: Found 2 Vulkan devices:\n"
+                "ggml_vulkan: 0 = AMD Radeon(TM) Graphics (AMD proprietary driver) | uma: 1 | fp16: 1\n"
+                "ggml_vulkan: 1 = Intel(R) Arc(TM) B580 Graphics (Intel Corporation) | uma: 0 | fp16: 1\n"
+                "Vulkan0\tAMD Radeon(TM) Graphics\nVulkan1\tIntel(R) Arc(TM) B580 Graphics\nCPU\tAMD Ryzen 5 7600X\n")
+    assert imagegen.escolhe_gpu(listagem) == "vulkan1"
+    assert imagegen.escolhe_gpu("CUDA0\tNVIDIA GeForce RTX 4070\nCPU\tx\n") == "cuda0"
+    assert imagegen.escolhe_gpu("CPU\tx\n") == "cpu"

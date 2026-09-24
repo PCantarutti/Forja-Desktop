@@ -308,6 +308,7 @@ export type ImageParams = {
   offload: boolean;
   flash_attn: boolean;
   vae_tiling: boolean;
+  te_cpu: "" | "gerar" | "editar" | "sempre";
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -407,6 +408,7 @@ export type ImageOpts = {
   offload: boolean;
   flash_attn: boolean;
   vae_tiling: boolean;
+  te_cpu: "" | "gerar" | "editar" | "sempre";
   diffusion_model: string;
   steps: number;
   cfg: number;

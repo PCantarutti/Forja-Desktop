@@ -121,6 +121,11 @@ DEFAULT_IMAGE = {
     # VAE em blocos: o do Qwen-Image 2.1 pede 4,7 GB de uma vez em 1024² e derrubou a Arc de 12 GB
     # ("device lost") no fim de uma edição de 11 min. Em blocos cabe em poucas centenas de MB.
     "vae_tiling": False,
+    # Codificador de texto na CPU: os 5+ GB do Qwen-VL saem da VRAM e a difusão cabe inteira na GPU,
+    # sem "Pesos na RAM". Qwen-Image 2.1 Q8 na B580, 512², 4 passos: gerar 25 s → 19 s; editar
+    # 37 s → 66 s (a visão lendo a referência na CPU custa 30 s, e a amostragem quase não muda).
+    # Por isso é por tarefa: "" (nunca), "gerar", "editar" ou "sempre".
+    "te_cpu": "",
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
     "descarte_dias": 7,  # quanto tempo as imagens reprovadas ficam em descartadas/ antes do expurgo
 }
@@ -951,7 +956,7 @@ def kind_of(f: Path) -> str:
 
 # Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
 IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm", "llm_vision",
-                   "offload", "flash_attn", "vae_tiling")
+                   "offload", "flash_attn", "vae_tiling", "te_cpu")
 
 
 # GGUF só-unet traz a arquitetura no metadado, e sem os arquivos de fora o sd.cpp só cospe erro técnico.
