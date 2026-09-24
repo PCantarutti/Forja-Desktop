@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import sys
 import tempfile
@@ -40,6 +41,7 @@ async def lifespan(_app):
               "python.org ou do uv para desenvolver.", flush=True)
     localai.reap_orphan()
     taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
+    lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
@@ -155,7 +157,8 @@ def _conv_root(conv_id: int | str | None):
 @app.get("/api/tools")
 def get_tools():
     return [{"name": t.name, "description": t.description, "mutating": t.mutating, "always_ask": t.always_ask,
-             "source": t.source, "enabled": t.name not in config.DISABLED_TOOLS} for t in REGISTRY.values()]
+             "source": t.source, "enabled": t.name not in config.DISABLED_TOOLS,
+             "parameters": t.parameters} for t in REGISTRY.values()]  # parameters: aba Schema da Trajetória
 
 
 # ------------------------------------------------------------------ configurações
@@ -689,7 +692,8 @@ def local_image_file(path: str):
     """Só serve PNG gerado pelo painel (a pasta padrão ou a que a tela Imagem escolheu)."""
     f = Path(path).resolve()
     pastas = {imagegen.OUT_DIR.resolve(), imagegen.out_dir().resolve()}
-    if not (pastas & set(f.parents)) or not f.is_file():
+    # ...ou uma imagem que a pessoa anexou do disco para editar (só as registradas, nada mais do disco)
+    if not ((pastas & set(f.parents)) or lotes.eh_referencia(str(f))) or not f.is_file():
         raise HTTPException(404, "Imagem não encontrada")
     return FileResponse(f)
 
@@ -726,8 +730,9 @@ class PromptBody(BaseModel):
 
 @app.post("/api/imagens/referencia")
 async def imagens_referencia(file: UploadFile = File(...)):
-    """Imagem trazida de fora para editar. Fica em <pasta de imagens>/referencias/, que a rota de
-    arquivo já serve: a miniatura aparece como qualquer imagem gerada."""
+    """Imagem sem caminho no disco (colada, ou o Forja no navegador/Docker): vai para
+    <pasta de imagens>/referencias/, que a rota de arquivo já serve. No app o normal é a rota de
+    baixo, que guarda só o caminho do arquivo da pessoa."""
     # ponytail: referências não entram no expurgo; ficam até alguém apagar a pasta
     dados = await file.read()
     if not (file.content_type or "").startswith("image/"):
@@ -736,9 +741,24 @@ async def imagens_referencia(file: UploadFile = File(...)):
         raise HTTPException(400, "Imagem maior que 50 MB.")
     pasta = imagegen.out_dir() / "referencias"
     pasta.mkdir(parents=True, exist_ok=True)
-    alvo = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{uploads.safe_name(file.filename or 'ref.png')}"
-    alvo.write_bytes(dados)
+    # nome pelo conteúdo: mandar a mesma imagem de novo reaproveita o arquivo em vez de duplicar
+    alvo = pasta / f"{hashlib.sha256(dados).hexdigest()[:16]}-{uploads.safe_name(file.filename or 'ref.png')}"
+    if not alvo.exists():
+        alvo.write_bytes(dados)
     return {"path": str(alvo)}
+
+
+class CaminhoBody(BaseModel):
+    path: str
+
+
+@app.post("/api/imagens/referencia/caminho")
+def imagens_referencia_caminho(body: CaminhoBody):
+    """Imagem do disco da pessoa, usada no lugar: nada é copiado, o lote guarda o caminho."""
+    try:
+        return {"path": lotes.registrar_referencia(body.path)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/imagens/{conv_id}/gerar")
@@ -766,6 +786,27 @@ def imagens_cancelar(message_id: int):
         return lotes.cancelar(message_id)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+class ContinuarBody(BaseModel):
+    confirm: bool = False
+
+
+@app.post("/api/imagens/{message_id}/continuar")
+async def imagens_continuar(message_id: int, body: ContinuarBody):
+    try:
+        return await asyncio.to_thread(lotes.continuar, message_id, body.confirm)
+    except imagegen.ModeloCarregado as e:
+        raise HTTPException(409, str(e))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/imagens/{conv_id}/arquivos")
+def imagens_arquivos(conv_id: int):
+    """Para o aviso de "apagar conversa": quantas imagens vão junto e onde estão."""
+    arquivos = lotes.imagens_da_conversa(conv_id)
+    return {"count": len(arquivos), "primeira": str(arquivos[0]) if arquivos else ""}
 
 
 @app.post("/api/imagens/descartadas/limpar")
@@ -1314,6 +1355,7 @@ async def bulk_conversations(body: BulkBody):
                     skipped.append(cid)  # não apaga conversa com execução em andamento
                     continue
                 s.query(db.Checkpoint).filter(db.Checkpoint.conversation_id == cid).delete()
+                lotes.apagar_imagens(cid)  # conversa de imagem: as geradas vão junto (a tela avisou)
                 s.delete(c)
                 closed.append(cid)
             elif body.action in ("archive", "unarchive"):
@@ -1634,7 +1676,9 @@ async def delete_conversation(conv_id: int):
     if active_run(conv_id):
         raise HTTPException(409, "Esta conversa tem uma execução em andamento. Pare antes de apagar.")
     with db.session() as s:
-        s.delete(_get_conv(s, conv_id))
+        c = _get_conv(s, conv_id)
+        lotes.apagar_imagens(conv_id)  # conversa de imagem: as geradas vão junto (a tela avisou)
+        s.delete(c)
         s.commit()
     mirror.remove(conv_id)  # o .md espelhado vai junto
     await MANAGER.close(str(conv_id))  # a sessão do navegador morre com a conversa

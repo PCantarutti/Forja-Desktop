@@ -754,12 +754,15 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   );
 }
 
+const PREVIA: Record<string, string> = { proj: "projeção", tae: "TAESD", vae: "VAE completo" };
+
 const ROTULO: Record<string, string> = {
   vae: "VAE",
   llm: "Codificador LLM",
   llm_vision: "Visão do LLM (mmproj)",
   clip_l: "clip_l",
   t5xxl: "t5xxl",
+  taesd: "TAESD",
 };
 
 /** Modelos de difusão que estão nas pastas. Não têm "Carregar": o sd.cpp sobe e desce a cada imagem —
@@ -786,7 +789,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
       vivo = false;
     };
   }, [sel, temReq]);
-  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl";
+  type Arquivo = "vae" | "llm" | "llm_vision" | "clip_l" | "t5xxl" | "taesd";
   const achadoDe = (k: string) => {
     const f = achados[k]?.[0];
     return f && form && form[k as Arquivo] !== f ? f : "";
@@ -799,7 +802,8 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
       return novo;
     });
   const nome = (p: string) => p.split(/[\\/]/).pop();
-  const Achado = ({ k }: { k: string }) => {
+  // função e não componente: um componente criado no render remonta a cada desenho (react-hooks/static-components)
+  const achado = (k: string) => {
     const f = achadoDe(k);
     if (!f) return null;
     return (
@@ -897,7 +901,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                     </span>{" "}
                     <span className="text-muted">— {oque}</span>{" "}
                     <a href={link} target="_blank" rel="noreferrer" className="underline text-faint">baixar</a>
-                    <Achado k={k} />
+                    {achado(k)}
                   </li>
                 ))}
                 {Object.entries(atual.req.edita ?? {}).map(([k, [oque, link]]) => (
@@ -907,7 +911,7 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
                     </span>{" "}
                     <span className="text-muted">— para editar imagens: {oque}</span>{" "}
                     <a href={link} target="_blank" rel="noreferrer" className="underline text-faint">baixar</a>
-                    <Achado k={k} />
+                    {achado(k)}
                   </li>
                 ))}
               </ul>
@@ -989,6 +993,25 @@ function ModelosDeImagem(props: { st: LocalState; onDone: () => void; onError: (
             <Field label="Visão do LLM (mmproj)" hint="Só para editar imagem com codificador em GGUF (Qwen-Image 2.1).">
               <input className={input} value={form.llm_vision ?? ""} onChange={(e) => set("llm_vision", e.target.value)} placeholder="opcional" />
             </Field>
+            <Field
+              label="Prévia enquanto gera"
+              hint={`O card da imagem mostra o passo atual. Automática usa o TAESD se houver o arquivo; senão a projeção, e o VAE nos modelos sem projeção (o Forja aprende isso na primeira imagem).${
+                atual?.previa_auto ? ` Neste modelo: ${PREVIA[atual.previa_auto]}.` : ""}`}
+            >
+              <select className={input} value={form.preview ?? ""} onChange={(e) => set("preview", e.target.value as ImageParams["preview"])}>
+                <option value="">Automática</option>
+                <option value="none">Nenhuma</option>
+                <option value="proj">Projeção do latente (de graça, cores aproximadas; nem todo modelo tem)</option>
+                <option value="tae">TAESD (rápida e fiel, precisa do arquivo)</option>
+                <option value="vae">VAE completo (fiel, deixa cada passo mais lento)</option>
+              </select>
+            </Field>
+            {(form.preview === "tae" || (!form.preview && achadoDe("taesd"))) && (
+              <Field label="TAESD" hint="O decodificador pequeno do modelo: taesd (SD 1.5), taesdxl (SDXL), taef1 (Flux). Sem ele, gera sem prévia.">
+                <input className={input} value={form.taesd ?? ""} onChange={(e) => set("taesd", e.target.value)} placeholder="caminho do .safetensors" />
+                {achado("taesd")}
+              </Field>
+            )}
           </div>
           <div className="mt-3 flex items-center gap-2">
             <button className={btnPrimary} onClick={salvar}>

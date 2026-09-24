@@ -24,6 +24,8 @@ interface ForjaBridge {
   token: string;
   /** Diálogo de pasta do sistema; devolve o caminho escolhido ou null se cancelou. */
   pickFolder(start?: string): Promise<string | null>;
+  /** Caminho no disco de um File escolhido ou arrastado; "" quando ele não veio do disco. */
+  caminhoDe?(file: File): string;
   /** Preferências da janela: zoom, bandeja, início com o Windows. */
   desktop: {
     get(): Promise<DesktopState>;

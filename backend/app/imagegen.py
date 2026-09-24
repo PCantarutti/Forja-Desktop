@@ -63,7 +63,8 @@ def _confere_arquivos(model: str, o: dict, refs: list[str]) -> None:
         raise ToolError(f"{Path(model).stem} não edita imagem (só gera). Edição funciona com: {editam}.")
     for r in refs:
         if not Path(r).is_file():
-            raise ToolError(f"Imagem de referência não encontrada: {r}")
+            raise ToolError(f"Imagem de referência não encontrada: {r}\nEla foi movida, renomeada ou apagada: "
+                            "anexe de novo (Reanexar, na miniatura).")
     falta = localai.faltando(model, o, editar=bool(refs))
     if falta:
         arquivos = {**req.get("precisa", {}), **req.get("edita", {})}
@@ -71,6 +72,26 @@ def _confere_arquivos(model: str, o: dict, refs: list[str]) -> None:
         raise ToolError(f"{req.get('nome')} precisa de arquivos que não estão configurados (ou não existem):\n"
                         f"{itens}\nBaixe e informe os caminhos em IA local › Imagem › ajustes deste modelo. "
                         f"Guia: {req.get('doc')}")
+
+
+SEM_PROJECAO = "No latent to RGB projection known"  # aviso do sd-cli, a cada passo
+
+
+def previa_automatica(model: str, o: dict) -> str:
+    """O modo que a prévia "Automática" usa neste modelo: TAESD se houver o arquivo; senão a projeção
+    (de graça), a não ser que o modelo não tenha — aí o VAE."""
+    if o.get("taesd"):
+        return "tae"
+    return "vae" if localai.sem_proj(model) else "proj"
+
+
+def modo_previa(o: dict) -> str | None:
+    """O --preview que vai para o sd-cli, ou None. "tae" sem o arquivo do TAESD não tem com o que
+    decodificar: gera sem prévia, que ela é só enfeite."""
+    modo = o.get("preview") or previa_automatica(str(o.get("model") or o.get("diffusion_model") or ""), o)
+    if modo == "none" or (modo == "tae" and not o.get("taesd")):
+        return None
+    return modo
 
 
 def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = ()) -> list[str]:
@@ -102,6 +123,12 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
     if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
         # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
         a += ["--backend", f"{_gpu(str(exe))},te=cpu"]
+    # Prévia por passo num arquivo (quem chama passa `_preview`: o lote, um por imagem).
+    modo = modo_previa(o) if o.get("_preview") else None
+    if modo:
+        a += ["--preview", modo, "--preview-path", str(o["_preview"])]
+        if modo == "tae":  # só a prévia: a imagem final continua saindo do VAE de verdade
+            a += ["--taesd", str(o["taesd"]), "--taesd-preview-only"]
     if o.get("negative"):
         a += ["-n", str(o["negative"])]
     # -s 0 é uma semente válida para o sd.cpp (o padrão dele é 42, sempre a mesma imagem): 0 aqui = aleatória.
@@ -132,13 +159,15 @@ def _exe() -> Path:
 
 
 def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
-             refs: list[str] | tuple = (), progresso=None) -> Path:
-    """`progresso(passo, total, s_passo)` a cada passo da amostragem (o card do lote enche com isso)."""
-    """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread."""
+             refs: list[str] | tuple = (), progresso=None, previa: Path | None = None) -> Path:
+    """Roda o sd-cli até o fim. Bloqueante: quem chama usa thread.
+
+    `progresso(passo, total, s_passo)` a cada passo da amostragem (o card do lote enche com isso).
+    `previa`: onde o sd-cli grava a prévia de cada passo, se o modelo tiver o modo de prévia ligado."""
     exe = _exe()
     if not prompt.strip():
         raise ToolError("Descreva a imagem (prompt vazio).")
-    o = _opts(opts)
+    o = {**_opts(opts), "_preview": previa} if previa else _opts(opts)
     out.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(argv(exe, prompt, out, o, refs), cwd=str(exe.parent), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
@@ -162,6 +191,8 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
         for line in proc.stdout:  # type: ignore[union-attr]
             tail.append(line.rstrip())
             del tail[:-40]
+            if SEM_PROJECAO in line and modo_previa(o) == "proj":
+                localai.marcar_sem_proj(str(o.get("model") or o.get("diffusion_model")))  # próxima: VAE
             m = PROGRESS.search(line)
             # Só a barra da amostragem (total = passos): o VAE em blocos também imprime barra em s/it, e
             # na edição ele codifica a referência antes de amostrar — o card ia a 100% e voltava a 0.

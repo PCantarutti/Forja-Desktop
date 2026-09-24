@@ -29,6 +29,12 @@ def descartadas_dir() -> Path:
     return imagegen.out_dir() / DESCARTADAS
 
 
+def previas_dir() -> Path:
+    """Prévia de cada imagem enquanto ela gera. Dentro da pasta de saída porque é de lá que a rota de
+    arquivo aceita servir; o arquivo some quando a imagem termina."""
+    return imagegen.out_dir() / ".previas"
+
+
 def _sementes(count: int, seed: int, modo: str) -> list[int]:
     """A semente é sempre decidida aqui, nunca pelo sd.cpp: sem isso não dá para repetir a imagem."""
     if modo == "aleatoria":
@@ -89,7 +95,43 @@ def _mensagem(message_id: int) -> dict:
         return {**m.to_dict(), "conversation_id": m.conversation_id}
 
 
+# ------------------------------------------------------------------ referências
+
+EXT_REFERENCIA = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+MAX_REFERENCIAS = 500  # ponytail: lista no local.json; as mais antigas saem (a miniatura delas some)
+
+
+def registrar_referencia(path: str) -> str:
+    """Imagem do disco da pessoa para editar: usada onde está, sem cópia. Fica registrada para a rota
+    de arquivo poder mostrar a miniatura (ela não serve arquivo qualquer do disco)."""
+    f = Path(path)
+    if not f.is_absolute() or f.suffix.lower() not in EXT_REFERENCIA:
+        raise ToolError("Anexe uma imagem (PNG, JPG ou WebP).")
+    if not f.is_file():
+        raise ToolError(f"Imagem de referência não encontrada: {path}")
+    if f.stat().st_size > 50_000_000:
+        raise ToolError("Imagem maior que 50 MB.")
+    chave = localai._chave(str(f))
+    data = localai.read_config()
+    lista = [p for p in data.get("referencias") or [] if p != chave] + [chave]
+    data["referencias"] = lista[-MAX_REFERENCIAS:]
+    localai.write_config(data)
+    return str(f)
+
+
+def eh_referencia(path: str) -> bool:
+    return localai._chave(path) in (localai.read_config().get("referencias") or [])
+
+
 # ------------------------------------------------------------------ geração
+
+def _liberar_vram(confirm: bool) -> None:
+    """LLM na VRAM: sem confirmação a tela pergunta (409); com ela, descarrega."""
+    if localai.status()["running"]:
+        if not confirm:
+            raise imagegen.ModeloCarregado(localai.status().get("alias") or "um modelo")
+        localai.unload()
+
 
 def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str] | None = None,
           count: int = 1, seed: int = 0, seed_mode: str = "incremental", confirm: bool = False,
@@ -106,10 +148,7 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     for m in dict.fromkeys(escolhidos):  # valida runtime e modelo ANTES de descarregar o LLM por nada
         imagegen.argv(exe, prompt, imagegen.OUT_DIR / "x.png", imagegen._opts({**opts, "model": m}), refs)
 
-    if localai.status()["running"]:
-        if not confirm:
-            raise imagegen.ModeloCarregado(localai.status().get("alias") or "um modelo")
-        localai.unload()
+    _liberar_vram(confirm)
 
     sementes = _sementes(count, seed, seed_mode)
     pasta = imagegen.out_dir()
@@ -144,19 +183,31 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
     imagens = list(_mensagem(message_id)["meta"]["images"])
     localai.set_image_busy(True)
     erro = ""
+    feitas, alvo = 0, sum(i["status"] == "pendente" for i in imagens)
     try:
         for i, item in enumerate(imagens):
+            if item["status"] != "pendente":  # "Continuar": o que já saiu fica como está
+                continue
             if downloads.cancelled(job_id):
                 for resto in imagens[i:]:
-                    resto["status"] = "cancelada"
+                    if resto["status"] == "pendente":
+                        resto["status"] = "cancelada"
                 _patch(message_id, meta={"images": imagens})
                 break
             item["status"] = "gerando"
             item["progress"] = 0.0
+            # Já no começo (carregando o modelo, antes da 1ª prévia): o card sabe que não vai de líquido.
+            item["com_previa"] = imagegen.modo_previa(imagegen._opts({**opts, "model": item["model"]})) is not None
             _patch(message_id, meta={"images": imagens})
+            previa = previas_dir() / Path(item["path"]).name
+            previa.parent.mkdir(parents=True, exist_ok=True)
 
-            def progresso(passo: int, total: int, s_passo: float = 0.0, item=item) -> None:
+            def progresso(passo: int, total: int, s_passo: float = 0.0, item=item, previa=previa) -> None:
                 # Vai no meta porque a tela já consulta a conversa enquanto o lote roda: nada de rota nova.
+                # A prévia só entra quando o sd-cli já gravou a primeira: até lá o card mostra o que tinha
+                # (na edição, a imagem original).
+                if previa.is_file():
+                    item["preview"] = str(previa)
                 item["progress"] = round(passo / total, 3) if total else 0.0
                 item["s_passo"] = round(s_passo, 2)
                 item["restante"] = round(max(0, total - passo) * s_passo)  # só a amostragem; o VAE vem depois
@@ -165,7 +216,7 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             try:
                 imagegen.generate(prompt, Path(item["path"]), {**opts, "model": item["model"],
                                                                "seed": item["seed"]}, job_id, refs or [],
-                                  progresso)
+                                  progresso, previa)
                 item["status"] = "pronta"
             except Exception as e:
                 # o próprio generate mata o sd-cli quando o job é cancelado no meio de uma imagem
@@ -174,13 +225,17 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                 item["error"] = "" if cancelada else str(e)
                 if not cancelada:
                     erro = erro or str(e)
+            item.pop("preview", None)
+            item.pop("com_previa", None)
+            previa.unlink(missing_ok=True)
             # o generate move a barra por passo; aqui ela volta a contar imagens do lote
-            downloads.update(job_id, done=i + 1, total=len(imagens))
+            feitas += 1
+            downloads.update(job_id, done=feitas, total=alvo)
             _patch(message_id, meta={"images": imagens})
     finally:
         localai.set_image_busy(False)
 
-    pronta = any(i["status"] == "pronta" for i in imagens)
+    pronta = any(i["status"] in ("pronta", "mantida", "descartada") for i in imagens)
     cancelado = any(i["status"] == "cancelada" for i in imagens)
     status = "pronto" if pronta else ("cancelado" if cancelado else "erro")
     downloads.finish(job_id, error="" if pronta else erro)
@@ -189,6 +244,67 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
     # o status sai por último de propósito: é o sinal de "acabou" para quem espera o lote, e nada
     # pode acontecer depois dele (nos testes, o monkeypatch das pastas já teria sido desfeito).
     _patch(message_id, status=status, meta={"images": imagens})
+
+
+# O que o lote ainda não entregou e "Continuar" gera de novo.
+A_REFAZER = ("interrompida", "pendente", "cancelada", "erro")
+
+
+def reap() -> int:
+    """Na subida do backend nenhum lote está rodando: os que ficaram "running" são de uma queda (o app
+    fechou no meio). Viram "interrompido", para a tela parar de esperar e oferecer "Continuar". A
+    imagem que estava no meio perde os passos (o sd-cli não salva estado parcial); se o PNG chegou a
+    ser gravado antes da queda, ela conta como pronta."""
+    shutil.rmtree(previas_dir(), ignore_errors=True)  # prévias de imagens que não terminaram
+    with db.session() as s:
+        presos = s.query(db.Message).filter(db.Message.role == "assistant", db.Message.status == "running").all()
+        n = 0
+        for m in presos:
+            imagens = [dict(i) for i in (m.meta or {}).get("images") or []]
+            if not imagens:
+                continue  # não é lote de imagem
+            for i in imagens:
+                if i["status"] in ("gerando", "pendente"):
+                    i["status"] = "pronta" if Path(i["path"]).is_file() else "interrompida"
+                    i.pop("progress", None)
+                    i.pop("preview", None)
+                    i.pop("com_previa", None)
+            m.meta = {**m.meta, "images": imagens}
+            m.status = "interrompido" if any(i["status"] == "interrompida" for i in imagens) else "pronto"
+            n += 1
+        s.commit()
+        return n
+
+
+def continuar(message_id: int, confirm: bool = False) -> dict:
+    """Gera o que faltou do lote (interrompidas, canceladas, com erro), com as mesmas sementes e
+    ajustes: sai a mesma imagem que teria saído. As prontas ficam como estão."""
+    msg = _mensagem(message_id)
+    if msg["status"] == "running":
+        raise ToolError("O lote ainda está rodando.")
+    imagens = list(msg["meta"]["images"])
+    if not any(i["status"] in A_REFAZER for i in imagens):
+        raise ToolError("Nada a continuar: todas as imagens deste lote já saíram.")
+    with db.session() as s:
+        pedido = (s.query(db.Message)
+                  .filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
+                          db.Message.id < message_id)
+                  .order_by(db.Message.id.desc()).first())
+        if not pedido:
+            raise ToolError("Pedido do lote não encontrado.")
+        prompt, refs = pedido.content, list((pedido.meta or {}).get("refs") or [])
+    _liberar_vram(confirm)
+    for i in imagens:
+        if i["status"] in A_REFAZER:
+            i.update(status="pendente", error="")
+    faltam = sum(i["status"] == "pendente" for i in imagens)
+    job = downloads.create("lote", prompt[:60])
+    downloads.update(job["id"], done=0, total=faltam)
+    _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
+    opts = msg["meta"].get("opts") or {}
+    threading.Thread(target=_trabalhar, args=(msg["conversation_id"], message_id, prompt, opts, job["id"], refs),
+                     daemon=True).start()
+    return {"ok": True}
 
 
 def cancelar(message_id: int) -> dict:
@@ -227,6 +343,35 @@ def decidir(message_id: int, keep: list[str]) -> dict:
     out = _patch(message_id, meta={"images": imagens})
     mirror.write(out["conversation_id"])
     return out
+
+
+def imagens_da_conversa(conv_id: int) -> list[Path]:
+    """Os arquivos que os lotes desta conversa geraram e ainda existem (inclusive em descartadas/).
+    Só o que está dentro da pasta de imagens: referência anexada do disco da pessoa nunca entra."""
+    pastas = {imagegen.OUT_DIR.resolve(), imagegen.out_dir().resolve()}
+    with db.session() as s:
+        msgs = s.query(db.Message).filter(db.Message.conversation_id == conv_id, db.Message.role == "assistant").all()
+        caminhos = [i["path"] for m in msgs for i in (m.meta or {}).get("images") or [] if i.get("path")]
+    achados: list[Path] = []
+    for c in caminhos:
+        for f in (Path(c), descartadas_dir() / Path(c).name):  # o caminho do meta, ou já no descarte
+            f = f.resolve()
+            if f.is_file() and pastas & set(f.parents) and f not in achados:
+                achados.append(f)
+                break
+    return achados
+
+
+def apagar_imagens(conv_id: int) -> int:
+    """Apagar a conversa leva as imagens dela junto (a tela avisa antes, com a contagem)."""
+    n = 0
+    for f in imagens_da_conversa(conv_id):
+        try:
+            f.unlink()
+            n += 1
+        except OSError:
+            pass  # aberta em outro programa: fica, e a conversa sai assim mesmo
+    return n
 
 
 def limpar_descartadas(dias: int | None = None) -> int:

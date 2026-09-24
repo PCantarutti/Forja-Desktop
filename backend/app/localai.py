@@ -126,6 +126,11 @@ DEFAULT_IMAGE = {
     # 37 s → 66 s (a visão lendo a referência na CPU custa 30 s, e a amostragem quase não muda).
     # Por isso é por tarefa: "" (nunca), "gerar", "editar" ou "sempre".
     "te_cpu": "",
+    # Prévia no card enquanto gera (--preview): "" (automática, ver imagegen.modo_previa), "none",
+    # "proj" (projeção do latente: de graça, cores aproximadas, nem todo modelo tem), "tae" (TAESD:
+    # rápida e fiel, precisa do arquivo em "taesd") ou "vae" (o VAE a cada passo: fiel e mais lenta).
+    "preview": "",
+    "taesd": "",
     "out_dir": "",  # vazio = %APPDATA%/Forja/imagens
     "descarte_dias": 7,  # quanto tempo as imagens reprovadas ficam em descartadas/ antes do expurgo
 }
@@ -133,7 +138,7 @@ DEFAULT_IMAGE = {
 _cfg_lock = threading.Lock()
 
 
-CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "llm_vision", "diffusion_model", "out_dir")
+CAMINHOS_IMAGEM = ("model", "vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd", "diffusion_model", "out_dir")
 
 
 def _image_valores(patch: dict) -> dict:
@@ -155,7 +160,8 @@ def _image_valores(patch: dict) -> dict:
 def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
-            "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {}}
+            "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
+            "sem_proj": [], "referencias": []}
 
 
 def read_config() -> dict:
@@ -956,7 +962,7 @@ def kind_of(f: Path) -> str:
 
 # Ajustes que cada modelo de imagem pode ter por conta própria (o Flux quer outro CFG que o SD 1.5).
 IMAGE_PER_MODEL = ("steps", "cfg", "width", "height", "sampler", "negative", "vae", "clip_l", "t5xxl", "llm", "llm_vision",
-                   "offload", "flash_attn", "vae_tiling", "te_cpu")
+                   "offload", "flash_attn", "vae_tiling", "te_cpu", "preview", "taesd")
 
 
 # GGUF só-unet traz a arquitetura no metadado, e sem os arquivos de fora o sd.cpp só cospe erro técnico.
@@ -972,6 +978,9 @@ REQUISITOS = {
         # Edição (-r): o codificador em GGUF não traz a parte de visão, que vem no mmproj.
         "edita": {"llm_vision": ("mmproj-Qwen3VL-8B-Instruct-F16.gguf (só se o codificador for GGUF)",
                                  "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/tree/main")},
+        # O sd.cpp não tem projeção do latente de 64 canais do 2.1 ("No latent to RGB projection known"):
+        # a prévia automática vai direto ao VAE, que custou +1 s/passo em 512² na B580 (2,1 → 3,0 s).
+        "sem_proj": True,
         "sugere": {"sampler": "euler", "cfg": 6.0, "width": 1024, "height": 1024, "steps": 20,
                    "offload": True, "flash_attn": True, "vae_tiling": True}},
     "qwen_image": {
@@ -996,7 +1005,8 @@ REQUISITOS = {
 PADROES = {
     "qwen_image21": {"vae": ["*qwen*image*2.1*vae*"], "llm": ["*qwen3*vl*8b*"], "llm_vision": ["mmproj*qwen3*vl*8b*"]},
     "qwen_image": {"vae": ["*qwen*image*vae*"], "llm": ["*qwen2.5*vl*7b*"], "llm_vision": ["mmproj*qwen2.5*vl*7b*"]},
-    "flux": {"vae": ["ae.safetensors", "*flux*vae*", "*flux*ae.safetensors"], "clip_l": ["clip_l*"], "t5xxl": ["t5xxl*"]},
+    "flux": {"vae": ["ae.safetensors", "*flux*vae*", "*flux*ae.safetensors"], "clip_l": ["clip_l*"], "t5xxl": ["t5xxl*"],
+             "taesd": ["taef1*"]},
 }
 EXTENSOES_PESO = (".gguf", ".safetensors", ".sft")
 BUSCA_PROFUNDIDADE = 3   # níveis abaixo de cada raiz
@@ -1046,7 +1056,7 @@ def achar_arquivos(path: str) -> dict[str, list[str]]:
 
 
 ROTULO_ARQUIVO = {"vae": "VAE", "llm": "Codificador LLM", "llm_vision": "Visão do LLM (mmproj)",
-                  "clip_l": "clip_l", "t5xxl": "t5xxl"}
+                  "clip_l": "clip_l", "t5xxl": "t5xxl", "taesd": "TAESD"}
 
 
 def requisitos(path: str) -> dict | None:
@@ -1066,7 +1076,7 @@ def faltando(path: str, o: dict, editar: bool = False) -> list[str]:
     return [k for k in chaves if not (o.get(k) and Path(o[k]).is_file())]
 
 
-COMPONENTES = ("vae", "clip_l", "t5xxl", "llm", "llm_vision")
+COMPONENTES = ("vae", "clip_l", "t5xxl", "llm", "llm_vision", "taesd")
 
 
 def _chave(path: str) -> str:
@@ -1100,6 +1110,20 @@ def save_image_params(path: str, patch: dict) -> dict:
     data["image_models"] = modelos
     write_config(data)
     return image_params(path)
+
+
+def sem_proj(path: str) -> bool:
+    """O sd.cpp não sabe projetar o latente deste modelo em RGB: a prévia "proj" não sai nada."""
+    return bool((requisitos(path) or {}).get("sem_proj")) or _chave(path) in (read_config().get("sem_proj") or [])
+
+
+def marcar_sem_proj(path: str) -> None:
+    """Aprendido do aviso do sd-cli na primeira geração: da próxima a prévia automática usa o VAE."""
+    if sem_proj(path):
+        return
+    data = read_config()
+    data["sem_proj"] = [*(data.get("sem_proj") or []), _chave(path)]
+    write_config(data)
 
 
 def alias_of(path: str) -> str:
@@ -1794,7 +1818,9 @@ def state() -> dict:
     # `vision`: o seletor mostra o olho, como o LM Studio.
     models = [{**m, "ctx": ctx_de(m["path"]), "vision": tem_visao(m["path"])} for m in todos if m["kind"] == "chat"]
     comp = acompanhantes(cfg)
+    from .imagegen import previa_automatica
     imagens = [{**m, "params": image_params(m["path"]), "req": requisitos(m["path"]),
+                "previa_auto": previa_automatica(m["path"], image_params(m["path"])),
                 "falta": faltando(m["path"], image_params(m["path"])),
                 "falta_edicao": faltando(m["path"], image_params(m["path"]), editar=True)}
                for m in todos if m["kind"] == "image" and _chave(m["path"]) not in comp]

@@ -41,8 +41,9 @@ export type Message = {
   tool_calls: ToolCall[] | null;
   tool_call_id: string | null;
   name: string | null;
-  status: "ok" | "erro" | "rejeitada" | "cancelada" | "running" | "pronto" | "cancelado" | null;
+  status: "ok" | "erro" | "rejeitada" | "cancelada" | "running" | "pronto" | "cancelado" | "interrompido" | null;
   meta: Record<string, any> | null;
+  created_at?: string | null;
 };
 
 export type Conversation = {
@@ -290,6 +291,7 @@ export type LocalModel = {
   req?: ImageReq | null; // GGUF só-unet (Qwen-Image, Flux): arquivos que ele precisa à parte
   falta?: string[]; // chaves de `req.precisa` sem arquivo configurado
   falta_edicao?: string[]; // idem, contando o que a edição (-r) pede a mais
+  previa_auto?: "proj" | "tae" | "vae"; // o modo que a prévia automática usa neste modelo
 };
 
 /** Ajustes que um modelo de imagem pode ter por conta própria. */
@@ -309,6 +311,8 @@ export type ImageParams = {
   flash_attn: boolean;
   vae_tiling: boolean;
   te_cpu: "" | "gerar" | "editar" | "sempre";
+  preview: "" | "none" | "proj" | "tae" | "vae";  // prévia no card enquanto gera ("" = automática)
+  taesd: string;
 };
 
 /** Metadados lidos do cabeçalho do .gguf. */
@@ -426,9 +430,12 @@ export type LoteImagem = {
   seed: number;
   model: string;
   model_name: string;
-  status: "pendente" | "gerando" | "pronta" | "erro" | "mantida" | "descartada" | "cancelada";
+  // interrompida: o app fechou no meio do lote ("Continuar" gera de novo, com a mesma semente)
+  status: "pendente" | "gerando" | "pronta" | "erro" | "mantida" | "descartada" | "cancelada" | "interrompida";
   error: string;
   progress?: number; // 0..1, passo da amostragem enquanto gera
+  preview?: string; // prévia do passo atual (só com o modo de prévia do modelo ligado)
+  com_previa?: boolean; // o modelo gera com prévia: o card não usa o líquido, nem antes da 1ª
   s_passo?: number; // segundos por passo, lido do sd-cli
   restante?: number; // segundos até o fim da amostragem
 };

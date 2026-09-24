@@ -273,6 +273,40 @@ def test_edicao_passa_referencias_e_mmproj(isolado, monkeypatch):
     assert "--backend" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())  # só na edição
 
 
+def test_previa_por_modo(isolado, monkeypatch):
+    """--preview só com o arquivo de prévia; "tae" leva o TAESD só para a prévia, e sem ele não há prévia."""
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": ""})
+    localai.set_image({"model": "C:/m/sd15.safetensors"})
+    previa = isolado / "p.png"
+    argv = lambda **o: imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", {**imagegen._opts(), **o})
+    assert "--preview" not in argv(preview="proj")  # sem `_preview` (ferramenta do agente): nada
+    assert "--preview" not in argv(preview="none", _preview=previa)
+    a = argv(preview="proj", _preview=previa)
+    assert a[a.index("--preview") + 1] == "proj" and a[a.index("--preview-path") + 1] == str(previa)
+    assert "--taesd" not in a
+    assert "--preview" not in argv(preview="tae", _preview=previa)  # tae sem o arquivo
+    a = argv(preview="tae", taesd="C:/m/taesd.safetensors", _preview=previa)
+    assert a[a.index("--taesd") + 1] == "C:/m/taesd.safetensors" and "--taesd-preview-only" in a
+    assert "--taesd" not in argv(preview="proj", taesd="C:/m/taesd.safetensors", _preview=previa)
+
+
+def test_previa_automatica_aprende_quem_nao_tem_projecao(isolado, monkeypatch):
+    """Automática: TAESD se houver; senão projeção, até o sd-cli avisar que o modelo não tem — aí VAE."""
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": ""})
+    localai.set_image({"model": "C:/m/sd15.safetensors"})
+    previa = isolado / "p.png"
+    modo = lambda **o: (lambda a: a[a.index("--preview") + 1])(
+        imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", {**imagegen._opts(), "_preview": previa, **o}))
+    assert modo() == "proj"
+    assert modo(taesd="C:/m/taesd.safetensors") == "tae"
+    localai.marcar_sem_proj("C:/m/sd15.safetensors")
+    assert modo() == "vae"
+    assert modo(preview="proj") == "proj"  # escolha manual vale mesmo assim
+    # arquitetura conhecida já nasce sabendo: o Qwen-Image 2.1 não tem projeção
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "qwen_image21"})
+    assert imagegen.previa_automatica("C:/m/qwen.gguf", {}) == "vae"
+
+
 def test_modelo_que_so_gera_recusa_edicao(isolado, monkeypatch):
     monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": ""})
     ref = isolado / "a.png"
@@ -319,6 +353,22 @@ def test_barra_do_vae_nao_conta_como_passo(isolado, monkeypatch):
     vistos = []
     imagegen.generate("x", out, {}, progresso=lambda p, t, s: vistos.append((p, t, s)))
     assert vistos == [(1, 20, 31.0)]
+
+
+def test_aviso_de_sem_projecao_marca_o_modelo(isolado, monkeypatch):
+    """O sd-cli avisa a cada passo que não projeta o latente: o modelo fica marcado para usar o VAE."""
+    import sys
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": ""})
+    saida = "[WARN   ] diffusion_engine.cpp:2032 - No latent to RGB projection known for this model (dim = 64)\n"
+    monkeypatch.setattr(imagegen, "_exe", lambda: Path(sys.executable))
+    monkeypatch.setattr(imagegen, "_opts", lambda o=None: {"steps": 20, "model": "C:/m/novo.gguf"})
+    out = isolado / "o.png"
+    monkeypatch.setattr(imagegen, "argv", lambda *a, **k: [
+        sys.executable, "-c", f"import sys, pathlib; sys.stdout.write({saida!r}); pathlib.Path({str(out)!r}).write_bytes(b'x')"])
+    assert not localai.sem_proj("C:/m/novo.gguf")
+    imagegen.generate("x", out, {}, previa=isolado / "p.png")
+    assert localai.sem_proj("C:/m/novo.gguf")
+    assert imagegen.previa_automatica("C:/m/novo.gguf", {}) == "vae"
 
 
 def test_vae_configurado_some_da_lista_de_imagem(isolado, monkeypatch):

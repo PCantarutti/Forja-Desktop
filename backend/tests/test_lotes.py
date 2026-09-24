@@ -31,7 +31,7 @@ def _fake_sd(monkeypatch, falhar=()):
     """Troca o sd-cli por um PNG de mentira; guarda o que cada chamada recebeu."""
     chamadas: list[dict] = []
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
         o = dict(opts or {})
         chamadas.append({"prompt": prompt, "out": Path(out), "refs": list(refs), **o})
         if o.get("model") in falhar:
@@ -160,7 +160,7 @@ def test_lote_com_llm_carregado_pede_confirmacao(monkeypatch):
 def test_cancelar_marca_as_restantes(monkeypatch):
     conv = _conversa()
 
-    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None):
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         Path(out).write_bytes(b"\x89PNG")
         downloads.cancel(job_id)  # cancela logo na primeira, como o botão faria
@@ -253,3 +253,120 @@ def test_api_aceita_conversa_de_imagem():
         r = c.post("/api/conversations", json={"kind": "imagem"})
         assert r.status_code == 200 and r.json()["kind"] == "imagem"
         assert c.post("/api/conversations", json={"kind": "outro"}).status_code == 400
+
+
+def test_queda_no_meio_vira_interrompido_e_continuar_gera_o_que_faltou(monkeypatch):
+    """App fechou com o lote rodando: na subida ele não pode ficar "gerando" para sempre."""
+    chamadas = _fake_sd(monkeypatch)
+    conv = _conversa()
+    msg = lotes.start(conv, "a fox", models=["m1.safetensors"], count=3, seed=7)
+    _esperar(msg["id"])
+    # simula a queda: a 1ª saiu, a 2ª estava no meio (sem PNG), a 3ª nem começou
+    imagens = lotes._mensagem(msg["id"])["meta"]["images"]
+    Path(imagens[1]["path"]).unlink()
+    Path(imagens[2]["path"]).unlink()
+    imagens[1].update(status="gerando", progress=0.18)
+    imagens[2]["status"] = "pendente"
+    lotes._patch(msg["id"], status="running", meta={"images": imagens})
+
+    assert lotes.reap() == 1
+    m = lotes._mensagem(msg["id"])
+    assert m["status"] == "interrompido"
+    assert [i["status"] for i in m["meta"]["images"]] == ["pronta", "interrompida", "interrompida"]
+
+    chamadas.clear()
+    lotes.continuar(msg["id"])
+    m = _esperar(msg["id"])
+    assert m["status"] == "pronto"
+    assert [i["status"] for i in m["meta"]["images"]] == ["pronta"] * 3
+    # só as que faltaram, com as mesmas sementes: sai a mesma imagem que teria saído
+    assert [c["seed"] for c in chamadas] == [imagens[1]["seed"], imagens[2]["seed"]]
+    assert [c["prompt"] for c in chamadas] == ["a fox", "a fox"]
+    with pytest.raises(lotes.ToolError):
+        lotes.continuar(msg["id"])  # nada mais a continuar
+
+
+def test_previa_entra_no_card_e_some_no_fim(monkeypatch):
+    """A prévia só aparece depois que o sd-cli grava a primeira, e o arquivo some quando a imagem sai."""
+    _fake_sd(monkeypatch)
+    vistas: list = []
+
+    def generate(prompt, out, opts=None, job_id="", refs=(), progresso=None, previa=None):
+        progresso(1, 4, 1.0)  # antes da primeira prévia: nada no card, mas ele já sabe que vem prévia
+        vistas.append(lotes._mensagem(msg_id[0])["meta"]["images"][0].get("preview"))
+        assert lotes._mensagem(msg_id[0])["meta"]["images"][0]["com_previa"] is True
+        Path(previa).write_bytes(b"\x89PNG")
+        progresso(2, 4, 1.0)
+        vistas.append(lotes._mensagem(msg_id[0])["meta"]["images"][0].get("preview"))
+        Path(out).write_bytes(b"\x89PNG")
+        return Path(out)
+
+    monkeypatch.setattr(imagegen, "generate", generate)
+    msg_id: list = []
+    orig = lotes.threading.Thread
+    # segura a thread até o id da mensagem estar à mão (o generate de mentira lê a mensagem)
+    monkeypatch.setattr(lotes.threading, "Thread", lambda target, args, daemon: orig(
+        target=lambda *a: (msg_id.append(a[1]), target(*a)), args=args, daemon=daemon))
+    m = _esperar(lotes.start(_conversa(), "a fox", models=["m1.safetensors"])["id"])
+    assert vistas[0] is None and vistas[1].endswith(".png")
+    assert "preview" not in m["meta"]["images"][0] and "com_previa" not in m["meta"]["images"][0]
+    assert not Path(vistas[1]).exists()
+
+
+def test_referencia_do_disco_fica_no_lugar_e_so_ela_e_servida(tmp_path):
+    """Anexar do disco guarda o caminho (nada copiado); a rota serve essa imagem, e não outra qualquer."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    fora = tmp_path / "fotos"
+    fora.mkdir()
+    foto, outra = fora / "gato.png", fora / "segredo.png"
+    foto.write_bytes(b"png1")
+    outra.write_bytes(b"png2")
+    with TestClient(app) as c:
+        assert c.get("/api/local/image/file", params={"path": str(foto)}).status_code == 404
+        r = c.post("/api/imagens/referencia/caminho", json={"path": str(foto)})
+        assert r.status_code == 200 and r.json()["path"] == str(foto)
+        assert not (imagegen.out_dir() / "referencias").exists()  # nenhuma cópia
+        assert c.get("/api/local/image/file", params={"path": str(foto)}).content == b"png1"
+        assert c.get("/api/local/image/file", params={"path": str(outra)}).status_code == 404
+        assert c.post("/api/imagens/referencia/caminho", json={"path": str(fora / "sumiu.png")}).status_code == 400
+        assert c.post("/api/imagens/referencia/caminho", json={"path": str(fora / "nota.txt")}).status_code == 400
+
+
+def test_mesma_imagem_colada_duas_vezes_nao_duplica():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    with TestClient(app) as c:
+        a = c.post("/api/imagens/referencia", files={"file": ("ref.png", b"mesma", "image/png")}).json()["path"]
+        b = c.post("/api/imagens/referencia", files={"file": ("ref.png", b"mesma", "image/png")}).json()["path"]
+    assert a == b and len(list((imagegen.out_dir() / "referencias").iterdir())) == 1
+
+
+def test_referencia_sumida_pede_para_reanexar(monkeypatch, tmp_path):
+    monkeypatch.setattr(localai, "gguf_info", lambda p: {"arch": "qwen_image21"})
+    with pytest.raises(imagegen.ToolError, match="anexe de novo"):
+        imagegen._confere_arquivos("C:/m/qwen.gguf", {}, [str(tmp_path / "movida.png")])
+
+
+def test_apagar_conversa_leva_as_imagens_dela_e_so_elas(monkeypatch, tmp_path):
+    """As geradas (inclusive a descartada) saem; a referência do disco e as de outra conversa ficam."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    _fake_sd(monkeypatch)
+    ref = tmp_path / "minha-foto.png"
+    ref.write_bytes(b"png")
+    conv, outra = _conversa(), _conversa()
+    m = _esperar(lotes.start(conv, "a fox", models=["m1.safetensors"], count=2)["id"])
+    lotes._save(conv, role="user", content="edita", meta={"refs": [str(ref)]})
+    fica = _esperar(lotes.start(outra, "a cat", models=["m1.safetensors"], count=1)["id"])
+    lotes.decidir(m["id"], keep=[m["meta"]["images"][0]["path"]])  # a 2ª vai para descartadas/
+    geradas = lotes.imagens_da_conversa(conv)
+    assert len(geradas) == 2 and any(lotes.DESCARTADAS in str(f) for f in geradas)
+    with TestClient(app) as c:
+        assert c.get(f"/api/imagens/{conv}/arquivos").json()["count"] == 2
+        assert c.delete(f"/api/conversations/{conv}").status_code == 200
+    assert not any(f.exists() for f in geradas)
+    assert ref.exists() and Path(fica["meta"]["images"][0]["path"]).exists()

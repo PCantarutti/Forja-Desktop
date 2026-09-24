@@ -29,6 +29,12 @@ function ItemMenu(props: {
   onDelete: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  // Conversa de imagem: apagar leva as imagens geradas; o aviso diz quantas, antes do "Sim".
+  const [imagens, setImagens] = useState<{ count: number; primeira: string } | null>(null);
+  useEffect(() => {
+    if (!confirming || props.c.kind !== "imagem") return;
+    api.get<{ count: number; primeira: string }>(`/imagens/${props.c.id}/arquivos`).then(setImagens).catch(() => {});
+  }, [confirming]);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
@@ -39,7 +45,7 @@ function ItemMenu(props: {
   }, []);
   const item = "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-fg hover:bg-raised";
   return (
-    <div ref={ref} onClick={(e) => e.stopPropagation()} className="absolute top-full right-1 z-30 mt-1 w-48 overflow-hidden rounded-xl border border-line bg-surface py-1 shadow-xl">
+    <div ref={ref} onClick={(e) => e.stopPropagation()} className={`absolute top-full right-1 z-30 mt-1 ${imagens?.count ? "w-56" : "w-48"} overflow-hidden rounded-xl border border-line bg-surface py-1 shadow-xl`}>
       <button className={item} onClick={() => { props.onRename(); props.onClose(); }}>
         <Edit className="size-3.5" /> Renomear
       </button>
@@ -52,6 +58,15 @@ function ItemMenu(props: {
       <a className={item} href={`/api/conversations/${props.c.id}/export`} download onClick={props.onClose}>
         <Download className="size-3.5" /> Exportar (.md)
       </a>
+      {confirming && !!imagens?.count && (
+        <div className="px-3 pt-1.5 text-xs leading-relaxed text-amber-300">
+          Apaga também {imagens.count === 1 ? "a imagem gerada" : `as ${imagens.count} imagens geradas`} nesta conversa, da
+          pasta de imagens. Copie ou mova antes as que quiser guardar.
+          <button className="mt-1 block underline text-fg" onClick={() => api.post("/open", { path: imagens.primeira, mode: "reveal" }).catch(() => {})}>
+            Abrir a pasta
+          </button>
+        </div>
+      )}
       {confirming ? (
         <div className="flex items-center gap-2 px-3 py-1.5 text-sm">
           <span className="text-red-300">Apagar?</span>
@@ -101,6 +116,15 @@ export default function Sidebar(props: {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Apagar em lote: quantas imagens geradas vão junto, somando as conversas de imagem selecionadas.
+  const [imagensLote, setImagensLote] = useState(0);
+  useEffect(() => {
+    setImagensLote(0);
+    if (!confirmDelete) return;
+    const deImagem = [...props.conversations, ...archived].filter((c) => selected.has(c.id) && c.kind === "imagem");
+    Promise.all(deImagem.map((c) => api.get<{ count: number }>(`/imagens/${c.id}/arquivos`).then((r) => r.count).catch(() => 0)))
+      .then((n) => setImagensLote(n.reduce((a, b) => a + b, 0)));
+  }, [confirmDelete]);
 
   useEffect(() => {
     localStorage.setItem(GROUPS_KEY, JSON.stringify([...collapsed]));
@@ -305,7 +329,8 @@ export default function Sidebar(props: {
 
   return (
     <aside className="flex w-64 shrink-0 flex-col bg-side">
-      <div className="arrasta flex items-center gap-2 px-3 pt-3 pb-1">
+      {/* mesma faixa h-12 e px-3 do cabeçalho: abrir/fechar a barra não move o seletor */}
+      <div className="arrasta flex h-12 shrink-0 items-center gap-2 px-3">
         <SectionTabs value={props.section} onChange={props.onSection} sidebarHidden={false} onToggleSidebar={props.onHide} />
       </div>
       <div className="flex items-center gap-2.5 px-4 pt-2 pb-2">
@@ -352,6 +377,12 @@ export default function Sidebar(props: {
       {selecting && (
         <div className="border-t border-line px-3 py-2 text-xs">
           <div className="mb-1.5 text-muted">{selected.size} selecionada{selected.size === 1 ? "" : "s"}</div>
+          {confirmDelete && imagensLote > 0 && (
+            <p className="mb-1.5 leading-relaxed text-amber-300">
+              Apaga também {imagensLote === 1 ? "a imagem gerada" : `as ${imagensLote} imagens geradas`} nas conversas de imagem
+              selecionadas, da pasta de imagens. Copie ou mova antes as que quiser guardar.
+            </p>
+          )}
           {confirmDelete ? (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-red-300">Apagar {selected.size}?</span>

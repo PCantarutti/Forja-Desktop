@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, PedidoMeta, SeedMode } from "../types";
-import { ArrowUp, Check, Edit, FolderOpen, Image, Refresh, Search, Sliders, Square, Trash, X } from "./icons";
+import { ArrowUp, Check, Copy, Edit, FolderOpen, Image, Paperclip, Refresh, Search, Sliders, Square, Trash, X } from "./icons";
+import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada, redondo } from "./Composer";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -33,7 +34,10 @@ const CORES: Record<LoteImagem["status"], string> = {
   descartada: "text-faint",
   cancelada: "text-faint",
   erro: "text-red-300",
+  interrompida: "text-amber-300",
 };
+// O que "Continuar" gera de novo (mesma lista do backend, lotes.A_REFAZER).
+const A_REFAZER: LoteImagem["status"][] = ["interrompida", "pendente", "cancelada", "erro"];
 
 const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
@@ -54,6 +58,9 @@ export default function ImagensView(props: {
   // Imagens a editar (-r do sd.cpp), na ordem. Vazio = gerar do zero.
   const [refs, setRefs] = useState<string[]>([]);
   const arquivo = useRef<HTMLInputElement>(null);
+  // Referências cujo arquivo não está mais lá (a miniatura não carregou): pedem para reanexar.
+  const [sumidas, setSumidas] = useState<Set<string>>(new Set());
+  const trocar = useRef<string | null>(null);  // "Reanexar": o próximo arquivo escolhido entra no lugar desta
   const [count, setCount] = useState(4);
   const [seedMode, setSeedMode] = useState<SeedMode>("incremental");
   const [abrirAjustes, setAbrirAjustes] = useState(false);
@@ -151,6 +158,10 @@ export default function ImagensView(props: {
 
   async function gerar(confirm = false) {
     if (!o || !prompt.trim() || !models.length) return;
+    if (refs.some((r) => sumidas.has(r))) {
+      mostrarErro("Uma imagem de referência não foi encontrada (movida ou apagada): reanexe ou tire da edição.");
+      return;
+    }
     try {
       // O que está na tela também vira o padrão da ferramenta image_generate do agente.
       await api.put("/local/image/defaults", { ...o, model: models[0] });
@@ -158,7 +169,7 @@ export default function ImagensView(props: {
       await api.post(`/imagens/${conv}/gerar`, {
         prompt,
         // offload/flash attention são do modelo (IA local › Modelos): o global não passa por cima
-        opts: { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined, te_cpu: undefined },
+        opts: { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined, te_cpu: undefined, preview: undefined, taesd: undefined },
         models,
         count,
         seed: o.seed,
@@ -195,8 +206,22 @@ export default function ImagensView(props: {
   }
 
   async function anexar(files: FileList | null) {
+    const velha = trocar.current;
+    trocar.current = null;
     try {
-      for (const f of Array.from(files ?? [])) editar(await uploadReferencia(f));
+      for (const f of Array.from(files ?? [])) {
+        // No app, o caminho do próprio arquivo: nada é copiado. Sem caminho (colada, navegador), cópia.
+        const noDisco = window.forja?.caminhoDe?.(f);
+        const path = noDisco
+          ? (await api.post<{ path: string }>("/imagens/referencia/caminho", { path: noDisco })).path
+          : await uploadReferencia(f);
+        if (velha) {
+          setRefs((r) => r.map((x) => (x === velha ? path : x)).filter((x, i, a) => a.indexOf(x) === i));
+          setSumidas((s) => new Set([...s].filter((x) => x !== velha && x !== path)));
+          break;  // reanexar troca uma só
+        }
+        editar(path);
+      }
     } catch (e: any) {
       mostrarErro(e.message);
     }
@@ -263,7 +288,7 @@ export default function ImagensView(props: {
       </div>
 
       <div className="shrink-0 px-5 pb-4">
-        <div className="mx-auto max-w-5xl">
+        <div className="mx-auto max-w-3xl">
           {erro && (
             <div className="mb-2 flex items-start gap-2 rounded-xl border border-red-900/70 bg-red-950/30 p-2.5 text-xs text-red-200">
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">{erro}</p>
@@ -305,12 +330,30 @@ export default function ImagensView(props: {
             />
           )}
 
-          <div className="rounded-3xl border border-line bg-surface p-3">
+          <CaixaPrompt>
             {refs.length > 0 && (
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
                 {refs.map((r, i) => (
-                  <div key={r} className="relative" title={r}>
-                    <img src={urlDa(r)} alt={`referência ${i + 1}`} className="size-14 rounded-lg border border-line object-cover" />
+                  <div key={r} className="relative" title={sumidas.has(r) ? `Não encontrada: ${r}` : r}>
+                    {sumidas.has(r) ? (
+                      <button
+                        onClick={() => {
+                          trocar.current = r;
+                          arquivo.current?.click();
+                        }}
+                        className="grid size-14 place-items-center rounded-lg border border-dashed border-amber-500/70 bg-amber-500/5 px-1 text-center text-[10px] leading-tight text-amber-300 hover:bg-amber-500/10"
+                      >
+                        não achada
+                        <span className="underline">Reanexar</span>
+                      </button>
+                    ) : (
+                      <img
+                        src={urlDa(r)}
+                        alt={`referência ${i + 1}`}
+                        onError={() => setSumidas((s) => new Set(s).add(r))}
+                        className="size-14 rounded-lg border border-line object-cover"
+                      />
+                    )}
                     <button
                       onClick={() => setRefs((atual) => atual.filter((x) => x !== r))}
                       title="Tirar da edição"
@@ -320,8 +363,10 @@ export default function ImagensView(props: {
                     </button>
                   </div>
                 ))}
-                <span className={naoEditam.length ? "text-amber-400" : "text-muted"}>
-                  {naoEditam.length
+                <span className={naoEditam.length || refs.some((r) => sumidas.has(r)) ? "text-amber-400" : "text-muted"}>
+                  {refs.some((r) => sumidas.has(r))
+                    ? "Imagem de referência não encontrada no lugar de antes (movida ou apagada): reanexe ou tire da edição."
+                    : naoEditam.length
                     ? `${naoEditam.join(", ")} não edita imagem — escolha um modelo que edita (ex.: Qwen-Image 2.1).`
                     : "Editando: descreva a mudança no campo abaixo."}
                 </span>
@@ -342,17 +387,9 @@ export default function ImagensView(props: {
                   ? "change the sky to a sunset, keep everything else the same"
                   : "a red fox in the snow, cinematic lighting — em inglês funciona melhor"
               }
-              className="w-full resize-none bg-transparent text-[15px] text-fg placeholder:text-faint focus:outline-none"
+              className={campoPrompt}
             />
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-              <button
-                onClick={() => setAbrirAjustes((v) => !v)}
-                title="Modelos, tamanho, passos, sementes"
-                className={`inline-flex items-center gap-1 ${btn} ${abrirAjustes ? "bg-raised" : ""}`}
-              >
-                <Sliders className="size-3.5" />
-                {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""}` : "Escolher modelo"}
-              </button>
+            <RodapePrompt>
               <input
                 ref={arquivo}
                 type="file"
@@ -366,55 +403,60 @@ export default function ImagensView(props: {
               />
               <button
                 onClick={() => arquivo.current?.click()}
-                title="Trazer uma imagem para editar (modelos que editam, como o Qwen-Image 2.1)"
-                className={`inline-flex items-center gap-1 ${btn}`}
+                title="Anexar uma imagem para editar (modelos que editam, como o Qwen-Image 2.1)"
+                className={redondo}
               >
-                <Image className="size-3.5" />
-                Editar imagem
+                <Paperclip className="size-4" />
               </button>
               <button
-                onClick={melhorar}
-                disabled={!prompt.trim() || !llm.model || melhorando}
-                title={llm.model ? `Reescrever o prompt com ${llm.model}` : "Escolha ao lado o modelo que reescreve"}
-                className={`inline-flex items-center gap-1 ${btn}`}
+                onClick={() => setAbrirAjustes((v) => !v)}
+                title={`Modelos, tamanho, passos, sementes\n${
+                  models.length > 1
+                    ? [...divisao].map(([m, n]) => `${n}× ${m.split(/[\\/]/).pop()}`).join(" · ")
+                    : `${o.width}×${o.height} · ${o.steps} passos · CFG ${o.cfg}`}`}
+                className={`${pilula} ${abrirAjustes ? pilulaLigada : ""}`}
               >
-                <Refresh className={`size-3.5 ${melhorando ? "animate-spin" : ""}`} />
-                Melhorar prompt
+                <Sliders className="size-3.5" />
+                {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""}` : "Escolher modelo"}
               </button>
-              {/* Div à parte: o ModelPicker traz ml-auto, que na linha do composer jogaria tudo para a direita. */}
-              <div title="Modelo que reescreve o prompt (não é o que gera a imagem)">
-                <ModelPicker
-                  provider={llm.provider}
-                  model={llm.model}
-                  onChange={(provider, model) => setLlm({ provider, model })}
-                />
-              </div>
-              <label className="inline-flex items-center gap-1.5 text-muted">
-                Variações
+              <label className={`${pilula} focus-within:border-[#555]`} title="Quantas variações gerar">
+                <Copy className="size-3.5" />
                 <input
                   type="number"
                   min={1}
                   max={50}
                   value={count}
                   onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-                  className={`${campo} w-16 text-right`}
+                  className={numeroPilula}
+                  style={larguraNumero(count)}
                 />
+                {count === 1 ? "variação" : "variações"}
               </label>
-              <span className="min-w-0 flex-1 truncate text-faint">
-                {models.length > 1
-                  ? [...divisao].map(([m, n]) => `${n}× ${m.split(/[\\/]/).pop()}`).join(" · ")
-                  : `${o.width}×${o.height} · ${o.steps} passos · CFG ${o.cfg}`}
-              </span>
               <button
-                onClick={() => gerar()}
-                disabled={!prompt.trim() || !models.length || semRuntime || st.image_busy || ocupado}
-                title={st.image_busy || ocupado ? "Já tem imagem sendo gerada" : "Gerar"}
-                className="grid size-9 place-items-center rounded-full bg-fg text-black hover:bg-white disabled:bg-raised disabled:text-faint"
+                onClick={melhorar}
+                disabled={!prompt.trim() || !llm.model || melhorando}
+                title={llm.model ? `Reescrever o prompt com ${llm.model} (o modelo à direita)` : "Escolha à direita o modelo que reescreve"}
+                className={pilula}
               >
-                <ArrowUp />
+                <Refresh className={`size-3.5 ${melhorando ? "animate-spin" : ""}`} />
+                Melhorar prompt
               </button>
-            </div>
-          </div>
+              <DireitaPrompt>
+              <div className="min-w-0" title="Modelo que reescreve o prompt (não é o que gera a imagem)">
+                <ModelPicker
+                  provider={llm.provider}
+                  model={llm.model}
+                  onChange={(provider, model) => setLlm({ provider, model })}
+                />
+              </div>
+              <BotaoEnviar
+                onEnviar={() => gerar()}
+                desabilitado={!prompt.trim() || !models.length || semRuntime || st.image_busy || ocupado}
+                titulo={st.image_busy || ocupado ? "Já tem imagem sendo gerada" : "Gerar"}
+              />
+              </DireitaPrompt>
+            </RodapePrompt>
+          </CaixaPrompt>
           <p className="mt-1.5 text-center text-[11px] text-faint">
             O sd.cpp gera uma imagem por vez e libera a memória no fim — um lote é uma fila.
           </p>
@@ -610,6 +652,8 @@ function Lote(props: {
   const viva = props.resposta.status === "running";
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [salvando, setSalvando] = useState(false);
+  const [vram, setVram] = useState(false);  // Continuar esbarrou num LLM carregado: pergunta antes
+  const faltam = imagens.filter((i) => A_REFAZER.includes(i.status)).length;
 
   // Enquanto o lote roda os caminhos mudam de status; a seleção acompanha o que já ficou pronto.
   useEffect(() => {
@@ -641,6 +685,17 @@ function Lote(props: {
     }
   }
 
+  async function continuar(confirm = false) {
+    try {
+      await api.post(`/imagens/${props.resposta.id}/continuar`, { confirm });
+      setVram(false);
+      props.onMudou();
+    } catch (e: any) {
+      if (e.status === 409) setVram(true);
+      else props.onError(e.message);
+    }
+  }
+
   async function mostrarNaPasta(caminho: string) {
     try {
       await api.post("/open", { path: caminho, mode: "reveal" });
@@ -654,7 +709,9 @@ function Lote(props: {
       <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
         <p className="min-w-0 flex-1 text-[15px] text-fg">{props.pedido.content}</p>
         <span className="text-xs text-faint">
-          {viva ? `gerando ${prontas + 1} de ${imagens.length}…` : `${imagens.length} variações`}
+          {viva ? `gerando ${prontas + 1} de ${imagens.length}…`
+            : props.resposta.status === "interrompido" ? `interrompido: ${imagens.length - faltam} de ${imagens.length} prontas`
+            : `${imagens.length} variações`}
         </span>
       </div>
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
@@ -662,7 +719,13 @@ function Lote(props: {
         {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos`}</Chip>}
         {meta.opts.cfg !== undefined && <Chip>{`CFG ${meta.opts.cfg}`}</Chip>}
         {meta.opts.sampler && <Chip>{meta.opts.sampler}</Chip>}
-        <Chip>{`sementes: ${meta.seed_mode}`}</Chip>
+        <button
+          onClick={() => props.onSemente(imagens[0].seed)}
+          title={`Sementes usadas: ${imagens.map((i) => i.seed).join(", ")}\nClique para usar ${imagens[0].seed} no próximo lote`}
+          className="rounded-full bg-raised px-2 py-0.5 hover:text-fg"
+        >
+          {rotuloSementes(imagens.map((i) => i.seed), meta.seed_mode)}
+        </button>
         {[...new Set(imagens.map((i) => i.model_name))].map((n) => (
           <Chip key={n}>{n}</Chip>
         ))}
@@ -725,6 +788,13 @@ function Lote(props: {
             </>
           )
         )}
+        {!viva && faltam > 0 && (
+          <button className={btn} onClick={() => continuar()}
+                  title="Gera só as que faltaram, com a mesma semente e os mesmos ajustes (a imagem que parou no meio recomeça do zero)">
+            <ArrowUp className="mr-1 inline size-3.5 rotate-90" />
+            Continuar ({faltam})
+          </button>
+        )}
         <button className={btn} onClick={props.onReaproveitar} title="Traz prompt e ajustes deste lote para o campo">
           <Refresh className="mr-1 inline size-3.5" />
           Reaproveitar
@@ -736,6 +806,13 @@ function Lote(props: {
           </span>
         )}
       </div>
+      {vram && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
+          <span className="flex-1">Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória.</span>
+          <button className={btnPrimary} onClick={() => continuar(true)}>Descarregar e continuar</button>
+          <button className={btn} onClick={() => setVram(false)}>Cancelar</button>
+        </div>
+      )}
     </section>
   );
 }
@@ -778,6 +855,35 @@ function Liquido({ fracao, sPasso, restante }: { fracao: number; sPasso?: number
   );
 }
 
+/** Imagem de fundo do card que troca só quando a próxima já carregou: o sd-cli regrava a prévia a cada
+ *  passo, e pegar o arquivo no meio da gravação mostraria uma imagem quebrada. */
+function Fundo(props: { src?: string; inicial?: string }) {
+  const [visivel, setVisivel] = useState(props.inicial);
+  useEffect(() => {
+    if (!props.src) return;
+    const i = new window.Image();
+    i.onload = () => setVisivel(props.src);
+    i.src = props.src;
+    return () => {
+      i.onload = null;
+    };
+  }, [props.src]);
+  if (!visivel) return null;
+  return <img src={visivel} alt="" onError={() => setVisivel(undefined)} className={`absolute inset-0 size-full object-cover ${visivel === props.inicial ? "opacity-40" : "opacity-80"}`} />;
+}
+
+/** "semente 4 · fixa", "sementes 4–7 · incremental", "sementes 12, 98, 551 · aleatória": o número é o
+ *  que permite repetir a imagem, então ele aparece, e não só o modo. */
+function rotuloSementes(sementes: number[], modo: SeedMode): string {
+  const unicas = [...new Set(sementes)];
+  const ordenadas = [...unicas].sort((a, b) => a - b);
+  const seguidas = ordenadas.every((s, i) => !i || s === ordenadas[i - 1] + 1);
+  const numeros = unicas.length === 1 ? `semente ${unicas[0]}`
+    : seguidas ? `sementes ${ordenadas[0]}–${ordenadas[ordenadas.length - 1]}`
+    : `sementes ${unicas.slice(0, 3).join(", ")}${unicas.length > 3 ? ` +${unicas.length - 3}` : ""}`;
+  return `${numeros} · ${modo === "aleatoria" ? "aleatória" : modo}`;
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return <span className="rounded-full bg-raised px-2 py-0.5">{children}</span>;
 }
@@ -794,6 +900,10 @@ function Cartao(props: {
 }) {
   const { img } = props;
   const temArquivo = ["pronta", "mantida", "descartada"].includes(img.status);
+  // Com prévia, a imagem fica inteira à vista: o andamento vai num anel no lugar da bolinha de marcar
+  // (que aparece ali quando ela fica pronta) e o número no rodapé. Sem prévia, o líquido por cima.
+  const comPrevia = img.status === "gerando" && (!!img.preview || !!img.com_previa);
+  const pct = Math.round(Math.min(1, Math.max(0, img.progress ?? 0)) * 100);
 
   return (
     <figure
@@ -812,19 +922,46 @@ function Cartao(props: {
         />
       ) : (
         <div className="relative grid aspect-square w-full place-items-center overflow-hidden">
-          {props.origem && img.status !== "erro" && (
-            <img src={urlDa(props.origem)} alt="imagem em edição" className="absolute inset-0 size-full object-cover opacity-40" />
+          {/* A prévia do passo atual e, até ela chegar, a imagem em edição. */}
+          {img.status !== "erro" && (
+            <Fundo
+              src={img.status === "gerando" && img.preview ? `${urlDa(img.preview)}&v=${img.progress ?? 0}` : undefined}
+              inicial={props.origem && urlDa(props.origem)}
+            />
           )}
           {img.status === "erro" ? (
             <span className="px-3 text-center text-[11px] text-red-300" title={img.error}>
               {img.error.split("\n")[0].slice(0, 90)}
             </span>
-          ) : img.status === "gerando" ? (
+          ) : img.status === "gerando" && !comPrevia ? (
             <Liquido fracao={img.progress ?? 0} sPasso={img.s_passo} restante={img.restante} />
           ) : null}
         </div>
       )}
 
+      {comPrevia && (
+        // A bolinha (24 px, onde fica a de marcar) com a % dentro; o anel contorna por fora.
+        <svg
+          viewBox="0 0 30 30"
+          role="progressbar"
+          aria-valuenow={pct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          className="absolute left-[5px] top-[5px] size-[30px]"
+        >
+          <circle cx="15" cy="15" r="12" className="fill-black/60" />
+          <circle cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" className="stroke-white/20" />
+          <circle
+            cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" strokeLinecap="round" pathLength={100}
+            strokeDasharray={`${pct} 100`} transform="rotate(-90 15 15)"
+            className="stroke-sky-400 transition-[stroke-dasharray] duration-1000 ease-out"
+          />
+          <text x="15" y="15" textAnchor="middle" dominantBaseline="central" fontSize="10" fontWeight="600"
+                className="fill-white tabular-nums">
+            {pct}
+          </text>
+        </svg>
+      )}
       {temArquivo && (
         <button
           onClick={props.onMarcar}
@@ -855,7 +992,14 @@ function Cartao(props: {
             </button>
           </>
         )}
-        {!temArquivo && <span className={CORES[img.status]}>{img.status}</span>}
+        {comPrevia ? (
+          // a % está na bolinha; aqui a velocidade e quanto falta (antes do 1º passo, carregando: "gerando")
+          <span className="shrink-0 tabular-nums text-sky-300">
+            {img.s_passo ? `${velocidade(img.s_passo)} · ${duracao(img.restante ?? 0)}` : "gerando"}
+          </span>
+        ) : (
+          !temArquivo && <span className={CORES[img.status]}>{img.status}</span>
+        )}
       </figcaption>
     </figure>
   );
