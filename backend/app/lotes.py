@@ -260,14 +260,8 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
 
 # ------------------------------------------------------------------ ampliação
 
-def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
-    """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
-    progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
+def _validar_ampliacao(fator: int, modelo: str) -> None:
     from . import ampliar as amp
-    msg = _mensagem(message_id)
-    item = next((i for i in msg["meta"]["images"] if i["path"] == path), None)
-    if not item or not Path(path).is_file():
-        raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
     if int(fator) not in (2, 4):
         raise ToolError("Amplie em 2× ou 4×.")
     if modelo and not amp.eh_ampliador(modelo):
@@ -275,26 +269,57 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
     amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada
     if localai.image_busy():
         raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
-    opts = dict(msg["meta"].get("opts") or {})
+
+
+def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: dict, seed: int,
+                    fator: int, modelo: str, suavizar: bool) -> dict:
+    """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem."""
     nome = Path(modelo).stem if modelo else "Lanczos"
-    amp_meta = {"origem": path, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar)}
-    opts.update(width=int(opts.get("width") or 0) * int(fator), height=int(opts.get("height") or 0) * int(fator),
-                ampliacao=amp_meta)
+    amp_meta = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar)}
+    opts = {**opts, "width": int(opts.get("width") or 0) * int(fator), "height": int(opts.get("height") or 0) * int(fator),
+            "ampliacao": amp_meta}
     if suavizar and opts.get("fps"):
         opts.update(fps=int(opts["fps"]) * 2, frames=int(opts.get("frames") or 0) * 2 - 1)
-    saida = Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm")
-    imagens = [{"path": str(saida), "seed": item["seed"], "model": modelo, "model_name": f"{nome} · {fator}×",
+    imagens = [{"path": str(saida), "seed": seed, "model": modelo, "model_name": f"{nome} · {fator}×",
                 "status": "pendente", "error": "", "unidade": "quadro"}]
+    _save(conv_id, role="user", content=prompt, meta={"refs": [], "models": [modelo], "ampliacao": amp_meta})
+    job = downloads.create("lote", f"ampliar {Path(origem).name}")
+    nova = _save(conv_id, role="assistant", content="", status="running",
+                 meta={"job": job["id"], "count": 1, "seed_mode": "fixa", "opts": opts, "images": imagens})
+    threading.Thread(target=_ampliar_trabalho, args=(conv_id, nova.id, job["id"]), daemon=True).start()
+    return nova.to_dict()
+
+
+def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+    """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
+    progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
+    msg = _mensagem(message_id)
+    item = next((i for i in msg["meta"]["images"] if i["path"] == path), None)
+    if not item or not Path(path).is_file():
+        raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
+    _validar_ampliacao(fator, modelo)
+    saida = Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm")
     with db.session() as s:
         pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
                                              db.Message.id < message_id).order_by(db.Message.id.desc()).first())
         prompt = pedido.content if pedido else ""
-    _save(msg["conversation_id"], role="user", content=prompt, meta={"refs": [], "models": [modelo], "ampliacao": amp_meta})
-    job = downloads.create("lote", f"ampliar {Path(path).name}")
-    nova = _save(msg["conversation_id"], role="assistant", content="", status="running",
-                 meta={"job": job["id"], "count": 1, "seed_mode": "fixa", "opts": opts, "images": imagens})
-    threading.Thread(target=_ampliar_trabalho, args=(msg["conversation_id"], nova.id, job["id"]), daemon=True).start()
-    return nova.to_dict()
+    return _nova_ampliacao(msg["conversation_id"], path, saida, prompt, dict(msg["meta"].get("opts") or {}), item["seed"],
+                           fator, modelo, suavizar)
+
+
+def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+    """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
+    para a pasta de imagens; o original não é tocado."""
+    from . import ampliar as amp
+    if not Path(path).is_file():
+        raise ToolError("Esse arquivo não existe (ou não está acessível).")
+    _validar_ampliacao(fator, modelo)
+    info = amp.sondar(path)
+    pasta = imagegen.out_dir()
+    pasta.mkdir(parents=True, exist_ok=True)
+    saida = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"
+    opts = {"width": info["w"], "height": info["h"], "fps": round(info["fps"]), "frames": info["quadros"]}
+    return _nova_ampliacao(conv_id, path, saida, Path(path).name, opts, 0, fator, modelo, suavizar)
 
 
 def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
@@ -349,6 +374,7 @@ def reap() -> int:
     imagem que estava no meio perde os passos (o sd-cli não salva estado parcial); se o PNG chegou a
     ser gravado antes da queda, ela conta como pronta."""
     shutil.rmtree(previas_dir(), ignore_errors=True)  # prévias de imagens que não terminaram
+    shutil.rmtree(imagegen.out_dir() / ".ampliando", ignore_errors=True)  # quadros de ampliações que caíram
     with db.session() as s:
         presos = s.query(db.Message).filter(db.Message.role == "assistant", db.Message.status == "running").all()
         n = 0
@@ -358,7 +384,11 @@ def reap() -> int:
                 continue  # não é lote de imagem
             for i in imagens:
                 if i["status"] in ("gerando", "pendente"):
-                    i["status"] = "pronta" if Path(i["path"]).is_file() else "interrompida"
+                    f = Path(i["path"])
+                    # a ampliação grava o webm aos poucos (ffmpeg): arquivo lá não quer dizer que terminou
+                    if i.get("unidade") == "quadro":
+                        f.unlink(missing_ok=True)
+                    i["status"] = "pronta" if f.is_file() and f.stat().st_size > 0 else "interrompida"
                     i.pop("progress", None)
                     i.pop("preview", None)
                     i.pop("com_previa", None)

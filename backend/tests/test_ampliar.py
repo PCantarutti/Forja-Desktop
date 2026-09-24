@@ -106,3 +106,36 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     assert m["meta"]["opts"]["frames"] == 63  # o que saiu, não a conta de antes
     with pytest.raises(lotes.ToolError, match="2× ou 4×"):
         lotes.ampliar(msg.id, str(origem), 3)
+
+    # um vídeo qualquer do disco: tamanho e fps vêm do ffprobe, o resultado vai para a pasta de imagens
+    fora = isolado / "de-fora" / "ferias.mp4"
+    fora.parent.mkdir()
+    fora.write_bytes(b"mp4")
+    monkeypatch.setattr(ampliar, "sondar", lambda v: {"w": 1280, "h": 720, "fps": 29.97, "taxa": "30000/1001", "quadros": 90, "audio": True})
+    nova = lotes.ampliar_arquivo(conv, str(fora), 2)
+    m = _esperar(nova["id"])
+    assert m["status"] == "pronto" and feitas[-1][0] == str(fora)
+    saida = Path(m["meta"]["images"][0]["path"])
+    assert saida.parent == isolado / "imagens" and saida.name.endswith("-ferias-2x.webm")
+    with db.session() as s:
+        assert s.get(db.Message, nova["id"] - 1).content == "ferias.mp4"  # o pedido é o nome do arquivo
+    with pytest.raises(lotes.ToolError, match="não existe"):
+        lotes.ampliar_arquivo(conv, str(isolado / "sumiu.mp4"), 2)
+
+
+def test_ampliacao_que_caiu_no_meio_nao_vira_pronta(isolado):
+    """O ffmpeg grava o webm aos poucos: na subida, o arquivo pela metade não pode contar como tomada pronta."""
+    with db.session() as s:
+        c = db.Conversation(kind="video")
+        s.add(c)
+        s.commit()
+        conv = c.id
+    parcial = isolado / "imagens" / "x-2x.webm"
+    parcial.write_bytes(b"pela metade")
+    m = lotes._save(conv, role="assistant", content="", status="running", meta={"job": "", "count": 1, "seed_mode": "fixa",
+        "opts": {}, "images": [{"path": str(parcial), "seed": 0, "model": "", "model_name": "", "status": "gerando",
+                                "error": "", "unidade": "quadro"}]})
+    lotes.reap()
+    r = lotes._mensagem(m.id)
+    assert r["status"] == "interrompido" and r["meta"]["images"][0]["status"] == "interrompida"
+    assert not parcial.exists()

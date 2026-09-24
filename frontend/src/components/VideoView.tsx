@@ -13,7 +13,7 @@ import { PROPORCOES, duracoesDe, estimarTempo, quadrosDe, tamanhosDe, type Propo
 import { A_REFAZER, AnelProgresso, Chip, CORES, duracao, Fundo, Liquido, rotuloSementes, SEEDS, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
-import { PainelAmpliar } from "./AmpliarVideo";
+import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
 
 /** Aba Vídeo: o Wan no stable-diffusion.cpp. O motor é o dos lotes de imagem (um lote = uma tomada,
  *  com variações, manter/descartar e "Continuar"); a tela é outra porque vídeo se olha tocando. */
@@ -84,6 +84,7 @@ export default function VideoView(props: {
   const [o, setO] = useState<ImageOpts | null>(null);
   const [modelo, setModelo] = useState("");
   const [modo, setModo] = useState<ModoVideo>("t2v");
+  const [ampliarPc, setAmpliarPc] = useState(false); // aba "Ampliar vídeo": um vídeo do PC, não uma geração
   const [slots, setSlots] = useState<Slots>([null, null]);
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState(1);
@@ -492,7 +493,7 @@ export default function VideoView(props: {
           <div
             onPaste={(e) => {
               const f = [...e.clipboardData.files].find((x) => x.type.startsWith("image/"));
-              if (!f || modo === "t2v") return;
+              if (!f || modo === "t2v" || ampliarPc) return;
               e.preventDefault();
               anexarArquivo(!slots[0] || modo === "i2v" ? 0 : 1, f);
             }}
@@ -506,13 +507,16 @@ export default function VideoView(props: {
                       <button
                         key={m.id}
                         role="radio"
-                        aria-checked={modo === m.id}
+                        aria-checked={!ampliarPc && modo === m.id}
                         disabled={!pode}
-                        onClick={() => setModo(m.id)}
+                        onClick={() => {
+                          setModo(m.id);
+                          setAmpliarPc(false);
+                        }}
                         title={pode ? m.dica : `${atual?.req?.nome ?? "Este modelo"} não faz ${m.curto}. ${
                           m.id === "t2v" ? "Use um T2V ou o TI2V 5B." : m.id === "i2v" ? "Use o TI2V 5B ou um I2V." : "Use o Wan2.1 FLF2V."}`}
                         className={`rounded-full px-3 py-1 transition-colors ${
-                          modo === m.id ? "bg-raised text-fg" : "text-muted hover:text-fg"
+                          !ampliarPc && modo === m.id ? "bg-raised text-fg" : "text-muted hover:text-fg"
                         } disabled:cursor-not-allowed disabled:text-faint/60 disabled:hover:text-faint/60`}
                       >
                         {m.rotulo}
@@ -520,7 +524,19 @@ export default function VideoView(props: {
                     );
                   })}
                 </div>
-                {aviso ? (
+                <button
+                  onClick={() => setAmpliarPc((v) => !v)}
+                  aria-pressed={ampliarPc}
+                  title="Mais resolução (e, se quiser, o dobro de quadros) para qualquer vídeo do PC"
+                  className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors ${
+                    ampliarPc ? "border-[#454545] bg-raised text-fg" : "border-line text-muted hover:text-fg"
+                  }`}
+                >
+                  <TelaCheia className="size-3.5" /> Ampliar vídeo
+                </button>
+                {ampliarPc ? (
+                  <span className="text-[11px] text-muted">Qualquer vídeo do PC: o original não muda.</span>
+                ) : aviso ? (
                   <span className="flex items-center gap-1.5 text-[11px] text-sky-300" role="status">
                     {aviso}
                     <button onClick={() => setAviso("")} aria-label="Dispensar aviso" className="rounded p-0.5 text-sky-300/70 hover:text-sky-200">
@@ -532,6 +548,18 @@ export default function VideoView(props: {
                 )}
               </div>
 
+              {ampliarPc ? (
+                <AmpliarArquivo
+                  ensureConversation={props.ensureConversation}
+                  onError={mostrarErro}
+                  onPronto={(conv) => {
+                    setAmpliarPc(false);
+                    props.onConversationChanged();
+                    carregarConversa(conv);
+                  }}
+                />
+              ) : (
+              <>
               {precisaQuadros > 0 && (
                 <div className="mb-2.5 flex items-end gap-2">
                   <SlotQuadro
@@ -744,6 +772,8 @@ export default function VideoView(props: {
                   />
                 </DireitaPrompt>
               </RodapePrompt>
+              </>
+              )}
             </CaixaPrompt>
           </div>
           <p className="mt-1.5 text-center text-[11px] text-faint">
@@ -1613,7 +1643,8 @@ function Foco(props: {
         if (fora && comecouFora.current) props.onFechar();
       }}
     >
-      <div data-fundo="1" className="flex min-w-0 flex-1 cursor-zoom-out items-center justify-center p-6" title="Clique fora do vídeo para fechar">
+      {/* sem cursor de zoom nem title aqui: os dois vazavam para o vídeo (o fundo é o pai dele) */}
+      <div data-fundo="1" className="flex min-w-0 flex-1 items-center justify-center p-10">
         <VideoPlayer
           key={atual.path}
           ref={player}
@@ -1625,8 +1656,8 @@ function Foco(props: {
           atalhosExtras={[["↑ · ↓", "tomada anterior · próxima"], ["M · X", "manter · descartar e ir à próxima"], ["Esc", "fechar"]]}
           marcas={refs.length === 2}
           className="rounded-xl shadow-2xl shadow-black"
-          // o maior que cabe na área sem cortar nem deixar tarja: largura limitada pela altura da tela
-          style={{ aspectRatio: w / h, width: `min(100%, calc((100vh - 48px) * ${w / h}))` }}
+          // cabe inteiro com folga em volta: 88% da área, e a altura deixa respiro em cima e embaixo
+          style={{ aspectRatio: w / h, width: `min(88%, calc((100vh - 200px) * ${w / h}))` }}
         />
       </div>
       <aside className="flex w-80 shrink-0 flex-col border-l border-line bg-panel" onClick={(e) => e.stopPropagation()}>
@@ -1697,13 +1728,15 @@ function Foco(props: {
           <p className="mb-1 mt-4 px-1 text-[11px] uppercase tracking-wider text-faint">Ampliar</p>
           {ampliar ? (
             <PainelAmpliar
-              messageId={props.resposta.id}
-              path={atual.path}
               w={w}
               h={h}
               fps={fps}
-              onPronto={() => (props.onMudou(), props.onFechar())}
               onError={props.onError}
+              enviar={async (c) => {
+                await api.post(`/imagens/${props.resposta.id}/ampliar`, { path: atual.path, ...c });
+                props.onMudou();
+                props.onFechar();
+              }}
             />
           ) : (
             <button className={acao} onClick={() => setAmpliar(true)} title="Mais resolução (ESRGAN quadro a quadro, ou Lanczos) e, se quiser, o dobro de quadros">

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { Check, Download } from "./icons";
+import { Check, Download, Film } from "./icons";
 import { btn, btnPrimary } from "./LocalPanel";
 
 /** O que o backend diz da ampliação: ffmpeg instalado, ESRGAN do catálogo e todos os que estão no disco. */
@@ -79,19 +79,20 @@ export function BaixarAmpliacao(props: { onError: (e: string) => void; soFaltand
   );
 }
 
-/** Painel do player: método (ESRGAN no disco ou Lanczos), fator e suavizar. O resultado é uma tomada nova no feed. */
+const fmtFps = (f: number) => (Number.isInteger(f) ? String(f) : f.toFixed(2).replace(".", ","));
+
+/** Método, fator e suavizar. `enviar` cria a tomada (de uma tomada do feed ou de um arquivo do PC). */
 export function PainelAmpliar(props: {
-  messageId: number;
-  path: string;
   w: number;
   h: number;
   fps: number;
-  onPronto: () => void;
+  quadros?: number;
+  enviar: (corpo: { fator: number; modelo: string; suavizar: boolean }) => Promise<void>;
   onError: (e: string) => void;
 }) {
   const estado = useCatalogo(props.onError);
   const { cat } = estado;
-  const [modelo, setModelo] = useState<string | null>(null); // null = ainda não escolheu: o 1º ESRGAN do disco
+  const [modelo, setModelo] = useState<string | null>(null); // null = ainda não escolheu
   const [fator, setFator] = useState<2 | 4>(2);
   const [suavizar, setSuavizar] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -101,8 +102,7 @@ export function PainelAmpliar(props: {
   async function ampliar() {
     setEnviando(true);
     try {
-      await api.post(`/imagens/${props.messageId}/ampliar`, { path: props.path, fator, modelo: escolhido, suavizar });
-      props.onPronto();
+      await props.enviar({ fator, modelo: escolhido, suavizar });
     } catch (e: any) {
       props.onError(e.message);
     } finally {
@@ -127,7 +127,7 @@ export function PainelAmpliar(props: {
           <option value="">Rápido, sem IA (Lanczos)</option>
         </select>
       </label>
-      <div className="flex items-center gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-faint">Fator</span>
         {([2, 4] as const).map((f) => (
           <button key={f} className={opcao(fator === f)} aria-pressed={fator === f} onClick={() => setFator(f)}>
@@ -137,8 +137,11 @@ export function PainelAmpliar(props: {
       </div>
       <label className="flex items-center gap-2 text-muted" title="Interpolação de movimento do ffmpeg: o dobro de quadros, sem gerar de novo">
         <input type="checkbox" checked={suavizar} onChange={(e) => setSuavizar(e.target.checked)} />
-        Suavizar movimento ({props.fps} → {props.fps * 2} fps)
+        Suavizar movimento ({fmtFps(props.fps)} → {fmtFps(props.fps * 2)} fps)
       </label>
+      {escolhido && !!props.quadros && (
+        <p className="text-faint">{props.quadros} quadros, cada um passa pelo ESRGAN na GPU: vídeo longo leva tempo (o cartão mostra quanto falta).</p>
+      )}
       <button className={btnPrimary} disabled={!cat.ffmpeg || enviando} onClick={ampliar}>
         {enviando ? "Começando…" : `Ampliar ${fator}×`}
       </button>
@@ -149,6 +152,133 @@ export function PainelAmpliar(props: {
           <div className="mt-1.5"><BaixarAmpliacao onError={props.onError} soFaltando estado={estado} /></div>
         </details>
       )}
+    </div>
+  );
+}
+
+type Sondagem = { w: number; h: number; fps: number; quadros: number; audio: boolean };
+
+/** Um vídeo qualquer do PC: escolher ou soltar, ver o que ele é e ampliar. O original não é tocado; o
+ *  resultado entra no feed como tomada. */
+export function AmpliarArquivo(props: {
+  ensureConversation: () => Promise<number>;
+  onPronto: (conv: number) => void;
+  onError: (e: string) => void;
+}) {
+  const [arq, setArq] = useState<{ path: string; nome: string; url: string } | null>(null);
+  const [info, setInfo] = useState<Sondagem | null>(null);
+  const [lendo, setLendo] = useState(false);
+  const [sobre, setSobre] = useState(false);
+  const [semPrevia, setSemPrevia] = useState(false); // formato que o Chromium não toca (MPEG-4 part 2, HEVC…)
+  const entrada = useRef<HTMLInputElement>(null);
+
+  useEffect(() => () => {
+    if (arq) URL.revokeObjectURL(arq.url);
+  }, [arq]);
+
+  async function escolher(f: File | undefined) {
+    if (!f) return;
+    const path = window.forja?.caminhoDe?.(f);
+    if (!path) return props.onError("Esse vídeo não veio de um arquivo do disco. Escolha o arquivo.");
+    setArq({ path, nome: f.name, url: URL.createObjectURL(f) });
+    setSemPrevia(false);
+    setInfo(null);
+    setLendo(true);
+    try {
+      setInfo(await api.get<Sondagem>(`/local/video/sondar?path=${encodeURIComponent(path)}`));
+    } catch (e: any) {
+      setArq(null);
+      props.onError(e.message);
+    } finally {
+      setLendo(false);
+    }
+  }
+
+  return (
+    <div
+      className="mb-2 flex flex-wrap items-start gap-3"
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        setSobre(true);
+      }}
+      onDragLeave={() => setSobre(false)}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setSobre(false);
+        escolher(e.dataTransfer.files[0]);
+      }}
+    >
+      <input
+        ref={entrada}
+        type="file"
+        accept="video/*,.mkv,.mov,.avi,.webm"
+        hidden
+        onChange={(e) => {
+          escolher(e.target.files?.[0]);
+          e.target.value = "";
+        }}
+      />
+      <button
+        onClick={() => entrada.current?.click()}
+        className={`relative grid w-56 shrink-0 place-items-center overflow-hidden rounded-xl border border-dashed text-xs transition-colors ${
+          sobre ? "border-sky-400 bg-sky-400/10 text-sky-200" : "border-line text-muted hover:border-[#454545] hover:text-fg"
+        }`}
+        style={{ aspectRatio: info ? info.w / info.h : 16 / 9 }}
+        title={arq ? "Escolher outro vídeo" : "Escolher um vídeo do PC"}
+      >
+        {arq ? (
+          semPrevia ? (
+            <span className="px-3 text-center text-faint">Sem prévia neste formato: a ampliação funciona igual (o ffmpeg lê).</span>
+          ) : (
+            <video src={arq.url} muted loop autoPlay playsInline onError={() => setSemPrevia(true)} className="size-full bg-black object-contain" />
+          )
+        ) : (
+          <span className="flex flex-col items-center gap-1.5 px-3 text-center">
+            <Film className="size-5" />
+            Escolha ou solte um vídeo do PC
+            <span className="text-faint">mp4, mov, mkv, webm…</span>
+          </span>
+        )}
+      </button>
+      <div className="min-w-56 flex-1">
+        {!arq && (
+          <p className="text-xs leading-relaxed text-muted">
+            Amplia a resolução de qualquer vídeo (ESRGAN quadro a quadro, ou Lanczos) e, se quiser, dobra os quadros. O áudio é
+            mantido; o original fica como está e o resultado entra aqui no feed.
+          </p>
+        )}
+        {arq && (
+          <p className="mb-2 truncate text-xs text-fg" title={arq.path}>
+            {arq.nome}
+            {lendo && <span className="ml-2 text-faint">lendo o vídeo…</span>}
+            {info && (
+              <span className="ml-2 text-faint">
+                {info.w}×{info.h} · {fmtFps(info.fps)} fps · {info.quadros} quadros ·{" "}
+                {(info.quadros / info.fps).toFixed(1).replace(".", ",")} s{info.audio ? " · com áudio" : ""}
+              </span>
+            )}
+          </p>
+        )}
+        {arq && info && (
+          <PainelAmpliar
+            key={arq.path}
+            w={info.w}
+            h={info.h}
+            fps={info.fps}
+            quadros={info.quadros}
+            onError={props.onError}
+            enviar={async (c) => {
+              const conv = await props.ensureConversation();
+              await api.post(`/imagens/${conv}/ampliar-arquivo`, { path: arq.path, ...c });
+              setArq(null);
+              setInfo(null);
+              props.onPronto(conv);
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

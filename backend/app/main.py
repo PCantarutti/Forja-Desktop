@@ -742,6 +742,24 @@ async def imagens_ampliar(message_id: int, body: AmpliarBody):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/imagens/{conv_id}/ampliar-arquivo")
+async def imagens_ampliar_arquivo(conv_id: int, body: AmpliarBody):
+    """Um vídeo qualquer do disco (não uma tomada): vira uma tomada ampliada nesta conversa."""
+    try:
+        return await asyncio.to_thread(lotes.ampliar_arquivo, conv_id, body.path, body.fator, body.modelo, body.suavizar)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/local/video/sondar")
+async def local_video_sondar(path: str):
+    from . import ampliar
+    try:
+        return await asyncio.to_thread(ampliar.sondar, path)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/local/image/achados")
 async def local_image_achados(path: str):
     """VAE/codificador/mmproj com cara de ser deste modelo, perto dele no disco (para o botão Usar)."""

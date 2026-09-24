@@ -271,7 +271,10 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   const frac = dur ? t / dur : 0;
   const mostrar = visiveis || !tocando || arrastando || ajuda;
   const miniatura = sobre !== null && fotos.length ? fotos[Math.min(fotos.length - 1, Math.floor(sobre * fotos.length))] : null;
-  const botao = "grid size-8 shrink-0 place-items-center rounded-full text-white/85 hover:bg-white/15 hover:text-white";
+  // Como os botões dos painéis do Forja: cantos de 8px, texto cheio, fundo só no hover, anel no foco.
+  const botao =
+    "grid size-8 shrink-0 place-items-center rounded-lg text-fg outline-none transition-colors hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-sky-400/60";
+  const ligado = "bg-sky-400/15 text-sky-300 hover:bg-sky-400/20";
 
   return (
     <div
@@ -308,7 +311,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           setDur(e.currentTarget.duration);
           setDims([e.currentTarget.videoWidth, e.currentTarget.videoHeight]);
         }}
-        className="block size-full object-contain"
+        className="block size-full cursor-pointer object-contain"
       />
 
       {/* Grande no meio só com o vídeo parado: o convite para tocar, sem cobrir a imagem tocando. */}
@@ -316,9 +319,9 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
         <button
           onClick={tocarPausar}
           aria-label="Tocar"
-          className="absolute left-1/2 top-1/2 grid size-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full bg-black/55 text-white shadow-lg backdrop-blur-sm transition hover:scale-105 hover:bg-black/70"
+          className="absolute left-1/2 top-1/2 grid size-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/15 bg-[#161616]/85 text-fg shadow-xl shadow-black/50 backdrop-blur-md transition hover:scale-105 hover:bg-[#1f1f1f]"
         >
-          <Play className="size-6 translate-x-0.5" />
+          <Play className="size-6" />
         </button>
       )}
 
@@ -344,9 +347,11 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
       )}
 
       <div
-        className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-3 pb-2 pt-10 transition-opacity duration-300 ${
-          mostrar ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
+        // Painel sólido flutuando sobre o vídeo (o degradê sumia em cena clara: neve, céu), com a borda e o
+        // fundo dos painéis do Forja.
+        className={`absolute rounded-xl border border-white/10 bg-[#161616]/90 shadow-lg shadow-black/40 backdrop-blur-md transition-opacity duration-300 ${
+          props.compacto ? "inset-x-1.5 bottom-1.5 px-2 pb-1 pt-2" : "inset-x-3 bottom-3 px-3 pb-2 pt-2.5"
+        } ${mostrar ? "opacity-100" : "pointer-events-none opacity-0"}`}
       >
         {/* Linha do tempo: as miniaturas são o trilho; o que já passou fica aceso. */}
         <div
@@ -370,11 +375,11 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           }}
           onPointerUp={() => setArrastando(false)}
           onPointerLeave={() => setSobre(null)}
-          className={`relative cursor-pointer select-none overflow-visible rounded-md ${props.compacto ? "h-1.5" : "h-9"}`}
+          className={`relative cursor-pointer select-none overflow-visible rounded-md ${props.compacto ? "h-1.5" : "h-8"}`}
         >
-          <div className="absolute inset-0 flex overflow-hidden rounded-md bg-white/10">
+          <div className="absolute inset-0 flex overflow-hidden rounded-md bg-white/15">
             {!props.compacto &&
-              fotos.map((f, i) => <img key={i} src={f} alt="" draggable={false} className="h-full min-w-0 flex-1 object-cover opacity-45" />)}
+              fotos.map((f, i) => <img key={i} src={f} alt="" draggable={false} className="h-full min-w-0 flex-1 object-cover opacity-35" />)}
           </div>
           {/* o trecho já visto, sem as miniaturas apagadas */}
           <div className="absolute inset-y-0 left-0 overflow-hidden rounded-l-md" style={{ width: `${frac * 100}%` }}>
@@ -409,9 +414,9 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           )}
         </div>
 
-        <div className="mt-1.5 flex items-center gap-1 text-white">
+        <div className="mt-2 flex items-center gap-0.5 text-fg">
           <button className={botao} onClick={tocarPausar} title={tocando ? "Pausar (Espaço)" : "Tocar (Espaço)"}>
-            {tocando ? <Pause className="size-4" /> : <Play className="size-4 translate-x-px" />}
+            {tocando ? <Pause className="size-4" /> : <Play className="size-4" />}
           </button>
           {!props.compacto && (
             <>
@@ -423,19 +428,22 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
               </button>
             </>
           )}
-          <span className="ml-1 font-mono text-[11px] tabular-nums text-white/85" title={`${segundos(t)} de ${segundos(dur)}`}>
+          <span className="mx-1.5 h-4 w-px bg-white/10" aria-hidden />
+          <span className="font-mono text-[11px] tabular-nums text-fg" title={`${segundos(t)} de ${segundos(dur)}`}>
             {String(quadro + 1).padStart(String(total).length, "0")}
-            <span className="text-white/45"> / {total}</span>
+            <span className="text-muted"> / {total}</span>
           </span>
           {!props.compacto && (
-            <span className="ml-2 hidden text-[11px] tabular-nums text-white/50 sm:inline">
+            <span className="ml-2.5 hidden text-[11px] tabular-nums text-muted sm:inline">
               {segundos(t)} · {fps} fps{dims[0] ? ` · ${dims[0]}×${dims[1]}` : ""}
             </span>
           )}
-          <div className="ml-auto flex items-center gap-0.5">
+          <div className="ml-auto flex items-center gap-1">
             {!props.compacto && (
               <button
-                className="h-7 min-w-10 rounded-full px-2 font-mono text-[11px] text-white/85 hover:bg-white/15 hover:text-white"
+                className={`h-7 min-w-11 rounded-lg border px-2 font-mono text-[11px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sky-400/60 ${
+                  vel === 1 ? "border-white/10 text-fg hover:bg-white/10" : "border-sky-400/40 bg-sky-400/10 text-sky-300"
+                }`}
                 onClick={() => setVel((v) => VELOCIDADES[(VELOCIDADES.indexOf(v) + 1) % VELOCIDADES.length])}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -447,7 +455,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
               </button>
             )}
             <button
-              className={`${botao} ${loop ? "text-sky-300 hover:text-sky-200" : "text-white/50"}`}
+              className={`${botao} ${loop ? ligado : "text-muted"}`}
               onClick={() => setLoop((x) => !x)}
               title={loop ? "Loop ligado (R)" : "Loop desligado (R)"}
               aria-pressed={loop}

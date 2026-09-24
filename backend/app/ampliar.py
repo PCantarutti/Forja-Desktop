@@ -102,12 +102,14 @@ def _ffmpeg() -> Path:
     return exe
 
 
-def _rodar(argv: list[str], job_id: str = "") -> str:
+def _rodar(argv: list[str], job_id: str = "", linha=None) -> str:
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                             text=True, encoding="utf-8", errors="replace", **native.popen_kwargs())
     saida = []
-    for linha in proc.stdout:  # type: ignore[union-attr]
-        saida.append(linha)  # inteira: -encoders e o JSON do ffprobe são lidos daqui (e com -v error é pouca coisa)
+    for l in proc.stdout:  # type: ignore[union-attr]
+        saida.append(l)  # inteira: -encoders e o JSON do ffprobe são lidos daqui (e com -v error é pouca coisa)
+        if linha:
+            linha(l)
         if job_id and downloads.cancelled(job_id):
             native.kill_tree(proc)
             break
@@ -120,14 +122,19 @@ def _rodar(argv: list[str], job_id: str = "") -> str:
 
 
 def sondar(video: str) -> dict:
-    """Largura, altura, fps e quadros do vídeo (pelo ffprobe que vem junto do ffmpeg)."""
+    """Largura, altura, fps (e a fração exata, `taxa`: 30000/1001), quadros e se tem áudio, pelo ffprobe."""
     probe = _ffmpeg().with_name("ffprobe" + _ffmpeg().suffix)
-    out = _rodar([str(probe), "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries",
-                  "stream=width,height,r_frame_rate,nb_read_frames", "-of", "json", str(video)])
-    s = json.loads(out)["streams"][0]
-    num, den = (int(x) for x in s["r_frame_rate"].split("/"))
+    try:
+        out = _rodar([str(probe), "-v", "error", "-count_frames", "-show_entries",
+                      "stream=codec_type,width,height,r_frame_rate,nb_read_frames", "-of", "json", str(video)])
+        streams = json.loads(out)["streams"]
+        s = next(x for x in streams if x.get("codec_type") == "video" and x.get("width"))
+        num, den = (int(x) for x in s["r_frame_rate"].split("/"))
+    except (ToolError, StopIteration, KeyError, ValueError, json.JSONDecodeError):
+        raise ToolError(f"Não consegui ler {Path(video).name} como vídeo.") from None
     return {"w": int(s["width"]), "h": int(s["height"]), "fps": num / den if den else float(num),
-            "quadros": int(s.get("nb_read_frames") or 0)}
+            "taxa": s["r_frame_rate"], "quadros": int(s.get("nb_read_frames") or 0),
+            "audio": any(x.get("codec_type") == "audio" for x in streams)}
 
 
 @functools.lru_cache(maxsize=4)
@@ -165,7 +172,9 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
     try:
         fonte = entrada
         if modelo:
-            _rodar([ff, "-v", "error", "-i", entrada, "-fps_mode", "passthrough", str(trabalho / "in" / "%05d.png")], job_id)
+            # fps constante: vídeo de celular vem com fps variável, e contar quadros "como vieram" tirava o
+            # vídeo do tempo do áudio
+            _rodar([ff, "-v", "error", "-i", entrada, "-fps_mode", "cfr", "-r", info["taxa"], str(trabalho / "in" / "%05d.png")], job_id)
             quadros = sorted((trabalho / "in").glob("*.png"))
             exe = imagegen._exe()
             gpu = imagegen._gpu(str(exe))
@@ -195,12 +204,21 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
                 if progresso:
                     progresso(i + 1, len(quadros), (time.monotonic() - comeco) / (i + 1))
             fonte = str(trabalho / "out" / "%05d.png")
-        entrada_final = ["-framerate", f"{info['fps']:g}", "-i", fonte] if modelo else ["-i", entrada]
-        _rodar([ff, "-v", "error", "-y", *entrada_final, "-vf", filtros(info["w"], info["h"], fator, suavizar, info["fps"]),
+        # o áudio vem do original (vídeo do PC costuma ter; os gerados não têm, e o "?" deixa passar)
+        entrada_final = ["-framerate", info["taxa"], "-i", fonte, "-i", entrada, "-map", "0:v", "-map", "1:a?"] if modelo             else ["-i", entrada, "-map", "0:v:0", "-map", "0:a?"]
+        total = max(1, info["quadros"] * (2 if suavizar else 1))
+        comeco = time.monotonic()
+
+        def andou(l: str) -> None:  # -progress: "frame=N" a cada meio segundo; só o Lanczos usa (é a fase inteira)
+            if progresso and not modelo and l.startswith("frame="):
+                feitos = int(l[6:] or 0)
+                progresso(min(feitos, total), total, (time.monotonic() - comeco) / max(1, feitos))
+        _rodar([ff, "-v", "error", "-nostats", "-progress", "pipe:1", "-y", *entrada_final,
+                "-vf", filtros(info["w"], info["h"], fator, suavizar, info["fps"]),
                 "-c:v", enc, "-b:v", "0", "-crf", "24", "-pix_fmt", "yuv420p", *(["-row-mt", "1"] if "vpx" in enc else []),
-                str(saida)], job_id)
+                "-c:a", "libopus", "-b:a", "128k", str(saida)], job_id, andou)
         if progresso and not modelo:
-            progresso(1, 1, 0.0)
+            progresso(total, total, (time.monotonic() - comeco) / total)
         return sondar(str(saida))
     finally:
         shutil.rmtree(trabalho, ignore_errors=True)
