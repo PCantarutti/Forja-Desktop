@@ -244,5 +244,5 @@ register(Tool(
                    "description": "Imagens a editar (caminhos na pasta de trabalho). Com isso o prompt "
                                   "descreve a edição. Só em modelos que editam, como o Qwen-Image 2.1"}},
          ["prompt"]),
-    image_generate, mutating=True, preview=_preview,
+    image_generate, mutating=True, preview=_preview, timeout=None,  # geração longa, com progresso próprio
     available=lambda: bool(localai.find_exe("sd"))))

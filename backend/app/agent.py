@@ -20,7 +20,7 @@ from typing import AsyncIterator
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import goals, hooks, skills
+from . import goals, hooks, skills, terminal  # noqa: F401  (terminal registra terminal_*)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -447,6 +447,16 @@ MAESTRO_RULES = [
     "a árvore de tarefas na tela; não repita nela o que já está lá.",
 ]
 
+# Regras gerais que valem também para a Maestro (o resto do bloco genérico é sobre escrever código,
+# que ela não faz). As do porte do DeepSeek Harness entram aqui: ler/buscar, saída guardada,
+# menções, contexto de execução, terminal e processo em segundo plano.
+MAESTRO_HERDA = ("- Tabela na resposta", "- Se uma ferramenta devolver erro", "- Conteúdo trazido da web",
+                 "- Navegador:", "- Conferir página", "- O print é sempre", "- " + NO_COUNTING,
+                 "- Leia o arquivo antes de editar", "- Use read_file", "- Palavras começando com @",
+                 "- Para achar código use grep", "- Resultado grande demais", "- O modo de permissão e as regras",
+                 "- Terminal persistente", "- Comando demorado")
+
+
 def system_prompt(via: str, caps: set[str] | None = None, exclude: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
                   chat: bool = False, maestro_mode: bool = False) -> str:
@@ -580,6 +590,12 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
     if "run_command" in names:
         rules.append("- run_command executa na pasta da conversa, no lugar indicado em Ambiente. Use para testar o que "
                      "escreveu, rodar git e instalar pacotes.")
+    if "terminal_open" in names:
+        rules.append("- Terminal persistente (terminal_open/terminal_send) só quando precisar de estado entre "
+                     "comandos (venv ativado, cd, variável) ou de entrada interativa (REPL, prompt que pergunta "
+                     "algo)" + ("; comando único é run_command" if "run_command" in names else "") + ". Guarde o id de cada terminal e feche com terminal_close o "
+                     "que não importa mais. 'Terminal quieto' ou tempo esgotado não provam que o comando terminou: "
+                     "confira com terminal_read.")
     if "serve_start" in names:
         rules.append("- Servidor de desenvolvimento: nunca como comando comum (ficaria preso até o timeout). Use "
                      "serve_start(name, command); depois serve_status(name) mostra o log e a porta. serve_stop encerra.")
@@ -705,11 +721,7 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
                      "termina com subagente rodando: se não houver mais nada a fazer, ele espera o relatório.")
     if maestro_mode:
         rules = [r if "browser_validate" in names else r.replace(NAVEGADOR_NA_VALIDACAO, "")
-                 for r in MAESTRO_RULES if "browser_validate" in names or not r.startswith("- Projeto com tela")] + [r for r in rules if r.startswith(("- Tabela na resposta",
-                                                                  "- Se uma ferramenta devolver erro",
-                                                                  "- Conteúdo trazido da web",
-                                                                  "- Navegador:", "- Conferir página",
-                                                                  "- O print é sempre", "- " + NO_COUNTING))]
+                 for r in MAESTRO_RULES if "browser_validate" in names or not r.startswith("- Projeto com tela")] + [r for r in rules if r.startswith(MAESTRO_HERDA)]
         if (n := int(getattr(config, "MAX_WORKERS", 1))) > 1:
             # Sem isto o modelo despachava uma tarefa por resposta e o modo paralelo nunca acontecia.
             rules.append(f"- Modo paralelo: até {n} Workers ao mesmo tempo. Tarefas sem dependência entre si "
@@ -1155,6 +1167,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                          meta={"attachments": req.attachments} if req.attachments else None)
         run.turn_id = user_msg.id
         yield {"type": "message", "message": user_msg.to_dict()}
+        if bloco := skills.invocada(workspace.root(), req.content):  # "/nome args": a skill vem inteira
+            yield _event(conv_id, "skill", bloco, to_model=True)
         # Hooks de início de conversa e de mensagem: a saída chega ao modelo como contexto.
         for evento, cond in (("session_start", primeira), ("user_prompt", True)):
             if cond and (saida := hooks.texto(await hooks.rodar_async(
@@ -1593,6 +1607,9 @@ def _flush_queue(conv_id: int, run: Run) -> list[dict]:
         m = _save(conv_id, role="user", content=run.queue.pop(0))
         run.turn_id = m.id
         events.append({"type": "message", "message": m.to_dict()})
+        if bloco := skills.invocada(workspace.root(), m.content):
+            s = _save(conv_id, role="event", content=bloco, meta={"kind": "skill", "to_model": True})
+            events.append({"type": "event", "message": s.to_dict()})
     run.acorda.clear()
     while run.avisos:  # processo ou subagente em segundo plano que terminou
         m = _save(conv_id, role="event", content=run.avisos.pop(0), meta={"kind": "aviso", "to_model": True})
@@ -1903,8 +1920,15 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
 
     sink_token = shell.OUTPUT_SINK.set(_output_sink if name in ("run_command", "serve_start") else None)
     try:
+        limite = config.TOOL_TIMEOUT if tool.timeout == 0 else tool.timeout
         try:
-            res = await execute(name, args)
+            # ponytail: handler síncrono roda em thread e o wait_for só solta o turno — a thread
+            # termina sozinha depois; cancelar de verdade exigiria cada ferramenta checar um flag.
+            res = await (asyncio.wait_for(execute(name, args), limite) if limite else execute(name, args))
+        except asyncio.TimeoutError:
+            result("erro", f"{name} passou de {limite:.0f}s e foi interrompida. Tente um alvo menor, divida o "
+                           "trabalho ou use outra abordagem; não repita a mesma chamada.")
+            return
         finally:
             shell.OUTPUT_SINK.reset(sink_token)
         if isinstance(res, dict):  # ferramenta devolveu anexos (ex.: screenshot) além do texto

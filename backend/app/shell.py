@@ -397,7 +397,7 @@ register(Tool(
                                       "serve_status(name=..., wait=60)."},
         "name": {"type": "string", "description": "Apelido do processo em background, ex.: build, testes"}},
      "required": ["command"]},
-    run_command, mutating=True, preview=command_preview, always_ask=True))
+    run_command, mutating=True, preview=command_preview, always_ask=True, timeout=None))  # o tempo dele é o `timeout` do comando
 register(Tool(
     "serve_start",
     "Inicia um servidor de desenvolvimento em segundo plano (ex.: npm run dev, uvicorn, php artisan serve) e "
@@ -419,7 +419,7 @@ register(Tool(
         "wait": {"type": "integer",
                  "description": f"Espera até N segundos (máx {WAIT_MAX}) o processo terminar. Precisa de name."}},
      "required": []},
-    serve_status, poll=True))
+    serve_status, poll=True, timeout=None))
 register(Tool(
     "serve_stop", "Encerra um servidor iniciado por serve_start.",
     {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},

@@ -800,6 +800,7 @@ export const NOTA_DO_AGENTE: Record<string, string> = {
   contexto: "Contexto de execução",
   hook: "Hook do projeto",
   nudge: "Lembrete automático",
+  skill: "Skill carregada",
 };
 
 // Primeira ferramenta do grupo vira a frase de abertura do resumo.

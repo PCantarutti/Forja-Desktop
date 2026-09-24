@@ -136,6 +136,14 @@ def catalogo(root: Path) -> str:
             "skill já veio na conversa (o usuário a chamou com /), siga-a e não a carregue de novo.")
 
 
+def _bloco(s: dict, root: Path, argumentos: str = "") -> str:
+    corpo = expand(s["prompt"], argumentos) if "$ARGUMENTS" in s["prompt"] else s["prompt"]
+    base = s.get("base") or (str(root / DIR) if s.get("source") else "")  # as do Forja não têm pasta
+    recursos = f"<skill_resources>Pasta base desta skill: {base}</skill_resources>\n\n" if base else ""
+    return (f'<skill_content name="{s["name"]}">\n{recursos}<skill_instructions>\n{corpo}\n'
+            "</skill_instructions>\n</skill_content>")
+
+
 def conteudo(root: Path, nome: str) -> str:
     s = next((x for x in do_modelo(root) if x["name"] == nome), None)
     if not s:
@@ -143,9 +151,25 @@ def conteudo(root: Path, nome: str) -> str:
         from .tools import ToolError
 
         raise ToolError(f"Skill '{nome}' não existe. Disponíveis: {nomes}.")
-    base = s.get("base") or str(root / DIR)
-    return (f'<skill_content name="{s["name"]}">\n<skill_resources>Pasta base desta skill: {base}'
-            f"</skill_resources>\n\n<skill_instructions>\n{s['prompt']}\n</skill_instructions>\n</skill_content>")
+    return _bloco(s, root)
+
+
+def invocada(root: Path, mensagem: str | None) -> str | None:
+    """`/nome argumentos` digitado pelo usuário → o bloco da skill para o modelo (ou None).
+
+    Como no DeepSeek Harness, a mensagem fica como o usuário escreveu e a skill entra inteira logo
+    depois — antes o front trocava o `/nome` pelo texto da skill, e a pasta dos recursos se perdia.
+    """
+    texto = (mensagem or "").strip()
+    if not texto.startswith("/") or "\n" in texto.split(" ", 1)[0]:
+        return None
+    nome, _, argumentos = texto[1:].partition(" ")
+    s = next((x for x in list_for(root) if x["name"] == nome and x.get("kind") == "prompt"), None)
+    if not s:
+        return None
+    return (f"O usuário chamou a skill /{nome}" + (f" com: {argumentos.strip()}" if argumentos.strip() else "")
+            + ". Siga as instruções dela; não a carregue de novo com a ferramenta skill.\n\n"
+            + _bloco(s, root, argumentos))
 
 
 def expand(prompt: str, arguments: str) -> str:

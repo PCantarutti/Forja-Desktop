@@ -184,6 +184,11 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
   list_agents: () => "Conferindo os subagentes",
+  terminal_open: (a) => `Abrindo um terminal ${trecho(a.name, 20) ?? ""}`.trim(),
+  terminal_send: (a) => `No terminal: ${trecho(a.command) ?? "enviando"}`,
+  terminal_read: () => "Lendo o terminal",
+  terminal_close: () => "Fechando um terminal",
+  terminal_list: () => "Conferindo os terminais",
   workflow: (a) => `Orquestrando ${Array.isArray(a.phases) ? a.phases.length : ""} fases de subagentes`.replace("  ", " "),
   create_goal: () => "Definindo o objetivo",
   get_goal: () => "Conferindo o objetivo",
@@ -1067,13 +1072,13 @@ export default function App() {
     setMentionHits([]);
   }
 
-  async function applySkill(s: Skill) {
+  async function applySkill(s: Skill): Promise<void> {
     const args = input.slice(1).split(" ").slice(1).join(" ");
     setInput("");
     setSlashIndex(0);
     if (s.kind === "prompt") {
-      setInput((s.prompt ?? "").replace("$ARGUMENTS", args.trim()).trim());
-      return;
+      // Vai como o usuário escreveu; o backend anexa a skill inteira para o modelo (skills.invocada).
+      return send(`/${s.name} ${args}`.trim(), true);
     }
     if (s.action === "compact") return compactNow();
     if (s.action === "commit" || s.action === "pr") {
@@ -1084,9 +1089,9 @@ export default function App() {
     if (s.action === "changes") setRight({ tab: "changes", collapsed: false });
   }
 
-  async function send(texto?: string) {
+  async function send(texto?: string, skill = false): Promise<void> {
     const content = (texto ?? input).trim();
-    if (slashQuery !== null && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
+    if (!skill && slashQuery !== null && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
     if (!content && !attachments.length) return;
     colar();  // mandar mensagem é dizer "quero ver o que vem agora": volta para o fim da conversa
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});

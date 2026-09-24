@@ -35,6 +35,9 @@ class Tool:
     requires: frozenset[str] = frozenset()  # capacidades do modelo exigidas, ex.: {"vision"}
     available: Callable[[], bool] | None = None  # some da lista quando False (ex.: delegate_task sem subagente)
     poll: bool = False        # acompanhar um processo é repetir a mesma chamada: fica fora do freio de loop
+    # Teto da execução (DeepSeek Harness: timeout-policy). 0 = o padrão (config.TOOL_TIMEOUT); None =
+    # sem teto aqui, porque a ferramenta controla o próprio tempo (shell, terminal, espera de processo).
+    timeout: float | None = 0
 
     def openai_schema(self) -> dict:
         return {"type": "function", "function": {

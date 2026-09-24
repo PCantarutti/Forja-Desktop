@@ -36,6 +36,7 @@ MAX_FILE_BYTES = int(os.getenv("MAX_FILE_BYTES", "1000000"))
 # mandar o arquivo inteiro ao modelo: o teto pode ser bem mais folgado que o do texto puro.
 MAX_DOC_BYTES = int(os.getenv("MAX_DOC_BYTES", "25000000"))
 SHELL_TIMEOUT_MAX = int(os.getenv("SHELL_TIMEOUT_MAX", "300"))
+TOOL_TIMEOUT = int(os.getenv("TOOL_TIMEOUT", "300"))  # teto de uma chamada de ferramenta (tools.Tool.timeout)
 SEARXNG_URL = os.getenv("SEARXNG_URL", "")  # vazio = web_search usa o DuckDuckGo
 COMPACT_AT = float(os.getenv("COMPACT_AT", "0.8"))  # fração da janela que dispara a compactação
 # Teto de raciocínio por esforço, em tokens de pensamento. Quem corta é o servidor: ao estourar ele

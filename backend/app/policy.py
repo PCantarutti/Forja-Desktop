@@ -157,6 +157,8 @@ def safe_command(command: str) -> bool:
 
 
 WILDCARD = re.compile("[*?[]")
+# Ferramentas cujo `command` é um comando de shell: regras, leitura segura e destrutivo valem igual.
+SHELLS = ("run_command", "terminal_send")
 
 
 def _rule(name: str, args: dict) -> tuple[str, bool] | None:
@@ -169,7 +171,7 @@ def _rule(name: str, args: dict) -> tuple[str, bool] | None:
     for pattern in config.AUTO_APPROVE_TOOLS:
         if fnmatch(name, pattern):
             return f"ferramenta {pattern}", False
-    if name == "run_command":
+    if name in SHELLS:
         command = str(args.get("command") or "").strip()
         if chained(command):  # regra libera um comando, não o que vier grudado nele
             return None
@@ -204,7 +206,7 @@ def decide(tool, args: dict, mode: str) -> tuple[bool, str | None]:
     # esperando clique — uma sessão de teste passou 40 minutos travada num `python -m http.server`.
     # `safe_command` exige que TODOS os trechos encadeados sejam leitura conhecida, e recusa
     # redirecionamento e substituição de comando; escrita, rede e instalação seguem perguntando.
-    if mode == "auto" and tool.name == "run_command" and safe_command(str(args.get("command") or "")):
+    if mode == "auto" and tool.name in SHELLS and safe_command(str(args.get("command") or "")):
         return False, "modo Automático: comando só de leitura"
     if tool.always_ask:  # shell e browser_eval só passam por regra explícita ou bypass
         return True, None
@@ -221,7 +223,7 @@ def decide(tool, args: dict, mode: str) -> tuple[bool, str | None]:
 
 def suggest(name: str, args: dict) -> str:
     """Sugestão de regra para o botão 'sempre permitir' do card de aprovação."""
-    if name != "run_command":
+    if name not in SHELLS:
         return name
     first = str(args.get("command") or "").strip().split()
     if not first:
