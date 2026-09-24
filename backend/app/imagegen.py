@@ -237,8 +237,10 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
         threading.Thread(target=vigia, daemon=True).start()
     try:
         for line in proc.stdout:  # type: ignore[union-attr]
-            tail.append(line.rstrip())
-            del tail[:-40]
+            # barra de carregamento ("|####   | 201/242 - 651MB/s") não explica erro nenhum e enchia o resumo
+            if not line.lstrip().startswith("|"):
+                tail.append(line.rstrip())
+                del tail[:-40]
             if SEM_PROJECAO in line and modo_previa(o) == "proj":
                 localai.marcar_sem_proj(str(o.get("model") or o.get("diffusion_model")))  # próxima: VAE
             m = PROGRESS.search(line)

@@ -239,13 +239,16 @@ export default function VideoView(props: {
     if (!b) return mostrarErro("Não deu para tirar o quadro deste vídeo.");
     try {
       const path = await subirQuadro(b, `quadro-${onde}.png`);
-      if (onde === "inicio") {
-        escolherQuadro(0, path);
-        if (modo === "t2v") setModo(modos.includes("i2v") ? "i2v" : modos.includes("flf2v") ? "flf2v" : "t2v");
-      } else {
-        escolherQuadro(1, path);
-        if (modos.includes("flf2v")) setModo("flf2v");
+      escolherQuadro(onde === "inicio" ? 0 : 1, path);
+      // O modo que o quadro pede; se o modelo da vez não faz, vai para um que faz (o 1.3B só faz texto:
+      // o quadro ia para um slot escondido e nada acontecia).
+      const quer: ModoVideo = onde === "fim" || (modo === "flf2v" && slots[1]) ? "flf2v" : "i2v";
+      if (!modos.includes(quer)) {
+        const outro = st?.video_models.find((m) => m.req?.modos?.includes(quer));
+        if (outro) aplicarModelo(outro);
+        else return mostrarErro(`Nenhum modelo de vídeo nas pastas faz ${quer === "i2v" ? "imagem → vídeo" : "primeiro e último quadro"}. Baixe um em IA local › Baixar.`);
       }
+      setModo(quer);
       texto.current?.focus();
     } catch (e: any) {
       mostrarErro(e.message);
@@ -1036,7 +1039,8 @@ function Tomada(props: {
           aprovaveis.length > 0 && (
             <>
               <button
-                className={btnPrimary}
+                // sem nada marcado a ação é descartar tudo: não pode ser o botão em destaque
+                className={sel.size ? btnPrimary : btn}
                 disabled={salvando}
                 onClick={async () => {
                   setSalvando(true);
@@ -1175,6 +1179,12 @@ function CartaoVideo(props: {
             </span>
           ) : item.status === "gerando" && !comPrevia ? (
             <Liquido fracao={item.progress ?? 0} sPasso={item.s_passo} restante={item.restante} />
+          ) : item.status === "gerando" && !item.preview ? (
+            // Antes da 1ª prévia (carregando pesos, codificando o prompt) o card não pode parecer travado.
+            <div className="flex flex-col items-center gap-2.5 text-[11px] text-muted">
+              <span className="size-6 animate-spin rounded-full border-2 border-sky-400/20 border-t-sky-400" />
+              {item.s_passo ? "primeira prévia a caminho…" : "carregando o modelo e o codificador…"}
+            </div>
           ) : item.status === "pendente" ? (
             <span className="text-[11px] text-faint">na fila</span>
           ) : null}
@@ -1214,7 +1224,7 @@ function CartaoVideo(props: {
         )}
         {comPrevia ? (
           <span className="shrink-0 tabular-nums text-sky-300">
-            {item.s_passo ? `${velocidade(item.s_passo)} · ${duracao(item.restante ?? 0)}` : "carregando o modelo"}
+            {item.s_passo ? `${velocidade(item.s_passo)} · ${duracao(item.restante ?? 0)}` : "preparando"}
           </span>
         ) : (
           !temArquivo && item.status !== "gerando" && <span className={CORES[item.status]}>{item.status}</span>

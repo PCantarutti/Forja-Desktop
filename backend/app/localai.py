@@ -1006,6 +1006,14 @@ def variante_video(path: str) -> str:
     return "wan21_i2v" if "i2v" in n else "wan21_t2v"
 
 
+MARCAS_VARIANTE = ("vace", "flf2v", "ti2v", "5b", "a14b", "noise", "i2v", "t2v")
+
+
+def variante_clara(nome: str) -> str | None:
+    """A variante quando o nome diz qual é; None em repositório genérico ("WanVideo_comfy")."""
+    return variante_video(nome) if any(m in _normal(nome) for m in MARCAS_VARIANTE) else None
+
+
 def alto_ruido(path: str) -> bool:
     """Metade HighNoise do Wan2.2 A14B: entra como par do LowNoise, não como modelo na lista."""
     return "highnoise" in _normal(path)
@@ -1683,7 +1691,12 @@ IMAGEM_FORA = ("lora", "controlnet", "ip-adapter", "textual-inversion", "embeddi
 
 
 # Vídeo que o sd-cli não roda (só o Wan tem -M vid_gen aqui) e peças do Wan que não são modelo.
-VIDEO_FORA = ("hunyuan", "ltx", "cogvideo", "mochi", "animatediff", "stable-video", "svd", "vae", "umt5")
+VIDEO_FORA = ("hunyuan", "ltx", "cogvideo", "mochi", "animatediff", "stable-video", "svd", "vae", "umt5",
+              # Wan que o Forja não roda: Animate e S2V pedem vídeo/áudio de entrada; Diffusers é repo espalhado
+              "animate", "s2v", "diffusers")
+
+
+WAN_NOME = re.compile(r"(?<![a-z])wan(?=[\d_.\- ]|video|$)", re.I)
 
 
 def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia") -> list[dict]:
@@ -1706,11 +1719,12 @@ def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia"
             continue  # LoRA, ControlNet e afins: o sd.cpp quer o modelo inteiro
         extra = {}
         if kind == "video":
-            texto = (m["id"] + " " + " ".join(tags)).lower()
-            if "wan" not in texto or any(x in m["id"].lower() for x in VIDEO_FORA):
+            # "wan" como palavra no nome (Wan2.1, Wan_2.2, WanVideo): substring pegava "wanli" e tags soltas
+            if not WAN_NOME.search(m["id"].split("/")[-1]) or any(x in m["id"].lower() for x in VIDEO_FORA):
                 continue
-            var = variante_video(m["id"])
-            extra = {"variante": var, "variante_nome": REQUISITOS[var]["nome"], "modos": REQUISITOS[var]["modos"]}
+            var = variante_clara(m["id"])
+            extra = ({"variante": var, "variante_nome": REQUISITOS[var]["nome"], "modos": REQUISITOS[var]["modos"]}
+                     if var else {"variante_nome": "Wan · ver os arquivos", "modos": []})
         saida.append({"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0),
                       "likes": m.get("likes", 0), "updated": m.get("lastModified", ""),
                       "gated": bool(m.get("gated")), "tags": _tags(tags), **extra})
@@ -1918,6 +1932,18 @@ def kits_video() -> list[dict]:
     return out
 
 
+def vram_video_gb() -> float:
+    """VRAM da GPU que o sd-cli vai usar. A soma de todas não serve: a integrada do Ryzen informa 16 GB
+    de memória compartilhada, e o kit de 14B "cabia" numa Arc de 12."""
+    from .imagegen import _gpu
+    sd, llama = find_exe("sd"), find_exe("llama")
+    if not sd or not llama:
+        return 0.0
+    alvo = _gpu(str(sd))
+    gpu = next((g for g in devices(str(llama)) if g["id"].lower() == alvo), None)
+    return round(gpu["total"] / 2**30, 1) if gpu else 0.0
+
+
 def baixar_kit(kit_id: str, folder: str = "") -> list[dict]:
     """Um download por arquivo que falta (entram na fila de downloads como qualquer outro)."""
     kit = next((k for k in kits_video() if k["id"] == kit_id), None)
@@ -2050,20 +2076,22 @@ def state() -> dict:
     # `ctx` por modelo: o seletor da Maestro e dos Workers barra quem tem janela pequena demais.
     # `vision`: o seletor mostra o olho, como o LM Studio.
     models = [{**m, "ctx": ctx_de(m["path"]), "vision": tem_visao(m["path"])} for m in todos if m["kind"] == "chat"]
-    comp = acompanhantes(cfg)
+    # Vídeo primeiro: ele se autoconfigura, e o VAE/umt5 que acabou de ganhar dono sai da lista de imagem
+    # já nesta resposta, e não só na seguinte.
+    videos = []
+    for m in todos:
+        if m["kind"] != "video" or alto_ruido(m["path"]) or _chave(m["path"]) in acompanhantes(cfg):
+            continue
+        p = completar_componentes(m["path"])
+        videos.append({**m, "params": p, "req": requisitos(m["path"]), "variante": _tipo(m["path"]),
+                       "falta": faltando(m["path"], p)})
+    comp = acompanhantes(read_config())
     from .imagegen import previa_automatica
     imagens = [{**m, "params": image_params(m["path"]), "req": requisitos(m["path"]),
                 "previa_auto": previa_automatica(m["path"], image_params(m["path"])),
                 "falta": faltando(m["path"], image_params(m["path"])),
                 "falta_edicao": faltando(m["path"], image_params(m["path"]), editar=True)}
                for m in todos if m["kind"] == "image" and _chave(m["path"]) not in comp]
-    videos = []
-    for m in todos:
-        if m["kind"] != "video" or alto_ruido(m["path"]) or _chave(m["path"]) in comp:
-            continue
-        p = completar_componentes(m["path"])
-        videos.append({**m, "params": p, "req": requisitos(m["path"]), "variante": _tipo(m["path"]),
-                       "falta": faltando(m["path"], p)})
     baixar = cfg.get("download_dir") or models_dir()
     return {"runtimes": runtimes(), "models": models, "server": status(), "dirs": dirs(), "download_dir": baixar,
             "hardware": hardware(), "guardrail": guardrail(), "autoload": autoload(),

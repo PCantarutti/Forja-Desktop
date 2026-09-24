@@ -174,7 +174,8 @@ export function SectionTabs(props: {
             aria-checked={props.value === t.id}
             title={t.title}
             onClick={() => props.onChange(t.id)}
-            className={`rounded-md px-2 py-1 ${props.value === t.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}
+            // px-1.5 e não px-2: com a aba Vídeo são 7, e a 7ª saía cortada na coluna de 240 px
+            className={`rounded-md px-1.5 py-1 ${props.value === t.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}
           >
             {t.icon}
           </button>

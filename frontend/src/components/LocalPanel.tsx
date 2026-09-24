@@ -1329,15 +1329,21 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
  *  de novo; o selo diz se o modelo cabe na GPU desta máquina. */
 function KitsVideo(props: { st: LocalState; destino: string; onDone: () => void; onError: (e: string) => void; onProcurar: () => void }) {
   const [kits, setKits] = useState<VideoKit[] | null>(null);
+  const [vram, setVram] = useState(0); // GB da GPU que o sd.cpp usa (a integrada não conta)
   const [aberto, setAberto] = useState<string | null>(null);
   const baixando = props.st.jobs.filter((j) => j.kind === "modelo" && j.status === "running").map((j) => j.name);
 
   const carregar = useCallback(() => {
-    api.get<{ kits: VideoKit[] }>("/local/video/kits").then((r) => setKits(r.kits)).catch((e) => props.onError(e.message));
+    api
+      .get<{ kits: VideoKit[]; vram_gb: number }>("/local/video/kits")
+      .then((r) => {
+        setKits(r.kits);
+        setVram(r.vram_gb);
+      })
+      .catch((e) => props.onError(e.message));
   }, []);
   useEffect(carregar, [carregar, baixando.length]);
 
-  const vram = (props.st.hardware.gpus.filter((g) => g.enabled).map((g) => g.total).sort((a, b) => b - a)[0] ?? 0) / 1024; // MiB → GiB
   const cabe = (k: VideoKit) => (vram ? k.gb_modelo * 1.15 < vram : null); // ~15% de folga para ativações
   const recomendado = kits
     ?.filter((k) => cabe(k) && k.modos.length > 1)

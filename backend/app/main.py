@@ -682,7 +682,8 @@ async def local_video_defaults(body: dict):
 
 @app.get("/api/local/video/kits")
 async def local_video_kits():
-    return {"kits": await asyncio.to_thread(localai.kits_video)}
+    kits, vram = await asyncio.gather(asyncio.to_thread(localai.kits_video), asyncio.to_thread(localai.vram_video_gb))
+    return {"kits": kits, "vram_gb": vram}
 
 
 class KitBody(BaseModel):

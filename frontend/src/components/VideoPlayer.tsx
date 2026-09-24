@@ -120,7 +120,9 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
     if (rvfc) {
       const cada = (_: number, meta: { mediaTime: number }) => {
         if (!vivo) return;
-        setT(meta.mediaTime);
+        // Só tocando: pausado, o quadro de um seek anterior chegava depois do seguinte e voltava o
+        // contador (Home e três → paravam no quadro 3, não no 4). Pausado quem manda é o currentTime.
+        if (!v.paused) setT(meta.mediaTime);
         id = rvfc(cada);
       };
       id = rvfc(cada);
@@ -165,7 +167,9 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   const irPara = useCallback((s: number) => {
     const v = video.current;
     if (!v || !v.duration) return;
-    v.currentTime = Math.min(v.duration - EPS, Math.max(0, s));
+    // Até a duração exata: o webm dá como duração o início do último quadro, e com "− 1 ms" o End e o
+    // passo a passo nunca chegavam nele (paravam no 16 de 17).
+    v.currentTime = Math.min(v.duration, Math.max(0, s));
     setT(v.currentTime);
   }, []);
 
@@ -183,10 +187,11 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
       const v = video.current;
       if (!v) return;
       v.pause();
-      const alvo = Math.min(total - 1, Math.max(0, quadro + n));
+      const atual = Math.min(total - 1, Math.max(0, Math.floor(v.currentTime * fps + EPS)));
+      const alvo = Math.min(total - 1, Math.max(0, atual + n));
       irPara((alvo + 0.5) / fps); // o meio do quadro: na borda o decodificador pode mostrar o vizinho
     },
-    [quadro, total, fps, irPara],
+    [total, fps, irPara],
   );
 
   const telaCheia = useCallback(() => {
@@ -286,7 +291,11 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           setTocando(true);
           mexeu();
         }}
-        onPause={() => setTocando(false)}
+        onPause={(e) => {
+          setTocando(false);
+          setT(e.currentTarget.currentTime);
+        }}
+        onSeeked={(e) => e.currentTarget.paused && setT(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => {
           setDur(e.currentTarget.duration);
           setDims([e.currentTarget.videoWidth, e.currentTarget.videoHeight]);

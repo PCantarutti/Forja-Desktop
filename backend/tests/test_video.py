@@ -129,6 +129,11 @@ def test_kit_baixado_configura_as_pecas_sozinho(isolado):
     assert [v["name"] for v in estado["video_models"]] == ["Wan2.2-T2V-A14B-LowNoise-Q4_K_M"]  # sem o HighNoise
     assert estado["video_models"][0]["falta"] == [] and estado["image_models"] == []  # peças não viram modelo
 
+    arquivo(m, "Wan2.2-TI2V-5B-Q8_0.gguf")
+    vae22 = arquivo(m, "wan2.2_vae.safetensors")
+    estado = localai.state()  # na mesma resposta em que o 5B pega o VAE do 2.2, o VAE sai da lista de imagem
+    assert vae22 not in [i["path"] for i in estado["image_models"]]
+
 
 def test_busca_de_video_so_passa_wan(monkeypatch):
     class R:
@@ -138,13 +143,18 @@ def test_busca_de_video_so_passa_wan(monkeypatch):
             return [{"id": "QuantStack/Wan2.2-TI2V-5B-GGUF", "tags": ["gguf", "text-to-video"]},
                     {"id": "someone/wan2.1-anime-lora", "tags": ["lora"]},
                     {"id": "city96/HunyuanVideo-gguf", "tags": ["gguf"]},
-                    {"id": "Lightricks/LTX-Video", "tags": []}]
+                    {"id": "Lightricks/LTX-Video", "tags": []},
+                    {"id": "x/DeBERTa-v3-large-mnli-fever-anli-ling-wanli", "tags": []},
+                    {"id": "y/gemma-4-31B-it-abliterated", "tags": ["wan"]},
+                    {"id": "Kijai/WanVideo_comfy", "tags": []}]
     pedidos = []
     monkeypatch.setattr(localai.httpx, "get", lambda url, **k: pedidos.append(k["params"]) or R())
     achados = localai.search("", "video")
-    assert [a["id"] for a in achados] == ["QuantStack/Wan2.2-TI2V-5B-GGUF"]
+    assert [a["id"] for a in achados] == ["QuantStack/Wan2.2-TI2V-5B-GGUF", "Kijai/WanVideo_comfy"]
     assert achados[0]["variante"] == "wan22_ti2v" and achados[0]["modos"] == ["t2v", "i2v"]
     assert pedidos[0]["search"] == "wan" and "pipeline_tag" not in pedidos[0]
+    assert localai.variante_clara("Kijai/WanVideo_comfy") is None  # genérico: sem chute de T2V
+    assert localai.variante_clara("Wan-AI/Wan2.2-TI2V-5B") == "wan22_ti2v"
 
 
 def test_kit_lista_so_o_que_falta(isolado, monkeypatch):
