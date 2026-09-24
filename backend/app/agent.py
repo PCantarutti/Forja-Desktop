@@ -1343,6 +1343,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             if _transitorio(e) and not content and not reasoning and retries < MAX_RETRIES:
                 retries += 1
                 espera = _retry_espera(retries)
+                if e.retry_after:  # o provedor disse quanto esperar: vale, até o teto de sempre
+                    espera = max(espera, min(e.retry_after, RETRY_MAX))
                 yield _event(conv_id, "info", f"{e} Tentando de novo em {espera:.1f}s "
                                               f"({retries}/{MAX_RETRIES})...")
                 await asyncio.sleep(espera)

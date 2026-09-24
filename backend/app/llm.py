@@ -26,9 +26,10 @@ TIMEOUT = httpx.Timeout(connect=10, read=600, write=60, pool=10)
 
 
 class LLMError(Exception):
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, retry_after: float | None = None):
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after  # segundos pedidos pelo provedor (cabeçalho Retry-After)
 
 
 def spec(provider: str) -> dict:
@@ -95,9 +96,13 @@ async def context_limit(provider: str, model: str, num_ctx: int) -> int | None:
     return None
 
 
-def _raise_for(provider: str, status: int, body: bytes) -> None:
+def _raise_for(provider: str, status: int, body: bytes, cabecalhos=None) -> None:
     text = body.decode("utf-8", "replace")[:1000]
-    raise LLMError(f"{provider} respondeu HTTP {status}: {text}", status)
+    try:  # só o formato em segundos; a data HTTP é rara em API de modelo e cai na espera normal
+        espera = float((cabecalhos or {}).get("retry-after") or "") or None
+    except ValueError:
+        espera = None
+    raise LLMError(f"{provider} respondeu HTTP {status}: {text}", status, espera)
 
 
 # Esforço -> raciocínio do modelo. Só mandamos quando o modelo entende, senão o servidor recusa.
@@ -229,7 +234,7 @@ async def _openai_stream(provider, model, messages, tools, num_ctx, extra: dict 
     async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers(provider)) as c:
         async with c.stream("POST", f"{base_url(provider)}/chat/completions", json=body) as r:
             if r.status_code >= 400:
-                _raise_for(provider, r.status_code, await r.aread())
+                _raise_for(provider, r.status_code, await r.aread(), r.headers)
             async for line in r.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -334,7 +339,7 @@ async def _ollama_stream(provider, model, messages, tools, num_ctx, extra: dict 
     async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers(provider)) as c:
         async with c.stream("POST", f"{host}/api/chat", json=body) as r:
             if r.status_code >= 400:
-                _raise_for(provider, r.status_code, await r.aread())
+                _raise_for(provider, r.status_code, await r.aread(), r.headers)
             async for line in r.aiter_lines():
                 if not line.strip():
                     continue

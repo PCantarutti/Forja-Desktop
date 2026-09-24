@@ -153,3 +153,32 @@ def test_validar_obrigatorio_e_tipo():
     with pytest.raises(ToolError, match="deveria ser integer"):
         validar(t, {"path": "a", "start_line": True})
     validar(t, {"path": "a", "start_line": 3})
+
+
+def test_retry_after_do_provedor_vale_ate_o_teto(monkeypatch):
+    from app.llm import _raise_for
+
+    with pytest.raises(llm.LLMError) as e:
+        _raise_for("p", 429, b"lento", {"retry-after": "7"})
+    assert e.value.retry_after == 7.0
+    with pytest.raises(llm.LLMError) as e:
+        _raise_for("p", 429, b"x", {"retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"})
+    assert e.value.retry_after is None
+
+    esperas = []
+
+    async def dorme(s):
+        esperas.append(s)
+
+    n = {"i": 0}
+
+    async def stream(*a, **kw):
+        n["i"] += 1
+        if n["i"] == 1:
+            raise llm.LLMError("HTTP 429", 429, 60)
+        yield "content", "ok"
+        yield "done", {"tool_calls": []}
+
+    monkeypatch.setattr(agent.asyncio, "sleep", dorme)
+    _roda(monkeypatch, stream)
+    assert esperas and esperas[0] == agent.RETRY_MAX  # pediu 60s, o teto é 10s
