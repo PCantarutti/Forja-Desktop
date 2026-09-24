@@ -18,6 +18,7 @@ import SettingsDialog from "./components/Settings";
 import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
+import GoalStrip from "./components/GoalStrip";
 import Confirma from "./components/Confirma";
 import { LogoMark } from "./components/Logo";
 import {
@@ -1223,7 +1224,17 @@ export default function App() {
     const used = lastStats ? lastStats.prompt_tokens + lastStats.tokens : (ctx?.used ?? null);
     const max = ctx?.max ?? lastStats?.ctx_max ?? null;
     const models = [...new Set(all.map((s) => s.model).filter(Boolean))];
-    return { used, max, out: lastTurn?.tokens ?? null, avg, models };
+    // Painel de sessão como o do dsh: turnos, passos, tokens somados e acerto de cache do servidor.
+    const comCache = all.filter((s) => s.cached != null);
+    const promptComCache = comCache.reduce((n, s) => n + s.prompt_tokens, 0);
+    const sessao = {
+      turnos: messages.filter((m) => m.role === "user").length,
+      passos: all.length,
+      tokens: all.reduce((n, s) => n + s.prompt_tokens + s.tokens, 0),
+      cache: promptComCache ? comCache.reduce((n, s) => n + (s.cached ?? 0), 0) / promptComCache : null,
+    };
+    const partes = (ctx as { partes?: Stats["partes"] } | null)?.partes ?? lastStats?.partes ?? null;
+    return { used, max, out: lastTurn?.tokens ?? null, avg, models, sessao, partes };
   }, [messages, turns, ctx]);
 
   function changeSection(next: Section) {
@@ -1668,6 +1679,7 @@ export default function App() {
             {uploading && <span className="text-xs text-muted">enviando…</span>}
           </div>
         )}
+        {section === "agent" && <GoalStrip convId={currentId} refreshKey={messages.length} />}
         {queued.length > 0 && (
           <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
             <span className="text-faint">na fila:</span>
@@ -1793,11 +1805,20 @@ export default function App() {
             <PermissionMenu value={settings.permission} onChange={changePermission} running={running} />
           )}
           <EffortMenu value={settings.effort} onChange={(effort) => update({ effort })} semExtremo={section === "maestro"} />
+          {summary.sessao.passos > 0 && (
+            <span className="hidden whitespace-nowrap font-mono text-[11px] text-faint xl:inline" title="Turnos, passos, média de tokens/s, tokens somados e acerto de cache desta conversa">
+              {summary.sessao.turnos} turnos · {summary.sessao.passos} passos
+              {summary.avg != null ? ` · ${summary.avg.toFixed(0)} t/s` : ""}
+              {summary.sessao.cache != null ? ` · cache ${Math.round(summary.sessao.cache * 100)}%` : ""}
+            </span>
+          )}
           <ContextRing
             used={summary.used}
             max={summary.max}
             out={summary.out}
             avg={summary.avg}
+            partes={summary.partes}
+            sessao={summary.sessao}
             canCompact={currentId !== null && !running}
             onCompact={compactNow}
             provider={settings.provider}

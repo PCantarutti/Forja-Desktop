@@ -27,7 +27,8 @@ from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, ex
                     resolve_path, spill, vision_caps)
 
 MAX_NUDGES = 2
-MAX_STOP_HOOKS = 3  # hook stop que sempre bloqueia não pode prender o turno para sempre
+MAX_REESCRITAS = 5  # alterações no mesmo arquivo num turno antes do lembrete de abordagem travada
+MAX_STOP_HOOKS = 3 # hook stop que sempre bloqueia não pode prender o turno para sempre
 # Maestro: a cada quantos turnos seguidos sem agir (só raciocínio) ela gera um novo alerta ao usuário.
 ALERTA_A_CADA = 5
 # Restrição do pedido vira loop de conferência no raciocínio: modelo pequeno enumera palavra por
@@ -171,7 +172,8 @@ class Run:
         self.avisos: list[str] = []     # término de processo/subagente em segundo plano (entram no próximo passo)
         self.filhos: dict[str, dict] = {}  # subagentes em segundo plano: id -> {task, tarefa, inicio}
         self.acorda = asyncio.Event()   # algo chegou em `avisos` (o fim do turno espera por isso)
-        self.stop_hooks = 0             # vezes que um hook stop segurou o fim do turno (teto MAX_STOP_HOOKS)
+        self.escritas: dict[str, int] = {}  # arquivo -> alterações neste turno (freio de reescrita)
+        self.stop_hooks = 0            # vezes que um hook stop segurou o fim do turno (teto MAX_STOP_HOOKS)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
         self.nudged: set[str] = set()   # já levaram o freio do esforço extremo (um aviso cada): caminhos
                                        # de arquivo e "delegate_task" para a delegação rasa
@@ -1087,6 +1089,13 @@ async def _compact(conv_id: int, msgs: list, req: RunRequest, ctx_max: int) -> A
         yield {"type": "event", "message": m.to_dict()}
 
 
+def partes_do_contexto(messages: list[dict], tools: list[dict] | None) -> dict:
+    """Quanto do prompt é system, schema de ferramenta e conversa (estimativa chars/4, como o medidor do dsh)."""
+    sistema = _estimate(messages[:1], None) if messages and messages[0].get("role") == "system" else 0
+    return {"sistema": sistema, "ferramentas": _estimate([], tools) if tools else 0,
+            "mensagens": _estimate(messages[1:] if sistema else messages, None)}
+
+
 def _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, model) -> dict:
     """Tokens reais do provider quando disponíveis; senão estimativa chars/4 (estimated=True)."""
     end = time.monotonic()
@@ -1096,7 +1105,8 @@ def _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, mode
     gen = end - (t_first or end)
     return {"model": model, "prompt_tokens": done.get("prompt_tokens") or est_prompt, "tokens": out,
             "estimated": not done.get("completion_tokens"), "seconds": round(end - t0, 2),
-            "tps": round(out / gen, 2) if gen > 0.05 else None, "ctx_max": ctx_max}
+            "tps": round(out / gen, 2) if gen > 0.05 else None, "ctx_max": ctx_max,
+            "cached": done.get("cached_tokens")}
 
 
 def _save_partial(conv_id: int, content: str, reasoning: str) -> None:
@@ -1390,7 +1400,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         retries = 0
 
         stats = _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, req.model)
-        yield {"type": "context", "used": stats["prompt_tokens"], "estimated": stats["estimated"], "max": ctx_max}
+        stats["partes"] = partes_do_contexto(messages, tools)
+        yield {"type": "context", "used": stats["prompt_tokens"], "estimated": stats["estimated"], "max": ctx_max,
+               "partes": stats["partes"]}
 
         think, visible = split_think(content)
         reasoning = (reasoning + "\n" + think).strip()
@@ -1473,6 +1485,16 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 run.nudged.add(chave)
                 yield _event(conv_id, "nudge", "Antes de encerrar, há trabalho aberto: " + "; ".join(abertas)
                              + ". Resolva (run_task, update_task ou cancelar com o motivo) ou diga por que vai parar.",
+                             to_model=True)
+                continue
+            # Lista de tarefas com item aberto: visto numa sessão real do Qwen no dsh — ele encerrou com
+            # "Testar fluxos no browser" ainda em andamento e declarou tudo pronto. Um lembrete por conjunto.
+            abertos = [t.get("text") or "" for t in run.tasks if t.get("status") != "done"]
+            if tools_on and abertos and (chave := "tarefas:" + "|".join(abertos)) not in run.nudged:
+                run.nudged.add(chave)
+                yield _event(conv_id, "nudge", "Sua lista de tarefas ainda tem itens abertos: " + "; ".join(abertos)
+                             + ". Faça-os, ou atualize a lista com update_tasks dizendo por que ficam de fora, antes de "
+                               "dar o trabalho por concluído. Não afirme que algo foi verificado sem ter verificado.",
                              to_model=True)
                 continue
             # Goal ativa e armada: o turno não acaba, começa a próxima rodada (DeepSeek Harness).
@@ -1974,6 +1996,15 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         if hook_out:
             res = f"{res}\n\n{hook_out}"
             meta["hooks"] = hook_out
+        if name in ("write_file", "edit_file") and (alvo := str(args.get("path") or "")):
+            # Reescrever o mesmo arquivo de novo e de novo é sinal de abordagem travada: na sessão do Qwen
+            # no dsh foram 8 reescritas do mesmo modal em 20 min brigando com um aviso de lint.
+            run.escritas[alvo] = run.escritas.get(alvo, 0) + 1
+            if run.escritas[alvo] == MAX_REESCRITAS:
+                res += (f"\n\n[Você já alterou {alvo} {MAX_REESCRITAS} vezes neste turno. Pare e reavalie: a "
+                        "abordagem pode estar errada, ou o problema pode estar em outro arquivo. Se for um aviso "
+                        "de lint/typecheck que não impede nada, considere aceitá-lo com uma justificativa em vez de "
+                        "reescrever mais uma vez.]")
         result("ok", spill(res, f"{conv_id}/{call['id']}"))
     except ToolError as e:
         result("erro", str(e))

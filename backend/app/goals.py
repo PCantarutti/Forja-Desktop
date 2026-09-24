@@ -101,8 +101,15 @@ def update_goal(_root: Path, args: dict) -> str:
         return f"{fim}\n{_desc(g)}"
 
 
+RETOMADAS_NA_TELA: set[int] = set()  # ponytail: em memória; reiniciar o app só volta a pedir o resume
+
+
 def desarmar(conv_id: int) -> None:
-    """Início de um turno novo do usuário: goal ativa fica desarmada até update_goal resume."""
+    """Início de um turno novo do usuário: goal ativa fica desarmada até update_goal resume — a não ser
+    que o usuário tenha acabado de retomá-la pela faixa da goal, que é o mesmo pedido."""
+    if conv_id in RETOMADAS_NA_TELA:
+        RETOMADAS_NA_TELA.discard(conv_id)
+        return
     with db.session() as s:
         for g in s.scalars(select(db.Goal).where(db.Goal.conversation_id == conv_id, db.Goal.status == "ativa")):
             g.armada = False
@@ -133,7 +140,7 @@ def proxima_rodada(conv_id: int) -> str | None:
 
 def contexto(conv_id: int) -> str:
     g = atual(conv_id)
-    if not g or g.status in ("completa",):
+    if not g or g.status in ("completa", "cancelada"):
         return ""
     linha = f"\n\nGoal desta conversa ({g.status}{'' if g.armada or g.status != 'ativa' else ', desarmada'}): {g.objective}"
     if g.status == "ativa" and not g.armada:
@@ -162,3 +169,31 @@ GOAL_TOOLS = [
               "blocked_reason": {"type": "string"}}, ["goal_id", "revision", "action"]),
         update_goal)),
 ]
+
+
+def para_tela(conv_id: int) -> dict | None:
+    g = atual(conv_id)
+    if not g or g.status == "cancelada":
+        return None
+    return {"id": g.id, "objective": g.objective, "status": g.status, "armada": g.armada, "rodada": g.rodada,
+            "max": MAX_RODADAS, "motivo": g.motivo}
+
+
+def acao_da_tela(conv_id: int, acao: str) -> dict | None:
+    """Pausar, retomar ou descartar a goal pela faixa acima do campo de mensagem."""
+    with db.session() as s:
+        g = s.scalars(select(db.Goal).where(db.Goal.conversation_id == conv_id).order_by(db.Goal.id.desc())).first()
+        if not g:
+            return None
+        if acao == "pause":
+            g.status = "pausada"
+        elif acao == "resume":
+            g.status, g.armada = "ativa", True
+            RETOMADAS_NA_TELA.add(conv_id)
+        elif acao == "clear":
+            g.status = "cancelada"
+        else:
+            raise ToolError("action deve ser pause, resume ou clear.")
+        g.revisao += 1
+        s.commit()
+    return para_tela(conv_id)

@@ -173,6 +173,8 @@ export type Stats = {
   seconds: number;
   tps: number | null;
   ctx_max: number | null;
+  cached?: number | null;  // tokens do prompt que vieram do cache do servidor (llama.cpp: cache_n)
+  partes?: { sistema: number; ferramentas: number; mensagens: number };  // estimativa por tipo
 };
 
 // ------------------------------------------------------------------ comparar modelos

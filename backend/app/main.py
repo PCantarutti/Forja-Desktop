@@ -16,7 +16,8 @@ from sqlalchemy import select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, imagegen, llm, localai, lotes,
+from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
+               localai, lotes,
                mcp_client, memory, mirror, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
@@ -1348,6 +1349,20 @@ def patch_conversation(conv_id: int, body: ConvPatch):
     if body.title is not None:
         mirror.write(conv_id)  # o título está no nome do arquivo: regrava e apaga o antigo
     return out
+
+
+@app.get("/api/conversations/{conv_id}/goal")
+def get_goal_da_conversa(conv_id: int):
+    """Faixa da goal acima do campo de mensagem (DeepSeek Harness: ui-goal)."""
+    return {"goal": goals.para_tela(conv_id)}
+
+
+@app.post("/api/conversations/{conv_id}/goal")
+def acao_goal(conv_id: int, body: dict):
+    try:
+        return {"goal": goals.acao_da_tela(conv_id, str(body.get("action") or ""))}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/conversations/{conv_id}/export")
