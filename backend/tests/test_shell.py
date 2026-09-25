@@ -30,3 +30,14 @@ def test_url_do_log_com_ipv6_do_http_server_no_windows(monkeypatch):
     assert shell.url_do_log("druve") == "http://localhost:8080"
     monkeypatch.setattr(shell, "_log", lambda name, n: "Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ...")
     assert shell.url_do_log("x") == "http://localhost:8000"
+
+
+def test_url_da_porta_pela_arvore_de_processos(monkeypatch):
+    """Sem URL no log: vale a porta em que o filho do shell (cmd -> python) escuta."""
+    import os
+    from app import shell
+    if os.name != "nt":
+        return
+    monkeypatch.setattr(shell, "_PORTAS", {"t": 1e12, "portas": {8080: 300, 9999: 999}, "pais": {200: 100, 300: 200}})
+    assert shell.url_da_porta(100) == "http://localhost:8080"  # neto do processo guardado
+    assert shell.url_da_porta(555) == ""  # sem porta na família

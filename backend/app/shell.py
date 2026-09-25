@@ -221,7 +221,7 @@ def _info(name: str) -> dict:
     code = s["proc"].poll()
     return {"name": name, "pid": s["proc"].pid, "alive": code is None, "exit_code": code, "command": s["command"],
             "cwd": s["cwd"], "log": s["log"], "uptime": int(time.time() - s["started"]),
-            "conv": s.get("conv") or "", "url": url_do_log(name) if code is None else ""}
+            "conv": s.get("conv") or "", "url": (url_do_log(name) or url_da_porta(s["proc"].pid)) if code is None else ""}
 
 
 def _log(name: str, tail: int) -> str:
@@ -323,6 +323,68 @@ def _sonda(porta: int) -> bool:
     return r.status < 500 and "html" in (r.getheader("content-type") or "") and "<title>Forja</title>" not in corpo
 
 
+def _saida(*cmd: str) -> str:
+    # página de código do console ("Endereço" em cp850): o backend do app roda em modo UTF-8, e
+    # decodificar como UTF-8 matava a leitura (stdout None, /api/servers com 500)
+    return subprocess.run(list(cmd), capture_output=True, encoding="oem", errors="replace", timeout=5,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout or ""
+
+
+def _pais() -> dict[int, int]:
+    """pid -> pid do pai, de todos os processos (Windows, Toolhelp32: instantâneo, sem PowerShell)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Entrada(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+    k32 = ctypes.windll.kernel32
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    pais: dict[int, int] = {}
+    e = Entrada()
+    e.dwSize = ctypes.sizeof(Entrada)
+    try:
+        ok = k32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            pais[e.th32ProcessID] = e.th32ParentProcessID
+            ok = k32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k32.CloseHandle(snap)
+    return pais
+
+
+_PORTAS: dict = {"t": 0.0, "portas": {}, "pais": {}}
+
+
+def url_da_porta(pid: int) -> str:
+    """Servidor que não anunciou a URL no log (ou anunciou de um jeito que não casa): a porta em que ele, ou
+    um processo filho dele (o serve_start roda pelo shell: cmd -> python), está escutando. '' se nenhuma."""
+    import os
+    if os.name != "nt":
+        return ""
+    if time.monotonic() - _PORTAS["t"] > CACHE_DETECTADOS:  # a lista é consultada a cada 4 s pelo painel
+        try:
+            _PORTAS.update(portas=_escutando(_saida("netstat", "-ano", "-p", "TCP") + _saida("netstat", "-ano", "-p", "TCPv6")),
+                           pais=_pais())
+        except (OSError, subprocess.SubprocessError, AttributeError):
+            pass
+        _PORTAS["t"] = time.monotonic()
+    familia, fila = {pid}, [pid]
+    filhos: dict[int, list[int]] = {}
+    for filho, pai in _PORTAS["pais"].items():
+        filhos.setdefault(pai, []).append(filho)
+    while fila:
+        for f in filhos.get(fila.pop(), []):
+            if f not in familia:
+                familia.add(f)
+                fila.append(f)
+    portas = sorted(p for p, dono in _PORTAS["portas"].items() if dono in familia)
+    return f"http://localhost:{portas[0]}" if portas else ""
+
+
 def servidores_detectados() -> list[dict]:
     """Servidores de desenvolvimento no ar que o Forja NÃO subiu (npm run dev no Terminal, ou fora do
     app), para o painel Navegador abrir com um clique. Windows: `netstat` + `tasklist`; outro sistema: []."""
@@ -331,16 +393,10 @@ def servidores_detectados() -> list[dict]:
         return []
     if time.monotonic() - _DETECTADOS["t"] < CACHE_DETECTADOS:
         return _DETECTADOS["lista"]
-    def saida(*cmd: str) -> str:
-        # página de código do console ("Endereço" em cp850): o backend do app roda em modo UTF-8, e
-        # decodificar como UTF-8 matava a leitura (stdout None, /api/servers com 500)
-        return subprocess.run(list(cmd), capture_output=True, encoding="oem", errors="replace", timeout=5,
-                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout or ""
-
     try:
-        portas = _escutando(saida("netstat", "-ano", "-p", "TCP") + saida("netstat", "-ano", "-p", "TCPv6"))
+        portas = _escutando(_saida("netstat", "-ano", "-p", "TCP") + _saida("netstat", "-ano", "-p", "TCPv6"))
         nomes = {}
-        for linha in saida("tasklist", "/FO", "CSV", "/NH").splitlines():
+        for linha in _saida("tasklist", "/FO", "CSV", "/NH").splitlines():
             campos = [c.strip('"') for c in linha.split('","')]
             if len(campos) > 1 and campos[1].isdigit():
                 nomes[int(campos[1])] = campos[0].lower().removesuffix(".exe")
