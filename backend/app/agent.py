@@ -19,7 +19,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
+from . import maestro, mobile, modelctl, progresso, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -1326,6 +1326,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     vision_source = ("override" if setting["vision"] != "auto"
                      else "detectado" if detected is not None else "desconhecido")
     loop = LoopDetector()
+    placar = progresso.Placar()  # E16: progresso por passo, ciclos, erro repetido, alucinação
     nudges = iterations = retries = 0
     forcar_compactar = estourou = False
 
@@ -1411,10 +1412,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         yield {"type": "assistant_start"}
         t0 = time.monotonic()
         t_first = None
+        degenerou = ""
+        checado = 0
+        # Depois de uma intervenção o próximo turno pensa com metade do teto: é para agir, não repensar.
+        mult, placar.teto_menor = (0.5 if placar.teto_menor else 1.0), False
+        fluxo = ate_cancelar(llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort,
+                                             **({"budget_mult": mult} if mult != 1.0 else {})), run.cancel)
         try:
-            async for kind, val in ate_cancelar(
-                    llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort),
-                    run.cancel):
+            async for kind, val in fluxo:
                 if kind != "done" and t_first is None:
                     t_first = time.monotonic()
                 if kind == "content":
@@ -1423,6 +1428,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 elif kind == "reasoning":
                     reasoning += val
                     yield {"type": "thinking", "text": val}
+                    # Filtro do raciocínio (E16): a cada ~500 tokens olha o fim do que já saiu. Não dá para
+                    # pausar e retomar um raciocínio no llama.cpp; degenerou, aborta e vai para o nível 2.
+                    if len(reasoning) - checado >= progresso.CHECA_A_CADA:
+                        checado = len(reasoning)
+                        if degenerou := progresso.degenerado(reasoning):
+                            break
                 elif kind == "tool_args":
                     yield {"type": "tool_token", "name": val["name"], "text": val["text"]}
                 elif kind == "done":
@@ -1456,10 +1467,19 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         except asyncio.CancelledError:  # servidor desligando
             _save_partial(conv_id, content, reasoning)
             raise
+        finally:
+            await fluxo.aclose()  # o break do filtro também tem de derrubar a conexão com o provedor
 
         if run.cancel.is_set():
             _save_partial(conv_id, content, reasoning)
             break
+        if degenerou:
+            # O raciocínio degenerado não volta ao histórico: reenviado, ele reforçaria o próprio giro.
+            yield _event(conv_id, "warning", f"Raciocínio degenerado ({degenerou}): a geração foi abortada e o "
+                                             "modelo recebeu uma intervenção.")
+            yield _event(conv_id, "nudge", placar.intervencao(f"o raciocínio degenerou ({degenerou})", None),
+                         to_model=True)
+            continue
         if t_first is None and not done["tool_calls"] and retries < MAX_RETRIES:
             retries += 1  # resposta vazia: o harness trata como falha transitória (EMPTY_RESPONSE)
             yield _event(conv_id, "info", f"O modelo devolveu uma resposta vazia. Tentando de novo "
@@ -1476,6 +1496,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
         think, visible = split_think(content)
         reasoning = (reasoning + "\n" + think).strip()
+        if reasoning:  # mediana por modelo: "pensar muito" é relativo a quem pensa (E16)
+            progresso.registra_raciocinio(req.model, len(reasoning) // 4)
         calls = done["tool_calls"]
         nomes_agora = [t.name for t in current_tools()]
         if tools_on and not calls and tool_mode != "native":
@@ -1505,6 +1527,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                     yield ev
                 nudges = 0
                 loop = LoopDetector()  # mensagem do usuário zera a contagem de repetição
+                placar.usuario()
                 continue
             # Turno mudo: nada visível e nenhuma chamada, mas o modelo pensou. Acontece com modelo
             # pensante quando o prompt é grande — ele monta o plano inteiro dentro do <think> e não
@@ -1528,6 +1551,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                               "O modelo anunciou uma ação mas não chamou nenhuma ferramenta, mesmo após ")
                              + f"{MAX_NUDGES} lembretes. Tente reformular o pedido ou trocar o modo de tool "
                                "calling deste modelo no painel lateral.")
+            # "Testei/passou" sem nenhum run_command ok desde a última escrita: sinal de alucinação (E16).
+            if tools_on and placar.afirmacao_sem_teste(visible) and "afirmou" not in run.nudged:
+                run.nudged.add("afirmou")
+                placar.alucinou()
+                yield _event(conv_id, "nudge", "Você afirmou que testou ou verificou, mas nenhum comando passou "
+                             "desde a sua última alteração. Rode o teste agora ou diga claramente que não verificou.",
+                             to_model=True)
+                continue
             # A Maestro ia parar com entrega sem validar: um lembrete por funcionalidade. Mais que
             # isso vira briga com o modelo — aí a funcionalidade fica 'validating' na árvore, à vista.
             # O lembrete volta quando o que falta muda: numa rodada real a revisão visual aprovou depois
@@ -1589,12 +1620,17 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
         stop = False
         cancelar: set[str] = set()
-        aviso_loop = ""
+        aviso_loop = motivo_loop = ""
         for call in calls:  # o detector olha a sequência inteira antes de executar qualquer coisa
             n = 0 if stop or _poll(call) else loop.conta(call["name"], call["arguments"])
+            if call["name"] not in nomes_agora:
+                placar.alucinou()  # ferramenta que não existe
             # Em degraus, como no DeepSeek Harness: lembrete ao modelo na 3ª, 5ª e 8ª repetição, e
             # só na PARA_EM o agente comum para. A Maestro nunca para sozinha: avisa o usuário.
-            if lembrete := aviso_repeticao(call["name"], call["arguments"], n):
+            if n == LoopDetector.FORTES[0]:  # 5ª: nível 2 da E16, com a chamada bloqueada
+                motivo_loop = f"{call['name']} pedida {n} vezes seguidas com os mesmos argumentos"
+                aviso_loop = placar.intervencao(motivo_loop, progresso.chave(call["name"], call["arguments"]))
+            elif lembrete := aviso_repeticao(call["name"], call["arguments"], n):
                 aviso_loop = lembrete
                 if maestro_mode and n == LoopDetector.LEVE:
                     for ev in _alerta(run, conv_id, f"A Maestro repetiu {call['name']} {n} vezes com os mesmos "
@@ -1610,11 +1646,21 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         # Maestro escrevendo fora do Project State: recusada antes de rodar (projstate.fora_do_papel).
         recusadas = {c["id"]: m for c in calls if maestro_mode
                      and (m := projstate.fora_do_papel(workspace.root(), c))}
+        # Chamada bloqueada pela recuperação de loop (E16, nível 2): recusada pelos próximos K passos.
+        recusadas |= {c["id"]: m for c in calls if c["id"] not in recusadas
+                      and (m := placar.bloqueada(c["name"], c["arguments"]))}
+        contaveis = {c["id"]: c for c in calls if not _poll(c)}  # esperar o Worker não é girar
+        progrediu = False
         for lote in batches(calls):
             rodar = [] if run.cancel.is_set() else [c for c in lote if c["id"] not in cancelar
                                                      and c["id"] not in recusadas]
             if rodar:
                 async for ev in _run_batch(conv_id, rodar, req, run, caps):
+                    if ev.get("type") == "tool_result" and (c := contaveis.get(ev["message"].get("tool_call_id"))):
+                        t = REGISTRY.get(c["name"])
+                        progrediu |= placar.resultado(c["name"], c["arguments"], ev["message"].get("status") or "",
+                                                      ev["message"].get("content") or "", workspace.root(),
+                                                      bool(t and t.mutating))
                     yield ev
             for call in lote:  # toda tool_call precisa de resposta no histórico, senão a próxima requisição falha
                 if call not in rodar:
@@ -1624,6 +1670,20 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                               content=recusa or "Não executada: o loop foi interrompido.",
                               meta={"arguments": call["arguments"]})
                     yield {"type": "tool_result", "message": m.to_dict()}
+        if contaveis:
+            placar.passo(progrediu)
+        if not aviso_loop and not stop:
+            nivel, motivo, alvo = placar.avalia()
+            if nivel == 2:
+                motivo_loop, aviso_loop = motivo, placar.intervencao(motivo, alvo)
+            elif nivel == 1:
+                aviso_loop = progresso.LEMBRETE
+        if motivo_loop and not stop:
+            for ev in (_alerta(run, conv_id, f"Recuperação de loop: {motivo_loop}. O modelo recebeu uma intervenção.")
+                       if maestro_mode else
+                       [_event(conv_id, "warning", f"Recuperação de loop: {motivo_loop}. O modelo recebeu uma "
+                                                   "intervenção e a chamada que girava foi bloqueada.")]):
+                yield ev
         if aviso_loop:  # depois dos resultados: no meio deles quebraria a sequência de tool calls
             yield _event(conv_id, "nudge", aviso_loop, to_model=True)
         # Muitas leituras seguidas sem escrever nada: a janela enche de arquivo lido. Uma dica por turno,
@@ -1643,6 +1703,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             yield tools_sent()
         for ev in _flush_queue(conv_id, run):  # mensagens enviadas durante as ferramentas entram já no próximo passo
             loop = LoopDetector()
+            placar.usuario()
             yield ev
         if stop:
             break

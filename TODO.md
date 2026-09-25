@@ -1598,7 +1598,41 @@ turno), o nível 4 usa a E2 (commit por tarefa) e o juiz usa a E4 (`como_rodar`)
 sandbox (E12).
 
 ### Parte A: placar de progresso, níveis 1–2 e filtro do raciocínio (sem LLM)
-- [ ] **Placar de progresso por passo.** Conta como progresso:
+
+*Feita em 2026-09-25* (`app/progresso.py`, ligada no laço de `agent.py`; testes em `tests/test_progresso.py`).
+
+Validada no Forja real com um provedor falso compatível com OpenAI (`scratchpad/modelo_falso.py`), porque o
+gpt-oss:120b não entrou em loop nem quando pedi:
+- modelo chamando `list_dir('.')` sem parar: lembrete na 3ª; na 5ª, a intervenção, a chamada bloqueada e o
+  aviso "Recuperação de loop" na conversa; as 4 seguintes recusadas; o modelo mudou de rumo;
+- raciocínio repetitivo: abortado com compressão 0,04 depois de ~2 mil caracteres. O raciocínio não volta ao
+  histórico, e o turno seguinte recebeu a intervenção.
+
+Diferenças em relação ao plano:
+- **Nível 2 da repetição exata:** fica na 5ª repetição, no lugar do lembrete forte. O lembrete forte da 8ª
+  e o freio da 10ª continuam.
+- **O que conta como progresso:**
+  - o resultado da ferramenta, comparado sem os números (tempo, pid e linha não contam como "novo");
+  - escrita, pelo hash do arquivo depois dela: voltar a um conteúdo anterior é desfazer;
+  - comando que falhava e passou.
+
+  A tarefa concluída entra pelo resultado diferente. Chamada de espera (`_poll`: task_status,
+  terminal_read) não conta: esperar o Worker não é girar.
+- **"Testei" sem teste:** só vale depois de o modelo ter escrito algo. Em conversa sem escrita, "testei" é
+  resposta, não alucinação. É um lembrete por turno, e soma ponto de alucinação. A pontuação chega a 3
+  com: ferramenta inexistente (1), o mesmo `path` inexistente 2× (1) e `old_str` não encontrado 2× no
+  mesmo arquivo (1).
+- **Intervenção:** zera a contagem de passos sem progresso, para não emendar lembrete e intervenção.
+- **Teto do raciocínio no turno seguinte:** metade (`budget_mult=0.5`).
+- **Filtro do raciocínio:** analisa a cada ~2 mil caracteres (~500 tokens), sobre os últimos 4 mil. Os
+  limites são estes:
+  - compressão abaixo de 0,25;
+  - um 12-grama repetido 3×;
+  - mais de 20 hesitações por mil tokens.
+- **Mediana:** fica em `app_settings` (`raciocinio_por_modelo`, as últimas 40 amostras), e não na
+  `model_settings`: é estatística, não ajuste do usuário. `pensa_demais()` (> 3× a mediana) fica pronta
+  para o juiz da parte B; na parte A ela não muda nada.
+- [x] **Placar de progresso por passo.** Conta como progresso:
   - um arquivo mudou sem desfazer uma mudança anterior (comparar com o hash do conteúdo de antes);
   - um verify ou teste que falhava passou;
   - uma tarefa foi concluída;
@@ -1606,7 +1640,7 @@ sandbox (E12).
   - uma mensagem do usuário.
 
   Guardar em `Run` junto do `LoopDetector`.
-- [ ] **Detector ampliado.** Além da repetição exata:
+- [x] **Detector ampliado.** Além da repetição exata:
   - ciclos curtos (período 2–4) na sequência de chamadas;
   - a mesma assinatura de erro (primeira linha do erro, sem números nem caminhos) voltando ≥ 3×;
   - N passos seguidos sem progresso (padrão 8);
@@ -1616,15 +1650,15 @@ sandbox (E12).
     - `edit_file` com `old_str` não encontrado 2× no mesmo arquivo;
     - afirmação de "testei/verifiquei/passou" sem um `run_command` ok desde a última escrita (reaproveitar
       o `detect_promise` e o item "Não afirme que algo foi verificado" que já existe).
-- [ ] **Nível 1, lembrete:** o que existe hoje, disparado também por 4 passos sem progresso.
-- [ ] **Nível 2, intervenção:** com 5 repetições, 8 passos sem progresso ou a pontuação de alucinação
+- [x] **Nível 1, lembrete:** o que existe hoje, disparado também por 4 passos sem progresso.
+- [x] **Nível 2, intervenção:** com 5 repetições, 8 passos sem progresso ou a pontuação de alucinação
       acima do limite, o harness injeta uma mensagem estruturada:
       "Você está em loop: fez X N vezes; resultado: Y; estado: arquivos mudados, testes. Escreva em 3
       linhas o que está errado e escolha uma abordagem **diferente**."
   - **Proibir de verdade** a chamada exata pelos próximos K passos (padrão 5): se o modelo repetir, a
     ferramenta recusa com a mensagem "chamada bloqueada pela recuperação de loop; escolha outra ação".
   - O próximo turno sai com o teto de raciocínio menor, para o modelo agir em vez de pensar.
-- [ ] **Filtro do raciocínio durante o streaming**, a cada ~500 tokens de raciocínio:
+- [x] **Filtro do raciocínio durante o streaming**, a cada ~500 tokens de raciocínio:
   - **compressão:** `zlib` nos últimos ~4k caracteres. Razão abaixo de ~0,25 = texto repetitivo;
   - **frases repetidas:** a mesma frase ou n-grama longo (≥ 12 palavras) 3× ou mais;
   - **marcadores de hesitação em série:** "wait", "actually", "hmm", "espera", "na verdade" acima de N
@@ -1633,10 +1667,10 @@ sandbox (E12).
   Degeneração clara: **aborta a geração** e vai para o nível 2. A geração não é pausada: o llama.cpp
   não retoma um raciocínio pela metade de forma confiável, então a análise roda sobre o texto que já
   saiu e só aborta se precisar.
-- [ ] **Mediana de raciocínio por modelo:** guardar a mediana de tokens de raciocínio por turno de cada
+- [x] **Mediana de raciocínio por modelo:** guardar a mediana de tokens de raciocínio por turno de cada
       modelo (`model_setting`). "Pensar muito" passa a ser relativo ao modelo (> 3× a mediana), não um
       número fixo. Um modelo que normalmente pensa 3k não é suspeito aos 2k.
-- [ ] Testes:
+- [x] Testes:
   - ciclo A,B,A,B detectado;
   - mesmo erro com chamadas diferentes detectado;
   - chamada bloqueada é recusada nos K passos;
