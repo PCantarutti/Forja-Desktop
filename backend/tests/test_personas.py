@@ -15,11 +15,11 @@ def test_agents_for_reads_header_and_body(tmp_path):
                                   "Você revisa código. Não edite nada.\n")
     _escreve(tmp_path, "vazio", "---\ndescription: nada\n---\n\n")  # sem corpo: não vira subagente
     agents = subagents.agents_for(tmp_path)
-    assert list(agents) == ["revisor"]
+    assert [n for n in agents if n != "explorador"] == ["revisor"]  # o explorador é embutido
     a = agents["revisor"]
     assert a["level"] == "capaz" and a["tools"] == ["read_file", "search"]
     assert a["description"] == "Revisa diff" and "Não edite nada" in a["prompt"]
-    assert subagents.agents_for(tmp_path / "nao-existe") == {}
+    assert list(subagents.agents_for(tmp_path / "nao-existe")) == ["explorador"]  # só o embutido
 
 
 def test_unknown_level_falls_back_to_rapido(tmp_path):

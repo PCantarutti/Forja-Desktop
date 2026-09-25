@@ -59,11 +59,11 @@ TRANSITIONS: dict[str, set[str]] = {
 SEMPRE = {"cancelled", "needs_human", "blocked"}
 
 CONTRACT_FIELDS = ("type", "context", "goal", "relevant_files", "requirements", "constraints", "do_not",
-                   "acceptance_criteria", "verify_command", "verify_reason", "expected_result")
+                   "acceptance_criteria", "verify_command", "verify_reason", "expected_result", "explorations")
 # Tipo da tarefa: diz ao Worker que tipo de mudança é (correção não é hora de refatorar) e ao
 # roteador que especialista chamar (subagents.ROTA_POR_TIPO). Fora da lista, é ignorado.
 TIPOS = ("feature", "bugfix", "refactor", "test", "ui", "docs", "chore")
-LISTAS = ("relevant_files", "requirements", "constraints", "do_not", "acceptance_criteria")
+LISTAS = ("relevant_files", "requirements", "constraints", "do_not", "acceptance_criteria", "explorations")
 MAX_TASKS_POR_FEATURE = 40
 MAX_ITENS = 20          # itens por lista do contrato
 MAX_TEXTO = 4000        # caracteres por campo de texto do contrato
@@ -134,7 +134,7 @@ def normalize_contract(raw) -> dict:
             if (tipo := str(valor or "").strip().lower()) in TIPOS:
                 out[campo] = tipo
         elif campo in LISTAS:
-            if itens := _lista(valor, virgula=campo == "relevant_files"):
+            if itens := _lista(valor, virgula=campo in ("relevant_files", "explorations")):
                 out[campo] = itens
         elif texto := str(valor or "").strip()[:MAX_TEXTO]:
             out[campo] = texto
@@ -160,6 +160,10 @@ def render_contract(task: db.Task, erro_anterior: str = "", strategy: str = "") 
             partes.append(f"{titulo}\n{corpo}")
     if c.get("expected_result"):
         partes.append("RESULTADO ESPERADO\n" + c["expected_result"])
+    if c.get("explorations"):
+        from . import exploracoes, workspace  # tardio: só o briefing precisa
+        if texto := exploracoes.para_contrato(workspace.root(), c["explorations"]):
+            partes.append("O QUE JÁ SE SABE DO CÓDIGO (exploração feita antes; confira antes de confiar)\n" + texto)
     if erro_anterior:
         # A tentativa N carrega o que falhou na N-1. Sem isto o Worker repete o mesmo erro com o
         # mesmo prompt, que é exatamente o laço que max_attempts existe para cortar.
@@ -886,7 +890,9 @@ _CONTRACT_SCHEMA = {
         "verify_reason": {"type": "string",
                           "description": "Só quando não existe comando possível: por que esta tarefa não tem "
                                          "verify_command (ex.: só texto de documentação)."},
-        "expected_result": {"type": "string"}},
+        "expected_result": {"type": "string"},
+        "explorations": {"type": "array", "items": {"type": "string"},
+                         "description": "Ids de explorações (EXP-001) cujo relatório vai no briefing do Worker"}},
     "required": ["goal"]}
 
 
@@ -928,6 +934,11 @@ def _plan_feature(_root: Path, args: dict) -> str:
             args = {**args, "feature_id": anexada.id}
     antes = pendencias(_conv()) if not args.get("feature_id") else []
     tarefas, copias = sem_copias(args.get("tasks") or [])
+    if geral := _lista(args.get("explorations")):
+        # O gpt-oss pôs explorations no plano, e não em cada tarefa: valia nada. Vai para as tarefas que
+        # não trouxeram as suas.
+        tarefas = [({**t, "contract": {**(t.get("contract") or {}), "explorations": geral}}
+                    if isinstance(t, dict) and not _contrato_bruto(t).get("explorations") else t) for t in tarefas]
     # Sem verify nada prova que a tarefa ficou pronta e ela sai 'unverified' em silêncio. Aceita
     # sem ele só com o motivo escrito (docs, ajuste de texto...), para a decisão ficar explícita.
     sem_verify = [str(t.get("title") or _contrato_bruto(t).get("goal") or f"tarefa {i + 1}")[:60]
@@ -964,6 +975,8 @@ PLAN_FEATURE = Tool(
     "Implementation Contract completo: o Worker que vai executá-la NÃO vê esta conversa, só o "
     "contrato. Decomponha em tarefas pequenas, cada uma verificável por um comando.",
     {"type": "object", "properties": {
+        "explorations": {"type": "array", "items": {"type": "string"},
+                         "description": "Explorações (EXP-001) que valem para todas as tarefas do plano"},
         "feature_id": {"type": "integer", "description": "Acrescenta as tarefas a esta funcionalidade "
                                                          "(correções da validação) em vez de criar outra"},
         "title": {"type": "string", "description": "Nome da funcionalidade"},

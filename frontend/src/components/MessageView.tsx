@@ -835,6 +835,7 @@ const ACTION: Record<string, string> = {
   write_file: "Escreveu um arquivo",
   list_dir: "Olhou a pasta",
   tree: "Olhou a árvore do projeto",
+  explore: "Explorou o código",
   ast: "Leu a estrutura do código",
   imports: "Conferiu os imports",
   search: "Procurou no projeto",

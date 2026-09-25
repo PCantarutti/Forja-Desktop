@@ -11,6 +11,7 @@ import contextlib
 import dataclasses
 import json
 import random
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from typing import AsyncIterator
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import codigo, goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports)
+from . import codigo, exploracoes, goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -28,6 +29,8 @@ from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, ex
 
 MAX_NUDGES = 2
 MAX_REESCRITAS = 5  # alterações no mesmo arquivo num turno antes do lembrete de abordagem travada
+LEITURAS = frozenset({"read_file", "grep", "glob", "list_dir", "tree", "ast", "imports", "lsp"})
+LIMITE_LEITURAS = 8  # leituras seguidas antes da dica do explore
 MAX_STOP_HOOKS = 3 # hook stop que sempre bloqueia não pode prender o turno para sempre
 # Maestro: a cada quantos turnos seguidos sem agir (só raciocínio) ela gera um novo alerta ao usuário.
 ALERTA_A_CADA = 5
@@ -175,6 +178,7 @@ class Run:
         self.escritas: dict[str, int] = {}  # arquivo -> alterações neste turno (freio de reescrita)
         self.stop_hooks = 0            # vezes que um hook stop segurou o fim do turno (teto MAX_STOP_HOOKS)
         self.tasks: list[dict] = []     # lista de tarefas do agente (update_tasks), estado mais recente
+        self.leituras = 0                # leituras seguidas sem escrever (dica do explore)
         self.nudged: set[str] = set()   # já levaram o freio do esforço extremo (um aviso cada): caminhos
                                        # de arquivo e "delegate_task" para a delegação rasa
         self.plan: str | None = None    # plano aprovado: fica preso no system prompt até outro substituí-lo
@@ -409,7 +413,8 @@ MAESTRO_RULES = [
     "recusa sem eles) → plan_feature → run_task uma por vez → leia o resultado → update_task → valide a entrega → "
     "session_note. Repita até não sobrar tarefa aberta.",
     "- Antes de planejar, investigue. Plano feito sem ler o código gera contrato errado, e contrato "
-    "errado queima uma tentativa inteira de um modelo grande.",
+    "errado queima uma tentativa inteira de um modelo grande. Para varrer muitos arquivos, use explore "
+    "(um explorador só de leitura, num contexto próprio) e passe o relatório no contrato com explorations.",
     "- Cada tarefa é pequena, tem um objetivo só e um 'verify_command' que PROVA que ficou pronta "
     "(pytest, build, lint, type check). Só quando não existe comando possível, escreva o motivo em "
     "'verify_reason': plan_feature recusa tarefa sem nenhum dos dois. Use o executor de testes do projeto, nunca `python -c`/`node -e`: "
@@ -507,9 +512,9 @@ def regras_plano(names: list[str]) -> list[str]:
         "plano vai tocar, não planeje de memória. Prefira funções e padrões que já existem a criar mecanismo "
         "novo. Não use update_tasks nesta fase: ela acompanha a execução depois do plano aprovado.",
     ]
-    if "delegate_task" in names:
-        regras.append("- Para varrer muitos arquivos ou pastas, use delegate_task level='rapido' com perguntas "
-                      "objetivas (onde está X, como Y é usado) e siga lendo enquanto ele responde.")
+    if "explore" in names:
+        regras.append("- Para varrer muitos arquivos ou pastas, use explore com uma pergunta objetiva (onde está X, "
+                      "como Y é usado): ele só lê, num contexto próprio, e devolve o relatório.")
     regras += [
         "- Descubra por inspeção o que dá para descobrir. ask_user só para escolha que é do usuário ou "
         "ambiguidade que o código não resolve — nunca para perguntar onde algo está ou como funciona hoje. "
@@ -741,7 +746,7 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
                         "colando a saída do erro.")
     elif "delegate_task" in names:
         rules.append("- delegate_task passa uma subtarefa autocontida para outro modelo e devolve só o relatório. "
-                     "Use level='rapido' para tarefas simples e mecânicas (buscar, resumir, listar, editar algo óbvio) "
+                     "Use level='rapido' para tarefas simples e mecânicas (resumir, editar algo óbvio; para só LER o código, explore) "
                      "e level='capaz' para raciocínio difícil (depurar, projetar, código complexo). Descreva a tarefa "
                      "por completo: o subagente não vê esta conversa. Em 'files', os arquivos que ele precisa ler (o "
                      "conteúdo vai junto); em 'done_when', o comando que prova que ficou pronto.")
@@ -1594,6 +1599,16 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                     yield {"type": "tool_result", "message": m.to_dict()}
         if aviso_loop:  # depois dos resultados: no meio deles quebraria a sequência de tool calls
             yield _event(conv_id, "nudge", aviso_loop, to_model=True)
+        # Muitas leituras seguidas sem escrever nada: a janela enche de arquivo lido. Uma dica por turno,
+        # não bloqueio (às vezes ler é mesmo o trabalho).
+        leituras = sum(1 for c in calls if c["name"] in LEITURAS)
+        run.leituras = run.leituras + leituras if leituras == len(calls) else 0
+        if (run.leituras >= LIMITE_LEITURAS and "explorar" not in run.nudged and not aviso_loop and loop.count <= 1
+                and any(t.name == "explore" for t in current_tools())):
+            run.nudged.add("explorar")
+            yield _event(conv_id, "nudge", f"Você já fez {run.leituras} leituras seguidas. Para varrer mais código, "
+                         "use explore com a pergunta: ele lê num contexto próprio e devolve só o relatório, "
+                         "sem encher a sua janela.", to_model=True)
         if run.permission != mode_at_start:  # plano aprovado ou modo trocado: o conjunto de ferramentas muda
             yield _event(conv_id, "info", run.mode_note or
                          f"Modo de permissão: {MODE_LABEL.get(run.permission, run.permission)}.")
@@ -1907,6 +1922,30 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
             return
         async for ev in _ask(call, run, out, meta):
             yield ev
+        return
+    if name == "explore":
+        if parent:
+            result("erro", "Um subagente não abre outro explorador: leia você mesmo e relate.")
+            return
+        try:
+            sub = {**call, "name": "delegate_task", "arguments": subagents.args_explorar(args)}
+        except ToolError as e:
+            result("erro", str(e))
+            return
+        async for ev in subagents.run(conv_id, sub, req, run, out, _run_call):
+            yield ev
+        relatorio = re.sub(r"^\[Relatório do subagente[^\]]*\]\n", "", out.get("text") or "")
+        if out.get("status") == "ok" and "RESPOSTA:" not in relatorio:
+            # Sem o formato não há relatório (na validação veio só a próxima chamada escrita como texto):
+            # gravar isso deixaria um EXP inútil que a Maestro depois confiaria.
+            out.update(status="erro", text="O explorador não entregou o relatório (nada foi guardado). "
+                                           "Tente de novo com uma pergunta mais específica, ou leia você mesmo.")
+        if out.get("status") == "ok":
+            relatorio = relatorio[:subagents.MAX_RELATORIO_EXPLORACAO]
+            eid = exploracoes.grava(workspace.root(), str(args.get("question") or ""),
+                                    subagents._files(args.get("paths")), relatorio)
+            out["text"] = (f"{relatorio}\n\n(Guardado como {eid} em {exploracoes.PASTA}/: sobrevive à "
+                           f"compactação; passe no contrato com explorations=['{eid}'].)")
         return
     if name == "delegate_task":
         if parent:

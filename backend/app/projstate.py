@@ -318,6 +318,9 @@ def prompt_block(root: Path | None = None) -> str:
             indice.append(f"{nome} ({len(texto)} c)")
     if (root / PASTA / "progress.md").is_file():
         indice.append("progress.md (histórico)")
+    from . import exploracoes  # tardio, como os outros deste módulo
+    if exploradas := exploracoes.indice(root):
+        partes.append(exploradas)
     return (f"\n\nProject State ({PASTA}/, a memória do projeto entre conversas; não reabra decisão "
             "tomada sem motivo novo). Sob demanda com read_file: "
             + (", ".join(indice) or "nada ainda") + ".\n" + "\n".join(partes))

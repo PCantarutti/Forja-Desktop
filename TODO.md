@@ -588,12 +588,12 @@ métricas de sucesso (E10). A exploração produz conhecimento, e cada um desses
 
 O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro papel.
 
-- [ ] **Persona embutida `explorador`.**
+- [x] **Persona embutida `explorador`.**
   - Só leitura: `read_file`, `list_dir`, `glob`, `grep`, `lsp` e, depois da E5, `tree`, `ast`,
     `imports`. Sem `run_command`, sem escrita e sem navegador.
   - O bloqueio é por lista de ferramentas, não só por instrução no prompt.
   - Usa o slot `rapido`. Se for o mesmo modelo do chamador, não há troca de modelo.
-- [ ] **Ferramenta `explore(pergunta, paths?)` no Maestro,** fora do `MAESTRO_FORA`.
+- [x] **Ferramenta `explore(pergunta, paths?)` no Maestro,** fora do `MAESTRO_FORA`.
   - Por dentro chama o mecanismo do `delegate_task` com a persona `explorador`.
   - O padrão é **um por vez, com o Maestro esperando o relatório**. O Maestro depende do resultado para
     seguir, então "segundo plano" não ganha nada. O ganho é isolar o contexto, não a velocidade.
@@ -604,26 +604,26 @@ O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro
   - nuvem só com o interruptor de exploração ligado.
 
   O explorador não implementa nenhuma regra própria de slot ou VRAM.
-- [ ] **No modo agente:** criar `delegate_task(agent='explorador')`, ou um `level='explorar'`. Ajustar a
+- [x] **No modo agente:** criar `delegate_task(agent='explorador')`, ou um `level='explorar'`. Ajustar a
       regra do prompt ("para varrer muitos arquivos…", `agent.py:511` e `737`) para apontar o explorador
       em vez do `rapido` com todas as ferramentas.
-- [ ] **Relatório com formato fixo:** resposta direta, arquivos e linhas relevantes
+- [x] **Relatório com formato fixo:** resposta direta, arquivos e linhas relevantes
       (`caminho:linha — por quê`) e o que não foi encontrado. Teto de tamanho proporcional à janela do
       chamador (E4).
-- [ ] **O relatório fica no estado do projeto.** Gravar em `projstate` (SQLite, como o resto do estado
+- [x] **O relatório fica no estado do projeto.** Gravar em `projstate` (SQLite, como o resto do estado
       do Maestro) com a pergunta, os caminhos e a data, para sobreviver à compactação e ao reinício do
       app. Um bloco curto no prompt do Maestro lista as explorações já feitas, e o corpo é lido sob
       demanda, para não reexplorar depois de compactar.
   - Invalidar ou avisar quando um arquivo citado mudou desde a exploração (mtime).
-- [ ] **Reúso nas tasks:** o `plan_feature` e o `run_task` aceitam `explorations=[id]`, e o contrato do
+- [x] **Reúso nas tasks:** o `plan_feature` e o `run_task` aceitam `explorations=[id]`, e o contrato do
       Worker leva os trechos relevantes. O Worker já começa sabendo onde mexer e economiza passos dos
       15.
-- [ ] **Lembrete automático:** quando o Maestro ou o agente fizer muitas leituras seguidas sem escrever
+- [x] **Lembrete automático:** quando o Maestro ou o agente fizer muitas leituras seguidas sem escrever
       (por exemplo, mais de 6 `read_file`/`grep`) ou a janela passar de ~50% com resultados de leitura,
       o código injeta uma dica curta: "use explore/delegate para varrer e fique só com a conclusão". É
       uma dica, não um bloqueio.
 - [ ] **Métrica:** evento do tipo `exploracao` na tabela da E10, separado das tasks.
-- [ ] Testes:
+- [x] Testes:
   - a persona não recebe ferramenta de escrita, nem se o modelo pedir;
   - o explorador passa por `como_rodar` (os cenários de VRAM e slot são testados na E4);
   - com `-np 1` duas explorações rodam em sequência;
@@ -632,6 +632,35 @@ O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro
   - o relatório sobrevive à compactação;
   - o aviso aparece quando um arquivo citado muda;
   - o contrato do Worker leva os trechos da exploração.
+
+**Feito em 2026-09-25 (sem a política da E4).**
+
+Validado no Forja real (Maestro, gpt-oss:120b, pacote `calc` com testes):
+- o Maestro chamou `explore` antes de planejar;
+- o relatório veio no formato (RESPOSTA / ARQUIVOS / NÃO ENCONTRADO) e foi guardado como EXP-001;
+- o Maestro passou `explorations: ["EXP-001"]` no plano;
+- o briefing do Worker trouxe "O QUE JÁ SE SABE DO CÓDIGO" com o relatório;
+- a tarefa passou de primeira e virou commit.
+
+Diferenças em relação ao plano:
+- **Onde fica o relatório:** em `.forja/exploracoes/EXP-NNN.md`, e não numa tabela do SQLite. É a
+  memória do projeto que já existia (FORJA.md e `.forja/`), sobrevive à compactação e ao reinício do
+  app, e o índice entra no bloco do Project State. Desatualizada = arquivo citado com o mtime mudado.
+- **Uma ferramenta `explore` para os dois modos**, e não um `level='explorar'`. No modo agente também
+  existe `delegate_task(agent='explorador')`.
+- **Onde roda:** não passa pela `como_rodar` (a E4 ainda não existe). Usa o slot `rapido`, com o
+  fallback de sempre, e roda em sequência (primeiro plano).
+- **Métrica:** fica para a E10.
+
+Achados da validação, corrigidos:
+- a 1ª rodada gravou como relatório a próxima chamada que o modelo escreveu como texto
+  (`{"path": ...}`). Agora o explorador é cobrado pelo formato (até 2 vezes), e relatório sem
+  `RESPOSTA:` não é guardado;
+- o Maestro pôs `explorations` no nível do plano, e não em cada tarefa. Agora vale para todas as
+  tarefas que não trouxerem as suas;
+- o loop do subagente recusa chamada de ferramenta fora da lista dele. Vale para toda persona, não só
+  para o explorador;
+- caminhos do `rollback` no resumo da Maestro passam a ser relativos.
 
 **Pronto quando:** o Maestro entende um repo desconhecido antes de planejar sem que a própria janela
 passe de ~30% com leituras, e nenhum explorador consegue escrever.

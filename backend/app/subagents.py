@@ -73,13 +73,32 @@ MAX_AGENTS = 20
 ATIVAS: dict[str, dict] = {}   # delegações rodando agora, para a aba Instâncias
 
 
+EXPLORADOR_TOOLS = ["read_file", "list_dir", "glob", "grep", "lsp", "tree", "ast", "imports"]
+MAX_RELATORIO_EXPLORACAO = 6000
+MAX_COBRANCAS_RELATORIO = 2  # vezes que o explorador é cobrado pelo formato do relatório
+# Embutida: o delegate_task 'rapido' recebia TODAS as ferramentas, e um modelo pequeno mandado explorar
+# podia acabar editando arquivo. Aqui só há leitura, e o loop recusa o que não está na lista.
+EXPLORADOR = {
+    "name": "explorador", "level": "rapido", "tools": EXPLORADOR_TOOLS, "source": "embutido",
+    "description": "só lê o código e responde uma pergunta, sem alterar nada",
+    "prompt": (
+        "Você só LÊ: não escreve, não roda comando, não altera nada. Responda a pergunta com o que o código "
+        "mostra, usando tree (forma do projeto), ast (esqueleto e funções), imports (quem usa o quê), grep e "
+        "read_file. Termine com o relatório neste formato, sem nada antes dele:\n"
+        "RESPOSTA: a resposta direta, em poucas linhas.\n"
+        "ARQUIVOS: um por linha, `caminho:linha — por que importa`.\n"
+        "NÃO ENCONTRADO: o que foi procurado e não existe (ou 'nada').\n"
+        "Cite só o que você leu de fato; não suponha conteúdo de arquivo não lido.")}
+
+
 def agents_for(root: Path) -> dict[str, dict]:
     """Personas de `.forja/agents/*.md`: cabeçalho diz o nível e as ferramentas, o corpo são as instruções.
 
     Sem persona o delegate_task só escolhe o tamanho do modelo; com ela o projeto versiona especialistas
-    ("revisor que não edita nada") junto com o código, do mesmo jeito que já faz com as skills.
+    ("revisor que não edita nada") junto com o código, do mesmo jeito que já faz com as skills. O
+    `explorador` é embutido; um `.forja/agents/explorador.md` do projeto o substitui.
     """
-    out: dict[str, dict] = {}
+    out: dict[str, dict] = {"explorador": dict(EXPLORADOR)}
     folder = root / AGENTS_DIR
     if not folder.is_dir():
         return out
@@ -287,6 +306,32 @@ register(Tool(
     _unused, available=lambda: bool(configured())))
 
 
+def args_explorar(args: dict) -> dict:
+    """explore(pergunta, paths) → a delegação ao explorador, em primeiro plano: quem pediu depende da
+    resposta para seguir, então 'segundo plano' não ganharia nada (o ganho é isolar o contexto)."""
+    pergunta = str(args.get("question") or "").strip()
+    if not pergunta:
+        raise ToolError("Informe 'question': o que você precisa saber do código.")
+    paths = _files(args.get("paths"))
+    tarefa = pergunta + (f"\n\nComece por: {', '.join(paths)}" if paths else "")
+    arquivos = [p for p in paths if (workspace.root() / p).is_file()]
+    return {"task": tarefa, "agent": "explorador", "files": arquivos, "run_in_background": False}
+
+
+register(Tool(
+    "explore",
+    "Manda um explorador SÓ DE LEITURA varrer o código e responder uma pergunta (onde está X, como Y "
+    "funciona, o que muda se eu mexer em Z). Ele lê num contexto próprio e devolve só o relatório, com "
+    "`caminho:linha`: use antes de planejar ou quando precisaria ler muitos arquivos, para não encher a sua "
+    "janela. O relatório fica guardado em .forja/exploracoes/ e pode ir no contrato (explorations=[id]).",
+    {"type": "object", "properties": {
+        "question": {"type": "string", "description": "A pergunta, completa: o explorador não vê esta conversa"},
+        "paths": {"type": "array", "items": {"type": "string"},
+                  "description": "Arquivos ou pastas por onde começar (opcional)"}},
+     "required": ["question"]},
+    _unused, available=lambda: bool(configured())))
+
+
 PODA_FRACAO = 0.6        # estimativa acima disto da janela → poda os resultados antigos do Worker
 PODA_TETO = 1500         # caracteres que sobram de cada resultado antigo podado
 PODA_TETO_FORTE = 600    # quando o servidor já recusou por contexto cheio
@@ -380,7 +425,7 @@ async def _setup(spec: dict, run_obj, sub_effort: str, persona: dict | None = No
     # Persona que lista ferramentas continua ganhando o ask_user de brinde (comportamento de sempre);
     # o Worker de contrato não, porque _run_call recusa ask_user de subagente e o schema só ocuparia
     # janela para devolver erro.
-    if not focado:
+    if not focado and not (persona and persona.get("source") == "embutido"):  # o explorador também não
         excluir.discard("ask_user")
     tools = available_tools(caps, run_obj.permission, exclude=excluir)
     conteudo = system_prompt(via, caps, exclude=excluir, permission=run_obj.permission,
@@ -515,6 +560,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
     recargas = 0
     apertou = False  # já podou por contexto cheio nesta tentativa
+    cobrancas = 0    # vezes que o explorador foi cobrado pelo relatório no formato
     teto_resultado = max(2000, int((ctx_max or config.NUM_CTX) * 3 * RESULTADO_FRACAO))
     # Loop de correção: verify falhou e sobram passos → a saída volta para o próprio Worker, em vez de a
     # tentativa acabar e a Maestro (às vezes noutro modelo, com troca de VRAM) ter de redespachar.
@@ -614,6 +660,20 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                                    for c in calls] or None,
                     "meta": {"stats": stats}})}
             if not calls:
+                if (persona and persona.get("source") == "embutido" and "RESPOSTA:" not in visible
+                        and cobrancas < MAX_COBRANCAS_RELATORIO and i + 1 < config.SUBAGENT_MAX_ITERATIONS):
+                    # Na validação o gpt-oss escreveu a próxima chamada como texto ({"path": ...}) e isso
+                    # virava o "relatório". Cobra o formato: chamar a ferramenta de verdade ou relatar.
+                    cobrancas += 1
+                    cobranca = ("Isso não é o relatório. Se precisa ler mais, CHAME a ferramenta (não a escreva no "
+                                "texto). Se já sabe a resposta, escreva agora o relatório no formato "
+                                "RESPOSTA: / ARQUIVOS: / NÃO ENCONTRADO:.")
+                    messages.append({"role": "assistant", "content": visible or "(vazio)"})
+                    messages.append({"role": "user", "content": cobranca})
+                    if structured:
+                        yield {"type": "sub_message", "parent": pid,
+                               "message": registra({"role": "user", "content": cobranca})}
+                    continue
                 final = visible
                 break
 
@@ -627,10 +687,18 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                     "\n<tool_call>\n" + json.dumps({"name": c["name"], "arguments": c["arguments"]},
                                                    ensure_ascii=False) + "\n</tool_call>" for c in calls)})
 
+            permitidas_agora = {t.name for t in tools}
             for c in calls:
                 sub_out: dict = {}
-                async for ev in run_call(conv_id, c, req, run_obj, caps, sub_out, parent=pid):
-                    yield ev
+                if c["name"] not in permitidas_agora:
+                    # O schema só lista o permitido, mas o modelo pode inventar a chamada (ou escrevê-la no
+                    # texto): sem esta trava, o explorador "só leitura" executaria um write_file.
+                    sub_out.update(status="erro", meta={"arguments": c["arguments"]},
+                                   text=f"'{c['name']}' não está disponível para este subagente. Use só: "
+                                        f"{', '.join(sorted(permitidas_agora))}.")
+                else:
+                    async for ev in run_call(conv_id, c, req, run_obj, caps, sub_out, parent=pid):
+                        yield ev
                 step = {"id": c["id"], "name": c["name"], "arguments": c["arguments"], "status": sub_out["status"],
                         "result": sub_out["text"][:MAX_RESULT_IN_STEP], "meta": {
                             k: v for k, v in sub_out["meta"].items() if k in ("preview", "auto_rule", "approved")}}

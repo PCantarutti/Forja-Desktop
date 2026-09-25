@@ -33,6 +33,13 @@ REGRESSAO_CMD = 180    # s por comando, como o verify do Worker
 WRITE_TOOLS = subagents.WRITE_TOOLS
 
 
+def _relativo(root: Path, caminho: str) -> str:
+    try:
+        return Path(caminho).resolve().relative_to(root.resolve()).as_posix()
+    except (ValueError, OSError):
+        return caminho
+
+
 def regressao(conv_id: int, task, root: Path) -> tuple[list[dict], bool]:
     """Roda de novo os verify_command das tarefas já concluídas desta conversa (menos o desta, que o
     Worker acabou de rodar). Devolve (falhas, parcial): parcial = o teto de tempo cortou a lista.
@@ -417,7 +424,7 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
         # descartado vai no briefing (last_error) para o Worker não repetir às cegas.
         descartado = checkpoints.diff_attempt(attempt_id, MAX_DESCARTE)
         if revertidos := checkpoints.restore_attempt(attempt_id):
-            resultado["rollback"] = {"files": revertidos, "diff": descartado}
+            resultado["rollback"] = {"files": [_relativo(root, f) for f in revertidos], "diff": descartado}
     registra_estado(attempt_id, root)
 
     # Etapa de revisão explícita: só quando NADA provou o resultado. Com o comando de verificação
