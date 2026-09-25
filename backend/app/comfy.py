@@ -8,6 +8,8 @@ roda e derruba (comfy_job.py), então a VRAM fica livre entre uma e outra — co
 from __future__ import annotations
 
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from . import downloads, localai, native
@@ -62,6 +64,14 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
                              "--entrada", entrada, "--saida", str(saida), "--fator", str(int(fator))],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())
+    def vigia() -> None:
+        # o driver passa minutos calado na fase "ampliando": o cancelamento não pode esperar a próxima linha
+        while proc.poll() is None:
+            if job_id and downloads.cancelled(job_id):
+                native.kill_tree(proc)  # o driver e o servidor do ComfyUI juntos: a VRAM volta na hora
+                return
+            time.sleep(0.5)
+    threading.Thread(target=vigia, daemon=True).start()
     fim = ""
     for linha in proc.stdout:  # type: ignore[union-attr]
         linha = linha.strip()
@@ -69,9 +79,6 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
             progresso(linha[5:])
         elif linha.startswith(("OK", "ERRO")):
             fim = linha
-        if job_id and downloads.cancelled(job_id):
-            native.kill_tree(proc)  # o driver e o servidor do ComfyUI juntos
-            break
     proc.wait()
     if job_id and downloads.cancelled(job_id):
         raise ToolError("Ampliação cancelada.")

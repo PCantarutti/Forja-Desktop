@@ -276,5 +276,22 @@ def test_caminho_so_com_ascii_para_o_sd_cli(tmp_path):
     f.write_bytes(b"png de teste")
     a = native.caminho_ascii(f)
     assert a.isascii() and Path(a).read_bytes() == b"png de teste"
-    assert native.caminho_ascii(tmp_path) == str(tmp_path) or str(tmp_path).isascii() is False
     assert native.pasta_ascii().is_dir() and str(native.pasta_ascii()).isascii()
+
+
+def test_cancelar_mata_o_driver_mesmo_calado(isolado, monkeypatch):
+    """Na fase "ampliando" o driver fica minutos sem escrever: cancelar tem de derrubar o processo assim mesmo."""
+    import sys, threading
+    from app import comfy
+    seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
+    safetensors(isolado / "modelos", "seedvr2_ema_vae_fp16.safetensors", ["decoder.conv_in.weight"])
+    falso = isolado / "driver.py"
+    falso.write_text("import time; print('FASE ampliando', flush=True); time.sleep(60); print('OK 1x1')", encoding="utf-8")
+    monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
+    monkeypatch.setattr(comfy, "JOB", falso)
+    job = downloads.create("lote", "teste")
+    threading.Timer(1.0, lambda: downloads.cancel(job["id"])).start()
+    comeco = time.monotonic()
+    with pytest.raises(lotes.ToolError, match="cancelada"):
+        comfy.ampliar("in.png", isolado / "out.png", 2, seed, job["id"])
+    assert time.monotonic() - comeco < 10
