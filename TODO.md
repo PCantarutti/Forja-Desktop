@@ -772,24 +772,52 @@ Resta conferir:
 **Por quê:** RAG é 2/10. Não há índice nenhum, e o `session_search` pode esconder resultados.
 **Depende de:** E5, para indexar símbolos junto com o texto; a parte de sessões pode sair antes.
 
-- [ ] **`session_search` com FTS5.** Criar uma tabela virtual FTS5 sobre `messages` no SQLite que já
+- [x] **`session_search` com FTS5.** Criar uma tabela virtual FTS5 sobre `messages` no SQLite que já
       existe (`db.py`), com gatilhos de insert, update e delete, e ranking `bm25`. Corrigir o
       `limit(400)` que é aplicado antes do filtro de pasta (`sessoes.py:58`).
-- [ ] **Busca em código com ranking.** Criar a ferramenta `code_search` (ou um modo do `grep`) sobre um
+      *Feito:* `messages_fts` com conteúdo próprio (rowid = id da mensagem), só falas do usuário e do
+      agente (saída de ferramenta fica fora), sem acento (`remove_diacritics 2`). Criada e preenchida
+      na primeira subida (`db._fts_mensagens`). A pasta filtra antes do limite. A consulta vira palavras
+      entre aspas com prefixo, unidas por OR (`sessoes.consulta_fts`). Sem FTS5 no SQLite, cai no LIKE.
+- [x] **Busca em código com ranking.** Criar a ferramenta `code_search` (ou um modo do `grep`) sobre um
       índice FTS5 por projeto, com os arquivos e os símbolos do `ast outline`. Indexação incremental por
       mtime, feita na primeira chamada. Responde "onde se trata X" quando o nome exato não é conhecido.
+      *Feito:* `codebusca.py`. Trechos de 40 linhas com caminho, símbolos, identificadores camelCase
+      quebrados em palavras e o texto, com bm25 por coluna. Documentação e teste têm peso menor, porque
+      citam o assunto mais vezes que a implementação. O índice é cache em `DATA_DIR/indices`, não
+      memória do projeto. Primeira indexação de ~1000 arquivos: ~3 s; as seguintes, ~0,2 s.
+      *Desvio encontrado:* numa pasta que agrupa vários repositórios (`mesaflow/` com api, admin e
+      site, cada um com `.git`), o `_analisaveis` pulava todos, e o índice ficava só com a
+      documentação. Agora o repo aninhado só é pulado quando a raiz também é um repo, ou quando ele
+      está numa pasta oculta (as worktrees em `.claude/`). Isso vale também para o `ast` e o `imports`.
 - [ ] **Embeddings: só se o FTS5 não bastar.** Avaliar depois de usar. O llama.cpp embutido serve
       embeddings (`--embedding`), mas isso exige outro modelo carregado e compete com o slot. Se um dia
       existir, passa por `como_rodar("embeddings", …)` (E4): sem VRAM, pula e usa o FTS5, nunca troca
       de modelo. Deixar anotado, sem construir agora.
-- [ ] **Memória por projeto.** O tipo "projeto" do `memory.py` passa a gravar sob a raiz do projeto
+- [x] **Memória por projeto.** O tipo "projeto" do `memory.py` passa a gravar sob a raiz do projeto
       (`.forja/memoria/` ou uma chave pela raiz do git), e o índice injetado mostra as memórias globais e
       as do projeto atual, não todas.
-- [ ] Testes: ranking do FTS5; filtro por pasta antes do limite; memória de projeto que não vaza para
-      outro projeto.
+      *Feito:* `<raiz do git>/.forja/memoria/`, a partir de qualquer subpasta. O índice congelado do
+      turno agora é por projeto (antes era um só, e trocar de pasta mostrava o índice da outra).
+      Memória que muda de tipo sai do lugar antigo. As "projeto" antigas, na pasta global, continuam
+      globais: não há como saber de que projeto eram.
+- [x] Testes: ranking do FTS5; filtro por pasta antes do limite; memória de projeto que não vaza para
+      outro projeto. (`tests/test_codebusca.py`)
 
 **Pronto quando:** "onde o app trata login?" acha o arquivo certo sem que o modelo saiba o nome do
 arquivo.
+
+*Validado no Forja real* (gpt-oss:120b, modo manual, no `C:\Projetos\mesaflow`), com a pergunta "onde o
+app trata o login dos funcionários?":
+- **1ª rodada:** o agente não usou a `code_search`. Foi de `tree` e `grep` e tentou uma ferramenta
+  `search` que não existe, ou seja, queria buscar por assunto e não reconheceu a ferramenta. A regra do
+  prompt passou a ser "comece por code_search", no agente e no explorador.
+- **2ª rodada:** a primeira chamada foi `code_search "login staff"`, que trouxe
+  `AuthUseCases.loginStaff` no topo, e a resposta saiu certa (backend e tela).
+- **Conversa seguinte:** o `session_search` achou a conversa anterior pelo assunto, e o `remember` com
+  tipo projeto gravou em `mesaflow/.forja/memoria/`. O `.forja` criado pela validação foi apagado.
+- **Defeito visto e corrigido:** `code_search` com uma pasta inexistente respondia "nada casa". Agora é
+  erro, com a dica de usar o `tree`.
 
 ---
 

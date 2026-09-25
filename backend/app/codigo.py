@@ -230,19 +230,24 @@ def _outline_arquivo(root: Path, p: Path, so_topo: bool = False) -> str:
     return "\n".join(linhas)
 
 
-def _analisaveis(base: Path, root: Path | None = None):
-    """Arquivos Python/JS/TS da pasta, pulando o que o `tree` pula (dependências, build, .gitignore da
-    raiz). Sem isto o índice varria resources/python inteiro e batia no teto antes do código do projeto."""
+def _analisaveis(base: Path, root: Path | None = None, exts=LINGUAS, ocultas: bool = True):
+    """Arquivos Python/JS/TS (ou das `exts`) da pasta, pulando o que o `tree` pula (dependências, build,
+    .gitignore da raiz). Sem isto o índice varria resources/python inteiro e batia no teto antes do
+    código do projeto. Repositório aninhado só é pulado quando a raiz também é um repositório (aí ele é
+    worktree ou cópia); numa pasta que agrupa vários repos (api/, admin/, site/), eles SÃO o projeto.
+    `ocultas=False` pula também as pastas que começam com ponto (.docusaurus, .claude, caches)."""
     root = root or base
     padroes = _gitignore(root)
+    raiz_repo = (root / ".git").exists()
     for dirpath, dirnames, filenames in os.walk(base):
         d = Path(dirpath)
         rel_d = d.relative_to(root).as_posix() if d.is_relative_to(root) else ""
         rel = (lambda n: f"{rel_d}/{n}" if rel_d not in ("", ".") else n)
         dirnames[:] = sorted(n for n in dirnames if not _ignorado(rel(n), n, True, padroes)
-                             and not _repo_aninhado(d / n))
+                             and (ocultas or not n.startswith(".") or n == ".github")
+                             and not ((raiz_repo or rel_d.split("/")[0].startswith(".") and rel_d != ".") and _repo_aninhado(d / n)))
         for n in sorted(filenames):
-            if Path(n).suffix.lower() in LINGUAS and not _ignorado(rel(n), n, False, padroes):
+            if Path(n).suffix.lower() in exts and not _ignorado(rel(n), n, False, padroes):
                 yield d / n
 
 

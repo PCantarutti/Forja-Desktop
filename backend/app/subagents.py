@@ -73,7 +73,7 @@ MAX_AGENTS = 20
 ATIVAS: dict[str, dict] = {}   # delegações rodando agora, para a aba Instâncias
 
 
-EXPLORADOR_TOOLS = ["read_file", "list_dir", "glob", "grep", "lsp", "tree", "ast", "imports"]
+EXPLORADOR_TOOLS = ["read_file", "list_dir", "glob", "grep", "lsp", "tree", "ast", "imports", "code_search"]
 MAX_RELATORIO_EXPLORACAO = 6000
 MAX_COBRANCAS_RELATORIO = 2  # vezes que o explorador é cobrado pelo formato do relatório
 # Embutida: o delegate_task 'rapido' recebia TODAS as ferramentas, e um modelo pequeno mandado explorar
@@ -83,7 +83,8 @@ EXPLORADOR = {
     "description": "só lê o código e responde uma pergunta, sem alterar nada",
     "prompt": (
         "Você só LÊ: não escreve, não roda comando, não altera nada. Responda a pergunta com o que o código "
-        "mostra, usando tree (forma do projeto), ast (esqueleto e funções), imports (quem usa o quê), grep e "
+        "mostra. Comece por code_search (várias palavras do assunto, também em inglês): ele devolve os arquivos "
+        "mais relevantes. Depois use ast (esqueleto e funções), imports (quem usa o quê), tree, grep e "
         "read_file. Termine com o relatório neste formato, sem nada antes dele:\n"
         "RESPOSTA: a resposta direta, em poucas linhas.\n"
         "ARQUIVOS: um por linha, `caminho:linha — por que importa`.\n"

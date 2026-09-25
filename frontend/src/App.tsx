@@ -210,6 +210,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
   explore: (a) => `Explorando: ${trecho(a.question, 50) ?? "o código"}`,
+  code_search: (a) => `Procurando no código: ${trecho(a.query, 40) ?? "…"}`,
   tree: (a) => `Olhando a árvore de ${trecho(a.path, 40) ?? "pastas do projeto"}`,
   ast: (a) => ({ outline: `Lendo a estrutura de ${arquivo(a.path) ?? "um arquivo"}`,
                  symbol: `Lendo ${trecho(a.name, 30) ?? "um símbolo"} em ${arquivo(a.path) ?? "um arquivo"}`,

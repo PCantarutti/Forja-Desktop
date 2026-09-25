@@ -243,6 +243,35 @@ def _migrate() -> None:
                 WHERE id NOT IN (SELECT DISTINCT conversation_id FROM messages WHERE role = 'tool')
                   AND id IN (SELECT DISTINCT conversation_id FROM messages
                              WHERE role = 'assistant' AND json_extract(meta, '$.via') = 'none')""")
+    _fts_mensagens()
+
+
+def _fts_mensagens() -> None:
+    """Índice FTS5 das falas (usuário e agente) para o session_search: ranking bm25 em vez de LIKE.
+    Tabela com conteúdo próprio (rowid = id da mensagem) e não external-content: assim os gatilhos
+    filtram por papel sem deixar entrada órfã, e saída de ferramenta não entra no índice."""
+    with engine.begin() as c:
+        existe = c.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'").first()
+        if existe:
+            return
+        try:
+            c.exec_driver_sql(
+                "CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='unicode61 remove_diacritics 2')")
+        except Exception:  # SQLite sem FTS5: o session_search segue no LIKE
+            return
+        falas = "('user', 'assistant')"
+        c.exec_driver_sql(f"""CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages
+            WHEN new.role IN {falas} BEGIN
+              INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content); END""")
+        c.exec_driver_sql("""CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
+              DELETE FROM messages_fts WHERE rowid = old.id; END""")
+        c.exec_driver_sql(f"""CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages
+            WHEN new.role IN {falas} BEGIN
+              DELETE FROM messages_fts WHERE rowid = old.id;
+              INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content); END""")
+        c.exec_driver_sql(f"INSERT INTO messages_fts(rowid, content) SELECT id, content FROM messages "
+                          f"WHERE role IN {falas}")
 
 
 _migrate()

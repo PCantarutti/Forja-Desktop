@@ -55,25 +55,55 @@ def transcricao(conv_id: int, inicio: int = 0, limite: int = MAX_LEITURA) -> str
     return trecho
 
 
+def consulta_fts(texto: str) -> str:
+    """Texto livre → consulta FTS5: cada palavra entre aspas (nada de sintaxe do usuário vaza) e com
+    prefixo (`login` acha `logins`), unidas por OR; o bm25 põe no topo quem tem mais termos raros."""
+    palavras = [p for p in re.findall(r"\w+", texto.lower()) if len(p) >= 2]
+    return " OR ".join(f'"{p}"*' for p in dict.fromkeys(palavras))
+
+
+def _achados_fts(s, consulta: str, ids: list[int]) -> dict[int, str]:
+    """{conversa: trecho} da melhor fala de cada conversa, na ordem do ranking."""
+    marcas = ",".join("?" * len(ids))
+    linhas = s.connection().exec_driver_sql(
+        "SELECT m.conversation_id, snippet(messages_fts, 0, '', '', '…', 24) FROM messages_fts "
+        f"JOIN messages m ON m.id = messages_fts.rowid WHERE messages_fts MATCH ? AND m.conversation_id IN ({marcas}) "
+        "ORDER BY bm25(messages_fts) LIMIT 400", (consulta, *ids)).all()
+    trechos: dict[int, str] = {}
+    for cid, trecho in linhas:
+        trechos.setdefault(cid, (trecho or "").replace("\n", " ").strip())
+    return trechos
+
+
+def _achados_like(s, termo: str, ids: list[int]) -> dict[int, str]:
+    linhas = s.execute(select(db.Message.conversation_id, db.Message.content)
+                       .where(db.Message.content.ilike(f"%{termo}%"), db.Message.role.in_(("user", "assistant")),
+                              db.Message.conversation_id.in_(ids))
+                       .order_by(db.Message.id.desc()).limit(400)).all()
+    trechos: dict[int, str] = {}
+    for cid, conteudo in linhas:
+        if cid not in trechos:
+            i = max(0, (conteudo or "").lower().find(termo.lower()))
+            trechos[cid] = "…" + (conteudo or "")[max(0, i - 60): i + 140].replace("\n", " ").strip() + "…"
+    return trechos
+
+
 def session_search(_root: Path, args: dict) -> str:
     termo = str(args.get("query") or "").strip()
     if len(termo) < 2:
         raise ToolError("Informe 'query' com pelo menos 2 caracteres.")
     atual, pasta = CONV.get(), _pasta_atual()
     with db.session() as s:
-        linhas = s.execute(select(db.Message.conversation_id, db.Message.content)
-                           .where(db.Message.content.ilike(f"%{termo}%"), db.Message.role.in_(("user", "assistant")))
-                           .order_by(db.Message.id.desc()).limit(400)).all()
+        # A pasta filtra ANTES do limite: com o LIMIT primeiro, 400 falas de outras pastas escondiam as daqui.
+        convs = {c.id: c for c in s.scalars(select(db.Conversation)) if c.id != atual and _mesma_pasta(c, pasta)}
         trechos: dict[int, str] = {}
-        for cid, conteudo in linhas:
-            if cid != atual and cid not in trechos:
-                i = max(0, (conteudo or "").lower().find(termo.lower()))
-                trechos[cid] = (conteudo or "")[max(0, i - 60): i + 140].replace("\n", " ").strip()
-        convs = [c for c in s.scalars(select(db.Conversation).where(db.Conversation.id.in_(list(trechos))))
-                 if _mesma_pasta(c, pasta)]
-        convs.sort(key=lambda c: c.updated_at, reverse=True)
-        achadas = [f"- conversa {c.id} «{c.title}» ({c.updated_at:%d/%m/%Y}): …{trechos[c.id]}…"
-                   for c in convs[:MAX_BUSCA]]
+        if convs and (consulta := consulta_fts(termo)):
+            try:
+                trechos = _achados_fts(s, consulta, list(convs))
+            except Exception:  # banco sem FTS5
+                trechos = _achados_like(s, termo, list(convs))
+        achadas = [f"- conversa {cid} «{convs[cid].title}» ({convs[cid].updated_at:%d/%m/%Y}): {t}"
+                   for cid, t in list(trechos.items())[:MAX_BUSCA]]
     return ("\n".join(achadas) + "\nLeia uma com session_read(id).") if achadas else \
         f"Nenhuma conversa desta pasta menciona '{termo}'."
 
