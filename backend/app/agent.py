@@ -21,7 +21,7 @@ from typing import AsyncIterator
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search)
+from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -2104,6 +2104,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
                 meta["sources"] = res["sources"]
             if res.get("imagens_pendentes"):  # a UI desenha o botão que leva os slots para a tela Imagens
                 meta["imagens_pendentes"] = res["imagens_pendentes"]
+            if res.get("board_card"):  # a UI desenha o card (abre no board, vai ao código, Iniciar)
+                meta["board_card"] = res["board_card"]
             res = res.get("text", "")
             images = [a for a in meta["attachments"] if a.get("kind") == "image"]
             if images:

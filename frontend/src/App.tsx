@@ -18,7 +18,7 @@ import { CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, enviarClasse, pa
 import { GRADE_VAZIA, abertos, abrir as abrirTile, fechar as fecharTile, soltos, type Grade } from "./components/tiles";
 import { executarNoTerminal } from "./components/TerminalPanel";
 import SettingsDialog from "./components/Settings";
-import BoardView from "./components/BoardView";
+import BoardView, { CardNoChat } from "./components/BoardView";
 import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
@@ -212,6 +212,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
   explore: (a) => `Explorando: ${trecho(a.question, 50) ?? "o código"}`,
   code_search: (a) => `Procurando no código: ${trecho(a.query, 40) ?? "…"}`,
+  board_card: (a) => `Criando card no board: ${trecho(a.titulo, 40) ?? "…"}`,
   tree: (a) => `Olhando a árvore de ${trecho(a.path, 40) ?? "pastas do projeto"}`,
   ast: (a) => ({ outline: `Lendo a estrutura de ${arquivo(a.path) ?? "um arquivo"}`,
                  symbol: `Lendo ${trecho(a.name, 30) ?? "um símbolo"} em ${arquivo(a.path) ?? "um arquivo"}`,
@@ -310,6 +311,13 @@ export default function App() {
   const [config, setConfig] = useState<Config>({ providers: [], num_ctx: 32768 });
   const [showSettings, setShowSettings] = useState(false);
   const [showBoard, setShowBoard] = useState(false);
+  const [boardFoco, setBoardFoco] = useState<{ id: number; projeto: string } | null>(null);
+  // Card na resposta da IA (CardNoChat): clicar abre o board no projeto dele, com o card aberto.
+  useEffect(() => {
+    const abre = (e: Event) => { setBoardFoco((e as CustomEvent).detail); setShowBoard(true); };
+    window.addEventListener("forja:board", abre);
+    return () => window.removeEventListener("forja:board", abre);
+  }, []);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [geral, setSettings] = useState<Settings>(loadSettings);
@@ -1637,6 +1645,10 @@ export default function App() {
                   )}
                   {showTurn && (
                     <div className="mt-4 space-y-1.5">
+                      {/* cards que a IA criou no board neste turno: no fim da resposta, antes dos números */}
+                      {turn.cards.length > 0 && (
+                        <div className="mb-3">{turn.cards.map((c) => <CardNoChat key={c.id} card={c} />)}</div>
+                      )}
                       {turn.stats && (
                         <StatsRow
                           s={turn.stats}
@@ -2102,9 +2114,11 @@ export default function App() {
       )}
       {showBoard && (
         <BoardView
-          pasta={(conv ? conv.workspace : pendingWs) ?? null}
+          key={boardFoco?.id ?? "board"}
+          pasta={boardFoco?.projeto ?? (conv ? conv.workspace : pendingWs) ?? null}
+          foco={boardFoco?.id}
           carimbo={activity.board}
-          onClose={() => setShowBoard(false)}
+          onClose={() => { setShowBoard(false); setBoardFoco(null); }}
           onAbrirConversa={async (id) => {
             setShowBoard(false);
             try {

@@ -210,6 +210,15 @@ class Issue(Base):
     updated_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class BoardVinculo(Base):
+    """Pasta ligada ao board de outra (E15): /projeto/back e /projeto/front no board de /projeto. Conversa
+    aberta na pasta, ou em qualquer subpasta dela, usa o board de `projeto`."""
+    __tablename__ = "board_vinculos"
+    pasta: Mapped[str] = mapped_column(String(1000), primary_key=True)  # normalizada
+    projeto: Mapped[str] = mapped_column(String(1000), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(f"sqlite:///{config.DB_PATH}", connect_args={"check_same_thread": False})
 

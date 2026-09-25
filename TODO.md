@@ -1394,6 +1394,39 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - Para isso a porta da rede local virou configurável: `FORJA_LAN_PORTA`, padrão 47811. A instância de
     teste usou a 47812, porque a 47811 estava com a instância de outra sessão.
 
+**Acréscimos pedidos depois do MVP** (2026-09-25, validados no Forja real com gpt-oss:120b):
+- **A IA cria card: ferramenta `board_card`.** O card cai em Novo, e a evidência é conferida no disco:
+  - o arquivo existe e a linha existe;
+  - o trecho está de fato perto da linha (card inventado é recusado);
+  - card aberto no mesmo arquivo, a até 2 linhas, é o mesmo card. Na validação, a IA apontou o `def`
+    numa vez e o `return` na outra e repetia;
+  - "bug", "melhoria"… viram o tipo certo, e área inválida é deduzida pelo caminho;
+  - verify que é nome de ferramenta (veio `browser_screenshot`) é descartado.
+
+  Tem teto de 20 cards por conversa e apelidos (`create_issue`, `add_card`…).
+- **Interruptor "IA cria cards sozinha", por board.** Desligado, o `board_card` nem entra no catálogo nem
+  no prompt. Um pedido explícito (skill `/board` ou "Pedir à IA") libera só naquela conversa.
+- **"Pedir à IA" no board e a skill `/board [foco]`.**
+  - O pedido abre uma conversa de agente em modo manual, que só lê. Foco: tudo, bugs, melhorias,
+    features ou visual, e opcionalmente uma subpasta.
+  - O pedido leva os cards abertos e os rejeitados recentes, para não repetir.
+  - Resultado num projeto com 5 bugs plantados: 5 cards corretos em 15 s. Ficaram de fora o contraste e
+    o `alt` da imagem. Pedido de novo, não duplicou.
+- **Card visual com print.**
+  - O Iniciar de card visual pede um print ANTES e um DEPOIS.
+  - Na Revisão, o primeiro e o último print da conversa viram evidência do card.
+  - Validado: o agente usou `serve_start` → `browser_screenshot` → `edit_file` → recarregar →
+    `browser_screenshot`, e o card chegou à Revisão com os dois prints, em 18 s.
+- **Pastas vinculadas.**
+  - `/projeto` com `back/` e `front/`, cada um com `.git`: "Pastas" › "Vincular todos". Conversa na
+    pasta vinculada, ou numa subpasta dela, usa o board da raiz, e a varredura passa por todas.
+  - Também dá para vincular uma pasta fora da raiz; o caminho fica com `../`.
+  - Os cards do board antigo da pasta vêm junto, com os caminhos refeitos.
+  - A impressão digital usa o caminho absoluto, para não duplicar depois de vincular.
+- **Card na resposta da IA**, igual ao do board, no fim da resposta. Clicar abre o board no card, e
+  ao lado ficam "Ir para o código" (editor na linha) e "Iniciar" (aceita e inicia).
+- **Board em 90% da tela.** Com a escala de 1,1 do Windows, o 100vw cortava a coluna Concluído.
+
 - [x] **Tabela `issues` por projeto** (pela pasta raiz, não por conversa como `Feature`/`Task`,
       `db.py:114`). Campos:
   - `id`, `projeto` (raiz), `titulo`, `descricao`;

@@ -467,13 +467,19 @@ def board_projetos():
 def board_listar(pasta: str):
     projeto = _board(board.projeto_de, pasta)
     return {"projeto": projeto, "issues": board.listar(projeto), "varredura": board.estado_varredura(projeto),
-            "comandos": board.comandos_do_projeto(Path(projeto))}
+            "comandos": board.comandos_do_projeto(Path(projeto)), "board_card": board.board_card_ligado(projeto),
+            "vinculadas": len(board.vinculadas(projeto))}
 
 
 @app.post("/api/board/issues")
 def board_criar(body: dict):
     projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
     return _board(board.criar, projeto, {k: v for k, v in body.items() if k not in ("pasta", "impressao")})[0]
+
+
+@app.get("/api/board/issues/{issue_id}")
+def board_pega(issue_id: int):
+    return _board(board.pega, issue_id)
 
 
 @app.patch("/api/board/issues/{issue_id}")
@@ -505,6 +511,39 @@ async def board_reabrir(issue_id: int, body: dict):
 @app.post("/api/board/varrer")
 def board_varrer(body: dict):
     return _board(board.varrer, str(body.get("pasta") or ""))
+
+
+@app.post("/api/board/pedir")
+async def board_pedir(body: dict):
+    """'Pedir à IA': conversa de agente que procura bugs/melhorias/ideias e cria os cards (board_card)."""
+    return _board(board.pedir_ia, str(body.get("pasta") or ""), str(body.get("foco") or "tudo"),
+                  str(body.get("subpasta") or ""))
+
+
+@app.post("/api/board/ia")
+def board_ia(body: dict):
+    """Liga/desliga o board_card neste board: desligado, o agente não cria card sozinho (nem vê a ferramenta)."""
+    projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
+    return {"board_card": board.define_board_card(projeto, bool(body.get("ligado")))}
+
+
+@app.get("/api/board/vinculos")
+def board_vinculos(pasta: str):
+    projeto = _board(board.projeto_de, pasta)
+    return {"projeto": projeto, "vinculadas": board.vinculadas(projeto), "sugestoes": board.sugestoes(projeto)}
+
+
+@app.post("/api/board/vinculos")
+def board_vincular(body: dict):
+    projeto = _board(board.projeto_de, str(body.get("pasta_board") or ""))
+    _board(board.vincular, projeto, str(body.get("pasta") or ""))
+    return board_vinculos(projeto)
+
+
+@app.delete("/api/board/vinculos")
+def board_desvincular(pasta: str):
+    board.desvincular(pasta)
+    return {"ok": True}
 
 
 @app.post("/api/servers/clear")

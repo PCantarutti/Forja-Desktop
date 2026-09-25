@@ -4,7 +4,11 @@ import { Modal } from "./Modal";
 
 /** Board de issues do projeto (E15-A): Novo → Backlog → Em andamento → Revisão → Concluído. */
 
-type Evidencia = { arquivo?: string; linha?: number; trecho?: string; comando?: string; saida?: string; imagem?: string };
+type Evidencia = { arquivo?: string; linha?: number; trecho?: string; comando?: string; saida?: string;
+  imagem?: string; conv?: number; rotulo?: string };
+const FOCOS = [{ id: "tudo", nome: "tudo" }, { id: "bugs", nome: "bugs" }, { id: "melhorias", nome: "melhorias" },
+  { id: "features", nome: "ideias de feature" }, { id: "visual", nome: "problemas visuais" }];
+const nomePasta = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 export type Issue = {
   id: number; projeto: string; titulo: string; descricao: string;
   tipo: string; area: string; severidade: number; status: string;
@@ -36,6 +40,7 @@ const btnPrimary = "rounded-full bg-fg px-3 py-1 text-xs font-medium text-black 
 export default function BoardView(props: {
   pasta: string | null;          // pasta da conversa aberta: o board abre no projeto dela
   carimbo?: string;              // activity.board: mudou, recarrega (outro aparelho, varredura, conversa terminou)
+  foco?: number | null;          // card para abrir já no detalhe (veio do card na resposta da IA)
   onClose: () => void;
   onAbrirConversa: (id: number) => void;
 }) {
@@ -48,8 +53,20 @@ export default function BoardView(props: {
   const [busca, setBusca] = useState("");
   const [filtro, setFiltro] = useState({ tipo: "", area: "", sev: "" });
   const [rejeitados, setRejeitados] = useState(false);
-  const [aberto, setAberto] = useState<number | "novo" | null>(null);
+  const [aberto, setAberto] = useState<number | "novo" | null>(props.foco ?? null);
   const [alvo, setAlvo] = useState<string | null>(null);  // coluna sob o card arrastado
+  const [iaCria, setIaCria] = useState(true);   // board_card ligado neste board
+  const [nVinc, setNVinc] = useState(0);
+  const [pedir, setPedir] = useState(false);
+  const [foco, setFoco] = useState("tudo");
+  const [subpasta, setSubpasta] = useState("");
+  const [pedido, setPedido] = useState<number | null>(null);  // conversa da IA procurando
+  const [pastas, setPastas] = useState(false);
+  const [vinc, setVinc] = useState<{ projeto: string; vinculadas: string[]; sugestoes: string[] } | null>(null);
+  const [novaPasta, setNovaPasta] = useState("");
+  const carregaVinc = () => pasta && api.get<typeof vinc>(`/board/vinculos?pasta=${encodeURIComponent(pasta)}`)
+    .then(setVinc).catch((e) => setErro(e.message));
+  useEffect(() => { if (pastas) carregaVinc(); }, [pastas, pasta]);
 
   useEffect(() => {
     api.get<{ projeto: string; nome: string }[]>("/board/projetos").then((l) => {
@@ -60,9 +77,10 @@ export default function BoardView(props: {
 
   const carregar = () => {
     if (!pasta) return;
-    api.get<{ issues: Issue[]; varredura: Varredura; comandos: Record<string, string>; projeto: string }>(
-      `/board?pasta=${encodeURIComponent(pasta)}`)
-      .then((r) => { setIssues(r.issues); setVarredura(r.varredura); setComandos(r.comandos); })
+    api.get<{ issues: Issue[]; varredura: Varredura; comandos: Record<string, string>; projeto: string;
+      board_card: boolean; vinculadas: number }>(`/board?pasta=${encodeURIComponent(pasta)}`)
+      .then((r) => { setIssues(r.issues); setVarredura(r.varredura); setComandos(r.comandos);
+        setIaCria(r.board_card); setNVinc(r.vinculadas); })
       .catch((e) => setErro(e.message));
   };
   useEffect(carregar, [pasta, props.carimbo]);
@@ -137,7 +155,9 @@ export default function BoardView(props: {
 
   return (
     <Modal onClose={props.onClose} label="Board do projeto"
-      className="flex h-[92vh] w-[96vw] max-w-[1600px] flex-col overflow-hidden rounded-2xl border border-line bg-bg">
+      // 90% do fundo do modal, não vw/vh: com o zoom da interface o 100vw passava da tela e cortava a
+      // coluna Concluído e os botões da direita (o usuário viu cortado mesmo com 100% do fundo).
+      className="flex h-[90%] w-[90%] flex-col overflow-hidden rounded-xl border border-line bg-bg">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
         <h2 className="mr-2 text-sm font-medium text-fg">Board</h2>
         <select className={sel} value={pasta ?? ""} onChange={(e) => setPasta(e.target.value)} aria-label="Projeto">
@@ -166,11 +186,87 @@ export default function BoardView(props: {
             title={Object.keys(comandos).length ? `TODOs, ${Object.values(comandos).join(", ")} e auditoria de dependências`
               : "TODOs e auditoria de dependências (ponha test_command/typecheck_command/lint_command no FORJA.md para rodar também)"}
             onClick={() => acao(() => api.post("/board/varrer", { pasta }))}>Varrer agora</button>
+          <button className={btn} disabled={!pasta} onClick={() => { setPastas((v) => !v); setPedir(false); }}
+            title="Pastas vinculadas a este board (ex.: back-end e front-end em repositórios separados)">
+            Pastas{nVinc ? ` (${nVinc})` : ""}
+          </button>
+          <label className="flex items-center gap-1 text-xs text-muted"
+            title="Ligado: em qualquer conversa deste projeto o agente pode criar cards (board_card), que caem em Novo. Desligado: a ferramenta nem aparece para o modelo; só /board e o Pedir à IA criam cards.">
+            <input type="checkbox" checked={iaCria} disabled={!pasta}
+              onChange={(e) => { const v = e.target.checked; setIaCria(v); acao(() => api.post("/board/ia", { pasta, ligado: v })); }} />
+            IA cria cards sozinha
+          </label>
+          <button className={btn} disabled={!pasta} onClick={() => { setPedir((v) => !v); setPastas(false); }}
+            title="Uma IA lê o projeto e cria os cards que confirmar, com arquivo e linha (caem em Novo)">Pedir à IA</button>
           <button className={btnPrimary} disabled={!pasta} onClick={() => setAberto("novo")}>+ Novo item</button>
           <button className={btn} onClick={props.onClose}>Fechar</button>
         </div>
       </div>
       {erro && <p className="border-b border-line px-4 py-2 text-xs text-red-400">{erro}</p>}
+      {pedir && pasta && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2 text-xs text-muted">
+          <span>A IA lê o projeto (sem alterar nada) e cria os cards que confirmar, com arquivo e linha. Procurar</span>
+          <select className={sel} value={foco} onChange={(e) => setFoco(e.target.value)} aria-label="Foco">
+            {FOCOS.map((f) => <option key={f.id} value={f.id}>{f.nome}</option>)}
+          </select>
+          <input className={`${sel} w-44`} placeholder="só na subpasta (opcional)" value={subpasta}
+            onChange={(e) => setSubpasta(e.target.value)} />
+          <button className={btnPrimary} onClick={() => acao(async () => {
+            const r = await api.post<{ conversa_id: number }>("/board/pedir", { pasta, foco, subpasta });
+            setPedido(r.conversa_id);
+            setPedir(false);
+          })}>Começar</button>
+        </div>
+      )}
+      {pedido !== null && (
+        <p className="border-b border-line px-4 py-2 text-xs text-muted">
+          A IA está procurando; os cards aparecem em Novo conforme ela confirma.{" "}
+          <button className="underline hover:text-fg" onClick={() => props.onAbrirConversa(pedido)}>Ver a conversa</button>
+          {" · "}<button className="underline hover:text-fg" onClick={() => setPedido(null)}>ocultar</button>
+        </p>
+      )}
+      {pastas && vinc && (
+        <div className="space-y-2 border-b border-line px-4 py-3 text-xs text-muted">
+          <p>
+            Board de <span className="font-mono text-fg">{vinc.projeto}</span>. Conversa aberta numa pasta vinculada
+            (ou numa subpasta dela) usa este board, e a varredura passa por todas.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            {vinc.vinculadas.map((v) => (
+              <span key={v} className="inline-flex items-center gap-1 rounded-full bg-raised px-2 py-0.5 font-mono text-fg" title={v}>
+                {nomePasta(v)}
+                <button className="text-faint hover:text-red-400" title="Desvincular (volta a ter board próprio)"
+                  onClick={() => acao(async () => { await api.del(`/board/vinculos?pasta=${encodeURIComponent(v)}`); await carregaVinc(); })}>×</button>
+              </span>
+            ))}
+            {!vinc.vinculadas.length && <span>Nenhuma pasta vinculada.</span>}
+          </div>
+          {vinc.sugestoes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span>Repositórios dentro do projeto:</span>
+              {vinc.sugestoes.map((v) => (
+                <button key={v} className={btn} title={v}
+                  onClick={() => acao(async () => { setVinc(await api.post("/board/vinculos", { pasta_board: pasta, pasta: v })); })}>
+                  + {nomePasta(v)}
+                </button>
+              ))}
+              <button className={btnPrimary} onClick={() => acao(async () => {
+                let r = vinc;
+                for (const v of vinc.sugestoes) r = await api.post("/board/vinculos", { pasta_board: pasta, pasta: v });
+                setVinc(r);
+              })}>Vincular todos</button>
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input className={`${sel} w-96 font-mono`} placeholder="C:/caminho/de/outra/pasta" value={novaPasta}
+              onChange={(e) => setNovaPasta(e.target.value)} />
+            <button className={btn} disabled={!novaPasta.trim()} onClick={() => acao(async () => {
+              setVinc(await api.post("/board/vinculos", { pasta_board: pasta, pasta: novaPasta.trim() }));
+              setNovaPasta("");
+            })}>Vincular pasta</button>
+          </div>
+        </div>
+      )}
       {!varredura?.rodando && varredura && varredura.avisos.length > 0 && (
         <p className="border-b border-line px-4 py-2 text-xs text-muted">
           Última varredura: {varredura.criados} card(s) novo(s). {varredura.avisos.join(" ")}
@@ -185,7 +281,7 @@ export default function BoardView(props: {
               const itens = visiveis.filter((i) => i.status === col.id);
               return (
                 <div key={col.id} data-coluna={col.id}
-                  className={`flex w-72 shrink-0 flex-col rounded-xl bg-surface transition-shadow ${
+                  className={`flex min-w-[250px] flex-1 flex-col rounded-xl bg-surface transition-shadow ${
                     alvo === col.id ? "ring-1 ring-sky-400/60 bg-sky-400/[0.04]" : ""}`}>
                   <div className="flex items-center justify-between px-3 py-2 text-xs text-muted">
                     <span className="font-medium text-fg">{col.nome}</span><span>{itens.length}</span>
@@ -281,6 +377,13 @@ function Detalhe(props: {
                   {e.arquivo}{e.linha ? `:${e.linha}` : ""}
                   {e.trecho && <span className="block truncate text-muted">{e.trecho}</span>}
                 </button>
+              ) : e.imagem ? (
+                <a key={k} href={`/api/files?path=${encodeURIComponent(e.imagem)}&conv=${e.conv ?? 0}`} target="_blank"
+                  rel="noreferrer" className="block" title="Abrir o print em tamanho real">
+                  <span className="text-[11px] uppercase tracking-wide text-faint">{e.rotulo ?? "print"}</span>
+                  <img src={`/api/files?path=${encodeURIComponent(e.imagem)}&conv=${e.conv ?? 0}`} alt={`Print ${e.rotulo ?? ""}`}
+                    className="mt-1 w-full rounded border border-line" />
+                </a>
               ) : e.saida ? (
                 <pre key={k} className="max-h-48 overflow-auto rounded bg-raised p-2 text-[11px] text-muted">{e.comando ? `$ ${e.comando}\n` : ""}{e.saida}</pre>
               ) : null)}
@@ -343,5 +446,55 @@ function Detalhe(props: {
         </>
       )}
     </aside>
+  );
+}
+
+/** O card que a IA criou (board_card), dentro da resposta dela: igual ao do board. Clicar abre o board nele;
+ * ao lado, ir ao trecho no editor e Iniciar (aceitar o card é o mesmo clique: foi o usuário que pediu). */
+export type CardMini = { id: number; titulo: string; tipo: string; area: string; severidade: number; status: string;
+  origem: string; projeto: string; evidencia: Evidencia | null };
+const NOME_STATUS: Record<string, string> = { novo: "Novo", backlog: "Backlog", andamento: "Em andamento",
+  revisao: "Revisão", concluido: "Concluído", rejeitado: "Rejeitado" };
+
+export function CardNoChat({ card }: { card: CardMini }) {
+  const [c, setC] = useState(card);
+  const [erro, setErro] = useState("");
+  useEffect(() => { api.get<CardMini>(`/board/issues/${card.id}`).then((x) => setC({ ...card, ...x })).catch(() => {}); }, [card.id]);
+  const ev = c.evidencia ?? (c as any).evidencias?.[0] ?? null;
+  const iniciar = async () => {
+    setErro("");
+    try {
+      if (c.status === "novo") await api.patch(`/board/issues/${c.id}`, { status: "backlog" });
+      setC({ ...c, ...(await api.post<CardMini>(`/board/issues/${c.id}/iniciar`, {})) });
+    } catch (e: any) { setErro(e.message); }
+  };
+  return (
+    <div className="mt-2 max-w-md">
+      <div className="flex items-stretch gap-1.5">
+        <button onClick={() => window.dispatchEvent(new CustomEvent("forja:board", { detail: { id: c.id, projeto: c.projeto } }))}
+          title="Abrir este card no board"
+          className="min-w-0 flex-1 rounded-lg border border-line bg-surface p-2 text-left hover:border-[#555]">
+          <div className="truncate text-sm text-fg">{c.titulo}</div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[11px]">
+            <span className={`rounded px-1.5 py-0.5 ${COR_TIPO[c.tipo] ?? ""}`}>{NOME_TIPO[c.tipo] ?? c.tipo}</span>
+            <span className="rounded bg-raised px-1.5 py-0.5 text-muted">{c.area}</span>
+            <span className="text-faint" title="severidade">{"●".repeat(4 - c.severidade)}</span>
+            <span className="text-faint">#{c.id} · {NOME_STATUS[c.status] ?? c.status}</span>
+          </div>
+        </button>
+        <div className="flex flex-col justify-center gap-1">
+          {ev?.arquivo && (
+            <button className={btn} title={`${ev.arquivo}${ev.linha ? `:${ev.linha}` : ""}`}
+              onClick={() => api.post("/open", { path: `${c.projeto}/${ev.arquivo}`, line: ev.linha ?? null }).catch((e) => setErro(e.message))}>
+              Ir para o código
+            </button>
+          )}
+          {["novo", "backlog"].includes(c.status) && (
+            <button className={btnPrimary} onClick={iniciar} title="Aceita o card e inicia no modo sugerido">Iniciar</button>
+          )}
+        </div>
+      </div>
+      {erro && <p className="mt-1 text-xs text-red-400">{erro}</p>}
+    </div>
   );
 }

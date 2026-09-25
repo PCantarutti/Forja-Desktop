@@ -202,3 +202,164 @@ def test_validacao_e_carimbo(proj):
         board.atualizar(card["id"], {"tipo": "inventado"})
     with pytest.raises(board.BoardError):
         board.rejeitar(card["id"], "porque sim")
+
+
+# ------------------------------------------------ vínculos entre pastas
+
+def _repo(p):
+    (p / ".git").mkdir(parents=True)
+    return p
+
+
+def test_vincular_subpastas_ao_mesmo_board(tmp_path):
+    raiz = tmp_path / "projeto"
+    back, front = _repo(raiz / "back"), _repo(raiz / "front")
+    (back / "api.py").write_text("x = 1  # TODO: validar\n", encoding="utf-8")
+    projeto = board.projeto_de(str(raiz))
+    assert board.projeto_de(str(back)) != projeto  # sem vínculo: cada repo com o seu board
+    card_back, _ = board.criar(board.projeto_de(str(back)), {"titulo": "Do back", "evidencias": [
+        {"arquivo": "api.py", "linha": 1, "trecho": "x"}]})
+    assert set(board.sugestoes(projeto)) == {board.workspace.normalize(str(back)), board.workspace.normalize(str(front))}
+    board.vincular(projeto, str(back))
+    board.vincular(projeto, str(front))
+    (back / "src").mkdir()
+    assert board.projeto_de(str(back / "src")) == projeto  # subpasta da vinculada também
+    assert board.sugestoes(projeto) == []
+    movido = next(c for c in board.listar(projeto) if c["id"] == card_back["id"])
+    assert movido["evidencias"][0]["arquivo"] == "back/api.py" and "vinculada" in movido["historico"][-1]["texto"]
+    board.desvincular(str(front))
+    assert board.projeto_de(str(front)) != projeto
+    with pytest.raises(board.BoardError):
+        board.vincular(projeto, str(raiz))
+
+
+def test_varredura_cobre_as_pastas_vinculadas(tmp_path, monkeypatch):
+    raiz = _repo(tmp_path / "mono")  # raiz É repo: a varredura dela pula os repos aninhados…
+    back = _repo(raiz / "back")
+    fora = tmp_path / "fora"
+    fora.mkdir()
+    (back / "a.py").write_text("# TODO: no back\n", encoding="utf-8")
+    (fora / "b.py").write_text("# FIXME: fora da raiz\n", encoding="utf-8")
+    projeto = board.projeto_de(str(raiz))
+    board.vincular(projeto, str(back))
+    board.vincular(projeto, str(fora))
+    _varre(projeto, raiz, monkeypatch)  # …e as vinculadas entram mesmo assim
+    ev = {c["titulo"]: c["evidencias"][0]["arquivo"] for c in board.listar(projeto)}
+    assert ev == {"TODO: no back": "back/a.py", "FIXME: fora da raiz": "../fora/b.py"}
+    assert _varre(projeto, raiz, monkeypatch)["criados"] == 0  # e não duplica na segunda
+
+
+# ------------------------------------------------ a IA cria card
+
+def test_board_card_exige_evidencia_que_confere(proj):
+    from app.tools import ToolError, run_tool
+    root, projeto = proj
+    ok = run_tool("board_card", {"titulo": "Subtração no lugar da soma", "tipo": "bugfix", "arquivo": "src/app.py",
+                                 "trecho": "return 1  # FIXME quebra com lista vazia"}, root)
+    assert "coluna Novo" in ok["text"] and "src/app.py:3" in ok["text"]
+    assert ok["board_card"]["evidencia"]["linha"] == 3 and ok["board_card"]["status"] == "novo"  # o chat desenha o card
+    card = board.listar(projeto)[0]
+    assert card["status"] == "novo" and card["origem"] == "varredura-ia" and card["evidencias"][0]["linha"] == 3
+    assert "Já existe" in run_tool("board_card", {"titulo": "de novo", "tipo": "bugfix", "arquivo": "src/app.py",
+                                                  "trecho": "return 1  # FIXME quebra com lista vazia"}, root)["text"]
+    for args, erro in (({"arquivo": "src/nao_existe.py", "linha": 1}, "não encontrado"),
+                       ({"arquivo": "src/app.py", "linha": 99}, "não existe"),
+                       ({"arquivo": "src/app.py", "linha": 1, "trecho": "codigo que nao esta la"}, "não está no arquivo"),
+                       ({"arquivo": ""}, "sem evidência")):
+        with pytest.raises(ToolError, match=erro):
+            run_tool("board_card", {"titulo": "x", "tipo": "bugfix", **args}, root)
+
+
+def test_apelido_create_issue_vira_board_card(proj):
+    from app import agent, apelidos
+    c = apelidos.resolve({"id": "1", "name": "create_issue", "arguments": {"title": "t", "file": "a.py", "line": 2}},
+                         ["board_card"], agent._props)
+    assert c["name"] == "board_card" and c["arguments"] == {"titulo": "t", "arquivo": "a.py", "linha": 2}
+
+
+def test_pedir_a_ia_leva_foco_abertos_e_rejeitados(proj, monkeypatch):
+    _, projeto = proj
+    rej, _ = board.criar(projeto, {"titulo": "Trocar tabs por espaços"})
+    board.rejeitar(rej["id"], "nao_quero")
+    board.criar(projeto, {"titulo": "Card aberto"})
+    disparos = []
+    monkeypatch.setattr(board, "_escolha", lambda modo: {"provider": "p", "model": "m", "permission": "auto", "effort": "medio"})
+    monkeypatch.setattr(board, "_dispara", lambda conv, kind, texto, esc: disparos.append((kind, texto, esc)))
+    r = board.pedir_ia(projeto, "bugs", "src")
+    kind, texto, esc = disparos[0]
+    assert kind == "agent" and esc["permission"] == "manual"  # só lê: escrita pede aprovação
+    assert "bugs prováveis" in texto and "`src`" in texto and "board_card" in texto
+    assert "- Card aberto" in texto and "Trocar tabs por espaços (nao quero)" in texto
+    with db.session() as s:
+        assert s.get(db.Conversation, r["conversa_id"]).workspace == projeto
+    with pytest.raises(board.BoardError):
+        board.pedir_ia(projeto, "inventado")
+
+
+# ------------------------------------------------ card visual: prints no card
+
+def test_card_visual_pede_prints_e_recebe_antes_e_depois(proj, monkeypatch):
+    _, projeto = proj
+    monkeypatch.setattr(board, "_escolha", lambda modo: {"provider": "p", "model": "m", "permission": "manual", "effort": "medio"})
+    textos = []
+    monkeypatch.setattr(board, "_dispara", lambda conv, kind, texto, esc: textos.append(texto))
+    card, _ = board.criar(projeto, {"titulo": "Botão cortado no celular", "tipo": "visual", "area": "frontend"})
+    card = board.iniciar(card["id"])
+    assert "ANTES" in textos[0] and "DEPOIS" in textos[0] and "browser_screenshot" in textos[0]
+    with db.session() as s:
+        for n in (1, 2, 3):
+            s.add(db.Message(conversation_id=card["conversa_id"], role="tool", name="browser_screenshot",
+                             content="ok", meta={"attachments": [{"path": f".forja/uploads/p{n}.jpg", "kind": "image"}]}))
+        s.add(db.Message(conversation_id=card["conversa_id"], role="assistant", content="corrigido"))
+        s.commit()
+    board.acompanha()
+    fim = board.listar(projeto)[0]
+    imgs = [e for e in fim["evidencias"] if e.get("imagem")]
+    assert fim["status"] == "revisao"
+    assert [(e["rotulo"], e["imagem"]) for e in imgs] == [("antes", ".forja/uploads/p1.jpg"), ("depois", ".forja/uploads/p3.jpg")]
+    assert imgs[0]["conv"] == card["conversa_id"]
+
+
+# ------------------------------------------------ interruptor do board_card e skill /board
+
+def test_board_card_desligado_some_do_catalogo_e_o_pedido_libera(proj):
+    from app import agent, sessoes, skills, workspace
+    root, projeto = proj
+    with db.session() as s:
+        c = db.Conversation(kind="agent", workspace=projeto)
+        s.add(c)
+        s.commit()
+        conv = c.id
+    t1, t2 = workspace.CURRENT.set(root), sessoes.CONV.set(conv)
+    try:
+        nomes = lambda: {t.name for t in agent.available_tools(None, "manual")}  # noqa: E731
+        assert "board_card" in nomes()  # ligado por padrão
+        board.define_board_card(projeto, False)
+        assert not board.board_card_ligado(projeto)
+        assert "board_card" not in nomes()  # desligado: fora do catálogo, logo fora do prompt
+        assert "Cria um card no board do projeto" not in agent.prompt_base("native", set())
+        with db.session() as s:
+            s.add(db.Message(conversation_id=conv, role="user", content="/board bugs no login"))
+            s.commit()
+        assert "board_card" in nomes()  # pedido explícito nesta conversa libera só aqui
+    finally:
+        workspace.CURRENT.reset(t1)
+        sessoes.CONV.reset(t2)
+        board.define_board_card(projeto, True)
+    bloco = skills.invocada(root, "/board bugs no login")
+    assert "board_card" in bloco and "bugs no login" in bloco
+
+
+def test_board_card_nao_repete_o_mesmo_ponto_e_aceita_tipo_solto(proj):
+    """Na validação a IA criou de novo os mesmos 3 bugs apontando a linha do `def` em vez da do `return`, e
+    teve 3 chamadas recusadas por tipo "bug" e área inventada."""
+    from app.tools import run_tool
+    root, projeto = proj
+    r = run_tool("board_card", {"titulo": "Retorno fixo", "tipo": "bug", "area": "backend/api",
+                                "arquivo": "src/app.py", "linha": 3}, root)
+    assert r["board_card"]["tipo"] == "bugfix" and r["board_card"]["area"] == "backend"
+    de_novo = run_tool("board_card", {"titulo": "Outro nome", "tipo": "improvement", "arquivo": "src/app.py",
+                                      "linha": 1}, root)
+    assert "Já existe o card #" in de_novo["text"] and de_novo["board_card"]["id"] == r["board_card"]["id"]
+    longe = run_tool("board_card", {"titulo": "Longe", "tipo": "melhoria", "arquivo": "web.tsx", "linha": 1}, root)
+    assert "criado" in longe["text"] and longe["board_card"]["tipo"] == "improvement"
