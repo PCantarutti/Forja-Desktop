@@ -548,6 +548,28 @@ def _devices(exe: str, _janela: int) -> list[dict]:
     return saida
 
 
+def uso() -> dict:
+    """O indicador de modelo carregado (PC e celular): o que está no llama-server, o que está carregando e
+    quanto a máquina tem de VRAM e RAM ocupada. Barato: status em memória, GPUs no cache de DEVICES_TTL."""
+    st = status()
+    modelo = None
+    if st["running"]:
+        p = st.get("params") or {}
+        try:
+            tamanho = Path(st["path"]).stat().st_size
+        except OSError:
+            tamanho = 0
+        modelo = {"alias": st.get("alias") or Path(st["path"]).stem, "path": st["path"], "tamanho": tamanho,
+                  "ctx": st.get("ctx") or p.get("ctx"), "uptime": st.get("uptime", 0), "vision": bool(st.get("vision")),
+                  "ngl": p.get("ngl"), "cache": f"{p.get('cache_type_k', '')}/{p.get('cache_type_v', '')}".strip("/")}
+    exe = find_exe("llama")
+    gpus = [{"nome": g["name"], "total": g["total"], "usado": max(0, g["total"] - g["free"])}
+            for g in (devices(str(exe)) if exe else [])]
+    ram, livre = system_ram()
+    return {"modelo": modelo, "carregando": st.get("loading") or None, "gpus": gpus,
+            "ram": {"total": ram, "usado": max(0, ram - livre)}, "gerando_imagem": image_busy()}
+
+
 def system_ram() -> tuple[int, int]:
     """(total, livre) da RAM. Sem dependência: é uma chamada da API do sistema."""
     if native.WINDOWS:

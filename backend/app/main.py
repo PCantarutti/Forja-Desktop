@@ -568,6 +568,12 @@ async def local_inference(model: str, path: str = ""):
     return await asyncio.to_thread(localai.inference_view, model, path)
 
 
+@app.get("/api/local/uso")
+async def local_uso():
+    """Modelo carregado + VRAM/RAM em uso: o indicador do rodapé (PC) e do cabeçalho (celular)."""
+    return await asyncio.to_thread(localai.uso)
+
+
 @app.get("/api/local/carregando")
 def local_carregando():
     """Só o progresso da carga do modelo ({} quando nada carrega). O celular consulta a cada poucos segundos:

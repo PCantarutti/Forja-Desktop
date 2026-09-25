@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { Conversation } from "../types";
 import { folderName } from "./FolderPicker";
+import ModeloCarregado from "./ModeloCarregado";
 import { LogoMark, LogoText } from "./Logo";
 import { SectionTabs, type Section } from "./Controls";
 import { Archive, Chevron, Download, Edit, Gear, More, Pin, Robo, Search, Trash } from "./icons";
@@ -414,6 +415,7 @@ export default function Sidebar(props: {
         </div>
       )}
       <AvisoAtualizacao />
+      <ModeloCarregado />
       <button
         onClick={props.onSettings}
         className="m-2 flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface hover:text-fg"
