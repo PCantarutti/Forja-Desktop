@@ -2021,6 +2021,9 @@ def rewind(conv_id: int, body: dict):
         for m in removed:
             s.delete(m)
         s.commit()
+        # expire_on_commit=False: sem isto c.messages vinha do cache, com as apagadas, e a tela somava
+        # a elas as novas do /run — que reusam os mesmos ids no SQLite (keys duplicadas no React).
+        s.expire_all()
         c = _get_conv(s, conv_id)
         out = {"messages": [m.to_dict() for m in c.messages], "removed": len(removed), "restored": restored}
     mirror.write(conv_id)  # turnos apagados somem do espelho também
