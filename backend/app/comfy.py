@@ -76,9 +76,11 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
                 return
             time.sleep(0.5)
     threading.Thread(target=vigia, daemon=True).start()
-    fim = ""
+    fim, outras = "", []
     for linha in proc.stdout:  # type: ignore[union-attr]
         linha = linha.strip()
+        if linha and not linha.startswith(("FASE ", "PROGRESSO ", "OK", "ERRO")):
+            outras = (outras + [linha])[-6:]  # traceback do Python, se o driver morrer sem dizer por quê
         if linha.startswith("FASE ") and progresso:
             progresso(linha[5:], None)
         elif linha.startswith("PROGRESSO ") and progresso:
@@ -92,6 +94,7 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
     if job_id and downloads.cancelled(job_id):
         raise ToolError("Ampliação cancelada.")
     if not fim.startswith("OK"):
-        raise ToolError(fim[5:] if fim.startswith("ERRO") else f"O ComfyUI saiu sem resultado (código {proc.returncode}).")
+        raise ToolError(fim[5:] if fim.startswith("ERRO") else
+                        f"O ComfyUI saiu sem resultado (código {proc.returncode}). " + " | ".join(outras)[-500:])
     w, h = (int(x) for x in fim.split()[1].split("x"))
     return {"w": w, "h": h}

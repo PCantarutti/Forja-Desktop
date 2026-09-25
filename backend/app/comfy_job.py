@@ -175,7 +175,12 @@ def main() -> int:
             raise Falha(f"O ComfyUI recusou o fluxo: {e.read().decode('utf-8', 'replace')[:500]}") from None
         limite = time.monotonic() + TRABALHO_S
         while True:
-            h = pede(f"/history/{pid}")
+            try:
+                h = pede(f"/history/{pid}")
+            except (TimeoutError, OSError) as e:  # imagem enorme: o servidor ocupado demora a responder
+                if isinstance(e, urllib.error.HTTPError):
+                    raise
+                h = {}
             if pid in h:
                 break
             if proc.poll() is not None:
@@ -236,6 +241,9 @@ def main() -> int:
         return 0
     except Falha as e:
         diz("ERRO", str(e))
+        return 1
+    except Exception as e:  # noqa: BLE001 — o Forja precisa da mensagem; sem ela, só "saiu com código 1"
+        diz("ERRO", f"Falha inesperada no driver ({type(e).__name__}): {e} | {cauda()}"[:600])
         return 1
     finally:
         parar.set()
