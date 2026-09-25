@@ -283,7 +283,7 @@ export default function Settings(props: {
                 <Field label="Timeout máximo do run_command (s)">
                   <Num value={s.shell_timeout_max} onChange={(v) => set("shell_timeout_max", v)} />
                 </Field>
-                <Field label="Sandbox isolado (Docker)" hint="Roda os comandos do agente num container com só a pasta do projeto, sem root e sem rede fora da instalação de pacotes. O Forja continua no Windows; servidores de dev e o terminal também. Precisa do Docker Desktop aberto (o Forja não o abre), e ele consome RAM: em PC com pouca memória rodando IA local, deixe desligado.">
+                <Field label="Sandbox isolado (Docker)" hint="Roda os comandos do agente num container com só a pasta do projeto, sem root e sem rede fora da instalação de pacotes. Servidores de dev (serve_start) e o terminal do agente vão junto, com a porta publicada no localhost do Windows; o Forja continua no Windows. Precisa de um Docker rodando (o Forja não o abre), e ele consome RAM: em PC com pouca memória rodando IA local, deixe desligado.">
                   <select className={input} value={s.sandbox_isolado} onChange={(e) => set("sandbox_isolado", e.target.value)}>
                     <option value="desligado">Desligado</option>
                     <option value="autonomo">Só nos modos autônomos (Automático, Ignorar permissões, Maestro)</option>

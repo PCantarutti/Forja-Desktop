@@ -24,9 +24,14 @@ MAX_BUFFER = 400_000
 class Term:
     """Shell do sistema lendo do stdin; um thread copia o stdout para o buffer."""
 
-    def __init__(self, cwd: Path):
-        self.proc = sandbox.popen(native.term_argv(), cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    def __init__(self, cwd: Path, plano: dict | None = None):
+        # `plano` (sandbox.plano_terminal): o terminal do agente pode ser bash num container; o do usuário
+        # é sempre o shell do Windows.
+        pl = plano or {"argv": native.term_argv(), "nome": "", "motor": "", "linux": not native.WINDOWS}
+        self.linux = pl["linux"]
+        self.proc = sandbox.popen(pl["argv"], cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                   stderr=subprocess.STDOUT, dev=True)
+        sandbox.marca_container(self.proc, pl["nome"], pl["motor"])
         self.buf = ""
         # Total já escrito desde o início, não o tamanho do buffer: é ele que vira o cursor do
         # cliente. Com `len(buf)` o cursor empacava em MAX_BUFFER assim que o buffer saturava e
@@ -35,7 +40,7 @@ class Term:
         self.lock = threading.Lock()  # dois POST de input não podem intercalar no stdin do shell
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.cond = threading.Condition()
-        if native.WINDOWS:  # saída em UTF-8 e sem barra de progresso quebrando o texto
+        if not self.linux:  # saída em UTF-8 e sem barra de progresso quebrando o texto
             self.write(native.PS_PREAMBLE + "$ProgressPreference='SilentlyContinue'")
         threading.Thread(target=self._reader, daemon=True).start()
 
@@ -163,11 +168,11 @@ def _texto_desde(t: "Term", desde: int) -> str:
     return texto
 
 
-def sentinela(nonce: str) -> str:
+def sentinela(nonce: str, linux: bool = not native.WINDOWS) -> str:
     """Linha mandada depois do comando: imprime o exit code com um marcador único. Quando ela aparece,
     o comando terminou de verdade — sem ela o fim era inferido por silêncio, que engana em build lento
     e em comando que termina calado."""
-    if native.WINDOWS:
+    if not linux:
         # $? primeiro (a atribuição o reescreve); cmdlet que falhou não mexe no $LASTEXITCODE: vira 1.
         return (f"$__ok=$?; $__ec=$LASTEXITCODE; Write-Output ('{MARCA}' + $(if ($__ok) {{0}} elseif ($__ec) "
                 f"{{$__ec}} else {{1}}) + '_{nonce}__')")
@@ -225,9 +230,12 @@ def terminal_open(root: Path, args: dict) -> str:
     cwd = resolve_path(root, args.get("cwd"))
     _reap()
     tid = "t" + uuid.uuid4().hex[:6]
-    SESSIONS[tid] = Term(cwd)
+    pl = sandbox.plano_terminal(cwd, root)
+    SESSIONS[tid] = Term(cwd, pl)
     AGENTE[tid] = {"conv": CONV.get(), "name": str(args.get("name") or tid)[:40], "lido": SESSIONS[tid].written}
-    return f"Terminal '{tid}' aberto ({native.shell_name()}) em {cwd}. Mande comandos com terminal_send(id='{tid}')."
+    onde = ("bash no container do sandbox, sem rede" if pl["nome"] else native.shell_name())
+    return (f"{pl['aviso']}Terminal '{tid}' aberto ({onde}) em {cwd}. Mande comandos com "
+            f"terminal_send(id='{tid}').")
 
 
 def _sem_sentinela(texto: str, nonce: str | None) -> str:
@@ -257,7 +265,7 @@ def terminal_send(root: Path, args: dict) -> str:
         # linha): mandar outro só entraria no REPL. Nesse caso, volta a inferência por silêncio.
         if not a.get("pendente"):
             nonce = uuid.uuid4().hex[:8]
-            t.write(sentinela(nonce))
+            t.write(sentinela(nonce, t.linux))
     estado = _espera(t, desde, min(float(args.get("wait") or ESPERA_PADRAO), ESPERA_MAX), nonce)
     a["lido"] = t.written
     saida = _sem_sentinela(_sem_sentinela(_texto_desde(t, desde), nonce), a.get("pendente"))

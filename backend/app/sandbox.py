@@ -308,24 +308,59 @@ def _puxa(img: str, motor: str = "desktop") -> None:
 
 
 def _cache_dir() -> Path:
+    """Cache no disco do Windows: só quando o volume do Linux não deu (ver _volume)."""
     p = config.DATA_DIR / "sandbox-cache"
     for sub in ("npm", "pip", "pyuser", "home"):
         (p / sub).mkdir(parents=True, exist_ok=True)
     return p
 
 
-def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str, motor: str = "desktop") -> list[str]:
-    """`docker run` que executa `command` (bash) com só a pasta do projeto montada em /workspace."""
+def _bin_dir() -> Path:
+    """Arquivos do Forja para dentro do container (o repassador de porta), montados só para leitura."""
+    p = config.DATA_DIR / "sandbox-bin"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# Cache de pacotes num volume nomeado: fica no disco do Linux, e não em /mnt/c, que o WSL2 lê devagar
+# (era a maior parte dos 3,3 s do pytest medidos). O volume nasce de root; o chown na criação o entrega
+# ao uid 1000, que é quem roda os comandos.
+VOLUME_CACHE = "forja-sandbox-cache"
+_VOLUME_OK: set[str] = set()
+
+
+def _volume(motor: str, img: str) -> None:
+    if motor in _VOLUME_OK:
+        return
+    base = prefixo(motor)
+    kw = {"capture_output": True, "timeout": 120, **native.popen_kwargs()}
+    try:
+        if subprocess.run([*base, "volume", "inspect", VOLUME_CACHE], **kw).returncode != 0:
+            subprocess.run([*base, "volume", "create", VOLUME_CACHE], **kw)
+        r = subprocess.run([*base, "run", "--rm", "--user", "0", "--network", "none", "-v", f"{VOLUME_CACHE}:/cache",
+                            img, "sh", "-c", "mkdir -p /cache/npm /cache/pip /cache/pyuser /cache/home && "
+                                             "chown -R 1000:1000 /cache"], **kw)
+        if r.returncode == 0:
+            _VOLUME_OK.add(motor)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # fica o cache na pasta do Windows, que já funcionava
+
+
+def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str, motor: str = "desktop",
+                rede: str | None = None, portas: dict[int, int] | None = None) -> list[str]:
+    """`docker run` que executa `command` (bash) com só a pasta do projeto montada em /workspace.
+    `rede` força a rede (senão, pela fase do comando); `portas` publica {porta do container: do Windows}."""
     lim = limites()
     try:
         sub = cwd.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
         sub = "."
     trabalho = "/workspace" + ("" if sub in ("", ".") else f"/{sub}")
-    cache = _cache_dir()
+    cache = VOLUME_CACHE if motor in _VOLUME_OK else caminho(motor, _cache_dir())
     argv = [*prefixo(motor), "run", "--rm", "-i", "--init", "--name", nome,
-            "-v", f"{caminho(motor, root)}:/workspace", "-w", trabalho, "-v", f"{caminho(motor, cache)}:/cache",
-            "--network", "bridge" if INSTALADOR.search(command) else "none",
+            "-v", f"{caminho(motor, root)}:/workspace", "-w", trabalho, "-v", f"{cache}:/cache",
+            "-v", f"{caminho(motor, _bin_dir())}:/forja:ro",
+            "--network", rede or ("bridge" if INSTALADOR.search(command) else "none"),
             "--user", "1000:1000", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             # Cache de pacote persistente e pip sem root (vai para o usuário, dentro do cache).
             "-e", "HOME=/cache/home", "-e", "npm_config_cache=/cache/npm", "-e", "PIP_CACHE_DIR=/cache/pip",
@@ -340,6 +375,8 @@ def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str, motor:
     for k in sorted(_env_allow(root)):
         if k in os.environ:
             argv += ["-e", f"{k}={os.environ[k]}"]
+    for dentro, fora in (portas or {}).items():  # só no loopback do Windows: nada exposto na rede
+        argv += ["-p", f"127.0.0.1:{fora}:{dentro}"]
     return argv + [img, "bash", "-lc", command]
 
 
@@ -348,27 +385,154 @@ def plano(command: str, cwd: Path, root: Path | None) -> tuple[list[str], str, s
     sem Docker, é o shell do Windows de sempre, com um aviso quando o isolamento foi pedido e não deu."""
     if not (root and isolar()):
         return native.shell_argv(command), "", "", ""
+    motor, img, aviso = _caixa(root)
+    if not motor:
+        return native.shell_argv(command), "", "", aviso
+    nome = _nome()
+    return argv_docker(command, cwd, root, img, nome, motor), nome, motor, ""
+
+
+def _nome() -> str:
+    return f"forja-sbx-{os.getpid()}-{_time.time_ns() % 10**12}"  # "forja-*" puro colide com o compose do forja-web
+
+
+def _caixa(root: Path) -> tuple[str, str, str]:
+    """(motor, imagem, aviso). Motor '' = não dá para isolar agora, e o aviso diz por quê."""
     if not (motor := motor_ativo()):
-        return (native.shell_argv(command), "", "",
-                "[sandbox isolado ligado, mas nenhum Docker está rodando (nem o Desktop nem o do WSL): este "
-                "comando rodou no Windows]\n")
+        return "", "", ("[sandbox isolado ligado, mas nenhum Docker está rodando (nem o Desktop nem o do WSL): "
+                        "este comando rodou no Windows]\n")
     img = imagem(root)
     if not _imagem_presente(img, motor):
         _puxa(img, motor)
-        return (native.shell_argv(command), "", "",
-                f"[baixando a imagem do sandbox ({img}, Docker {motor}); até terminar, os comandos rodam no "
-                "Windows]\n")
-    nome = f"forja-sbx-{os.getpid()}-{_time.time_ns() % 10**12}"  # "forja-*" puro colide com o compose do forja-web
-    return argv_docker(command, cwd, root, img, nome, motor), nome, motor, ""
+        return "", img, (f"[baixando a imagem do sandbox ({img}, Docker {motor}); até terminar, os comandos rodam "
+                         "no Windows]\n")
+    _volume(motor, img)
+    return motor, img, ""
+
+
+# ------------------------------------------------------------------ servidor de dev e terminal no container
+# O servidor sobe no container com a porta publicada no 127.0.0.1 do Windows, e o navegador do Forja abre
+# http://localhost:PORTA como sempre. Servidor de dev costuma escutar só no localhost DO CONTAINER, que
+# o `-p` do Docker não alcança (ele entrega no IP da interface do container): um repassador em Python
+# espera o servidor escutar e então escuta no IP do container, na mesma porta, repassando para o
+# localhost. Se o servidor já escuta em todas as interfaces, o bind falha e o repassador sai calado.
+REPASSADOR = r'''
+import socket, sys, threading, time
+p = int(sys.argv[1])
+def alvo():
+    for h in ("127.0.0.1", "::1"):
+        try:
+            socket.create_connection((h, p), 1).close()
+            return h
+        except OSError:
+            pass
+while not (h := alvo()):
+    time.sleep(0.5)
+s = socket.socket()
+try:
+    s.bind((socket.gethostbyname(socket.gethostname()), p))
+except OSError:
+    sys.exit(0)
+s.listen(64)
+def tubo(a, b):
+    try:
+        while (d := a.recv(65536)):
+            b.sendall(d)
+    except OSError:
+        pass
+    for x in (a, b):
+        try:
+            x.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+while True:
+    c, _ = s.accept()
+    try:
+        u = socket.create_connection((h, p))
+    except OSError:
+        c.close()
+        continue
+    threading.Thread(target=tubo, args=(c, u), daemon=True).start()
+    threading.Thread(target=tubo, args=(u, c), daemon=True).start()
+'''
+PORTA_NO_COMANDO = re.compile(r"(?:--port[= ]|-p\s+|PORT=|http\.server\s+|:)(\d{2,5})\b")
+
+
+def porta_do_servidor(command: str, cwd: Path) -> int:
+    """Porta em que o servidor vai escutar: a do comando, ou a padrão da ferramenta."""
+    if m := PORTA_NO_COMANDO.search(command):
+        return int(m.group(1))
+    c = command.lower()
+    try:
+        pkg = (cwd / "package.json").read_text(encoding="utf-8", errors="replace").lower()
+    except OSError:
+        pkg = ""
+    if "vite" in c or ("vite" in pkg and re.search(r"(npm|pnpm|yarn)\s+(run\s+)?(dev|preview)", c)):
+        return 4173 if "preview" in c else 5173
+    if "next" in c or "react-scripts" in pkg or "next" in pkg:
+        return 3000
+    if "flask" in c:
+        return 5000
+    return 8000  # http.server, uvicorn, django
+
+
+def _porta_livre(p: int) -> int:
+    """A mesma porta no Windows, se livre; senão uma qualquer que o sistema der."""
+    import socket
+    for tentativa in (p, 0):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", tentativa))
+                return s.getsockname()[1]
+            except OSError:
+                continue
+    return p
+
+
+def plano_servidor(command: str, cwd: Path, root: Path | None, porta: int | None = None,
+                   servidor: bool = True) -> dict:
+    """Como subir um servidor de dev (ou processo em segundo plano) do agente. Chaves: argv, nome, motor,
+    aviso e, no container, porta (do container) e porta_host (no Windows)."""
+    if not (root and isolar()):
+        return {"argv": native.shell_argv(command), "nome": "", "motor": "", "aviso": ""}
+    motor, img, aviso = _caixa(root)
+    if not motor:
+        return {"argv": native.shell_argv(command), "nome": "", "motor": "", "aviso": aviso}
+    nome = _nome()
+    if not servidor:  # run_command(background): mesma regra de rede do comando comum
+        return {"argv": argv_docker(command, cwd, root, img, nome, motor), "nome": nome, "motor": motor, "aviso": ""}
+    p = int(porta or porta_do_servidor(command, cwd))
+    fora = _porta_livre(p)
+    (_bin_dir() / "repassa.py").write_text(REPASSADOR, encoding="utf-8")
+    # Rede bridge: sem ela não há -p. É a única fase além da instalação com rede (ver nota_para_o_modelo).
+    argv = argv_docker(f"(python3 /forja/repassa.py {p} >/dev/null 2>&1 &)\n{command}", cwd, root, img, nome,
+                       motor, rede="bridge", portas={p: fora})
+    return {"argv": argv, "nome": nome, "motor": motor, "aviso": "", "porta": p, "porta_host": fora}
+
+
+def plano_terminal(cwd: Path, root: Path | None) -> dict:
+    """Terminal do agente: bash no container, sem rede (instalar vai por run_command), ou o shell do Windows."""
+    if not (root and isolar()):
+        return {"argv": native.term_argv(), "nome": "", "motor": "", "aviso": "", "linux": not native.WINDOWS}
+    motor, img, aviso = _caixa(root)
+    if not motor:
+        return {"argv": native.term_argv(), "nome": "", "motor": "", "aviso": aviso, "linux": not native.WINDOWS}
+    nome = _nome()
+    argv = argv_docker("exec bash", cwd, root, img, nome, motor, rede="none")
+    return {"argv": argv, "nome": nome, "motor": motor, "aviso": "", "linux": True}
+
+
+def marca_container(proc: subprocess.Popen, nome: str, motor: str) -> None:
+    if nome:
+        proc._forja_container = nome  # type: ignore[attr-defined]
+        proc._forja_docker = prefixo(motor)  # type: ignore[attr-defined]
 
 
 def popen_comando(command: str, cwd: Path, root: Path | None, **kw) -> tuple[subprocess.Popen, str]:
     """Popen de um comando do agente, no Windows ou no container conforme `plano`. (proc, aviso)."""
     argv, nome, motor, aviso = plano(command, cwd, root)
     proc = popen(argv, cwd, root=root, **kw)
-    if nome:
-        proc._forja_container = nome  # type: ignore[attr-defined]
-        proc._forja_docker = prefixo(motor)  # type: ignore[attr-defined]
+    marca_container(proc, nome, motor)
     return proc, aviso
 
 
@@ -386,4 +550,6 @@ def nota_para_o_modelo() -> str:
         return ""
     return ("- run_command roda num container Linux (bash, não PowerShell), com só a pasta do projeto em "
             "/workspace, sem root, e com rede só em comandos de instalação (npm install, pip install...). "
-            "Use sintaxe bash. Servidores de dev (serve_start) e o terminal continuam no Windows.")
+            "Use sintaxe bash. serve_start e terminal_open também rodam lá: o servidor fica em "
+            "http://localhost:PORTA como sempre (passe `port` se ele não usa a porta padrão da ferramenta), e o "
+            "terminal é bash sem rede.")

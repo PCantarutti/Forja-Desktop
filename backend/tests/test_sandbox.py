@@ -113,7 +113,7 @@ def test_argv_do_container_so_monta_o_projeto_e_so_libera_rede_na_instalacao(tmp
     assert teste[-3:] == ["bash", "-lc", "pytest -q"]
     instala = sandbox.argv_docker("npm install", tmp_path, tmp_path, "node:22-bookworm", "forja-y")
     assert instala[instala.index("--network") + 1] == "bridge"
-    assert not any(":\\" in a and "workspace" not in a and "cache" not in a for a in teste if ":" in a)
+    assert not any(":\\" in a and "workspace" not in a and "cache" not in a and ":/forja:ro" not in a for a in teste if ":" in a)
 
 
 def test_imagem_pelo_projeto(tmp_path):
@@ -202,3 +202,84 @@ def test_wsl_preserva_aspas_e_operadores_do_comando(tmp_path, monkeypatch):
     saida = run_tool("run_command", {"command": 'for i in 1 2; do echo "n=$i" > f$i.txt; done && cat f1.txt f2.txt',
                                      "timeout": 120}, tmp_path)
     assert "n=1" in saida and "n=2" in saida
+
+
+# ------------------------------------------------------------------ servidor, terminal e cache (passo 3, resto)
+
+def test_porta_do_servidor(tmp_path):
+    assert sandbox.porta_do_servidor("python -m http.server 8123", tmp_path) == 8123
+    assert sandbox.porta_do_servidor("npx vite --port 4000", tmp_path) == 4000
+    assert sandbox.porta_do_servidor("uvicorn app:app", tmp_path) == 8000
+    (tmp_path / "package.json").write_text('{"scripts": {"dev": "vite"}}', encoding="utf-8")
+    assert sandbox.porta_do_servidor("npm run dev", tmp_path) == 5173
+
+
+def test_argv_publica_a_porta_so_no_loopback(tmp_path):
+    argv = sandbox.argv_docker("x", tmp_path, tmp_path, "python:3.12-bookworm", "forja-p", rede="bridge",
+                               portas={5173: 5180})
+    assert argv[argv.index("-p") + 1] == "127.0.0.1:5180:5173" and argv[argv.index("--network") + 1] == "bridge"
+    assert any(a.endswith(":/forja:ro") for a in argv)
+
+
+def test_sem_docker_servidor_e_terminal_ficam_no_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SANDBOX_ISOLADO", "sempre")
+    monkeypatch.setattr(sandbox, "docker_ok", lambda motor="desktop": False)
+    pl = sandbox.plano_servidor("npm run dev", tmp_path, tmp_path)
+    assert pl["nome"] == "" and "nenhum Docker" in pl["aviso"] and pl["argv"] == native.shell_argv("npm run dev")
+    assert sandbox.plano_terminal(tmp_path, tmp_path)["nome"] == ""
+
+
+def _wsl(monkeypatch):
+    monkeypatch.setattr(config, "SANDBOX_ISOLADO", "sempre")
+    monkeypatch.setattr(config, "SANDBOX_MOTOR", "wsl")
+
+
+@pytest.mark.skipif(not _docker_pronto(sandbox.IMAGEM_PYTHON, "wsl"), reason="Docker do WSL parado ou sem a imagem")
+def test_servidor_no_container_abre_no_localhost_do_windows(tmp_path, monkeypatch):
+    """http.server escuta em todas as interfaces; o 127.0.0.1 exige o repassador. Os dois abrem no Windows."""
+    import urllib.request
+    _wsl(monkeypatch)
+    (tmp_path / "index.html").write_text("<title>dentro do container</title>", encoding="utf-8")
+    containers = []
+    for nome, cmd in (("todas", "python3 -m http.server 8765"), ("local", "python3 -m http.server 8766 --bind 127.0.0.1")):
+        saida = shell.serve_start(tmp_path, {"name": nome, "command": cmd})
+        containers.append(shell._SERVERS[nome]["proc"]._forja_container)
+        try:
+            info = shell._info(nome)
+            assert "no container do sandbox" in saida and info["url"].startswith("http://localhost:")
+            corpo = ""
+            for _ in range(40):
+                try:
+                    corpo = urllib.request.urlopen(info["url"], timeout=3).read().decode()
+                    break
+                except OSError:
+                    time.sleep(0.5)
+            assert "dentro do container" in corpo, saida
+        finally:
+            shell.stop_server(nome)
+    vivos = __import__("subprocess").run(sandbox.prefixo("wsl") + ["ps", "--format", "{{.Names}}"],
+                                          capture_output=True, text=True).stdout.split()
+    assert not set(containers) & set(vivos)  # serve_stop derrubou os containers
+
+
+@pytest.mark.skipif(not _docker_pronto(sandbox.IMAGEM_PYTHON, "wsl"), reason="Docker do WSL parado ou sem a imagem")
+def test_terminal_do_agente_no_container(tmp_path, monkeypatch):
+    from app import terminal
+    _wsl(monkeypatch)
+    aberto = terminal.terminal_open(tmp_path, {"name": "t"})
+    tid = aberto.split("'")[1]
+    try:
+        assert "container do sandbox" in aberto
+        saida = terminal.terminal_send(tmp_path, {"id": tid, "command": "cd /workspace && id -u && ls /c 2>&1 | head -1",
+                                                  "wait": 60})
+        assert "exit 0" in saida and "1000" in saida and ("No such file" in saida or "cannot access" in saida)
+    finally:
+        terminal.terminal_close(tmp_path, {"id": tid})
+
+
+@pytest.mark.skipif(not _docker_pronto(sandbox.IMAGEM_PYTHON, "wsl"), reason="Docker do WSL parado ou sem a imagem")
+def test_cache_de_pacotes_num_volume_do_linux(tmp_path, monkeypatch):
+    _wsl(monkeypatch)
+    saida = run_tool("run_command", {"command": "stat -c %u /cache/pip && df /cache | tail -1", "timeout": 120},
+                     tmp_path)
+    assert "wsl" in sandbox._VOLUME_OK and "1000" in saida and "9p" not in saida and "drvfs" not in saida

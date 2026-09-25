@@ -256,8 +256,12 @@ def _proxy_site(porta: int):
                 async with httpx.AsyncClient(timeout=None) as c:
                     async with c.stream(scope["method"], url, headers=cabecalhos(scope), content=corpo) as r:
                         # redirect para http://localhost:<porta>/x vira /x, que o celular resolve no proxy
+                        # Sem cache: a porta do proxy (47820...) serve sites diferentes ao longo do tempo (e
+                        # outra instância do Forja pode ter usado a mesma), e o WebView do celular mostrava a
+                        # página velha de outro projeto em vez de pedir de novo.
                         hs = [(k, v.replace(f"http://{alvo}".encode(), b"")) for k, v in r.headers.raw
-                              if k.lower() not in (b"transfer-encoding", b"connection")]
+                              if k.lower() not in (b"transfer-encoding", b"connection", b"cache-control", b"etag",
+                                                   b"last-modified", b"expires")] + [(b"cache-control", b"no-store")]
                         await send({"type": "http.response.start", "status": r.status_code, "headers": hs})
                         async for pedaco in r.aiter_raw():
                             await send({"type": "http.response.body", "body": pedaco, "more_body": True})
@@ -373,6 +377,19 @@ def revoga(call_ids: list[str]) -> None:
     task = asyncio.get_running_loop().create_task(_enviar([{**msg, "to": t} for t in alvos]))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
+
+
+def avisa(titulo: str, texto: str, conv_id: int | None = None) -> None:
+    """Push avulso (fora de um run), no mesmo formato só de dados que o app desenha. Síncrono: quem chama
+    está numa thread (o board automático, E15-C)."""
+    if not (alvos := devices()):
+        return
+    msg = {"priority": "high", "_contentAvailable": True,
+           "data": {"forja": "mostra", "titulo": titulo[:80], "texto": texto[:180], "conv_id": conv_id}}
+    try:
+        httpx.post(EXPO_PUSH, json=[{**msg, "to": t} for t in alvos], timeout=10)
+    except httpx.HTTPError as e:  # ponytail: sem retry, como o _enviar
+        print(f"Forja: push para o celular falhou: {e}", flush=True)
 
 
 def notify(ev: dict, conv_id: int, run_id: str) -> None:

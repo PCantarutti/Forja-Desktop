@@ -272,17 +272,24 @@ def _safe_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (name or "").strip())[:40] or "server"
 
 
-def _start(name: str, command: str, cwd: Path) -> dict:
+def _start(name: str, command: str, cwd: Path, root: Path | None = None, porta: int | None = None,
+           servidor: bool = True) -> dict:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    # Com `root` (comando do agente) pode ir para o container do sandbox, com a porta publicada no Windows.
+    pl = sandbox.plano_servidor(command, cwd, root, porta, servidor)
     with _servers_lock:
         if name in _SERVERS:
             _drop(_SERVERS.pop(name))  # mesmo nome = reinicia
         log = LOG_DIR / f"{name}.log"
         fh = open(log, "wb")  # fechado em _drop: sem guardar o handle, vazava um descritor por servidor
-        proc = sandbox.popen(native.shell_argv(command), cwd, stdout=fh, stderr=subprocess.STDOUT,
-                             stdin=subprocess.DEVNULL, dev=True)
+        if pl["aviso"]:
+            fh.write(pl["aviso"].encode("utf-8"))
+            fh.flush()
+        proc = sandbox.popen(pl["argv"], cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, dev=True)
+        sandbox.marca_container(proc, pl["nome"], pl["motor"])
         _SERVERS[name] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
-                          "started": time.time(), "conv": CONV.get()}
+                          "started": time.time(), "conv": CONV.get(),
+                          "porta": pl.get("porta"), "porta_host": pl.get("porta_host")}
     return _info(name)
 
 
@@ -301,7 +308,28 @@ def _info(name: str) -> dict:
     code = s["proc"].poll()
     return {"name": name, "pid": s["proc"].pid, "alive": code is None, "exit_code": code, "command": s["command"],
             "cwd": s["cwd"], "log": s["log"], "uptime": int(time.time() - s["started"]),
-            "conv": s.get("conv") or "", "url": (url_do_log(name) or url_da_porta(s["proc"].pid)) if code is None else ""}
+            "conv": s.get("conv") or "", "url": _url(name) if code is None else ""}
+
+
+def _url(name: str) -> str:
+    """Endereço do servidor no Windows. No sandbox é a porta publicada, que pode não ser a que o servidor
+    anuncia no log (a de dentro do container)."""
+    s = _SERVERS[name]
+    u = url_do_log(name)
+    if not s.get("porta_host"):
+        return u or url_da_porta(s["proc"].pid)
+    m = re.match(r"https?://[^/]+:(\d+)(.*)", u)
+    return f"http://localhost:{s['porta_host']}" + (m.group(2) if m and int(m.group(1)) == s["porta"] else "")
+
+
+def porta_errada(name: str) -> str:
+    """No sandbox só a porta prevista é publicada: o servidor anunciar outra é o modelo precisar do `port`."""
+    s = _SERVERS.get(name) or {}
+    m = re.match(r"https?://[^/]+:(\d+)", url_do_log(name)) if s.get("porta_host") else None
+    if m and int(m.group(1)) != s["porta"]:
+        return (f"\n[sandbox: publiquei a porta {s['porta']}, mas o servidor escutou na {m.group(1)}. Suba de novo com "
+                f"port={m.group(1)} e restart=true.]")
+    return ""
 
 
 def _log(name: str, tail: int) -> str:
@@ -352,8 +380,14 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
         return (f"{kind} '{vivos[0]}' já está rodando esse comando nesta pasta"
                 + (f", em {url}" if url else "") + ". Reaproveitei; nada foi reiniciado. "
                 "Para reiniciar (mudou configuração, travou), chame serve_start com restart=true.")
-    info = _start(name, command, cwd)
+    porta = int(args["port"]) if str(args.get("port") or "").isdigit() else None
+    info = _start(name, command, cwd, root, porta, servidor=kind == "Servidor")
     time.sleep(2.5)  # dá tempo de o servidor imprimir a porta
+    if _SERVERS.get(name, {}).get("porta_host") and kind == "Servidor":
+        # No container sobe mais devagar (pasta do Windows lida pelo WSL2): espera o anúncio da URL.
+        fim = time.monotonic() + 15
+        while time.monotonic() < fim and not url_do_log(name) and _info(name)["alive"]:
+            time.sleep(0.5)
     log, alive = _log(name, 30), _info(name)["alive"]
     status = "rodando" if alive else ("JÁ ENCERROU (veja o log: provável erro)" if kind == "Servidor"
                                       else "JÁ TERMINOU (o log abaixo é o resultado)")
@@ -362,13 +396,15 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
     # Sem a URL no log, a porta em que o processo (ou um filho) já escuta; o cache pode ser de antes da subida.
     if kind == "Servidor":
         _PORTAS["t"] = 0.0
-    url = (url_do_log(name) or url_da_porta(info.get("pid") or 0)) if kind == "Servidor" and alive else ""
+    url = _url(name) if kind == "Servidor" and alive else ""
     if url:
         dica = (f"Endereço: {url} — vale para o navegador integrado e para o navegador do usuário. Mande-o ao "
                 f"usuário como link: [{url}]({url}).\n")
-    return (f"{kind} '{name}' iniciado (pid {info.get('pid')}), {status}.\n{dica}"
+    onde = " no container do sandbox" if _SERVERS.get(name, {}).get("porta_host") or getattr(
+        _SERVERS.get(name, {}).get("proc"), "_forja_container", None) else ""
+    return (f"{kind} '{name}' iniciado{onde} (pid {info.get('pid')}), {status}.\n{dica}"
             f"Use serve_status(name='{name}') para acompanhar e serve_stop para encerrar.\n"
-            f"--- log ---\n{log or '(vazio ainda)'}")
+            f"--- log ---\n{log or '(vazio ainda)'}{porta_errada(name)}")
 
 
 # ------------------------------------------------------------------ servidores que o Forja não subiu
@@ -621,7 +657,8 @@ register(Tool(
     {"type": "object", "properties": {
         "name": {"type": "string", "description": "Apelido curto, ex.: vite, api"},
         "command": {"type": "string"},
-        "cwd": {"type": "string", "description": "Subpasta da pasta de trabalho. Padrão: '.'"}},
+        "cwd": {"type": "string", "description": "Subpasta da pasta de trabalho. Padrão: '.'"},
+        "port": {"type": "integer", "description": "Porta em que o servidor escuta, se não for a padrão da ferramenta"}},
      "required": ["name", "command"]},
     serve_start, mutating=True, preview=serve_preview, always_ask=True))
 register(Tool(
