@@ -61,7 +61,7 @@ import {
   turnosDe,
   type TurnStats,
 } from "./components/MessageView";
-import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Laptop, Paperclip, Refresh, Square, Undo } from "./components/icons";
+import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Refresh, Square, Undo, X } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
 
@@ -1762,15 +1762,26 @@ export default function App() {
   const conversaBlock = (
   <>
   {linkAberto && (
-    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-md space-y-4 rounded-2xl border border-line bg-surface p-5">
-      <div className="text-base font-medium text-fg">Abrir link</div>
-      <div className="truncate font-mono text-xs text-muted" title={linkAberto}>{linkAberto}</div>
-      <div className="flex flex-wrap justify-end gap-2">
-        <button onClick={() => setLinkAberto(null)} className="rounded-full px-4 py-1.5 text-sm text-muted hover:text-fg">Cancelar</button>
-        <button onClick={() => { window.open(linkAberto, "_blank"); setLinkAberto(null); }}
-                className="rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised">Navegador do sistema</button>
+    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-sm space-y-4 rounded-2xl border border-line bg-surface p-5">
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-base font-medium text-fg">Abrir link</div>
+          <div className="mt-1 truncate font-mono text-xs text-muted" title={linkAberto}>{linkAberto}</div>
+        </div>
+        <button onClick={() => setLinkAberto(null)} title="Fechar" aria-label="Fechar"
+                className="-mr-1 -mt-1 rounded-lg p-1.5 text-faint hover:bg-raised hover:text-fg">
+          <X className="size-4" />
+        </button>
+      </div>
+      <div className="flex flex-col gap-2">
         <button autoFocus onClick={() => abreLinkNoForja(linkAberto)}
-                className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white">Navegador do Forja</button>
+                className="flex items-center gap-2.5 rounded-xl bg-fg px-4 py-2.5 text-sm font-medium text-black hover:bg-white">
+          <Globe className="size-4" /> Navegador do Forja
+        </button>
+        <button onClick={() => { window.open(linkAberto, "_blank"); setLinkAberto(null); }}
+                className="flex items-center gap-2.5 rounded-xl border border-line px-4 py-2.5 text-sm text-fg hover:bg-raised">
+          <ExternalLink className="size-4" /> Navegador do sistema
+        </button>
       </div>
     </Modal>
   )}

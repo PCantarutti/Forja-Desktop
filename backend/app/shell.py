@@ -279,9 +279,13 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
                                       else "JÁ TERMINOU (o log abaixo é o resultado)")
     dica = ("Abra http://localhost:PORTA — vale para o navegador integrado e para o navegador do usuário.\n"
             if kind == "Servidor" else "")
-    url = url_do_log(name) if kind == "Servidor" else ""
+    # Sem a URL no log, a porta em que o processo (ou um filho) já escuta; o cache pode ser de antes da subida.
+    if kind == "Servidor":
+        _PORTAS["t"] = 0.0
+    url = (url_do_log(name) or url_da_porta(info.get("pid") or 0)) if kind == "Servidor" and alive else ""
     if url:
-        dica = f"Endereço: {url} — vale para o navegador integrado e para o navegador do usuário.\n"
+        dica = (f"Endereço: {url} — vale para o navegador integrado e para o navegador do usuário. Mande-o ao "
+                f"usuário como link: [{url}]({url}).\n")
     return (f"{kind} '{name}' iniciado (pid {info.get('pid')}), {status}.\n{dica}"
             f"Use serve_status(name='{name}') para acompanhar e serve_stop para encerrar.\n"
             f"--- log ---\n{log or '(vazio ainda)'}")
@@ -531,7 +535,9 @@ register(Tool(
 register(Tool(
     "serve_start",
     "Inicia um servidor de desenvolvimento em segundo plano (ex.: npm run dev, uvicorn, php artisan serve) e "
-    "devolve as primeiras linhas do log. Mesmo nome reinicia.",
+    "devolve as primeiras linhas do log e o endereço. Mesmo nome reinicia. Depois de subir, mande o endereço "
+    "ao usuário na resposta como link markdown, ex.: [http://localhost:5173](http://localhost:5173): no app "
+    "ele abre com um toque, no PC e no celular.",
     {"type": "object", "properties": {
         "name": {"type": "string", "description": "Apelido curto, ex.: vite, api"},
         "command": {"type": "string"},
