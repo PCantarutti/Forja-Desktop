@@ -327,7 +327,7 @@ export function AmpliarArquivo(props: {
       <div className="min-w-56 flex-1">
         {!arq && props.imagem && (
           <p className="text-xs leading-relaxed text-muted">
-            Amplia a resolução de qualquer imagem (ESRGAN, ou Lanczos sem IA). O original fica como está e o resultado entra
+            Amplia a resolução de qualquer imagem: ESRGAN (segundos), SeedVR2 (difusão, minutos, mais detalhe) ou Lanczos, sem IA. O original fica como está e o resultado entra
             aqui no feed.
           </p>
         )}

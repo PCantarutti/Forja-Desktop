@@ -200,6 +200,45 @@ def _adaptadores() -> list[dict]:
     return out
 
 
+def pasta_ascii() -> Path:
+    """Uma pasta temporária cujo caminho só tem ASCII (o curto 8.3 do %TEMP%, se o nome do usuário tiver acento)."""
+    import tempfile
+    pasta = Path(tempfile.gettempdir()) / "forja-ascii"
+    pasta.mkdir(parents=True, exist_ok=True)
+    curto = _curto(pasta)
+    return Path(curto) if curto.isascii() else pasta
+
+
+def _curto(p: Path) -> str:
+    if not WINDOWS:
+        return str(p)
+    import ctypes
+    buf = ctypes.create_unicode_buffer(32768)
+    n = ctypes.windll.kernel32.GetShortPathNameW(str(p), buf, len(buf))
+    return buf.value if 0 < n < len(buf) else str(p)
+
+
+def caminho_ascii(p: Path) -> str:
+    """O caminho de um arquivo que existe, só com ASCII, para programas que não abrem caminho com acento (o sd-cli:
+    "Ampliação", "Área de Trabalho", "Vídeos" viram "file not found"). O curto 8.3 do Windows; em disco sem nomes
+    8.3, um link (ou cópia) com nome ASCII numa pasta temporária."""
+    if str(p).isascii():
+        return str(p)
+    curto = _curto(p)
+    if curto.isascii():
+        return curto
+    import hashlib
+    alvo = pasta_ascii() / (hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:16] + p.suffix.lower())
+    if not (alvo.is_file() and alvo.stat().st_size == p.stat().st_size):
+        alvo.unlink(missing_ok=True)
+        try:
+            os.link(p, alvo)
+        except OSError:  # outro disco: copia (é um modelo de dezenas de MB ou uma imagem)
+            import shutil
+            shutil.copyfile(p, alvo)
+    return str(alvo)
+
+
 def placas() -> list[dict]:
     """As GPUs da máquina ({nome, vendor, vram}), da de mais VRAM dedicada para a de menos: a integrada e as
     virtuais (Parsec, Microsoft Basic Render) ficam no fim sozinhas, têm pouca ou nenhuma."""

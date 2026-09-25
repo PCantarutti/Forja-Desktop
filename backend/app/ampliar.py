@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import re
 import shutil
 import struct
@@ -219,10 +220,16 @@ def _esrgan(exe: Path, gpu: str, entrada: Path, destino: Path, modelo: str, fato
     """Uma imagem pelo ESRGAN do sd-cli. `repeticoes` 0 = ainda não medida: a escala é a do modelo (2× ou 4×),
     medida nesta passada, e um 2× pedido como 4× roda de novo com duas repetições. Devolve as repetições."""
     def rodar(n: int) -> None:
-        subprocess.run([str(exe), "-M", "upscale", "-i", str(entrada), "-o", str(destino), "--upscale-model", modelo,
+        # o sd-cli não abre caminho com acento (nem modelo, nem imagem): tudo vai pelo caminho só com ASCII, e a
+        # saída sai num temporário ASCII e é movida para o destino
+        saida = destino if str(destino).isascii() else native.pasta_ascii() / f"saida-{os.getpid()}-{time.monotonic_ns()}.png"
+        subprocess.run([str(exe), "-M", "upscale", "-i", native.caminho_ascii(Path(entrada)), "-o", str(saida),
+                        "--upscale-model", native.caminho_ascii(Path(modelo)),
                         "--upscale-tile-size", str(TILE_ESRGAN), "--upscale-repeats", str(n), "--backend", gpu],
                        cwd=str(exe.parent), capture_output=True, text=True, encoding="utf-8", errors="replace",
                        **native.popen_kwargs())
+        if saida != destino and saida.is_file():
+            shutil.move(str(saida), str(destino))
         if job_id and downloads.cancelled(job_id):
             raise ToolError("Ampliação cancelada.")
         if not destino.is_file():

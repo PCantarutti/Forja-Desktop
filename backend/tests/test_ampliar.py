@@ -265,3 +265,16 @@ def test_pacote_do_comfyui_pela_placa_de_mais_vram(monkeypatch):
     assert comfy.gpu() == "intel" and comfy.URL.format(versao=comfy.VERSAO, gpu="intel").endswith("_intel.7z")
     monkeypatch.setattr(native, "placas", lambda: [{"nome": "Microsoft Basic Render Driver", "vendor": 0x1414, "vram": 0}])
     assert comfy.gpu() == "nvidia"
+
+
+def test_caminho_so_com_ascii_para_o_sd_cli(tmp_path):
+    """O sd-cli não abre caminho com acento ("Ampliação", "Área de Trabalho"): vai o curto 8.3 ou uma cópia ASCII,
+    sempre com o mesmo conteúdo."""
+    from app import native
+    f = tmp_path / "Ampliação" / "café.png"
+    f.parent.mkdir()
+    f.write_bytes(b"png de teste")
+    a = native.caminho_ascii(f)
+    assert a.isascii() and Path(a).read_bytes() == b"png de teste"
+    assert native.caminho_ascii(tmp_path) == str(tmp_path) or str(tmp_path).isascii() is False
+    assert native.pasta_ascii().is_dir() and str(native.pasta_ascii()).isascii()
