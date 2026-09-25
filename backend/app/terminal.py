@@ -14,7 +14,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import native
+from . import native, sandbox
 from .tools import ToolError
 
 POLL_WAIT = 20.0
@@ -25,8 +25,8 @@ class Term:
     """Shell do sistema lendo do stdin; um thread copia o stdout para o buffer."""
 
     def __init__(self, cwd: Path):
-        self.proc = subprocess.Popen(native.term_argv(), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=native.ambiente_dev(),
-                                     stderr=subprocess.STDOUT, **native.popen_kwargs())
+        self.proc = sandbox.popen(native.term_argv(), cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, dev=True)
         self.buf = ""
         # Total já escrito desde o início, não o tamanho do buffer: é ele que vira o cursor do
         # cliente. Com `len(buf)` o cursor empacava em MAX_BUFFER assim que o buffer saturava e
@@ -83,6 +83,7 @@ class Term:
 
     def close(self) -> None:
         native.kill_tree(self.proc)
+        sandbox.fecha(self.proc)
 
 
 SESSIONS: dict[str, Term] = {}

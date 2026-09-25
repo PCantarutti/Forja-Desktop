@@ -950,7 +950,7 @@ sandbox é o que torna o modo autônomo seguro.**
 Deve estar pronto (pelo menos o passo 3) antes de o Maestro autônomo virar o fluxo recomendado.
 
 ### Passo 1: Job Object do Windows em todo processo do agente
-- [ ] Todo processo criado por `run_command`, `serve_start` e `terminal_open` (e pelo `verify_command`
+- [x] Todo processo criado por `run_command`, `serve_start` e `terminal_open` (e pelo `verify_command`
       e pela regressão, E1/E2) entra num **Job Object** criado pelo Forja (via `ctypes`, sem
       dependência nova):
   - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: a árvore inteira morre quando o comando termina, é cancelado
@@ -958,24 +958,46 @@ Deve estar pronto (pelo menos o passo 3) antes de o Maestro autônomo virar o fl
   - limite de memória por job (padrão 4 GB, ou 50% da RAM, o que for menor);
   - limite de processos ativos (padrão 64), contra fork bomb;
   - limite de CPU (`CpuRate`, padrão 80%), para o PC continuar usável.
-- [ ] Os limites entram nos perfis de hardware (E4) e ficam configuráveis. Estouro de limite aparece
+- [x] Os limites entram nos perfis de hardware (E4) e ficam configuráveis. Estouro de limite aparece
       para o modelo como erro claro ("o comando passou do limite de memória de 4 GB do sandbox").
-- [ ] Linux/macOS (web e runner): o equivalente é `setrlimit` + grupo de processos (`os.setsid` +
+- [x] Linux/macOS (web e runner): o equivalente é `setrlimit` + grupo de processos (`os.setsid` +
       `killpg`).
-- [ ] Testes: processo filho de um filho morre com o job; o limite de memória derruba um script que
+- [x] Testes: processo filho de um filho morre com o job; o limite de memória derruba um script que
       aloca além dele; o limite de processos barra uma fork bomb.
 
 ### Passo 2: ambiente limpo para os processos
-- [ ] O processo filho **não herda** o ambiente do backend. Hoje ele recebe tudo:
+- [x] O processo filho **não herda** o ambiente do backend. Hoje ele recebe tudo:
   - fica de fora qualquer variável com `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `FORJA_*`,
     `ANTHROPIC_*`, `OPENAI_*`, `AWS_*`, `AZURE_*`, `GITHUB_TOKEN`, `HF_TOKEN`;
   - só passa uma lista do que é necessário: `PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `HOME`,
     `LANG`, as de toolchain (`JAVA_HOME`, `GOPATH`, …) e o que o FORJA.md do projeto declarar em
     `env_allow`.
-- [ ] O `.env` do projeto não é carregado pelo Forja. Se o projeto precisar, o próprio comando do
+- [x] O `.env` do projeto não é carregado pelo Forja. Se o projeto precisar, o próprio comando do
       projeto o lê.
-- [ ] Testes: uma variável `X_API_KEY` no backend não aparece no `env` do processo; o `env_allow` do
+- [x] Testes: uma variável `X_API_KEY` no backend não aparece no `env` do processo; o `env_allow` do
       FORJA.md aparece.
+
+**Passos 1 e 2 feitos em 2026-09-25** (`app/sandbox.py`).
+
+Validado no Forja real (modo agente, backend com `TESTE_API_KEY` no ambiente):
+- `$env:TESTE_API_KEY` saiu vazio e o `PATH` continuou;
+- um filho aberto com `Start-Process` morreu quando o comando terminou (o arquivo que ele escreveria
+  depois de 3 s não apareceu).
+
+Diferenças em relação ao plano:
+- **Ambiente com lista de bloqueio, e não de liberação.** Nome com KEY/TOKEN/SECRET/PASSWORD/
+  CREDENTIAL, ou com prefixo `FORJA_`, `ANTHROPIC_`, `OPENAI_`, `AWS_`, `AZURE_`, `HF_`… não passa.
+  Uma lista de liberação quebraria toolchains que dependem de dezenas de variáveis do sistema.
+  `env_allow:` no FORJA.md libera.
+- **Limites padrão:**
+  - memória automática, metade da RAM até 4 GB;
+  - 128 processos (e não 64: builds com node e testes com navegador abrem muitos);
+  - CPU a 80%;
+  - os três configuráveis em Configurações ("Sandbox: …"). Entram nos perfis quando a E4 existir.
+- **O processo entra no job logo depois de criado, e não suspenso.** Um filho aberto no primeiro
+  milissegundo escapa, e isso está anotado no código.
+- **Linux/macOS:** só o `setrlimit` de memória. O `RLIMIT_NPROC` é por usuário e não por árvore, e
+  quebraria o resto do sistema.
 
 ### Passo 3: modo sandbox com WSL2 ou Docker (isolamento de verdade)
 - [ ] **Detecção:** se WSL2 ou Docker estiver disponível, a tela oferece "Executar comandos do agente

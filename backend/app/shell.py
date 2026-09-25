@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import config, native
+from . import config, native, sandbox
 from .tools import Tool, ToolError, register, resolve_path
 
 MAX_OUTPUT = 20_000
@@ -62,8 +62,8 @@ def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] 
     chunks: list[str] = []
     timed_out = threading.Event()
     # `with`: no caminho do timeout o pipe ficava aberto, um descritor por comando estourado.
-    with subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **native.popen_kwargs()) as p:
+    with sandbox.popen(native.shell_argv(command), cwd, stdout=subprocess.PIPE,
+                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL) as p:
         def _kill():
             timed_out.set()
             native.kill_tree(p)
@@ -78,8 +78,10 @@ def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] 
                 if sink:
                     sink(line)
             p.wait()
+            chunks.append(sandbox.aviso_limite(p))
         finally:
             timer.cancel()
+            sandbox.fecha(p)  # o que a árvore deixou para trás morre com o job
     return p.returncode, "".join(chunks), timed_out.is_set()
 
 
@@ -111,8 +113,8 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log = LOG_DIR / f"fg-{nome}-{time.time_ns()}.log"
     fh = open(log, "wb")
-    proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, **native.popen_kwargs())
+    proc = sandbox.popen(native.shell_argv(command), cwd, stdout=fh, stderr=subprocess.STDOUT,
+                         stdin=subprocess.DEVNULL)
     lidos, resto = 0, b""
     # Só cabeça e cauda na memória: antes a saída inteira ficava num list (um build verboso de GB ia
     # junto) só para ser cortada em MAX_OUTPUT no fim. O completo continua no log, em disco.
@@ -169,6 +171,9 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
     fh.close()
     if resto:
         guarda(native.decode(resto))
+    if aviso := sandbox.aviso_limite(proc):
+        guarda(aviso)
+    sandbox.fecha(proc)  # comando acabou: filho que ficou rodando (daemon, watcher) morre junto
     completo = ""
     try:
         if tam["total"] > MAX_OUTPUT:
@@ -255,8 +260,8 @@ def _start(name: str, command: str, cwd: Path) -> dict:
             _drop(_SERVERS.pop(name))  # mesmo nome = reinicia
         log = LOG_DIR / f"{name}.log"
         fh = open(log, "wb")  # fechado em _drop: sem guardar o handle, vazava um descritor por servidor
-        proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, env=native.ambiente_dev(), **native.popen_kwargs())
+        proc = sandbox.popen(native.shell_argv(command), cwd, stdout=fh, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, dev=True)
         _SERVERS[name] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
                           "started": time.time(), "conv": CONV.get()}
     return _info(name)
@@ -265,6 +270,7 @@ def _start(name: str, command: str, cwd: Path) -> dict:
 def _drop(s: dict) -> None:
     """Encerra o processo e fecha o arquivo de log dele."""
     native.kill_tree(s["proc"])
+    sandbox.fecha(s["proc"])
     try:
         s["fh"].close()
     except (OSError, KeyError):

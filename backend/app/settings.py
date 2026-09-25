@@ -48,6 +48,10 @@ ENV_DEFAULTS: dict[str, Any] = {
     "workers_do_maestro": False,
     "worker_especialidades": [dict(e) for e in config.ESPECIALIDADES_PADRAO],
     "workspace_padrao": "",  # pasta de uma conversa nova de Agente/Maestro; vazio = escolher a cada conversa
+    # Sandbox dos processos do agente (sandbox.py): -1 = automático, 0 = sem limite
+    "sandbox_memoria_mb": config.SANDBOX_MEMORIA_MB,
+    "sandbox_processos": config.SANDBOX_PROCESSOS,
+    "sandbox_cpu": config.SANDBOX_CPU,
 }
 MAX_ESPECIALIDADES = 12
 
@@ -66,6 +70,9 @@ NUMBERS = {  # chave: (tipo, mínimo, máximo)
     # Teto baixo de propósito: cada Worker é uma inferência inteira, e no local só cabe um.
     "max_workers": (int, 1, 8),
     "subagent_max_iterations": (int, 1, 100),
+    "sandbox_memoria_mb": (int, -1, 262_144),  # -1 automático, 0 sem limite
+    "sandbox_processos": (int, 0, 10_000),
+    "sandbox_cpu": (int, 0, 100),
 }
 TYPES = ("ollama", "lmstudio", "openai", "llamacpp")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
@@ -149,6 +156,9 @@ def apply(values: dict | None = None) -> dict:
     config.BROWSER_SCALE = int(values["browser_scale"])
     config.BROWSER_STREAM = values["browser_stream"]
     config.WORKSPACE_PADRAO = values["workspace_padrao"] or None
+    config.SANDBOX_MEMORIA_MB = int(values["sandbox_memoria_mb"])
+    config.SANDBOX_PROCESSOS = int(values["sandbox_processos"])
+    config.SANDBOX_CPU = int(values["sandbox_cpu"])
     return values
 
 

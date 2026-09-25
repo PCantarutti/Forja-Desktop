@@ -25,6 +25,9 @@ export type AppSettings = {
   max_iterations: number;
   max_file_bytes: number;
   shell_timeout_max: number;
+  sandbox_memoria_mb: number;
+  sandbox_processos: number;
+  sandbox_cpu: number;
   compact_at: number;
   searxng_url: string;
   disabled_tools: string[];
@@ -235,6 +238,15 @@ export default function Settings(props: {
                 </Field>
                 <Field label="Timeout máximo do run_command (s)">
                   <Num value={s.shell_timeout_max} onChange={(v) => set("shell_timeout_max", v)} />
+                </Field>
+                <Field label="Sandbox: memória por comando (MB)" hint="Teto de memória da árvore de um comando do agente (run_command, servidores, terminal). -1 = automático (metade da RAM, até 4 GB); 0 = sem limite.">
+                  <Num value={s.sandbox_memoria_mb} onChange={(v) => set("sandbox_memoria_mb", v)} />
+                </Field>
+                <Field label="Sandbox: processos por comando" hint="Processos vivos ao mesmo tempo na árvore de um comando: barra fork bomb. 0 = sem limite.">
+                  <Num value={s.sandbox_processos} onChange={(v) => set("sandbox_processos", v)} />
+                </Field>
+                <Field label="Sandbox: CPU por comando (%)" hint="Teto de CPU de um comando, para o PC continuar usável num build pesado. 0 = sem limite.">
+                  <Num value={s.sandbox_cpu} onChange={(v) => set("sandbox_cpu", v)} />
                 </Field>
                 <Field label="URL do SearXNG" hint="Instância própria de busca. Vazio = DuckDuckGo, sem chave e sem conta.">
                   <input className={input} value={s.searxng_url} onChange={(e) => set("searxng_url", e.target.value)} />
