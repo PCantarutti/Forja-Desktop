@@ -215,7 +215,12 @@ class Run:
         elif t in ("plan_request", "question_request"):  # reconexão: a UI recria o card pelos argumentos
             self.approvals[ev["call"]["id"]] = {"call": ev["call"], "preview": None, "suggest": None, "parent": None}
         elif t == "tool_result":
-            self.approvals.pop(ev["message"]["tool_call_id"], None)
+            # Estava esperando decisão e saiu (aprovada no desktop, no celular ou por troca de permissão):
+            # a notificação dela no celular some.
+            if self.approvals.pop(ev["message"]["tool_call_id"], None) is not None:
+                mobile.revoga([ev["message"]["tool_call_id"]])
+        elif t in ("done", "error") and self.approvals:
+            mobile.revoga(list(self.approvals))  # turno acabou (parado, erro) com pedido aberto
         elif t == "tools_sent":
             self.sent = ev
         if t in ("token", "thinking", "tool_token") and self.geracao is not None:

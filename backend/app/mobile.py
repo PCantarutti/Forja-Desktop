@@ -226,9 +226,12 @@ def _mensagem(ev: dict, conv_id: int, run_id: str) -> dict:
     call = ev.get("call") or {}
     corpo = {"approval_request": f"{call.get('name', 'ferramenta')} quer rodar",
              "question_request": str(ev.get("question") or "")}.get(ev["type"], "")
-    return {"title": AVISA[ev["type"]], "body": corpo[:180] or "Toque para abrir a conversa",
-            "priority": "high", "sound": "default",
-            "data": {"conv_id": conv_id, "run_id": run_id, "call_id": call.get("id")}}
+    # Só dados: quem desenha a notificação é o app (src/revoga.ts), com o call_id como identificador. Com
+    # título, o Firebase desenhava sozinho com o app em segundo plano e perdia o `data` — e aí não havia como
+    # tirar a notificação quando o pedido fosse decidido no desktop (revoga).
+    return {"priority": "high", "_contentAvailable": True,
+            "data": {"forja": "mostra", "titulo": AVISA[ev["type"]], "texto": corpo[:180] or "Toque para abrir a conversa",
+                     "conv_id": conv_id, "run_id": run_id, "call_id": call.get("id")}}
 
 
 async def _enviar(msgs: list[dict]) -> None:
@@ -237,6 +240,16 @@ async def _enviar(msgs: list[dict]) -> None:
             await c.post(EXPO_PUSH, json=msgs)
     except httpx.HTTPError as e:  # ponytail: sem fila/retry; push perdido não trava o run
         print(f"Forja: push para o celular falhou: {e}", flush=True)
+
+
+def revoga(call_ids: list[str]) -> None:
+    """Push só de dados (sem título, não aparece): o app, até fechado, tira as notificações desses pedidos."""
+    if not call_ids or not (alvos := devices()):
+        return
+    msg = {"data": {"forja": "revoga", "call_ids": call_ids}, "priority": "high", "_contentAvailable": True}
+    task = asyncio.get_running_loop().create_task(_enviar([{**msg, "to": t} for t in alvos]))
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
 
 
 def notify(ev: dict, conv_id: int, run_id: str) -> None:

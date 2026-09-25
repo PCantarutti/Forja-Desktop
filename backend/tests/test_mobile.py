@@ -53,8 +53,32 @@ def test_aprovacao_vira_push_e_token_nao(isolado, monkeypatch):
     asyncio.run(cenario())
     assert len(enviados) == 1
     assert enviados[0]["to"] == "ExponentPushToken[a]"
-    assert enviados[0]["body"] == "run_command quer rodar"
-    assert enviados[0]["data"] == {"conv_id": 7, "run_id": enviados[0]["data"]["run_id"], "call_id": "c1"}
+    assert "title" not in enviados[0]  # só dados: o app desenha (e pode tirar) a notificação
+    assert enviados[0]["data"] == {"forja": "mostra", "titulo": "Aprovação pendente", "texto": "run_command quer rodar",
+                                   "conv_id": 7, "run_id": enviados[0]["data"]["run_id"], "call_id": "c1"}
+
+
+def test_pedido_decidido_revoga_a_notificacao(isolado, monkeypatch):
+    """Decidido em qualquer lugar (vira tool_result) ou turno encerrado com pedido aberto: push só de dados."""
+    enviados = []
+
+    async def falso(msgs):
+        enviados.extend(msgs)
+    monkeypatch.setattr(mobile, "_enviar", falso)
+    mobile.register("ExponentPushToken[a]")
+
+    async def cenario():
+        run = Run(7)
+        for cid in ("c1", "c2"):
+            await run.publish({"type": "approval_request", "call": {"id": cid, "name": "run_command", "arguments": {}}, "preview": None})
+        await run.publish({"type": "tool_result", "message": {"tool_call_id": "c1"}})
+        await run.publish({"type": "tool_result", "message": {"tool_call_id": "outra"}})  # não estava esperando
+        await run.publish({"type": "done"})
+        await asyncio.sleep(0)
+    asyncio.run(cenario())
+    revogas = [m["data"]["call_ids"] for m in enviados if m.get("data", {}).get("forja") == "revoga"]
+    assert revogas == [["c1"], ["c2"]]
+    assert all("title" not in m for m in enviados if m.get("data", {}).get("forja") == "revoga")
 
 
 def test_expose_so_servidor_vivo_do_agente(isolado, monkeypatch):
