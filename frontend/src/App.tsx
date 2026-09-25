@@ -18,6 +18,7 @@ import { CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, enviarClasse, pa
 import { GRADE_VAZIA, abertos, abrir as abrirTile, fechar as fecharTile, soltos, type Grade } from "./components/tiles";
 import { executarNoTerminal } from "./components/TerminalPanel";
 import SettingsDialog from "./components/Settings";
+import BoardView from "./components/BoardView";
 import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
@@ -62,7 +63,7 @@ import {
   turnosDe,
   type TurnStats,
 } from "./components/MessageView";
-import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Refresh, Square, Undo, X } from "./components/icons";
+import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
 
@@ -308,6 +309,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
 export default function App() {
   const [config, setConfig] = useState<Config>({ providers: [], num_ctx: 32768 });
   const [showSettings, setShowSettings] = useState(false);
+  const [showBoard, setShowBoard] = useState(false);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [geral, setSettings] = useState<Settings>(loadSettings);
@@ -2098,6 +2100,22 @@ export default function App() {
       {showSettings && (
         <SettingsDialog onClose={() => setShowSettings(false)} tools={allTools} mcp={mcp} onChanged={refreshTools} />
       )}
+      {showBoard && (
+        <BoardView
+          pasta={(conv ? conv.workspace : pendingWs) ?? null}
+          carimbo={activity.board}
+          onClose={() => setShowBoard(false)}
+          onAbrirConversa={async (id) => {
+            setShowBoard(false);
+            try {
+              const c = await api.get<{ kind?: string }>(`/conversations/${id}`);
+              irParaConversa(id, (c.kind as Section) || "agent");
+            } catch (e: any) {
+              setError(e.message);
+            }
+          }}
+        />
+      )}
 
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
@@ -2145,6 +2163,10 @@ export default function App() {
               </button>
               <button onClick={() => openPath(".", "reveal")} title="Abrir a pasta no Explorer" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
                 <FolderOpen className="size-3.5" />
+              </button>
+              <button onClick={() => setShowBoard(true)} title="Board do projeto: backlog, varredura e Iniciar"
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-xs text-muted hover:text-fg">
+                <Quadro className="size-3.5" /> Board
               </button>
             </>
           )}

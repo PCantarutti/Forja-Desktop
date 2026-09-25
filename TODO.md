@@ -1355,7 +1355,46 @@ partes:
 E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E12.
 
 ### Parte A: MVP sem LLM (board, cards e o botão Iniciar)
-- [ ] **Tabela `issues` por projeto** (pela pasta raiz, não por conversa como `Feature`/`Task`,
+
+*Feita em 2026-09-25.*
+- **Código:** `board.py`, a tabela `Issue`, as rotas `/api/board/*` e o carimbo `board` no
+  `/api/activity`. No desktop, `BoardView.tsx` abre pelo botão **Board** na barra superior (seções
+  Agente e Maestro). No celular, `src/Board.tsx`, na página Board da gaveta.
+- **Arrastar:** mesmo gesto dos painéis do Maestro (`RightPanel.alca`). O card levanta e segue o
+  ponteiro, a coluna acende, e soltar em "Em andamento" é o mesmo que Iniciar.
+- **Testes:** `tests/test_board.py`.
+- **Desvios:**
+  - A varredura não roda `browser_validate`. Ela não sabe quais rotas o app tem nem se o servidor
+    de dev está de pé; isso fica para a parte B.
+  - Comandos do projeto são linhas `test_command:`, `typecheck_command:` e `lint_command:` no
+    FORJA.md, no mesmo estilo do `env_allow:`. A E14 depois detecta sozinha.
+  - O verify roda depois de a conversa terminar, e o resultado vai para o histórico. O card vai para
+    Revisão mesmo com o verify falhando, marcado assim. Quem decide é a revisão.
+  - O commit do card é o HEAD novo desde o Iniciar. O modo agente não commita sozinho, então ali
+    costuma vir vazio; no Maestro é o commit por tarefa da E2.
+
+*Validado no Forja real* (`.devval/board-proj`, projeto com 3 comentários e um teste falhando):
+- "Varrer agora" pela tela criou 4 cards em Novo, cada um com `arquivo:linha`.
+- **Aceitar → Iniciar** no card do teste: o agente (gpt-oss:120b) corrigiu `soma`. O card foi
+  sozinho para Revisão, e o verify rodou e passou. O FIXME removido pelo agente virou "resolvido?".
+- Arrastar com o mouse de Novo para Backlog funcionou, e o clique de depois não abre o card.
+- **Defeitos vistos e corrigidos:**
+  - o Iniciar dava 500 ("no running event loop": endpoint síncrono), e agora há teste que passa
+    pela API com o Run real;
+  - o erro sumia da tela;
+  - a área padrão `fullstack` mandava todo card manual para o Maestro;
+  - uma falha no Iniciar deixava conversa órfã.
+- [x] **Testado no celular de verdade** (Galaxy A54, APK de release instalado com `adb install -r`,
+  pareado pelo QR com a instância de teste na rede local). Os três sentidos:
+  - **celular → PC:** Aceitar no celular aparece no board aberto do PC na hora (menos de 4 s, contando
+    o toque);
+  - **PC → celular:** card criado no PC aparece no celular em 5,6 s (ciclo de 4 s do `/api/activity`);
+  - **Iniciar pelo celular:** o PC viu "Em andamento" em 1,7 s. O agente implementou o TODO, e o card
+    foi para Revisão nos dois aparelhos.
+  - Para isso a porta da rede local virou configurável: `FORJA_LAN_PORTA`, padrão 47811. A instância de
+    teste usou a 47812, porque a 47811 estava com a instância de outra sessão.
+
+- [x] **Tabela `issues` por projeto** (pela pasta raiz, não por conversa como `Feature`/`Task`,
       `db.py:114`). Campos:
   - `id`, `projeto` (raiz), `titulo`, `descricao`;
   - `tipo` (bugfix | feature | improvement | visual | todo | seguranca);
@@ -1365,18 +1404,18 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - `evidencias` (JSON com `arquivo:linha`, saída, caminho do screenshot);
   - `prompt`, `verify_sugerido`, `origem` (manual | varredura-deterministica | varredura-ia | visual);
   - `impressao`, `motivo_rejeicao`, `conversa_id`, `feature_id`, `commit`, datas.
-- [ ] **Tela "Projeto › Board"** (componente novo, ao lado do `MaestroView.tsx`):
+- [x] **Tela "Projeto › Board"** (componente novo, ao lado do `MaestroView.tsx`):
   - colunas Novo → Backlog → Em andamento → Revisão → Concluído, com arrastar entre colunas;
   - filtros por tipo, área e severidade;
   - uma busca;
   - contagem por coluna.
-- [ ] **Card:** título, tags coloridas por tipo e área, severidade e origem. Aberto, mostra:
+- [x] **Card:** título, tags coloridas por tipo e área, severidade e origem. Aberto, mostra:
   - as evidências clicáveis (abre o arquivo na linha, ou o screenshot);
   - o prompt, editável;
   - o `verify` sugerido;
   - o histórico.
-- [ ] **Criar card à mão** ("+ Novo item"), com o mesmo formulário.
-- [ ] **Botão "Iniciar":**
+- [x] **Criar card à mão** ("+ Novo item"), com o mesmo formulário.
+- [x] **Botão "Iniciar":**
   - sugere o modo: bugfix, todo e visual pequenos → **agente**; feature, ou área fullstack →
     **Maestro**. O usuário pode trocar na hora;
   - cria uma conversa nova na pasta do projeto com o prompt do card, o `verify` e as evidências, e
@@ -1385,7 +1424,7 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - **Fim:** quando a conversa termina (a feature do Maestro virou `done`, ou o turno do agente acabou
     com o verify passando), o card vai para "Revisão", com o commit (E2, quando existir). O usuário
     aprova e ele vai para "Concluído", ou reabre com um comentário que vira mensagem na mesma conversa.
-- [ ] **Varredura determinística (camada 1)**, sem LLM, pelo botão "Varrer agora":
+- [x] **Varredura determinística (camada 1)**, sem LLM, pelo botão "Varrer agora":
   - `TODO`/`FIXME`/`HACK`/`XXX` pelo `grep` (`busca.py`) → tipo `todo`, com o texto do comentário;
   - erros de `tsc --noEmit`, lint e testes que falham (comandos do FORJA.md; depois da E14, os
     detectados) → `bugfix`, com a saída;
@@ -1395,10 +1434,10 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
 
   Um card por problema, com impressão digital. Reexecutar não duplica, e um problema que sumiu marca
   o card "resolvido?" para o usuário confirmar.
-- [ ] **Sincronizar com o celular** (regra do `CLAUDE.md`): card novo, mudança de coluna e fim da
+- [x] **Sincronizar com o celular** (regra do `CLAUDE.md`): card novo, mudança de coluna e fim da
       varredura entram no `/api/activity`. O Forja Mobile ganha a lista do board para triar pelo
       celular (aceitar, rejeitar, iniciar). Testar nos dois sentidos com o celular de verdade.
-- [ ] Testes:
+- [x] Testes:
   - a impressão digital evita duplicado;
   - rejeitado não volta;
   - um `TODO` detectado vira card com `arquivo:linha`;

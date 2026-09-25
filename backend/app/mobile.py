@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -135,7 +136,8 @@ def tailnet_url() -> str | None:
 # desktop continua em 127.0.0.1. Na LAN não há quem autentique o aparelho além do token, então o porteiro
 # exige o token em TODA requisição — inclusive nas rotas que o desktop serve sem token (/api/files,
 # imagens, /export) — e só serve /api. HTTP sem TLS: o token trafega aberto, aceitável na rede de casa.
-LAN_PORTA = 47811
+# FORJA_LAN_PORTA: uma 2ª instância (validação, worktree) na mesma máquina não briga pela porta da 1ª.
+LAN_PORTA = int(os.getenv("FORJA_LAN_PORTA") or 47811)
 _lan: dict = {}  # {"server": uvicorn.Server, "task": asyncio.Task} enquanto ligado
 # IP -> quando foi visto com o token certo: os sites na LAN (lan_site) só atendem o celular pareado.
 _celulares: dict[str, float] = {}

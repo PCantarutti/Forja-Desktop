@@ -16,11 +16,11 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
+from . import (baterias, board, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
@@ -423,9 +423,88 @@ async def get_activity():
     with db.session() as s:
         n, maior, ultima = s.execute(select(func.count(db.Conversation.id), func.max(db.Conversation.id),
                                             func.max(db.Conversation.updated_at))).one()
+    try:  # card em andamento cuja conversa acabou vai para Revisão; o carimbo avisa as telas do board
+        await asyncio.to_thread(board.acompanha)
+        quadro = await asyncio.to_thread(board.carimbo)
+    except Exception:
+        quadro = ""
     # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
     return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
-            "lista": f"{n}-{maior}-{ultima}"}
+            "lista": f"{n}-{maior}-{ultima}", "board": quadro}
+
+
+# ------------------------------------------------------------------ board de issues (E15)
+
+def _board(fn, *a):
+    # Iniciar e Reabrir disparam um Run, que precisa do laço de eventos: por isso aqueles endpoints são
+    # async (endpoint síncrono roda numa thread, e o Run.start falhava com "no running event loop").
+    try:
+        return fn(*a)
+    except (board.BoardError, workspace.WorkspaceError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/board/projetos")
+def board_projetos():
+    """Pastas que já tiveram conversa de agente/Maestro ou card, pela raiz do projeto: o seletor do board."""
+    vistos: dict[str, float] = {}
+    with db.session() as s:
+        for w, quando in s.execute(select(db.Conversation.workspace, func.max(db.Conversation.updated_at))
+                                   .where(db.Conversation.kind.in_(("agent", "maestro")),
+                                          db.Conversation.workspace.is_not(None))
+                                   .group_by(db.Conversation.workspace)):
+            try:
+                p = board.projeto_de(w)
+            except workspace.WorkspaceError:
+                continue  # pasta que não existe mais
+            vistos[p] = max(vistos.get(p, 0), quando.timestamp() if quando else 0)
+        for (p,) in s.execute(select(db.Issue.projeto).distinct()):
+            vistos.setdefault(p, 0)
+    return [{"projeto": p, "nome": Path(p).name} for p in sorted(vistos, key=lambda k: -vistos[k])]
+
+
+@app.get("/api/board")
+def board_listar(pasta: str):
+    projeto = _board(board.projeto_de, pasta)
+    return {"projeto": projeto, "issues": board.listar(projeto), "varredura": board.estado_varredura(projeto),
+            "comandos": board.comandos_do_projeto(Path(projeto))}
+
+
+@app.post("/api/board/issues")
+def board_criar(body: dict):
+    projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
+    return _board(board.criar, projeto, {k: v for k, v in body.items() if k not in ("pasta", "impressao")})[0]
+
+
+@app.patch("/api/board/issues/{issue_id}")
+def board_atualizar(issue_id: int, body: dict):
+    return _board(board.atualizar, issue_id, body)
+
+
+@app.delete("/api/board/issues/{issue_id}")
+def board_apagar(issue_id: int):
+    board.apagar(issue_id)
+    return {"ok": True}
+
+
+@app.post("/api/board/issues/{issue_id}/rejeitar")
+def board_rejeitar(issue_id: int, body: dict):
+    return _board(board.rejeitar, issue_id, body.get("motivo"))
+
+
+@app.post("/api/board/issues/{issue_id}/iniciar")
+async def board_iniciar(issue_id: int, body: dict):
+    return _board(board.iniciar, issue_id, body.get("modo"))
+
+
+@app.post("/api/board/issues/{issue_id}/reabrir")
+async def board_reabrir(issue_id: int, body: dict):
+    return _board(board.reabrir, issue_id, body.get("comentario"))
+
+
+@app.post("/api/board/varrer")
+def board_varrer(body: dict):
+    return _board(board.varrer, str(body.get("pasta") or ""))
 
 
 @app.post("/api/servers/clear")
@@ -1769,6 +1848,7 @@ class OpenBody(BaseModel):
     conv: int | str | None = None
     path: str
     mode: str = "editor"  # editor | reveal
+    line: int | None = None  # editor: abrir nesta linha
 
 
 @app.post("/api/open")
@@ -1784,7 +1864,7 @@ async def open_in_system(body: OpenBody):
         except ToolError as e:
             raise HTTPException(400, str(e))
     try:
-        return {"opened": await asyncio.to_thread(native.open_path, host, body.mode)}
+        return {"opened": await asyncio.to_thread(native.open_path, host, body.mode, body.line)}
     except (ValueError, OSError) as e:
         raise HTTPException(400, str(e))
 

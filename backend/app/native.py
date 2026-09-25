@@ -129,7 +129,7 @@ DO_SISTEMA = {".docx", ".xlsx", ".xlsm", ".pptx", ".pdf", ".odt", ".ods", ".odp"
               ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".mp4", ".webm", ".zip"}
 
 
-def open_path(path: str, mode: str) -> str:
+def open_path(path: str, mode: str, line: int | None = None) -> str:
     if not os.path.exists(path):
         raise ValueError(f"Caminho não existe: {path}")
     if mode == "reveal":
@@ -148,7 +148,8 @@ def open_path(path: str, mode: str) -> str:
         return "revelado"
     # editor: VS Code para texto; documento e mídia vão para o programa padrão do sistema
     if Path(path).suffix.lower() not in DO_SISTEMA and (shutil.which("code") or (WINDOWS and shutil.which("code.cmd"))):
-        subprocess.Popen(shell_argv(f"code {quote(path)}"), **popen_kwargs())
+        alvo = f"-g {quote(f'{path}:{int(line)}')}" if line else quote(path)  # -g: abre na linha (board, evidência)
+        subprocess.Popen(shell_argv(f"code {alvo}"), **popen_kwargs())
         return "code"
     if WINDOWS:
         os.startfile(path)  # type: ignore[attr-defined]
