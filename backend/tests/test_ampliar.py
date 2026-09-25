@@ -108,8 +108,8 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     assert (o["width"], o["height"], o["fps"], o["frames"]) == (1664, 960, 32, 65)  # 2× e o dobro de quadros
     lotes.continuar(nova["id"])  # "Gerar as que faltaram" refaz a ampliação, não uma geração
     m = _esperar(nova["id"])
-    assert m["status"] == "pronto" and Path(m["meta"]["images"][0]["path"]).name == "a-00-s7-2x-suave.webm"
-    assert feitas[-1] == (str(origem), "a-00-s7-2x-suave.webm", 2, True)
+    assert m["status"] == "pronto" and Path(m["meta"]["images"][0]["path"]).name == "a-00-s7-2x-lanczos-suave.webm"
+    assert feitas[-1] == (str(origem), "a-00-s7-2x-lanczos-suave.webm", 2, True)
     assert m["meta"]["opts"]["frames"] == 63  # o que saiu, não a conta de antes
     with pytest.raises(lotes.ToolError, match="2× ou 4×"):
         lotes.ampliar(msg.id, str(origem), 3)
@@ -170,7 +170,7 @@ def test_ampliar_imagem_sem_ffmpeg_por_lanczos_gerada_e_do_disco(isolado, monkey
     m = _esperar(lotes.ampliar(msg.id, str(origem), 2, suavizar=True)["id"])
     item = m["meta"]["images"][0]
     assert m["status"] == "pronto" and "unidade" not in item and not m["meta"]["opts"]["ampliacao"]["suavizar"]
-    assert Path(item["path"]).name == "gato-s3-2x.png" and Image.open(item["path"]).size == (16, 12)
+    assert Path(item["path"]).name == "gato-s3-2x-lanczos.png" and Image.open(item["path"]).size == (16, 12)
 
     fora = isolado / "de-fora" / "foto.jpg"
     fora.parent.mkdir()
@@ -295,3 +295,13 @@ def test_cancelar_mata_o_driver_mesmo_calado(isolado, monkeypatch):
     with pytest.raises(lotes.ToolError, match="cancelada"):
         comfy.ampliar("in.png", isolado / "out.png", 2, seed, job["id"])
     assert time.monotonic() - comeco < 10
+
+
+def test_dois_metodos_na_mesma_imagem_nao_se_sobrescrevem(tmp_path):
+    origem = tmp_path / "cafe.png"
+    origem.write_bytes(b"x")
+    a = lotes._saida_ao_lado(origem, 2, "C:/m/4x-UltraSharp.safetensors", ".png")
+    b = lotes._saida_ao_lado(origem, 2, "C:/m/seedvr2_3b_fp16.safetensors", ".png")
+    assert (a.name, b.name) == ("cafe-2x-4x-UltraSharp.png", "cafe-2x-seedvr2_3b_fp16.png")
+    a.write_bytes(b"x")
+    assert lotes._saida_ao_lado(origem, 2, "C:/m/4x-UltraSharp.safetensors", ".png").name == "cafe-2x-4x-UltraSharp-2.png"

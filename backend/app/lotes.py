@@ -612,6 +612,17 @@ def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: d
     return nova.to_dict()
 
 
+def _saida_ao_lado(origem: Path, fator: int, modelo: str, ext: str, suave: bool = False) -> Path:
+    """Arquivo novo ao lado da origem, com o fator e o método no nome ("cafe-2x-4x-UltraSharp.png"): a mesma imagem
+    ampliada 2× por dois métodos não pode cair no mesmo arquivo (o segundo apagava o primeiro). Já existe: -2, -3…"""
+    metodo = re.sub(r"[^\w.-]+", "", Path(modelo).stem)[:32] if modelo else "lanczos"
+    base = f"{origem.stem}-{fator}x-{metodo}{'-suave' if suave else ''}"
+    saida, n = origem.with_name(base + ext), 2
+    while saida.exists():
+        saida, n = origem.with_name(f"{base}-{n}{ext}"), n + 1
+    return saida
+
+
 def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False) -> dict:
     """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
     progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
@@ -622,8 +633,7 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
     from . import ampliar as amp
     imagem = amp.eh_imagem(path)
     _validar_ampliacao(fator, modelo, not imagem, confirm)
-    saida = (Path(path).with_name(f"{Path(path).stem}-{fator}x.png") if imagem
-             else Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"))
+    saida = _saida_ao_lado(Path(path), fator, modelo, ".png" if imagem else ".webm", suavizar and not imagem)
     with db.session() as s:
         pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
                                              db.Message.id < message_id).order_by(db.Message.id.desc()).first())
