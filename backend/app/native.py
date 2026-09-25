@@ -157,16 +157,10 @@ def open_path(path: str, mode: str) -> str:
     return "padrão"
 
 
-def vram_em_uso() -> dict[str, int]:
-    """Nome do adaptador -> VRAM dedicada em uso no sistema todo (bytes). {} fora do Windows.
-
-    É o número do Gerenciador de Tarefas: contador de desempenho "GPU Adapter Memory", ligado ao nome
-    da placa pelo LUID que o DXGI informa. O `--list-devices` do llama.cpp (Vulkan) não serve para
-    isso: ele não enxerga a memória de outros processos, e com um modelo de 8 GB na placa ainda dizia
-    que ela estava livre.
-    """
+def _adaptadores() -> list[dict]:
+    """As placas que o DXGI enumera: nome, fabricante (VendorId do PCI), VRAM dedicada e o LUID. [] fora do Windows."""
     if not WINDOWS:
-        return {}
+        return []
     import ctypes
     from ctypes import wintypes as W
 
@@ -184,13 +178,13 @@ def vram_em_uso() -> dict[str, int]:
     iid = GUID(0x7b7166ec, 0x21c7, 0x44ae, (ctypes.c_ubyte * 8)(0xb2, 0x1a, 0xc9, 0xae, 0x32, 0x1a, 0xe3, 0x69))
     fab = ctypes.c_void_p()
     if ctypes.windll.dxgi.CreateDXGIFactory(ctypes.byref(iid), ctypes.byref(fab)):
-        return {}
+        return []
 
     def metodo(obj, i, *tipos):
         vt = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
         return ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *tipos)(vt[i])
 
-    nomes = {}
+    out = []
     i = 0
     while True:
         ad = ctypes.c_void_p()
@@ -198,10 +192,36 @@ def vram_em_uso() -> dict[str, int]:
             break
         d = DESC()
         metodo(ad, 8, ctypes.c_void_p)(ad, ctypes.byref(d))  # GetDesc
-        nomes[f"luid_0x{d.Luid.High & 0xffffffff:08x}_0x{d.Luid.Low:08x}"] = d.Description
+        out.append({"nome": d.Description, "vendor": d.VendorId, "vram": d.Dedicated,
+                    "luid": f"luid_0x{d.Luid.High & 0xffffffff:08x}_0x{d.Luid.Low:08x}"})
         metodo(ad, 2)(ad)  # Release
         i += 1
     metodo(fab, 2)(fab)
+    return out
+
+
+def placas() -> list[dict]:
+    """As GPUs da máquina ({nome, vendor, vram}), da de mais VRAM dedicada para a de menos: a integrada e as
+    virtuais (Parsec, Microsoft Basic Render) ficam no fim sozinhas, têm pouca ou nenhuma."""
+    return sorted(({k: a[k] for k in ("nome", "vendor", "vram")} for a in _adaptadores()), key=lambda a: a["vram"], reverse=True)
+
+
+def vram_em_uso() -> dict[str, int]:
+    """Nome do adaptador -> VRAM dedicada em uso no sistema todo (bytes). {} fora do Windows.
+
+    É o número do Gerenciador de Tarefas: contador de desempenho "GPU Adapter Memory", ligado ao nome
+    da placa pelo LUID que o DXGI informa. O `--list-devices` do llama.cpp (Vulkan) não serve para
+    isso: ele não enxerga a memória de outros processos, e com um modelo de 8 GB na placa ainda dizia
+    que ela estava livre.
+    """
+    if not WINDOWS:
+        return {}
+    import ctypes
+    from ctypes import wintypes as W
+
+    nomes = {a["luid"]: a["nome"] for a in _adaptadores()}
+    if not nomes:
+        return {}
 
     pdh = ctypes.windll.pdh
     q, c = ctypes.c_void_p(), ctypes.c_void_p()

@@ -20,18 +20,13 @@ PASTA = localai.RUNTIMES / "comfy"
 JOB = Path(__file__).with_name("comfy_job.py")
 
 
+VENDOR = {0x10DE: "nvidia", 0x1002: "amd", 0x8086: "intel"}  # VendorId do PCI
+
+
 def gpu() -> str:
-    """A marca da GPU que o portátil deve usar: a de mais VRAM entre as que o llama.cpp ou o sd.cpp enxergam
-    (a integrada da CPU fica de fora sozinha, tem pouca). Sem nenhuma listagem, NVIDIA (o portátil padrão)."""
-    exe = localai.find_exe("llama") or localai.find_exe("sd")
-    placas = sorted(localai.devices(str(exe)) if exe else [], key=lambda g: g["total"], reverse=True)
-    nome = (placas[0]["name"] if placas else "").lower()
-    # ponytail: pelo nome da placa; um nome que não cite a marca cai em NVIDIA (o pacote que também roda na CPU)
-    if "intel" in nome or "arc" in nome:
-        return "intel"
-    if "amd" in nome or "radeon" in nome:
-        return "amd"
-    return "nvidia"
+    """A marca da GPU que o portátil deve usar: a placa de mais VRAM dedicada que o Windows lista (a integrada e
+    as virtuais ficam para trás). Sem nenhuma conhecida, NVIDIA: o pacote que também roda só na CPU."""
+    return next((VENDOR[p["vendor"]] for p in native.placas() if p["vendor"] in VENDOR and p["vram"]), "nvidia")
 
 
 def python() -> Path | None:

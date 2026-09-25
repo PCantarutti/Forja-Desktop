@@ -255,3 +255,13 @@ def test_7z_mantem_a_arvore_sem_a_pasta_raiz(tmp_path):
     dest.mkdir()
     downloads._unzip(pacote, dest)
     assert (dest / "python_embeded" / "python.exe").is_file() and (dest / "ComfyUI" / "main.py").is_file()
+
+
+def test_pacote_do_comfyui_pela_placa_de_mais_vram(monkeypatch):
+    """A Arc com a integrada AMD ao lado: o pacote é o da Intel, não o da AMD, e sem placa conhecida é o da NVIDIA."""
+    from app import comfy, native
+    monkeypatch.setattr(native, "placas", lambda: [{"nome": "Intel(R) Arc(TM) B580", "vendor": 0x8086, "vram": 12 << 30},
+                                                   {"nome": "AMD Radeon(TM) Graphics", "vendor": 0x1002, "vram": 2 << 30}])
+    assert comfy.gpu() == "intel" and comfy.URL.format(versao=comfy.VERSAO, gpu="intel").endswith("_intel.7z")
+    monkeypatch.setattr(native, "placas", lambda: [{"nome": "Microsoft Basic Render Driver", "vendor": 0x1414, "vram": 0}])
+    assert comfy.gpu() == "nvidia"
