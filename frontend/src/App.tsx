@@ -1407,9 +1407,12 @@ export default function App() {
 
   // Linha de estatísticas sempre presente enquanto roda: iterações já concluídas do turno (valores reais do
   // provider) + a geração em andamento (tokens contados ao vivo, tempo correndo, t/s atual).
+  // Conversa do Claude por MCP: quem responde é ele, não o modelo escolhido aqui. O Run dela fica aberto
+  // enquanto ele trabalha, e sem isto a linha "ao vivo" mostrava o modelo do Maestro com ~0 tokens.
+  const doClaude = (conv?.origem as any)?.externo === "claude";
   const liveStats: TurnStats | null = (() => {
     void tick; // recalcula a cada 250 ms
-    if (!running) return null;
+    if (!running || doClaude) return null;
     const done = messages.slice(lastUserIndex + 1).flatMap((m) => (m.role === "assistant" && m.meta?.stats ? [m.meta.stats as Stats] : []));
     const base: TurnStats = done.length ? aggregate(done) : { model: settings.model, tokens: 0, seconds: 0, tps: null, estimated: true };
     const g = liveGen.current;
@@ -1995,7 +1998,7 @@ export default function App() {
           }}
           ref={composer}
           rows={2}
-          placeholder={running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "maestro" ? "Qual é o objetivo? A Maestro planeja e delega ( / para comandos, @ para arquivos )" : section === "agent" ? "Peça algo ao agente... ( / para comandos, @ para arquivos )" : "Digite uma mensagem..."}
+          placeholder={doClaude ? "Mensagem para o Claude (chega a ele na próxima ferramenta que ele chamar)…" : running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "maestro" ? "Qual é o objetivo? A Maestro planeja e delega ( / para comandos, @ para arquivos )" : section === "agent" ? "Peça algo ao agente... ( / para comandos, @ para arquivos )" : "Digite uma mensagem..."}
           className={campoPrompt}
         />
         <RodapePrompt>
@@ -2226,7 +2229,7 @@ export default function App() {
             onBoard={setBoard}
             modelPhase={modelPhase}
             provider={settings.provider}
-            model={settings.model}
+            model={doClaude ? "Claude (via MCP)" : settings.model}
             conversa={conversaBlock}
             renderConversa={conversaDe}
             composer={composerBlock}

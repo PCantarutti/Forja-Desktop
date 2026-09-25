@@ -1777,13 +1777,51 @@ servidor.
 `issue_*` dependem da tabela `issues` da E15-A. A E1 e a E2 tornam o fluxo confiável, mas não bloqueiam o
 começo.
 
+*Feita em 2026-09-25.*
+- **Código:**
+  - `mcp_servidor.py` (servidor FastMCP do pacote `mcp` 1.30, gerente de sessões no lifespan) e
+    `forja_hook.py` (o hook do Claude Code);
+  - a seção "Permitir que o Claude controle o Forja" em Configurações › MCP, com o comando
+    `claude mcp add` pronto, o JSON, a revogação do token e "Instalar no Claude Code";
+  - `tests/test_mcp_servidor.py`, com um cliente MCP de verdade contra um uvicorn local.
+- **Como funciona sem duplicar lógica:** cada ferramenta MCP vira uma chamada de ferramenta do Forja
+  executada por `agent._run_call`, num Run da conversa-espelho (`Run.start` aceita um gerador próprio).
+  Valem os mesmos portões, a mesma aprovação no PC e no celular, e tudo fica registrado e ao vivo.
+- **Desvios:**
+  - **Token fixo próprio** (`DATA_DIR/mcp_token`) em vez do da interface, que muda a cada abertura
+    do app e quebraria o `mcp.json`.
+  - **`path` em toda ferramenta:** o Claude passa a pasta do projeto.
+  - **Uma conversa-espelho por projeto,** reaproveitada por 6 h. O MCP e os hooks caem na mesma, porque
+    o id de sessão de um não é o do outro.
+  - **Ferramentas a mais:**
+    - `forja_md`, porque o `plan_feature` exige FORJA.md, e sem ela o Claude sem ferramentas de
+      escrita travava;
+    - `validate_feature`, que roda só os verifies da funcionalidade e encerra pelo `session_note`.
+      O Claude não tem `run_command` pelo MCP, e a funcionalidade ficava em "validando".
+- **Validado com o Claude Code 2.1.233 de verdade** (`claude -p`, restrito às ferramentas do Forja e à
+  leitura), no `.devval/board-bugs`:
+  - **1ª rodada:** parou no FORJA.md, o que levou ao `forja_md`.
+  - **2ª rodada, em 103 s:** escreveu o FORJA.md, planejou, despachou a TASK-001 para o Worker local
+    (gpt-oss:120b), acompanhou com `task_status` e fechou com o verify passando (commit `fde91ee`). O
+    card repetido foi recusado, porque o #13 já cobria o ponto.
+  - **Encerramento:** o `validate_feature` encerrou a funcionalidade.
+  - **Registro na conversa-espelho, tipo Maestro:** o pedido (hook `UserPromptSubmit`), as leituras
+    do Claude (`PostToolUse`), as chamadas MCP, as notas e a resposta final (`Stop`).
+  - **Celular:** a conversa aparece na lista do Maestro. A mensagem escrita nele foi para a caixa de
+    entrada e chegou ao Claude uma vez só, no `forja_inbox`.
+  - **Defeitos vistos e corrigidos:**
+    - com o Run do Claude aberto, a tela mostrava o modelo do Maestro "ao vivo" e mandava a mensagem
+      para a fila do agente; agora vai para a caixa de entrada e o rótulo é "Claude (via MCP)";
+    - o pedido chegava com BOM;
+    - "Claude usou ToolSearch" era ruído.
+
 ### Servidor
-- [ ] Endpoint `/mcp` com transporte streamable HTTP, montado no FastAPI existente:
+- [x] Endpoint `/mcp` com transporte streamable HTTP, montado no FastAPI existente:
   - só em `127.0.0.1`;
   - autenticado pelo mesmo token (`x-forja-token`), que a tela de configurações mostra junto com o
     trecho pronto para colar no `mcp.json` do Claude Code/Desktop;
   - interruptor "Permitir que o Claude controle o Forja", **desligado por padrão**.
-- [ ] Cada ferramenta MCP chama a função que já existe. Não há lógica duplicada, e as regras e portões
+- [x] Cada ferramenta MCP chama a função que já existe. Não há lógica duplicada, e as regras e portões
       da E1 valem igual.
 
 ### Ferramentas
@@ -1797,7 +1835,7 @@ começo.
 | `forja_note(texto)` | Mensagem de progresso explícita do Claude para o painel |
 | `forja_inbox()` | Mensagens que o usuário escreveu no Forja ou no celular para o Claude (ver abaixo) |
 
-- [ ] As ferramentas que alteram estado (`run_task`, `update_task`, `issue_update` com mudança de
+- [x] As ferramentas que alteram estado (`run_task`, `update_task`, `issue_update` com mudança de
       coluna) respeitam o modo de permissão da conversa-espelho. No Manual, a aprovação aparece no
       Forja e no celular, como qualquer outra.
 
@@ -1805,12 +1843,12 @@ começo.
 O MCP funciona por chamadas de ferramenta: o texto que o Claude escreve para o usuário **não** chega ao
 servidor sozinho. Três mecanismos, do mais garantido ao opcional, resolvem isso:
 
-- [ ] **1. Conversa-espelho automática (garantida):** cada sessão MCP (`Mcp-Session-Id`) vira uma
+- [x] **1. Conversa-espelho automática (garantida):** cada sessão MCP (`Mcp-Session-Id`) vira uma
       conversa no Forja, do tipo "Claude (externo)", ligada ao projeto. **Toda chamada de ferramenta que
       o Claude faz ao Forja fica registrada nela pelo próprio servidor**, sem depender do modelo:
       planos, `run_task`, resultados, cards criados. A árvore de tarefas aparece no `MaestroView`
       normalmente, porque os dados são as mesmas `Feature`/`Task`.
-- [ ] **2. Hooks do Claude Code (automático, com o texto inteiro):** o Forja oferece "Instalar
+- [x] **2. Hooks do Claude Code (automático, com o texto inteiro):** o Forja oferece "Instalar
       integração no Claude Code". Com a aprovação do usuário, grava os hooks no `settings.json` do
       Claude Code do projeto (`.claude/settings.json`):
   - `UserPromptSubmit` manda o pedido do usuário;
@@ -1821,10 +1859,10 @@ servidor sozinho. Três mecanismos, do mais garantido ao opcional, resolvem isso
   Cada hook faz um POST em `127.0.0.1` com o token, e a conversa-espelho passa a mostrar o diálogo
   completo, como uma conversa normal do Forja. Antes de construir, conferir o formato atual da
   entrada de cada hook na documentação do Claude Code.
-- [ ] **3. `forja_note` (opcional):** para progresso no meio de um turno longo. As instruções do servidor
+- [x] **3. `forja_note` (opcional):** para progresso no meio de um turno longo. As instruções do servidor
       MCP pedem ao Claude que o use a cada etapa, mas ele não é obrigatório, porque os mecanismos 1 e 2
       já cobrem o essencial.
-- [ ] **Do Forja para o Claude (o caminho de volta):** um servidor MCP não consegue abrir um turno novo no
+- [x] **Do Forja para o Claude (o caminho de volta):** um servidor MCP não consegue abrir um turno novo no
       Claude Code sozinho. A solução é uma caixa de entrada:
   - o que o usuário escreve na conversa-espelho (no PC ou no celular) fica na fila;
   - a fila chega ao Claude **dentro do próximo resultado de qualquer ferramenta do Forja** (ex.:
@@ -1832,18 +1870,18 @@ servidor sozinho. Três mecanismos, do mais garantido ao opcional, resolvem isso
 
   Enquanto o Claude estiver trabalhando com o Forja, o usuário consegue redirecioná-lo pelo celular.
   Com o Claude parado, a mensagem espera o próximo turno, e a tela avisa isso.
-- [ ] **Sincronizar com o celular** (regra do `CLAUDE.md`): a conversa-espelho, as tarefas e os cards
+- [x] **Sincronizar com o celular** (regra do `CLAUDE.md`): a conversa-espelho, as tarefas e os cards
       entram no `/api/activity`. Testar nos dois sentidos com o celular de verdade.
 
 ### Testes e validação
-- [ ] Testes com um cliente MCP falso (o próprio `mcp` em modo cliente):
+- [x] Testes com um cliente MCP falso (o próprio `mcp` em modo cliente):
   - sem token é recusado;
   - com o interruptor desligado, recusa;
   - `run_task` devolve na hora e o `task_status` acompanha;
   - `issue_create` sem evidência é recusado;
   - toda chamada aparece na conversa-espelho;
   - mensagem da caixa de entrada chega no próximo resultado.
-- [ ] Validar com o Claude Code de verdade num projeto real: planejar uma feature pequena, despachar 2–3
+- [x] Validar com o Claude Code de verdade num projeto real: planejar uma feature pequena, despachar 2–3
       tarefas para Workers locais, criar cards com evidência, e acompanhar tudo no painel do Forja e no
       celular.
 

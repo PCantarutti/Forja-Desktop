@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -20,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (baterias, board, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
+from . import (baterias, board, checkpoints, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
@@ -57,7 +58,8 @@ async def lifespan(_app):
     vivas.add(task)
     if mobile.lan_quer():  # celular na rede local, ligado na aba Celular
         await mobile.liga_lan(_app)
-    yield
+    async with mcp_servidor.gerente():  # /mcp: o Claude controlando o Forja (E17); o gerente vive com o app
+        yield
     await mobile.desliga_lan()
     task.cancel()
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
@@ -70,6 +72,9 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Forja", lifespan=lifespan)
+# /mcp fora de /api: tem o próprio porteiro (token fixo do MCP + interruptor), não o token da interface.
+from starlette.routing import Route  # noqa: E402
+app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=["GET", "POST", "DELETE"]))
 
 
 # ------------------------------------------------------------------ fronteira da API local
@@ -511,6 +516,42 @@ async def board_reabrir(issue_id: int, body: dict):
 @app.post("/api/board/varrer")
 def board_varrer(body: dict):
     return _board(board.varrer, str(body.get("pasta") or ""))
+
+
+# ------------------------------------------------------------------ o Claude controlando o Forja (E17)
+
+@app.post("/mcp/hook")
+async def mcp_hook(request: Request):
+    """Hook do Claude Code (forja_hook.py): o pedido, a resposta e as ferramentas dele entram na conversa-espelho.
+    Fora de /api: autentica pelo token fixo do MCP, não pelo da interface."""
+    if not secrets.compare_digest(request.headers.get("x-forja-token") or "-", mcp_servidor.token()):
+        raise HTTPException(401, "Token do Forja ausente ou errado.")
+    try:
+        dados = await request.json()
+    except ValueError:
+        raise HTTPException(400, "JSON inválido.") from None
+    return await mcp_servidor.hook(dados if isinstance(dados, dict) else {})
+
+
+@app.get("/api/mcp/servidor")
+def mcp_servidor_config():
+    return mcp_servidor.configuracao()
+
+
+@app.post("/api/mcp/servidor/token")
+def mcp_servidor_token():
+    mcp_servidor.rotaciona()
+    mcp_servidor.grava_endereco()
+    return mcp_servidor.configuracao()
+
+
+@app.post("/api/mcp/servidor/hooks")
+def mcp_servidor_hooks(body: dict):
+    """Instala os hooks no Claude Code do projeto (clique do usuário na tela: grava .claude/settings.local.json)."""
+    try:
+        return mcp_servidor.instala_hooks(str(body.get("pasta") or ""))
+    except (ValueError, OSError, workspace.WorkspaceError) as e:
+        raise HTTPException(400, str(e))
 
 
 @app.post("/api/board/pedir")
@@ -2147,6 +2188,12 @@ async def start_run(conv_id: int, body: RunBody):
         raise HTTPException(400, f"permission deve ser um de {', '.join(policy.MODES)}")
     if body.effort not in ("baixo", "medio", "alto", "maximo", "extremo"):
         raise HTTPException(400, "effort deve ser baixo, medio, alto, maximo ou extremo")
+    with db.session() as s:
+        espelho = mcp_servidor.eh_espelho(_get_conv(s, conv_id))
+    if espelho:  # conversa do Claude (MCP): o que o usuário escreve vai para a caixa de entrada dele
+        if not (body.content or "").strip():
+            raise HTTPException(400, "Escreva a mensagem para o Claude.")
+        return _sse(mcp_servidor.recebe_do_usuario(conv_id, body.content), 0)
     if active_run(conv_id):
         raise HTTPException(409, "Esta conversa já tem uma execução em andamento")
     with db.session() as s:
@@ -2216,6 +2263,12 @@ async def queue_message(run_id: str, body: dict):
     run = _get_run(run_id)
     if run.finished:
         raise HTTPException(409, "A execução já terminou; envie normalmente")
+    with db.session() as s:
+        espelho = mcp_servidor.eh_espelho(s.get(db.Conversation, run.conv_id))
+    if espelho:  # conversa do Claude com o Run dele aberto: a fala vai para a caixa de entrada dele, não para a fila
+        for ev in mcp_servidor.guarda_para_o_claude(run.conv_id, content):
+            await run.publish(ev)
+        return {"ok": True, "pending": 0, "claude": True}
     run.queue.append(content)
     await run.publish({"type": "queued", "content": content, "pending": len(run.queue)})
     return {"ok": True, "pending": len(run.queue)}

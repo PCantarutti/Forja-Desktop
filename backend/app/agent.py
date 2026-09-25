@@ -293,10 +293,12 @@ class Run:
         return {"segundos": agora - g["t0"], "tokens": g["tokens"],
                 "segundos_gerando": (agora - g["t_primeiro"]) if g["t_primeiro"] else 0.0}
 
-    def start(self, req: "RunRequest") -> None:
+    def start(self, req: "RunRequest", gerador: AsyncIterator[dict] | None = None) -> None:
+        """`gerador`: outro dono dos eventos no lugar do loop do agente (a conversa-espelho do Claude por MCP
+        executa as chamadas dele por aqui, com as mesmas aprovações, stream e registro)."""
         async def main():
             try:
-                async for ev in run_agent(self.conv_id, req, self):
+                async for ev in gerador or run_agent(self.conv_id, req, self):
                     await self.publish(ev)
             except Exception as e:  # bug no loop: mostra em vez de sumir
                 await self.publish(_event(self.conv_id, "error", f"Erro interno: {e.__class__.__name__}: {e}"))

@@ -90,6 +90,10 @@ APELIDOS: dict[str, tuple[str, ...]] = {
     "imagens_pendentes": ("batch_images", "generate_images", "image_batch", "pending_images"),
     "board_card": ("create_issue", "add_card", "create_card", "board_add", "new_issue", "report_bug",
                    "file_issue", "create_ticket", "add_issue", "issue_create", "create_task_card"),
+    # Só do servidor MCP (mcp_servidor.py), chamadas pela conversa-espelho do Claude
+    "project_state": ("get_project_state", "project_info", "project_summary"),
+    "issue_list": ("list_issues", "list_cards", "board_list", "get_issues"),
+    "issue_update": ("update_issue", "edit_issue", "update_card", "move_card", "edit_card"),
     # Fora do REGISTRY: agent.EXIT_PLAN e agent.ASK_USER
     "exit_plan_mode": ("exitplanmode", "present_plan", "submit_plan", "finish_planning", "propose_plan"),
     "ask_user": ("askuserquestion", "ask_user_question", "ask_question", "ask_followup_question", "ask_human",

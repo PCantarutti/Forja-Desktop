@@ -1683,6 +1683,96 @@ function Permissions({ s, save }: { s: AppSettings; save: (patch: Partial<AppSet
 
 // ------------------------------------------------------------------ mcp
 
+type McpServidor = { ligado: boolean; permissao: string; url: string; token: string; comando: string; json: unknown };
+
+/** E17: o Claude (Claude Code / Claude Desktop) planeja e escreve os cards; os Workers locais trabalham. */
+function ClaudeControla() {
+  const [c, setC] = useState<McpServidor | null>(null);
+  const [msg, setMsg] = useState("");
+  const [pasta, setPasta] = useState("");
+  const [verToken, setVerToken] = useState(false);
+  const carrega = () => api.get<McpServidor>("/mcp/servidor").then(setC).catch((e) => setMsg(e.message));
+  useEffect(() => { carrega(); }, []);
+  const muda = async (patch: Record<string, unknown>) => {
+    setMsg("");
+    try { await api.put("/settings", patch); await carrega(); } catch (e: any) { setMsg(e.message); }
+  };
+  const copia = (t: string, o: string) => navigator.clipboard.writeText(t).then(() => setMsg(`${o} copiado.`));
+  if (!c) return null;
+  return (
+    <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+      <label className="flex items-start gap-3">
+        <input type="checkbox" className="mt-1" checked={c.ligado} onChange={(e) => muda({ mcp_servidor: e.target.checked })} />
+        <span>
+          <span className="block text-sm font-medium text-fg">Permitir que o Claude controle o Forja</span>
+          <span className="block text-xs text-muted">
+            O Claude Code (ou o Claude Desktop) se conecta aqui por MCP: planeja, cria cards no board e despacha tarefas
+            para os Workers locais. Tudo o que ele faz aparece numa conversa "Claude · projeto" (tipo Maestro), no PC e no
+            celular, e o que você escreve nela chega a ele no resultado da próxima ferramenta.
+          </span>
+        </span>
+      </label>
+      {c.ligado && (
+        <>
+          <Field label="Ações do Claude" hint="Como as ações dele que mexem no projeto são aprovadas. No Manual, a aprovação aparece no Forja e no celular, como qualquer outra.">
+            <select className={input} value={c.permissao} onChange={(e) => muda({ mcp_permissao: e.target.value })}>
+              <option value="manual">Manual: pergunta antes</option>
+              <option value="edits">Edições passam, o resto pergunta</option>
+              <option value="auto">Automático</option>
+              <option value="bypass">Ignorar permissões</option>
+            </select>
+          </Field>
+          <div className="space-y-1.5">
+            <div className="text-xs text-muted">No terminal do projeto, uma vez:</div>
+            <div className="flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-lg bg-bg px-3 py-2 font-mono text-xs text-fg" title={c.comando}>
+                {verToken ? c.comando : c.comando.replace(c.token, "•".repeat(12))}
+              </code>
+              <button className={btn} onClick={() => copia(c.comando, "Comando")}>Copiar</button>
+            </div>
+            <details className="text-xs text-muted">
+              <summary className="cursor-pointer select-none hover:text-fg">Claude Desktop ou mcp.json</summary>
+              <div className="mt-2 flex items-start gap-2">
+                <pre className="min-w-0 flex-1 overflow-x-auto rounded-lg bg-bg p-3 font-mono text-[11px] text-fg">
+                  {JSON.stringify(c.json, null, 2).replace(verToken ? "\u0000" : c.token, "•".repeat(12))}
+                </pre>
+                <button className={btn} onClick={() => copia(JSON.stringify(c.json, null, 2), "JSON")}>Copiar</button>
+              </div>
+            </details>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <button className="text-faint hover:text-fg" onClick={() => setVerToken((v) => !v)}>{verToken ? "Esconder" : "Mostrar"} o token</button>
+              <span className="text-faint">·</span>
+              <button className="text-faint hover:text-red-300"
+                onClick={async () => { setC(await api.post<McpServidor>("/mcp/servidor/token", {})); setMsg("Token novo: atualize o Claude com o comando acima."); }}>
+                Revogar e gerar outro token
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1.5 border-t border-line pt-3">
+            <div className="text-sm text-fg">Conversa inteira no Forja (opcional)</div>
+            <div className="text-xs text-muted">
+              Instala hooks no Claude Code do projeto (<span className="font-mono">.claude/settings.local.json</span>, fora do
+              git): o seu pedido, a resposta final dele e as ferramentas que ele usar aparecem na conversa do Forja. O arquivo
+              não guarda o token.
+            </div>
+            <div className="flex items-center gap-2">
+              <input className={`${input} font-mono text-xs`} placeholder="C:/caminho/do/projeto" value={pasta} onChange={(e) => setPasta(e.target.value)} />
+              <button className={btn} disabled={!pasta.trim()} onClick={async () => {
+                setMsg("");
+                try {
+                  const r = await api.post<{ arquivo: string }>("/mcp/servidor/hooks", { pasta: pasta.trim() });
+                  setMsg(`Hooks gravados em ${r.arquivo}. Vale a partir da próxima sessão do Claude Code.`);
+                } catch (e: any) { setMsg(e.message); }
+              }}>Instalar no Claude Code</button>
+            </div>
+          </div>
+        </>
+      )}
+      {msg && <p className="text-xs text-muted">{msg}</p>}
+    </section>
+  );
+}
+
 function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void }) {
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
@@ -1711,6 +1801,8 @@ function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void 
 
   return (
     <div className="max-w-2xl space-y-4">
+      <ClaudeControla />
+      <h3 className="pt-2 text-sm font-medium text-fg">Servidores que o Forja usa</h3>
       <p className="text-sm text-muted">
         Servidores MCP, no mesmo formato do Claude Desktop. Comandos (<span className="font-mono">command</span>) rodam na
         sua máquina, no seu PATH — precisam do <span className="font-mono">npx</span> (Node.js) ou do{" "}

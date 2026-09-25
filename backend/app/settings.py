@@ -53,6 +53,8 @@ ENV_DEFAULTS: dict[str, Any] = {
     "sandbox_processos": config.SANDBOX_PROCESSOS,
     "sandbox_cpu": config.SANDBOX_CPU,
     "sandbox_isolado": config.SANDBOX_ISOLADO,
+    "mcp_servidor": config.MCP_SERVIDOR,
+    "mcp_permissao": config.MCP_PERMISSAO,
     "sandbox_motor": config.SANDBOX_MOTOR,
     "sandbox_wsl_distro": config.SANDBOX_WSL_DISTRO,
 }
@@ -163,6 +165,8 @@ def apply(values: dict | None = None) -> dict:
     config.SANDBOX_PROCESSOS = int(values["sandbox_processos"])
     config.SANDBOX_CPU = int(values["sandbox_cpu"])
     config.SANDBOX_ISOLADO = values["sandbox_isolado"]
+    config.MCP_SERVIDOR = bool(values["mcp_servidor"])
+    config.MCP_PERMISSAO = values["mcp_permissao"]
     config.SANDBOX_MOTOR = values["sandbox_motor"]
     config.SANDBOX_WSL_DISTRO = values["sandbox_wsl_distro"]
     return values
@@ -262,7 +266,8 @@ def validate(patch: dict, current: dict) -> dict:
             if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
                 raise SettingsError(f"Modelo da Maestro: provedor '{provider}' não existe.")
             values[key] = {"provider": provider, "model": model}
-        elif key in ("project_memory", "personal_memory", "maestro_browser", "workers_do_maestro", "auto_review"):
+        elif key in ("project_memory", "personal_memory", "maestro_browser", "workers_do_maestro", "auto_review",
+                     "mcp_servidor"):
             values[key] = bool(raw)
         elif key == "project_memory_file":
             name = str(raw).strip() or "FORJA.md"
@@ -284,6 +289,11 @@ def validate(patch: dict, current: dict) -> dict:
             if nome and not all(c.isalnum() or c in "-_." for c in nome):
                 raise SettingsError("sandbox_wsl_distro: só o nome da distro (ex.: Ubuntu).")
             values[key] = nome
+        elif key == "mcp_permissao":
+            from .policy import MODES
+            if raw not in MODES or raw == "plan":
+                raise SettingsError(f"mcp_permissao deve ser um de: {', '.join(m for m in MODES if m != 'plan')}.")
+            values[key] = raw
         elif key == "sandbox_isolado":
             from .sandbox import MODOS_ISOLADO
             if raw not in MODOS_ISOLADO:

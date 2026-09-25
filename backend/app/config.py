@@ -90,6 +90,10 @@ SANDBOX_CPU = 80          # teto de CPU em %, para o PC continuar usável num bu
 SANDBOX_ISOLADO = "desligado"
 # Qual Docker: auto (o Desktop se estiver aberto, senão o Engine dentro do WSL) | desktop | wsl.
 SANDBOX_MOTOR = "auto"
+# E17: o Claude (Claude Code/Desktop) controla o Forja por MCP em /mcp. Desligado por padrão; as ações dele
+# passam pelo modo de permissão abaixo, com aprovação no PC e no celular como qualquer outra.
+MCP_SERVIDOR = False
+MCP_PERMISSAO = "manual"
 SANDBOX_WSL_DISTRO = ""  # distro WSL com o Docker Engine; vazio = a distro padrão do WSL
 
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai
