@@ -518,6 +518,16 @@ def _comandos_ok(s, conv_id: int, desde) -> list[str]:
     return [str(((m.meta or {}).get("arguments") or {}).get("command") or "") for m in msgs]
 
 
+def _cobre(verify: str, comando: str) -> bool:
+    """O comando rodado cobre o verify? Texto contido ("cd x && pytest -q") ou todas as palavras dele
+    presentes: `pytest -q a.py b.py` roda o verify `pytest -q b.py` junto com outro, e exigir o texto
+    exato obrigava a Maestro a repetir cada verify sozinho."""
+    verify = verify.strip()
+    # ponytail: palavras, não semântica — `pytest -q -k x` também "cobre" o verify `pytest -q`. Entender
+    # o comando de cada ferramenta de teste fica para quando isso enganar alguém de verdade.
+    return verify in comando or set(verify.split()) <= set(comando.split())
+
+
 def _prova(s, task: db.Task) -> bool:
     """Fechar uma tarefa que não passou pelo ciclo normal exige evidência: a última tentativa passou
     no verify, ou a Maestro rodou o verify_command (ou, sem ele, qualquer comando) com sucesso
@@ -527,7 +537,7 @@ def _prova(s, task: db.Task) -> bool:
         return True
     cmd = str((task.contract or {}).get("verify_command") or "").strip()
     desde = ultima and (ultima.finished_at or ultima.started_at)
-    return any(cmd in c if cmd else c for c in _comandos_ok(s, task.conversation_id, desde))
+    return any(_cobre(cmd, c) if cmd else c for c in _comandos_ok(s, task.conversation_id, desde))
 
 
 def _fecha_feature(s, feature_id: int, fechando: int) -> None:
@@ -587,7 +597,7 @@ def encerra_validadas(conv_id: int) -> list[str]:
             # Qualquer comando valia (um `ls` encerrava a entrega). Com verify nas tarefas, cada um
             # precisa ter passado de novo depois que a funcionalidade entrou em validação.
             rodados = _comandos_ok(s, conv_id, f.updated_at)
-            if faltam := [v for v in _verifies(s, f.id) if not any(v.strip() in c for c in rodados)]:
+            if faltam := [v for v in _verifies(s, f.id) if not any(_cobre(v, c) for c in rodados)]:
                 raise ToolError(f"A entrega de '{f.title}' ainda não foi validada: falta rodar com sucesso "
                                 + "; ".join(f"`{v}`" for v in faltam) + ". " + pedido)
             if faltas := qualidade.faltas_para_entregar(conv_id, f.updated_at, workspace.root()):
@@ -691,7 +701,14 @@ def last_error(code: str, conv_id: int | None = None) -> str:
         if testes.get("status") and testes["status"] != "ok":
             partes.append(f"O comando de verificação `{testes.get('command')}` FALHOU:\n"
                           f"{(testes.get('output') or '')[:2000]}")
+        for f in r.get("regression") or []:
+            partes.append(f"Passou no próprio verify, mas QUEBROU {', '.join(f['tasks'])}: `{f['command']}` "
+                          f"falhou:\n{(f.get('output') or '')[:1500]}")
         partes += [str(p) for p in (r.get("summary"), *(r.get("errors") or [])) if p]
+        if rb := r.get("rollback"):
+            # Vai no fim: o teto de MAX_TEXTO corta o diff antes do diagnóstico.
+            partes.append("Os arquivos da tentativa foram revertidos. O que ela tinha feito (descartado):\n"
+                          + (rb.get("diff") or "(sem diff)"))
         return "\n".join(partes)[:MAX_TEXTO]
 
 
@@ -976,6 +993,34 @@ LIST_TASKS = Tool(
     _list_tasks, poll=True)
 
 
+_SEM_GIT: set[int] = set()  # conversas que já ouviram o aviso de "pasta sem git"
+
+
+def _commit_da_tarefa(code: str, conv: int) -> str:
+    """Tarefa concluída vira um commit só com os arquivos que as tentativas aceitas dela escreveram.
+    Dá diff por tarefa, rollback pelo git e base para trabalhar em paralelo depois. Falha aqui não
+    desfaz a conclusão: vira aviso na resposta. Devolve a linha para acrescentar à resposta."""
+    from . import gitops, workspace
+    root = workspace.root()
+    if not gitops.is_repo(root):
+        if conv in _SEM_GIT:
+            return ""
+        _SEM_GIT.add(conv)
+        return ("\n(A pasta não é um repositório git: as tarefas não viram commit. Com `git init`, cada "
+                "tarefa concluída passa a ter o próprio commit.)")
+    with db.session() as s:
+        task = _get(s, code, conv)
+        titulo = task.title
+        caminhos = [c["path"] for a in s.query(db.Attempt).filter(
+                        db.Attempt.task_id == task.id, db.Attempt.status.in_(("completed", "unverified")))
+                    for c in ((a.result or {}).get("changes") or []) if c.get("path")]
+    try:
+        sha = gitops.commit_paths(root, caminhos, f"forja({code}): {titulo}\n\nTarefa do Maestro do Forja.")
+    except ToolError as e:
+        return f"\nO commit automático da tarefa falhou: {str(e)[:300]}"
+    return f"\nCommit {sha}: {code} ({len(set(caminhos))} arquivo(s))." if sha else ""
+
+
 def _update_task(_root: Path, args: dict) -> str:
     conv = _conv()
     code = str(args.get("code") or "").strip().upper()
@@ -1015,6 +1060,8 @@ def _update_task(_root: Path, args: dict) -> str:
         raise ToolError("Nada para mudar: informe status, contract, model_slot, priority ou max_attempts.")
     _publish(conv)
     saida = f"{code} atualizada ({', '.join(mudou)}). Status atual: {estado}."
+    if novo == "completed" and estado == "completed":
+        saida += _commit_da_tarefa(code, conv)
     if estado == "completed":
         saida += "".join("\n" + pedido_de_validacao(f) for f in validando(conv))
     return saida

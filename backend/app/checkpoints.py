@@ -119,6 +119,30 @@ def arquivos_da_tentativa(attempt_id: int) -> list[Path]:
             db.Checkpoint.attempt_id == attempt_id).order_by(db.Checkpoint.id))]
 
 
+def diff_attempt(attempt_id: int, limite: int = 3000) -> str:
+    """O que a tentativa mudou (antes → agora), em diff unificado, com teto. Vai no briefing da tentativa
+    seguinte quando esta é revertida: o Worker vê o que não funcionou em vez de recomeçar às cegas."""
+    import difflib
+    with db.session() as s:
+        rows = list(s.scalars(select(db.Checkpoint).where(db.Checkpoint.attempt_id == attempt_id)
+                              .order_by(db.Checkpoint.id)))
+        partes: list[str] = []
+        for cp in rows:
+            p = Path(cp.path)
+            antes = (cp.content or b"").decode("utf-8", "replace").splitlines() if cp.existed else []
+            try:
+                agora = p.read_text(encoding="utf-8", errors="replace").splitlines() if p.is_file() else []
+            except OSError:
+                agora = []
+            try:  # relativo à pasta: caminho absoluto só gasta token do Worker
+                nome = p.resolve().relative_to(workspace.root().resolve()).as_posix()
+            except (ValueError, OSError):
+                nome = workspace.to_host(p) or cp.path
+            partes += difflib.unified_diff(antes, agora, f"a/{nome}", f"b/{nome}", lineterm="")
+    texto = "\n".join(partes)
+    return texto[:limite] + ("\n(diff truncado)" if len(texto) > limite else "")
+
+
 def restore_attempt(attempt_id: int) -> list[str]:
     """Volta os arquivos de UMA tentativa ao estado de antes dela. Mudança feita depois nesses mesmos
     arquivos sai junto — é o preço de voltar o arquivo inteiro, e a interface avisa antes."""

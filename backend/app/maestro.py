@@ -25,7 +25,36 @@ from .tools import ToolError
 MAX_ERROS = 5          # erros de passo que entram no resultado
 MAX_ERRO_TEXTO = 1500
 MAX_SAIDA_TESTE = 4000
+MAX_DESCARTE = 3000    # diff da tentativa revertida que vai no briefing da próxima
+REGRESSAO_TETO = 300   # s somando os verify das tarefas antigas depois de cada tarefa
+REGRESSAO_CMD = 180    # s por comando, como o verify do Worker
 WRITE_TOOLS = subagents.WRITE_TOOLS
+
+
+def regressao(conv_id: int, task, root: Path) -> tuple[list[dict], bool]:
+    """Roda de novo os verify_command das tarefas já concluídas desta conversa (menos o desta, que o
+    Worker acabou de rodar). Devolve (falhas, parcial): parcial = o teto de tempo cortou a lista.
+
+    ponytail: suíte inteira, em série, a cada tarefa; com modelo lento e muitas tarefas, rodar só as
+    que tocam os mesmos arquivos e a completa a cada N tarefas."""
+    from . import shell
+    atual = (task.contract or {}).get("verify_command")
+    cmds: dict[str, list[str]] = {}
+    with db.session() as s:
+        for t in (s.query(db.Task).filter(db.Task.conversation_id == conv_id, db.Task.status == "completed",
+                                          db.Task.id != task.id).order_by(db.Task.id)):
+            if (c := (t.contract or {}).get("verify_command")) and c != atual:
+                cmds.setdefault(c, []).append(t.code)
+    falhas: list[dict] = []
+    inicio = time.monotonic()
+    for cmd, codes in cmds.items():
+        resta = REGRESSAO_TETO - (time.monotonic() - inicio)
+        if resta < 10:
+            return falhas, True
+        code, saida = shell.exec_in(root, subagents.sem_path(cmd), int(min(REGRESSAO_CMD, resta)))
+        if code != 0:
+            falhas.append({"tasks": codes, "command": cmd, "exit": code, "output": saida[-MAX_ERRO_TEXTO:]})
+    return falhas, False
 
 # Um lock por arquivo, por conversa. Duas tarefas em paralelo que declaram o mesmo arquivo em
 # `relevant_files` serializam; as que não se tocam correm juntas.
@@ -367,6 +396,20 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     resultado["route"] = f"{subagents.nome_do_nivel(nivel)} — {motivo_rota}"
     if externas:
         resultado["external_changes"] = externas
+    if resultado["status"] == "completed" and not run_obj.cancel.is_set():
+        # A tarefa passou no próprio verify; agora as anteriores não podem ter quebrado.
+        falhas, parcial = await asyncio.to_thread(regressao, conv_id, task, root)
+        if falhas:
+            resultado["status"] = "failed"
+            resultado["regression"] = falhas
+        if parcial:
+            resultado["regression_partial"] = True
+    if resultado["status"] in ("failed", "error"):
+        # Tentativa que falhou não deixa sujeira: a próxima começa do estado de antes dela, e o que foi
+        # descartado vai no briefing (last_error) para o Worker não repetir às cegas.
+        descartado = checkpoints.diff_attempt(attempt_id, MAX_DESCARTE)
+        if revertidos := checkpoints.restore_attempt(attempt_id):
+            resultado["rollback"] = {"files": revertidos, "diff": descartado}
     registra_estado(attempt_id, root)
 
     # Etapa de revisão explícita: só quando NADA provou o resultado. Com o comando de verificação
@@ -389,8 +432,10 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     # 'error' (o Worker nem rodou: conexão, modelo) também é falha: em 'reviewing' a tarefa parecia
     # entregue e a Maestro não conseguia devolvê-la para 'pending' para tentar de novo.
     falhou = resultado["status"] in ("failed", "error")
+    quebradas = [c for f in resultado.get("regression") or [] for c in f["tasks"]]
     taskdb.set_status(task.code, "failed" if falhou else "reviewing", conv_id,
-                      ("A verificação falhou." if resultado["status"] == "failed"
+                      (f"Quebrou {', '.join(quebradas)} (regressão)." if quebradas
+                       else "A verificação falhou." if resultado["status"] == "failed"
                        else (sub_out.get("text") or "O Worker falhou.")[:500]) if falhou else "")
     yield {"type": "task_update", "code": task.code, "status": resultado["status"],
            "attempt": attempt_n}
@@ -466,7 +511,22 @@ def _para_o_maestro(r: dict) -> str:
         "error": "O Worker não concluiu. Veja 'errors' e decida: nova tentativa com outra estratégia, "
                  "outro modelo (update_task model_slot), ou needs_human.",
     }.get(r["status"], "Analise o resultado e decida o próximo passo.")
-    if fora := r.get("outside_contract"):
+    if reg := r.get("regression"):
+        cauda = ("O verify desta tarefa passou, mas ela QUEBROU tarefas já concluídas: "
+                 + "; ".join(f"{', '.join(f['tasks'])} (`{f['command']}`)" for f in reg)
+                 + ". Diagnostique pela saída em 'regression' e rode run_task de novo com 'strategy' dizendo "
+                   "como não quebrar as outras.")
+        if fora := r.get("outside_contract"):
+            cauda += f" Suspeitos: arquivos escritos FORA do contrato ({', '.join(fora)})."
+    elif fora := r.get("outside_contract"):
         cauda += (f"\nATENÇÃO: o Worker escreveu fora do contrato ({', '.join(fora)}). Confira se não desfez "
                   "o trabalho de outra tarefa antes de fechar esta.")
-    return json.dumps(r, ensure_ascii=False, default=str) + "\n\n" + cauda
+    if r.get("rollback"):
+        cauda += ("\nOs arquivos desta tentativa foram REVERTIDOS ao estado de antes dela; o diff do que foi "
+                  "descartado vai sozinho no briefing da próxima tentativa.")
+    if r.get("regression_partial"):
+        cauda += "\n(A regressão parou no teto de tempo: nem todas as tarefas antigas foram conferidas.)"
+    # O diff descartado é para o Worker da próxima tentativa (last_error); na janela da Maestro só
+    # ocuparia tokens.
+    visto = {**r, "rollback": {"files": r["rollback"]["files"]}} if r.get("rollback") else r
+    return json.dumps(visto, ensure_ascii=False, default=str) + "\n\n" + cauda

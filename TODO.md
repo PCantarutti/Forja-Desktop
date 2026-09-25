@@ -179,25 +179,48 @@ que passou.
 e nada roda de novo os testes antigos.
 **Depende de:** E1 (a regressão usa os `verify_command` já obrigatórios).
 
-- [ ] **Commit automático por tarefa concluída.** Quando uma tarefa vira `completed`, fazer
+- [x] **Commit automático por tarefa concluída.** Quando uma tarefa vira `completed`, fazer
       `git add -A && git commit -m "forja(task <código>): <título>"` no projeto.
   - Se a pasta não é git: fazer `git init` só com o aceite do usuário, e perguntar na primeira vez.
     Sem aceite, manter o comportamento atual e avisar.
   - Respeitar o `.gitignore`. Nunca fazer commit de `.env*` nem de arquivos acima de 5 MB.
-- [ ] **Diff por tentativa.** `_mudancas` (`maestro.py:81`) passa a comparar com o commit da tarefa
+- [x] **Diff por tentativa.** `_mudancas` (`maestro.py:81`) passa a comparar com o commit da tarefa
       anterior (guardar o hash de início da tentativa em `taskdb`), não com `HEAD` + árvore suja.
-- [ ] **Rollback automático de tentativa que falhou.** Quando a tentativa termina `failed`, voltar os
+- [x] **Rollback automático de tentativa que falhou.** Quando a tentativa termina `failed`, voltar os
       arquivos ao hash de início (`git stash` ou `checkout`), para a próxima tentativa começar limpa.
       Guardar o diff descartado no `last_error`, para o Worker ver o que não funcionou.
-- [ ] **Regressão depois de cada tarefa.** Depois que o verify da tarefa N passar, rodar de novo os
+- [x] **Regressão depois de cada tarefa.** Depois que o verify da tarefa N passar, rodar de novo os
       `verify_command` das tarefas já concluídas (com um teto de tempo total, por exemplo 5 min).
   - Se alguma quebrar: a tarefa N volta para `failed`, com a mensagem "quebrou a tarefa X".
   - Idéia para modelos lentos: rodar primeiro só as tarefas que tocam os mesmos arquivos e a suíte
     completa a cada 5 tarefas.
-- [ ] `outside_contract` (`maestro.py:141`) deixa de ser só aviso. Um arquivo fora do contrato que
+- [x] `outside_contract` (`maestro.py:141`) deixa de ser só aviso. Um arquivo fora do contrato que
       quebra a regressão aparece em destaque no resultado.
-- [ ] Testes com um repo git em `tmp_path`: commit criado, diff isolado, rollback, e regressão pegando
+- [x] Testes com um repo git em `tmp_path`: commit criado, diff isolado, rollback, e regressão pegando
       uma tarefa que quebra a anterior.
+
+**Feito em 2026-09-25**, validado com o Maestro real (gpt-oss:120b do Ollama Cloud) num repo git:
+- TASK-001 virou o commit `48580da` e TASK-002 o `e4cb438`, cada um só com os arquivos da tarefa. O
+  FORJA.md e o `.forja/` do usuário ficaram fora;
+- a 1ª tentativa da TASK-002, instruída a estragar `soma`, passou no próprio verify, e a regressão
+  pegou a quebra da TASK-001;
+- os arquivos voltaram ao estado de antes, e o diff descartado foi para o briefing;
+- a 2ª tentativa, com `strategy`, passou.
+
+Diferenças em relação ao plano:
+- **Commit:**
+  - sem `git init` automático: a pasta sem git só recebe um aviso (uma vez por conversa);
+  - o commit leva só os arquivos que as tentativas aceitas escreveram, e não `git add -A`, que levaria
+    junto alterações do usuário.
+- **Diff por tentativa:** não guarda hash. Com um commit por tarefa e a tentativa falha revertida, o
+  `git diff HEAD` de cada arquivo já é o da tentativa.
+- **Rollback:** usa os checkpoints (`checkpoints.restore_attempt`), que funcionam com ou sem git. O que
+  o Worker mudou pelo `run_command` (ex.: `npm install`) não volta.
+- **Regressão:**
+  - roda a lista inteira de verify antigos, em série, com teto de 300 s;
+  - a otimização "só as que tocam os mesmos arquivos" ficou para quando o tempo pesar.
+- **Validação da entrega:** passou a aceitar um comando que cobre o verify, por exemplo
+  `pytest -q a.py b.py` para os verify `pytest -q a.py` e `pytest -q b.py`.
 
 **Pronto quando:** cada tarefa concluída é um commit, uma tentativa que falhou não deixa sujeira, e uma
 regressão é detectada no mesmo passo.
