@@ -197,7 +197,7 @@ def test_esrgan_formato_antigo_e_seedvr2_pelo_conteudo(isolado):
     m = isolado / "modelos"
     velho = safetensors(m, "4x-UltraSharp.safetensors", ["model.0.weight", "model.1.sub.0.RDB1.conv1.0.weight"])
     seed = safetensors(m, "qualquer-nome.safetensors", ["blocks.0.ada.txt.attn_gate", "blocks.0.attn.proj.weight"])
-    vae = safetensors(m, "seedvr2_ema_vae_fp16.safetensors", ["decoder.conv_in.weight"])
+    vae = safetensors(m, "outro-nome-vae.safetensors", ["decoder.up_blocks.0.upsamplers.0.upscale_conv.weight"])
     assert ampliar.eh_ampliador(velho) and not ampliar.eh_seedvr2(velho)
     assert ampliar.eh_seedvr2(seed) and not ampliar.eh_ampliador(seed)
     assert [localai.kind_of(Path(x)) for x in (velho, seed, vae)] == ["ampliador", "ampliador", "outro"]
@@ -226,7 +226,7 @@ def test_comfy_le_as_fases_e_o_resultado_do_driver(isolado, monkeypatch):
     import subprocess, sys
     from app import comfy
     seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
-    safetensors(isolado / "modelos", "seedvr2_ema_vae_fp16.safetensors", ["decoder.conv_in.weight"])
+    safetensors(isolado / "modelos", "vae.safetensors", ["decoder.up_blocks.0.upsamplers.0.upscale_conv.weight"])
     falso = isolado / "driver.py"
     monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
     monkeypatch.setattr(comfy, "JOB", falso)
@@ -286,7 +286,7 @@ def test_cancelar_mata_o_driver_mesmo_calado(isolado, monkeypatch):
     import sys, threading
     from app import comfy
     seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
-    safetensors(isolado / "modelos", "seedvr2_ema_vae_fp16.safetensors", ["decoder.conv_in.weight"])
+    safetensors(isolado / "modelos", "vae.safetensors", ["decoder.up_blocks.0.upsamplers.0.upscale_conv.weight"])
     falso = isolado / "driver.py"
     falso.write_text("import time; print('FASE ampliando', flush=True); time.sleep(60); print('OK 1x1')", encoding="utf-8")
     monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
@@ -312,16 +312,57 @@ def test_dois_metodos_na_mesma_imagem_nao_se_sobrescrevem(tmp_path):
 def test_o_que_o_forja_roda_pelos_nomes_e_formas_das_camadas():
     """A mesma regra vale para arquivo no disco e para o começo de um arquivo do Hugging Face."""
     cam = lambda forma: {"conv_first.weight": {"shape": forma}, "body.0.rdb1.conv1.weight": {"shape": [32, 64, 3, 3]}}
-    assert ampliar.tipo_por_nomes(cam([64, 3, 3, 3]), "RealESRGAN_x4plus.safetensors") == "esrgan"
-    assert ampliar.tipo_por_nomes(cam([64, 12, 3, 3]), "qualquer.safetensors") == "spandrel"  # 2× com pixel-unshuffle: ComfyUI
-    assert ampliar.tipo_por_nomes(b"conv_first.weight body.0.rdb1", "RealESRGAN_x2plus.pth") == "spandrel"  # .pth: pelo nome
-    assert ampliar.tipo_por_nomes(b"model.0.weight model.1.sub.0.RDB1.conv1.0", "4x-UltraSharp.pth") == "esrgan"
-    assert ampliar.tipo_por_nomes({"blocks.0.ada.txt.attn_gate": {}}, "seedvr2_3b_fp16.safetensors") == "seedvr2"
-    assert ampliar.tipo_por_nomes({"before_RG.1.weight": {}}, "4x-UltraSharpV2.safetensors") == "spandrel"  # DAT
-    assert ampliar.tipo_por_nomes({"feats.1.channel_mixer.0.weight": {}}, "Lite.safetensors") == "spandrel"  # PLKSR
-    assert ampliar.tipo_por_nomes(b"conv_first before_RG.1 conv_after_body", "4x-UltraSharpV2.pth") == "spandrel"
-    assert ampliar.tipo_por_nomes({f"body.{i}.weight": {} for i in range(8)}, "realesr-general-x4v3.safetensors") == "spandrel"
-    assert ampliar.tipo_por_nomes({"unet.down.0.weight": {}}, "sd15.safetensors") == ""  # modelo de imagem: nada
+    assert ampliar.tipo_por_nomes(cam([64, 3, 3, 3])) == "esrgan"
+    assert ampliar.tipo_por_nomes(cam([64, 12, 3, 3])) == "spandrel"  # 2× com pixel-unshuffle: ComfyUI
+    assert ampliar.tipo_por_nomes(b"model.0.weight model.1.sub.0.RDB1.conv1.0") == "esrgan"
+    assert ampliar.tipo_por_nomes({"blocks.0.ada.txt.attn_gate": {}}) == "seedvr2"
+    assert ampliar.tipo_por_nomes({"decoder.up_blocks.0.upsamplers.0.upscale_conv.weight": {}}) == "vae"  # do SeedVR2
+    assert ampliar.tipo_por_nomes({"before_RG.1.weight": {}}) == "spandrel"  # DAT
+    assert ampliar.tipo_por_nomes({"feats.1.channel_mixer.0.weight": {}}) == "spandrel"  # PLKSR
+    assert ampliar.tipo_por_nomes(b"conv_first before_RG.1 conv_after_body") == "spandrel"
+    assert ampliar.tipo_por_nomes({f"body.{i}.weight": {} for i in range(8)}) == "spandrel"
+    assert ampliar.tipo_por_nomes({"unet.down.0.weight": {}}) == ""  # modelo de imagem: nada
+
+
+def test_pth_pelas_formas_do_pickle_sem_executar_nada(monkeypatch, tmp_path):
+    """O 2× com pixel-unshuffle (12 canais) sai da forma do conv_first dentro do pickle, com qualquer nome; e o
+    pickle é lido sem torch e sem rodar código (as classes viram stubs)."""
+    import io, pickle, sys, types, zipfile
+    utils = types.ModuleType("torch._utils")
+    def _rebuild_tensor_v2(*_a):
+        return None
+    _rebuild_tensor_v2.__module__, _rebuild_tensor_v2.__qualname__ = "torch._utils", "_rebuild_tensor_v2"
+    utils._rebuild_tensor_v2 = _rebuild_tensor_v2
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
+    monkeypatch.setitem(sys.modules, "torch._utils", utils)
+
+    class T:
+        def __init__(self, forma):
+            self.forma = forma
+
+        def __reduce__(self):
+            return utils._rebuild_tensor_v2, (None, 0, self.forma, (1,))
+
+    def pth(canais):
+        pkl = pickle.dumps({"params_ema": {"conv_first.weight": T((64, canais, 3, 3)), "body.0.rdb1.conv1.weight": T((32, 64, 3, 3))}}, 2)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            z.writestr("modelo/data.pkl", pkl)
+        return pkl, buf.getvalue()
+
+    for canais, tipo in ((12, "spandrel"), (3, "esrgan")):
+        pkl, zip_ = pth(canais)
+        assert ampliar.tipo_por_nomes(pkl) == tipo  # do disco (o data.pkl)
+        assert ampliar.tipo_por_nomes(zip_[:4096]) == tipo  # do HF (o começo do zip)
+    assert ampliar._formas_pth(b"\x80\x02cos\nsystem\n(S'echo x'\ntR.") == {}  # os.system vira stub, não roda
+
+
+def test_so_nvidia_pelo_cabecalho():
+    """nvfp4 (weight_scale_2) e mxfp8 (F8_E4M3 + escalas U8) só rodam em NVIDIA recente; fp8 puro roda em qualquer uma."""
+    fp8 = {"blocks.0.ada.txt.attn_gate": {"dtype": "F8_E4M3"}}
+    assert not ampliar._so_nvidia(fp8)
+    assert ampliar._so_nvidia({**fp8, "blocks.0.mlp.weight_scale": {"dtype": "U8"}})
+    assert ampliar._so_nvidia({"blocks.0.mlp.weight_scale_2": {"dtype": "F32"}})
 
 
 def test_dat_hat_swinir_vao_pelo_comfyui_sem_vae_e_so_imagem(isolado, monkeypatch):

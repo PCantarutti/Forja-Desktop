@@ -11,8 +11,10 @@ anime_6B); a escala sai dos pesos, e aqui ela é medida no 1º quadro (tamanho d
 from __future__ import annotations
 
 import functools
+import io
 import json
 import os
+import pickle
 import re
 import shutil
 import struct
@@ -66,17 +68,61 @@ def _nomes(p: Path) -> dict | bytes:
     return cabecalho(str(p))  # dict: nomes e formas (a 1ª camada diz se é o 2× com pixel-unshuffle)
 
 
-def tipo_por_nomes(nomes: list[str] | dict | bytes, arquivo: str = "") -> str:
+class _SoFormas(pickle.Unpickler):
+    """Lê o pickle de um .pth sem executar nada: cada tensor vira só {"shape": [...]} (o `size` que o
+    _rebuild_tensor_v2 do torch recebe); fora o OrderedDict, toda classe vira um stub inerte."""
+    def find_class(self, modulo, nome):
+        if (modulo, nome) == ("collections", "OrderedDict"):
+            import collections
+            return collections.OrderedDict
+        if nome == "_rebuild_tensor_v2":
+            return lambda _armazem, _inicio, forma, *_: {"shape": list(forma)}
+        if nome == "_rebuild_parameter":
+            return lambda dados, *_: dados
+        return lambda *_a, **_k: None
+
+    def persistent_load(self, _pid):
+        return None
+
+
+def _formas_pth(dados: bytes) -> dict:
+    """{nome: {"shape": forma}} do pickle de um .pth. `dados`: o data.pkl ou o começo do zip (do Hugging Face).
+    Os pesos podem vir dentro de params_ema/params/state_dict: achata. {} se não der para ler."""
+    if dados[:4] == b"PK\x03\x04":  # cabeçalho local do zip: o data.pkl vem sem compressão logo depois
+        n, extra = struct.unpack("<HH", dados[26:30])
+        dados = dados[30 + n + extra:]
+    try:
+        raiz = _SoFormas(io.BytesIO(dados)).load()
+    except Exception:  # noqa: BLE001 — pickle cortado ou estranho: fica sem as formas
+        return {}
+    formas, pilha = {}, [raiz]
+    while pilha:
+        d = pilha.pop()
+        if isinstance(d, dict):
+            for k, v in d.items():
+                if isinstance(v, dict) and "shape" in v:
+                    formas[str(k)] = v
+                elif isinstance(v, dict):
+                    pilha.append(v)
+    return formas
+
+
+def _so_nvidia(cab: dict) -> bool:
+    """Quantização em blocos que só as NVIDIA recentes (Blackwell) rodam, pelo cabeçalho: nvfp4 tem o
+    `weight_scale_2`; mxfp8 guarda os pesos em F8_E4M3 com as escalas em U8. fp8 puro e int8 rodam em qualquer uma."""
+    tipos = {v.get("dtype") for v in cab.values() if isinstance(v, dict)}
+    return any(k.endswith(".weight_scale_2") for k in cab) or {"F8_E4M3", "U8"} <= tipos
+
+
+def tipo_por_nomes(nomes: list[str] | dict | bytes) -> str:
     """"esrgan" (RRDBNet, formato novo `conv_first`/`rdb1` ou antigo `model.0`/`RDB1`), "seedvr2" (DiT com
-    `blocks.N.ada.txt`), "spandrel" (o que o ComfyUI roda e o sd.cpp não: DAT/HAT/SwinIR/SPAN/PLKSR/compactos e o
+    `blocks.N.ada.txt`), "vae" (o VAE do SeedVR2: decoder com `upsamplers.N.upscale_conv`), "spandrel" (o que o ComfyUI roda e o sd.cpp não: DAT/HAT/SwinIR/SPAN/PLKSR/compactos e o
     RRDBNet 2× do Real-ESRGAN, que entra com pixel-unshuffle) ou "" (o Forja não roda). `nomes`: o cabeçalho do
     .safetensors (dict, com os formatos, ou só a lista de nomes) ou os bytes do pickle do .pth."""
-    # o 2× com pixel-unshuffle o sd.cpp recusa, mas o ComfyUI roda: vai por lá (pela forma quando há, senão pelo nome)
-    if isinstance(nomes, dict):
-        primeira = (nomes.get("conv_first.weight") or nomes.get("model.0.weight") or {}).get("shape") or []
-        if len(primeira) == 4 and primeira[1] != 3:
-            return "spandrel"
-    if "x2plus" in Path(arquivo).name.lower():
+    # o 2× com pixel-unshuffle (12 canais na entrada) o sd.cpp recusa, mas o ComfyUI roda: vai por lá
+    formas = _formas_pth(nomes) if isinstance(nomes, bytes) else nomes if isinstance(nomes, dict) else {}
+    primeira = (formas.get("conv_first.weight") or formas.get("model.0.weight") or {}).get("shape") or []
+    if len(primeira) == 4 and primeira[1] != 3:
         return "spandrel"
     if isinstance(nomes, bytes):
         if (b"conv_first" in nomes and b"rdb1" in nomes) or (b"model.0.weight" in nomes and b"RDB1" in nomes):
@@ -86,7 +132,11 @@ def tipo_por_nomes(nomes: list[str] | dict | bytes, arquivo: str = "") -> str:
             ("model.0.weight" in nomes and any(".RDB1." in n for n in nomes)):
         return "esrgan"
     if any(".ada.txt." in n for n in nomes):
-        return "seedvr2"
+        from . import comfy
+        # nvfp4/mxfp8 fora de uma NVIDIA: o ComfyUI carrega e quebra no meio, então nem aparece
+        return "" if isinstance(nomes, dict) and _so_nvidia(nomes) and comfy.gpu() != "nvidia" else "seedvr2"
+    if any(n.startswith("decoder.") and ".upscale_conv." in n for n in nomes):
+        return "vae"
     return "spandrel" if _eh_spandrel(nomes) else ""
 
 
@@ -117,7 +167,7 @@ def eh_ampliador(path: str) -> bool:
         nomes = _nomes(p)
     except (OSError, ValueError, zipfile.BadZipFile, KeyError, struct.error):
         return False
-    return tipo_por_nomes(nomes, path) == "esrgan"
+    return tipo_por_nomes(nomes) == "esrgan"
 
 
 def eh_seedvr2(path: str) -> bool:
@@ -133,12 +183,12 @@ def eh_seedvr2(path: str) -> bool:
 
 
 def tipo_local(path: str) -> str:
-    """O tipo de um arquivo do disco: esrgan, seedvr2, spandrel ou "" (o Forja não roda)."""
+    """O tipo de um arquivo do disco: esrgan, seedvr2, spandrel, vae (do SeedVR2) ou "" (o Forja não roda)."""
     p = Path(path)
     if p.suffix.lower() not in (".pth", ".safetensors"):
         return ""
     try:
-        return tipo_por_nomes(_nomes(p), path)
+        return tipo_por_nomes(_nomes(p))
     except (OSError, ValueError, zipfile.BadZipFile, KeyError, struct.error):
         return ""
 
@@ -165,11 +215,12 @@ def eh_spandrel(path: str) -> bool:
 
 
 def vae_seedvr2(modelo: str) -> str:
-    """O VAE do SeedVR2: ao lado do modelo (onde o catálogo baixa) ou em qualquer pasta de modelos."""
-    ao_lado = Path(modelo).with_name(VAE_SEEDVR2["nome"])
-    if ao_lado.is_file():
-        return str(ao_lado)
-    return next((m["path"] for m in localai.scan((".safetensors",)) if Path(m["path"]).name.lower() == VAE_SEEDVR2["nome"]), "")
+    """O VAE do SeedVR2, pelas camadas (qualquer nome): ao lado do modelo (onde o catálogo baixa) ou em qualquer
+    pasta de modelos."""
+    pasta = Path(modelo).parent
+    ao_lado = sorted(pasta.glob("*.safetensors")) if pasta.is_dir() else []
+    return next((str(p) for p in ao_lado if tipo_local(str(p)) == "vae"),
+                next((m["path"] for m in localai.scan((".safetensors",)) if tipo_local(m["path"]) == "vae"), ""))
 
 
 @functools.lru_cache(maxsize=4)
@@ -204,7 +255,7 @@ def catalogo() -> dict:
                for c in CATALOGO]
     # Redesenhar: os checkpoints de imagem (SD 1.5/SDXL) que já estão nas pastas, sem baixar nada novo
     for m in localai.scan((".safetensors",)):
-        if m["kind"] == "image" and tipo_checkpoint(m["path"]):
+        if tipo_checkpoint(m["path"]):
             achados.append({"path": m["path"], "name": m["name"], "tipo": "redesenhar"})
     ff = localai.find_exe("ffmpeg")
     return {"modelos": modelos, "erro": erro, "ffmpeg": str(ff) if ff else "", "no_disco": achados, "comfy": comfy.estado()}
@@ -229,7 +280,6 @@ def baixar_modelo(nome: str, folder: str = "") -> dict:
 
 # ---------------------------------------------------------------- Procurar modelos (Hugging Face)
 
-ESRGAN_MAX = 200 << 20  # ESRGAN/UltraSharp têm < 200 MB; acima disso só vale a pena ler o que se chama seedvr2
 PICKLE_INICIO = 1 << 20  # o data.pkl é a 1ª entrada do zip do .pth (sem compressão): 1 MB o contém inteiro
 BUSCA_PADRAO = ("esrgan", "upscale", "4x")  # sem termo: o que costuma nomear um ampliador no HF
 # Sem termo, estes abrem a lista: o HF está cheio de cópias do mesmo ESRGAN, e os bons se perdiam no meio
@@ -251,17 +301,13 @@ def tipo_remoto(repo: str, caminho: str, tamanho: int) -> str:
     """O tipo de um arquivo do HF sem baixá-lo: o cabeçalho do .safetensors (8 bytes + o JSON) ou o começo do
     zip do .pth, que tem o pickle com os nomes das camadas. "" = incompatível (ou ilegível)."""
     nome = Path(caminho).name.lower()
-    if nome == VAE_SEEDVR2["nome"]:
-        return "vae"
-    if tamanho > ESRGAN_MAX and not nome.startswith("seedvr2"):
-        return ""
     try:
         if nome.endswith(".safetensors"):
             n = struct.unpack("<Q", _faixa(repo, caminho, 0, 7))[0]
             if n > 20 << 20:
                 return ""
-            return tipo_por_nomes(json.loads(_faixa(repo, caminho, 8, 7 + n)), caminho)
-        return tipo_por_nomes(_faixa(repo, caminho, 0, PICKLE_INICIO - 1), caminho)
+            return tipo_por_nomes(json.loads(_faixa(repo, caminho, 8, 7 + n)))
+        return tipo_por_nomes(_faixa(repo, caminho, 0, PICKLE_INICIO - 1))
     except (ToolError, httpx.HTTPError, ValueError, struct.error):
         return ""
 
@@ -281,11 +327,6 @@ def arquivos_hf(repo: str, maximo: int = 0) -> list[dict]:
         candidatos = sorted(candidatos, key=lambda c: c[1])[:maximo]
     with ThreadPoolExecutor(8) as ex:
         tipos = list(ex.map(lambda c: tipo_remoto(repo, c[0], c[1]), candidatos))
-    # ponytail: pelo nome; nvfp4/mxfp8 só rodam em NVIDIA recente (Blackwell), então somem nas outras placas
-    from . import comfy
-    so_nvidia = ("nvfp4", "mxfp8")
-    tipos = ["" if t == "seedvr2" and comfy.gpu() != "nvidia" and any(x in c[0].lower() for x in so_nvidia) else t
-             for c, t in zip(candidatos, tipos)]
     tem_seedvr2 = "seedvr2" in tipos
     out = [{"path": c[0], "size": c[1], "quant": "", "shards": 1, "tipo": t,
             "papel": "modelo", "subpasta": PASTA["seedvr2" if t == "vae" else t]}
