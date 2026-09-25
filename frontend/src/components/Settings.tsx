@@ -29,6 +29,8 @@ export type AppSettings = {
   sandbox_processos: number;
   sandbox_cpu: number;
   sandbox_isolado: string;
+  sandbox_motor: string;
+  sandbox_wsl_distro: string;
   compact_at: number;
   searxng_url: string;
   disabled_tools: string[];
@@ -83,6 +85,45 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
       <div className="mt-1.5">{children}</div>
     </label>
+  );
+}
+
+// Como instalar o Docker que o sandbox isolado usa. Dois caminhos: o Docker Desktop (mais simples, mas
+// precisa ficar aberto e come RAM) ou o Docker Engine dentro do WSL (sem janela, o WSL sobe sozinho).
+function TutorialDocker() {
+  const cmd = (texto: string) => (
+    <code className="mt-1 block whitespace-pre-wrap break-all rounded-lg bg-raised px-3 py-2 font-mono text-xs text-fg">{texto}</code>
+  );
+  return (
+    <details className="rounded-lg border border-line px-3 py-2 text-xs text-muted">
+      <summary className="cursor-pointer text-sm text-fg">Como instalar o Docker para o sandbox isolado</summary>
+      <div className="mt-3 space-y-4">
+        <div>
+          <p className="text-fg">Opção 1 — Docker Engine no WSL (recomendado: sem janela aberta, mais leve)</p>
+          <ol className="mt-1 list-decimal space-y-1.5 pl-5">
+            <li>Tenha o WSL 2 com uma distro Linux (ex.: Ubuntu). No PowerShell, se ainda não tiver:{cmd("wsl --install -d Ubuntu")}</li>
+            <li>Se o Docker Desktop estiver instalado, desligue a integração com essa distro em Settings › Resources › WSL integration, e apague os atalhos que ela deixou (dentro do Ubuntu):{cmd("sudo find /usr/bin /usr/local/bin /usr/local/lib/docker/cli-plugins -maxdepth 1 -lname '/mnt/wsl/docker-desktop/*' -print -delete")}</li>
+            <li>Instale e ligue o Docker Engine (dentro do Ubuntu):{cmd("sudo apt update && sudo apt install -y docker.io")}{cmd("sudo systemctl enable --now docker")}{cmd("sudo usermod -aG docker $USER")}</li>
+            <li>Para o Docker subir junto com o WSL, o systemd precisa estar ligado em /etc/wsl.conf (em [boot], systemd=true); depois rode no PowerShell:{cmd("wsl --shutdown")}</li>
+            <li>Confira (dentro do Ubuntu):{cmd("docker info --format '{{.ServerVersion}}'")}</li>
+            <li>Aqui no Forja: "Sandbox isolado: qual Docker" em Automático ou Docker Engine no WSL, e a distro (vazio = a padrão).</li>
+          </ol>
+        </div>
+        <div>
+          <p className="text-fg">Opção 2 — Docker Desktop</p>
+          <ol className="mt-1 list-decimal space-y-1.5 pl-5">
+            <li>Instale o Docker Desktop (docker.com/products/docker-desktop) com o motor WSL 2.</li>
+            <li>Deixe-o aberto enquanto o agente trabalha: o Forja não o abre sozinho. Em Settings › General dá para abrir junto com o Windows, e o Resource Saver reduz a RAM quando ocioso.</li>
+            <li>Confira no PowerShell:{cmd("docker info --format '{{.ServerVersion}}'")}</li>
+          </ol>
+        </div>
+        <p>
+          Na primeira vez, o Forja baixa a imagem do sandbox (node:22-bookworm ou python:3.12-bookworm, ~400 MB) em
+          segundo plano; até terminar, os comandos rodam no Windows. Comandos no container são mais lentos em
+          arquivos (a pasta do projeto é lida através do WSL), e o node_modules que um npm install criar lá é de Linux.
+        </p>
+      </div>
+    </details>
   );
 }
 
@@ -247,6 +288,17 @@ export default function Settings(props: {
                     <option value="sempre">Sempre</option>
                   </select>
                 </Field>
+                <Field label="Sandbox isolado: qual Docker" hint="Automático usa o Docker Desktop se ele estiver aberto e, se não, o Docker Engine instalado dentro do WSL (sem Docker Desktop, e o WSL sobe sozinho quando o Forja chama).">
+                  <select className={input} value={s.sandbox_motor} onChange={(e) => set("sandbox_motor", e.target.value)}>
+                    <option value="auto">Automático</option>
+                    <option value="desktop">Docker Desktop</option>
+                    <option value="wsl">Docker Engine no WSL</option>
+                  </select>
+                </Field>
+                <Field label="Sandbox isolado: distro do WSL" hint="Onde o Docker Engine está instalado (ex.: Ubuntu). Vazio = a distro padrão do WSL.">
+                  <input className={input} value={s.sandbox_wsl_distro} onChange={(e) => set("sandbox_wsl_distro", e.target.value)} />
+                </Field>
+                <TutorialDocker />
                 <Field label="Sandbox: memória por comando (MB)" hint="Teto de memória da árvore de um comando do agente (run_command, servidores, terminal). -1 = automático (metade da RAM, até 4 GB); 0 = sem limite.">
                   <Num value={s.sandbox_memoria_mb} onChange={(v) => set("sandbox_memoria_mb", v)} />
                 </Field>

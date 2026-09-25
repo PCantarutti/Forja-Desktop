@@ -53,6 +53,8 @@ ENV_DEFAULTS: dict[str, Any] = {
     "sandbox_processos": config.SANDBOX_PROCESSOS,
     "sandbox_cpu": config.SANDBOX_CPU,
     "sandbox_isolado": config.SANDBOX_ISOLADO,
+    "sandbox_motor": config.SANDBOX_MOTOR,
+    "sandbox_wsl_distro": config.SANDBOX_WSL_DISTRO,
 }
 MAX_ESPECIALIDADES = 12
 
@@ -161,6 +163,8 @@ def apply(values: dict | None = None) -> dict:
     config.SANDBOX_PROCESSOS = int(values["sandbox_processos"])
     config.SANDBOX_CPU = int(values["sandbox_cpu"])
     config.SANDBOX_ISOLADO = values["sandbox_isolado"]
+    config.SANDBOX_MOTOR = values["sandbox_motor"]
+    config.SANDBOX_WSL_DISTRO = values["sandbox_wsl_distro"]
     return values
 
 
@@ -259,6 +263,16 @@ def validate(patch: dict, current: dict) -> dict:
             if raw not in LIFECYCLES:
                 raise SettingsError(f"model_lifecycle deve ser um de: {', '.join(LIFECYCLES)}.")
             values[key] = raw
+        elif key == "sandbox_motor":
+            from .sandbox import MOTORES
+            if raw not in MOTORES:
+                raise SettingsError(f"sandbox_motor deve ser um de: {', '.join(MOTORES)}.")
+            values[key] = raw
+        elif key == "sandbox_wsl_distro":
+            nome = str(raw or "").strip()
+            if nome and not all(c.isalnum() or c in "-_." for c in nome):
+                raise SettingsError("sandbox_wsl_distro: só o nome da distro (ex.: Ubuntu).")
+            values[key] = nome
         elif key == "sandbox_isolado":
             from .sandbox import MODOS_ISOLADO
             if raw not in MODOS_ISOLADO:

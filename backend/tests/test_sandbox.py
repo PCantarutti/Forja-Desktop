@@ -126,26 +126,59 @@ def test_imagem_pelo_projeto(tmp_path):
 
 def test_docker_parado_roda_no_windows_com_aviso(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SANDBOX_ISOLADO", "sempre")
-    monkeypatch.setattr(sandbox, "docker_ok", lambda: False)
+    monkeypatch.setattr(sandbox, "docker_ok", lambda motor="desktop": False)
     saida = run_tool("run_command", {"command": "echo ok", "timeout": 30}, tmp_path)
-    assert "Docker não está rodando" in saida and "ok" in saida
+    assert "nenhum Docker está rodando" in saida and "ok" in saida
 
 
 def test_imagem_ausente_baixa_em_segundo_plano_e_nao_trava(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SANDBOX_ISOLADO", "sempre")
-    monkeypatch.setattr(sandbox, "docker_ok", lambda: True)
-    monkeypatch.setattr(sandbox, "_imagem_presente", lambda img: False)
+    monkeypatch.setattr(sandbox, "docker_ok", lambda motor="desktop": motor == "desktop")
+    monkeypatch.setattr(sandbox, "_imagem_presente", lambda img, motor="desktop": False)
     pedidas = []
-    monkeypatch.setattr(sandbox, "_puxa", lambda img: pedidas.append(img))
+    monkeypatch.setattr(sandbox, "_puxa", lambda img, motor="desktop": pedidas.append(img))
     saida = run_tool("run_command", {"command": "echo ok", "timeout": 30}, tmp_path)
     assert "baixando a imagem do sandbox" in saida and pedidas == [sandbox.IMAGEM_PYTHON]
 
 
-def _docker_pronto(img):
+def _docker_pronto(img, motor="desktop"):
     try:
-        return sandbox.docker_ok() and sandbox._imagem_presente(img)
+        return sandbox.docker_ok(motor) and sandbox._imagem_presente(img, motor)
     except Exception:
         return False
+
+
+def test_motor_wsl_traduz_o_caminho_e_chama_pelo_wsl(tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(config, "SANDBOX_WSL_DISTRO", "Ubuntu")
+    assert sandbox.prefixo("wsl") == ["wsl.exe", "-d", "Ubuntu", "--exec", "docker"]
+    assert sandbox.prefixo("desktop") == ["docker"]
+    if WIN:
+        assert sandbox.caminho("wsl", Path("C:/Projetos/App")) == "/mnt/c/Projetos/App"
+    argv = sandbox.argv_docker("true", tmp_path, tmp_path, "python:3.12-bookworm", "forja-z", "wsl")
+    assert argv[:5] == ["wsl.exe", "-d", "Ubuntu", "--exec", "docker"] and argv[5] == "run"
+    montagem = argv[argv.index("-v") + 1]
+    assert montagem.endswith(":/workspace") and (montagem.startswith("/mnt/") or not WIN)
+
+
+def test_auto_prefere_o_desktop_e_cai_para_o_wsl(monkeypatch):
+    monkeypatch.setattr(config, "SANDBOX_MOTOR", "auto")
+    monkeypatch.setattr(sandbox, "docker_ok", lambda motor="desktop": True)
+    assert sandbox.motor_ativo() == "desktop"
+    monkeypatch.setattr(sandbox, "docker_ok", lambda motor="desktop": motor == "wsl")
+    assert sandbox.motor_ativo() == "wsl"
+    monkeypatch.setattr(config, "SANDBOX_MOTOR", "desktop")
+    assert sandbox.motor_ativo() is None                     # escolheu o Desktop: não cai para o WSL
+
+
+@pytest.mark.skipif(not _docker_pronto(sandbox.IMAGEM_PYTHON, "wsl"), reason="Docker do WSL parado ou sem a imagem")
+def test_container_de_verdade_pelo_wsl(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "SANDBOX_ISOLADO", "sempre")
+    monkeypatch.setattr(config, "SANDBOX_MOTOR", "wsl")
+    (tmp_path / "dentro.txt").write_text("projeto", encoding="utf-8")
+    saida = run_tool("run_command", {"command": "cat dentro.txt; ls /mnt/c 2>&1 | head -1; echo fim",
+                                     "timeout": 120}, tmp_path)
+    assert "projeto" in saida and "fim" in saida and ("No such file" in saida or "cannot access" in saida)
 
 
 @pytest.mark.skipif(not _docker_pronto(sandbox.IMAGEM_PYTHON), reason="Docker parado ou imagem não baixada")
@@ -159,3 +192,13 @@ def test_container_de_verdade_isola_disco_e_rede(tmp_path, monkeypatch):
     assert "No such file" in saida or "cannot access" in saida   # o disco C do Windows não existe lá
     assert "root" not in saida.split("fim")[0].splitlines()[-3:]  # não é root
     assert "Error" in saida or "Temporary failure" in saida       # sem rede fora da instalação
+
+
+@pytest.mark.skipif(not _docker_pronto(sandbox.IMAGEM_PYTHON, "wsl"), reason="Docker do WSL parado ou sem a imagem")
+def test_wsl_preserva_aspas_e_operadores_do_comando(tmp_path, monkeypatch):
+    """Com `wsl.exe --`, o $i e as aspas se perdiam no shell do Linux e o comando do agente quebrava."""
+    monkeypatch.setattr(config, "SANDBOX_ISOLADO", "sempre")
+    monkeypatch.setattr(config, "SANDBOX_MOTOR", "wsl")
+    saida = run_tool("run_command", {"command": 'for i in 1 2; do echo "n=$i" > f$i.txt; done && cat f1.txt f2.txt',
+                                     "timeout": 120}, tmp_path)
+    assert "n=1" in saida and "n=2" in saida

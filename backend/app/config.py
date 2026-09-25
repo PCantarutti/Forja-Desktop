@@ -88,6 +88,9 @@ SANDBOX_CPU = 80          # teto de CPU em %, para o PC continuar usável num bu
 # Comandos do agente num container Docker (passo 3): desligado | autonomo (Automático, Ignorar permissões,
 # Maestro) | sempre. Desligado por padrão: o Docker Desktop consome RAM que um PC com IA local pode não ter.
 SANDBOX_ISOLADO = "desligado"
+# Qual Docker: auto (o Desktop se estiver aberto, senão o Engine dentro do WSL) | desktop | wsl.
+SANDBOX_MOTOR = "auto"
+SANDBOX_WSL_DISTRO = ""  # distro WSL com o Docker Engine; vazio = a distro padrão do WSL
 
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai
 PROVIDERS = {

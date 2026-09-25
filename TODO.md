@@ -1060,6 +1060,35 @@ Diferenças em relação ao plano:
 - **Web:** o `HOST_MOUNTS` opt-in e o forja-runner com o mesmo modo ficam para o sync com o
   `forja-web`.
 
+**Motor WSL (2026-09-25).** Configuração "Sandbox isolado: qual Docker": Automático (o Docker Desktop
+se estiver aberto, senão o Docker Engine dentro do WSL), Docker Desktop ou Docker Engine no WSL, e a
+distro do WSL. O motor WSL:
+- chama `wsl.exe --exec docker …`. Com `--`, o `wsl.exe` passava a linha pelo shell do Linux e perdia
+  as aspas (`$i`, `&&`, `>`), e isso foi pego na medição;
+- traduz os caminhos (`C:\x` → `/mnt/c/x`);
+- tem as próprias imagens, separadas das do Docker Desktop.
+
+Na tela de Configurações há um **tutorial** para instalar o Docker das duas formas.
+
+Validado no Forja real: com o Docker Desktop fora do ar, o Automático caiu no Engine do WSL (29.1.3). O
+comando com aspas, `$i`, `>` e `&&` rodou num Debian, e os arquivos apareceram na pasta do Windows.
+
+Medição (mediana de 5 rodadas, mesma pasta de projeto no disco C):
+
+| Caso | Windows, sem sandbox | Docker Engine no WSL | Docker Desktop |
+|---|---|---|---|
+| Subir o comando (vazio) | 0,25 s | 0,46 s | — |
+| 2000 arquivos (escrever e ler) | 3,52 s | 9,17 s | — |
+| pytest (60 testes) | 0,52 s | 3,34 s | — |
+| pip install (já em cache) | 1,06 s | 2,17 s | — |
+
+- [ ] **Medir o Docker Desktop.** Ele não subiu nesta sessão: o backend dele caía ao recriar os sockets
+      em `%LOCALAPPDATA%\Docker\run`, e isso não tem relação com o Forja. Reiniciar o Windows e rodar
+      `scratchpad/bench_sandbox.py` de novo.
+- [ ] **Cache de pacotes num volume do Linux.** Hoje o cache (`sandbox-cache`) fica no disco do Windows e
+      é lido por `/mnt/c`, e é a maior parte dos 3,3 s do pytest. Um volume nomeado do Docker é nativo
+      do Linux, mas nasce de root: precisa de um `chown` para o uid 1000 na criação.
+
 ### Passo 4 (depois): AppContainer do Windows
 - [ ] Isolamento nativo sem Docker/WSL. O processo roda num **AppContainer**:
   - só a pasta do projeto e o cache de pacotes ganham ACL de acesso;

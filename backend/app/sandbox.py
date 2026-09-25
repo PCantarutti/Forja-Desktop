@@ -189,8 +189,8 @@ def fecha(proc: subprocess.Popen) -> None:
         _k32.CloseHandle(job)
     if nome := getattr(proc, "_forja_container", None):
         proc._forja_container = None  # type: ignore[attr-defined]
-        subprocess.run(["docker", "rm", "-f", nome], capture_output=True, timeout=30,
-                       **native.popen_kwargs())
+        subprocess.run([*getattr(proc, "_forja_docker", ["docker"]), "rm", "-f", nome], capture_output=True,
+                       timeout=60, **native.popen_kwargs())
 
 
 # ------------------------------------------------------------------ passo 3: container (Docker)
@@ -207,8 +207,9 @@ INSTALADOR = re.compile(
     r"pipenv\s+install\b|cargo\s+(?:fetch|build|add)\b|go\s+(?:mod\s+download|get)\b|composer\s+install\b)", re.I)
 # () -> bool, posto pelo agente por execução: "esta chamada é de um modo sem aprovação por comando?"
 AUTONOMO: contextvars.ContextVar = contextvars.ContextVar("forja_autonomo", default=lambda: False)
-_DOCKER = {"ok": None, "quando": 0.0}
-_PUXANDO: set[str] = set()
+MOTORES = ("auto", "desktop", "wsl")
+_DOCKER: dict[str, tuple[bool, float]] = {}   # motor -> (respondeu, quando)
+_PUXANDO: set[tuple[str, str]] = set()
 
 
 def modo_isolado() -> str:
@@ -231,19 +232,46 @@ def isolar() -> bool:
     return False
 
 
-def docker_ok() -> bool:
-    """Daemon do Docker respondendo (cache de 30 s: `docker info` leva ~1 s). Nunca abre o Docker
-    Desktop: parado, os comandos seguem no Windows com aviso."""
+def prefixo(motor: str) -> list[str]:
+    """Como chamar o `docker` de cada motor. desktop: o CLI do Docker Desktop no Windows. wsl: o Docker
+    Engine instalado dentro de uma distro WSL, sem Docker Desktop (o WSL sobe sozinho quando chamado)."""
+    if motor == "wsl":
+        distro = str(getattr(config, "SANDBOX_WSL_DISTRO", "") or "").strip()
+        # --exec e não --: com "--" o wsl.exe passa a linha pelo shell do Linux, que remonta os argumentos e
+        # perde as aspas ($i, &&, > quebravam o comando do agente). --exec chama o docker direto.
+        return ["wsl.exe", *(["-d", distro] if distro else []), "--exec", "docker"]
+    return ["docker"]
+
+
+def caminho(motor: str, p: Path) -> str:
+    """Caminho do Windows como o daemon do motor o enxerga: no WSL, C:/x vira /mnt/c/x."""
+    p = p.resolve()
+    if motor == "wsl" and p.drive:
+        return f"/mnt/{p.drive[0].lower()}/" + "/".join(p.parts[1:])
+    return str(p)
+
+
+def docker_ok(motor: str = "desktop") -> bool:
+    """O daemon desse motor respondendo (cache de 30 s: `docker info` leva ~1 s). Nunca abre o Docker
+    Desktop nem instala nada: sem motor, os comandos seguem no Windows com aviso."""
     agora = _time.monotonic()
-    if _DOCKER["ok"] is None or agora - _DOCKER["quando"] > 30:
+    feito = _DOCKER.get(motor)
+    if feito is None or agora - feito[1] > 30:
         try:
-            r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True,
-                               timeout=15, **native.popen_kwargs())
-            _DOCKER["ok"] = r.returncode == 0
+            r = subprocess.run([*prefixo(motor), "info", "--format", "{{.ServerVersion}}"], capture_output=True,
+                               timeout=30, **native.popen_kwargs())
+            _DOCKER[motor] = (r.returncode == 0, agora)
         except (OSError, subprocess.TimeoutExpired):
-            _DOCKER["ok"] = False
-        _DOCKER["quando"] = agora
-    return bool(_DOCKER["ok"])
+            _DOCKER[motor] = (False, agora)
+    return _DOCKER[motor][0]
+
+
+def motor_ativo() -> str | None:
+    """O motor que vai rodar: o escolhido nas Configurações, ou no 'auto' o Docker Desktop se estiver
+    aberto e senão o Docker do WSL. None: nenhum respondendo."""
+    escolhido = str(getattr(config, "SANDBOX_MOTOR", "auto") or "auto")
+    ordem = ["desktop", "wsl"] if escolhido not in ("desktop", "wsl") else [escolhido]
+    return next((m for m in ordem if docker_ok(m)), None)
 
 
 def imagem(root: Path) -> str:
@@ -257,22 +285,25 @@ def imagem(root: Path) -> str:
     return IMAGEM_NODE if (root / "package.json").is_file() else IMAGEM_PYTHON
 
 
-def _imagem_presente(img: str) -> bool:
-    r = subprocess.run(["docker", "image", "inspect", img], capture_output=True, timeout=30, **native.popen_kwargs())
+def _imagem_presente(img: str, motor: str = "desktop") -> bool:
+    """Cada motor tem as próprias imagens: baixada no Docker Desktop não existe no Docker do WSL."""
+    r = subprocess.run([*prefixo(motor), "image", "inspect", img], capture_output=True, timeout=60,
+                       **native.popen_kwargs())
     return r.returncode == 0
 
 
-def _puxa(img: str) -> None:
+def _puxa(img: str, motor: str = "desktop") -> None:
     """Baixa a imagem em segundo plano, uma vez: o comando que pediu não espera o download."""
-    if img in _PUXANDO:
+    if (img, motor) in _PUXANDO:
         return
-    _PUXANDO.add(img)
+    _PUXANDO.add((img, motor))
 
     def roda():
         try:
-            subprocess.run(["docker", "pull", img], capture_output=True, timeout=3600, **native.popen_kwargs())
+            subprocess.run([*prefixo(motor), "pull", img], capture_output=True, timeout=3600,
+                           **native.popen_kwargs())
         finally:
-            _PUXANDO.discard(img)
+            _PUXANDO.discard((img, motor))
     threading.Thread(target=roda, daemon=True).start()
 
 
@@ -283,7 +314,7 @@ def _cache_dir() -> Path:
     return p
 
 
-def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str) -> list[str]:
+def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str, motor: str = "desktop") -> list[str]:
     """`docker run` que executa `command` (bash) com só a pasta do projeto montada em /workspace."""
     lim = limites()
     try:
@@ -292,8 +323,8 @@ def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str) -> lis
         sub = "."
     trabalho = "/workspace" + ("" if sub in ("", ".") else f"/{sub}")
     cache = _cache_dir()
-    argv = ["docker", "run", "--rm", "-i", "--init", "--name", nome,
-            "-v", f"{root.resolve()}:/workspace", "-w", trabalho, "-v", f"{cache}:/cache",
+    argv = [*prefixo(motor), "run", "--rm", "-i", "--init", "--name", nome,
+            "-v", f"{caminho(motor, root)}:/workspace", "-w", trabalho, "-v", f"{caminho(motor, cache)}:/cache",
             "--network", "bridge" if INSTALADOR.search(command) else "none",
             "--user", "1000:1000", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             # Cache de pacote persistente e pip sem root (vai para o usuário, dentro do cache).
@@ -312,29 +343,32 @@ def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str) -> lis
     return argv + [img, "bash", "-lc", command]
 
 
-def plano(command: str, cwd: Path, root: Path | None) -> tuple[list[str], str, str]:
-    """(argv, nome do container ou '', aviso) para rodar `command`. Fora do isolamento, ou sem Docker,
-    é o shell do Windows de sempre, com um aviso quando o isolamento foi pedido e não deu."""
+def plano(command: str, cwd: Path, root: Path | None) -> tuple[list[str], str, str, str]:
+    """(argv, nome do container ou '', motor ou '', aviso) para rodar `command`. Fora do isolamento, ou
+    sem Docker, é o shell do Windows de sempre, com um aviso quando o isolamento foi pedido e não deu."""
     if not (root and isolar()):
-        return native.shell_argv(command), "", ""
-    if not docker_ok():
-        return (native.shell_argv(command), "",
-                "[sandbox isolado ligado, mas o Docker não está rodando: este comando rodou no Windows]\n")
+        return native.shell_argv(command), "", "", ""
+    if not (motor := motor_ativo()):
+        return (native.shell_argv(command), "", "",
+                "[sandbox isolado ligado, mas nenhum Docker está rodando (nem o Desktop nem o do WSL): este "
+                "comando rodou no Windows]\n")
     img = imagem(root)
-    if not _imagem_presente(img):
-        _puxa(img)
-        return (native.shell_argv(command), "",
-                f"[baixando a imagem do sandbox ({img}); até terminar, os comandos rodam no Windows]\n")
+    if not _imagem_presente(img, motor):
+        _puxa(img, motor)
+        return (native.shell_argv(command), "", "",
+                f"[baixando a imagem do sandbox ({img}, Docker {motor}); até terminar, os comandos rodam no "
+                "Windows]\n")
     nome = f"forja-sbx-{os.getpid()}-{_time.time_ns() % 10**12}"  # "forja-*" puro colide com o compose do forja-web
-    return argv_docker(command, cwd, root, img, nome), nome, ""
+    return argv_docker(command, cwd, root, img, nome, motor), nome, motor, ""
 
 
 def popen_comando(command: str, cwd: Path, root: Path | None, **kw) -> tuple[subprocess.Popen, str]:
     """Popen de um comando do agente, no Windows ou no container conforme `plano`. (proc, aviso)."""
-    argv, nome, aviso = plano(command, cwd, root)
+    argv, nome, motor, aviso = plano(command, cwd, root)
     proc = popen(argv, cwd, root=root, **kw)
     if nome:
         proc._forja_container = nome  # type: ignore[attr-defined]
+        proc._forja_docker = prefixo(motor)  # type: ignore[attr-defined]
     return proc, aviso
 
 
