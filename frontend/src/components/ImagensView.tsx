@@ -960,6 +960,14 @@ function Ajustes(props: {
   );
 }
 
+/** O prompt que descreve a imagem de um lote (o mesmo que lotes.prompt_da_imagem): o da geração; numa ampliação, o do
+ *  redesenho dela; numa ampliação de arquivo do PC o pedido é só o nome do arquivo, e aí fica vazio. */
+function promptDaImagem(pedido: Message): string {
+  const amp = (pedido.meta as { ampliacao?: { prompt?: string } } | null)?.ampliacao;
+  if (!amp) return pedido.content;
+  return amp.prompt || (/\.(png|jpe?g|webp)$/i.test(pedido.content) ? "" : pedido.content);
+}
+
 // ---------------------------------------------------------------- um lote
 
 function Lote(props: {
@@ -1047,7 +1055,7 @@ function Lote(props: {
           <p className="mb-3 text-sm text-fg">Ampliar imagem</p>
           <PainelAmpliar
             imagem
-            prompt={props.pedido.content}
+            prompt={promptDaImagem(props.pedido)}
             w={ampliando.img.width ?? meta.opts.width ?? 0}
             h={ampliando.img.height ?? meta.opts.height ?? 0}
             onError={props.onError}

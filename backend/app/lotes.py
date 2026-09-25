@@ -627,6 +627,17 @@ def _saida_ao_lado(origem: Path, fator: int, modelo: str, ext: str, suave: bool 
     return saida
 
 
+def prompt_da_imagem(conteudo: str, meta: dict | None) -> str:
+    """O prompt que descreve a imagem de um lote: o da geração; numa ampliação, o do redesenho dela (se foi um); numa
+    ampliação de arquivo do PC o pedido é só o nome do arquivo, que não serve de prompt."""
+    amp = (meta or {}).get("ampliacao")
+    if not amp:
+        return conteudo or ""
+    if amp.get("prompt"):
+        return amp["prompt"]
+    return "" if re.search(r"\.(png|jpe?g|webp)$", conteudo or "", re.I) else (conteudo or "")
+
+
 def _redesenho(modelo: str, prompt: str, forca: float | None) -> dict:
     """Redesenhar (checkpoint de imagem): o prompt e a força vão junto da ampliação (Continuar refaz igual)."""
     from . import ampliar as amp
@@ -654,9 +665,10 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
         pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
                                              db.Message.id < message_id).order_by(db.Message.id.desc()).first())
         prompt = pedido.content if pedido else ""
+        base = prompt_da_imagem(pedido.content, pedido.meta) if pedido else ""
     # redesenhar: sem prompt na tela, vale o prompt que gerou a imagem
     return _nova_ampliacao(msg["conversation_id"], path, saida, prompt, dict(msg["meta"].get("opts") or {}), item["seed"],
-                           fator, modelo, suavizar and not imagem, _redesenho(modelo, prompt_novo or prompt, forca))
+                           fator, modelo, suavizar and not imagem, _redesenho(modelo, prompt_novo or base, forca))
 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False,

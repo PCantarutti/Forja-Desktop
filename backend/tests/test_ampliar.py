@@ -384,3 +384,10 @@ def test_redesenhar_com_checkpoint_de_imagem(isolado, monkeypatch):
     assert a[a.index("--modo") + 1] == "redesenhar" and a[a.index("--forca") + 1] == "0.50" and a[a.index("--bloco") + 1] == "1024"
     with pytest.raises(lotes.ToolError, match="Força"):
         lotes.ampliar_arquivo(conv, str(foto), 2, ck, forca=1.5)
+
+
+def test_prompt_da_imagem_nao_e_nome_de_arquivo():
+    assert lotes.prompt_da_imagem("a red fox", {}) == "a red fox"
+    assert lotes.prompt_da_imagem("foto.jpg", {"ampliacao": {"origem": "x"}}) == ""  # ampliação de arquivo do PC
+    assert lotes.prompt_da_imagem("a red fox", {"ampliacao": {"origem": "x"}}) == "a red fox"  # ampliação de uma gerada
+    assert lotes.prompt_da_imagem("foto.jpg", {"ampliacao": {"prompt": "um gato"}}) == "um gato"  # redesenho anterior
