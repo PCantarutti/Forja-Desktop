@@ -1712,6 +1712,45 @@ function ClaudeControla() {
           </span>
         </span>
       </label>
+      <details className="rounded-xl border border-line bg-bg px-3 py-2 text-xs text-muted" open={!c.ligado}>
+        <summary className="cursor-pointer select-none text-sm text-fg">Como usar e para que serve</summary>
+        <div className="mt-2 space-y-3 leading-relaxed">
+          <p>
+            <span className="text-fg">Para que serve:</span> o Claude pensa e o Forja executa. Você pede a feature ao Claude Code
+            como sempre; ele lê o projeto, divide em tarefas com critério de pronto e manda cada uma para um{" "}
+            <span className="text-fg">Worker do Forja</span> (os modelos de Configurações › Subagentes, locais ou na nuvem). O
+            Worker escreve o código, o Forja roda o verify e faz o commit, e o Claude confere o resultado e fecha. Ele também
+            pode criar cards no board com arquivo e linha.
+          </p>
+          <ol className="list-decimal space-y-1.5 pl-5">
+            <li>Ligue <span className="text-fg">Permitir que o Claude controle o Forja</span> (acima).</li>
+            <li>
+              No terminal, <span className="text-fg">dentro da pasta do projeto</span>, rode uma vez o comando que aparece abaixo
+              (<span className="font-mono">claude mcp add …</span>). Para valer em todos os projetos, acrescente{" "}
+              <span className="font-mono">--scope user</span>. No Claude Desktop, cole o JSON em Configurações › Desenvolvedor.
+            </li>
+            <li>
+              Opcional: <span className="text-fg">Instalar no Claude Code</span>, mais abaixo, com a pasta do projeto. Aí o seu
+              pedido e as respostas dele também aparecem no Forja.
+            </li>
+            <li>
+              Abra o Claude Code no projeto e peça, por exemplo:{" "}
+              <span className="font-mono text-fg">"Use o Forja: planeje o filtro por data na lista de pedidos e deixe os Workers
+              implementarem."</span> Na primeira vez ele pede para usar as ferramentas do Forja: aceite.
+            </li>
+            <li>
+              Acompanhe em <span className="text-fg">Maestro › "Claude · nome do projeto"</span>, no PC ou no celular: tarefas,
+              Worker trabalhando, verify e commit. O que você escrever ali chega ao Claude na próxima ferramenta que ele chamar.
+            </li>
+          </ol>
+          <p>
+            <span className="text-fg">Vale mais</span> para tarefas bem delimitadas e com teste que prove (corrigir um bug com
+            teste, CRUD, tela seguindo um padrão que já existe). Arquitetura e decisão difícil, deixe com o próprio Claude.{" "}
+            <span className="text-fg">Aprovações:</span> escolha em "Ações do Claude"; no Manual, cada escrita do Worker pede o
+            seu ok aqui e no celular.
+          </p>
+        </div>
+      </details>
       {c.ligado && (
         <>
           <Field label="Ações do Claude" hint="Como as ações dele que mexem no projeto são aprovadas. No Manual, a aprovação aparece no Forja e no celular, como qualquer outra.">
