@@ -178,3 +178,25 @@ def test_mensagem_com_o_run_do_claude_aberto_vai_para_a_caixa(servidor, ligado):
                    headers={"x-forja-token": config.API_TOKEN} if config.API_TOKEN else {})
         assert r.status_code == 200 and r.json()["claude"] is True
     assert run.queue == [] and mcp_servidor.caixa(conv, marcar=False) == ["use pytest, não unittest"]
+
+
+def test_estatisticas_do_turno_vem_do_claude(tmp_path):
+    assert mcp_servidor.nome_do_modelo("claude-opus-5-5") == "Claude Opus 5.5"
+    assert mcp_servidor.nome_do_modelo("claude-haiku-4-5-20251001") == "Claude Haiku 4.5"
+    assert mcp_servidor.nome_do_modelo("claude-sonnet-5") == "Claude Sonnet 5"
+    linhas = [
+        {"type": "user", "timestamp": "2026-09-25T10:00:00Z", "message": {"role": "user", "content": "antigo"}},
+        {"type": "assistant", "timestamp": "2026-09-25T10:00:05Z", "message": {"model": "claude-sonnet-5",
+         "usage": {"output_tokens": 999}, "content": [{"type": "text", "text": "velho"}]}},
+        {"type": "user", "timestamp": "2026-09-25T10:01:00Z", "message": {"role": "user", "content": "conserte"}},
+        {"type": "assistant", "timestamp": "2026-09-25T10:01:04Z", "message": {"model": "claude-opus-5-5",
+         "usage": {"output_tokens": 120}, "content": [{"type": "tool_use", "name": "Read"}]}},
+        {"type": "user", "timestamp": "2026-09-25T10:01:05Z", "message": {"role": "user", "content": [
+            {"type": "tool_result", "content": "..."}]}},  # resultado de ferramenta não abre turno novo
+        {"type": "assistant", "timestamp": "2026-09-25T10:01:30Z", "message": {"model": "claude-opus-5-5",
+         "usage": {"output_tokens": 80}, "content": [{"type": "text", "text": "Pronto."}]}},
+    ]
+    t = tmp_path / "t.jsonl"
+    t.write_text("\n".join(json.dumps(x) for x in linhas), encoding="utf-8")
+    assert mcp_servidor.turno_do_transcript(str(t)) == {"texto": "Pronto.", "modelo": "claude-opus-5-5",
+                                                        "tokens": 200, "segundos": 30.0}

@@ -580,26 +580,71 @@ PORTEIRO = _App()
 
 # ------------------------------------------------------------------ hooks do Claude Code (o diálogo inteiro)
 
-def _ultimo_texto(transcript: str) -> str:
-    """Última fala do assistente no transcript .jsonl do Claude Code."""
+def nome_do_modelo(mid: str) -> str:
+    """`claude-opus-5-5` → `Claude Opus 5.5`; `claude-haiku-4-5-20251001` → `Claude Haiku 4.5`."""
+    partes = [p for p in str(mid or "").split("-") if p and not (p.isdigit() and len(p) == 8)]
+    if len(partes) < 2 or partes[0].lower() != "claude":
+        return str(mid or "Claude")
+    versao = ".".join(p for p in partes[2:] if p.isdigit())
+    return " ".join(["Claude", partes[1].capitalize()] + ([versao] if versao else []))
+
+
+def _ts(e: dict) -> float | None:
+    try:
+        return datetime.fromisoformat(str(e.get("timestamp")).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def turno_do_transcript(transcript: str) -> dict:
+    """O último turno do transcript .jsonl do Claude Code: texto final, modelo, tokens gerados e duração.
+    É o que dá à linha de estatísticas da conversa-espelho os números do Claude, não os do Forja."""
     try:
         linhas = Path(transcript).read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        return ""
-    for linha in reversed(linhas):
+        return {}
+    entradas = []
+    for linha in linhas:
         try:
-            e = json.loads(linha)
+            entradas.append(json.loads(linha))
         except ValueError:
             continue
+
+    def eh_pedido(e):  # fala do usuário (não o resultado de ferramenta, que também vem como "user")
         msg = e.get("message") or {}
-        if e.get("type") == "assistant" or msg.get("role") == "assistant":
-            conteudo = msg.get("content")
-            if isinstance(conteudo, str) and conteudo.strip():
-                return conteudo
-            textos = [b.get("text", "") for b in conteudo or [] if isinstance(b, dict) and b.get("type") == "text"]
-            if any(t.strip() for t in textos):
-                return "\n".join(textos)
-    return ""
+        c = msg.get("content")
+        return e.get("type") == "user" and (isinstance(c, str) or any(
+            isinstance(b, dict) and b.get("type") == "text" for b in c or []))
+
+    inicio = max((i for i, e in enumerate(entradas) if eh_pedido(e)), default=-1)
+    turno = [e for e in entradas[inicio + 1:] if e.get("type") == "assistant" or (e.get("message") or {}).get("role") == "assistant"]
+    texto, modelo, tokens = "", "", 0
+    for e in turno:
+        msg = e.get("message") or {}
+        modelo = msg.get("model") or modelo
+        tokens += int((msg.get("usage") or {}).get("output_tokens") or 0)
+        conteudo = msg.get("content")
+        blocos = [conteudo] if isinstance(conteudo, str) else [
+            b.get("text", "") for b in conteudo or [] if isinstance(b, dict) and b.get("type") == "text"]
+        if any(t.strip() for t in blocos):
+            texto = "\n".join(blocos)
+    t0 = _ts(entradas[inicio]) if inicio >= 0 else None
+    t1 = _ts(turno[-1]) if turno else None
+    segundos = round(t1 - t0, 1) if t0 and t1 and t1 >= t0 else 0.0
+    return {"texto": texto, "modelo": modelo, "tokens": tokens, "segundos": segundos}
+
+
+def _ultimo_texto(transcript: str) -> str:
+    return turno_do_transcript(transcript).get("texto", "")
+
+
+def _guarda_modelo(conv: int, modelo: str) -> None:
+    """O modelo do Claude nesta conversa: a linha ao vivo e o cabeçalho do Maestro mostram ele."""
+    with db.session() as s:
+        c = s.get(db.Conversation, conv)
+        if c and eh_espelho(c) and (c.origem or {}).get("modelo") != modelo:
+            c.origem = {**c.origem, "modelo": modelo}
+            s.commit()
 
 
 async def hook(dados: dict) -> dict:
@@ -614,12 +659,17 @@ async def hook(dados: dict) -> dict:
             m = _save(conv, role="user", content=texto[:MAX_TEXTO_HOOK], meta={"via": "claude_code"})
             return {"type": "message", "message": m.to_dict()}
     elif evento == "Stop":
-        texto = str(dados.get("last_assistant_message") or "").strip() or _ultimo_texto(str(dados.get("transcript_path") or ""))
+        turno = turno_do_transcript(str(dados.get("transcript_path") or ""))
+        texto = str(dados.get("last_assistant_message") or "").strip() or turno.get("texto", "")
         if not texto:
             return {"ok": True, "vazio": True}
+        modelo = nome_do_modelo(turno.get("modelo")) if turno.get("modelo") else "Claude"
+        stats = {"model": modelo, "tokens": turno.get("tokens", 0), "seconds": turno.get("segundos", 0.0),
+                 "tps": None, "estimated": not turno.get("tokens")}
 
         def ev(conv):
-            m = _save(conv, role="assistant", content=texto[:MAX_TEXTO_HOOK], meta={"via": "claude_code"})
+            _guarda_modelo(conv, modelo)
+            m = _save(conv, role="assistant", content=texto[:MAX_TEXTO_HOOK], meta={"via": "claude_code", "stats": stats})
             return {"type": "assistant_end", "message": m.to_dict()}
     elif evento == "PostToolUse":
         nome = str(dados.get("tool_name") or "")

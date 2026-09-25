@@ -1410,17 +1410,19 @@ export default function App() {
   // Conversa do Claude por MCP: quem responde é ele, não o modelo escolhido aqui. O Run dela fica aberto
   // enquanto ele trabalha, e sem isto a linha "ao vivo" mostrava o modelo do Maestro com ~0 tokens.
   const doClaude = (conv?.origem as any)?.externo === "claude";
+  // o modelo do Claude (do transcript dele, via hook); o do Forja não é quem responde nesta conversa
+  const modeloVivo = doClaude ? ((conv?.origem as any)?.modelo ?? "Claude (via MCP)") : settings.model;
   const liveStats: TurnStats | null = (() => {
     void tick; // recalcula a cada 250 ms
-    if (!running || doClaude) return null;
+    if (!running) return null;
     const done = messages.slice(lastUserIndex + 1).flatMap((m) => (m.role === "assistant" && m.meta?.stats ? [m.meta.stats as Stats] : []));
-    const base: TurnStats = done.length ? aggregate(done) : { model: settings.model, tokens: 0, seconds: 0, tps: null, estimated: true };
+    const base: TurnStats = done.length ? aggregate(done) : { model: modeloVivo, tokens: 0, seconds: 0, tps: null, estimated: true };
     const g = liveGen.current;
-    if (!g) return { ...base, model: settings.model || base.model, estimated: true };
+    if (!g) return { ...base, model: modeloVivo || base.model, estimated: true };
     const now = Date.now();
     const gen = g.tFirst ? (now - g.tFirst) / 1000 : 0;
     return {
-      model: settings.model || base.model,
+      model: modeloVivo || base.model,
       tokens: base.tokens + g.tokens,
       seconds: base.seconds + (now - g.t0) / 1000,
       tps: gen > 0.3 ? g.tokens / gen : base.tps,
@@ -2229,7 +2231,7 @@ export default function App() {
             onBoard={setBoard}
             modelPhase={modelPhase}
             provider={settings.provider}
-            model={doClaude ? "Claude (via MCP)" : settings.model}
+            model={modeloVivo}
             conversa={conversaBlock}
             renderConversa={conversaDe}
             composer={composerBlock}
