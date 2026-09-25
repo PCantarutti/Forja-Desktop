@@ -855,18 +855,43 @@ commit.
 **Por quê:** 7/10. Funciona, mas há casos que enganam o agente.
 **Depende de:** nada. São correções pequenas e independentes, agrupadas por serem baratas.
 
-- [ ] **Sentinela no `terminal_send`.** Depois de cada comando, mandar `echo __FORJA_FIM_$LASTEXITCODE`
+- [x] **Sentinela no `terminal_send`.** Depois de cada comando, mandar `echo __FORJA_FIM_$LASTEXITCODE`
       (no bash, `$?`). O fim passa a ser certo e vem com o exit code, em vez de "quieto" por silêncio.
       Continua caindo no "quieto" em REPL interativo.
-- [ ] **Browser nativo: contexto por conversa.** Hoje todas as sessões usam `contexts[0]` e dividem
+- [x] **Browser nativo: contexto por conversa.** Hoje todas as sessões usam `contexts[0]` e dividem
       cookies e storage (`browser.py:~160`). Criar um contexto por conversa, ou pelo menos documentar e
       oferecer um "limpar sessão do navegador".
-- [ ] **Limpar `%TEMP%\forja-serve`.** Apagar os logs de mais de 7 dias ao iniciar.
-- [ ] **O `run_command` não guarda a saída inteira em memória.** Escrever direto no arquivo e ler só
+- [x] **Limpar `%TEMP%\forja-serve`.** Apagar os logs de mais de 7 dias ao iniciar.
+- [x] **O `run_command` não guarda a saída inteira em memória.** Escrever direto no arquivo e ler só
       cabeça e cauda (casa com o spill da E4).
-- [ ] **Tempo de ferramenta sem a espera de aprovação.** Hoje `meta["segundos"]` inclui a espera pela
+- [x] **Tempo de ferramenta sem a espera de aprovação.** Hoje `meta["segundos"]` inclui a espera pela
       aprovação (`agent.py:1880`). Separar em `segundos` e `espera_aprovacao`.
-- [ ] Testes: sentinela com exit code ≠ 0; limpeza de logs antigos.
+- [x] Testes: sentinela com exit code ≠ 0; limpeza de logs antigos.
+
+**Feito em 2026-09-25.**
+
+Validado no Forja real (modo agente, gpt-oss:120b):
+- `Start-Sleep -Seconds 4; cmd /c exit 3` no terminal voltou `[comando terminou: exit 3]`. Antes, os 4 s
+  calados virariam "terminal quieto" no meio;
+- a saída de 6000 linhas do `run_command` veio cortada, com o caminho do log completo, e o agente abriu
+  esse arquivo com `read_file` e leu a linha 3000.
+
+Como ficou:
+- **Sentinela:** se não voltar dentro do `wait` (comando longo, ou um REPL que engoliu a linha), o
+  terminal fica "pendente" e não recebe outro sentinela. O `terminal_read` avisa `[o comando anterior
+  terminou: exit N]` quando o pendente aparece. Dentro de um REPL, o fim volta a ser inferido pelo
+  silêncio.
+- **Navegador: já estava resolvido, e a revisão errou.** Cada conversa tem a própria partição do
+  Electron, em memória (`browserHost.js`, `forja-browser-<key>`), e as partições antigas em disco são
+  apagadas ao abrir (`main.js`). O `contexts[0]` do Playwright é só a porta CDP, e agora um comentário
+  explica isso.
+- **`run_command`:** guarda só a cabeça e a cauda da saída na memória. Com a saída cortada, o log vai
+  para a pasta de spill (legível pelo `read_file`), em vez de ser apagado. Isso adianta o item do spill
+  da E4.
+- **Limpeza:** os logs com mais de 7 dias em `%TEMP%\forja-serve` e em `spill/run-*.log` são apagados
+  quando o backend sobe.
+- **Tempo de ferramenta:** `segundos` não inclui mais a espera no card de aprovação. A espera vai em
+  `espera_aprovacao` e aparece na Trajetória.
 
 ---
 

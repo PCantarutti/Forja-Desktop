@@ -1896,9 +1896,14 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
     yield {"type": "tool_call", "call": call, **tag}
 
     inicio = time.monotonic()
+    esperou = {"s": 0.0}  # tempo parado no card de aprovação: não é tempo da ferramenta
 
     def result(status: str, text: str) -> None:
-        meta["segundos"] = round(time.monotonic() - inicio, 2)  # aba Trajetória (inclui a espera por aprovação)
+        # aba Trajetória: `segundos` é a ferramenta trabalhando; a espera pela aprovação vai à parte (antes
+        # vinha somada, e um comando de 1 s aprovado depois de 5 min aparecia como lento).
+        meta["segundos"] = round(time.monotonic() - inicio - esperou["s"], 2)
+        if esperou["s"]:
+            meta["espera_aprovacao"] = round(esperou["s"], 2)
         out.update(status=status, text=text, meta=meta)
 
     if "__raw__" in args:
@@ -2027,7 +2032,9 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         run.waiting[call["id"]] = (tool, args)
         yield {"type": "approval_request", "call": call, "preview": meta["preview"],
                "suggest": policy.suggest(name, args), "nota": meta.get("revisor") or meta.get("hook"), **tag}
+        t_espera = time.monotonic()
         decision = await fut
+        esperou["s"] += time.monotonic() - t_espera
         approved = decision.get("approved") if isinstance(decision, dict) else bool(decision)
         run.pending.pop(call["id"], None)
         run.waiting.pop(call["id"], None)

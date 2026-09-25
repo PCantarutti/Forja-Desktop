@@ -47,6 +47,7 @@ async def lifespan(_app):
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
+    shell.limpa_logs()  # logs de comando e servidor com mais de 7 dias em %TEMP%\forja-serve
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
     vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.

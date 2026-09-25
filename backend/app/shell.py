@@ -6,6 +6,7 @@ bash no Linux/macOS) — ver native.py. Como no Claude Desktop, a proteção é 
 """
 from __future__ import annotations
 
+import collections
 import contextvars
 import re
 import subprocess
@@ -26,6 +27,27 @@ _servers_lock = threading.Lock()
 OUTPUT_SINK: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar("forja_output_sink", default=None)
 # Conversa do turno atual: fica gravada no processo para a aba Instâncias separar por conversa.
 CONV: contextvars.ContextVar[str] = contextvars.ContextVar("forja_conv", default="")
+
+
+LOG_DIAS = 7  # log de comando/servidor mais velho que isto é apagado quando o backend sobe
+
+
+def limpa_logs(dias: int = LOG_DIAS) -> int:
+    """Apaga os logs antigos de %TEMP%\\forja-serve (e os de run_command que foram para o spill).
+    Antes nunca eram limpos: centenas de arquivos acumulando no TEMP. Arquivo em uso (servidor ainda
+    rodando) falha ao apagar no Windows e fica, que é o certo."""
+    from .tools import SPILL_DIR
+    corte = time.time() - dias * 86_400
+    apagados = 0
+    for pasta, padrao in ((LOG_DIR, "*.log"), (SPILL_DIR, "run-*.log")):
+        for p in pasta.glob(padrao) if pasta.is_dir() else []:
+            try:
+                if p.stat().st_mtime < corte:
+                    p.unlink()
+                    apagados += 1
+            except OSError:
+                pass
+    return apagados
 
 
 def _truncate(text: str) -> str:
@@ -91,8 +113,25 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
     fh = open(log, "wb")
     proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, **native.popen_kwargs())
-    lidos, resto, pedacos = 0, b"", []
+    lidos, resto = 0, b""
+    # Só cabeça e cauda na memória: antes a saída inteira ficava num list (um build verboso de GB ia
+    # junto) só para ser cortada em MAX_OUTPUT no fim. O completo continua no log, em disco.
+    cabeca: list[str] = []
+    cauda: collections.deque[str] = collections.deque()
+    tam = {"cabeca": 0, "cauda": 0, "total": 0}
+    metade = MAX_OUTPUT // 2
     limite = time.monotonic() + timeout
+
+    def guarda(linha: str) -> None:
+        tam["total"] += len(linha)
+        if tam["cabeca"] < metade:
+            cabeca.append(linha)
+            tam["cabeca"] += len(linha)
+            return
+        cauda.append(linha)
+        tam["cauda"] += len(linha)
+        while tam["cauda"] > metade and len(cauda) > 1:
+            tam["cauda"] -= len(cauda.popleft())
 
     def puxa() -> None:
         nonlocal lidos, resto
@@ -103,9 +142,17 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
         *linhas, resto = (resto + novo).split(b"\n")
         for raw in linhas:
             linha = native.decode(raw + b"\n")
-            pedacos.append(linha)
+            guarda(linha)
             if sink:
                 sink(linha)
+
+    def texto(completo: str = "") -> str:
+        omitidos = tam["total"] - tam["cabeca"] - tam["cauda"]
+        if omitidos <= 0:
+            return "".join(cabeca) + "".join(cauda)
+        onde = (f"; a saída completa está em {completo} — leia o meio com read_file (start_line/end_line) "
+                "ou procure nele com grep" if completo else "")
+        return f"{''.join(cabeca)}\n\n... ({omitidos} caracteres omitidos{onde}) ...\n\n{''.join(cauda)}"
 
     while proc.poll() is None and time.monotonic() < limite:
         time.sleep(0.2)
@@ -118,15 +165,23 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
             _SERVERS[nome] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
                               "started": time.time() - timeout, "conv": CONV.get(), "kind": "Processo"}
         _vigia(nome)
-        return None, "".join(pedacos)
+        return None, texto(str(log))
     fh.close()
     if resto:
-        pedacos.append(native.decode(resto))
+        guarda(native.decode(resto))
+    completo = ""
     try:
-        log.unlink()
+        if tam["total"] > MAX_OUTPUT:
+            # Saída cortada: o log vira o arquivo completo que o modelo pode ler por partes (antes era
+            # apagado, e o meio de um log de build sumia para sempre).
+            from .tools import SPILL_DIR
+            SPILL_DIR.mkdir(parents=True, exist_ok=True)
+            completo = str(log.replace(SPILL_DIR / f"run-{nome}-{time.time_ns()}.log"))
+        else:
+            log.unlink()
     except OSError:
         pass
-    return proc.returncode, "".join(pedacos)
+    return proc.returncode, texto(completo)
 
 
 def run_command(root: Path, args: dict) -> str:
@@ -147,8 +202,8 @@ def run_command(root: Path, args: dict) -> str:
         return (f"[ainda rodando após {timeout}s; movido para o processo em segundo plano '{nome}']\n"
                 "O comando continua rodando. Você recebe um aviso quando ele terminar; enquanto isso siga com o "
                 f"que não depende dele. serve_status(name='{nome}') mostra o log, serve_stop encerra.\n"
-                f"Saída até aqui:\n{_truncate(out) or '(sem saída)'}")
-    body = f"exit code: {code}\n{_truncate(out) or '(sem saída)'}"
+                f"Saída até aqui:\n{out or '(sem saída)'}")
+    body = f"exit code: {code}\n{out or '(sem saída)'}"
     if code != 0:
         raise ToolError(body)
     return body
