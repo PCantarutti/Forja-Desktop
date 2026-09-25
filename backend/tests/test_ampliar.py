@@ -51,12 +51,15 @@ def test_filtros_do_ffmpeg():
 def test_catalogo_com_o_que_ja_esta_no_disco(isolado, monkeypatch):
     monkeypatch.setattr(ampliar, "_assets_esrgan", lambda janela: {
         "RealESRGAN_x4plus.pth": {"url": "https://x/RealESRGAN_x4plus.pth", "mb": 67.0},
-        "RealESRGAN_x2plus.pth": {"url": "https://x/RealESRGAN_x2plus.pth", "mb": 67.1}})
+        "RealESRGAN_x4plus_anime_6B.pth": {"url": "https://x/RealESRGAN_x4plus_anime_6B.pth", "mb": 17.9}})
     monkeypatch.setattr(localai, "find_exe", lambda kind: None)
-    pth(isolado / "modelos", "RealESRGAN_x2plus.pth", b"conv_first rdb1")
+    pth(isolado / "modelos", "RealESRGAN_x4plus_anime_6B.pth", b"conv_first rdb1")
+    (isolado / "modelos" / "copia").mkdir()
+    pth(isolado / "modelos" / "copia", "RealESRGAN_x4plus_anime_6B.pth", b"conv_first rdb1")  # a mesma, em outra pasta
     c = ampliar.catalogo()
+    assert len(c["no_disco"]) == 1
     assert [(x["nome"], x["mb"], bool(x["presente"])) for x in c["modelos"]] == [
-        ("RealESRGAN_x4plus.pth", 67.0, False), ("RealESRGAN_x2plus.pth", 67.1, True), ("RealESRGAN_x4plus_anime_6B.pth", 0, False)]
+        ("RealESRGAN_x4plus.pth", 67.0, False), ("RealESRGAN_x4plus_anime_6B.pth", 17.9, True)]
     assert c["ffmpeg"] == ""
     with pytest.raises(ampliar.ToolError, match="ffmpeg"):
         ampliar._ffmpeg()
@@ -141,3 +144,36 @@ def test_ampliacao_que_caiu_no_meio_nao_vira_pronta(isolado):
     r = lotes._mensagem(m.id)
     assert r["status"] == "interrompido" and r["meta"]["images"][0]["status"] == "interrompida"
     assert not parcial.exists()
+
+
+def test_ampliar_imagem_sem_ffmpeg_por_lanczos_gerada_e_do_disco(isolado, monkeypatch):
+    """Imagem não passa pelo ffmpeg: Lanczos é o Pillow; a tomada é um PNG do tamanho pedido."""
+    from PIL import Image
+
+    def sem_ffmpeg():
+        raise ampliar.ToolError("Falta o ffmpeg")
+    monkeypatch.setattr(ampliar, "_ffmpeg", sem_ffmpeg)
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    with db.session() as s:
+        c = db.Conversation(kind="imagem")
+        s.add(c)
+        s.commit()
+        conv = c.id
+    origem = isolado / "imagens" / "gato-s3.png"
+    Image.new("RGB", (8, 6), "red").save(origem)
+    lotes._save(conv, role="user", content="um gato", meta={})
+    msg = lotes._save(conv, role="assistant", content="", status="pronto", meta={
+        "job": "", "count": 1, "seed_mode": "fixa", "opts": {"width": 8, "height": 6},
+        "images": [{"path": str(origem), "seed": 3, "model": "m.gguf", "model_name": "m", "status": "pronta", "error": ""}]})
+    m = _esperar(lotes.ampliar(msg.id, str(origem), 2, suavizar=True)["id"])
+    item = m["meta"]["images"][0]
+    assert m["status"] == "pronto" and "unidade" not in item and not m["meta"]["opts"]["ampliacao"]["suavizar"]
+    assert Path(item["path"]).name == "gato-s3-2x.png" and Image.open(item["path"]).size == (16, 12)
+
+    fora = isolado / "de-fora" / "foto.jpg"
+    fora.parent.mkdir()
+    Image.new("RGB", (5, 4)).save(fora)
+    m = _esperar(lotes.ampliar_arquivo(conv, str(fora), 4)["id"])
+    saida = Path(m["meta"]["images"][0]["path"])
+    assert saida.parent == isolado / "imagens" and saida.name.endswith("-foto-4x.png")
+    assert Image.open(saida).size == (20, 16) and (m["meta"]["opts"]["width"], m["meta"]["opts"]["height"]) == (20, 16)

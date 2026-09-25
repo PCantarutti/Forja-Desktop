@@ -3,7 +3,7 @@ dedicada, e voltam num webm. Sem IA (Lanczos), é tudo no ffmpeg. "Suavizar" dob
 interpolação de movimento (minterpolate do ffmpeg).
 
 O sd.cpp só lê imagem e só grava vídeo que ele mesmo gerou, por isso o ffmpeg — baixado como os outros
-runtimes (IA local), não empacotado. O ESRGAN que o sd.cpp roda é o RRDBNet (RealESRGAN x4plus, x2plus,
+runtimes (IA local), não empacotado. O ESRGAN que o sd.cpp roda é o RRDBNet (RealESRGAN x4plus,
 anime_6B); a escala sai dos pesos, e aqui ela é medida no 1º quadro (tamanho de saída ÷ de entrada).
 """
 from __future__ import annotations
@@ -24,10 +24,10 @@ from . import downloads, imagegen, localai, native
 from .tools import ToolError
 
 # Curadoria: os ESRGAN oficiais que o sd.cpp carrega (RRDBNet). Os "compactos" (realesr-general-v3,
-# animevideov3) são outra arquitetura e ficam de fora. Tamanho e URL vêm da API do GitHub.
+# animevideov3) são outra arquitetura e ficam de fora; o x2plus também (entra com pixel-unshuffle, 12 canais,
+# e o sd.cpp recusa o conv_first). 2× sai do 4× reduzido por Lanczos. Tamanho e URL vêm da API do GitHub.
 CATALOGO = [
     ("RealESRGAN_x4plus.pth", "Fotográfico, 4×: o mais fiel para cenas reais"),
-    ("RealESRGAN_x2plus.pth", "Fotográfico, 2×: mais rápido, para dobrar"),
     ("RealESRGAN_x4plus_anime_6B.pth", "Animação e ilustração, 4× (leve)"),
 ]
 REPO_ESRGAN = "xinntao/Real-ESRGAN"
@@ -69,7 +69,13 @@ def _assets_esrgan(_janela: int) -> dict[str, dict]:
 
 def catalogo() -> dict:
     """Os modelos de ampliação do catálogo, com tamanho e o que já está no disco; e o estado do ffmpeg."""
-    achados = [m for m in localai.scan(localai.WEIGHTS_TODOS) if m["kind"] == "ampliador"]
+    # o mesmo arquivo em duas pastas de modelos (nome e tamanho iguais) aparece uma vez só
+    achados, vistos = [], set()
+    for m in localai.scan(localai.WEIGHTS_TODOS):
+        chave = (m["name"].lower(), m.get("size"))
+        if m["kind"] == "ampliador" and chave not in vistos:
+            vistos.add(chave)
+            achados.append(m)
     no_disco = {Path(m["path"]).name.lower(): m["path"] for m in achados}
     try:
         assets = _assets_esrgan(int(time.time() // GH_TTL))
@@ -158,6 +164,63 @@ def filtros(w: int, h: int, fator: int, suavizar: bool, fps: float) -> str:
     return ",".join(vf)
 
 
+def _esrgan(exe: Path, gpu: str, entrada: Path, destino: Path, modelo: str, fator: int, job_id: str = "",
+            repeticoes: int = 0, oque: str = "a imagem") -> int:
+    """Uma imagem pelo ESRGAN do sd-cli. `repeticoes` 0 = ainda não medida: a escala é a do modelo (2× ou 4×),
+    medida nesta passada, e um 2× pedido como 4× roda de novo com duas repetições. Devolve as repetições."""
+    def rodar(n: int) -> None:
+        subprocess.run([str(exe), "-M", "upscale", "-i", str(entrada), "-o", str(destino), "--upscale-model", modelo,
+                        "--upscale-tile-size", str(TILE_ESRGAN), "--upscale-repeats", str(n), "--backend", gpu],
+                       cwd=str(exe.parent), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       **native.popen_kwargs())
+        if job_id and downloads.cancelled(job_id):
+            raise ToolError("Ampliação cancelada.")
+        if not destino.is_file():
+            raise ToolError(f"O ESRGAN não gerou {oque}. O modelo é um RRDBNet (RealESRGAN)?")
+    rodar(repeticoes or 1)
+    if not repeticoes:
+        from PIL import Image
+        with Image.open(entrada) as a0, Image.open(destino) as b0:
+            escala = round(b0.width / a0.width)
+        if escala < 2:  # o sd-cli que não carrega o modelo grava a própria entrada e diz "success"
+            destino.unlink(missing_ok=True)
+            raise ToolError(f"O sd.cpp não conseguiu rodar {Path(modelo).name} (saiu do mesmo tamanho). "
+                            "Use um RRDBNet 4× como RealESRGAN_x4plus ou x4plus_anime_6B.")
+        repeticoes = 1
+        if escala < fator:
+            repeticoes = 2
+            destino.unlink()
+            rodar(2)
+    return repeticoes
+
+
+EXT_IMAGEM = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def eh_imagem(path: str) -> bool:
+    return Path(path).suffix.lower() in EXT_IMAGEM
+
+
+def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "") -> dict:
+    """Amplia uma imagem em `fator` e grava `saida` (.png). `modelo` vazio = Lanczos (Pillow), sem IA e sem ffmpeg.
+    ESRGAN que passou do alvo (um 4× pedido como 2×) volta ao tamanho pedido por Lanczos."""
+    from PIL import Image
+    with Image.open(entrada) as im:
+        alvo = (im.width * int(fator), im.height * int(fator))
+        if not modelo:
+            im.convert("RGBA" if "A" in im.getbands() else "RGB").resize(alvo, Image.LANCZOS).save(saida)
+            return {"w": alvo[0], "h": alvo[1]}
+    exe = imagegen._exe()
+    _esrgan(exe, imagegen._gpu(str(exe)), Path(entrada), saida, modelo, fator, job_id)
+    with Image.open(saida) as out:
+        certo = out.size == alvo
+        if not certo:
+            out = out.resize(alvo, Image.LANCZOS)  # já carregada: o arquivo fecha antes de ser regravado (Windows)
+    if not certo:
+        out.save(saida)
+    return {"w": alvo[0], "h": alvo[1]}
+
+
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: bool = False, job_id: str = "",
             progresso=None, previa: Path | None = None) -> dict:
     """Amplia `entrada` em `fator` (2 ou 4) e grava `saida` (.webm). `modelo` vazio = Lanczos, sem IA.
@@ -179,27 +242,10 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
             quadros = sorted((trabalho / "in").glob("*.png"))
             exe = imagegen._exe()
             gpu = imagegen._gpu(str(exe))
-            repeticoes, comeco = 1, time.monotonic()
+            repeticoes, comeco = 0, time.monotonic()
             for i, q in enumerate(quadros):
                 destino = trabalho / "out" / q.name
-                a = [str(exe), "-M", "upscale", "-i", str(q), "-o", str(destino), "--upscale-model", modelo,
-                     "--upscale-tile-size", str(TILE_ESRGAN), "--upscale-repeats", str(repeticoes), "--backend", gpu]
-                subprocess.run(a, cwd=str(exe.parent), capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", **native.popen_kwargs())
-                if job_id and downloads.cancelled(job_id):
-                    raise ToolError("Ampliação cancelada.")
-                if not destino.is_file():
-                    raise ToolError(f"O ESRGAN não gerou o quadro {i + 1}. O modelo é um RRDBNet (RealESRGAN)?")
-                if i == 0:
-                    # A escala é a do modelo (2× ou 4×): medida aqui. Um 2× pedido como 4× roda duas vezes.
-                    from PIL import Image
-                    with Image.open(q) as a0, Image.open(destino) as b0:
-                        escala = round(b0.width / a0.width)
-                    if escala < fator and escala > 1:
-                        repeticoes = 2
-                        destino.unlink()
-                        subprocess.run([*a[:a.index("--upscale-repeats") + 1], "2", "--backend", gpu], cwd=str(exe.parent),
-                                       capture_output=True, **native.popen_kwargs())
+                repeticoes = _esrgan(exe, gpu, q, destino, modelo, fator, job_id, repeticoes, f"o quadro {i + 1}")
                 if previa:
                     shutil.copyfile(destino, previa)
                 if progresso:

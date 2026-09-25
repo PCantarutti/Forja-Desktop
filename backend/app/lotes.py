@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import queue
 import random
+import re
 import shutil
 import threading
 import time
@@ -572,13 +573,14 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
 
 # ------------------------------------------------------------------ ampliação
 
-def _validar_ampliacao(fator: int, modelo: str) -> None:
+def _validar_ampliacao(fator: int, modelo: str, video: bool = True) -> None:
     from . import ampliar as amp
     if int(fator) not in (2, 4):
         raise ToolError("Amplie em 2× ou 4×.")
     if modelo and not amp.eh_ampliador(modelo):
         raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN).")
-    amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada
+    if video:
+        amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada (imagem não precisa: é sd-cli ou Pillow)
 
 
 def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: dict, seed: int,
@@ -591,7 +593,9 @@ def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: d
     if suavizar and opts.get("fps"):
         opts.update(fps=int(opts["fps"]) * 2, frames=int(opts.get("frames") or 0) * 2 - 1)
     imagens = [{"path": str(saida), "seed": seed, "model": modelo, "model_name": f"{nome} · {fator}×",
-                "status": "pendente", "error": "", "unidade": "quadro"}]
+                "status": "pendente", "error": ""}]
+    if saida.suffix == ".webm":  # vídeo: o reap apaga o webm pela metade; o PNG da imagem só aparece pronto
+        imagens[0]["unidade"] = "quadro"
     _save(conv_id, role="user", content=prompt, meta={"refs": [], "models": [modelo], "ampliacao": amp_meta})
     job = downloads.create("lote", f"ampliar {Path(origem).name}")
     nova = _save(conv_id, role="assistant", content="", status="running",
@@ -607,14 +611,17 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
     item = next((i for i in msg["meta"]["images"] if i["path"] == path), None)
     if not item or not Path(path).is_file():
         raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
-    _validar_ampliacao(fator, modelo)
-    saida = Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm")
+    from . import ampliar as amp
+    imagem = amp.eh_imagem(path)
+    _validar_ampliacao(fator, modelo, not imagem)
+    saida = (Path(path).with_name(f"{Path(path).stem}-{fator}x.png") if imagem
+             else Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"))
     with db.session() as s:
         pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
                                              db.Message.id < message_id).order_by(db.Message.id.desc()).first())
         prompt = pedido.content if pedido else ""
     return _nova_ampliacao(msg["conversation_id"], path, saida, prompt, dict(msg["meta"].get("opts") or {}), item["seed"],
-                           fator, modelo, suavizar)
+                           fator, modelo, suavizar and not imagem)
 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
@@ -623,6 +630,19 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
     from . import ampliar as amp
     if not Path(path).is_file():
         raise ToolError("Esse arquivo não existe (ou não está acessível).")
+    if amp.eh_imagem(path):
+        _validar_ampliacao(fator, modelo, False)
+        from PIL import Image
+        try:
+            with Image.open(path) as im:
+                w, h = im.size
+        except OSError:
+            raise ToolError(f"Não consegui ler {Path(path).name} como imagem.") from None
+        pasta = imagegen.out_dir()
+        pasta.mkdir(parents=True, exist_ok=True)
+        nome = re.sub(r"^[0-9a-f]{16}-", "", Path(path).name)  # a do celular chega em referencias/ com o sha na frente
+        saida = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(nome).stem}-{fator}x.png"
+        return _nova_ampliacao(conv_id, path, saida, nome, {"width": w, "height": h}, 0, fator, modelo, False)
     _validar_ampliacao(fator, modelo)
     info = amp.sondar(path)
     pasta = imagegen.video_dir()
@@ -652,7 +672,11 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
                         restante=round(max(0, total - feitos) * s_quadro))
             _patch(message_id, meta={"images": imagens})
 
-        r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
+        if amp.eh_imagem(a["origem"]):
+            amp.ampliar_imagem(a["origem"], Path(item["path"]), a["fator"], a["modelo"], job_id)
+            r = None  # o tamanho já está nas opts (origem × fator)
+        else:
+            r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
         # o que saiu de fato (o minterpolate não inventa quadro depois do último): o player conta com isso
         if r:
             _patch(message_id, meta={"opts": {**meta["opts"], "width": r["w"], "height": r["h"], "fps": round(r["fps"]),
