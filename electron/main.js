@@ -5,7 +5,7 @@
  * Empacotado, o Python e o build da UI vêm de process.resourcesPath. Em dev (npm run dev), usa o
  * venv de backend/.venv e o FORJA_WEB que o script passar.
  */
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, powerSaveBlocker, screen, shell } = require("electron");
 const { spawn, execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -28,6 +28,9 @@ const PREFS_FILE = path.join(USER_DATA, "desktop.json");
 // WebContentsViews dentro da janela. Porta 0 = o sistema escolhe; o Chromium grava em DevToolsActivePort.
 // Só 127.0.0.1 e sem --remote-allow-origins: página web nenhuma consegue conectar, só processos locais.
 app.commandLine.appendSwitch("remote-debugging-port", "0");
+// PC bloqueado ou tela apagada: o Chromium do Windows dá a janela por coberta e as abas do agente param de
+// desenhar (o browser_screenshot ficava esperando até o teto da ferramenta). Sem o rastreio, seguem vivas.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 
 let backend = null;
 let port = 0;
@@ -46,6 +49,7 @@ const DEFAULT_PREFS = {
   closeToTray: false, // false = o X fecha o app de verdade
   startWithWindows: false,
   startMinimized: false, // só vale junto com startWithWindows
+  manterAcordado: false, // true = o PC não dorme com o Forja aberto (o celular alcança a qualquer hora)
   bounds: null, // { x, y, width, height, maximized }
 };
 
@@ -368,7 +372,8 @@ function createWindow({ hidden = false } = {}) {
     ...(process.platform === "darwin"
       ? { titleBarStyle: "hiddenInset" }
       : { titleBarStyle: "hidden", titleBarOverlay: { color: "#171717", symbolColor: "#a3a3a3", height: 48 } }),
-    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
+    webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false,
+                      backgroundThrottling: false }, // escondida/bloqueada, a tela segue acompanhando o turno do celular
   });
   mainWindow = win;
   if (b.maximized) win.maximize();
@@ -529,6 +534,7 @@ const desktopState = () => ({
   closeToTray: prefs.closeToTray,
   startWithWindows: prefs.startWithWindows,
   startMinimized: prefs.startMinimized,
+  manterAcordado: prefs.manterAcordado,
   version: app.getVersion(),
   packaged: app.isPackaged,
   paths: { data: USER_DATA, log: LOG_FILE, db: DB_FILE, md: MD_DIR, exe: app.getPath("exe") },
@@ -546,7 +552,9 @@ ipcMain.handle("forja:desktop:set", (_e, patch = {}) => {
   if (typeof patch.closeToTray === "boolean") prefs.closeToTray = patch.closeToTray;
   if (typeof patch.startWithWindows === "boolean") prefs.startWithWindows = patch.startWithWindows;
   if (typeof patch.startMinimized === "boolean") prefs.startMinimized = patch.startMinimized;
+  if (typeof patch.manterAcordado === "boolean") prefs.manterAcordado = patch.manterAcordado;
   savePrefs();
+  vigiaSono();
   syncTray();
   syncAutoStart();
   return desktopState();
@@ -599,11 +607,36 @@ if (!app.requestSingleInstanceLock()) {
       if (hidden) ensureTray();
       createWindow({ hidden });
       wireUpdater();
+      vigiaSono();
+      setInterval(vigiaSono, 30_000);
     } catch (e) {
       dialog.showErrorBox("Forja", `Não foi possível iniciar: ${e.message}`);
       app.quit();
     }
   });
+}
+
+// ------------------------------------------------------------------ sono do Windows
+
+// O Windows conta ociosidade pelo teclado e mouse, não pela rede: com o PC bloqueado ele dormia no meio de um
+// turno pedido pelo celular, e dormindo nada responde. Segura o sono (a tela pode apagar) enquanto houver
+// turno rodando, ou sempre, se a pessoa ligou "manter acordado".
+let bloqueioSono = null;
+async function vigiaSono() {
+  let precisa = prefs.manterAcordado;
+  if (!precisa && port) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/api/activity`, { headers: { "x-forja-token": token } });
+      precisa = (await r.json()).conversations.some((c) => c.running);
+    } catch {
+      precisa = bloqueioSono !== null; // backend sem responder agora: mantém como estava
+    }
+  }
+  if (precisa && bloqueioSono === null) bloqueioSono = powerSaveBlocker.start("prevent-app-suspension");
+  else if (!precisa && bloqueioSono !== null) {
+    powerSaveBlocker.stop(bloqueioSono);
+    bloqueioSono = null;
+  }
 }
 
 // Com a bandeja ligada a janela some em vez de fechar, então isto só dispara no modo "fechar mesmo".

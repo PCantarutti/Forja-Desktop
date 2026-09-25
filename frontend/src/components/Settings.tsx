@@ -880,6 +880,12 @@ function AppTab() {
             disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
             onChange={(v) => patch({ startMinimized: v })}
           />
+          <Toggle
+            label="Manter o PC acordado para o celular"
+            hint="Com o Forja aberto o Windows não entra em suspensão (a tela ainda apaga e pode ficar bloqueada), então o celular manda pedidos a qualquer hora. Desligado, ele só segura o sono enquanto um turno roda."
+            checked={d.manterAcordado}
+            onChange={(v) => patch({ manterAcordado: v })}
+          />
         </div>
       </div>
 

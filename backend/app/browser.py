@@ -991,11 +991,21 @@ async def screenshot(_root: Path, args: dict) -> dict:
                 # tamanho do PAINEL (estreito e alto), não o override — o print "desktop" de 1280x720
                 # saía igual ao de celular, e a revisão visual julgava o desktop sem nunca vê-lo. A foto
                 # sai pela mesma sessão CDP que aplicou o tamanho.
-                r = await real["cdp"].send("Page.captureScreenshot",
-                                           {"format": "jpeg", "quality": JPEG_QUALITY, "fromSurface": True})
+                # Aba que não está desenhando (painel escondido, janela minimizada) nunca devolve a foto:
+                # sem teto próprio a ferramenta esperava os 5 min dela.
+                try:
+                    r = await asyncio.wait_for(real["cdp"].send(
+                        "Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY, "fromSurface": True}),
+                        PRINT_TIMEOUT / 1000)
+                except asyncio.TimeoutError:
+                    raise ToolError("A aba não está sendo desenhada agora (painel do navegador fechado ou janela do "
+                                    "Forja minimizada), então não saiu foto. Use browser_read ou browser_validate, "
+                                    "que não dependem da tela.") from None
                 jpg = base64.b64decode(r["data"])
             else:
                 jpg = await page.screenshot(**comum)
+    except ToolError:
+        raise
     except Exception as e:
         raise ToolError((_act_err(alvo, e) if alvo else f"Falha no screenshot: {_err(e)}")) from e
     try:

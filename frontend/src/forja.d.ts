@@ -3,6 +3,7 @@ interface DesktopState {
   zoom: number;
   zoomSteps: number[];
   closeToTray: boolean;
+  manterAcordado: boolean;
   startWithWindows: boolean;
   startMinimized: boolean;
   version: string;
@@ -29,7 +30,7 @@ interface ForjaBridge {
   /** Preferências da janela: zoom, bandeja, início com o Windows. */
   desktop: {
     get(): Promise<DesktopState>;
-    set(patch: Partial<Pick<DesktopState, "zoom" | "closeToTray" | "startWithWindows" | "startMinimized">>): Promise<DesktopState>;
+    set(patch: Partial<Pick<DesktopState, "zoom" | "closeToTray" | "startWithWindows" | "startMinimized" | "manterAcordado">>): Promise<DesktopState>;
     zoom(dir: "in" | "out" | "reset"): Promise<number>;
     open(what: "log" | "data" | "db" | "md"): Promise<unknown>;
   };
