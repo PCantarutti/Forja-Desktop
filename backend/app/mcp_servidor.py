@@ -31,7 +31,9 @@ from sqlalchemy import select
 from . import config, db, workspace
 
 MAX_ESPERA = 100          # task_status: abaixo do timeout comum de uma chamada MCP
-OCIOSO = 900              # s sem chamada: o Run da conversa-espelho encerra (a conversa fica)
+# s sem chamada: o Run da conversa-espelho encerra (a conversa fica). Com os hooks, o Stop do Claude já
+# encerra na hora; isto é para quem não instalou. Era 900 s, e a tela dizia "trabalhando…" esse tempo todo.
+OCIOSO = 90
 JANELA_ESPELHO = timedelta(hours=6)  # conversa-espelho reaproveitada dentro desta janela
 MAX_TEXTO_HOOK = 20_000
 ORIGEM = "claude"
@@ -117,6 +119,7 @@ class Sessao:
         self.run = None
         self.fundo: set[asyncio.Task] = set()   # run_task em andamento
         self.saidas: dict[int, dict] = {}        # attempt_id -> resultado do run_task (para o task_status)
+        self.fechando = False                     # o laço saiu: chamada nova abre outra sessão
 
 
 _SESSOES: dict[int, Sessao] = {}
@@ -148,6 +151,8 @@ async def _laco(sess: Sessao, req):
             break
         if job["tipo"] == "evento":
             yield job["ev"]
+            if job.get("fim") and not sess.fundo:  # o Claude terminou o turno (hook Stop): o Run fecha
+                break
             continue
         call, fut = job["call"], job["fut"]
         msg = _save(sess.conv, role="assistant", content="", tool_calls=[call], meta={"via": "mcp"})
@@ -173,13 +178,22 @@ async def _laco(sess: Sessao, req):
             out.update(status="erro", text=f"Erro interno no Forja: {type(e).__name__}: {e}")
         if not fut.done():
             fut.set_result(out)
+    # O que chegou enquanto fechava não se perde: vai para uma sessão nova (o Claude esperaria para sempre).
+    sess.fechando = True
+    sobra = []
+    while not sess.fila.empty():
+        sobra.append(sess.fila.get_nowait())
+    if sobra:
+        nova = _sessao(sess.conv, sess.root)
+        for job in sobra:
+            nova.fila.put_nowait(job)
     yield {"type": "done"}
 
 
 def _sessao(conv: int, root: Path) -> Sessao:
     from .agent import RUNS, Run
     sess = _SESSOES.get(conv)
-    if sess and sess.run and not sess.run.finished:
+    if sess and sess.run and not sess.run.finished and not sess.fechando:
         sess.run.permission = config.MCP_PERMISSAO
         return sess
     sess = Sessao(conv, root)
@@ -192,11 +206,13 @@ def _sessao(conv: int, root: Path) -> Sessao:
     return sess
 
 
-async def publica(pasta: str, ev_fn) -> int:
-    """Grava algo na conversa-espelho (fala do Claude, pedido do usuário no Claude Code) e mostra ao vivo."""
+async def publica(pasta: str, ev_fn, fim: bool = False) -> int:
+    """Grava algo na conversa-espelho (fala do Claude, pedido do usuário no Claude Code) e mostra ao vivo.
+    `fim`: é o fim do turno do Claude; sem Worker rodando, o Run da conversa fecha (a tela para de dizer
+    "trabalhando")."""
     conv, root = espelho(pasta)
     ev = ev_fn(conv)
-    await _sessao(conv, root).fila.put({"tipo": "evento", "ev": ev})
+    await _sessao(conv, root).fila.put({"tipo": "evento", "ev": ev, "fim": fim})
     return conv
 
 
@@ -686,7 +702,7 @@ async def hook(dados: dict) -> dict:
     else:
         return {"ok": True, "ignorado": evento}
     try:
-        conv = await publica(pasta, ev)
+        conv = await publica(pasta, ev, fim=evento == "Stop")
     except workspace.WorkspaceError as e:
         return {"ok": False, "motivo": str(e)}
     return {"ok": True, "conversa": conv}

@@ -200,3 +200,24 @@ def test_estatisticas_do_turno_vem_do_claude(tmp_path):
     t.write_text("\n".join(json.dumps(x) for x in linhas), encoding="utf-8")
     assert mcp_servidor.turno_do_transcript(str(t)) == {"texto": "Pronto.", "modelo": "claude-opus-5-5",
                                                         "tokens": 200, "segundos": 30.0}
+
+
+def test_stop_do_claude_fecha_o_run_da_conversa(servidor, ligado):
+    """O Run da conversa-espelho ficava aberto 15 min e a tela dizia "trabalhando…" o tempo todo."""
+    async def fn(s):
+        return _texto(await s.call_tool("forja_note", {"path": str(ligado), "texto": "começando"}))
+    _cliente(servidor, mcp_servidor.token(), fn)
+    conv, _ = mcp_servidor.espelho(str(ligado))
+    run = mcp_servidor._SESSOES[conv].run
+    assert not run.finished
+    httpx.post(servidor + "/mcp/hook", json={"hook_event_name": "Stop", "cwd": str(ligado),
+                                             "last_assistant_message": "Feito."},
+               headers={"x-forja-token": mcp_servidor.token()})
+    for _ in range(50):
+        if run.finished:
+            break
+        time.sleep(0.1)
+    assert run.finished
+    # e a próxima chamada abre outro Run, sem se perder
+    assert "Anotado" in _cliente(servidor, mcp_servidor.token(), fn)
+    assert not mcp_servidor._SESSOES[conv].run.finished
