@@ -1057,9 +1057,38 @@ Diferenças em relação ao plano:
       do passo 1 (`--memory`, `--cpus`, `--pids-limit`).
 - [x] **Imagem:** base mínima com node, python e git. O projeto pode declarar a própria imagem no
       FORJA.md (`sandbox_image`). A imagem é baixada uma vez, com o tamanho mostrado antes.
-- [ ] **Terminal e servidores de dev** também rodam no sandbox, e o `browser_*` acessa a porta exposta.
-- [ ] **Web:** o container do backend deixa de montar o disco C inteiro por padrão (`HOST_MOUNTS` vira
+- [x] **Terminal e servidores de dev** também rodam no sandbox, e o `browser_*` acessa a porta exposta.
+  *Feito em 2026-09-25.*
+  - `serve_start` (e o `run_command(background)`, que passava por ele e escapava do sandbox) sobe no
+    container com `-p 127.0.0.1:PORTA:PORTA`. A porta vem do comando, da ferramenta (vite 5173, next 3000,
+    flask 5000, o resto 8000) ou do novo argumento `port`. Ocupada no Windows, vai para uma livre, e o
+    endereço devolvido já é o do Windows.
+  - Servidor de dev costuma escutar só no localhost do container, que o `-p` não alcança. Um repassador
+    em Python (`/forja/repassa.py`, montado só para leitura) espera o servidor subir e escuta no IP do
+    container. Se o servidor já escuta em todas as interfaces, o repassador sai calado.
+  - `terminal_open` do agente é bash no container, sem rede. O terminal do usuário na interface continua
+    no Windows.
+  - Validado no Forja real (gpt-oss:120b, Ignorar permissões, Docker do WSL):
+    - `python3 -m http.server 8777 --bind 127.0.0.1` subiu no container;
+    - o navegador do Forja abriu `http://localhost:8777` e tirou o print da página;
+    - o terminal respondeu `id -u` = 1000 e `uname` = Linux.
+  - **Desvio:** o servidor roda com rede `bridge` (o `-p` não existe com `--network none`), então ele tem
+    rede enquanto roda.
+  - **Celular:** pela rede local o site do container abriu no app (proxy do Forja para `localhost:PORTA`). Na
+    primeira vez apareceu a página de OUTRO projeto: o WebView guardava em cache o que a mesma porta do proxy
+    (47820) já tinha servido antes, pelo Forja normal. O proxy agora manda `Cache-Control: no-store` e tira
+    `ETag`/`Last-Modified`.
+- [x] **Web:** o container do backend deixa de montar o disco C inteiro por padrão (`HOST_MOUNTS` vira
       opt-in), e o forja-runner ganha o mesmo modo sandbox.
+  *Feito em 2026-09-25 no forja-web, branch `feat/e12-web` (22b2505, a partir do `sync-desktop-0.7`).*
+  - O disco C passou para o `docker-compose.discos.yml`, ligado por `COMPOSE_FILE` no `.env`.
+    **Quem atualizar sem essa linha perde o disco C no seletor**; o README e o `.env.example` explicam.
+  - `FORJA_RUNNER_SANDBOX=docker|wsl` põe o `/run` e o `/run/stream` do runner num container:
+    - só a pasta da conversa, uid 1000 e rede só na instalação;
+    - timeout derruba o container junto.
+  - Os servidores do runner seguem no sistema.
+  - Conferido com o Docker do WSL: o comando viu a pasta e não viu `/mnt/c`, e ficou sem rede fora da
+    instalação.
 - [x] Testes:
   - o sandbox não enxerga um arquivo fora do projeto;
   - `curl` falha na fase de test;
@@ -1067,7 +1096,8 @@ Diferenças em relação ao plano:
   - o processo roda sem root;
   - sem Docker/WSL, cai para os passos 1 e 2 com aviso.
 - [ ] Validar no app real com o bench da E0 rodando inteiro no sandbox. Medir o custo de tempo contra
-      rodar sem sandbox.
+      rodar sem sandbox. *Fica para depois da E0: o bench ainda não existe. A medição por caso está na tabela
+      abaixo.*
 
 **Passo 3 feito em 2026-09-25 (parcial)**, com a configuração "Sandbox isolado (Docker)".
 
@@ -1130,9 +1160,10 @@ Desktop aberto (menos RAM ociosa). Por isso o Automático está bom como está: 
       Contorno: com o Docker fechado, renomear as pastas `%LOCALAPPDATA%\Docker\run` e
       `%LOCALAPPDATA%\docker-secrets-engine` juntas (não apagar) e abrir uma vez. Issue:
       docker/desktop-feedback#676.
-- [ ] **Cache de pacotes num volume do Linux.** Hoje o cache (`sandbox-cache`) fica no disco do Windows e
-      é lido por `/mnt/c`, e é a maior parte dos 3,3 s do pytest. Um volume nomeado do Docker é nativo
-      do Linux, mas nasce de root: precisa de um `chown` para o uid 1000 na criação.
+- [x] **Cache de pacotes num volume do Linux.** *Feito em 2026-09-25:* o volume `forja-sandbox-cache`, criado
+      uma vez por motor com `chown` para o uid 1000; se falhar, fica a pasta do Windows. Medido no WSL: o
+      pytest caiu de 3,37 s para 1,69 s e o pip, de 1,79 s para 1,41 s. Antes o cache ficava no disco do Windows, lido por
+      `/mnt/c`.
 
 ### Passo 4 (depois): AppContainer do Windows
 - [ ] Isolamento nativo sem Docker/WSL. O processo roda num **AppContainer**:
@@ -1146,6 +1177,26 @@ Desktop aberto (menos RAM ociosa). Por isso o Automático está bom como está: 
   - a interação com o antivírus.
 
   Fazer um protótipo com `npm install && npm test` num projeto real antes de construir.
+
+**Protótipo feito em 2026-09-25**: ctypes com `CreateAppContainerProfile` e
+`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, e o ACL por `icacls`. Rodou numa cópia do frontend do Forja,
+sem baixar nada. **Não dá para construir por enquanto.**
+- **O isolamento funciona:**
+  - lê a pasta liberada;
+  - leitura em Documentos ou no repositório do Forja dá `EPERM`;
+  - sem a capability, a rede falha com `ENOTFOUND`; com `internetClient`, responde 200.
+- **O custo do ACL é aceitável:** 5,4 a 6,2 s na primeira vez para ~10,5 mil arquivos, pelo `icacls /T`.
+- **A toolchain quebra, em três pontos:**
+  1. O Node instalado em `G:\Program Files` não tem `ALL APPLICATION PACKAGES` no ACL e nem é
+     encontrado. Seria preciso dar ACL também à pasta da toolchain do usuário.
+  2. O `realpath` do Node faz `lstat` em `C:\` e leva `EPERM`. Contorna com
+     `NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`.
+  3. **Processo filho trava:** `execFileSync` de outro node não volta nem com timeout. Por isso o `tsc`
+     passa e o `vite build` (esbuild) e o `node --test` travam, e morreram no limite de 120 s. É o fim
+     da linha para npm, vite, pytest com subprocess etc., até achar a causa, provavelmente os pipes
+     nomeados do libuv dentro do AppContainer.
+- **Decisão:** o Docker/WSL continua sendo o isolamento de verdade. O AppContainer volta quando alguém
+  resolver o processo filho: testar primeiro com LPAC ou com um broker que crie os pipes fora.
 
 **Integração com o resto do plano:**
 - **Perfis (E4):** os perfis ligam o sandbox automaticamente conforme o modo de permissão, e os limites
@@ -1540,21 +1591,54 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
       mudados; a varredura para quando o principal pede o modelo; o teto de cards é respeitado.
 
 ### Parte C: execução automática ("sozinho", de ponta a ponta)
-- [ ] **Opção "Executar backlog automaticamente"**, por projeto e desligada por padrão. Pega os cards
+
+*Feita em 2026-09-25* (`app/board_auto.py`, o interruptor "Executar backlog sozinho" no board; testes em
+`tests/test_board_auto.py`).
+
+Validada no Forja real (gpt-oss:120b na nuvem, Docker do WSL, projeto git `.devval/auto-proj` com dois bugs
+e testes falhando):
+- o interruptor ligado pela tela;
+- o card #14 foi sozinho para Em andamento (modo agente, Automático, comandos no container);
+- a conversa corrigiu o bug, e o card chegou à Revisão com "verify passou" e o commit `c142310`, que leva
+  só o arquivo que a conversa escreveu;
+- tudo em 29 s. O card #15, criado depois, rodou sozinho do mesmo jeito (`72b9d55`, "2/5 hoje");
+- o push "Card pronto para revisão · #15" chegou ao celular.
+
+Como ficou:
+- **Travas para ligar:** o Sandbox isolado ligado e com um Docker respondendo, e o projeto num repositório
+  git. Sem isso o interruptor fica desabilitado, e a dica diz o motivo.
+- **O que roda:** um card por vez e nenhum outro em andamento no projeto; mais severo primeiro, depois o
+  mais antigo. Card em Novo e de segurança nunca rodam. Card de agente sem `verify_sugerido` fica de fora,
+  porque nada provaria que ficou pronto.
+- **Modo e permissão:** o card roda no modo sugerido e na permissão Automático (`board.iniciar(...,
+  permissao="auto")`), e por isso o sandbox "só nos modos autônomos" vale. O modelo é o último usado,
+  como no Iniciar.
+- **Fim de card de agente:** o verify do `acompanha` é obrigatório. Se passa, os arquivos escritos na
+  conversa viram o commit do card (`gitops.commit_paths`, o mesmo do commit por tarefa). Se falha, a
+  execução para. No Maestro, verify, commit por tarefa e regressão já são dele; tarefa em `needs_human`
+  para tudo.
+- **Parada:** aparece no board ("Parou: …", com "seguir") e vai por push. Religar é o "pode seguir".
+  O limite é por dia (padrão 5, até 50).
+- **O tique:** vem do `/api/activity`, no laço de eventos (o Iniciar precisa dele). `docker info` e `git`
+  vão para thread, e só quando há card para rodar. Sem o PC nem o celular abertos, nada roda.
+  ponytail: sem agendador próprio.
+- O estado (ligado, feitos hoje, em curso, parado) não aparece no celular. O card mudando de coluna já
+  sincroniza pelo carimbo do board.
+- [x] **Opção "Executar backlog automaticamente"**, por projeto e desligada por padrão. Pega os cards
       do Backlog, por severidade e depois por ordem, e inicia um de cada vez no modo sugerido, sem
       clique.
-- [ ] **Só pode ser ligada com o sandbox (E12, passo 3 ou 4) ativo** e com as travas da E1/E2 (verify
+- [x] **Só pode ser ligada com o sandbox (E12, passo 3 ou 4) ativo** e com as travas da E1/E2 (verify
       obrigatório, commit por tarefa, regressão). Sem isso, o interruptor fica desabilitado com o
       motivo.
-- [ ] **Só cards aceitos pelo usuário.** O que está em "Novo" nunca é executado sozinho, mesmo com a
+- [x] **Só cards aceitos pelo usuário.** O que está em "Novo" nunca é executado sozinho, mesmo com a
       opção ligada.
-- [ ] **Limites:**
+- [x] **Limites:**
   - no máximo N cards por dia (padrão 5);
   - parar na 1ª falha que acabar em `needs_human`;
   - nunca executar card `seguranca` sem aprovação.
-- [ ] **Resultado sempre passa pela coluna Revisão.** Concluído só com a aprovação do usuário. O push no
+- [x] **Resultado sempre passa pela coluna Revisão.** Concluído só com a aprovação do usuário. O push no
       celular avisa "card X pronto para revisão".
-- [ ] Testes: a opção não liga sem sandbox; um card em "Novo" não é executado; o limite diário é
+- [x] Testes: a opção não liga sem sandbox; um card em "Novo" não é executado; o limite diário é
       respeitado; parar em `needs_human`.
 
 **Pronto quando:**

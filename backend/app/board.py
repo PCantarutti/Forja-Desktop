@@ -546,7 +546,7 @@ def _dispara(conv_id: int, kind: str, texto: str, escolha: dict) -> None:
     run.start(RunRequest(mode=kind, content=texto, **escolha))
 
 
-def iniciar(issue_id: int, modo: str | None = None) -> dict:
+def iniciar(issue_id: int, modo: str | None = None, permissao: str | None = None, quem: str = "") -> dict:
     with db.session() as s:
         i = s.get(db.Issue, issue_id)
         if not i:
@@ -560,6 +560,8 @@ def iniciar(issue_id: int, modo: str | None = None) -> dict:
     if modo not in ("agent", "maestro"):
         raise BoardError("Modo deve ser 'agent' ou 'maestro'.")
     escolha = _escolha(modo)
+    if permissao:  # execução automática (board_auto): sem ninguém para aprovar, é o modo Automático
+        escolha["permission"] = permissao
     with db.session() as s:
         c = db.Conversation(kind=modo, workspace=card["projeto"], title=card["titulo"][:200])
         s.add(c)
@@ -576,7 +578,7 @@ def iniciar(issue_id: int, modo: str | None = None) -> dict:
     with db.session() as s:
         i = s.get(db.Issue, issue_id)
         i.status, i.conversa_id, i.commit_inicio, i.commit = "andamento", conv_id, _head(Path(card["projeto"])), None
-        _evento(i, f"iniciado no modo {'Maestro' if modo == 'maestro' else 'agente'} (conversa {conv_id})")
+        _evento(i, f"iniciado{quem} no modo {'Maestro' if modo == 'maestro' else 'agente'} (conversa {conv_id})")
         s.commit()
         return _dict(i)
 

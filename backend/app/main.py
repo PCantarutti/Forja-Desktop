@@ -21,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (baterias, board, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
+from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
@@ -433,6 +433,10 @@ async def get_activity():
         quadro = await asyncio.to_thread(board.carimbo)
     except Exception:
         quadro = ""
+    try:
+        await board_auto.tique()  # E15-C: backlog automático (no loop: o Iniciar precisa dele)
+    except Exception as e:  # nunca derruba o /api/activity, que é o pulso das telas
+        print(f"Forja: board automático: {e}", flush=True)
     # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
     return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
             "lista": f"{n}-{maior}-{ultima}", "board": quadro}
@@ -566,6 +570,18 @@ def board_ia(body: dict):
     """Liga/desliga o board_card neste board: desligado, o agente não cria card sozinho (nem vê a ferramenta)."""
     projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
     return {"board_card": board.define_board_card(projeto, bool(body.get("ligado")))}
+
+
+@app.get("/api/board/auto")
+def board_auto_estado(pasta: str):
+    return board_auto.estado(_board(board.projeto_de, pasta))
+
+
+@app.post("/api/board/auto")
+def board_auto_define(body: dict):
+    """Executar backlog automaticamente (E15-C): só liga com as travas satisfeitas (sandbox e git)."""
+    projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
+    return _board(board_auto.define, projeto, bool(body.get("ligado")), body.get("por_dia"))
 
 
 @app.get("/api/board/vinculos")

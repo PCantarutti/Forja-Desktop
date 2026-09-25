@@ -137,6 +137,9 @@ export default function BoardView(props: {
   const [alvo, setAlvo] = useState<string | null>(null);  // coluna sob o card arrastado
   const [iaCria, setIaCria] = useState(true);   // board_card ligado neste board
   const [nVinc, setNVinc] = useState(0);
+  // Executar backlog automaticamente (E15-C): as travas dizem por que não liga (sandbox, git)
+  const [auto, setAuto] = useState<{ ligado: boolean; travas: string[]; parado: string; feitos: number;
+    por_dia: number; em_curso: number | null } | null>(null);
   const [painel, setPainel] = useState<"pedir" | "pastas" | null>(null);
   const [foco, setFoco] = useState("tudo");
   const [subpasta, setSubpasta] = useState("");
@@ -162,6 +165,7 @@ export default function BoardView(props: {
       .then((r) => { setIssues(r.issues); setVarredura(r.varredura); setComandos(r.comandos);
         setIaCria(r.board_card); setNVinc(r.vinculadas); })
       .catch((e) => setErro(e.message));
+    api.get<NonNullable<typeof auto>>(`/board/auto?pasta=${encodeURIComponent(pasta)}`).then(setAuto).catch(() => {});
   };
   useEffect(carregar, [pasta, props.carimbo]);
   // Varredura rodando: o carimbo só muda no fim; o progresso (etapa, contagem) vem daqui.
@@ -327,6 +331,24 @@ export default function BoardView(props: {
           <Interruptor ligado={iaCria} disabled={!pasta} rotulo="IA cria cards sozinha"
             dica="Ligado: em qualquer conversa deste projeto o agente pode criar cards (board_card), que caem em Novo. Desligado: a ferramenta nem aparece para o modelo; só /board e o Pedir à IA criam cards."
             onMuda={(v) => { setIaCria(v); acao(() => api.post("/board/ia", { pasta, ligado: v })); }} />
+          {auto && (
+            <Interruptor ligado={auto.ligado} disabled={!pasta || (!auto.ligado && auto.travas.length > 0)}
+              rotulo="Executar backlog sozinho"
+              dica={!auto.ligado && auto.travas.length ? auto.travas.join(" ")
+                : `Pega os cards do Backlog (mais graves primeiro), um por vez, no modo Automático e no sandbox. Card em Novo e de segurança nunca rodam sozinhos. Até ${auto.por_dia} por dia; para na primeira falha. O resultado para em Revisão.`}
+              onMuda={(v) => acao(() => api.post("/board/auto", { pasta, ligado: v }))} />
+          )}
+          {auto?.ligado && (auto.parado ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-amber-300" title={auto.parado}>
+              Parou: {auto.parado.length > 48 ? auto.parado.slice(0, 48) + "…" : auto.parado}
+              <button className="text-fg underline-offset-2 hover:underline"
+                onClick={() => acao(() => api.post("/board/auto", { pasta, ligado: true }))}>seguir</button>
+            </span>
+          ) : (
+            <span className="text-xs text-faint" aria-live="polite">
+              {auto.em_curso ? `rodando #${auto.em_curso} · ` : ""}{auto.feitos}/{auto.por_dia} hoje
+            </span>
+          ))}
         </div>
       </div>
 
