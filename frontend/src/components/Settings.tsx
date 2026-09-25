@@ -1743,9 +1743,19 @@ function ClaudeControla() {
               Worker trabalhando, verify e commit. O que você escrever ali chega ao Claude na próxima ferramenta que ele chamar.
             </li>
           </ol>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg border border-line p-2.5">
+              <div className="mb-1 font-medium text-fg">Delegue aos Workers do Forja</div>
+              CRUD, tela que segue um padrão que já existe e bug com teste que prove.
+            </div>
+            <div className="rounded-lg border border-line p-2.5">
+              <div className="mb-1 font-medium text-fg">Deixe com o Claude</div>
+              Arquitetura, depuração difícil e decisões.
+            </div>
+          </div>
           <p>
-            <span className="text-fg">Vale mais</span> para tarefas bem delimitadas e com teste que prove (corrigir um bug com
-            teste, CRUD, tela seguindo um padrão que já existe). Arquitetura e decisão difícil, deixe com o próprio Claude.{" "}
+            Assim o ciclo caro (ler arquivos, escrever, rodar teste, corrigir) roda nos Workers e gasta menos do seu plano do
+            Claude; em tarefa pequena ou vaga a economia some, porque planejar e revisar custa quase o mesmo que fazer direto.{" "}
             <span className="text-fg">Aprovações:</span> escolha em "Ações do Claude"; no Manual, cada escrita do Worker pede o
             seu ok aqui e no celular.
           </p>
