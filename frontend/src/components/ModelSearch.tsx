@@ -191,7 +191,7 @@ export default function ModelSearch(props: {
             {!buscando && lista === null && (
               <p className="p-3 text-faint">
                 {props.kind === "ampliar"
-                  ? "Só aparecem os que o Forja roda, conferidos pelo conteúdo do arquivo: ESRGAN (RRDBNet, pelo sd-cli) e SeedVR2 (pelo ComfyUI). DAT, HAT, SwinIR e os compactos ficam de fora."
+                  ? "Só aparecem os que o Forja roda, conferidos pelo conteúdo do arquivo: ESRGAN (pelo sd-cli), DAT/HAT/SwinIR/SPAN/PLKSR e compactos (pelo ComfyUI) e SeedVR2 (difusão, pelo ComfyUI)."
                   : semTermo ? "Só aparecem os Wan, que é o que o stable-diffusion.cpp gera em vídeo." : "Digite o que procura e aperte Enter. Ex.: qwen3, gemma, sdxl."}
               </p>
             )}
@@ -291,8 +291,10 @@ export default function ModelSearch(props: {
                       <div key={f.path} className="flex items-center gap-2 rounded-lg border border-line px-2 py-1.5">
                         {f.quant && <span className={`${chip} shrink-0`}>{f.quant}</span>}
                         {f.tipo && (
-                          <span className={`${chip} shrink-0`} title={f.tipo === "seedvr2" ? "Difusão: mais detalhe, minutos por imagem (precisa do ComfyUI)" : f.tipo === "vae" ? "Peça do SeedVR2: vai junto do modelo" : "Rápido: segundos por imagem"}>
-                            {f.tipo === "seedvr2" ? "SeedVR2 · ComfyUI" : f.tipo === "vae" ? "VAE do SeedVR2" : "ESRGAN · sd-cli"}
+                          <span className={`${chip} shrink-0`} title={f.tipo === "seedvr2" ? "Difusão: mais detalhe, minutos por imagem (precisa do ComfyUI)"
+                            : f.tipo === "spandrel" ? "DAT, HAT, SwinIR e afins: segundos por imagem, mais fiel que o ESRGAN (precisa do ComfyUI)"
+                            : f.tipo === "vae" ? "Peça do SeedVR2: vai junto do modelo" : "Rápido: segundos por imagem"}>
+                            {f.tipo === "seedvr2" ? "SeedVR2 · ComfyUI" : f.tipo === "spandrel" ? "DAT/HAT · ComfyUI" : f.tipo === "vae" ? "VAE do SeedVR2" : "ESRGAN · sd-cli"}
                           </span>
                         )}
                         {f.papel && f.papel !== "modelo" && (

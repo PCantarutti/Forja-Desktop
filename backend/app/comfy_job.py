@@ -1,9 +1,13 @@
-"""Uma ampliação SeedVR2 no ComfyUI portátil, do começo ao fim: sobe o servidor escondido (127.0.0.1, porta
-livre), manda o fluxo, grava o PNG e derruba o servidor (a VRAM volta toda). Só biblioteca padrão: roda
-com o Python do próprio ComfyUI (python_embeded), chamado pelo Forja Desktop ou, no Docker, pelo runner.
+"""Uma ampliação no ComfyUI portátil, do começo ao fim: sobe o servidor escondido (127.0.0.1, porta livre), manda o
+fluxo, grava o PNG e derruba o servidor (a VRAM volta toda). Roda com o Python do próprio ComfyUI (python_embeded),
+chamado pelo Forja Desktop ou, no Docker, pelo runner. Além da biblioteca padrão, só o Pillow, que vem no portátil.
 
-    python comfy_job.py --comfy <pasta do portátil> --modelo <seedvr2_*.safetensors> --vae <vae>
+    python comfy_job.py --modo seedvr2|spandrel --comfy <pasta do portátil> --modelo <arquivo> [--vae <vae>]
                         --entrada <img> --saida <png> --fator 2|4
+
+seedvr2: difusão (o DiT + o VAE dele). spandrel: DAT, HAT, SwinIR, SPAN, os compactos e afins, pelo carregador de
+modelos de ampliação do ComfyUI; a escala sai dos pesos e é medida na saída (um 2× pedido como 4× roda duas vezes;
+o que passar do alvo volta por Lanczos).
 
 Fala com quem chamou por linhas no stdout: "FASE <texto>" e, no fim, "OK <w>x<h>" ou "ERRO <mensagem>".
 O mesmo arquivo existe em forja-desktop e forja-web (backend/app/comfy_job.py): mudou um, copie no outro.
@@ -26,6 +30,10 @@ PRONTO_S = 300  # 1ª subida do portátil compila kernels da GPU (na Arc: ~1 min
 TRABALHO_S = 3600
 
 
+class Falha(Exception):
+    pass
+
+
 def diz(tipo: str, texto: str = "") -> None:
     print(f"{tipo} {texto}".strip(), flush=True)
 
@@ -36,7 +44,7 @@ def porta_livre() -> int:
         return s.getsockname()[1]
 
 
-def fluxo(img: str, fator: int, modelo: str, vae: str, semente: int) -> dict:
+def fluxo_seedvr2(img: str, fator: int, modelo: str, vae: str, semente: int) -> dict:
     """O blueprint "Upscale Video (SeedVR2)" do ComfyUI, na versão de uma imagem (sem os blocos de vídeo)."""
     tiles = {"tile_size": 512, "overlap": 128, "temporal_size": 64, "temporal_overlap": 8}
     return {
@@ -58,22 +66,36 @@ def fluxo(img: str, fator: int, modelo: str, vae: str, semente: int) -> dict:
     }
 
 
+def fluxo_spandrel(img: str, modelo: str) -> dict:
+    """Carregar o modelo de ampliação, ampliar (o ComfyUI divide em blocos sozinho se faltar VRAM), salvar."""
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": img}},
+        "2": {"class_type": "UpscaleModelLoader", "inputs": {"model_name": modelo}},
+        "3": {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["2", 0], "image": ["1", 0]}},
+        "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0], "filename_prefix": "forja"}},
+    }
+
+
 def main() -> int:
     a = argparse.ArgumentParser()
-    for nome in ("comfy", "modelo", "vae", "entrada", "saida"):
+    for nome in ("comfy", "modelo", "entrada", "saida"):
         a.add_argument(f"--{nome}", required=True)
+    a.add_argument("--modo", choices=("seedvr2", "spandrel"), default="seedvr2")
+    a.add_argument("--vae", default="")
     a.add_argument("--fator", type=int, default=2)
     a.add_argument("--semente", type=int, default=42)
     o = a.parse_args()
-    raiz, modelo, vae = Path(o.comfy), Path(o.modelo), Path(o.vae)
+    raiz, modelo = Path(o.comfy), Path(o.modelo)
     trabalho = Path(tempfile.mkdtemp(prefix="forja-comfy-"))
     (trabalho / "in").mkdir()
     (trabalho / "out").mkdir()
-    # As pastas dos dois pesos entram como pastas extras de modelo: nada é copiado para dentro do portátil.
-    (trabalho / "pastas.yaml").write_text(
-        f"forja:\n  diffusion_models: {json.dumps(str(modelo.parent))}\n  vae: {json.dumps(str(vae.parent))}\n",
-        encoding="utf-8")
-    shutil.copyfile(o.entrada, trabalho / "in" / ("entrada" + Path(o.entrada).suffix.lower()))
+    # As pastas dos pesos entram como pastas extras de modelo: nada é copiado para dentro do portátil.
+    pastas = ({"diffusion_models": modelo.parent, "vae": Path(o.vae).parent} if o.modo == "seedvr2"
+              else {"upscale_models": modelo.parent})
+    (trabalho / "pastas.yaml").write_text("forja:\n" + "".join(f"  {k}: {json.dumps(str(v))}\n" for k, v in pastas.items()),
+                                          encoding="utf-8")
+    entrada = "entrada" + Path(o.entrada).suffix.lower()
+    shutil.copyfile(o.entrada, trabalho / "in" / entrada)
     porta = porta_livre()
     url = f"http://127.0.0.1:{porta}"
     log = open(trabalho / "comfy.log", "w", encoding="utf-8", errors="replace")
@@ -96,6 +118,36 @@ def main() -> int:
         linhas = (trabalho / "comfy.log").read_text(encoding="utf-8", errors="replace").splitlines()
         return " | ".join(l.strip() for l in linhas[-6:] if l.strip())[:600]
 
+    def rodar(g: dict) -> Path:
+        """Um fluxo até o fim; devolve a imagem que ele gravou em out/."""
+        try:
+            pid = pede("/prompt", {"prompt": g})["prompt_id"]
+        except urllib.error.HTTPError as e:
+            raise Falha(f"O ComfyUI recusou o fluxo: {e.read().decode('utf-8', 'replace')[:500]}") from None
+        limite = time.monotonic() + TRABALHO_S
+        while True:
+            h = pede(f"/history/{pid}")
+            if pid in h:
+                break
+            if proc.poll() is not None:
+                raise Falha(f"O ComfyUI caiu no meio: {cauda()}")
+            if time.monotonic() > limite:
+                raise Falha("A ampliação passou de 1 hora.")
+            time.sleep(1)
+        st = h[pid].get("status") or {}
+        if st.get("status_str") != "success":
+            erro = next((m[1] for m in st.get("messages", []) if m[0] == "execution_error"), {})
+            msg = erro.get("exception_message", "") or cauda()
+            if "OUT_OF_RESOURCES" in msg or "DEVICE_LOST" in msg or "out of memory" in msg.lower():
+                msg = "A GPU ficou sem memória (tem outro modelo carregado?). " + msg
+            elif "UnsupportedModel" in msg or "Unsupported model" in msg:
+                msg = "O ComfyUI não reconhece esta arquitetura de ampliação. " + msg
+            raise Falha(msg.strip()[:600])
+        arquivos = [i["filename"] for s in h[pid]["outputs"].values() for i in s.get("images", [])]
+        if not arquivos:
+            raise Falha("O ComfyUI terminou sem gravar a imagem.")
+        return trabalho / "out" / arquivos[0]
+
     try:
         diz("FASE", "iniciando o ComfyUI")
         limite = time.monotonic() + PRONTO_S
@@ -112,41 +164,27 @@ def main() -> int:
                     return 1
                 time.sleep(1)
         diz("FASE", "ampliando")
-        try:
-            pid = pede("/prompt", {"prompt": fluxo("entrada" + Path(o.entrada).suffix.lower(), o.fator, modelo.name,
-                                                   vae.name, o.semente)})["prompt_id"]
-        except urllib.error.HTTPError as e:
-            diz("ERRO", f"O ComfyUI recusou o fluxo: {e.read().decode('utf-8', 'replace')[:500]}")
-            return 1
-        limite = time.monotonic() + TRABALHO_S
-        while True:
-            h = pede(f"/history/{pid}")
-            if pid in h:
-                break
-            if proc.poll() is not None:
-                diz("ERRO", f"O ComfyUI caiu no meio: {cauda()}")
-                return 1
-            if time.monotonic() > limite:
-                diz("ERRO", "A ampliação passou de 1 hora.")
-                return 1
-            time.sleep(1)
-        st = h[pid].get("status") or {}
-        if st.get("status_str") != "success":
-            erro = next((m[1] for m in st.get("messages", []) if m[0] == "execution_error"), {})
-            msg = erro.get("exception_message", "") or cauda()
-            if "OUT_OF_RESOURCES" in msg or "DEVICE_LOST" in msg or "out of memory" in msg.lower():
-                msg = "A GPU ficou sem memória (tem outro modelo carregado?). " + msg
-            diz("ERRO", msg.strip()[:600])
-            return 1
-        arquivos = [i["filename"] for s in h[pid]["outputs"].values() for i in s.get("images", [])]
-        if not arquivos:
-            diz("ERRO", "O ComfyUI terminou sem gravar a imagem.")
-            return 1
-        shutil.copyfile(trabalho / "out" / arquivos[0], o.saida)
-        with open(o.saida, "rb") as f:  # largura e altura do PNG (bytes 16-24 do IHDR), sem Pillow
-            cab = f.read(24)
-        diz("OK", f"{int.from_bytes(cab[16:20], 'big')}x{int.from_bytes(cab[20:24], 'big')}")
+        from PIL import Image
+        with Image.open(o.entrada) as im:
+            alvo = (im.width * o.fator, im.height * o.fator)
+        if o.modo == "seedvr2":
+            final = rodar(fluxo_seedvr2(entrada, o.fator, modelo.name, Path(o.vae).name, o.semente))
+        else:
+            final = rodar(fluxo_spandrel(entrada, modelo.name))
+            with Image.open(final) as im:
+                largura = im.width
+            if largura < alvo[0]:  # modelo 2× e pediu 4×: mais uma passada, em cima da primeira
+                shutil.copyfile(final, trabalho / "in" / "passo2.png")
+                final = rodar(fluxo_spandrel("passo2.png", modelo.name))
+        with Image.open(final) as im:
+            if im.size != alvo:  # um 4× pedido como 2× (ou o 2× que passou do 4×): o tamanho pedido por Lanczos
+                im = im.resize(alvo, Image.LANCZOS)
+            im.save(o.saida)
+        diz("OK", f"{alvo[0]}x{alvo[1]}")
         return 0
+    except Falha as e:
+        diz("ERRO", str(e))
+        return 1
     finally:
         proc.kill()  # ponytail: o ComfyUI não tem filhos que segurem a GPU; kill no processo basta
         proc.wait()

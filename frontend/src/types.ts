@@ -621,7 +621,7 @@ export type HfRepo = {
   readme: string;
 };
 export type HfFile = { path: string; size: number; quant: string; shards: number; papel?: string;
-  tipo?: "esrgan" | "seedvr2" | "vae"; subpasta?: string }; // tipo/subpasta: só na busca de ampliação
+  tipo?: "esrgan" | "seedvr2" | "spandrel" | "vae"; subpasta?: string }; // tipo/subpasta: só na busca de ampliação
 
 // ------------------------------------------------------------------ Maestro
 // A Maestro planeja e verifica; os Workers implementam. O estado real vive no SQLite do backend

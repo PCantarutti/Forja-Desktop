@@ -50,17 +50,20 @@ def instalar() -> dict:
     return downloads.start("runtime", f"ComfyUI {g} {VERSAO}", [URL.format(versao=VERSAO, gpu=g)], PASTA, extract=True)
 
 
-def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = "", progresso=None) -> dict:
-    """Uma imagem pelo SeedVR2 (comfy_job.py no Python do portátil). `progresso(fase)` a cada fase."""
+def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = "", progresso=None,
+            modo: str = "seedvr2") -> dict:
+    """Uma imagem pelo ComfyUI (comfy_job.py no Python do portátil): `modo` seedvr2 (difusão, com o VAE) ou spandrel
+    (DAT/HAT/SwinIR e afins). `progresso(fase)` a cada fase."""
     from .ampliar import vae_seedvr2
     py = python()
     if not py:
-        raise ToolError("Falta o ComfyUI (motor do SeedVR2): baixe na lista de ampliação, em Baixar o que falta.")
-    vae = vae_seedvr2(modelo)
-    if not vae:
+        raise ToolError("Falta o ComfyUI (motor do SeedVR2 e dos DAT/HAT/SwinIR): baixe na lista de ampliação, em Baixar o que falta.")
+    vae = vae_seedvr2(modelo) if modo == "seedvr2" else ""
+    if modo == "seedvr2" and not vae:
         raise ToolError("Falta o VAE do SeedVR2 (seedvr2_ema_vae_fp16.safetensors): baixe o modelo de novo pelo catálogo.")
     # -X utf8: com o stdout num pipe, o Python do Windows escreve em cp1252 e os acentos chegavam quebrados
-    proc = subprocess.Popen([str(py), "-X", "utf8", "-s", str(JOB), "--comfy", str(PASTA), "--modelo", modelo, "--vae", vae,
+    proc = subprocess.Popen([str(py), "-X", "utf8", "-s", str(JOB), "--modo", modo, "--comfy", str(PASTA), "--modelo", modelo,
+                             *(["--vae", vae] if vae else []),
                              "--entrada", entrada, "--saida", str(saida), "--fator", str(int(fator))],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())

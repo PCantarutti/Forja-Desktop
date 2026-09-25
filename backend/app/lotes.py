@@ -577,12 +577,15 @@ def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: boo
     from . import ampliar as amp, comfy
     if int(fator) not in (2, 4):
         raise ToolError("Amplie em 2× ou 4×.")
-    if modelo and amp.eh_seedvr2(modelo):
+    tipo = amp.tipo_local(modelo) if modelo else ""
+    if tipo in ("seedvr2", "spandrel"):  # pelo ComfyUI
+        nome = "O SeedVR2" if tipo == "seedvr2" else "Este modelo (DAT/HAT/SwinIR)"
         if video:
-            raise ToolError("O SeedVR2 aqui amplia só imagem: para vídeo, use um ESRGAN ou o Lanczos.")
+            raise ToolError(f"{nome} aqui amplia só imagem: para vídeo, use um ESRGAN ou o Lanczos.")
         if not comfy.python():
-            raise ToolError("Falta o ComfyUI (motor do SeedVR2): baixe na lista de ampliação, em Baixar o que falta.")
-        if not localai.image_busy():
+            raise ToolError("Falta o ComfyUI (motor do SeedVR2 e dos DAT/HAT/SwinIR): baixe na lista de ampliação, "
+                            "em Baixar o que falta.")
+        if tipo == "seedvr2" and not localai.image_busy():
             _liberar_vram(confirm)  # ~7 GB de VRAM: com um LLM carregado, a tela pergunta antes (409)
         return
     if modelo and not amp.eh_ampliador(modelo):

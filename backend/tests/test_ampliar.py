@@ -60,7 +60,8 @@ def test_catalogo_com_o_que_ja_esta_no_disco(isolado, monkeypatch):
     assert len(c["no_disco"]) == 1
     assert [(x["nome"], x["mb"], bool(x["presente"])) for x in c["modelos"]] == [
         ("RealESRGAN_x4plus.pth", 67.0, False), ("RealESRGAN_x4plus_anime_6B.pth", 17.9, True),
-        ("4x-UltraSharp.safetensors", 66.9, False), ("seedvr2_3b_fp16.safetensors", 6780, False),
+        ("4x-UltraSharp.safetensors", 66.9, False), ("4x-UltraSharpV2.safetensors", 140, False),
+        ("seedvr2_3b_fp16.safetensors", 6780, False),
         ("seedvr2_7b_fp8_e4m3fn.safetensors", 8240, False)]
     assert c["ffmpeg"] == ""
     with pytest.raises(ampliar.ToolError, match="ffmpeg"):
@@ -311,8 +312,38 @@ def test_o_que_o_forja_roda_pelos_nomes_e_formas_das_camadas():
     """A mesma regra vale para arquivo no disco e para o começo de um arquivo do Hugging Face."""
     cam = lambda forma: {"conv_first.weight": {"shape": forma}, "body.0.rdb1.conv1.weight": {"shape": [32, 64, 3, 3]}}
     assert ampliar.tipo_por_nomes(cam([64, 3, 3, 3]), "RealESRGAN_x4plus.safetensors") == "esrgan"
-    assert ampliar.tipo_por_nomes(cam([64, 12, 3, 3]), "qualquer.safetensors") == ""  # 2× com pixel-unshuffle
-    assert ampliar.tipo_por_nomes(b"conv_first.weight body.0.rdb1", "RealESRGAN_x2plus.pth") == ""  # .pth: pelo nome
+    assert ampliar.tipo_por_nomes(cam([64, 12, 3, 3]), "qualquer.safetensors") == "spandrel"  # 2× com pixel-unshuffle: ComfyUI
+    assert ampliar.tipo_por_nomes(b"conv_first.weight body.0.rdb1", "RealESRGAN_x2plus.pth") == "spandrel"  # .pth: pelo nome
     assert ampliar.tipo_por_nomes(b"model.0.weight model.1.sub.0.RDB1.conv1.0", "4x-UltraSharp.pth") == "esrgan"
     assert ampliar.tipo_por_nomes({"blocks.0.ada.txt.attn_gate": {}}, "seedvr2_3b_fp16.safetensors") == "seedvr2"
-    assert ampliar.tipo_por_nomes({"before_RG.1.weight": {}}, "4x-UltraSharpV2.safetensors") == ""  # DAT
+    assert ampliar.tipo_por_nomes({"before_RG.1.weight": {}}, "4x-UltraSharpV2.safetensors") == "spandrel"  # DAT
+    assert ampliar.tipo_por_nomes({"feats.1.channel_mixer.0.weight": {}}, "Lite.safetensors") == "spandrel"  # PLKSR
+    assert ampliar.tipo_por_nomes(b"conv_first before_RG.1 conv_after_body", "4x-UltraSharpV2.pth") == "spandrel"
+    assert ampliar.tipo_por_nomes({f"body.{i}.weight": {} for i in range(8)}, "realesr-general-x4v3.safetensors") == "spandrel"
+    assert ampliar.tipo_por_nomes({"unet.down.0.weight": {}}, "sd15.safetensors") == ""  # modelo de imagem: nada
+
+
+def test_dat_hat_swinir_vao_pelo_comfyui_sem_vae_e_so_imagem(isolado, monkeypatch):
+    import sys
+    from app import comfy
+    dat = safetensors(isolado / "modelos", "4x-UltraSharpV2.safetensors", ["before_RG.1.weight", "conv_after_body.weight"])
+    assert localai.kind_of(Path(dat)) == "ampliador" and ampliar.tipo_local(dat) == "spandrel"
+    with pytest.raises(lotes.ToolError, match="só imagem"):
+        lotes._validar_ampliacao(2, dat, video=True)
+    monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "qwen"})
+    lotes._validar_ampliacao(2, dat, video=False)  # leve (< 1 GB): não pede para descarregar o LLM
+    falso = isolado / "driver.py"
+    falso.write_text("import sys; print('ARGS', ' '.join(sys.argv[1:])); print('OK 20x16')", encoding="utf-8")
+    monkeypatch.setattr(comfy, "JOB", falso)
+    linhas = []
+    monkeypatch.setattr(comfy.subprocess, "Popen", _espia(comfy.subprocess.Popen, linhas))
+    assert ampliar.ampliar_imagem("in.png", isolado / "out.png", 4, dat) == {"w": 20, "h": 16}
+    assert "--modo spandrel" in " ".join(linhas[0]) and "--vae" not in linhas[0]
+
+
+def _espia(popen, guarda):
+    def f(argv, *a, **k):
+        guarda.append(argv)
+        return popen(argv, *a, **k)
+    return f

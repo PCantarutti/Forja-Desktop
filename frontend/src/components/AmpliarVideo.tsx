@@ -5,7 +5,7 @@ import { btn, btnPrimary } from "./LocalPanel";
 
 /** O que o backend diz da ampliação: ffmpeg (vídeo) e ComfyUI (SeedVR2) instalados, o catálogo e todos os
  *  modelos no disco. `tipo`: esrgan (sd-cli, rápido, imagem e vídeo) ou seedvr2 (difusão, pesado, só imagem). */
-type Tipo = "esrgan" | "seedvr2";
+type Tipo = "esrgan" | "seedvr2" | "spandrel"; // spandrel: DAT/HAT/SwinIR e afins, rápidos, pelo ComfyUI
 export type CatalogoAmpliacao = {
   modelos: { nome: string; resumo: string; mb: number; presente: string; tipo: Tipo }[];
   no_disco: { path: string; name: string; tipo: Tipo }[];
@@ -61,7 +61,7 @@ export function BaixarAmpliacao(props: {
   const linhas = [
     ...(props.imagem ? [] : [{ nome: "ffmpeg", titulo: "ffmpeg", resumo: "Lê e grava o vídeo (obrigatório) · ~80 MB", presente: !!cat.ffmpeg }]),
     ...(props.video ? [] : [{ nome: "comfyui", titulo: `ComfyUI portátil (${GPU[cat.comfy.gpu] ?? cat.comfy.gpu})`,
-      resumo: `Motor do SeedVR2, fica com os runtimes · ~${(cat.comfy.mb / 1000).toFixed(1).replace(".", ",")} GB`, presente: !!cat.comfy.instalado }]),
+      resumo: `Motor do SeedVR2 e dos DAT/HAT/SwinIR, fica com os runtimes · ~${(cat.comfy.mb / 1000).toFixed(1).replace(".", ",")} GB`, presente: !!cat.comfy.instalado }]),
     ...cat.modelos.filter((m) => !props.video || m.tipo === "esrgan").map((m) => ({
       nome: m.nome,
       titulo: m.nome.replace(/\.(pth|safetensors)$/, ""),
@@ -121,8 +121,9 @@ export function PainelAmpliar(props: {
   // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora); o
   // SeedVR2 nunca é o padrão, leva minutos
   const escolhido = modelo ?? (esrgans.find((m) => new RegExp(`x${fator}(?!\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? "";
-  const pesado = metodos.find((m) => m.path === escolhido)?.tipo === "seedvr2";
-  const semComfy = pesado && !cat?.comfy.instalado;
+  const tipo = metodos.find((m) => m.path === escolhido)?.tipo;
+  const pesado = tipo === "seedvr2";
+  const semComfy = (tipo === "seedvr2" || tipo === "spandrel") && !cat?.comfy.instalado;
 
   async function ampliar(confirm = false) {
     setEnviando(true);
@@ -154,7 +155,8 @@ export function PainelAmpliar(props: {
         >
           {metodos.map((m) => (
             <option key={m.path} value={m.path}>
-              {m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos" : props.imagem ? "IA" : "IA, quadro a quadro"})
+              {m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos" : m.tipo === "spandrel" ? "IA, pelo ComfyUI"
+                : props.imagem ? "IA" : "IA, quadro a quadro"})
             </option>
           ))}
           <option value="">Rápido, sem IA (Lanczos)</option>
@@ -180,7 +182,7 @@ export function PainelAmpliar(props: {
       {pesado && !semComfy && (
         <p className="text-faint">Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais).</p>
       )}
-      {semComfy && <p className="text-amber-400">O SeedVR2 roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}
+      {semComfy && <p className="text-amber-400">{pesado ? "O SeedVR2" : "Este modelo"} roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}
       <button className={btnPrimary} disabled={semFfmpeg || semComfy || enviando} onClick={() => ampliar()}>
         {enviando ? "Começando…" : `Ampliar ${fator}×`}
       </button>

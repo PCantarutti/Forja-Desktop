@@ -39,6 +39,9 @@ CATALOGO = [
     {"nome": "4x-UltraSharp.safetensors", "tipo": "esrgan", "mb": 66.9,
      "url": "https://huggingface.co/Kim2091/UltraSharp/resolve/main/4x-UltraSharp.safetensors",
      "resumo": "Nítido para foto e textura, 4× (licença não comercial)"},
+    {"nome": "4x-UltraSharpV2.safetensors", "tipo": "spandrel", "mb": 140,
+     "url": "https://huggingface.co/Kim2091/UltraSharpV2/resolve/main/4x-UltraSharpV2.safetensors",
+     "resumo": "DAT2 (transformer): mais fiel que o ESRGAN, 4×, segundos (pelo ComfyUI; licença não comercial)"},
     {"nome": "seedvr2_3b_fp16.safetensors", "tipo": "seedvr2", "mb": 6780, "url": f"{HF_SEEDVR2}/diffusion_models/seedvr2_3b_fp16.safetensors",
      "resumo": "Difusão: reconstrói textura e detalhe. Pesado (~7 GB de VRAM, minutos por imagem)"},
     {"nome": "seedvr2_7b_fp8_e4m3fn.safetensors", "tipo": "seedvr2", "mb": 8240, "url": f"{HF_SEEDVR2}/diffusion_models/seedvr2_7b_fp8_e4m3fn.safetensors",
@@ -50,7 +53,7 @@ REPO_ESRGAN = "xinntao/Real-ESRGAN"
 # buffer do Vulkan). Se outra GPU pedir outro valor, vira medida por máquina como o bloco do VAE.
 TILE_ESRGAN = 256
 GH_TTL = 3600
-PASTA = {"esrgan": "Ampliação (ESRGAN)", "seedvr2": "Ampliação (SeedVR2)"}  # subpastas da pasta de modelos
+PASTA = {"esrgan": "Ampliação (ESRGAN)", "seedvr2": "Ampliação (SeedVR2)", "spandrel": "Ampliação (ComfyUI)"}  # subpastas da pasta de modelos
 
 
 def _nomes(p: Path) -> dict | bytes:
@@ -65,21 +68,42 @@ def _nomes(p: Path) -> dict | bytes:
 
 def tipo_por_nomes(nomes: list[str] | dict | bytes, arquivo: str = "") -> str:
     """"esrgan" (RRDBNet, formato novo `conv_first`/`rdb1` ou antigo `model.0`/`RDB1`), "seedvr2" (DiT com
-    `blocks.N.ada.txt`) ou "" (o Forja não roda). `nomes`: o cabeçalho do .safetensors (dict, com os formatos,
-    ou só a lista de nomes) ou os bytes do pickle do .pth. O RRDBNet 2× do Real-ESRGAN entra com pixel-unshuffle
-    (12 canais na 1ª camada) e o sd.cpp recusa: pelo formato quando há, senão pelo nome (x2plus)."""
+    `blocks.N.ada.txt`), "spandrel" (o que o ComfyUI roda e o sd.cpp não: DAT/HAT/SwinIR/SPAN/PLKSR/compactos e o
+    RRDBNet 2× do Real-ESRGAN, que entra com pixel-unshuffle) ou "" (o Forja não roda). `nomes`: o cabeçalho do
+    .safetensors (dict, com os formatos, ou só a lista de nomes) ou os bytes do pickle do .pth."""
+    # o 2× com pixel-unshuffle o sd.cpp recusa, mas o ComfyUI roda: vai por lá (pela forma quando há, senão pelo nome)
     if isinstance(nomes, dict):
         primeira = (nomes.get("conv_first.weight") or nomes.get("model.0.weight") or {}).get("shape") or []
         if len(primeira) == 4 and primeira[1] != 3:
-            return ""
+            return "spandrel"
     if "x2plus" in Path(arquivo).name.lower():
-        return ""
+        return "spandrel"
     if isinstance(nomes, bytes):
-        return "esrgan" if ((b"conv_first" in nomes and b"rdb1" in nomes) or (b"model.0.weight" in nomes and b"RDB1" in nomes)) else ""
+        if (b"conv_first" in nomes and b"rdb1" in nomes) or (b"model.0.weight" in nomes and b"RDB1" in nomes):
+            return "esrgan"
+        return "spandrel" if _eh_spandrel(nomes) else ""
     if (any(n.startswith("conv_first") for n in nomes) and any(".rdb1." in n for n in nomes)) or \
             ("model.0.weight" in nomes and any(".RDB1." in n for n in nomes)):
         return "esrgan"
-    return "seedvr2" if any(".ada.txt." in n for n in nomes) else ""
+    if any(".ada.txt." in n for n in nomes):
+        return "seedvr2"
+    return "spandrel" if _eh_spandrel(nomes) else ""
+
+
+# Camadas que só aparecem nas arquiteturas que o ComfyUI (spandrel) carrega e o sd.cpp não: DAT, HAT, SwinIR, DRCT,
+# ATD... (conv_after_body), o DAT puro (before_RG), o SPAN (block_1.c1_r) e o PLKSR (channel_mixer). O compacto (SRVGGNet: realesr-general,
+# animevideov3) é só uma fila de body.N. O ComfyUI confere de novo ao carregar e recusa o que não conhecer.
+SPANDREL = ("conv_after_body.", "before_RG.", "block_1.c1_r.", ".channel_mixer.")  # último: (Real)PLKSR
+COMPACTO = re.compile(r"^body\.\d+\.(weight|bias)$")
+
+
+def _eh_spandrel(nomes) -> bool:
+    if isinstance(nomes, bytes):
+        return (any(x.rstrip(".").encode() in nomes for x in SPANDREL)
+                or (b"body.0.weight" in nomes and b"body.1.weight" in nomes and b"conv_first" not in nomes))
+    chaves = [n for n in nomes if n != "__metadata__"]
+    return (any(x in n for n in chaves for x in SPANDREL)
+            or (len(chaves) >= 6 and all(COMPACTO.match(n) for n in chaves)))
 
 
 def eh_ampliador(path: str) -> bool:
@@ -106,6 +130,21 @@ def eh_seedvr2(path: str) -> bool:
         return tipo_por_nomes(_nomes(p)) == "seedvr2"
     except (OSError, ValueError, KeyError, struct.error):
         return False
+
+
+def tipo_local(path: str) -> str:
+    """O tipo de um arquivo do disco: esrgan, seedvr2, spandrel ou "" (o Forja não roda)."""
+    p = Path(path)
+    if p.suffix.lower() not in (".pth", ".safetensors"):
+        return ""
+    try:
+        return tipo_por_nomes(_nomes(p), path)
+    except (OSError, ValueError, zipfile.BadZipFile, KeyError, struct.error):
+        return ""
+
+
+def eh_spandrel(path: str) -> bool:
+    return tipo_local(path) == "spandrel"
 
 
 def vae_seedvr2(modelo: str) -> str:
@@ -136,7 +175,7 @@ def catalogo() -> dict:
         chave = (m["name"].lower(), m.get("size"))
         if m["kind"] == "ampliador" and chave not in vistos:
             vistos.add(chave)
-            achados.append({"path": m["path"], "name": m["name"], "tipo": "seedvr2" if eh_seedvr2(m["path"]) else "esrgan"})
+            achados.append({"path": m["path"], "name": m["name"], "tipo": tipo_local(m["path"]) or "esrgan"})
     no_disco = {Path(m["path"]).name.lower(): m["path"] for m in achados}
     try:
         assets = _assets_esrgan(int(time.time() // GH_TTL))
@@ -171,9 +210,9 @@ def baixar_modelo(nome: str, folder: str = "") -> dict:
 
 ESRGAN_MAX = 200 << 20  # ESRGAN/UltraSharp têm < 200 MB; acima disso só vale a pena ler o que se chama seedvr2
 PICKLE_INICIO = 1 << 20  # o data.pkl é a 1ª entrada do zip do .pth (sem compressão): 1 MB o contém inteiro
-BUSCA_PADRAO = ("esrgan", "upscale")  # sem termo: o que costuma nomear um ampliador no HF
+BUSCA_PADRAO = ("esrgan", "upscale", "4x")  # sem termo: o que costuma nomear um ampliador no HF
 # Sem termo, estes abrem a lista: o HF está cheio de cópias do mesmo ESRGAN, e os bons se perdiam no meio
-REFERENCIA = ("Comfy-Org/SeedVR2", "Kim2091/UltraSharp", "ai-forever/Real-ESRGAN")
+REFERENCIA = ("Comfy-Org/SeedVR2", "Kim2091/UltraSharpV2", "Kim2091/UltraSharp", "ai-forever/Real-ESRGAN")
 ARQUIVOS_POR_REPO = 6  # conferidos por repo na busca (os menores primeiro); a ficha confere todos
 
 
@@ -229,7 +268,7 @@ def arquivos_hf(repo: str, maximo: int = 0) -> list[dict]:
     tem_seedvr2 = "seedvr2" in tipos
     out = [{"path": c[0], "size": c[1], "quant": "", "shards": 1, "tipo": t,
             "papel": "modelo", "subpasta": PASTA["seedvr2" if t == "vae" else t]}
-           for c, t in zip(candidatos, tipos) if t in ("esrgan", "seedvr2") or (t == "vae" and tem_seedvr2)]
+           for c, t in zip(candidatos, tipos) if t in ("esrgan", "seedvr2", "spandrel") or (t == "vae" and tem_seedvr2)]
     return sorted(out, key=lambda f: (f["tipo"] == "vae", f["size"], f["path"]))
 
 
@@ -271,7 +310,8 @@ def buscar_hf(q: str, sort: str = "relevancia", limite: int = 20) -> list[dict]:
             return None
         return {"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0), "likes": m.get("likes", 0),
                 "updated": m.get("lastModified", ""), "gated": bool(m.get("gated")), "tags": _tags(m.get("tags") or []),
-                "variante_nome": " + ".join({"esrgan": "ESRGAN (sd-cli)", "seedvr2": "SeedVR2 (ComfyUI)"}[t] for t in tipos)}
+                "variante_nome": " + ".join({"esrgan": "ESRGAN (sd-cli)", "seedvr2": "SeedVR2 (ComfyUI)",
+                                             "spandrel": "DAT/HAT/SwinIR (ComfyUI)"}[t] for t in tipos)}
     with ThreadPoolExecutor(8) as ex:
         achados = [x for x in ex.map(confere, list(vistos.values())[: limite * 2]) if x]
     return achados[:limite]
@@ -389,9 +429,10 @@ def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_
     SeedVR2 vai pelo ComfyUI (comfy.py); ESRGAN pelo sd-cli. ESRGAN que passou do alvo (um 4× pedido como 2×)
     volta ao tamanho pedido por Lanczos. `progresso(fase)`: só o SeedVR2 avisa (é o único que leva minutos)."""
     from PIL import Image
-    if modelo and eh_seedvr2(modelo):
+    tipo = tipo_local(modelo) if modelo else ""
+    if tipo in ("seedvr2", "spandrel"):
         from . import comfy
-        return comfy.ampliar(entrada, saida, fator, modelo, job_id, progresso)
+        return comfy.ampliar(entrada, saida, fator, modelo, job_id, progresso, tipo)
     with Image.open(entrada) as im:
         alvo = (im.width * int(fator), im.height * int(fator))
         if not modelo:
