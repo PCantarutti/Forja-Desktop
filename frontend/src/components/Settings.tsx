@@ -1701,8 +1701,16 @@ function ClaudeControla() {
   if (!c) return null;
   return (
     <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
-      <label className="flex items-start gap-3">
-        <input type="checkbox" className="mt-1" checked={c.ligado} onChange={(e) => muda({ mcp_servidor: e.target.checked })} />
+      <div className="flex items-start gap-3">
+        <button
+          role="switch"
+          aria-checked={c.ligado}
+          aria-label="Permitir que o Claude controle o Forja"
+          onClick={() => muda({ mcp_servidor: !c.ligado })}
+          className={`mt-0.5 h-5 w-10 shrink-0 rounded-full transition-colors ${c.ligado ? "bg-sky-500" : "bg-raised"}`}
+        >
+          <span className={`block size-4 rounded-full bg-white transition-transform ${c.ligado ? "translate-x-5" : "translate-x-0.5"}`} />
+        </button>
         <span>
           <span className="block text-sm font-medium text-fg">Permitir que o Claude controle o Forja</span>
           <span className="block text-xs text-muted">
@@ -1711,8 +1719,8 @@ function ClaudeControla() {
             celular, e o que você escreve nela chega a ele no resultado da próxima ferramenta.
           </span>
         </span>
-      </label>
-      <details className="rounded-xl border border-line bg-bg px-3 py-2 text-xs text-muted" open={!c.ligado}>
+      </div>
+      <details className="rounded-xl border border-line bg-bg px-3 py-2 text-xs text-muted">
         <summary className="cursor-pointer select-none text-sm text-fg">Como usar e para que serve</summary>
         <div className="mt-2 space-y-3 leading-relaxed">
           <p>
