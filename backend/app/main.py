@@ -412,10 +412,12 @@ async def get_activity():
     except Exception:  # runner fora do ar não pode derrubar a barra lateral
         pass
     try:  # modelo local no ar: o ponto verde da aba IA local não depende de o painel estar aberto
-        local = bool(localai.status().get("running"))
+        st = localai.status()
+        local, alias = bool(st.get("running")), st.get("alias") or ""
     except Exception:
-        local = False
-    return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local}
+        local, alias = False, ""
+    # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
+    return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias}
 
 
 @app.post("/api/servers/clear")

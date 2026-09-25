@@ -544,6 +544,11 @@ export default function App() {
                `${conv(c.id)?.title ?? "Conversa"}: ${c.waiting} esperando você`, true, abrir(c.id));
       }
     }
+    // "IA local" com outro nome no seletor (o modelo foi trocado pelo celular ou pela API): o llama-server só
+    // tem um modelo, então a resposta viria dele com o rótulo do antigo. O seletor passa a mostrar o carregado.
+    if (activity.local && activity.local_alias && settings.provider === "local" && settings.model !== activity.local_alias
+        && secaoRef.current !== "maestro")
+      setSettings((s) => ({ ...s, model: activity.local_alias! }));
     const agora = new Set(activity.conversations.filter((c) => c.running).map((c) => c.id));
     // Turno que esta tela não disparou (o celular, ou aviso de processo em segundo plano) na conversa aberta:
     // rodando, conecta no stream dele como no F5; já terminado (durou menos que o intervalo), recarrega.

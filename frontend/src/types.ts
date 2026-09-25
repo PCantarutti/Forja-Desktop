@@ -30,6 +30,7 @@ export type Activity = {
     run?: string }[];  // id do turno mais recente (rodando ou recém-terminado)
   servers: number;
   local?: boolean;  // modelo local carregado no llama-server
+  local_alias?: string;  // qual: o seletor com "IA local" segue o que está carregado
 };
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video";
