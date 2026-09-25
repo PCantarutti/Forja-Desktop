@@ -48,7 +48,9 @@ TRANSITIONS: dict[str, set[str]] = {
     "implementing": {"testing", "reviewing", "failed", "queued", "completed"},
     "testing": {"reviewing", "failed", "queued", "completed"},
     "reviewing": {"completed", "failed", "queued"},
-    "failed": {"queued", "pending", "completed"},  # a Maestro conferiu e aceita: fecha direto
+    # failed → completed só pelo atalho "conferida" de set_status, que exige prova (_prova): sem ela
+    # um modelo pequeno carimbava como pronta a tarefa cujo teste acabou de falhar.
+    "failed": {"queued", "pending"},
     "blocked": {"pending", "queued"},
     "needs_human": {"pending", "queued"},
     "completed": {"pending", "queued"},   # reabrir: o Maestro achou um bug depois
@@ -57,7 +59,7 @@ TRANSITIONS: dict[str, set[str]] = {
 SEMPRE = {"cancelled", "needs_human", "blocked"}
 
 CONTRACT_FIELDS = ("type", "context", "goal", "relevant_files", "requirements", "constraints", "do_not",
-                   "acceptance_criteria", "verify_command", "expected_result")
+                   "acceptance_criteria", "verify_command", "verify_reason", "expected_result")
 # Tipo da tarefa: diz ao Worker que tipo de mudança é (correção não é hora de refatorar) e ao
 # roteador que especialista chamar (subagents.ROTA_POR_TIPO). Fora da lista, é ignorado.
 TIPOS = ("feature", "bugfix", "refactor", "test", "ui", "docs", "chore")
@@ -275,7 +277,7 @@ def duplicadas(conv_id: int, tasks: list) -> list[str]:
     for bruto in tasks:
         if not isinstance(bruto, dict):
             continue
-        nome = _normaliza(bruto.get("title") or (bruto.get("contract") or {}).get("goal"))
+        nome = _normaliza(bruto.get("title") or _contrato_bruto(bruto).get("goal"))
         if not nome:
             continue
         for code, titulo in abertas:
@@ -362,7 +364,7 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id:
             if not isinstance(bruto, dict):
                 raise ToolError(f"Tarefa {i + 1} deve ser um objeto com title e contract.")
             titulo = str(bruto.get("title") or "").strip()[:200]
-            contrato = normalize_contract(bruto.get("contract") or ({"goal": titulo} if titulo else None))
+            contrato = normalize_contract(_contrato_bruto(bruto) or ({"goal": titulo} if titulo else None))
             if guia and guia not in contrato.get("relevant_files", []):
                 contrato["relevant_files"] = [guia, *contrato.get("relevant_files", [])][:MAX_ITENS]
             titulo = titulo or contrato["goal"][:200]
@@ -391,12 +393,45 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id:
                 if alvo != task.code and alvo not in resolvidas:
                     resolvidas.append(alvo)
             task.depends_on = resolvidas
+        if ciclo := _ciclo(s, conv_id):
+            # Sem esta checagem, A→B→A ficava preso em unmet_deps para sempre, e pendencias() nem
+            # listava as duas (só lista pendente com dependência pronta).
+            s.rollback()
+            raise ToolError("Dependências em ciclo: " + " → ".join(ciclo) + ". Uma tarefa não pode "
+                            "depender, direta ou indiretamente, de si mesma. Refaça o depends_on.")
         s.commit()
         out = {"feature_id": feat.id, "title": feat.title,
                "tasks": [{"code": t.code, "title": t.title, "depends_on": t.depends_on,
                           "model_slot": t.model_slot} for t, _ in criadas]}
     _publish(conv_id)
     return out
+
+
+def _contrato_bruto(tarefa: dict) -> dict:
+    """O contrato da tarefa do plano, aceitando os campos soltos na tarefa: o gpt-oss escreveu goal,
+    requirements e verify_command ao lado do title, fora de 'contract', e eles sumiam calados."""
+    soltos = {k: tarefa[k] for k in CONTRACT_FIELDS if k in tarefa}
+    dentro = tarefa.get("contract") if isinstance(tarefa.get("contract"), dict) else {}
+    return {**soltos, **dentro}
+
+
+def _ciclo(s, conv_id: int) -> list[str]:
+    """Um ciclo no depends_on das tarefas da conversa (['A', 'B', 'A']), ou []."""
+    grafo = {t.code: list(t.depends_on or []) for t in s.query(db.Task).filter(db.Task.conversation_id == conv_id)}
+    cor: dict[str, int] = {}  # 1 = no caminho atual, 2 = já visto sem ciclo
+
+    def visita(no: str, caminho: list[str]) -> list[str]:
+        cor[no] = 1
+        for dep in grafo.get(no, []):
+            if cor.get(dep) == 1:
+                return caminho[caminho.index(dep):] + [dep]
+            if dep not in cor and (achado := visita(dep, caminho + [dep])):
+                return achado
+        cor[no] = 2
+        return []
+
+    # ponytail: recursão, até 40 tarefas por funcionalidade não chega perto do limite do Python
+    return next((c for no in grafo if no not in cor and (c := visita(no, [no]))), [])
 
 
 def _guia_no_contrato() -> str:
@@ -441,7 +476,13 @@ def set_status(code: str, novo: str, conv_id: int | None = None, reason: str = "
         # A Maestro conferiu sozinha (rodou os testes) o trabalho que um Worker já fez e quer fechar a
         # tarefa que ela mesma tinha devolvido para a fila: sem esta saída, numa rodada real ela tentou
         # oito vezes e desistiu com needs_human em tarefas com os testes passando.
-        conferida = novo == "completed" and atual in ("pending", "queued", "needs_human", "blocked")             and task.attempt_count > 0
+        conferida = novo == "completed" and atual in ("failed", "pending", "queued", "needs_human", "blocked") \
+            and task.attempt_count > 0
+        if conferida and not _prova(s, task):
+            cmd = (task.contract or {}).get("verify_command")
+            raise ToolError(f"{task.code} está em '{atual}' e não há prova de que ficou pronta. "
+                            + (f"Rode `{cmd}` com run_command e, passando, feche de novo."
+                               if cmd else "Rode os testes ou o build com run_command e, passando, feche de novo."))
         if novo != atual and novo not in SEMPRE and not conferida and novo not in TRANSITIONS.get(atual, set()):
             permitidos = ", ".join(sorted(TRANSITIONS.get(atual, set()) | SEMPRE))
             raise ToolError(f"{task.code} está em '{atual}' e não pode ir para '{novo}'. "
@@ -459,6 +500,27 @@ def set_status(code: str, novo: str, conv_id: int | None = None, reason: str = "
         out = _task_dict(task)
     _publish(conv_id)
     return out
+
+
+def _comandos_ok(s, conv_id: int, desde) -> list[str]:
+    """Comandos que a Maestro rodou com sucesso (exit 0) nesta conversa a partir de `desde`."""
+    msgs = s.query(db.Message).filter(db.Message.conversation_id == conv_id, db.Message.role == "tool",
+                                      db.Message.name == "run_command", db.Message.status == "ok")
+    if desde is not None:
+        msgs = msgs.filter(db.Message.created_at >= desde)
+    return [str(((m.meta or {}).get("arguments") or {}).get("command") or "") for m in msgs]
+
+
+def _prova(s, task: db.Task) -> bool:
+    """Fechar uma tarefa que não passou pelo ciclo normal exige evidência: a última tentativa passou
+    no verify, ou a Maestro rodou o verify_command (ou, sem ele, qualquer comando) com sucesso
+    depois que a última tentativa terminou."""
+    ultima = s.query(db.Attempt).filter(db.Attempt.task_id == task.id).order_by(db.Attempt.n.desc()).first()
+    if ultima and ultima.status == "completed":
+        return True
+    cmd = str((task.contract or {}).get("verify_command") or "").strip()
+    desde = ultima and (ultima.finished_at or ultima.started_at)
+    return any(cmd in c if cmd else c for c in _comandos_ok(s, task.conversation_id, desde))
 
 
 def _fecha_feature(s, feature_id: int, fechando: int) -> None:
@@ -512,9 +574,15 @@ def encerra_validadas(conv_id: int) -> list[str]:
             db.Message.name.in_(VALIDACOES))]
         from . import qualidade, workspace  # import tardio: qualidade importa este módulo
         for f in feats:
+            pedido = pedido_de_validacao({"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id)})
             if not any(t >= f.updated_at for t in feitas):
-                raise ToolError("A entrega ainda não foi validada. " + pedido_de_validacao(
-                    {"id": f.id, "title": f.title, "goal": f.goal, "verify": _verifies(s, f.id)}))
+                raise ToolError("A entrega ainda não foi validada. " + pedido)
+            # Qualquer comando valia (um `ls` encerrava a entrega). Com verify nas tarefas, cada um
+            # precisa ter passado de novo depois que a funcionalidade entrou em validação.
+            rodados = _comandos_ok(s, conv_id, f.updated_at)
+            if faltam := [v for v in _verifies(s, f.id) if not any(v.strip() in c for c in rodados)]:
+                raise ToolError(f"A entrega de '{f.title}' ainda não foi validada: falta rodar com sucesso "
+                                + "; ".join(f"`{v}`" for v in faltam) + ". " + pedido)
             if faltas := qualidade.faltas_para_entregar(conv_id, f.updated_at, workspace.root()):
                 raise ToolError(f"Projeto com tela: '{f.title}' ainda não pode ser encerrada. Falta: "
                                 + "; ".join(faltas) + ".")
@@ -758,6 +826,9 @@ _CONTRACT_SCHEMA = {
                            "description": "Comando que PROVA que ficou pronto (ex.: pytest -q tests/test_x.py). "
                                           "Executor de testes, não python -c: esse pede aprovação. "
                                           "Roda depois que o Worker para e o resultado entra no task_result."},
+        "verify_reason": {"type": "string",
+                          "description": "Só quando não existe comando possível: por que esta tarefa não tem "
+                                         "verify_command (ex.: só texto de documentação)."},
         "expected_result": {"type": "string"}},
     "required": ["goal"]}
 
@@ -800,6 +871,16 @@ def _plan_feature(_root: Path, args: dict) -> str:
             args = {**args, "feature_id": anexada.id}
     antes = pendencias(_conv()) if not args.get("feature_id") else []
     tarefas, copias = sem_copias(args.get("tasks") or [])
+    # Sem verify nada prova que a tarefa ficou pronta e ela sai 'unverified' em silêncio. Aceita
+    # sem ele só com o motivo escrito (docs, ajuste de texto...), para a decisão ficar explícita.
+    sem_verify = [str(t.get("title") or _contrato_bruto(t).get("goal") or f"tarefa {i + 1}")[:60]
+                  for i, t in enumerate(tarefas) if isinstance(t, dict)
+                  and not str(_contrato_bruto(t).get("verify_command") or "").strip()
+                  and not str(_contrato_bruto(t).get("verify_reason") or "").strip()]
+    if sem_verify:
+        raise ToolError("Tarefa sem verify_command: " + "; ".join(sem_verify) + ". Dê a cada uma o comando "
+                        "que prova que ficou pronta (testes, build, lint, tsc). Se não existir comando "
+                        "possível, escreva o motivo em contract.verify_reason.")
     out = create_feature(_conv(), args.get("title") or (None if args.get("goal") else _objetivo_da_conversa()), args.get("goal"), tarefas,
                          args.get("feature_id") or None)
     linhas = [f"Funcionalidade '{out['title']}' (feature_id={out['feature_id']}): "
@@ -892,16 +973,26 @@ def _update_task(_root: Path, args: dict) -> str:
     conv = _conv()
     code = str(args.get("code") or "").strip().upper()
     mudou = []
+    # Tudo o que pode ser recusado é validado ANTES de mexer no status: antes o status mudava e só
+    # depois o contrato inválido dava erro, deixando a tarefa meio atualizada.
+    contrato = slot = None
+    if (c := args.get("contract")) is not None:
+        if not isinstance(c, dict):
+            raise ToolError("contract deve ser um objeto com os campos do Implementation Contract.")
+        # Parcial se mescla com o atual: a Maestro manda só {"verify_command": ...} e antes perdia o
+        # resto do contrato (e a chamada era recusada por falta de goal).
+        contrato = normalize_contract({**(get(code, conv).contract or {}), **c})
+    if args.get("model_slot") is not None:
+        slot = _slot_valido(args.get("model_slot"))
     if novo := str(args.get("status") or "").strip().lower():
         set_status(code, novo, conv, str(args.get("reason") or ""))
         mudou.append(f"status={novo}")
     with db.session() as s:
         task = _get(s, code, conv)
-        if (c := args.get("contract")) is not None:
-            task.contract = normalize_contract(c)
+        if contrato is not None:
+            task.contract = contrato
             mudou.append("contrato")
-        if (slot := args.get("model_slot")) is not None:
-            slot = _slot_valido(slot)
+        if args.get("model_slot") is not None:
             task.model_slot = slot
             mudou.append(f"modelo={slot or 'automático'}")
         if (p := args.get("priority")) is not None:

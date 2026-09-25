@@ -377,7 +377,7 @@ def test_ferramentas_do_maestro_sao_executaveis(conv):
     for nome in ("plan_feature", "list_tasks", "update_task", "run_task"):
         assert get_tool(nome).name == nome
     texto = _asyncio.run(execute("plan_feature", {
-        "title": "X", "goal": "y", "tasks": [{"contract": {"goal": "fazer algo"}}]}))
+        "title": "X", "goal": "y", "tasks": [{"contract": {"goal": "fazer algo", "verify_command": "pytest -q"}}]}))
     assert "TASK-001" in texto
     assert "TASK-001" in _asyncio.run(execute("list_tasks", {}))
 
@@ -1274,6 +1274,12 @@ def test_maestro_fecha_tarefa_que_devolveu_para_a_fila_depois_de_conferir(tmp_pa
     taskdb.finish_attempt(taskdb.new_attempt("TASK-001", {"level": "capaz"}, "", conv), "failed", {}, error="verify")
     taskdb.set_status("TASK-001", "queued", conv)
     taskdb.set_status("TASK-001", "pending", conv)
+    with pytest.raises(ToolError, match="não há prova"):  # conferir exige ter rodado algo
+        taskdb.set_status("TASK-001", "completed", conv)
+    with db.session() as s:
+        s.add(db.Message(conversation_id=conv, role="tool", name="run_command", status="ok",
+                         meta={"arguments": {"command": "pytest -q"}}))
+        s.commit()
     assert taskdb.set_status("TASK-001", "completed", conv)["status"] == "completed"
 
 
@@ -1311,3 +1317,19 @@ def test_escrita_fora_do_contrato_vira_aviso():
     assert maestro.fora_do_contrato(mud, [".forja/knowledge/frontend.md"]) == []   # só o guia: sem declaração
     r = {"status": "unverified", "outside_contract": ["src/style.css"]}
     assert "fora do contrato (src/style.css)" in maestro._para_o_maestro(r)
+
+
+def test_worker_sem_conexao_deixa_a_tarefa_failed_e_redespachavel(conv, monkeypatch):
+    """Antes o erro do Worker (conexão caiu) deixava a tarefa em 'reviewing', como se tivesse entregue,
+    e a Maestro não conseguia devolvê-la para 'pending' para tentar de novo."""
+    async def cai(*a, **k):
+        raise llm.LLMError("Não foi possível conectar em https://ollama.com/v1: ConnectTimeout.")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(llm, "chat_stream", cai)
+    _plano(conv)
+    out, _ = _despacha(conv, "TASK-001")
+    assert out["meta"]["task_result"]["status"] == "error"
+    task = taskdb.get("TASK-001", conv)
+    assert task.status == "failed" and "conectar" in (task.blocked_reason or "")
+    assert taskdb.set_status("TASK-001", "pending", conv)["status"] == "pending"

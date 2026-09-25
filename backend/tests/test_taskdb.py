@@ -358,12 +358,88 @@ def test_toda_tentativa_recomeca_o_ciclo(conv):
     assert taskdb.set_status("TASK-001", "queued", conv)["status"] == "queued"
 
 
-def test_maestro_fecha_direto_uma_tarefa_que_falhou(conv):
-    """Ela conferiu e aceitou: antes precisava percorrer a máquina à mão (10 chamadas numa execução real)."""
-    _plano(conv)
-    for st in ("queued", "implementing", "failed", "completed"):
-        taskdb.set_status("TASK-001", st, conv)
-    assert taskdb.get("TASK-001", conv).status == "completed"
+def _rodou(conv_id, comando, status="ok"):
+    """A Maestro rodou `comando` com run_command nesta conversa."""
+    with db.session() as s:
+        s.add(db.Message(conversation_id=conv_id, role="tool", name="run_command", status=status,
+                         content="exit code: 0", meta={"arguments": {"command": comando}}))
+        s.commit()
+
+
+def _falhou(conv_id, code):
+    taskdb.set_status(code, "queued", conv_id)
+    taskdb.finish_attempt(taskdb.new_attempt(code, {"level": "capaz"}, "", conv_id), "failed", {}, error="verify")
+    taskdb.set_status(code, "implementing", conv_id)
+    taskdb.set_status(code, "failed", conv_id)
+
+
+def test_tarefa_que_falhou_so_fecha_com_prova(conv):
+    """Antes failed→completed passava direto: um modelo pequeno fechava a tarefa cujo teste falhou."""
+    _plano(conv, tasks=[{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q tests/test_a.py"}}])
+    _falhou(conv, "TASK-001")
+    with pytest.raises(ToolError, match="não há prova"):
+        taskdb.set_status("TASK-001", "completed", conv)
+    _rodou(conv, "pytest -q tests/test_b.py")          # outro comando não prova esta tarefa
+    _rodou(conv, "pytest -q tests/test_a.py", "erro")  # o verify, mas falhando
+    with pytest.raises(ToolError, match="pytest -q tests/test_a.py"):
+        taskdb.set_status("TASK-001", "completed", conv)
+    _rodou(conv, "cd x && pytest -q tests/test_a.py")
+    assert taskdb.set_status("TASK-001", "completed", conv)["status"] == "completed"
+
+
+def test_conferida_sem_verify_aceita_qualquer_comando_ok(conv):
+    _plano(conv, tasks=[{"title": "A", "contract": {"goal": "a"}}])
+    _falhou(conv, "TASK-001")
+    taskdb.set_status("TASK-001", "pending", conv)
+    with pytest.raises(ToolError, match="não há prova"):
+        taskdb.set_status("TASK-001", "completed", conv)
+    _rodou(conv, "npm run build")
+    assert taskdb.set_status("TASK-001", "completed", conv)["status"] == "completed"
+
+
+def test_dependencia_em_ciclo_e_recusada(conv):
+    with pytest.raises(ToolError, match="ciclo: TASK-00[12] → TASK-00[12] → TASK-00[12]"):
+        _plano(conv, tasks=[{"title": "A", "contract": {"goal": "a"}, "depends_on": ["2"]},
+                            {"title": "B", "contract": {"goal": "b"}, "depends_on": ["1"]}])
+    assert taskdb.board(conv)["total"] == 0  # nada ficou gravado pela metade
+    _plano(conv, tasks=[{"title": "A", "contract": {"goal": "a"}},
+                        {"title": "B", "contract": {"goal": "b"}, "depends_on": ["1"]},
+                        {"title": "C", "contract": {"goal": "c"}, "depends_on": ["1", "2"]}])  # DAG passa
+
+
+def test_plan_feature_exige_verify_ou_motivo(conv, tmp_path, monkeypatch):
+    from app import workspace
+    monkeypatch.setattr(workspace, "root", lambda: tmp_path)
+    with pytest.raises(ToolError, match="sem verify_command: Doc"):
+        taskdb.PLAN_FEATURE.handler(None, {"tasks": [
+            {"title": "Código", "contract": {"goal": "c", "verify_command": "pytest -q"}},
+            {"title": "Doc", "contract": {"goal": "d"}}]})
+    texto = taskdb.PLAN_FEATURE.handler(None, {"tasks": [
+        {"title": "Código", "contract": {"goal": "c", "verify_command": "pytest -q"}},
+        {"title": "Doc", "contract": {"goal": "d", "verify_reason": "só texto do README"}}]})
+    assert "TASK-002" in texto
+    assert taskdb.get("TASK-002", conv).contract["verify_reason"] == "só texto do README"
+
+
+def test_entrega_so_encerra_com_todos_os_verify_rodados(conv, tmp_path, monkeypatch):
+    """Antes qualquer run_command (até um `ls`) encerrava a entrega."""
+    from app import qualidade, workspace
+    monkeypatch.setattr(workspace, "root", lambda: tmp_path)
+    monkeypatch.setattr(qualidade, "faltas_para_entregar", lambda *a: [])
+    _plano(conv, tasks=[{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q tests/a.py"}},
+                        {"title": "B", "contract": {"goal": "b", "verify_command": "npm test"}}])
+    for code in ("TASK-001", "TASK-002"):
+        for st in ("queued", "implementing", "testing", "reviewing", "completed"):
+            taskdb.set_status(code, st, conv)
+    assert taskdb.board(conv)["features"][0]["status"] == "validating"
+    _rodou(conv, "ls")
+    with pytest.raises(ToolError, match="falta rodar com sucesso `pytest -q tests/a.py`; `npm test`"):
+        taskdb.encerra_validadas(conv)
+    _rodou(conv, "pytest -q tests/a.py")
+    with pytest.raises(ToolError, match="`npm test`"):
+        taskdb.encerra_validadas(conv)
+    _rodou(conv, "npm test")
+    assert taskdb.encerra_validadas(conv) == ["Autenticação"]
 
 
 def test_reabrir_tarefa_devolve_a_feature_para_active(conv):
@@ -425,3 +501,31 @@ def test_cancelada_nao_conta_no_total(conv):
     assert b["total"] == 1 and len(b["features"][0]["tasks"]) == 2
     taskdb.set_status("TASK-001", "cancelled", conv)
     assert taskdb.board(conv)["total"] == 0 and taskdb.board(conv)["features"]   # a árvore continua lá
+
+
+def test_update_task_com_contrato_parcial_mescla_com_o_atual(conv):
+    _plano(conv, tasks=[{"title": "A", "contract": {"goal": "a", "requirements": ["r1"], "verify_command": "pytest"}}])
+    texto = taskdb.UPDATE_TASK.handler(None, {"code": "TASK-001", "contract": {"verify_command": "pytest -q"}})
+    assert "contrato" in texto
+    c = taskdb.get("TASK-001", conv).contract
+    assert c["goal"] == "a" and c["requirements"] == ["r1"] and c["verify_command"] == "pytest -q"
+
+
+def test_update_task_invalido_nao_muda_o_status_pela_metade(conv):
+    _plano(conv)
+    with pytest.raises(ToolError, match="model_slot inválido"):
+        taskdb.UPDATE_TASK.handler(None, {"code": "TASK-001", "status": "queued", "model_slot": "xpto"})
+    with pytest.raises(ToolError, match="verify_command é comando de terminal"):
+        taskdb.UPDATE_TASK.handler(None, {"code": "TASK-001", "status": "queued",
+                                          "contract": {"verify_command": "browser_validate(x)"}})
+    assert taskdb.get("TASK-001", conv).status == "pending"
+
+
+def test_campos_do_contrato_soltos_na_tarefa_sao_aceitos(conv):
+    """O gpt-oss escreveu goal e verify_command ao lado do title, fora de 'contract'."""
+    _plano(conv, tasks=[{"title": "Soma", "goal": "criar soma(a, b)", "verify_command": "pytest -q",
+                         "requirements": ["retorna a + b"], "contract": {"context": "calc"}}])
+    c = taskdb.get("TASK-001", conv).contract
+    c.pop("relevant_files", None)  # o guia visual entra sozinho quando a pasta de teste tem tela
+    assert c == {"context": "calc", "goal": "criar soma(a, b)", "requirements": ["retorna a + b"],
+                 "verify_command": "pytest -q"}

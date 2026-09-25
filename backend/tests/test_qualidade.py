@@ -53,17 +53,17 @@ def test_detecta_projeto_com_tela(tmp_path, site):
 def test_projeto_com_tela_exige_guia_visual_e_ele_vai_no_contrato(site):
     root, conv = site
     with pytest.raises(ToolError, match="guia visual"):
-        taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Home", "contract": {"goal": "home"}}]})
+        taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}]})
     (root / qualidade.GUIA).parent.mkdir(parents=True, exist_ok=True)
     (root / qualidade.GUIA).write_text("# Frontend\nPaleta: #111 e #0af. Fonte Inter.\n", "utf-8")
-    taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Home", "contract": {"goal": "home",
+    taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test",
                                                                                "relevant_files": ["src/App.tsx"]}}]})
     assert taskdb.get("TASK-001", conv).contract["relevant_files"] == [qualidade.GUIA, "src/App.tsx"]
 
 
 def test_erro_de_console_vira_tarefa_sem_duplicar(site):
     _, conv = site
-    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home"}}])
+    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}])
     _conclui("TASK-001", conv)  # funcionalidade em validação
     resultado = "URL: x\n\nERROS DE CONSOLE: 2\n[x] pageerror: TypeError: a is undefined\n[y] requestfailed: /api\n\nESTRUTURA"
     nota = qualidade.pos_validacao(conv, resultado, "http://localhost:5173/")
@@ -77,14 +77,14 @@ def test_erro_de_console_vira_tarefa_sem_duplicar(site):
 def test_rodadas_de_correcao_tem_limite(site, monkeypatch):
     _, conv = site
     monkeypatch.setattr(qualidade, "MAX_CORRECOES", 1)
-    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home"}}])
+    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}])
     qualidade.tarefa_de_correcao(conv, "Corrigir A", ["a"], "x")
     assert "ask_user" in qualidade.tarefa_de_correcao(conv, "Corrigir B", ["b"], "x")
 
 
 def test_encerrar_projeto_com_tela_exige_build_navegador_e_visual(site):
     root, conv = site
-    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home"}}])
+    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}])
     _conclui("TASK-001", conv)
     _ferramenta(conv, "run_command", "exit code: 0\n1 passed", {"command": "npm test"})  # validou, mas pouco
     with pytest.raises(ToolError) as falta:
@@ -101,9 +101,10 @@ def test_encerrar_projeto_com_tela_exige_build_navegador_e_visual(site):
 
 def test_revisao_visual_indisponivel_e_dita_e_nao_trava(site):
     _, conv = site
-    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home"}}])
+    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}])
     _conclui("TASK-001", conv)
     _ferramenta(conv, "run_command", "exit code: 0", {"command": "npm run build"})
+    _ferramenta(conv, "run_command", "exit code: 0", {"command": "npm test"})
     _ferramenta(conv, "browser_validate", "ERROS DE CONSOLE: 0 (nenhum)")
     _ferramenta(conv, "visual_review", "REVISÃO VISUAL INDISPONÍVEL: nenhum modelo com visão. O visual NÃO foi julgado.")
     assert "encerrada" in projstate.SESSION_NOTE.handler(None, {"objective": "Home"})
@@ -140,7 +141,7 @@ def test_visual_review_sem_modelo_mostra_os_prints_e_avisa(site, monkeypatch):
 
 def test_visual_review_reprovado_vira_tarefa(site, monkeypatch):
     _, conv = site
-    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home"}}])
+    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}])
     _fotos(monkeypatch)
     monkeypatch.setattr(config, "MAESTRO_VISUAL", {"provider": "local", "model": "visao"})
 
@@ -177,9 +178,9 @@ def test_site_novo_exige_guia_pelo_plano(tmp_path, monkeypatch):
     try:
         with pytest.raises(ToolError, match="guia visual"):
             taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Landing", "contract": {
-                "goal": "landing", "relevant_files": ["index.html", "style.css"]}}]})
+                "goal": "landing", "verify_command": "npm test", "relevant_files": ["index.html", "style.css"]}}]})
         assert "TASK-001" in taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Script", "contract": {
-            "goal": "cli", "relevant_files": ["main.py"]}}]})
+            "goal": "cli", "verify_reason": "script sem testes", "relevant_files": ["main.py"]}}]})
     finally:
         taskdb.CONV.reset(token)
 
@@ -188,7 +189,7 @@ def test_lembrete_volta_quando_as_provas_se_completam(site, monkeypatch):
     """Rodada real: revisão visual aprovou, a Maestro escreveu o resumo e não encerrou."""
     from app import llm, modelctl
     root, conv = site
-    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home"}}])
+    taskdb.create_feature(conv, "Home", "", [{"title": "Home", "contract": {"goal": "home", "verify_command": "npm test"}}])
     _conclui("TASK-001", conv)
     lembretes = []
     passos = []

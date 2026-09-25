@@ -55,6 +55,10 @@ def _conn_error(provider: str, e: Exception) -> LLMError:
     # nada a configurar; apontando para outra máquina (ou para o Forja em Docker), aí sim ele
     # precisa escutar em 0.0.0.0. Dizer a segunda coisa na primeira situação só confunde.
     longe = urlparse(base_url(provider)).hostname not in ("127.0.0.1", "localhost", "::1")
+    if CLOUD_HOST in base_url(provider):  # nuvem: não há OLLAMA_HOST nem bandeja para conferir
+        return LLMError(f"Sem resposta do Ollama Cloud ({base_url(provider)}): {e.__class__.__name__}. "
+                        "Confira a internet; se ela estiver ok, o serviço pode estar instável — tente de novo "
+                        "em instantes.")
     hint = {
         "ollama": ("Ollama está rodando e escutando em " + str(urlparse(base_url(provider)).hostname)
                    + "? Para aceitar conexão de fora da máquina dele, ele precisa subir com "

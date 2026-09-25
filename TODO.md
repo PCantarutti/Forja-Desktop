@@ -137,20 +137,36 @@ resultado registrado.
 **Por quê:** hoje um modelo pequeno consegue declarar pronto o que não está.
 **Depende de:** nada. Tudo aqui mexe em `taskdb.py`/`maestro.py`, por isso vai numa entrega só.
 
-- [ ] **Bloquear `failed → completed` sem prova.** Tirar a transição da tabela (`taskdb.py:51`) ou só
+- [x] **Bloquear `failed → completed` sem prova.** Tirar a transição da tabela (`taskdb.py:51`) ou só
       permiti-la se houve um `run_command` do `verify_command` que passou depois da última falha.
-- [ ] **"Conferida" exige evidência.** O atalho em `taskdb.py:444` não pode fechar uma tarefa
+- [x] **"Conferida" exige evidência.** O atalho em `taskdb.py:444` não pode fechar uma tarefa
       `pending`/`needs_human` sem uma verificação posterior que passou.
-- [ ] **Ciclo em `depends_on`.** Detectar no `plan_feature` e no `update_task` (DFS simples) e recusar
+- [x] **Ciclo em `depends_on`.** Detectar no `plan_feature` e no `update_task` (DFS simples) e recusar
       com a mensagem "ciclo: A → B → A". Hoje as tarefas ficam presas em `unmet_deps` sem nenhum aviso
       (`taskdb.py:539`, `305`).
-- [ ] **Tarefa sem `verify_command`.** No `plan_feature`, avisar e pedir um verify. Aceitar sem verify só
+- [x] **Tarefa sem `verify_command`.** No `plan_feature`, avisar e pedir um verify. Aceitar sem verify só
       com uma justificativa explícita (`verify_reason`), para a tarefa não sair "unverified" em silêncio.
-- [ ] **Validação final de verdade.** `encerra_validadas` (`taskdb.py:515`) hoje aceita qualquer
+- [x] **Validação final de verdade.** `encerra_validadas` (`taskdb.py:515`) hoje aceita qualquer
       `run_command`. Passar a exigir que os `verify_command` de **todas** as tarefas concluídas rodem
       juntos e passem, mais o comando de teste do projeto, se o FORJA.md declarar um.
-- [ ] Testes em `tests/test_maestro.py`/`test_planos.py`, um para cada brecha acima: o teste reproduz a
+- [x] Testes em `tests/test_maestro.py`/`test_planos.py`, um para cada brecha acima: o teste reproduz a
       brecha e falha antes da correção.
+
+**Feito em 2026-09-25**, validado com o Maestro real (gpt-oss:120b do Ollama Cloud):
+- o `plan_feature` recusou tarefas sem verify;
+- o fechamento sem prova de uma tarefa com o verify falhando foi recusado;
+- a entrega só encerrou depois de rodar de novo os dois verify.
+
+Diferenças em relação ao plano:
+- o ciclo é checado só no `plan_feature`, porque o `update_task` não mexe em `depends_on`;
+- o "comando de teste do FORJA.md" ficou de fora, porque o FORJA.md não tem um campo estruturado para
+  isso. Os verify das tarefas já cobrem a entrega.
+
+Correções achadas na validação e feitas junto:
+- Worker com erro (ex.: conexão) deixa a tarefa `failed`, não `reviewing`;
+- `update_task` com contrato parcial mescla com o atual e valida tudo antes de mudar o status;
+- campos do contrato soltos na tarefa do plano (fora de `contract`) são aceitos;
+- a dica de erro de conexão do Ollama Cloud não fala mais em `OLLAMA_HOST`.
 
 **Pronto quando:** nenhuma tarefa ou funcionalidade chega a `completed` sem um comando de verificação
 que passou.

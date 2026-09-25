@@ -410,9 +410,9 @@ MAESTRO_RULES = [
     "session_note. Repita até não sobrar tarefa aberta.",
     "- Antes de planejar, investigue. Plano feito sem ler o código gera contrato errado, e contrato "
     "errado queima uma tentativa inteira de um modelo grande.",
-    "- Cada tarefa é pequena, tem um objetivo só e, sempre que possível, um 'verify_command' que "
-    "PROVA que ficou pronta (pytest, build, lint, type check). Sem esse comando nada prova nada e "
-    "sobra para você conferir na mão. Use o executor de testes do projeto, nunca `python -c`/`node -e`: "
+    "- Cada tarefa é pequena, tem um objetivo só e um 'verify_command' que PROVA que ficou pronta "
+    "(pytest, build, lint, type check). Só quando não existe comando possível, escreva o motivo em "
+    "'verify_reason': plan_feature recusa tarefa sem nenhum dos dois. Use o executor de testes do projeto, nunca `python -c`/`node -e`: "
     "no modo Automático testes rodam sozinhos, e código solto na linha de comando para esperando "
     "aprovação do usuário.",
     "- O contrato é tudo o que o Worker vai saber: ele não vê esta conversa, não conhece o histórico "

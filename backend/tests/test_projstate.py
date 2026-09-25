@@ -237,15 +237,16 @@ def test_ultima_tarefa_leva_a_funcionalidade_para_validacao(projeto):
     assert taskdb.board(conv)["features"][0]["status"] == "validating"
 
 
-def _maestro_rodou(conv, ferramenta="run_command"):
+def _maestro_rodou(conv, ferramenta="run_command", comando="pytest -q"):
     with db.session() as s:
-        s.add(db.Message(conversation_id=conv, role="tool", name=ferramenta, content="exit code: 0"))
+        s.add(db.Message(conversation_id=conv, role="tool", name=ferramenta, content="exit code: 0",
+                         status="ok", meta={"arguments": {"command": comando}}))
         s.commit()
 
 
 def test_session_note_encerra_a_funcionalidade_validada(projeto):
     root, conv = projeto
-    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a"}}])
+    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}])
     _conclui("TASK-001", conv)
     _maestro_rodou(conv)  # a validação: a própria Maestro rodou a suíte depois do 'validating'
     texto = projstate.SESSION_NOTE.handler(None, {"objective": "Auth", "result": "suíte ok"})
@@ -269,7 +270,7 @@ def test_nao_encerra_sem_validar_e_nao_grava_nota(projeto):
 
 def test_nota_sem_funcionalidade_em_validacao_nao_mexe_em_nada(projeto):
     root, conv = projeto
-    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a"}}])
+    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}])
     assert "encerrada" not in projstate.SESSION_NOTE.handler(None, {"objective": "parar pela metade"})
     assert taskdb.board(conv)["features"][0]["status"] == "active"
 
@@ -277,18 +278,18 @@ def test_nota_sem_funcionalidade_em_validacao_nao_mexe_em_nada(projeto):
 def test_plan_feature_exige_o_project_state(projeto):
     root, conv = projeto
     with pytest.raises(ToolError, match="FORJA.md"):
-        taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "A", "contract": {"goal": "a"}}]})
+        taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}]})
     (root / "FORJA.md").write_text("# Projeto\nCalculadora em Python. Testes: pytest -q\n", "utf-8")
-    assert "TASK-001" in taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "A", "contract": {"goal": "a"}}]})
+    assert "TASK-001" in taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}]})
 
 
 def test_correcao_entra_na_mesma_funcionalidade(projeto):
     root, conv = projeto
     (root / "FORJA.md").write_text("# Projeto\nAuth\n", "utf-8")
-    out = taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a"}}])
+    out = taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}])
     _conclui("TASK-001", conv)
     texto = taskdb.PLAN_FEATURE.handler(None, {"feature_id": out["feature_id"], "tasks": [
-        {"title": "Corrige refresh", "contract": {"goal": "refresh no Safari"}}]})
+        {"title": "Corrige refresh", "contract": {"goal": "refresh no Safari", "verify_command": "pytest -q"}}]})
     assert "tarefas novas" in texto
     feat = taskdb.board(conv)["features"]
     assert len(feat) == 1 and feat[0]["status"] == "active" and len(feat[0]["tasks"]) == 2
@@ -335,7 +336,7 @@ def test_conversa_nova_copia_o_trabalho_aberto_e_a_lista_fica(projeto):
         sess.query(db.Feature).filter(db.Feature.conversation_id == antiga).update({"status": "done"})
         sess.commit()
     taskdb.create_feature(antiga, "Aberta", "", [
-        {"title": "A", "contract": {"goal": "a"}},
+        {"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}},
         {"title": "B", "contract": {"goal": "b"}, "depends_on": ["1"]}])
     taskdb.create_feature(conv, "Daqui", "", [{"title": "X", "contract": {"goal": "x"}},
                                              {"title": "Y", "contract": {"goal": "y"}}])  # TASK-001/002
@@ -358,7 +359,7 @@ def test_conversa_nova_copia_o_trabalho_aberto_e_a_lista_fica(projeto):
 def test_nao_assume_de_conversa_que_esta_rodando(projeto):
     root, conv = projeto
     antiga = _outra(root)
-    taskdb.create_feature(antiga, "Em uso", "", [{"title": "A", "contract": {"goal": "a"}}])
+    taskdb.create_feature(antiga, "Em uso", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}])
     assert projstate.congelar(root, conv, ocupada=lambda c: c == antiga) == []
     assert taskdb.board(antiga)["total"] == 1
 
@@ -379,7 +380,7 @@ def test_nova_sessao_copia_o_trabalho_e_a_antiga_nao_executa_mais(projeto):
 
     from app import maestro
     root, conv = projeto
-    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a"}}])
+    taskdb.create_feature(conv, "Auth", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}])
     novo, copiadas = projstate.nova_sessao(conv)
     assert copiadas == ["Auth"] and taskdb.board(novo)["total"] == 1
     assert taskdb.board(conv)["features"][0]["copiada_para"] == novo  # lista fica, marcada
@@ -467,12 +468,12 @@ def test_plano_repetindo_tarefa_aberta_e_recusado(projeto):
     out = taskdb.create_feature(conv, "Categorias", "", [{"title": "Listagem de Categorias", "contract": {"goal": "g"}}])
     with pytest.raises(ToolError, match="TASK-001"):
         taskdb.PLAN_FEATURE.handler(None, {"feature_id": out["feature_id"], "tasks": [
-            {"title": "Listagem de categorias", "contract": {"goal": "listar"}}]})
+            {"title": "Listagem de categorias", "contract": {"goal": "listar", "verify_command": "pytest -q"}}]})
 
 
 def test_dependencia_cancelada_nao_trava(projeto):
     _, conv = projeto
-    taskdb.create_feature(conv, "C", "", [{"title": "A", "contract": {"goal": "a"}},
+    taskdb.create_feature(conv, "C", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}},
                                           {"title": "B", "contract": {"goal": "b"}, "depends_on": ["1"]}])
     taskdb.set_status("TASK-001", "cancelled", conv)
     assert taskdb.unmet_deps(taskdb.get("TASK-002", conv), conv) == []
@@ -485,7 +486,7 @@ def test_nova_funcionalidade_lembra_o_que_ficou_para_tras(projeto):
                                                  {"title": "Seed resiliente", "contract": {"goal": "b"}}])
     for st in ("queued", "implementing", "reviewing"):
         taskdb.set_status("TASK-001", st, conv)
-    texto = taskdb.PLAN_FEATURE.handler(None, {"title": "Categorias", "tasks": [{"title": "Store", "contract": {"goal": "c"}}]})
+    texto = taskdb.PLAN_FEATURE.handler(None, {"title": "Categorias", "tasks": [{"title": "Store", "contract": {"goal": "c", "verify_command": "pytest -q"}}]})
     assert "TASK-001" in texto and "espera sua revisão" in texto and "TASK-002" in texto
 
 
@@ -580,9 +581,9 @@ def test_correcao_sem_feature_id_durante_a_validacao_entra_nela(projeto):
     """TaskBoard: cada bug achado no navegador virava funcionalidade nova."""
     root, conv = projeto
     (root / "FORJA.md").write_text("# Projeto\nTaskBoard\n", "utf-8")
-    out = taskdb.create_feature(conv, "TaskBoard", "", [{"title": "A", "contract": {"goal": "a"}}])
+    out = taskdb.create_feature(conv, "TaskBoard", "", [{"title": "A", "contract": {"goal": "a", "verify_command": "pytest -q"}}])
     _conclui("TASK-001", conv)
-    texto = taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Corrige modal", "contract": {"goal": "modal"}}]})
+    texto = taskdb.PLAN_FEATURE.handler(None, {"tasks": [{"title": "Corrige modal", "contract": {"goal": "modal", "verify_command": "pytest -q"}}]})
     assert f"funcionalidade {out['feature_id']}, que está em validação" in texto
     feat = taskdb.board(conv)["features"]
     assert len(feat) == 1 and len(feat[0]["tasks"]) == 2

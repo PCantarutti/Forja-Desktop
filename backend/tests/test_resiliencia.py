@@ -182,3 +182,15 @@ def test_retry_after_do_provedor_vale_ate_o_teto(monkeypatch):
     monkeypatch.setattr(agent.asyncio, "sleep", dorme)
     _roda(monkeypatch, stream)
     assert esperas and esperas[0] == agent.RETRY_MAX  # pediu 60s, o teto é 10s
+
+
+def test_dica_de_conexao_do_ollama_cloud_nao_fala_de_ollama_host(monkeypatch):
+    import httpx
+    from app import config, llm
+    monkeypatch.setitem(config.PROVIDERS, "nuvem-x", {"id": "nuvem-x", "name": "Ollama Cloud", "type": "ollama",
+                                                      "url": "https://ollama.com/v1", "api_key": "k"})
+    monkeypatch.setitem(config.PROVIDERS, "rede-x", {"id": "rede-x", "name": "Ollama", "type": "ollama",
+                                                     "url": "http://192.168.0.9:11434/v1", "api_key": ""})
+    nuvem = str(llm._conn_error("nuvem-x", httpx.ConnectTimeout("t")))
+    assert "Ollama Cloud" in nuvem and "internet" in nuvem and "OLLAMA_HOST" not in nuvem
+    assert "OLLAMA_HOST=0.0.0.0" in str(llm._conn_error("rede-x", httpx.ConnectTimeout("t")))

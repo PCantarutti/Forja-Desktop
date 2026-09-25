@@ -37,10 +37,17 @@ Coisas que já enganaram:
   ```powershell
   Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
     Where-Object { $_.CommandLine -like '*uvicorn app.main*' }   # tem que vir vazio
-  $env:FORJA_DATA = "C:\Projetos\Forja\.devdata"   # banco e logs só do dev
+  Start-Process node_modules\electron\dist\electron.exe `
+    -ArgumentList ".", "--user-data-dir=C:\Projetos\Forja\.devdata" -WorkingDirectory . `
+    -RedirectStandardError electron.err.log -PassThru
   ```
-  Com `FORJA_DATA` próprio o usuário pode seguir usando o Forja enquanto a validação roda. O log
-  passa a ser `$env:FORJA_DATA\logs\backend.log`, não o de `%APPDATA%`.
+  **`$env:FORJA_DATA` sozinho NÃO isola:** o `main.js` passa `FORJA_DATA: app.getPath("userData")`
+  ao backend, por cima do que estiver no ambiente. Quem muda o `userData` é o `--user-data-dir`. Em
+  2026-09-25 uma validação subiu só com `$env:FORJA_DATA` e gravou conversas e configurações no banco
+  real do usuário. Confira logo depois de subir: o `.devdata\forja.db-wal` tem de estar com a data de
+  agora, e o `%APPDATA%\Forja\forja.db-wal` não pode mudar.
+  Com o `userData` próprio o usuário pode seguir usando o Forja enquanto a validação roda. O log
+  passa a ser `C:\Projetos\Forja\.devdata\logs\backend.log`, não o de `%APPDATA%`.
 - Encerrar com `taskkill /T /F /PID <pid do electron.exe>`. `Stop-Process -Force` só no electron
   deixa o uvicorn filho vivo, e o órfão continua escrevendo no banco.
 - Banco corrompido (`integrity_check` acusando `2nd reference to page N`, `invalid page number` ou
@@ -56,7 +63,7 @@ Coisas que já enganaram:
 - O texto “Aguardando a primeira tela…” no painel Navegador significa modo espelho (headless), ou seja,
   o modo nativo NÃO está ativo: `FORJA_CDP` não chegou ao backend.
 - O userData padrão de dev é o mesmo do app instalado (`%APPDATA%\Forja`) — por isso a validação
-  sobe com `FORJA_DATA` próprio (ver acima). Nunca deixar os dois escrevendo no mesmo `forja.db`.
+  sobe com `--user-data-dir` próprio (ver acima). Nunca deixar os dois escrevendo no mesmo `forja.db`.
 
 ## PC e celular sempre em sincronia, ao vivo
 

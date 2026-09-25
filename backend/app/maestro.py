@@ -386,8 +386,12 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
                           tokens=resultado.get("tokens") or 0)
     # 'reviewing' e não 'completed': a tarefa fica esperando o julgamento do Maestro. É a etapa
     # explícita de revisão — o Worker não assina o próprio atestado.
-    taskdb.set_status(task.code, "reviewing" if resultado["status"] != "failed" else "failed",
-                      conv_id, "" if resultado["status"] != "failed" else "A verificação falhou.")
+    # 'error' (o Worker nem rodou: conexão, modelo) também é falha: em 'reviewing' a tarefa parecia
+    # entregue e a Maestro não conseguia devolvê-la para 'pending' para tentar de novo.
+    falhou = resultado["status"] in ("failed", "error")
+    taskdb.set_status(task.code, "failed" if falhou else "reviewing", conv_id,
+                      ("A verificação falhou." if resultado["status"] == "failed"
+                       else (sub_out.get("text") or "O Worker falhou.")[:500]) if falhou else "")
     yield {"type": "task_update", "code": task.code, "status": resultado["status"],
            "attempt": attempt_n}
 
