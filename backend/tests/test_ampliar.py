@@ -14,6 +14,7 @@ def isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "modelos")
     monkeypatch.setattr(imagegen, "OUT_DIR", tmp_path / "imagens")
     monkeypatch.setattr(localai, "VIDEOS", tmp_path / "videos")
+    monkeypatch.setattr(lotes.projeto, "gpu_alheia", lambda pid: [])  # a GPU de verdade desta máquina não entra
     monkeypatch.setattr(mirror, "ROOT", tmp_path / "conversas")
     localai._KINDS.clear()
     (tmp_path / "modelos").mkdir()
