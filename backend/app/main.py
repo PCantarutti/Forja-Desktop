@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
@@ -2136,19 +2136,23 @@ def mobile_rotate():
 
 
 @app.post("/api/mobile/expose/{name}")
-def mobile_expose(name: str):
+async def mobile_expose(name: str, request: Request):
     """Site que o agente subiu (serve_start) visto do celular: só porta de servidor vivo, nunca uma qualquer."""
-    srv = next((x for x in shell.list_servers() if x["name"] == name and x["alive"] and x["url"]), None)
+    srv = next((x for x in await asyncio.to_thread(shell.list_servers) if x["name"] == name and x["alive"] and x["url"]), None)
     port = int(m.group(1)) if srv and (m := re.search(r":(\d+)", srv["url"])) else None
     # Servidor de desenvolvimento aberto fora do Forja (npm run dev no Terminal): "porta-N", e só se N está
     # entre os detectados agora (processo de dev no localhost que responde HTML), nunca uma porta qualquer.
     if port is None and (m := re.fullmatch(r"porta-(\d+)", name)) and \
-            int(m.group(1)) in {d["port"] for d in shell.servidores_detectados()}:
+            int(m.group(1)) in {d["port"] for d in await asyncio.to_thread(shell.servidores_detectados)}:
         port = int(m.group(1))
     if not port:
         raise HTTPException(404, "Servidor não está rodando ou não tem URL")
+    # Celular pela rede local (o porteiro da LAN marca): o site sai por um proxy na LAN, porque o endereço
+    # da tailnet não resolve com a VPN desligada. Pela tailnet, `tailscale serve` como antes.
     try:
-        return {"url": mobile.expose(port)}
+        if request.headers.get("x-forja-via") == "lan":
+            return {"url": await mobile.lan_site(port)}
+        return {"url": await asyncio.to_thread(mobile.expose, port)}
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         raise HTTPException(502, str(e))
 

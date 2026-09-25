@@ -15,6 +15,7 @@ import json
 import secrets
 import shutil
 import subprocess
+import time
 
 import httpx
 
@@ -136,6 +137,11 @@ def tailnet_url() -> str | None:
 # imagens, /export) — e só serve /api. HTTP sem TLS: o token trafega aberto, aceitável na rede de casa.
 LAN_PORTA = 47811
 _lan: dict = {}  # {"server": uvicorn.Server, "task": asyncio.Task} enquanto ligado
+# IP -> quando foi visto com o token certo: os sites na LAN (lan_site) só atendem o celular pareado.
+_celulares: dict[str, float] = {}
+CELULAR_VALE = 12 * 3600  # s
+_sites: dict[int, dict] = {}  # porta do site -> {"porta": porta na LAN, "server", "task"}
+SITES_LAN = range(47820, 47900)
 
 
 def _lan_file():
@@ -180,8 +186,12 @@ def _porteiro(app):
                             "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"detail":"Token ausente ou invalido"}'})
                 return
+            if scope.get("client"):
+                _celulares[scope["client"][0]] = time.time()
+            extra = [(b"x-forja-via", b"lan")]  # o /mobile/expose responde com o site pela LAN, não pela tailnet
             if b"x-forja-token" not in headers:  # veio por ?t=: o middleware do app confere o header
-                scope = {**scope, "headers": [*scope["headers"], (b"x-forja-token", dado.encode())]}
+                extra.append((b"x-forja-token", dado.encode()))
+            scope = {**scope, "headers": [*scope["headers"], *extra]}
         await app(scope, receive, send)
     return asgi
 
@@ -208,7 +218,115 @@ async def liga_lan(app) -> None:
     _lan.update(server=server, task=task)
 
 
+def _proxy_site(porta: int):
+    """ASGI: repassa tudo para localhost:<porta> — HTTP e WebSocket (o HMR do Vite) —, com o Host de
+    localhost: o Vite recusa host que não conhece. Só para o IP do celular que usou o token há pouco."""
+    import httpx
+
+    alvo = f"localhost:{porta}"
+
+    def liberado(scope) -> bool:
+        ip = (scope.get("client") or ("", 0))[0]
+        return time.time() - _celulares.get(ip, 0) < CELULAR_VALE
+
+    def cabecalhos(scope) -> list[tuple[str, str]]:
+        fora = {"host", "connection", "upgrade", "sec-websocket-key", "sec-websocket-version",
+                "sec-websocket-extensions", "sec-websocket-protocol"}
+        return [(k.decode("latin-1"), v.decode("latin-1")) for k, v in scope["headers"]
+                if k.decode("latin-1").lower() not in fora] + [("host", alvo)]
+
+    async def asgi(scope, receive, send):
+        if scope["type"] == "http":
+            if not liberado(scope):
+                await send({"type": "http.response.start", "status": 403, "headers": [(b"content-type", b"text/plain")]})
+                await send({"type": "http.response.body", "body": "Abra este site pelo app Forja.".encode()})
+                return
+            corpo = b""
+            while True:
+                m = await receive()
+                corpo += m.get("body", b"")
+                if not m.get("more_body"):
+                    break
+            url = f"http://{alvo}{scope['raw_path'].decode('latin-1') if scope.get('raw_path') else scope['path']}"
+            if scope.get("query_string") and "?" not in url:
+                url += "?" + scope["query_string"].decode("latin-1")
+            try:
+                async with httpx.AsyncClient(timeout=None) as c:
+                    async with c.stream(scope["method"], url, headers=cabecalhos(scope), content=corpo) as r:
+                        # redirect para http://localhost:<porta>/x vira /x, que o celular resolve no proxy
+                        hs = [(k, v.replace(f"http://{alvo}".encode(), b"")) for k, v in r.headers.raw
+                              if k.lower() not in (b"transfer-encoding", b"connection")]
+                        await send({"type": "http.response.start", "status": r.status_code, "headers": hs})
+                        async for pedaco in r.aiter_raw():
+                            await send({"type": "http.response.body", "body": pedaco, "more_body": True})
+                        await send({"type": "http.response.body", "body": b""})
+            except httpx.HTTPError as e:
+                await send({"type": "http.response.start", "status": 502, "headers": [(b"content-type", b"text/plain")]})
+                await send({"type": "http.response.body", "body": f"O site não respondeu: {e}".encode()})
+        elif scope["type"] == "websocket":
+            if not liberado(scope):
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            from websockets.asyncio.client import connect
+            url = f"ws://{alvo}{scope['path']}" + (f"?{scope['query_string'].decode()}" if scope.get("query_string") else "")
+            protocolos = [p for k, v in scope["headers"] if k == b"sec-websocket-protocol" for p in v.decode().split(", ")]
+            try:
+                ws = await connect(url, subprotocols=protocolos or None, additional_headers=[("Origin", f"http://{alvo}")])
+            except Exception:
+                await send({"type": "websocket.close", "code": 1011})
+                return
+            await receive()  # websocket.connect
+            await send({"type": "websocket.accept", "subprotocol": ws.subprotocol})
+
+            async def de_la():
+                async for msg in ws:
+                    await send({"type": "websocket.send", **({"bytes": msg} if isinstance(msg, bytes) else {"text": msg})})
+
+            tarefa = asyncio.create_task(de_la())
+            try:
+                while True:
+                    m = await receive()
+                    if m["type"] == "websocket.disconnect":
+                        break
+                    await ws.send(m["bytes"] if m.get("bytes") is not None else m.get("text", ""))
+            finally:
+                tarefa.cancel()
+                await ws.close()
+    return asgi
+
+
+async def lan_site(porta: int) -> str:
+    """URL do site do agente (localhost:<porta>) vista da rede local: um proxy numa porta da faixa SITES_LAN,
+    reaproveitado enquanto o backend vive. Sem LAN ligada ou sem IP, erro."""
+    ip = lan_ip()
+    if not _lan or not ip:
+        raise RuntimeError("Rede local desligada neste PC (aba Celular)")
+    if porta in _sites and not _sites[porta]["task"].done():
+        return f"http://{ip}:{_sites[porta]['porta']}"
+    import contextlib
+    import socket
+    import uvicorn
+    for livre in SITES_LAN:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("0.0.0.0", livre))
+            break
+        except OSError:
+            sock.close()
+    else:
+        raise RuntimeError("Sem porta livre para o site na rede local")
+    server = uvicorn.Server(uvicorn.Config(_proxy_site(porta), lifespan="off", log_level="warning",
+                                           access_log=False, ws="websockets"))
+    server.capture_signals = contextlib.nullcontext
+    task = asyncio.get_running_loop().create_task(server.serve(sockets=[sock]))
+    _sites[porta] = {"porta": livre, "server": server, "task": task}
+    return f"http://{ip}:{livre}"
+
+
 async def desliga_lan() -> None:
+    for s in _sites.values():
+        s["server"].should_exit = True
+    _sites.clear()
     if not _lan:
         return
     _lan["server"].should_exit = True
