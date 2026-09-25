@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import compact, config, db, gitops, llm, modelctl, skills, workspace
+from . import apelidos, compact, config, db, gitops, llm, modelctl, skills, workspace
 from .parsing import parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, register, resolve_path, vision_caps
 
@@ -650,9 +650,12 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
             pensou, visible = split_think(content)
             calls = done.get("tool_calls") or []
+            nomes = [t.name for t in tools]
             if not calls and (via == "prompt" or auto):
-                parsed, visible = parse_text_tool_calls(content, [t.name for t in tools])
+                parsed, visible = parse_text_tool_calls(content, nomes + apelidos.extras(nomes))
                 calls = [{"id": "call_" + uuid.uuid4().hex[:12], **c} for c in parsed]
+            calls = apelidos.resolve_todas(calls, nomes, lambda n: next(
+                (t.parameters.get("properties") or {} for t in tools if t.name == n), None))
             if structured:
                 stats = _stats(messages, schemas, content, reasoning, done, t_passo, t_primeiro, ctx_max, model)
                 yield {"type": "sub_message", "parent": pid, "message": registra({

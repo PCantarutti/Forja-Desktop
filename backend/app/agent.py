@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import AsyncIterator
 
-from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
+from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search)
@@ -29,6 +29,14 @@ from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, ex
 
 MAX_NUDGES = 2
 MAX_REESCRITAS = 5  # alterações no mesmo arquivo num turno antes do lembrete de abordagem travada
+def _props(nome: str) -> dict | None:
+    """Schema de argumentos de uma ferramenta, para os apelidos não renomearem argumento que ela tem."""
+    try:
+        return get_tool(nome).parameters.get("properties") or {}
+    except ToolError:
+        return None
+
+
 LEITURAS = frozenset({"read_file", "grep", "glob", "list_dir", "tree", "ast", "imports", "code_search", "lsp"})
 LIMITE_LEITURAS = 8  # leituras seguidas antes da dica do explore
 MAX_STOP_HOOKS = 3 # hook stop que sempre bloqueia não pode prender o turno para sempre
@@ -1460,9 +1468,11 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         think, visible = split_think(content)
         reasoning = (reasoning + "\n" + think).strip()
         calls = done["tool_calls"]
+        nomes_agora = [t.name for t in current_tools()]
         if tools_on and not calls and tool_mode != "native":
-            parsed, visible = parse_text_tool_calls(content, [t.name for t in current_tools()])
+            parsed, visible = parse_text_tool_calls(content, nomes_agora + apelidos.extras(nomes_agora))
             calls = [{"id": "call_" + uuid.uuid4().hex[:12], **c} for c in parsed]
+        calls = apelidos.resolve_todas(calls or [], nomes_agora, _props)  # `search` do gpt-oss, `Bash` do Claude...
         if agent and not calls and run.permission == "plan" and looks_like_plan(visible):
             # Modelo escreveu o plano na resposta e parou: vira exit_plan_mode para o card e a aba
             # Planos aparecerem, em vez de o turno acabar em texto solto.
@@ -1912,7 +1922,7 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         meta["segundos"] = round(time.monotonic() - inicio - esperou["s"], 2)
         if esperou["s"]:
             meta["espera_aprovacao"] = round(esperou["s"], 2)
-        out.update(status=status, text=text, meta=meta)
+        out.update(status=status, text=apelidos.nota(call) + text, meta=meta)
 
     if "__raw__" in args:
         result("erro", f"Argumentos não são JSON válido: {args['__raw__'][:200]}")

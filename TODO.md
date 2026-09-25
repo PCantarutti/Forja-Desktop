@@ -313,6 +313,12 @@ primeiro, dentro desta entrega. A parte de cache em disco e dos padrões de KV d
 V1–V4 da E0. O resto da E4 não depende delas. **A política de execução depende da parte A da E13**: ela
 precisa saber o que cada backend deixa o Forja controlar.
 
+- [ ] **Tetos de leitura proporcionais à janela.** Medido na E6: `session_search` custa ~120 tokens e um
+      `session_read` de conversa curta ~600. Mas o teto do `session_read` (`sessoes.MAX_LEITURA`, 12 mil
+      caracteres, ~3k tokens) e o do `@conversa:ID` são fixos. Numa janela de 8k, duas leituras cheias
+      ocupam quase metade. Esses tetos e os do `read_file`, `code_search` e `tree` passam a sair do
+      `ctx` real do modelo, junto com os outros tetos desta entrega.
+
 ### Política de execução (fazer primeiro)
 
 - [ ] **Uma função só decide onde cada chamada roda:** `modelctl.como_rodar(papel, modelo_pedido)`, com
