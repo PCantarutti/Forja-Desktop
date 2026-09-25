@@ -348,3 +348,39 @@ def _espia(popen, guarda):
         guarda.append(argv)
         return popen(argv, *a, **k)
     return f
+
+
+def test_redesenhar_com_checkpoint_de_imagem(isolado, monkeypatch):
+    """Um checkpoint SDXL/SD 1.5 inteiro vira o método "redesenhar": aparece no catálogo, guarda prompt e força na
+    ampliação (Continuar refaz igual) e vai ao driver com o bloco do modelo (1024 no SDXL)."""
+    import sys
+    from PIL import Image
+    from app import comfy
+    ck = safetensors(isolado / "modelos", "juggernautXL.safetensors",
+                     ["model.diffusion_model.input_blocks.0.0.weight", "first_stage_model.decoder.conv_in.weight",
+                      "conditioner.embedders.1.model.ln_final.weight"])
+    assert ampliar.tipo_checkpoint(ck) == "sdxl" and not ampliar.tipo_local(ck)
+    assert {"path": ck, "name": "juggernautXL", "tipo": "redesenhar"} in ampliar.catalogo()["no_disco"]
+    with pytest.raises(lotes.ToolError, match="só imagem"):
+        lotes._validar_ampliacao(2, ck, video=True)
+    monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    falso = isolado / "driver.py"
+    falso.write_text("import sys; print('ARGS', ' '.join(sys.argv[1:])); print('OK 20x16')", encoding="utf-8")
+    monkeypatch.setattr(comfy, "JOB", falso)
+    argvs = []
+    monkeypatch.setattr(comfy.subprocess, "Popen", _espia(comfy.subprocess.Popen, argvs))
+    with db.session() as s:
+        c = db.Conversation(kind="imagem")
+        s.add(c)
+        s.commit()
+        conv = c.id
+    foto = isolado / "foto.png"
+    Image.new("RGB", (10, 8)).save(foto)
+    m = _esperar(lotes.ampliar_arquivo(conv, str(foto), 2, ck, prompt="um gato ruivo", forca=0.5)["id"])
+    assert m["status"] == "pronto" and m["meta"]["opts"]["ampliacao"]["prompt"] == "um gato ruivo"
+    assert m["meta"]["opts"]["ampliacao"]["forca"] == 0.5 and m["meta"]["images"][0]["path"].endswith("-2x (juggernautXL).png")
+    a = argvs[0]
+    assert a[a.index("--modo") + 1] == "redesenhar" and a[a.index("--forca") + 1] == "0.50" and a[a.index("--bloco") + 1] == "1024"
+    with pytest.raises(lotes.ToolError, match="Força"):
+        lotes.ampliar_arquivo(conv, str(foto), 2, ck, forca=1.5)

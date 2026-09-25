@@ -143,6 +143,23 @@ def tipo_local(path: str) -> str:
         return ""
 
 
+def tipo_checkpoint(path: str) -> str:
+    """Checkpoint de imagem completo, num arquivo só (modelo + VAE + codificador de texto), que o ComfyUI carrega
+    para redesenhar: "sdxl" (conditioner.embedders), "sd15" (cond_stage_model) ou "" (FLUX/Qwen vêm em peças,
+    GGUF e o resto ficam de fora)."""
+    if not str(path).lower().endswith(".safetensors"):
+        return ""
+    try:
+        nomes = _nomes(Path(path))
+    except (OSError, ValueError, KeyError, struct.error):
+        return ""
+    if not (any(n.startswith("model.diffusion_model.") for n in nomes) and any(n.startswith("first_stage_model.") for n in nomes)):
+        return ""
+    if any(n.startswith("conditioner.embedders.") for n in nomes):
+        return "sdxl"
+    return "sd15" if any(n.startswith("cond_stage_model.") for n in nomes) else ""
+
+
 def eh_spandrel(path: str) -> bool:
     return tipo_local(path) == "spandrel"
 
@@ -185,6 +202,10 @@ def catalogo() -> dict:
     modelos = [{"nome": c["nome"], "resumo": c["resumo"], "tipo": c["tipo"],
                 "mb": c.get("mb") or (assets.get(c["nome"]) or {}).get("mb", 0), "presente": no_disco.get(c["nome"].lower(), "")}
                for c in CATALOGO]
+    # Redesenhar: os checkpoints de imagem (SD 1.5/SDXL) que já estão nas pastas, sem baixar nada novo
+    for m in localai.scan((".safetensors",)):
+        if m["kind"] == "image" and tipo_checkpoint(m["path"]):
+            achados.append({"path": m["path"], "name": m["name"], "tipo": "redesenhar"})
     ff = localai.find_exe("ffmpeg")
     return {"modelos": modelos, "erro": erro, "ffmpeg": str(ff) if ff else "", "no_disco": achados, "comfy": comfy.estado()}
 
@@ -418,13 +439,17 @@ def _esrgan(exe: Path, gpu: str, entrada: Path, destino: Path, modelo: str, fato
 
 
 EXT_IMAGEM = {".png", ".jpg", ".jpeg", ".webp"}
+# Redesenhar: quanto o modelo pode mudar (denoise). Medido no Juggernaut XL, 512 -> 2048: 0,35 limpa sem inventar,
+# 0,55 já redesenha a textura (bolhas novas na espuma do café). 0,4 é o meio; a tela deixa de 0,2 a 0,7.
+FORCA_PADRAO = 0.4
 
 
 def eh_imagem(path: str) -> bool:
     return Path(path).suffix.lower() in EXT_IMAGEM
 
 
-def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "", progresso=None) -> dict:
+def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "", progresso=None,
+                   prompt: str = "", forca: float = FORCA_PADRAO) -> dict:
     """Amplia uma imagem em `fator` e grava `saida` (.png). `modelo` vazio = Lanczos (Pillow), sem IA e sem ffmpeg;
     SeedVR2 vai pelo ComfyUI (comfy.py); ESRGAN pelo sd-cli. ESRGAN que passou do alvo (um 4× pedido como 2×)
     volta ao tamanho pedido por Lanczos. `progresso(fase, fração)`: só o que vai pelo ComfyUI avisa."""
@@ -433,6 +458,11 @@ def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_
     if tipo in ("seedvr2", "spandrel"):
         from . import comfy
         return comfy.ampliar(entrada, saida, fator, modelo, job_id, progresso, tipo)
+    ck = tipo_checkpoint(modelo) if modelo else ""
+    if ck:  # redesenhar: o checkpoint refaz a imagem em alta resolução, por blocos (1024 no SDXL, 768 no SD 1.5)
+        from . import comfy
+        return comfy.ampliar(entrada, saida, fator, modelo, job_id, progresso, "redesenhar",
+                             prompt=prompt, forca=forca, bloco=1024 if ck == "sdxl" else 768)
     with Image.open(entrada) as im:
         alvo = (im.width * int(fator), im.height * int(fator))
         if not modelo:

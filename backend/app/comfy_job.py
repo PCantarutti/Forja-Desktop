@@ -7,7 +7,10 @@ chamado pelo Forja Desktop ou, no Docker, pelo runner. Além da biblioteca padr�
 
 seedvr2: difusão (o DiT + o VAE dele). spandrel: DAT, HAT, SwinIR, SPAN, os compactos e afins, pelo carregador de
 modelos de ampliação do ComfyUI; a escala sai dos pesos e é medida na saída (um 2× pedido como 4× roda duas vezes;
-o que passar do alvo volta por Lanczos).
+o que passar do alvo volta por Lanczos). redesenhar: um checkpoint de imagem (SD 1.5/SDXL) redesenha a imagem em
+alta resolução por blocos, com prompt e força (--prompt, --negativo, --forca): a técnica do "Ultimate SD Upscale"
+feita aqui com os nós básicos do ComfyUI; Lanczos até o tamanho final, cada bloco por imagem-para-imagem, e a
+costura com transição suave na sobreposição (sem emenda).
 
 Fala com quem chamou por linhas no stdout: "FASE <texto>", "PROGRESSO <0..1>" (do WebSocket do ComfyUI, que é
 onde ele conta os blocos; o log não tem) e, no fim, "OK <w>x<h>" ou "ERRO <mensagem>".
@@ -69,6 +72,49 @@ def fluxo_seedvr2(img: str, fator: int, modelo: str, vae: str, semente: int) -> 
     }
 
 
+def fluxo_redesenhar(img: str, ckpt: str, prompt: str, negativo: str, forca: float, semente: int, passos: int) -> dict:
+    """Imagem-para-imagem de um bloco: o checkpoint redesenha com o prompt; `forca` (denoise) é quanto pode mudar."""
+    return {
+        "1": {"class_type": "LoadImage", "inputs": {"image": img}},
+        "2": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
+        "3": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 1], "text": prompt}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 1], "text": negativo}},
+        "5": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0], "vae": ["2", 2]}},
+        "6": {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["3", 0], "negative": ["4", 0],
+                                                   "latent_image": ["5", 0], "seed": semente, "steps": passos, "cfg": 5.0,
+                                                   "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": forca}},
+        "7": {"class_type": "VAEDecode", "inputs": {"samples": ["6", 0], "vae": ["2", 2]}},
+        "8": {"class_type": "SaveImage", "inputs": {"images": ["7", 0], "filename_prefix": "forja"}},
+    }
+
+
+def blocos(total: int, bloco: int, sobra: int) -> list[int]:
+    """Onde começa cada bloco numa dimensão: o menor número de blocos de `bloco` px que cobre `total` com pelo menos
+    `sobra` px de sobreposição, espaçados por igual (múltiplos de 8, que o VAE pede)."""
+    if total <= bloco:
+        return [0]
+    n = -(-(total - sobra) // (bloco - sobra))
+    return [round((total - bloco) * i / (n - 1) / 8) * 8 for i in range(n)]
+
+
+def pesos(w: int, h: int, sobra: int, esq: bool, cima: bool, dir_: bool, baixo: bool):
+    """Máscara de mistura de um bloco: 1 no miolo, rampa até 0 nas bordas que encostam em outro bloco (as da imagem
+    ficam em 1). É o que tira a emenda da costura."""
+    import numpy as np
+    x = np.ones(w, dtype=np.float32)
+    y = np.ones(h, dtype=np.float32)
+    rampa = np.linspace(0, 1, sobra + 2, dtype=np.float32)[1:-1]
+    if esq:
+        x[:sobra] = rampa
+    if dir_:
+        x[-sobra:] = rampa[::-1]
+    if cima:
+        y[:sobra] = rampa
+    if baixo:
+        y[-sobra:] = rampa[::-1]
+    return (y[:, None] * x[None, :])[..., None]
+
+
 def fluxo_spandrel(img: str, modelo: str) -> dict:
     """Carregar o modelo de ampliação, ampliar (o ComfyUI divide em blocos sozinho se faltar VRAM), salvar."""
     return {
@@ -82,12 +128,16 @@ def fluxo_spandrel(img: str, modelo: str) -> dict:
 # Faixa de cada nó no total: medida na Arc B580 (SeedVR2 3B, 1024 -> 2048, servidor de pé: codificar 4 s, carregar o
 # modelo 6 s, o passo 6 s, decodificar 6 s). Dentro do nó que conta blocos, o avanço é contínuo.
 FAIXAS = {"seedvr2": {"6": (0.03, 0.20), "5": (0.20, 0.45), "8": (0.45, 0.72), "9": (0.72, 0.97), "10": (0.97, 1.0)},
-          "spandrel": {"2": (0.0, 0.02), "3": (0.02, 0.98), "4": (0.98, 1.0)}}
+          "spandrel": {"2": (0.0, 0.02), "3": (0.02, 0.98), "4": (0.98, 1.0)},
+          # por bloco (a escala do ouvinte leva ao total): carregar/codificar, os passos, decodificar
+          "redesenhar": {"5": (0.0, 0.08), "6": (0.08, 0.92), "7": (0.92, 1.0)}}
 
 
-def ouvir(url: str, cid: str, faixas: dict, parar: threading.Event) -> None:
+def ouvir(url: str, cid: str, faixas: dict, parar: threading.Event, escala: list | None = None) -> None:
     """Os eventos do ComfyUI para este cliente viram "PROGRESSO <fração>" (só quando a fração sobe 1% ou mais).
-    Sem aiohttp (vem no portátil) ou sem conexão, fica calado: o trabalho não depende disto."""
+    `escala` [início, largura]: a fração de um fluxo dentro do total (no redesenhar, cada bloco é um fluxo e quem
+    roda os blocos muda a escala). Sem aiohttp (vem no portátil) ou sem conexão, fica calado."""
+    escala = escala if escala is not None else [0.0, 1.0]
     try:
         import asyncio
         import aiohttp
@@ -113,9 +163,9 @@ def ouvir(url: str, cid: str, faixas: dict, parar: threading.Event) -> None:
                 if not faixa:
                     continue
                 if e.get("type") == "executing":
-                    manda(faixa[0])
+                    manda(escala[0] + escala[1] * faixa[0])
                 elif e.get("type") == "progress" and d.get("max"):
-                    manda(faixa[0] + (faixa[1] - faixa[0]) * d["value"] / d["max"])
+                    manda(escala[0] + escala[1] * (faixa[0] + (faixa[1] - faixa[0]) * d["value"] / d["max"]))
     try:
         asyncio.run(laco())
     except Exception:  # noqa: BLE001 — progresso é enfeite: qualquer falha aqui não derruba a ampliação
@@ -126,7 +176,12 @@ def main() -> int:
     a = argparse.ArgumentParser()
     for nome in ("comfy", "modelo", "entrada", "saida"):
         a.add_argument(f"--{nome}", required=True)
-    a.add_argument("--modo", choices=("seedvr2", "spandrel"), default="seedvr2")
+    a.add_argument("--modo", choices=("seedvr2", "spandrel", "redesenhar"), default="seedvr2")
+    a.add_argument("--prompt", default="")
+    a.add_argument("--negativo", default="blurry, lowres, jpeg artifacts, oversmoothed, watermark, text")
+    a.add_argument("--forca", type=float, default=0.35)
+    a.add_argument("--passos", type=int, default=20)
+    a.add_argument("--bloco", type=int, default=1024)
     a.add_argument("--vae", default="")
     a.add_argument("--fator", type=int, default=2)
     a.add_argument("--semente", type=int, default=42)
@@ -137,7 +192,7 @@ def main() -> int:
     (trabalho / "out").mkdir()
     # As pastas dos pesos entram como pastas extras de modelo: nada é copiado para dentro do portátil.
     pastas = ({"diffusion_models": modelo.parent, "vae": Path(o.vae).parent} if o.modo == "seedvr2"
-              else {"upscale_models": modelo.parent})
+              else {"checkpoints": modelo.parent} if o.modo == "redesenhar" else {"upscale_models": modelo.parent})
     (trabalho / "pastas.yaml").write_text("forja:\n" + "".join(f"  {k}: {json.dumps(str(v))}\n" for k, v in pastas.items()),
                                           encoding="utf-8")
     entrada = "entrada" + Path(o.entrada).suffix.lower()
@@ -202,6 +257,40 @@ def main() -> int:
             raise Falha("O ComfyUI terminou sem gravar a imagem.")
         return trabalho / "out" / arquivos[0]
 
+    def redesenhar(alvo: tuple[int, int], escala: list) -> Path:
+        """Lanczos até o tamanho final (arredondado a 8 px), um fluxo por bloco e a costura com as máscaras."""
+        import numpy as np
+        from PIL import Image
+        W, H = (alvo[0] + 7) // 8 * 8, (alvo[1] + 7) // 8 * 8
+        with Image.open(o.entrada) as im:
+            base = np.asarray(im.convert("RGB").resize(alvo, Image.LANCZOS))
+        # a borda que falta para o múltiplo de 8 repete a última linha/coluna; no fim, corta de volta
+        grande = Image.fromarray(np.pad(base, ((0, H - alvo[1]), (0, W - alvo[0]), (0, 0)), mode="edge"))
+        bw, bh = min(o.bloco, W), min(o.bloco, H)
+        sobra = min(128, bw // 4, bh // 4) // 8 * 8 or 8
+        xs, ys = blocos(W, bw, sobra), blocos(H, bh, sobra)
+        soma = np.zeros((H, W, 3), dtype=np.float32)
+        peso = np.zeros((H, W, 1), dtype=np.float32)
+        total, feito = len(xs) * len(ys), 0
+        for j, y in enumerate(ys):
+            for i, x in enumerate(xs):
+                diz("FASE", f"redesenhando o bloco {feito + 1} de {total}")
+                escala[0], escala[1] = feito / total, 1 / total
+                nome = f"bloco{feito}.png"
+                grande.crop((x, y, x + bw, y + bh)).save(trabalho / "in" / nome)
+                saiu = rodar(fluxo_redesenhar(nome, modelo.name, o.prompt or "high quality, detailed, sharp",
+                                              o.negativo, o.forca, o.semente + feito, o.passos))
+                with Image.open(saiu) as b:
+                    arr = np.asarray(b.convert("RGB").resize((bw, bh), Image.LANCZOS), dtype=np.float32)
+                m = pesos(bw, bh, sobra, i > 0, j > 0, i < len(xs) - 1, j < len(ys) - 1)
+                soma[y:y + bh, x:x + bw] += arr * m
+                peso[y:y + bh, x:x + bw] += m
+                feito += 1
+        pronto = Image.fromarray(np.clip(soma / np.maximum(peso, 1e-6), 0, 255).astype(np.uint8)).crop((0, 0, *alvo))
+        caminho = trabalho / "out" / "redesenhada.png"
+        pronto.save(caminho)
+        return caminho
+
     try:
         diz("FASE", "iniciando o ComfyUI")
         limite = time.monotonic() + PRONTO_S
@@ -218,12 +307,15 @@ def main() -> int:
                     return 1
                 time.sleep(1)
         diz("FASE", "ampliando")
-        threading.Thread(target=ouvir, args=(url, cid, FAIXAS[o.modo], parar), daemon=True).start()
+        escala = [0.0, 1.0]
+        threading.Thread(target=ouvir, args=(url, cid, FAIXAS[o.modo], parar, escala), daemon=True).start()
         time.sleep(0.3)  # o WebSocket conectado antes do fluxo, senão os primeiros eventos se perdem
         from PIL import Image
         with Image.open(o.entrada) as im:
             alvo = (im.width * o.fator, im.height * o.fator)
-        if o.modo == "seedvr2":
+        if o.modo == "redesenhar":
+            final = redesenhar(alvo, escala)
+        elif o.modo == "seedvr2":
             final = rodar(fluxo_seedvr2(entrada, o.fator, modelo.name, Path(o.vae).name, o.semente))
         else:
             final = rodar(fluxo_spandrel(entrada, modelo.name))

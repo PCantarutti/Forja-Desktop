@@ -1047,6 +1047,7 @@ function Lote(props: {
           <p className="mb-3 text-sm text-fg">Ampliar imagem</p>
           <PainelAmpliar
             imagem
+            prompt={props.pedido.content}
             w={ampliando.img.width ?? meta.opts.width ?? 0}
             h={ampliando.img.height ?? meta.opts.height ?? 0}
             onError={props.onError}

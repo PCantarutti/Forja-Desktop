@@ -577,16 +577,16 @@ def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: boo
     from . import ampliar as amp, comfy
     if int(fator) not in (2, 4):
         raise ToolError("Amplie em 2× ou 4×.")
-    tipo = amp.tipo_local(modelo) if modelo else ""
-    if tipo in ("seedvr2", "spandrel"):  # pelo ComfyUI
-        nome = "O SeedVR2" if tipo == "seedvr2" else "Este modelo (DAT/HAT/SwinIR)"
+    tipo = (amp.tipo_local(modelo) or ("redesenhar" if amp.tipo_checkpoint(modelo) else "")) if modelo else ""
+    if tipo in ("seedvr2", "spandrel", "redesenhar"):  # pelo ComfyUI
+        nome = {"seedvr2": "O SeedVR2", "spandrel": "Este modelo (DAT/HAT/SwinIR)", "redesenhar": "O redesenho"}[tipo]
         if video:
             raise ToolError(f"{nome} aqui amplia só imagem: para vídeo, use um ESRGAN ou o Lanczos.")
         if not comfy.python():
             raise ToolError("Falta o ComfyUI (motor do SeedVR2 e dos DAT/HAT/SwinIR): baixe na lista de ampliação, "
                             "em Baixar o que falta.")
-        if tipo == "seedvr2" and not localai.image_busy():
-            _liberar_vram(confirm)  # ~7 GB de VRAM: com um LLM carregado, a tela pergunta antes (409)
+        if tipo in ("seedvr2", "redesenhar") and not localai.image_busy():
+            _liberar_vram(confirm)  # ~7 GB de VRAM (SeedVR2, SDXL): com um LLM carregado, a tela pergunta antes (409)
         return
     if modelo and not amp.eh_ampliador(modelo):
         raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN ou SeedVR2).")
@@ -595,10 +595,10 @@ def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: boo
 
 
 def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: dict, seed: int,
-                    fator: int, modelo: str, suavizar: bool) -> dict:
+                    fator: int, modelo: str, suavizar: bool, redesenho: dict | None = None) -> dict:
     """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem."""
     nome = Path(modelo).stem if modelo else "Lanczos"
-    amp_meta = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar)}
+    amp_meta = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar), **(redesenho or {})}
     opts = {**opts, "width": int(opts.get("width") or 0) * int(fator), "height": int(opts.get("height") or 0) * int(fator),
             "ampliacao": amp_meta}
     if suavizar and opts.get("fps"):
@@ -627,7 +627,19 @@ def _saida_ao_lado(origem: Path, fator: int, modelo: str, ext: str, suave: bool 
     return saida
 
 
-def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False) -> dict:
+def _redesenho(modelo: str, prompt: str, forca: float | None) -> dict:
+    """Redesenhar (checkpoint de imagem): o prompt e a força vão junto da ampliação (Continuar refaz igual)."""
+    from . import ampliar as amp
+    if not (modelo and amp.tipo_checkpoint(modelo)):
+        return {}
+    f = amp.FORCA_PADRAO if forca is None else float(forca)
+    if not 0.05 <= f <= 0.9:
+        raise ToolError("Força do redesenho entre 0,05 e 0,9.")
+    return {"prompt": (prompt or "").strip(), "forca": round(f, 2)}
+
+
+def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False,
+            prompt_novo: str = "", forca: float | None = None) -> dict:
     """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
     progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
     msg = _mensagem(message_id)
@@ -642,12 +654,13 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
         pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
                                              db.Message.id < message_id).order_by(db.Message.id.desc()).first())
         prompt = pedido.content if pedido else ""
+    # redesenhar: sem prompt na tela, vale o prompt que gerou a imagem
     return _nova_ampliacao(msg["conversation_id"], path, saida, prompt, dict(msg["meta"].get("opts") or {}), item["seed"],
-                           fator, modelo, suavizar and not imagem)
+                           fator, modelo, suavizar and not imagem, _redesenho(modelo, prompt_novo or prompt, forca))
 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False,
-                    confirm: bool = False) -> dict:
+                    confirm: bool = False, prompt: str = "", forca: float | None = None) -> dict:
     """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
     para a pasta de vídeos; o original não é tocado."""
     from . import ampliar as amp
@@ -669,7 +682,8 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
         pasta.mkdir(parents=True, exist_ok=True)
         nome = re.sub(r"^[0-9a-f]{16}-", "", Path(path).name)  # a do celular chega em referencias/ com o sha na frente
         saida = _saida_ao_lado(pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{nome}", fator, modelo, ".png")
-        return _nova_ampliacao(conv_id, path, saida, nome, {"width": w, "height": h}, 0, fator, modelo, False)
+        return _nova_ampliacao(conv_id, path, saida, nome, {"width": w, "height": h}, 0, fator, modelo, False,
+                               _redesenho(modelo, prompt, forca))
     _validar_ampliacao(fator, modelo)
     info = amp.sondar(path)
     pasta = imagegen.video_dir()
@@ -716,7 +730,8 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
                         item["restante"] = round(passou * (1 - fracao) / fracao)
                 _patch(message_id, meta={"images": imagens})
             item["com_previa"] = False
-            amp.ampliar_imagem(a["origem"], Path(item["path"]), a["fator"], a["modelo"], job_id, fase)
+            amp.ampliar_imagem(a["origem"], Path(item["path"]), a["fator"], a["modelo"], job_id, fase,
+                               a.get("prompt", ""), a.get("forca", amp.FORCA_PADRAO))
             r = None  # o tamanho já está nas opts (origem × fator)
         else:
             r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)

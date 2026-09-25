@@ -774,13 +774,15 @@ class AmpliarBody(BaseModel):
     modelo: str = ""  # vazio = Lanczos, sem IA
     suavizar: bool = False
     confirm: bool = False  # SeedVR2 com LLM na VRAM: a tela perguntou e pode descarregar
+    prompt: str = ""  # redesenhar: o que o modelo deve desenhar (vazio = o prompt que gerou a imagem)
+    forca: float | None = None  # redesenhar: quanto pode mudar (denoise); vazio = o padrão
 
 
 @app.post("/api/imagens/{message_id}/ampliar")
 async def imagens_ampliar(message_id: int, body: AmpliarBody):
     try:
         return await asyncio.to_thread(lotes.ampliar, message_id, body.path, body.fator, body.modelo, body.suavizar,
-                                       body.confirm)
+                                       body.confirm, body.prompt, body.forca)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:
@@ -792,7 +794,7 @@ async def imagens_ampliar_arquivo(conv_id: int, body: AmpliarBody):
     """Um vídeo qualquer do disco (não uma tomada): vira uma tomada ampliada nesta conversa."""
     try:
         return await asyncio.to_thread(lotes.ampliar_arquivo, conv_id, body.path, body.fator, body.modelo, body.suavizar,
-                                       body.confirm)
+                                       body.confirm, body.prompt, body.forca)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:

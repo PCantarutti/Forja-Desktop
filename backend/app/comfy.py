@@ -51,7 +51,7 @@ def instalar() -> dict:
 
 
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = "", progresso=None,
-            modo: str = "seedvr2") -> dict:
+            modo: str = "seedvr2", prompt: str = "", forca: float = 0.4, bloco: int = 1024) -> dict:
     """Uma imagem pelo ComfyUI (comfy_job.py no Python do portátil): `modo` seedvr2 (difusão, com o VAE) ou spandrel
     (DAT/HAT/SwinIR e afins). `progresso(fase, fração)`: a fase quando muda (fração None) e a fração do trabalho
     (0..1, contada pelo ComfyUI) quando ela sobe (fase None)."""
@@ -65,6 +65,8 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
     # -X utf8: com o stdout num pipe, o Python do Windows escreve em cp1252 e os acentos chegavam quebrados
     proc = subprocess.Popen([str(py), "-X", "utf8", "-s", str(JOB), "--modo", modo, "--comfy", str(PASTA), "--modelo", modelo,
                              *(["--vae", vae] if vae else []),
+                             *(["--prompt", prompt, "--forca", f"{forca:.2f}", "--bloco", str(bloco), "--passos", "25"]
+                               if modo == "redesenhar" else []),
                              "--entrada", entrada, "--saida", str(saida), "--fator", str(int(fator))],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())

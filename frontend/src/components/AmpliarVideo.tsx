@@ -5,7 +5,9 @@ import { btn, btnPrimary } from "./LocalPanel";
 
 /** O que o backend diz da ampliação: ffmpeg (vídeo) e ComfyUI (SeedVR2) instalados, o catálogo e todos os
  *  modelos no disco. `tipo`: esrgan (sd-cli, rápido, imagem e vídeo) ou seedvr2 (difusão, pesado, só imagem). */
-type Tipo = "esrgan" | "seedvr2" | "spandrel"; // spandrel: DAT/HAT/SwinIR e afins, rápidos, pelo ComfyUI
+// spandrel: DAT/HAT/SwinIR e afins, rápidos, pelo ComfyUI; redesenhar: um checkpoint de imagem (SD 1.5/SDXL) refaz
+// a imagem em alta resolução por blocos, com prompt e força
+type Tipo = "esrgan" | "seedvr2" | "spandrel" | "redesenhar";
 export type CatalogoAmpliacao = {
   modelos: { nome: string; resumo: string; mb: number; presente: string; tipo: Tipo }[];
   no_disco: { path: string; name: string; tipo: Tipo }[];
@@ -106,7 +108,8 @@ export function PainelAmpliar(props: {
   fps?: number;
   quadros?: number;
   imagem?: boolean;
-  enviar: (corpo: { fator: number; modelo: string; suavizar: boolean; confirm?: boolean }) => Promise<void>;
+  prompt?: string; // redesenhar: começa com o prompt que gerou a imagem
+  enviar: (corpo: { fator: number; modelo: string; suavizar: boolean; confirm?: boolean; prompt?: string; forca?: number }) => Promise<void>;
   onError: (e: string) => void;
 }) {
   const estado = useCatalogo(props.onError);
@@ -116,19 +119,23 @@ export function PainelAmpliar(props: {
   const [suavizar, setSuavizar] = useState(false);
   const [enviando, setEnviando] = useState(false);
   const [vram, setVram] = useState(""); // a mensagem do 409: tem modelo de texto carregado
+  const [prompt, setPrompt] = useState(props.prompt ?? "");
+  const [forca, setForca] = useState(0.4); // o FORCA_PADRAO do backend
   const metodos = (cat?.no_disco ?? []).filter((m) => props.imagem || m.tipo === "esrgan");
   const esrgans = metodos.filter((m) => m.tipo === "esrgan");
   // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora); o
   // SeedVR2 nunca é o padrão, leva minutos
   const escolhido = modelo ?? (esrgans.find((m) => new RegExp(`x${fator}(?!\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? "";
   const tipo = metodos.find((m) => m.path === escolhido)?.tipo;
-  const pesado = tipo === "seedvr2";
-  const semComfy = (tipo === "seedvr2" || tipo === "spandrel") && !cat?.comfy.instalado;
+  const pesado = tipo === "seedvr2" || tipo === "redesenhar";
+  const redesenha = tipo === "redesenhar";
+  const semComfy = !!tipo && tipo !== "esrgan" && !cat?.comfy.instalado;
 
   async function ampliar(confirm = false) {
     setEnviando(true);
     try {
-      await props.enviar({ fator, modelo: escolhido, suavizar: suavizar && !props.imagem, ...(confirm ? { confirm } : {}) });
+      await props.enviar({ fator, modelo: escolhido, suavizar: suavizar && !props.imagem, ...(confirm ? { confirm } : {}),
+                           ...(redesenha ? { prompt, forca } : {}) });
       setVram("");
     } catch (e: any) {
       if (e.status === 409) setVram(e.message || "Tem um modelo carregado na VRAM.");
@@ -155,7 +162,8 @@ export function PainelAmpliar(props: {
         >
           {metodos.map((m) => (
             <option key={m.path} value={m.path}>
-              {m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos" : m.tipo === "spandrel" ? "IA, pelo ComfyUI"
+              {m.tipo === "redesenhar" ? `Redesenhar com ${m.name}` : m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos"
+                : m.tipo === "redesenhar" ? "refaz a imagem, leva minutos" : m.tipo === "spandrel" ? "IA, pelo ComfyUI"
                 : props.imagem ? "IA" : "IA, quadro a quadro"})
             </option>
           ))}
@@ -179,16 +187,34 @@ export function PainelAmpliar(props: {
       {escolhido && !!props.quadros && (
         <p className="text-faint">{props.quadros} quadros, cada um passa pelo ESRGAN na GPU: vídeo longo leva tempo (o cartão mostra quanto falta).</p>
       )}
-      {pesado && !semComfy && (
+      {tipo === "seedvr2" && !semComfy && (
         <p className="text-faint">Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais).</p>
       )}
-      {semComfy && <p className="text-amber-400">{pesado ? "O SeedVR2" : "Este modelo"} roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}
+      {redesenha && !semComfy && (
+        <>
+          <label className="flex flex-col gap-1">
+            <span className="text-faint">O que desenhar</span>
+            <textarea className="min-h-14 rounded-md border border-line bg-raised px-2 py-1 text-fg" value={prompt}
+              onChange={(e) => setPrompt(e.target.value)} placeholder="Descreva a imagem (em inglês funciona melhor)" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="flex text-faint">
+              <span className="flex-1">Força</span>
+              <span className="tabular-nums text-fg">{forca.toFixed(2).replace(".", ",")}</span>
+            </span>
+            <input type="range" min={0.2} max={0.7} step={0.05} value={forca} onChange={(e) => setForca(Number(e.target.value))} />
+            <span className="flex text-[11px] text-faint"><span className="flex-1">fiel, só limpa</span><span>reimagina a textura</span></span>
+          </label>
+          <p className="text-faint">O modelo redesenha a imagem por blocos: mais detalhe, mas muda a imagem (rostos podem sair diferentes). ~7 GB de VRAM, minutos.</p>
+        </>
+      )}
+      {semComfy && <p className="text-amber-400">{tipo === "seedvr2" ? "O SeedVR2" : redesenha ? "O redesenho" : "Este modelo"} roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}
       <button className={btnPrimary} disabled={semFfmpeg || semComfy || enviando} onClick={() => ampliar()}>
         {enviando ? "Começando…" : `Ampliar ${fator}×`}
       </button>
       {vram && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-amber-800/70 bg-amber-950/30 p-2 text-amber-200">
-          <span>{vram.startsWith("Outro programa") ? vram : `${vram} O SeedVR2 precisa dessa memória.`}</span>
+          <span>{vram.startsWith("Outro programa") ? vram : `${vram} ${redesenha ? "O redesenho" : "O SeedVR2"} precisa dessa memória.`}</span>
           <div className="flex gap-1.5">
             <button className={btnPrimary} disabled={enviando} onClick={() => ampliar(true)}>
               {vram.startsWith("Outro programa") ? "Ampliar mesmo assim" : "Descarregar e ampliar"}
