@@ -231,9 +231,10 @@ def test_comfy_le_as_fases_e_o_resultado_do_driver(isolado, monkeypatch):
     monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
     monkeypatch.setattr(comfy, "JOB", falso)
     fases = []
-    falso.write_text("print('FASE iniciando o ComfyUI'); print('FASE ampliando'); print('OK 1024x768')", encoding="utf-8")
-    assert comfy.ampliar("in.png", isolado / "out.png", 4, seed, progresso=fases.append) == {"w": 1024, "h": 768}
-    assert fases == ["iniciando o ComfyUI", "ampliando"]
+    falso.write_text("print('FASE iniciando o ComfyUI'); print('FASE ampliando'); print('PROGRESSO 0.5'); print('OK 1024x768')",
+                     encoding="utf-8")
+    assert comfy.ampliar("in.png", isolado / "out.png", 4, seed, progresso=lambda f, x: fases.append((f, x))) == {"w": 1024, "h": 768}
+    assert fases == [("iniciando o ComfyUI", None), ("ampliando", None), (None, 0.5)]
     falso.write_text("import sys; print('ERRO A GPU ficou sem memória'); sys.exit(1)", encoding="utf-8")
     with pytest.raises(lotes.ToolError, match="sem memória"):
         comfy.ampliar("in.png", isolado / "out.png", 4, seed)

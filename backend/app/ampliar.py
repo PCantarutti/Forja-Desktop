@@ -427,7 +427,7 @@ def eh_imagem(path: str) -> bool:
 def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "", progresso=None) -> dict:
     """Amplia uma imagem em `fator` e grava `saida` (.png). `modelo` vazio = Lanczos (Pillow), sem IA e sem ffmpeg;
     SeedVR2 vai pelo ComfyUI (comfy.py); ESRGAN pelo sd-cli. ESRGAN que passou do alvo (um 4× pedido como 2×)
-    volta ao tamanho pedido por Lanczos. `progresso(fase)`: só o SeedVR2 avisa (é o único que leva minutos)."""
+    volta ao tamanho pedido por Lanczos. `progresso(fase, fração)`: só o que vai pelo ComfyUI avisa."""
     from PIL import Image
     tipo = tipo_local(modelo) if modelo else ""
     if tipo in ("seedvr2", "spandrel"):

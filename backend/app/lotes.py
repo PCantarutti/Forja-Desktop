@@ -660,6 +660,10 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
                 w, h = im.size
         except OSError:
             raise ToolError(f"Não consegui ler {Path(path).name} como imagem.") from None
+        try:  # a original aparece por trás do card enquanto amplia: a rota de arquivo só serve imagem registrada
+            registrar_referencia(path)
+        except ToolError:
+            pass  # maior que 50 MB: amplia igual, só sem o fundo
         pasta = imagegen.out_dir()
         pasta.mkdir(parents=True, exist_ok=True)
         nome = re.sub(r"^[0-9a-f]{16}-", "", Path(path).name)  # a do celular chega em referencias/ com o sha na frente
@@ -695,11 +699,20 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
             _patch(message_id, meta={"images": imagens})
 
         if amp.eh_imagem(a["origem"]):
-            # só o SeedVR2 avisa, por fase (leva minutos): o card mostra a fase e um avanço aproximado
-            fases = {"iniciando o ComfyUI": 0.05, "ampliando": 0.3}
+            # o que vai pelo ComfyUI avisa a fase e a fração do trabalho (contada por ele, bloco a bloco): o card
+            # mostra a porcentagem e quanto falta, pelo ritmo desde que a ampliação começou de fato
+            comeco = [0.0]
 
-            def fase(texto: str) -> None:
-                item.update(fase=texto, progress=fases.get(texto, item.get("progress", 0.0)))
+            def fase(texto: str | None, fracao: float | None = None) -> None:
+                if texto:
+                    item["fase"] = texto
+                    if texto.startswith("ampliando") and not comeco[0]:
+                        comeco[0] = time.monotonic()
+                if fracao is not None:
+                    item["progress"] = round(fracao, 3)
+                    passou = time.monotonic() - comeco[0] if comeco[0] else 0
+                    if fracao >= 0.05 and passou:
+                        item["restante"] = round(passou * (1 - fracao) / fracao)
                 _patch(message_id, meta={"images": imagens})
             item["com_previa"] = False
             amp.ampliar_imagem(a["origem"], Path(item["path"]), a["fator"], a["modelo"], job_id, fase)
@@ -717,7 +730,7 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
         item["error"] = "" if cancelada else str(e)
     finally:
         localai.set_image_busy(False)
-        for k in ("preview", "com_previa", "fase"):
+        for k in ("preview", "com_previa", "fase", "restante"):
             item.pop(k, None)
         previa.unlink(missing_ok=True)
     pronta = item["status"] == "pronta"

@@ -9,7 +9,8 @@ seedvr2: difusão (o DiT + o VAE dele). spandrel: DAT, HAT, SwinIR, SPAN, os com
 modelos de ampliação do ComfyUI; a escala sai dos pesos e é medida na saída (um 2× pedido como 4× roda duas vezes;
 o que passar do alvo volta por Lanczos).
 
-Fala com quem chamou por linhas no stdout: "FASE <texto>" e, no fim, "OK <w>x<h>" ou "ERRO <mensagem>".
+Fala com quem chamou por linhas no stdout: "FASE <texto>", "PROGRESSO <0..1>" (do WebSocket do ComfyUI, que é
+onde ele conta os blocos; o log não tem) e, no fim, "OK <w>x<h>" ou "ERRO <mensagem>".
 O mesmo arquivo existe em forja-desktop e forja-web (backend/app/comfy_job.py): mudou um, copie no outro.
 """
 from __future__ import annotations
@@ -21,7 +22,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -76,6 +79,49 @@ def fluxo_spandrel(img: str, modelo: str) -> dict:
     }
 
 
+# Faixa de cada nó no total: medida na Arc B580 (SeedVR2 3B, 1024 -> 2048, servidor de pé: codificar 4 s, carregar o
+# modelo 6 s, o passo 6 s, decodificar 6 s). Dentro do nó que conta blocos, o avanço é contínuo.
+FAIXAS = {"seedvr2": {"6": (0.03, 0.20), "5": (0.20, 0.45), "8": (0.45, 0.72), "9": (0.72, 0.97), "10": (0.97, 1.0)},
+          "spandrel": {"2": (0.0, 0.02), "3": (0.02, 0.98), "4": (0.98, 1.0)}}
+
+
+def ouvir(url: str, cid: str, faixas: dict, parar: threading.Event) -> None:
+    """Os eventos do ComfyUI para este cliente viram "PROGRESSO <fração>" (só quando a fração sobe 1% ou mais).
+    Sem aiohttp (vem no portátil) ou sem conexão, fica calado: o trabalho não depende disto."""
+    try:
+        import asyncio
+        import aiohttp
+    except ImportError:
+        return
+    visto = [-1.0]
+
+    def manda(f: float) -> None:
+        if f >= visto[0] + 0.01:
+            visto[0] = f
+            diz("PROGRESSO", f"{min(f, 1.0):.3f}")
+
+    async def laco() -> None:
+        async with aiohttp.ClientSession() as s, s.ws_connect(f"{url}/ws?clientId={cid}") as ws:
+            async for m in ws:
+                if parar.is_set():
+                    return
+                if m.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                e = json.loads(m.data)
+                d = e.get("data") or {}
+                faixa = faixas.get(str(d.get("node")))
+                if not faixa:
+                    continue
+                if e.get("type") == "executing":
+                    manda(faixa[0])
+                elif e.get("type") == "progress" and d.get("max"):
+                    manda(faixa[0] + (faixa[1] - faixa[0]) * d["value"] / d["max"])
+    try:
+        asyncio.run(laco())
+    except Exception:  # noqa: BLE001 — progresso é enfeite: qualquer falha aqui não derruba a ampliação
+        pass
+
+
 def main() -> int:
     a = argparse.ArgumentParser()
     for nome in ("comfy", "modelo", "entrada", "saida"):
@@ -118,10 +164,13 @@ def main() -> int:
         linhas = (trabalho / "comfy.log").read_text(encoding="utf-8", errors="replace").splitlines()
         return " | ".join(l.strip() for l in linhas[-6:] if l.strip())[:600]
 
+    cid = uuid.uuid4().hex
+    parar = threading.Event()
+
     def rodar(g: dict) -> Path:
         """Um fluxo até o fim; devolve a imagem que ele gravou em out/."""
         try:
-            pid = pede("/prompt", {"prompt": g})["prompt_id"]
+            pid = pede("/prompt", {"prompt": g, "client_id": cid})["prompt_id"]
         except urllib.error.HTTPError as e:
             raise Falha(f"O ComfyUI recusou o fluxo: {e.read().decode('utf-8', 'replace')[:500]}") from None
         limite = time.monotonic() + TRABALHO_S
@@ -164,6 +213,8 @@ def main() -> int:
                     return 1
                 time.sleep(1)
         diz("FASE", "ampliando")
+        threading.Thread(target=ouvir, args=(url, cid, FAIXAS[o.modo], parar), daemon=True).start()
+        time.sleep(0.3)  # o WebSocket conectado antes do fluxo, senão os primeiros eventos se perdem
         from PIL import Image
         with Image.open(o.entrada) as im:
             alvo = (im.width * o.fator, im.height * o.fator)
@@ -174,6 +225,7 @@ def main() -> int:
             with Image.open(final) as im:
                 largura = im.width
             if largura < alvo[0]:  # modelo 2× e pediu 4×: mais uma passada, em cima da primeira
+                diz("FASE", "ampliando (2ª passada)")
                 shutil.copyfile(final, trabalho / "in" / "passo2.png")
                 final = rodar(fluxo_spandrel("passo2.png", modelo.name))
         with Image.open(final) as im:
@@ -186,6 +238,7 @@ def main() -> int:
         diz("ERRO", str(e))
         return 1
     finally:
+        parar.set()
         proc.kill()  # ponytail: o ComfyUI não tem filhos que segurem a GPU; kill no processo basta
         proc.wait()
         log.close()

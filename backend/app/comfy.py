@@ -53,7 +53,8 @@ def instalar() -> dict:
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = "", progresso=None,
             modo: str = "seedvr2") -> dict:
     """Uma imagem pelo ComfyUI (comfy_job.py no Python do portátil): `modo` seedvr2 (difusão, com o VAE) ou spandrel
-    (DAT/HAT/SwinIR e afins). `progresso(fase)` a cada fase."""
+    (DAT/HAT/SwinIR e afins). `progresso(fase, fração)`: a fase quando muda (fração None) e a fração do trabalho
+    (0..1, contada pelo ComfyUI) quando ela sobe (fase None)."""
     from .ampliar import vae_seedvr2
     py = python()
     if not py:
@@ -79,7 +80,12 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
     for linha in proc.stdout:  # type: ignore[union-attr]
         linha = linha.strip()
         if linha.startswith("FASE ") and progresso:
-            progresso(linha[5:])
+            progresso(linha[5:], None)
+        elif linha.startswith("PROGRESSO ") and progresso:
+            try:
+                progresso(None, float(linha.split()[1]))
+            except (IndexError, ValueError):
+                pass
         elif linha.startswith(("OK", "ERRO")):
             fim = linha
     proc.wait()
