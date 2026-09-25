@@ -32,6 +32,16 @@ class ModeloCarregado(ToolError):
 def out_dir() -> Path:
     escolhida = localai.read_config()["image"].get("out_dir")
     return Path(escolhida) if escolhida else OUT_DIR
+
+
+def video_dir() -> Path:
+    """Vídeos da aba Vídeo (Configurações › Pastas). Prévias e descartados seguem na pasta de imagens."""
+    return Path(localai.read_config()["video_dir"] or localai.VIDEOS)
+
+
+def pastas_saida() -> set[Path]:
+    """Raízes de onde saem arquivos gerados (servir, apagar com a conversa)."""
+    return {OUT_DIR.resolve(), out_dir().resolve(), localai.VIDEOS.resolve(), video_dir().resolve()}
 # Barra de amostragem do sd.cpp: "  |=====>   | 3/8 - 11.5it/s". As barras de carregamento do modelo
 # usam MB/s e ficam de fora — senão a barra da UI andaria para trás.
 PROGRESS = re.compile(r"\|\s*(\d+)/(\d+) - ([\d.]+)\s*(it/s|s/it)")

@@ -101,7 +101,7 @@ export default function FolderPicker(props: {
             <section>
               <h3 className="mb-1 px-2 text-[11px] tracking-wider text-faint uppercase">Padrão</h3>
               <button
-                onClick={() => props.onPick(null)}
+                onClick={() => props.onPick(roots?.default ?? null)} // caminho explícito: conversa nova sem pasta é barrada no envio
                 title={roots?.default}
                 className="w-full truncate rounded-lg px-2 py-1.5 text-left text-muted hover:bg-surface hover:text-fg"
               >

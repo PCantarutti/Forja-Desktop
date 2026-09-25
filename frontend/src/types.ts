@@ -26,7 +26,8 @@ export type Approval = {
 
 /** O que está rodando agora: turno do agente e delegações por conversa, e processos vivos. */
 export type Activity = {
-  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean; alertas?: number }[];
+  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean; alertas?: number;
+    run?: string }[];  // id do turno mais recente (rodando ou recém-terminado)
   servers: number;
   local?: boolean;  // modelo local carregado no llama-server
 };
@@ -573,6 +574,7 @@ export type LocalState = {
   last: string;
   image: ImageOpts;
   image_dir: string; // pasta onde as imagens do painel são salvas
+  video_dir: string; // pasta dos vídeos da aba Vídeo
   image_models: LocalModel[];
   video: ImageOpts; // padrões da aba Vídeo
   video_models: LocalModel[];

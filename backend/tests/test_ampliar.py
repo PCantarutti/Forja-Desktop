@@ -13,6 +13,7 @@ def isolado(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "LOCAL_CONFIG", tmp_path / "local.json")
     monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "modelos")
     monkeypatch.setattr(imagegen, "OUT_DIR", tmp_path / "imagens")
+    monkeypatch.setattr(localai, "VIDEOS", tmp_path / "videos")
     monkeypatch.setattr(mirror, "ROOT", tmp_path / "conversas")
     localai._KINDS.clear()
     (tmp_path / "modelos").mkdir()
@@ -107,7 +108,7 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     with pytest.raises(lotes.ToolError, match="2× ou 4×"):
         lotes.ampliar(msg.id, str(origem), 3)
 
-    # um vídeo qualquer do disco: tamanho e fps vêm do ffprobe, o resultado vai para a pasta de imagens
+    # um vídeo qualquer do disco: tamanho e fps vêm do ffprobe, o resultado vai para a pasta de vídeos
     fora = isolado / "de-fora" / "ferias.mp4"
     fora.parent.mkdir()
     fora.write_bytes(b"mp4")
@@ -116,7 +117,7 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     m = _esperar(nova["id"])
     assert m["status"] == "pronto" and feitas[-1][0] == str(fora)
     saida = Path(m["meta"]["images"][0]["path"])
-    assert saida.parent == isolado / "imagens" and saida.name.endswith("-ferias-2x.webm")
+    assert saida.parent == isolado / "videos" and saida.name.endswith("-ferias-2x.webm")
     with db.session() as s:
         assert s.get(db.Message, nova["id"] - 1).content == "ferias.mp4"  # o pedido é o nome do arquivo
     with pytest.raises(lotes.ToolError, match="não existe"):

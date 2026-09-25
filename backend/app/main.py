@@ -16,7 +16,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from fastapi.staticfiles import StaticFiles
 
@@ -115,7 +115,7 @@ async def fronteira(request, call_next):
 def get_config():
     return {"providers": [{"id": p["id"], "name": p["name"]} for p in config.PROVIDERS.values()],
             "num_ctx": config.NUM_CTX, "max_iterations": config.MAX_ITERATIONS,
-            "default_workspace": workspace.label(None), "drives": [d["name"] for d in workspace.roots()],
+            "default_workspace": workspace.label(None), "workspace_padrao": config.WORKSPACE_PADRAO, "drives": [d["name"] for d in workspace.roots()],
             "subagents": {k: v for k, v in subagents.configured().items()},
             # o seletor de modelo barra o GGUF local com janela menor que isto (Maestro / Workers)
             "min_ctx_maestro": config.MAESTRO_MIN_CTX, "min_ctx_worker": config.WORKER_MIN_CTX,
@@ -387,6 +387,10 @@ async def get_activity():
                                        {"id": int(conv_id), "running": False, "subagents": 0, "servers": 0})
 
     for r in RUNS.values():
+        # Último turno de cada conversa, mesmo já terminado (fica em RUNS por uns minutos): a tela que não
+        # disparou o turno (outro aparelho) vê um id novo e se atualiza, ainda que ele tenha durado segundos.
+        if not r.finished or not entrada(r.conv_id).get("run"):
+            entrada(r.conv_id)["run"] = r.id
         if not r.finished:
             e = entrada(r.conv_id)
             e["running"] = True
@@ -464,6 +468,7 @@ class DownloadBody(BaseModel):
 class PathsBody(BaseModel):
     models_dir: str = ""
     image_dir: str = ""
+    video_dir: str = ""
 
 
 class RuntimeChoiceBody(BaseModel):
@@ -659,7 +664,7 @@ def local_cancel(job_id: str):
 async def local_paths(body: PathsBody):
     """Pastas padrão: modelos baixados e imagens geradas."""
     try:
-        return await asyncio.to_thread(localai.set_paths, body.models_dir, body.image_dir)
+        return await asyncio.to_thread(localai.set_paths, body.models_dir, body.image_dir, body.video_dir)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -799,7 +804,7 @@ async def local_image_model(body: LoadBody):
 def local_image_file(path: str):
     """Só serve PNG gerado pelo painel (a pasta padrão ou a que a tela Imagem escolheu)."""
     f = Path(path).resolve()
-    pastas = {imagegen.OUT_DIR.resolve(), imagegen.out_dir().resolve()}
+    pastas = imagegen.pastas_saida()
     # ...ou uma imagem que a pessoa anexou do disco para editar (só as registradas, nada mais do disco)
     # ...ou o arquivo de um slot do site (skill gerar-imagens), registrado quando a fila dele saiu
     if not ((pastas & set(f.parents)) or lotes.eh_referencia(str(f)) or lotes.eh_slot(str(f))) or not f.is_file():
@@ -1467,10 +1472,14 @@ def _conv_dict(c: db.Conversation) -> dict:
 
 
 @app.get("/api/conversations")
-def list_conversations(kind: str | None = None, archived: bool = False):
-    """Sem `kind`, todas; com `kind`, só as da seção (chat ou agent). Fixadas primeiro; arquivadas à parte."""
+def list_conversations(kind: str | None = None, archived: bool = False, keep: int | None = None):
+    """Sem `kind`, todas; com `kind`, só as da seção (chat ou agent). Fixadas primeiro; arquivadas à parte.
+    Conversa vazia (nasceu num anexo ou num envio que falhou) não aparece, salvo a aberta (`keep`)."""
     with db.session() as s:
         q = select(db.Conversation).order_by(db.Conversation.pinned.desc(), db.Conversation.updated_at.desc())
+        if not archived:  # arquivar foi escolha da pessoa: lá a vazia aparece
+            q = q.where(or_(db.Conversation.messages.any(), db.Conversation.title != "Nova conversa",
+                            db.Conversation.origem.isnot(None), db.Conversation.id == (keep or -1)))
         q = q.where(db.Conversation.archived.is_(True) if archived else db.Conversation.archived.isnot(True))
         if kind:
             q = q.where(db.Conversation.kind == kind)
@@ -1511,6 +1520,8 @@ def create_conversation(body: dict | None = None):
     kind = (body or {}).get("kind") or "agent"
     if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa"):
         raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar ou pesquisa")
+    if not folder and kind in ("agent", "maestro"):
+        folder = config.WORKSPACE_PADRAO  # None: a pasta é escolhida antes do 1º envio (start_run barra)
     with db.session() as s:
         c = db.Conversation(workspace=folder, kind=kind)
         s.add(c)
@@ -1996,7 +2007,15 @@ async def start_run(conv_id: int, body: RunBody):
     if active_run(conv_id):
         raise HTTPException(409, "Esta conversa já tem uma execução em andamento")
     with db.session() as s:
-        kind = _get_conv(s, conv_id).kind or "agent"  # o tipo é da conversa, não do pedido
+        c = _get_conv(s, conv_id)
+        kind = c.kind or "agent"  # o tipo é da conversa, não do pedido
+        # Agente/Maestro mexem em arquivos: conversa nova sem pasta não cai calada em ~/Forja. As antigas
+        # (já com mensagens) seguem na pasta padrão de sempre.
+        if kind in ("agent", "maestro") and not c.workspace and not c.messages:
+            if not config.WORKSPACE_PADRAO:
+                raise HTTPException(400, "Escolha uma pasta de trabalho antes de enviar.")
+            c.workspace = config.WORKSPACE_PADRAO
+            s.commit()
     mobile.lembra({k: getattr(body, k) for k in ("provider", "model", "permission", "effort")})
     run = Run(conv_id)
     RUNS[run.id] = run

@@ -87,6 +87,7 @@ type Config = {
   providers: { id: string; name: string }[];
   num_ctx: number;
   default_workspace?: string;
+  workspace_padrao?: string | null;  // pasta de conversa nova de Agente/Maestro (Configurações); null = escolher
   min_ctx_maestro?: number;  // janela mínima de modelo local para a Maestro (o seletor barra abaixo)
   maestro_model?: { provider: string; model: string };  // modelo padrão da Maestro (Configurações)
 };
@@ -309,7 +310,9 @@ export default function App() {
   const [nativeError, setNativeError] = useState("");
   const [picking, setPicking] = useState(false); // diálogo nativo aberto no sistema
   // Pasta escolhida antes de a conversa existir (tela inicial); vira a pasta da conversa no 1º envio.
-  const [pendingWs, setPendingWs] = useState<string | null>(() => localStorage.getItem("forja.workspace"));
+  // Pasta da conversa nova (Agente/Maestro). Começa na pasta padrão das Configurações, se houver; sem ela, o
+  // envio é barrado até escolher (a última pasta usada não é mais herdada).
+  const [pendingWs, setPendingWs] = useState<string | null>(null);
   const [subSteps, setSubSteps] = useState<Record<string, SubState>>({});
   const [board, setBoard] = useState<MaestroBoard | null>(null);  // árvore de tarefas do Maestro
   // Troca de modelo local em curso. Carregar um GGUF leva minutos: sem isto o cockpit parece travado.
@@ -440,9 +443,8 @@ export default function App() {
   }, [sidebarHidden]);
 
   useEffect(() => {
-    if (pendingWs) localStorage.setItem("forja.workspace", pendingWs);
-    else localStorage.removeItem("forja.workspace");
-  }, [pendingWs]);
+    if (currentId === null && config.workspace_padrao !== undefined) setPendingWs((p) => p ?? config.workspace_padrao ?? null);
+  }, [config.workspace_padrao]);
 
   // Miniaturas/anexos são servidos da pasta da conversa aberta.
   useEffect(() => setFileConv(currentId), [currentId]);
@@ -512,12 +514,18 @@ export default function App() {
         .catch(() => {});
     carrega();
     const t = setInterval(carrega, 4000);
-    return () => clearInterval(t);
+    // Janela escondida tem o timer estrangulado pelo Chromium: ao voltar, confere na hora.
+    window.addEventListener("focus", carrega);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener("focus", carrega);
+    };
   }, []);
 
   // Avisos que não dependem da conversa aberta na tela: aprovação esperando (inclusive do Worker) e
   // Maestro que terminou. Vêm da atividade, que cobre todas as conversas; a aberta já avisa pelo stream.
   const atividadeAnterior = useRef<Activity | null>(null);
+  const turnosVistos = useRef(new Set<string>());
   useEffect(() => {
     const antes = atividadeAnterior.current;
     atividadeAnterior.current = activity;
@@ -537,9 +545,18 @@ export default function App() {
       }
     }
     const agora = new Set(activity.conversations.filter((c) => c.running).map((c) => c.id));
-    // Turno aberto pelo servidor (aviso de processo em segundo plano que terminou) na conversa da tela:
-    // conecta no stream dele, como no F5.
-    if (currentId && !running && agora.has(currentId) && !rodandoAntes.has(currentId)) openConversation(currentId);
+    // Turno que esta tela não disparou (o celular, ou aviso de processo em segundo plano) na conversa aberta:
+    // rodando, conecta no stream dele como no F5; já terminado (durou menos que o intervalo), recarrega.
+    const turno = activity.conversations.find((c) => c.id === currentId)?.run;
+    if (currentId && !running && turno && turno !== runId.current && !turnosVistos.current.has(turno)) {
+      turnosVistos.current.add(turno);
+      if (agora.has(currentId)) openConversation(currentId);
+      else {
+        const id = currentId;
+        api.get<Live>(`/conversations/${id}/live`).then((l) => abertaRef.current === id && setMessages(l.messages)).catch(() => {});
+        refreshConversations();
+      }
+    }
     for (const id of rodandoAntes.keys()) {
       if (agora.has(id) || conv(id)?.kind !== "maestro") continue;
       api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {
@@ -565,11 +582,14 @@ export default function App() {
   const secaoRef = useRef(section);
   const secaoEscolhida = useRef(false);  // true depois que a pessoa clica numa aba
   secaoRef.current = section;
+  // A conversa aberta, para a lista não esconder a dela enquanto ainda está vazia (só com anexo).
+  const abertaRef = useRef<number | null>(null);
+  abertaRef.current = currentId;
 
   function refreshConversations(kind: Section = section) {
     const meu = ++pedidoConversas.current;
     api
-      .get<Conversation[]>(`/conversations?kind=${kind}`)
+      .get<Conversation[]>(`/conversations?kind=${kind}${abertaRef.current ? `&keep=${abertaRef.current}` : ""}`)
       .then((list) => {
         if (meu !== pedidoConversas.current) return;  // resposta atrasada de outra seção
         conversationsRef.current = list;
@@ -760,6 +780,7 @@ export default function App() {
     setCtx(null);
     setCheckpoints({});
     setChangesCount(0);
+    setPendingWs(config.workspace_padrao ?? null);
   }
 
   async function deleteConversation(id: number) {
@@ -957,6 +978,7 @@ export default function App() {
   async function ensureConversation(): Promise<number> {
     if (currentId !== null) return currentId;
     const c = await api.post<Conversation>("/conversations", { workspace: pendingWs, kind: section });
+    abertaRef.current = c.id;
     setCurrentId(c.id);
     setMessages([]);
     refreshConversations();
@@ -1024,6 +1046,7 @@ export default function App() {
     // sem erro nenhum na tela. O dataTransfer do arrastar tem o mesmo prazo de validade.
     const lista = Array.from(files);
     if (!lista.length) return;
+    if (semPasta) return setError("Escolha uma pasta de trabalho antes de anexar: o anexo vai para dentro dela.");
     setUploading(true);
     const conv = await ensureConversation().catch((e) => {
       setError(e.message);
@@ -1169,6 +1192,10 @@ export default function App() {
     }
     if (!settings.model) {
       setError("Escolha um modelo primeiro.");
+      return;
+    }
+    if (semPasta) {
+      setError("Escolha uma pasta de trabalho antes de enviar (no seletor de pasta, no topo).");
       return;
     }
     setError("");
@@ -1328,7 +1355,8 @@ export default function App() {
   }
 
   const conv = conversations.find((c) => c.id === currentId);
-  const wsLabel = (conv ? conv.workspace : pendingWs) ?? config.default_workspace ?? "pasta padrão";
+  // Conversa aberta sem pasta = das antigas, que rodam na raiz interna; a nova sem pasta ainda não pode enviar.
+  const wsLabel = conv ? conv.workspace ?? config.default_workspace ?? "pasta padrão" : pendingWs;
 
   // O turno atual ainda está rodando: não mostra estatísticas dele até terminar.
   const lastUserIndex = messages.map((m) => m.role).lastIndexOf("user");
@@ -1422,6 +1450,7 @@ export default function App() {
   // Agente e Maestro agem numa pasta de trabalho: os dois têm seletor de pasta, modos de permissão,
   // aviso de modo e Shift+Tab. Uma condição só, para os dois não divergirem de novo.
   const agentica = section === "agent" || section === "maestro";
+  const semPasta = agentica && currentId === null && !pendingWs;
   // A conversa desenhada como no chat. Função de uma lista de mensagens, e não bloco fixo, porque o
   // cockpit do Maestro desenha a do Worker com ela também: o mesmo "Raciocinou ›", os mesmos blocos
   // de ferramenta com diff, a mesma linha de tokens e t/s — igual por construção, não por imitação.
@@ -1744,12 +1773,12 @@ export default function App() {
           <div className="mt-4 text-sm text-muted">
             {section === "agent" ? (
               <>
-                Agente: lê e escreve em <span className="font-mono text-fg">{wsLabel}</span>
+                Agente: {wsLabel ? <>lê e escreve em <span className="font-mono text-fg">{wsLabel}</span></> : <span className="text-amber-300">escolha uma pasta de trabalho no topo para começar.</span>}
               </>
             ) : section === "maestro" ? (
               <>
                 Maestro: diga o objetivo; ela planeja, delega aos Workers e valida em{" "}
-                <span className="font-mono text-fg">{wsLabel}</span>
+                {wsLabel ? <span className="font-mono text-fg">{wsLabel}</span> : <span className="text-amber-300">uma pasta — escolha no topo para começar.</span>}
               </>
             ) : (
               "Chat: conversa com busca na web, sem acesso a arquivos."
@@ -1982,10 +2011,8 @@ export default function App() {
         onNew={newConversation}
         onNewIn={(ws) => {
           // Nova conversa já na pasta do grupo: vira a pasta da conversa no primeiro envio.
-          setPendingWs(ws);
-          if (ws) localStorage.setItem("forja.workspace", ws);
-          else localStorage.removeItem("forja.workspace");
           newConversation();
+          if (ws) setPendingWs(ws);
         }}
         onDelete={deleteConversation}
         onBulk={async (ids, action) => {
@@ -2040,11 +2067,11 @@ export default function App() {
           <button
             onClick={chooseFolder}
             disabled={running || picking}
-            title={`Pasta de trabalho: ${wsLabel}\nClique para trocar`}
-            className="inline-flex max-w-56 shrink-0 items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-xs text-muted hover:text-fg disabled:opacity-50"
+            title={wsLabel ? `Pasta de trabalho: ${wsLabel}\nClique para trocar` : "Nenhuma pasta escolhida: clique para escolher"}
+            className={`inline-flex max-w-56 shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-xs disabled:opacity-50 ${wsLabel ? "bg-raised text-muted hover:text-fg" : "bg-amber-500/15 text-amber-300 hover:text-amber-200"}`}
           >
             <span className="truncate">
-              {picking ? "escolhendo…" : folderName(conv ? conv.workspace ?? config.default_workspace : pendingWs ?? config.default_workspace)}
+              {picking ? "escolhendo…" : wsLabel ? folderName(wsLabel) : "Escolher pasta"}
             </span>
             <ChevronDown className="size-3 shrink-0" />
           </button>

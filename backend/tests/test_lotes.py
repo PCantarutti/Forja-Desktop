@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -12,6 +13,7 @@ def pastas(tmp_path, monkeypatch):
     """Tudo em tmp: o config do localai, a pasta das imagens e o espelho em Markdown."""
     monkeypatch.setattr(config, "LOCAL_CONFIG", tmp_path / "local.json")
     monkeypatch.setattr(imagegen, "OUT_DIR", tmp_path / "imagens")
+    monkeypatch.setattr(localai, "VIDEOS", tmp_path / "videos")
     monkeypatch.setattr(mirror, "ROOT", tmp_path / "conversas")
     monkeypatch.setattr(lotes.projeto, "gpu_alheia", lambda pid: [])  # a GPU de verdade desta máquina não entra
     localai.write_config({**localai._blank(), "image": {**localai.DEFAULT_IMAGE,
@@ -304,10 +306,9 @@ def test_previa_entra_no_card_e_some_no_fim(monkeypatch):
 
     monkeypatch.setattr(imagegen, "generate", generate)
     msg_id: list = []
-    orig = lotes.threading.Thread
-    # segura a thread até o id da mensagem estar à mão (o generate de mentira lê a mensagem)
-    monkeypatch.setattr(lotes.threading, "Thread", lambda target, args, daemon: orig(
-        target=lambda *a: (msg_id.append(a[1]), target(*a)), args=args, daemon=daemon))
+    orig = lotes._trabalhar
+    # guarda o id da mensagem antes de o lote andar (o generate de mentira lê a mensagem)
+    monkeypatch.setattr(lotes, "_trabalhar", lambda *a: (msg_id.append(a[1]), orig(*a)))
     m = _esperar(lotes.start(_conversa(), "a fox", models=["m1.safetensors"])["id"])
     assert vistas[0] is None and vistas[1].endswith(".png")
     assert "preview" not in m["meta"]["images"][0] and "com_previa" not in m["meta"]["images"][0]
@@ -499,3 +500,29 @@ def test_slot_que_falha_nao_tira_a_imagem_do_site(tmp_path, monkeypatch):
     # e o slot volta à fila: sai de novo com outro modelo, não fica preso ao do lote que falhou
     assert [sl["nome"] for sl in lotes.origem(conv)["pendentes"]] == ["vela-3141"]
     assert not list(lotes.descartadas_dir().glob("vela-3141-*.png"))
+
+
+def test_segundo_lote_entra_na_fila_em_vez_de_ser_recusado(monkeypatch):
+    """Com um lote gerando, outro pedido não dá erro: espera a vez e sai depois, na ordem."""
+    ordem: list[str] = []
+    solta = threading.Event()
+
+    def generate(prompt, out, *_, **__):
+        if prompt == "primeiro":
+            solta.wait(5)
+        ordem.append(prompt)
+        Path(out).write_bytes(b"\x89PNG")
+        return Path(out)
+
+    monkeypatch.setattr(imagegen, "generate", generate)
+    monkeypatch.setattr(imagegen, "_exe", lambda: Path("sd-cli.exe"))
+    monkeypatch.setattr(imagegen, "argv", lambda *a, **k: ["sd-cli"])
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    conv = _conversa()
+    a = lotes.start(conv, "primeiro", models=["m1.safetensors"])
+    b = lotes.start(conv, "segundo", models=["m1.safetensors"])  # antes: "Já tem uma geração em andamento"
+    assert lotes._mensagem(b["id"])["status"] == "running"
+    solta.set()
+    ma, mb = _esperar(a["id"]), _esperar(b["id"])
+    assert ma["status"] == mb["status"] == "pronto", (ma["meta"]["images"], mb["meta"]["images"])
+    assert ordem == ["primeiro", "segundo"]

@@ -47,6 +47,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "auto_review": False,  # modo Automático: o modelo revisa o risco da ação em vez de perguntar
     "workers_do_maestro": False,
     "worker_especialidades": [dict(e) for e in config.ESPECIALIDADES_PADRAO],
+    "workspace_padrao": "",  # pasta de uma conversa nova de Agente/Maestro; vazio = escolher a cada conversa
 }
 MAX_ESPECIALIDADES = 12
 
@@ -147,6 +148,7 @@ def apply(values: dict | None = None) -> dict:
     config.BROWSER_IDLE_MINUTES = int(values["browser_idle_minutes"])
     config.BROWSER_SCALE = int(values["browser_scale"])
     config.BROWSER_STREAM = values["browser_stream"]
+    config.WORKSPACE_PADRAO = values["workspace_padrao"] or None
     return values
 
 
@@ -249,6 +251,16 @@ def validate(patch: dict, current: dict) -> dict:
             if raw not in ("png", "jpeg"):
                 raise SettingsError("browser_stream deve ser png ou jpeg.")
             values[key] = raw
+        elif key == "workspace_padrao":
+            from . import workspace
+            pasta = str(raw or "").strip()
+            if pasta:
+                try:
+                    workspace.resolve(pasta)
+                except workspace.WorkspaceError as e:
+                    raise SettingsError(str(e)) from None
+                pasta = workspace.normalize(pasta)
+            values[key] = pasta
         elif key == "searxng_url":
             url = str(raw).strip().rstrip("/")
             if not url.startswith(("http://", "https://")):

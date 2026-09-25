@@ -12,6 +12,8 @@ passarem de `image.descarte_dias` (padrão 7).
 """
 from __future__ import annotations
 
+import logging
+import queue
 import random
 import shutil
 import threading
@@ -25,6 +27,33 @@ from .tools import ToolError
 DESCARTADAS = "descartadas"
 MAX_VARIACOES = 50  # o sd-cli é sequencial; acima disso é espera, não geração
 SEED_MAX = 2**31 - 1
+
+
+# Lotes e ampliações numa fila só: o sd-cli ocupa a GPU inteira, então um por vez, na ordem em que chegaram.
+# Pedir outro com um rodando entra na fila (a mensagem nasce "running" com as imagens "pendente").
+_FILA: queue.Queue = queue.Queue()
+_trabalhador: threading.Thread | None = None
+_fila_lock = threading.Lock()
+
+
+def _enfileirar(alvo, *args) -> None:
+    global _trabalhador
+    _FILA.put((alvo, args))
+    with _fila_lock:
+        if _trabalhador is None or not _trabalhador.is_alive():
+            _trabalhador = threading.Thread(target=_consumir, daemon=True)
+            _trabalhador.start()
+
+
+def _consumir() -> None:
+    while True:
+        alvo, args = _FILA.get()
+        while localai.image_busy():  # image_generate/video_generate do agente, que roda fora da fila
+            time.sleep(1)
+        try:
+            alvo(*args)
+        except Exception:  # um lote que estoura não pode parar a fila dos outros
+            logging.exception("lote da fila falhou")
 
 
 def descartadas_dir() -> Path:
@@ -371,8 +400,6 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     if not prompt:
         raise ToolError("Descreva a imagem (prompt vazio).")
     count = max(1, min(int(count or 1), MAX_VARIACOES))
-    if localai.image_busy():
-        raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
     opts = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
     escolhidos = _distribuir(list(models or []), count)
     refs = [str(r) for r in (refs or [])]
@@ -383,10 +410,12 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
     for m in dict.fromkeys(escolhidos):  # valida runtime e modelo ANTES de descarregar o LLM por nada
         imagegen.argv(exe, prompt, imagegen.OUT_DIR / f"x{ext}", imagegen._opts({**opts, "model": m}), refs)
 
-    _liberar_vram(confirm)
+    if not localai.image_busy():  # com a fila andando o LLM já saiu, e o sd-cli dela não é "outro programa"
+        _liberar_vram(confirm)
 
     sementes = _sementes(count, seed, seed_mode)
-    pasta = imagegen.out_dir()
+    pasta = imagegen.video_dir() if ext == ".webm" else imagegen.out_dir()
+    pasta.mkdir(parents=True, exist_ok=True)
     marca = time.strftime("%Y%m%d-%H%M%S")
     imagens = [{"path": str(pasta / f"{marca}-{i:02d}-s{s}{ext}"), "seed": s, "model": m,
                 "model_name": _nome(m), "status": "pendente", "error": ""}
@@ -430,7 +459,7 @@ def start(conv_id: int, prompt: str, opts: dict | None = None, models: list[str]
                                       "imagens_pendentes": {**pedido_ia.meta["imagens_pendentes"], "geradas": True}}
             s.commit()
 
-    threading.Thread(target=_trabalhar, args=(conv_id, msg.id, prompt, opts, job["id"], refs), daemon=True).start()
+    _enfileirar(_trabalhar, conv_id, msg.id, prompt, opts, job["id"], refs)
     return msg.to_dict()
 
 
@@ -550,8 +579,6 @@ def _validar_ampliacao(fator: int, modelo: str) -> None:
     if modelo and not amp.eh_ampliador(modelo):
         raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN).")
     amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada
-    if localai.image_busy():
-        raise ToolError("Já tem uma geração em andamento (imagem ou vídeo): espere terminar ou cancele.")
 
 
 def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: dict, seed: int,
@@ -569,7 +596,7 @@ def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: d
     job = downloads.create("lote", f"ampliar {Path(origem).name}")
     nova = _save(conv_id, role="assistant", content="", status="running",
                  meta={"job": job["id"], "count": 1, "seed_mode": "fixa", "opts": opts, "images": imagens})
-    threading.Thread(target=_ampliar_trabalho, args=(conv_id, nova.id, job["id"]), daemon=True).start()
+    _enfileirar(_ampliar_trabalho, conv_id, nova.id, job["id"])
     return nova.to_dict()
 
 
@@ -592,13 +619,13 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
     """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
-    para a pasta de imagens; o original não é tocado."""
+    para a pasta de vídeos; o original não é tocado."""
     from . import ampliar as amp
     if not Path(path).is_file():
         raise ToolError("Esse arquivo não existe (ou não está acessível).")
     _validar_ampliacao(fator, modelo)
     info = amp.sondar(path)
-    pasta = imagegen.out_dir()
+    pasta = imagegen.video_dir()
     pasta.mkdir(parents=True, exist_ok=True)
     saida = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"
     opts = {"width": info["w"], "height": info["h"], "fps": round(info["fps"]), "frames": info["quadros"]}
@@ -696,12 +723,13 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
     if not any(i["status"] in A_REFAZER for i in imagens):
         raise ToolError("Nada a continuar: todas as imagens deste lote já saíram.")
     if (msg["meta"].get("opts") or {}).get("ampliacao"):  # é uma ampliação: refaz a ampliação
-        _liberar_vram(confirm)
+        if not localai.image_busy():
+            _liberar_vram(confirm)
         for i in imagens:
             i.update(status="pendente", error="")
         job = downloads.create("lote", f"ampliar {Path(imagens[0]['path']).name}")
         _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
-        threading.Thread(target=_ampliar_trabalho, args=(msg["conversation_id"], message_id, job["id"]), daemon=True).start()
+        _enfileirar(_ampliar_trabalho, msg["conversation_id"], message_id, job["id"])
         return {"ok": True}
     with db.session() as s:
         pedido = (s.query(db.Message)
@@ -711,7 +739,8 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
         if not pedido:
             raise ToolError("Pedido do lote não encontrado.")
         prompt, refs = pedido.content, list((pedido.meta or {}).get("refs") or [])
-    _liberar_vram(confirm)
+    if not localai.image_busy():
+        _liberar_vram(confirm)
     for i in imagens:
         if i["status"] in A_REFAZER:
             i.update(status="pendente", error="")
@@ -720,8 +749,7 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
     downloads.update(job["id"], done=0, total=faltam)
     _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
     opts = msg["meta"].get("opts") or {}
-    threading.Thread(target=_trabalhar, args=(msg["conversation_id"], message_id, prompt, opts, job["id"], refs),
-                     daemon=True).start()
+    _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, opts, job["id"], refs)
     return {"ok": True}
 
 
@@ -751,7 +779,7 @@ def decidir(message_id: int, keep: list[str], apenas: list[str] | None = None) -
         if item["path"] in manter:
             if item["status"] == "descartada":  # desfazer: volta para a pasta de saída
                 # slot volta para o caminho que o código aponta; variação, para a pasta de saída
-                alvo = Path(item["destino"]) if item.get("destino") else imagegen.out_dir() / Path(item["path"]).name
+                alvo = Path(item["destino"]) if item.get("destino") else (imagegen.video_dir() if item["path"].endswith(".webm") else imagegen.out_dir()) / Path(item["path"]).name
                 if Path(item["path"]).exists():
                     alvo.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(item["path"], alvo)
@@ -847,7 +875,7 @@ def otimizar(conv_id: int) -> dict:
 def imagens_da_conversa(conv_id: int) -> list[Path]:
     """Os arquivos que os lotes desta conversa geraram e ainda existem (inclusive em descartadas/).
     Só o que está dentro da pasta de imagens: referência anexada do disco da pessoa nunca entra."""
-    pastas = {imagegen.OUT_DIR.resolve(), imagegen.out_dir().resolve()}
+    pastas = imagegen.pastas_saida()
     with db.session() as s:
         msgs = s.query(db.Message).filter(db.Message.conversation_id == conv_id, db.Message.role == "assistant").all()
         caminhos = [i["path"] for m in msgs for i in (m.meta or {}).get("images") or [] if i.get("path")]

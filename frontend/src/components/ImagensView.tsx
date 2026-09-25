@@ -747,8 +747,8 @@ export default function ImagensView(props: {
               </div>
               <BotaoEnviar
                 onEnviar={() => gerar()}
-                desabilitado={!prompt.trim() || !models.length || semRuntime || st.image_busy || ocupado}
-                titulo={st.image_busy || ocupado ? "Já tem imagem sendo gerada" : "Gerar"}
+                desabilitado={!prompt.trim() || !models.length || semRuntime}
+                titulo={st.image_busy || ocupado ? "Entra na fila: gera quando o lote atual terminar" : "Gerar"}
               />
               </DireitaPrompt>
             </RodapePrompt>

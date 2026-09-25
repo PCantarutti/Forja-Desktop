@@ -23,6 +23,9 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Pasta padrão (conversas sem pasta escolhida). Cada conversa escolhe a sua na interface.
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT") or Path.home() / "Forja")
+# Pasta que Agente/Maestro usam numa conversa nova (Configurações › Pastas). None = o usuário escolhe
+# antes do 1º envio. WORKSPACE_ROOT segue como raiz interna (chat, skills, MCP, conversas antigas sem pasta).
+WORKSPACE_PADRAO: str | None = None
 WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
 DB_PATH = os.getenv("DB_PATH") or str(DATA_DIR / "forja.db")
 MCP_CONFIG = Path(os.getenv("MCP_CONFIG") or DATA_DIR / "mcp.json")

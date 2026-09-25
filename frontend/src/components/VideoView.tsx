@@ -276,8 +276,8 @@ export default function VideoView(props: {
   }
 
   async function gerar(confirm = false) {
-    // As mesmas travas do botão: pelo Enter, uma 2ª geração subia outro sd-cli disputando a VRAM.
-    if (!o || !st || !prompt.trim() || !modelo || ocupado || st.image_busy || !st.runtimes.sd.installed) return;
+    // Com uma geração rodando, a nova entra na fila do backend (um sd-cli por vez, na ordem).
+    if (!o || !st || !prompt.trim() || !modelo || !st.runtimes.sd.installed) return;
     if (refs.length < precisaQuadros) {
       mostrarErro(precisaQuadros === 1 ? "Escolha a imagem que vai ser animada." : "Escolha o quadro inicial e o final.");
       return;
@@ -767,8 +767,8 @@ export default function VideoView(props: {
                   )}
                   <BotaoEnviar
                     onEnviar={() => gerar()}
-                    desabilitado={!prompt.trim() || !modelo || semRuntime || st.image_busy || ocupado || refs.length < precisaQuadros}
-                    titulo={st.image_busy || ocupado ? "Já tem geração em andamento" : refs.length < precisaQuadros ? "Faltam os quadros" : "Gerar"}
+                    desabilitado={!prompt.trim() || !modelo || semRuntime || refs.length < precisaQuadros}
+                    titulo={refs.length < precisaQuadros ? "Faltam os quadros" : st.image_busy || ocupado ? "Entra na fila: gera quando a atual terminar" : "Gerar"}
                   />
                 </DireitaPrompt>
               </RodapePrompt>

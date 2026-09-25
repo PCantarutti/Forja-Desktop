@@ -32,6 +32,7 @@ from .tools import ToolError
 
 RUNTIMES = config.DATA_DIR / "runtimes"
 IMAGENS = config.DATA_DIR / "imagens"  # padrão das imagens do painel
+VIDEOS = config.DATA_DIR / "videos"  # padrão dos vídeos da aba Vídeo
 LOG_DIR = config.DATA_DIR / "logs"
 LOG_FILE = LOG_DIR / "llama-server.log"
 
@@ -174,7 +175,7 @@ def _blank() -> dict:
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
             "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
             "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0,
-            "slots_liberados": []}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
+            "slots_liberados": [], "video_dir": ""}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
 
 
 def read_config() -> dict:
@@ -214,10 +215,10 @@ def dirs() -> list[str]:
     return [models_dir(), *[d for d in extra if not _mesma_pasta(d, models_dir())]]
 
 
-def set_paths(models: str = "", imagens: str = "") -> dict:
+def set_paths(models: str = "", imagens: str = "", videos: str = "") -> dict:
     """Pastas padrão da tela de Configurações. Cria o que não existe (dar erro por isso seria chato)."""
     data = read_config()
-    for valor, chave in ((models, "models_dir"), (imagens, "image")):
+    for valor, chave in ((models, "models_dir"), (imagens, "image"), (videos, "video_dir")):
         if not valor:
             continue
         try:
@@ -230,7 +231,7 @@ def set_paths(models: str = "", imagens: str = "") -> dict:
             data[chave] = valor
     write_config(data)
     return {"models_dir": models_dir(), "image_dir": read_config()["image"].get("out_dir") or str(IMAGENS),
-            "dirs": dirs()}
+            "video_dir": read_config()["video_dir"] or str(VIDEOS), "dirs": dirs()}
 
 
 def set_dirs(paths: list[str]) -> list[str]:
@@ -2444,4 +2445,5 @@ def state() -> dict:
             "loras": [{**m, **(loras.info_lora(m["path"]) or {})} for m in todos if m["kind"] == "lora"],
             "ampliadores": [m for m in todos if m["kind"] == "ampliador"],
             "image_dir": cfg["image"].get("out_dir") or str(IMAGENS), "models_dir": models_dir(),
+            "video_dir": cfg["video_dir"] or str(VIDEOS),
             "image_busy": image_busy(), "data_dir": str(config.DATA_DIR)}

@@ -195,7 +195,7 @@ export default function Settings(props: {
             ) : tab === "Skills" ? (
               <SkillsTab onError={setError} />
             ) : tab === "Pastas" ? (
-              <PastasTab onError={setError} />
+              <PastasTab onError={setError} onChanged={props.onChanged} />
             ) : tab === "Runtime" ? (
               <RuntimeTab onError={setError} />
             ) : tab === "Hardware" ? (
@@ -550,10 +550,11 @@ function stDefault(st: any, chave: string) {
 }
 
 /** Pastas padrão da IA local. Salva na hora, como a aba Aplicativo. */
-function PastasTab(props: { onError: (e: string) => void }) {
+function PastasTab(props: { onError: (e: string) => void; onChanged: () => void }) {
   const [st, setSt] = useState<{
     models_dir: string;
     image_dir: string;
+    video_dir: string;
     data_dir: string;
     dirs: string[];
     hf_token: boolean;
@@ -562,9 +563,24 @@ function PastasTab(props: { onError: (e: string) => void }) {
   const [token, setToken] = useState("");
   const temToken = !!st?.hf_token;
 
+  // Pasta padrão do Agente/Maestro: fica nas Configurações gerais (PUT /settings), não no local.json.
+  const [wsPadrao, setWsPadrao] = useState<string | null>(null);
+
   useEffect(() => {
     api.get<typeof st>("/local").then(setSt).catch((e) => props.onError(e.message));
+    api.get<{ workspace_padrao?: string }>("/settings").then((r) => setWsPadrao(r.workspace_padrao ?? "")).catch(() => setWsPadrao(""));
   }, []);
+
+  async function salvarWs(pasta: string) {
+    try {
+      const r = await api.put<{ workspace_padrao: string }>("/settings", { workspace_padrao: pasta });
+      setWsPadrao(r.workspace_padrao);
+      setSalvo("Salvo.");
+      props.onChanged(); // o app relê /config e a conversa nova já nasce com a pasta
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
 
   async function salvarToken() {
     try {
@@ -579,9 +595,9 @@ function PastasTab(props: { onError: (e: string) => void }) {
 
   if (!st) return <div className="text-muted">Carregando…</div>;
 
-  async function salvar(patch: { models_dir?: string; image_dir?: string }) {
+  async function salvar(patch: { models_dir?: string; image_dir?: string; video_dir?: string }) {
     try {
-      const r = await api.put<{ models_dir: string; image_dir: string; dirs: string[] }>("/local/paths", patch);
+      const r = await api.put<{ models_dir: string; image_dir: string; video_dir: string; dirs: string[] }>("/local/paths", patch);
       setSt({ ...st!, ...r });
       setSalvo("Salvo.");
     } catch (e: any) {
@@ -605,13 +621,13 @@ function PastasTab(props: { onError: (e: string) => void }) {
     if (escolhida) pastas([...st!.dirs.slice(1), escolhida]);
   }
 
-  async function escolher(campo: "models_dir" | "image_dir") {
+  async function escolher(campo: "models_dir" | "image_dir" | "video_dir") {
     const atual = st![campo];
     const escolhida = window.forja ? await window.forja.pickFolder(atual) : prompt("Caminho da pasta:", atual);
     if (escolhida) salvar({ [campo]: escolhida });
   }
 
-  const linha = (campo: "models_dir" | "image_dir") => (
+  const linha = (campo: "models_dir" | "image_dir" | "video_dir") => (
     <div className="flex items-center gap-2">
       <input
         className={input}
@@ -662,6 +678,38 @@ function PastasTab(props: { onError: (e: string) => void }) {
       </Field>
       <Field label="Imagens geradas" hint="Onde o painel salva as imagens. As geradas pelo agente vão para a pasta de trabalho da conversa.">
         {linha("image_dir")}
+      </Field>
+      <Field label="Vídeos gerados" hint="Onde a aba Vídeo salva as tomadas (e as ampliações de vídeo).">
+        {linha("video_dir")}
+      </Field>
+      <Field
+        label="Pasta padrão do Agente e da Maestro"
+        hint="Conversa nova já nasce nesta pasta. Vazio: cada conversa nova pede uma pasta antes do primeiro envio."
+      >
+        <div className="flex items-center gap-2">
+          <input
+            className={input}
+            value={wsPadrao ?? ""}
+            placeholder="Nenhuma: escolher a cada conversa"
+            spellCheck={false}
+            onChange={(e) => setWsPadrao(e.target.value)}
+            onBlur={(e) => salvarWs(e.target.value.trim())}
+          />
+          <button
+            className={btn}
+            onClick={async () => {
+              const p = window.forja ? await window.forja.pickFolder(wsPadrao ?? "") : prompt("Caminho da pasta:", wsPadrao ?? "");
+              if (p) salvarWs(p);
+            }}
+          >
+            Escolher…
+          </button>
+          {!!wsPadrao && (
+            <button className={btn} onClick={() => salvarWs("")}>
+              Limpar
+            </button>
+          )}
+        </div>
       </Field>
       <Field
         label="Token do Hugging Face"
