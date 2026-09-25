@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -239,7 +240,15 @@ def _trocar(novo: Path, dest: Path) -> None:
 
 
 def _unzip(zip_path: Path, dest: Path) -> None:
-    """Extrai achatando o diretório raiz do zip (os do llama.cpp trazem build/bin/...)."""
+    """Extrai achatando o diretório raiz do zip (os do llama.cpp trazem build/bin/...). O .7z (ComfyUI portátil)
+    mantém a árvore e só perde a pasta raiz; quem abre é o `tar` do Windows (libarchive lê 7z)."""
+    if zip_path.suffix.lower() == ".7z":
+        tar = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"  # o do Git (GNU) não lê 7z
+        r = subprocess.run([str(tar), "-xf", str(zip_path), "-C", str(dest), "--strip-components", "1"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+        if r.returncode:
+            raise OSError(f"tar não abriu {zip_path.name}: {(r.stderr or r.stdout).strip()[:300]}")
+        return
     with zipfile.ZipFile(zip_path) as z:
         members = [m for m in z.namelist() if not m.endswith("/")]
         for m in members:

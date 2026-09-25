@@ -59,7 +59,9 @@ def test_catalogo_com_o_que_ja_esta_no_disco(isolado, monkeypatch):
     c = ampliar.catalogo()
     assert len(c["no_disco"]) == 1
     assert [(x["nome"], x["mb"], bool(x["presente"])) for x in c["modelos"]] == [
-        ("RealESRGAN_x4plus.pth", 67.0, False), ("RealESRGAN_x4plus_anime_6B.pth", 17.9, True)]
+        ("RealESRGAN_x4plus.pth", 67.0, False), ("RealESRGAN_x4plus_anime_6B.pth", 17.9, True),
+        ("4x-UltraSharp.safetensors", 66.9, False), ("seedvr2_3b_fp16.safetensors", 6780, False),
+        ("seedvr2_7b_fp8_e4m3fn.safetensors", 8240, False)]
     assert c["ffmpeg"] == ""
     with pytest.raises(ampliar.ToolError, match="ffmpeg"):
         ampliar._ffmpeg()
@@ -177,3 +179,79 @@ def test_ampliar_imagem_sem_ffmpeg_por_lanczos_gerada_e_do_disco(isolado, monkey
     saida = Path(m["meta"]["images"][0]["path"])
     assert saida.parent == isolado / "imagens" and saida.name.endswith("-foto-4x.png")
     assert Image.open(saida).size == (20, 16) and (m["meta"]["opts"]["width"], m["meta"]["opts"]["height"]) == (20, 16)
+
+
+def safetensors(pasta: Path, nome: str, camadas: list[str]) -> str:
+    """Só o cabeçalho importa para o Forja: 8 bytes com o tamanho do JSON, o JSON e os dados."""
+    import json, struct
+    cab = json.dumps({n: {"dtype": "F16", "shape": [1], "data_offsets": [2 * i, 2 * i + 2]} for i, n in enumerate(camadas)}).encode()
+    f = pasta / nome
+    f.write_bytes(struct.pack("<Q", len(cab)) + cab + b"\0\0" * len(camadas))
+    return str(f)
+
+
+def test_esrgan_formato_antigo_e_seedvr2_pelo_conteudo(isolado):
+    """UltraSharp e os da comunidade nomeiam as camadas do jeito antigo (model.0, RDB1); o SeedVR2 tem os blocos
+    com modulação por texto. O VAE dele não vira modelo de imagem."""
+    m = isolado / "modelos"
+    velho = safetensors(m, "4x-UltraSharp.safetensors", ["model.0.weight", "model.1.sub.0.RDB1.conv1.0.weight"])
+    seed = safetensors(m, "qualquer-nome.safetensors", ["blocks.0.ada.txt.attn_gate", "blocks.0.attn.proj.weight"])
+    vae = safetensors(m, "seedvr2_ema_vae_fp16.safetensors", ["decoder.conv_in.weight"])
+    assert ampliar.eh_ampliador(velho) and not ampliar.eh_seedvr2(velho)
+    assert ampliar.eh_seedvr2(seed) and not ampliar.eh_ampliador(seed)
+    assert [localai.kind_of(Path(x)) for x in (velho, seed, vae)] == ["ampliador", "ampliador", "outro"]
+    no_disco = {x["name"]: x["tipo"] for x in ampliar.catalogo()["no_disco"]}
+    assert no_disco == {"4x-UltraSharp": "esrgan", "qualquer-nome": "seedvr2"}
+    assert ampliar.vae_seedvr2(seed) == vae  # ao lado do modelo
+
+
+def test_seedvr2_so_imagem_pede_comfyui_e_vram(isolado, monkeypatch):
+    from app import comfy
+    seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
+    with pytest.raises(lotes.ToolError, match="só imagem"):
+        lotes._validar_ampliacao(2, seed, video=True)
+    monkeypatch.setattr(comfy, "python", lambda: None)
+    with pytest.raises(lotes.ToolError, match="ComfyUI"):
+        lotes._validar_ampliacao(2, seed, video=False)
+    monkeypatch.setattr(comfy, "python", lambda: Path("python.exe"))
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "qwen"})
+    monkeypatch.setattr(lotes.projeto, "gpu_alheia", lambda pid: [])
+    with pytest.raises(imagegen.ModeloCarregado):  # a tela pergunta (409) antes de descarregar o LLM
+        lotes._validar_ampliacao(2, seed, video=False)
+
+
+def test_comfy_le_as_fases_e_o_resultado_do_driver(isolado, monkeypatch):
+    """comfy.ampliar roda o driver e lê o stdout: FASE vira progresso, OK vira tamanho, ERRO vira a mensagem."""
+    import subprocess, sys
+    from app import comfy
+    seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
+    safetensors(isolado / "modelos", "seedvr2_ema_vae_fp16.safetensors", ["decoder.conv_in.weight"])
+    falso = isolado / "driver.py"
+    monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
+    monkeypatch.setattr(comfy, "JOB", falso)
+    fases = []
+    falso.write_text("print('FASE iniciando o ComfyUI'); print('FASE ampliando'); print('OK 1024x768')", encoding="utf-8")
+    assert comfy.ampliar("in.png", isolado / "out.png", 4, seed, progresso=fases.append) == {"w": 1024, "h": 768}
+    assert fases == ["iniciando o ComfyUI", "ampliando"]
+    falso.write_text("import sys; print('ERRO A GPU ficou sem memória'); sys.exit(1)", encoding="utf-8")
+    with pytest.raises(lotes.ToolError, match="sem memória"):
+        comfy.ampliar("in.png", isolado / "out.png", 4, seed)
+
+
+def test_7z_mantem_a_arvore_sem_a_pasta_raiz(tmp_path):
+    """O ComfyUI portátil vem em .7z com uma pasta raiz; o runtime precisa da árvore (python_embeded/, ComfyUI/)."""
+    import os, subprocess
+    tar = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "tar.exe"
+    if not tar.is_file():
+        pytest.skip("sem o tar do Windows")
+    raiz = tmp_path / "src" / "ComfyUI_windows_portable"
+    (raiz / "python_embeded").mkdir(parents=True)
+    (raiz / "python_embeded" / "python.exe").write_bytes(b"x")
+    (raiz / "ComfyUI").mkdir()
+    (raiz / "ComfyUI" / "main.py").write_text("")
+    pacote = tmp_path / "p.7z"
+    subprocess.run([str(tar), "--format", "7zip", "-cf", str(pacote), "-C", str(tmp_path / "src"), "ComfyUI_windows_portable"], check=True)
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    downloads._unzip(pacote, dest)
+    assert (dest / "python_embeded" / "python.exe").is_file() and (dest / "ComfyUI" / "main.py").is_file()

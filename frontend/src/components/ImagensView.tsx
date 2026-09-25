@@ -1398,7 +1398,7 @@ function Cartao(props: {
             {img.s_passo ? `${velocidade(img.s_passo)} · ${duracao(img.restante ?? 0)}` : "gerando"}
           </span>
         ) : (
-          !temArquivo && <span className={CORES[img.status]}>{img.status}</span>
+          !temArquivo && <span className={CORES[img.status]}>{img.fase ?? img.status}</span>
         )}
       </figcaption>
     </figure>

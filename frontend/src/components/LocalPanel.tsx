@@ -1607,7 +1607,7 @@ function VideoTab(props: { st: LocalState; onDone: () => void; onError: (e: stri
           Mais resolução para as tomadas prontas e para vídeos do PC (aba Vídeo › Ampliar vídeo). O ffmpeg, o motor acima,
           lê e grava o vídeo; os ESRGAN ampliam quadro a quadro na GPU. Sem ESRGAN, amplia por Lanczos.
         </p>
-        <BaixarAmpliacao onError={props.onError} soModelos />
+        <BaixarAmpliacao onError={props.onError} soModelos video />
       </section>
     </>
   );

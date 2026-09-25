@@ -493,6 +493,7 @@ export type LoteImagem = {
   error: string;
   progress?: number; // 0..1, passo da amostragem enquanto gera
   preview?: string; // prévia do passo atual (só com o modo de prévia do modelo ligado)
+  fase?: string; // ampliação SeedVR2 em andamento: "iniciando o ComfyUI", "ampliando"
   width?: number; // tamanho próprio do slot (skill gerar-imagens); nas outras vale o do lote
   height?: number;
   com_previa?: boolean; // o modelo gera com prévia: o card não usa o líquido, nem antes da 1ª

@@ -999,9 +999,11 @@ def kind_of(f: Path) -> str:
     if f.suffix.lower() == ".safetensors" and loras.info_lora(str(f)):
         return "lora"  # pelos tensores, não pelo nome: não é modelo, é ajuste por cima de um
     if f.suffix.lower() in (".pth", ".safetensors"):
-        from .ampliar import eh_ampliador
-        if eh_ampliador(str(f)):
-            return "ampliador"  # ESRGAN: amplia quadro a quadro, não gera nada
+        from .ampliar import VAE_SEEDVR2, eh_ampliador, eh_seedvr2
+        if eh_ampliador(str(f)) or eh_seedvr2(str(f)):
+            return "ampliador"  # ESRGAN ou SeedVR2: amplia, não gera nada
+        if f.name.lower() == VAE_SEEDVR2["nome"]:
+            return "outro"  # o VAE do SeedVR2 é peça dele, não modelo de imagem
         if f.suffix.lower() == ".pth":
             return "outro"  # .pth que não é ESRGAN não vira modelo de imagem
     if f.suffix.lower() != ".gguf":

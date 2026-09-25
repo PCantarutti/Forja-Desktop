@@ -573,12 +573,20 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
 
 # ------------------------------------------------------------------ ampliação
 
-def _validar_ampliacao(fator: int, modelo: str, video: bool = True) -> None:
-    from . import ampliar as amp
+def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: bool = False) -> None:
+    from . import ampliar as amp, comfy
     if int(fator) not in (2, 4):
         raise ToolError("Amplie em 2× ou 4×.")
+    if modelo and amp.eh_seedvr2(modelo):
+        if video:
+            raise ToolError("O SeedVR2 aqui amplia só imagem: para vídeo, use um ESRGAN ou o Lanczos.")
+        if not comfy.python():
+            raise ToolError("Falta o ComfyUI (motor do SeedVR2): baixe na lista de ampliação, em Baixar o que falta.")
+        if not localai.image_busy():
+            _liberar_vram(confirm)  # ~7 GB de VRAM: com um LLM carregado, a tela pergunta antes (409)
+        return
     if modelo and not amp.eh_ampliador(modelo):
-        raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN).")
+        raise ToolError("Esse arquivo não é um modelo de ampliação (ESRGAN ou SeedVR2).")
     if video:
         amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada (imagem não precisa: é sd-cli ou Pillow)
 
@@ -604,7 +612,7 @@ def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: d
     return nova.to_dict()
 
 
-def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False) -> dict:
     """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
     progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
     msg = _mensagem(message_id)
@@ -613,7 +621,7 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
         raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
     from . import ampliar as amp
     imagem = amp.eh_imagem(path)
-    _validar_ampliacao(fator, modelo, not imagem)
+    _validar_ampliacao(fator, modelo, not imagem, confirm)
     saida = (Path(path).with_name(f"{Path(path).stem}-{fator}x.png") if imagem
              else Path(path).with_name(f"{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"))
     with db.session() as s:
@@ -624,14 +632,15 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
                            fator, modelo, suavizar and not imagem)
 
 
-def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False) -> dict:
+def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False,
+                    confirm: bool = False) -> dict:
     """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
     para a pasta de vídeos; o original não é tocado."""
     from . import ampliar as amp
     if not Path(path).is_file():
         raise ToolError("Esse arquivo não existe (ou não está acessível).")
     if amp.eh_imagem(path):
-        _validar_ampliacao(fator, modelo, False)
+        _validar_ampliacao(fator, modelo, False, confirm)
         from PIL import Image
         try:
             with Image.open(path) as im:
@@ -673,7 +682,14 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
             _patch(message_id, meta={"images": imagens})
 
         if amp.eh_imagem(a["origem"]):
-            amp.ampliar_imagem(a["origem"], Path(item["path"]), a["fator"], a["modelo"], job_id)
+            # só o SeedVR2 avisa, por fase (leva minutos): o card mostra a fase e um avanço aproximado
+            fases = {"iniciando o ComfyUI": 0.05, "ampliando": 0.3}
+
+            def fase(texto: str) -> None:
+                item.update(fase=texto, progress=fases.get(texto, item.get("progress", 0.0)))
+                _patch(message_id, meta={"images": imagens})
+            item["com_previa"] = False
+            amp.ampliar_imagem(a["origem"], Path(item["path"]), a["fator"], a["modelo"], job_id, fase)
             r = None  # o tamanho já está nas opts (origem × fator)
         else:
             r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
@@ -688,7 +704,7 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
         item["error"] = "" if cancelada else str(e)
     finally:
         localai.set_image_busy(False)
-        for k in ("preview", "com_previa"):
+        for k in ("preview", "com_previa", "fase"):
             item.pop(k, None)
         previa.unlink(missing_ok=True)
     pronta = item["status"] == "pronta"

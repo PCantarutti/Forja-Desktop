@@ -1,4 +1,6 @@
-"""Ampliação de vídeo: os quadros saem pelo ffmpeg, cada um passa pelo ESRGAN do sd-cli (`-M upscale`) na GPU
+"""Ampliação de imagem e de vídeo. Imagem: Lanczos (Pillow), ESRGAN (sd-cli) ou SeedVR2 (ComfyUI, ver comfy.py).
+
+Vídeo: os quadros saem pelo ffmpeg, cada um passa pelo ESRGAN do sd-cli (`-M upscale`) na GPU
 dedicada, e voltam num webm. Sem IA (Lanczos), é tudo no ffmpeg. "Suavizar" dobra os quadros por
 interpolação de movimento (minterpolate do ffmpeg).
 
@@ -23,38 +25,78 @@ import httpx
 from . import downloads, imagegen, localai, native
 from .tools import ToolError
 
-# Curadoria: os ESRGAN oficiais que o sd.cpp carrega (RRDBNet). Os "compactos" (realesr-general-v3,
-# animevideov3) são outra arquitetura e ficam de fora; o x2plus também (entra com pixel-unshuffle, 12 canais,
-# e o sd.cpp recusa o conv_first). 2× sai do 4× reduzido por Lanczos. Tamanho e URL vêm da API do GitHub.
+# Curadoria. ESRGAN (tipo "esrgan") roda no sd-cli (RRDBNet, nos dois formatos de nome das camadas); os
+# "compactos" (realesr-general-v3, animevideov3) são outra arquitetura e ficam de fora, e o x2plus também
+# (entra com pixel-unshuffle, 12 canais, e o sd.cpp recusa o conv_first): 2× sai do 4× reduzido por Lanczos.
+# SeedVR2 (tipo "seedvr2") é difusão, roda no ComfyUI portátil (comfy.py) e só amplia imagem.
+# Sem "url", tamanho e URL vêm dos releases do Real-ESRGAN no GitHub.
+# Medido na Arc B580, 256 → 1024: UltraSharp 3 s; SeedVR2 3B 80 s e 7,2 GB de VRAM; 7B fp8 150 s e 8,8 GB.
+HF_SEEDVR2 = "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main"
 CATALOGO = [
-    ("RealESRGAN_x4plus.pth", "Fotográfico, 4×: o mais fiel para cenas reais"),
-    ("RealESRGAN_x4plus_anime_6B.pth", "Animação e ilustração, 4× (leve)"),
+    {"nome": "RealESRGAN_x4plus.pth", "tipo": "esrgan", "resumo": "Fotográfico, 4×: o mais fiel para cenas reais"},
+    {"nome": "RealESRGAN_x4plus_anime_6B.pth", "tipo": "esrgan", "resumo": "Animação e ilustração, 4× (leve)"},
+    {"nome": "4x-UltraSharp.safetensors", "tipo": "esrgan", "mb": 66.9,
+     "url": "https://huggingface.co/Kim2091/UltraSharp/resolve/main/4x-UltraSharp.safetensors",
+     "resumo": "Nítido para foto e textura, 4× (licença não comercial)"},
+    {"nome": "seedvr2_3b_fp16.safetensors", "tipo": "seedvr2", "mb": 6780, "url": f"{HF_SEEDVR2}/diffusion_models/seedvr2_3b_fp16.safetensors",
+     "resumo": "Difusão: reconstrói textura e detalhe. Pesado (~7 GB de VRAM, minutos por imagem)"},
+    {"nome": "seedvr2_7b_fp8_e4m3fn.safetensors", "tipo": "seedvr2", "mb": 8240, "url": f"{HF_SEEDVR2}/diffusion_models/seedvr2_7b_fp8_e4m3fn.safetensors",
+     "resumo": "Difusão, versão maior: mais textura, mais lenta (~9 GB de VRAM)"},
 ]
+VAE_SEEDVR2 = {"nome": "seedvr2_ema_vae_fp16.safetensors", "mb": 501, "url": f"{HF_SEEDVR2}/vae/seedvr2_ema_vae_fp16.safetensors"}
 REPO_ESRGAN = "xinntao/Real-ESRGAN"
 # ponytail: medido no Arc B580 (832×480 → 4×): 128 (padrão do sd.cpp) 8,7 s, 256 6,1 s, 512 26,6 s (estoura o
 # buffer do Vulkan). Se outra GPU pedir outro valor, vira medida por máquina como o bloco do VAE.
 TILE_ESRGAN = 256
 GH_TTL = 3600
-PASTA = "Ampliação (ESRGAN)"  # subpasta da pasta de modelos onde os ESRGAN baixados caem
+PASTA = {"esrgan": "Ampliação (ESRGAN)", "seedvr2": "Ampliação (SeedVR2)"}  # subpastas da pasta de modelos
+
+
+def _nomes(p: Path) -> list[str] | bytes:
+    """Nomes das camadas: o pickle do .pth (bytes, sem desserializar) ou o cabeçalho do .safetensors."""
+    if p.suffix.lower() == ".pth":
+        with zipfile.ZipFile(p) as z:
+            pkl = next((n for n in z.namelist() if n.endswith("data.pkl")), None)
+            return z.read(pkl) if pkl else b""
+    from .loras import cabecalho
+    return list(cabecalho(str(p)))
 
 
 def eh_ampliador(path: str) -> bool:
-    """ESRGAN (RRDBNet) pelo conteúdo: `conv_first` e os blocos `rdb` no pickle do .pth (ou no cabeçalho do
-    .safetensors). Pelo nome não dá: o mesmo arquivo circula com nomes diferentes."""
+    """ESRGAN (RRDBNet) pelo conteúdo, nos dois jeitos de nomear as camadas: o novo (`conv_first`, blocos `rdb1`,
+    do Real-ESRGAN) e o antigo (`model.0`, blocos `RDB1`, do UltraSharp e da maioria dos da comunidade).
+    Pelo nome não dá: o mesmo arquivo circula com nomes diferentes."""
     p = Path(path)
+    if p.suffix.lower() not in (".pth", ".safetensors"):
+        return False
     try:
-        if p.suffix.lower() == ".pth":
-            with zipfile.ZipFile(p) as z:
-                pkl = next((n for n in z.namelist() if n.endswith("data.pkl")), None)
-                dados = z.read(pkl) if pkl else b""
-            return b"conv_first" in dados and b"rdb1" in dados
-        if p.suffix.lower() == ".safetensors":
-            from .loras import cabecalho
-            nomes = list(cabecalho(str(p)))
-            return any(n.startswith("conv_first") for n in nomes) and any(".rdb1." in n for n in nomes)
+        nomes = _nomes(p)
     except (OSError, ValueError, zipfile.BadZipFile, KeyError, struct.error):
         return False
-    return False
+    if isinstance(nomes, bytes):
+        return (b"conv_first" in nomes and b"rdb1" in nomes) or (b"model.0.weight" in nomes and b"RDB1" in nomes)
+    return ((any(n.startswith("conv_first") for n in nomes) and any(".rdb1." in n for n in nomes))
+            or ("model.0.weight" in nomes and any(".RDB1." in n for n in nomes)))
+
+
+def eh_seedvr2(path: str) -> bool:
+    """O DiT do SeedVR2 pelo cabeçalho: os blocos têm modulação por texto (`blocks.N.ada.txt`), que nenhum outro
+    modelo que o Forja lê usa com esse nome."""
+    p = Path(path)
+    if p.suffix.lower() != ".safetensors":
+        return False
+    try:
+        return any(".ada.txt." in n for n in _nomes(p))
+    except (OSError, ValueError, KeyError, struct.error):
+        return False
+
+
+def vae_seedvr2(modelo: str) -> str:
+    """O VAE do SeedVR2: ao lado do modelo (onde o catálogo baixa) ou em qualquer pasta de modelos."""
+    ao_lado = Path(modelo).with_name(VAE_SEEDVR2["nome"])
+    if ao_lado.is_file():
+        return str(ao_lado)
+    return next((m["path"] for m in localai.scan((".safetensors",)) if Path(m["path"]).name.lower() == VAE_SEEDVR2["nome"]), "")
 
 
 @functools.lru_cache(maxsize=4)
@@ -68,36 +110,44 @@ def _assets_esrgan(_janela: int) -> dict[str, dict]:
 
 
 def catalogo() -> dict:
-    """Os modelos de ampliação do catálogo, com tamanho e o que já está no disco; e o estado do ffmpeg."""
+    """Os modelos de ampliação do catálogo, com tamanho e o que já está no disco; o ffmpeg (vídeo) e o ComfyUI
+    (SeedVR2). `no_disco` inclui os de fora do catálogo, cada um com o tipo (esrgan ou seedvr2)."""
+    from . import comfy
     # o mesmo arquivo em duas pastas de modelos (nome e tamanho iguais) aparece uma vez só
     achados, vistos = [], set()
     for m in localai.scan(localai.WEIGHTS_TODOS):
         chave = (m["name"].lower(), m.get("size"))
         if m["kind"] == "ampliador" and chave not in vistos:
             vistos.add(chave)
-            achados.append(m)
+            achados.append({"path": m["path"], "name": m["name"], "tipo": "seedvr2" if eh_seedvr2(m["path"]) else "esrgan"})
     no_disco = {Path(m["path"]).name.lower(): m["path"] for m in achados}
     try:
         assets = _assets_esrgan(int(time.time() // GH_TTL))
         erro = ""
     except (ToolError, httpx.HTTPError) as e:
         assets, erro = {}, f"Não deu para consultar o GitHub: {e}"
-    modelos = [{"nome": n, "resumo": r, "mb": (assets.get(n) or {}).get("mb", 0), "presente": no_disco.get(n.lower(), "")}
-               for n, r in CATALOGO]
+    modelos = [{"nome": c["nome"], "resumo": c["resumo"], "tipo": c["tipo"],
+                "mb": c.get("mb") or (assets.get(c["nome"]) or {}).get("mb", 0), "presente": no_disco.get(c["nome"].lower(), "")}
+               for c in CATALOGO]
     ff = localai.find_exe("ffmpeg")
-    return {"modelos": modelos, "erro": erro, "ffmpeg": str(ff) if ff else "",
-            "no_disco": [{"path": m["path"], "name": m["name"]} for m in achados]}  # inclui os de fora do catálogo
+    return {"modelos": modelos, "erro": erro, "ffmpeg": str(ff) if ff else "", "no_disco": achados, "comfy": comfy.estado()}
 
 
 def baixar_modelo(nome: str, folder: str = "") -> dict:
-    if nome not in dict(CATALOGO):
+    from . import comfy
+    if nome == "comfyui":
+        return comfy.instalar()
+    c = next((c for c in CATALOGO if c["nome"] == nome), None)
+    if not c:
         raise ToolError("Modelo de ampliação fora do catálogo.")
-    asset = _assets_esrgan(int(time.time() // GH_TTL)).get(nome)
-    if not asset:
+    url = c.get("url") or (_assets_esrgan(int(time.time() // GH_TTL)).get(nome) or {}).get("url")
+    if not url:
         raise ToolError(f"{nome} não está mais nos releases do Real-ESRGAN.")
-    pasta = Path(folder or localai.models_dir()) / PASTA
+    pasta = Path(folder or localai.models_dir()) / PASTA[c["tipo"]]
     pasta.mkdir(parents=True, exist_ok=True)
-    return downloads.start("modelo", nome, [asset["url"]], pasta / nome)
+    if c["tipo"] == "seedvr2" and not vae_seedvr2(str(pasta / nome)):  # o VAE vem junto, uma vez só
+        downloads.start("modelo", VAE_SEEDVR2["nome"], [VAE_SEEDVR2["url"]], pasta / VAE_SEEDVR2["nome"])
+    return downloads.start("modelo", nome, [url], pasta / nome)
 
 
 # ---------------------------------------------------------------- ffmpeg
@@ -201,10 +251,14 @@ def eh_imagem(path: str) -> bool:
     return Path(path).suffix.lower() in EXT_IMAGEM
 
 
-def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "") -> dict:
-    """Amplia uma imagem em `fator` e grava `saida` (.png). `modelo` vazio = Lanczos (Pillow), sem IA e sem ffmpeg.
-    ESRGAN que passou do alvo (um 4× pedido como 2×) volta ao tamanho pedido por Lanczos."""
+def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "", progresso=None) -> dict:
+    """Amplia uma imagem em `fator` e grava `saida` (.png). `modelo` vazio = Lanczos (Pillow), sem IA e sem ffmpeg;
+    SeedVR2 vai pelo ComfyUI (comfy.py); ESRGAN pelo sd-cli. ESRGAN que passou do alvo (um 4× pedido como 2×)
+    volta ao tamanho pedido por Lanczos. `progresso(fase)`: só o SeedVR2 avisa (é o único que leva minutos)."""
     from PIL import Image
+    if modelo and eh_seedvr2(modelo):
+        from . import comfy
+        return comfy.ampliar(entrada, saida, fator, modelo, job_id, progresso)
     with Image.open(entrada) as im:
         alvo = (im.width * int(fator), im.height * int(fator))
         if not modelo:

@@ -3,13 +3,17 @@ import { api } from "../api";
 import { Check, Download, Film, Image, X } from "./icons";
 import { btn, btnPrimary } from "./LocalPanel";
 
-/** O que o backend diz da ampliação: ffmpeg instalado, ESRGAN do catálogo e todos os que estão no disco. */
+/** O que o backend diz da ampliação: ffmpeg (vídeo) e ComfyUI (SeedVR2) instalados, o catálogo e todos os
+ *  modelos no disco. `tipo`: esrgan (sd-cli, rápido, imagem e vídeo) ou seedvr2 (difusão, pesado, só imagem). */
+type Tipo = "esrgan" | "seedvr2";
 export type CatalogoAmpliacao = {
-  modelos: { nome: string; resumo: string; mb: number; presente: string }[];
-  no_disco: { path: string; name: string }[];
+  modelos: { nome: string; resumo: string; mb: number; presente: string; tipo: Tipo }[];
+  no_disco: { path: string; name: string; tipo: Tipo }[];
   ffmpeg: string;
+  comfy: { instalado: string; gpu: string; mb: number; versao: string };
   erro: string;
 };
+const GPU: Record<string, string> = { intel: "Intel", amd: "AMD", nvidia: "NVIDIA" };
 
 /** Catálogo com recarga enquanto algo baixa (o download corre no backend; aqui só se espera o arquivo). */
 function useCatalogo(onError: (e: string) => void) {
@@ -18,7 +22,8 @@ function useCatalogo(onError: (e: string) => void) {
   const carregar = useCallback(() => {
     api.get<CatalogoAmpliacao>("/local/video/ampliadores").then((c) => {
       setCat(c);
-      setBaixando((b) => new Set([...b].filter((n) => (n === "ffmpeg" ? !c.ffmpeg : !c.modelos.find((m) => m.nome === n)?.presente))));
+      setBaixando((b) => new Set([...b].filter((n) => (n === "ffmpeg" ? !c.ffmpeg : n === "comfyui" ? !c.comfy.instalado
+        : !c.modelos.find((m) => m.nome === n)?.presente))));
     }).catch((e) => onError(e.message));
   }, []);
   useEffect(carregar, [carregar]);
@@ -40,22 +45,27 @@ function useCatalogo(onError: (e: string) => void) {
   return { cat, baixando, baixar, carregar };
 }
 
-/** Os downloads da ampliação: o ffmpeg (obrigatório) e os ESRGAN (opcionais: sem eles, é Lanczos). */
+/** Os downloads da ampliação: o ffmpeg (vídeo), o ComfyUI (motor do SeedVR2) e os modelos (opcionais: sem
+ *  eles, é Lanczos). `video`: só o que amplia vídeo (sem SeedVR2 e sem ComfyUI); `imagem`: sem o ffmpeg. */
 export function BaixarAmpliacao(props: {
   onError: (e: string) => void;
   soFaltando?: boolean;
   soModelos?: boolean; // o ffmpeg já aparece como motor (card de runtime) acima
+  video?: boolean;
+  imagem?: boolean;
   estado?: ReturnType<typeof useCatalogo>;
 }) {
   const proprio = useCatalogo(props.onError);
   const { cat, baixando, baixar } = props.estado ?? proprio;
   if (!cat) return <p className="text-xs text-muted">Carregando…</p>;
   const linhas = [
-    { nome: "ffmpeg", titulo: "ffmpeg", resumo: "Lê e grava o vídeo (obrigatório) · ~80 MB", presente: !!cat.ffmpeg },
-    ...cat.modelos.map((m) => ({
+    ...(props.imagem ? [] : [{ nome: "ffmpeg", titulo: "ffmpeg", resumo: "Lê e grava o vídeo (obrigatório) · ~80 MB", presente: !!cat.ffmpeg }]),
+    ...(props.video ? [] : [{ nome: "comfyui", titulo: `ComfyUI portátil (${GPU[cat.comfy.gpu] ?? cat.comfy.gpu})`,
+      resumo: `Motor do SeedVR2, fica com os runtimes · ~${(cat.comfy.mb / 1000).toFixed(1).replace(".", ",")} GB`, presente: !!cat.comfy.instalado }]),
+    ...cat.modelos.filter((m) => !props.video || m.tipo === "esrgan").map((m) => ({
       nome: m.nome,
-      titulo: m.nome.replace(/\.pth$/, ""),
-      resumo: `${m.resumo}${m.mb ? ` · ${Math.round(m.mb)} MB` : ""}`,
+      titulo: m.nome.replace(/\.(pth|safetensors)$/, ""),
+      resumo: `${m.resumo}${m.mb ? ` · ${m.mb >= 1000 ? `${(m.mb / 1000).toFixed(1).replace(".", ",")} GB` : `${Math.round(m.mb)} MB`}` : ""}`,
       presente: !!m.presente,
     })),
   ].filter((l) => (!props.soFaltando || !l.presente) && (!props.soModelos || l.nome !== "ffmpeg"));
@@ -73,7 +83,8 @@ export function BaixarAmpliacao(props: {
           ) : baixando.has(l.nome) ? (
             <span className="shrink-0 text-sky-300">baixando…</span>
           ) : (
-            <button className={`${btn} shrink-0`} onClick={() => baixar(l.nome)} disabled={l.nome !== "ffmpeg" && !cat.modelos.find((m) => m.nome === l.nome)?.mb}>
+            <button className={`${btn} shrink-0`} onClick={() => baixar(l.nome)}
+              disabled={l.nome !== "ffmpeg" && l.nome !== "comfyui" && !cat.modelos.find((m) => m.nome === l.nome)?.mb}>
               <Download className="mr-1 inline size-3" />
               Baixar
             </button>
@@ -87,14 +98,15 @@ export function BaixarAmpliacao(props: {
 const fmtFps = (f: number) => (Number.isInteger(f) ? String(f) : f.toFixed(2).replace(".", ","));
 
 /** Método, fator e suavizar. `enviar` cria a tomada (de uma tomada do feed ou de um arquivo do PC).
- *  `imagem`: sem suavizar e sem ffmpeg (é uma passada do ESRGAN, ou Lanczos no Pillow). */
+ *  `imagem`: sem suavizar e sem ffmpeg, e com o SeedVR2 (difusão, pelo ComfyUI) entre os métodos. Com um modelo
+ *  de texto na VRAM, o SeedVR2 volta 409 e o painel pergunta antes de descarregar (enviar de novo com confirm). */
 export function PainelAmpliar(props: {
   w: number;
   h: number;
   fps?: number;
   quadros?: number;
   imagem?: boolean;
-  enviar: (corpo: { fator: number; modelo: string; suavizar: boolean }) => Promise<void>;
+  enviar: (corpo: { fator: number; modelo: string; suavizar: boolean; confirm?: boolean }) => Promise<void>;
   onError: (e: string) => void;
 }) {
   const estado = useCatalogo(props.onError);
@@ -103,15 +115,23 @@ export function PainelAmpliar(props: {
   const [fator, setFator] = useState<2 | 4>(2);
   const [suavizar, setSuavizar] = useState(false);
   const [enviando, setEnviando] = useState(false);
-  // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora)
-  const escolhido = modelo ?? (cat?.no_disco.find((m) => new RegExp(`x${fator}(?!\\d)`, "i").test(m.name)) ?? cat?.no_disco[0])?.path ?? "";
+  const [vram, setVram] = useState(""); // a mensagem do 409: tem modelo de texto carregado
+  const metodos = (cat?.no_disco ?? []).filter((m) => props.imagem || m.tipo === "esrgan");
+  const esrgans = metodos.filter((m) => m.tipo === "esrgan");
+  // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora); o
+  // SeedVR2 nunca é o padrão, leva minutos
+  const escolhido = modelo ?? (esrgans.find((m) => new RegExp(`x${fator}(?!\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? "";
+  const pesado = metodos.find((m) => m.path === escolhido)?.tipo === "seedvr2";
+  const semComfy = pesado && !cat?.comfy.instalado;
 
-  async function ampliar() {
+  async function ampliar(confirm = false) {
     setEnviando(true);
     try {
-      await props.enviar({ fator, modelo: escolhido, suavizar: suavizar && !props.imagem });
+      await props.enviar({ fator, modelo: escolhido, suavizar: suavizar && !props.imagem, ...(confirm ? { confirm } : {}) });
+      setVram("");
     } catch (e: any) {
-      props.onError(e.message);
+      if (e.status === 409) setVram(e.message || "Tem um modelo carregado na VRAM.");
+      else props.onError(e.message);
     } finally {
       setEnviando(false);
     }
@@ -119,7 +139,8 @@ export function PainelAmpliar(props: {
 
   if (!cat) return <p className="px-2.5 text-xs text-muted">Carregando…</p>;
   const semFfmpeg = !cat.ffmpeg && !props.imagem;
-  const falta = semFfmpeg || cat.modelos.some((m) => !m.presente);
+  const falta = semFfmpeg || (props.imagem && !cat.comfy.instalado)
+    || cat.modelos.some((m) => !m.presente && (props.imagem || m.tipo === "esrgan"));
   const opcao = (ligada: boolean) =>
     `rounded-md border px-2 py-1 text-xs ${ligada ? "border-sky-500/60 bg-sky-500/10 text-sky-200" : "border-line text-muted hover:bg-raised hover:text-fg"}`;
   return (
@@ -131,7 +152,11 @@ export function PainelAmpliar(props: {
           value={escolhido}
           onChange={(e) => setModelo(e.target.value)}
         >
-          {cat.no_disco.map((m) => <option key={m.path} value={m.path}>{m.name} (IA{props.imagem ? "" : ", quadro a quadro"})</option>)}
+          {metodos.map((m) => (
+            <option key={m.path} value={m.path}>
+              {m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos" : props.imagem ? "IA" : "IA, quadro a quadro"})
+            </option>
+          ))}
           <option value="">Rápido, sem IA (Lanczos)</option>
         </select>
       </label>
@@ -139,7 +164,7 @@ export function PainelAmpliar(props: {
         <span className="mr-1 text-faint">Fator</span>
         {([2, 4] as const).map((f) => (
           <button key={f} className={opcao(fator === f)} aria-pressed={fator === f} onClick={() => setFator(f)}>
-            {f}× <span className="text-faint">{props.w * f}×{props.h * f}</span>
+            {f}× {!!props.w && <span className="text-faint">{props.w * f}×{props.h * f}</span>}
           </button>
         ))}
       </div>
@@ -152,14 +177,31 @@ export function PainelAmpliar(props: {
       {escolhido && !!props.quadros && (
         <p className="text-faint">{props.quadros} quadros, cada um passa pelo ESRGAN na GPU: vídeo longo leva tempo (o cartão mostra quanto falta).</p>
       )}
-      <button className={btnPrimary} disabled={semFfmpeg || enviando} onClick={ampliar}>
+      {pesado && !semComfy && (
+        <p className="text-faint">Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais).</p>
+      )}
+      {semComfy && <p className="text-amber-400">O SeedVR2 roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}
+      <button className={btnPrimary} disabled={semFfmpeg || semComfy || enviando} onClick={() => ampliar()}>
         {enviando ? "Começando…" : `Ampliar ${fator}×`}
       </button>
+      {vram && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-amber-800/70 bg-amber-950/30 p-2 text-amber-200">
+          <span>{vram.startsWith("Outro programa") ? vram : `${vram} O SeedVR2 precisa dessa memória.`}</span>
+          <div className="flex gap-1.5">
+            <button className={btnPrimary} disabled={enviando} onClick={() => ampliar(true)}>
+              {vram.startsWith("Outro programa") ? "Ampliar mesmo assim" : "Descarregar e ampliar"}
+            </button>
+            <button className={btn} onClick={() => setVram("")}>Cancelar</button>
+          </div>
+        </div>
+      )}
       {semFfmpeg && <p className="text-amber-400">Falta o ffmpeg para ler e gravar o vídeo:</p>}
       {falta && (
-        <details open={semFfmpeg || !cat.no_disco.length}>
+        <details open={semFfmpeg || semComfy || !metodos.length}>
           <summary className="cursor-pointer text-faint hover:text-fg">Baixar o que falta</summary>
-          <div className="mt-1.5"><BaixarAmpliacao onError={props.onError} soFaltando soModelos={props.imagem} estado={estado} /></div>
+          <div className="mt-1.5">
+            <BaixarAmpliacao onError={props.onError} soFaltando imagem={props.imagem} video={!props.imagem} estado={estado} />
+          </div>
         </details>
       )}
     </div>
