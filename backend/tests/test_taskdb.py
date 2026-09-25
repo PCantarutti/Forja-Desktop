@@ -39,6 +39,15 @@ def test_contrato_aceita_lista_em_texto():
     assert c["relevant_files"] == ["a.py", "b.py"]
 
 
+def test_texto_do_contrato_nao_e_cortado_na_virgula():
+    """O gpt-oss mandou requirements como texto e a vírgula de soma(a, b) picotava o requisito."""
+    c = taskdb.normalize_contract({"goal": "x",
+                                   "requirements": "calc.py com soma(a, b); teste de soma(2, 3) == 5",
+                                   "acceptance_criteria": "- soma(2, 3) == 5\n2. soma(-1, 1) == 0\n\n* docstring"})
+    assert c["requirements"] == ["calc.py com soma(a, b); teste de soma(2, 3) == 5"]
+    assert c["acceptance_criteria"] == ["soma(2, 3) == 5", "soma(-1, 1) == 0", "docstring"]
+
+
 def test_contrato_descarta_campos_vazios():
     c = taskdb.normalize_contract({"goal": "x", "context": "  ", "do_not": []})
     assert c == {"goal": "x"}

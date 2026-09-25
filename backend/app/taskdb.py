@@ -90,9 +90,16 @@ def _conv() -> int:
     return conv
 
 
-def _lista(raw) -> list[str]:
-    """Modelo pequeno manda 'a.py, b.py' em vez de lista. Aceita os dois, como subagents._files."""
-    itens = raw.split(",") if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+def _lista(raw, virgula: bool = True) -> list[str]:
+    """Modelo pequeno manda 'a.py, b.py' em vez de lista. Aceita os dois, como subagents._files.
+
+    `virgula=False` para texto (requisitos, critérios): ali a vírgula é da frase — "soma(a, b)"
+    virava dois requisitos picotados. Texto se divide por linha, sem o marcador ("- ", "1. ")."""
+    if isinstance(raw, str):
+        itens = raw.split(",") if virgula else [re.sub(r"^\s*(?:[-*•]|\d+[.)])\s+", "", l)
+                                                for l in raw.splitlines()]
+    else:
+        itens = raw if isinstance(raw, list) else []
     return [str(x).strip()[:MAX_TEXTO] for x in itens[:MAX_ITENS] if str(x).strip()]
 
 
@@ -127,7 +134,7 @@ def normalize_contract(raw) -> dict:
             if (tipo := str(valor or "").strip().lower()) in TIPOS:
                 out[campo] = tipo
         elif campo in LISTAS:
-            if itens := _lista(valor):
+            if itens := _lista(valor, virgula=campo == "relevant_files"):
                 out[campo] = itens
         elif texto := str(valor or "").strip()[:MAX_TEXTO]:
             out[campo] = texto
