@@ -238,8 +238,10 @@ SERVIDOR_DEV = re.compile(
     r"(?:^|[;&|]\s*)(?:npm\s+(?:run\s+)?(?:dev|start|serve|preview)|pnpm\s+(?:run\s+)?(?:dev|start)|"
     r"yarn\s+(?:run\s+)?(?:dev|start)|npx\s+(?:vite|next\s+dev|serve)\b(?!\s+build)|vite(?:\s+(?!build)|\s*$)|"
     r"next\s+dev|python\d?\s+-m\s+http\.server|flask\s+run|uvicorn\s|php\s+-S)", re.I)
-# sem ) ] > aspas e vírgula no fim: o http.server anuncia "(http://127.0.0.1:8000/) ..."
-URL_NO_LOG = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):\d+[^\s)\]>'\",]*")
+# sem ) ] > aspas e vírgula no fim: o http.server anuncia "(http://127.0.0.1:8000/) ...", e no Windows, com
+# IPv6, "(http://[::]:8080/)" — sem o [::] a porta não saía e o servidor sumia da lista do navegador.
+URL_NO_LOG = re.compile(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):\d+[^\s)\]>'\",]*")
+HOST_LOCAL = re.compile(r"//(?:127\.0\.0\.1|0\.0\.0\.0|\[::1?\])(?=:)")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -250,7 +252,8 @@ def parece_servidor(command: str) -> bool:
 def url_do_log(name: str) -> str:
     """URL que o servidor anunciou ("Local: http://localhost:5174/"). '' se ainda não anunciou."""
     achadas = URL_NO_LOG.findall(ANSI.sub("", _log(name, 200)))
-    return achadas[-1].rstrip("/") if achadas else ""
+    # 0.0.0.0 e [::] são "todas as interfaces", não endereço que se abra: o navegador vai em localhost.
+    return HOST_LOCAL.sub("//localhost", achadas[-1].rstrip("/")) if achadas else ""
 
 
 def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
