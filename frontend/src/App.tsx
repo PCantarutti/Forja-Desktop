@@ -2249,6 +2249,7 @@ export default function App() {
         ) : section === "imagem" ? (
           <ImagensView
             conv={currentId}
+            carimbo={activity.lista}
             onAbrirConversa={irParaConversa}
             ensureConversation={ensureConversation}
             provider={settings.provider}
@@ -2259,6 +2260,7 @@ export default function App() {
         ) : section === "video" ? (
           <VideoView
             conv={currentId}
+            carimbo={activity.lista}
             ensureConversation={ensureConversation}
             provider={settings.provider}
             model={settings.model}

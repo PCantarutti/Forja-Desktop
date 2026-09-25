@@ -77,6 +77,7 @@ export default function VideoView(props: {
   model: string;
   onError: (e: string) => void;
   onConversationChanged: () => void;
+  carimbo?: string; // muda quando qualquer conversa muda (/api/activity): lote criado pelo celular aparece sem recarregar
   onAbrirBaixar: () => void;
 }) {
   const [st, setSt] = useState<LocalState | null>(null);
@@ -199,6 +200,12 @@ export default function VideoView(props: {
     },
     [props.conv, mostrarErro],
   );
+  // Lote criado ou ampliado em outro aparelho (celular): o carimbo da atividade muda e a conversa aberta
+  // recarrega. Sozinha, a tela só consulta enquanto sabe de um lote rodando.
+  useEffect(() => {
+    if (props.carimbo) carregarConversa();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.carimbo]);
 
   useEffect(() => {
     carregarConversa();
