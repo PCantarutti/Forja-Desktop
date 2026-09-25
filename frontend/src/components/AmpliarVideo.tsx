@@ -5,7 +5,7 @@ import { btn, btnPrimary } from "./LocalPanel";
 
 /** O que o backend diz da ampliação: ffmpeg (vídeo) e ComfyUI (SeedVR2) instalados, o catálogo e todos os
  *  modelos no disco. `tipo` (do conteúdo do arquivo): esrgan (sd-cli, rápido) ou seedvr2 (difusão, pesado, vídeo por
- *  trechos). Imagem e vídeo. */
+ *  quadro a quadro). Imagem e vídeo. */
 // spandrel: DAT/HAT/SwinIR e afins, rápidos, pelo ComfyUI; redesenhar (só imagem: em vídeo, cada quadro sairia de um
 // jeito): um checkpoint de imagem (SD 1.5/SDXL) refaz a imagem em alta resolução por blocos, com prompt e força
 type Tipo = "esrgan" | "seedvr2" | "spandrel" | "redesenhar";
@@ -164,7 +164,7 @@ export function PainelAmpliar(props: {
             <option key={m.path} value={m.path}>
               {m.tipo === "redesenhar" ? `Redesenhar com ${m.name}` : m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos"
                 : m.tipo === "redesenhar" ? "refaz a imagem, leva minutos" : m.tipo === "spandrel" ? "IA, pelo ComfyUI"
-                : props.imagem ? "IA" : "IA, quadro a quadro"}{!props.imagem && m.tipo === "seedvr2" ? ", por trechos" : ""})
+                : props.imagem ? "IA" : "IA, quadro a quadro"})
             </option>
           ))}
           <option value="">Rápido, sem IA (Lanczos)</option>
@@ -184,13 +184,13 @@ export function PainelAmpliar(props: {
           Suavizar movimento ({fmtFps(props.fps ?? 0)} → {fmtFps((props.fps ?? 0) * 2)} fps)
         </label>
       )}
-      {escolhido && !!props.quadros && tipo !== "seedvr2" && (
+      {escolhido && !!props.quadros && (props.imagem || tipo !== "seedvr2") && (
         <p className="text-faint">{props.quadros} quadros, cada um passa pela IA na GPU: vídeo longo leva tempo (o cartão mostra quanto falta).</p>
       )}
       {tipo === "seedvr2" && !semComfy && (
         <p className="text-faint">
           {props.imagem ? "Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais)."
-            : `Difusão feita para vídeo: amplia ${props.quadros ? `os ${props.quadros} quadros` : "os quadros"} em trechos, olhando os vizinhos (sem tremer). O mais pesado: ~7 GB de VRAM e minutos por segundo de vídeo.`}
+            : `Difusão: reconstrói textura e detalhe quadro a quadro${props.quadros ? ` (${props.quadros} quadros)` : ""}. O mais pesado: ~7 GB de VRAM e alguns segundos por quadro (na Arc B580, ~3 s em 640×360).`}
         </p>
       )}
       {redesenha && !semComfy && (

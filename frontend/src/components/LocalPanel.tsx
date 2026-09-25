@@ -1615,8 +1615,8 @@ function VideoTab(props: { st: LocalState; onDone: () => void; onError: (e: stri
         </span>
         <p className="mb-2 text-faint">
           Mais resolução para as tomadas prontas e para vídeos do PC (aba Vídeo › Ampliar vídeo). O ffmpeg, o motor acima,
-          lê e grava o vídeo; na GPU, os ESRGAN (sd-cli) e os DAT/HAT/SwinIR (ComfyUI) ampliam quadro a quadro, e o SeedVR2
-          (ComfyUI) por trechos, olhando os quadros vizinhos. Sem modelo, amplia por Lanczos.
+          lê e grava o vídeo; na GPU, os ESRGAN (sd-cli), os DAT/HAT/SwinIR e o SeedVR2 (ComfyUI)
+          ampliam quadro a quadro. Sem modelo, amplia por Lanczos.
         </p>
         <BaixarAmpliacao onError={props.onError} soModelos video />
       </section>
