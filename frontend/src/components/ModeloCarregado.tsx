@@ -42,7 +42,7 @@ function Memoria({ rotulo, usado, total }: { rotulo: string; usado: number; tota
   );
 }
 
-/** Rodapé da barra lateral: qual modelo local está carregado (ou carregando) e a VRAM; o clique abre os detalhes. */
+/** Meio do cabeçalho: qual modelo local está carregado (ou carregando) e a VRAM; o clique abre os detalhes. */
 export default function ModeloCarregado() {
   const [uso, setUso] = useState<Uso | null>(null);
   const [aberto, setAberto] = useState(false);
@@ -73,15 +73,17 @@ export default function ModeloCarregado() {
       <button
         onClick={() => setAberto(true)}
         title="IA local: modelo carregado e memória"
-        className="mx-2 mt-1 flex flex-col gap-1.5 rounded-lg px-3 py-2 text-left hover:bg-surface"
+        className="flex max-w-80 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
       >
-        <span className="flex items-center gap-2 text-xs">
-          <span className={`size-2 shrink-0 rounded-full ${ponto}`} />
-          <span className={`min-w-0 flex-1 truncate ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
-          {m && g && <span className="shrink-0 font-mono text-[11px] text-faint">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>}
-        </span>
+        <span className={`size-2 shrink-0 rounded-full ${ponto}`} />
+        <span className={`min-w-0 truncate ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
         {/* Sem modelo, a placa "mais usada" pode ser a integrada: o número confundia. Fica no painel. */}
-        {m && g && <Barra usado={g.usado} total={g.total} />}
+        {m && g && (
+          <>
+            <span className="w-12 shrink-0"><Barra usado={g.usado} total={g.total} /></span>
+            <span className="shrink-0 font-mono text-[11px] text-faint">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>
+          </>
+        )}
       </button>
 
       {aberto && (

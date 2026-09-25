@@ -26,6 +26,7 @@ import Trajetoria from "./components/Trajetoria";
 import TodosBar from "./components/TodosBar";
 import Confirma from "./components/Confirma";
 import { Modal } from "./components/Modal";
+import ModeloCarregado from "./components/ModeloCarregado";
 import { LogoMark } from "./components/Logo";
 import {
   EffortMenu,
@@ -2088,7 +2089,11 @@ export default function App() {
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
       <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className="arrasta livre-controles flex h-12 shrink-0 items-center gap-2 px-3">
+        <div className="arrasta livre-controles relative flex h-12 shrink-0 items-center gap-2 px-3">
+          {/* Indicador da IA local no meio do cabeçalho, em todas as seções. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-center">
+            <div className="pointer-events-auto"><ModeloCarregado /></div>
+          </div>
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
           {sidebarHidden && (
