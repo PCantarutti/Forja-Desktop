@@ -56,6 +56,12 @@ export function SourceList({ items }: { items: Source[] }) {
 }
 
 /** Citação dentro da resposta: pílula clicável, no lugar do link cru do markdown. */
+/** Clique em link da resposta: o App pergunta onde abrir (navegador do Forja ou do sistema). */
+export const pedeLink = (e: React.MouseEvent, href: string) => {
+  e.preventDefault();
+  window.dispatchEvent(new CustomEvent("forja:link", { detail: href }));
+};
+
 export function SourceChip({ href, children }: { href: string; children: React.ReactNode }) {
   let dominio: string;
   try {
@@ -69,6 +75,7 @@ export function SourceChip({ href, children }: { href: string; children: React.R
       target="_blank"
       rel="noreferrer"
       title={href}
+      onClick={(e) => pedeLink(e, href)}
       className="fonte mx-0.5 inline-flex max-w-[18rem] items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 align-baseline text-xs"
     >
       <Favicon dominio={dominio} className="size-3" />

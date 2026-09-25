@@ -416,8 +416,15 @@ async def get_activity():
         local, alias = bool(st.get("running")), st.get("alias") or ""
     except Exception:
         local, alias = False, ""
+    # Carimbo da lista de conversas: conversa criada, apagada ou renomeada em outro aparelho muda o carimbo,
+    # e a barra lateral recarrega sozinha (antes só trocando de página).
+    from sqlalchemy import func
+    with db.session() as s:
+        n, maior, ultima = s.execute(select(func.count(db.Conversation.id), func.max(db.Conversation.id),
+                                            func.max(db.Conversation.updated_at))).one()
     # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
-    return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias}
+    return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
+            "lista": f"{n}-{maior}-{ultima}"}
 
 
 @app.post("/api/servers/clear")
@@ -2314,7 +2321,11 @@ if config.WEB_DIR and config.WEB_DIR.is_dir():
     def spa(path: str):
         if path.startswith("api/"):  # rota de API inexistente: 404, e não a interface
             raise HTTPException(404, "Rota não encontrada")
-        return FileResponse(_web_file(path) or config.WEB_DIR / "index.html")
+        if f := _web_file(path):
+            return FileResponse(f)
+        # O index.html aponta para os assets com hash do build atual: sem no-cache o Chromium reusava o
+        # antigo por heurística, e depois de atualizar (ou reiniciar em dev) a interface seguia a velha.
+        return FileResponse(config.WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 def _web_file(path: str):

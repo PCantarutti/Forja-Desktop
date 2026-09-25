@@ -25,6 +25,7 @@ import GoalStrip from "./components/GoalStrip";
 import Trajetoria from "./components/Trajetoria";
 import TodosBar from "./components/TodosBar";
 import Confirma from "./components/Confirma";
+import { Modal } from "./components/Modal";
 import { LogoMark } from "./components/Logo";
 import {
   EffortMenu,
@@ -469,6 +470,19 @@ export default function App() {
 
   // Cada conversa tem a própria sessão de navegador; "0" é o rascunho da tela inicial.
   const browserKey = currentId === null ? "0" : String(currentId);
+  // Link clicado na resposta (Sources.pedeLink): pergunta se abre no navegador do Forja ou no do sistema.
+  const [linkAberto, setLinkAberto] = useState<string | null>(null);
+  useEffect(() => {
+    const pede = (e: Event) => setLinkAberto((e as CustomEvent<string>).detail);
+    window.addEventListener("forja:link", pede);
+    return () => window.removeEventListener("forja:link", pede);
+  }, []);
+  function abreLinkNoForja(url: string) {
+    setLinkAberto(null);
+    setBrowserOpen(true);
+    abrir("browser");
+    api.post(`/browser/navigate?conv=${browserKey}`, { url }).catch((e) => setError(e.message));
+  }
   useEffect(() => {
     api.get<BrowserState>(`/browser?conv=${browserKey}`).then((s) => setBrowserOpen(s.open)).catch(() => setBrowserOpen(false));
   }, [browserKey]);
@@ -530,6 +544,7 @@ export default function App() {
     const antes = atividadeAnterior.current;
     atividadeAnterior.current = activity;
     if (!antes) return;
+    if (activity.lista && antes.lista && activity.lista !== antes.lista) refreshConversations();
     const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
     const abrir = (id: number) => () => openConversation(id);
     const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
@@ -1746,6 +1761,19 @@ export default function App() {
   // Maestro mostra esta mesma na coluna da Maestro.
   const conversaBlock = (
   <>
+  {linkAberto && (
+    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-md space-y-4 rounded-2xl border border-line bg-surface p-5">
+      <div className="text-base font-medium text-fg">Abrir link</div>
+      <div className="truncate font-mono text-xs text-muted" title={linkAberto}>{linkAberto}</div>
+      <div className="flex flex-wrap justify-end gap-2">
+        <button onClick={() => setLinkAberto(null)} className="rounded-full px-4 py-1.5 text-sm text-muted hover:text-fg">Cancelar</button>
+        <button onClick={() => { window.open(linkAberto, "_blank"); setLinkAberto(null); }}
+                className="rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised">Navegador do sistema</button>
+        <button autoFocus onClick={() => abreLinkNoForja(linkAberto)}
+                className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white">Navegador do Forja</button>
+      </div>
+    </Modal>
+  )}
   {showFolder && (
     <FolderPicker
       current={conv ? conv.workspace ?? null : pendingWs}

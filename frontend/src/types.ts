@@ -31,6 +31,7 @@ export type Activity = {
   servers: number;
   local?: boolean;  // modelo local carregado no llama-server
   local_alias?: string;  // qual: o seletor com "IA local" segue o que está carregado
+  lista?: string;  // carimbo das conversas: mudou (outro aparelho), a barra lateral recarrega
 };
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video";
