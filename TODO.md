@@ -1073,18 +1073,25 @@ Na tela de Configurações há um **tutorial** para instalar o Docker das duas f
 Validado no Forja real: com o Docker Desktop fora do ar, o Automático caiu no Engine do WSL (29.1.3). O
 comando com aspas, `$i`, `>` e `&&` rodou num Debian, e os arquivos apareceram na pasta do Windows.
 
-Medição (mediana de 5 rodadas, mesma pasta de projeto no disco C):
+Medição (mediana de 3 rodadas, mesma pasta de projeto no disco C, os três na mesma sessão depois de
+reiniciar o Windows):
 
-| Caso | Windows, sem sandbox | Docker Engine no WSL | Docker Desktop |
+| Caso | Windows, sem sandbox | Docker Engine no WSL | Docker Desktop 4.x (29.7.2) |
 |---|---|---|---|
-| Subir o comando (vazio) | 0,25 s | 0,46 s | — |
-| 2000 arquivos (escrever e ler) | 3,52 s | 9,17 s | — |
-| pytest (60 testes) | 0,52 s | 3,34 s | — |
-| pip install (já em cache) | 1,06 s | 2,17 s | — |
+| Subir o comando (vazio) | 0,19 s | 0,35 s | 0,48 s |
+| 2000 arquivos (escrever e ler) | 2,50 s | 7,42 s | 7,65 s |
+| pytest (60 testes) | 0,49 s | 3,34 s | 3,41 s |
+| pip install (já em cache) | 0,80 s | 1,87 s | 2,00 s |
 
-- [ ] **Medir o Docker Desktop.** Ele não subiu nesta sessão: o backend dele caía ao recriar os sockets
-      em `%LOCALAPPDATA%\Docker\run`, e isso não tem relação com o Forja. Reiniciar o Windows e rodar
-      `scratchpad/bench_sandbox.py` de novo.
+Os dois Dockers empatam em trabalho, porque os dois leem o projeto pelo mesmo caminho lento do WSL2
+para o disco do Windows. O Engine do WSL sobe o comando ~0,1 s mais rápido e não precisa do Docker
+Desktop aberto (menos RAM ociosa). Por isso o Automático está bom como está: usa o que estiver de pé.
+
+- [x] **Medir o Docker Desktop.** Feito. Antes ele não abria: bug do Docker Desktop no Windows 11 build
+      26200, que não consegue renomear os sockets AF_UNIX velhos (erro 1920, nem o Windows renomeia).
+      Contorno: com o Docker fechado, renomear as pastas `%LOCALAPPDATA%\Docker\run` e
+      `%LOCALAPPDATA%\docker-secrets-engine` juntas (não apagar) e abrir uma vez. Issue:
+      docker/desktop-feedback#676.
 - [ ] **Cache de pacotes num volume do Linux.** Hoje o cache (`sandbox-cache`) fica no disco do Windows e
       é lido por `/mnt/c`, e é a maior parte dos 3,3 s do pytest. Um volume nomeado do Docker é nativo
       do Linux, mas nasce de root: precisa de um `chown` para o uid 1000 na criação.
