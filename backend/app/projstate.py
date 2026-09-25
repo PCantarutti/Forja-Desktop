@@ -303,6 +303,9 @@ def prompt_block(root: Path | None = None) -> str:
     elif not memory.project_text():
         # memória do projeto desligada nas Configurações: o _extra não o põe no prompt, então vai aqui
         partes.append(f"--- {arquivo} ---\n{_cap(_enxuto(projeto), TETO['forja.md'], arquivo)}")
+    from . import convencoes
+    if conv := convencoes.texto_para_prompt(root):  # curto e decisivo: vai inteiro, não só no índice
+        partes.append(f"--- knowledge/convencoes.md (siga no plano e nos contratos) ---\n{conv}")
     if not vazio(dec := _ler(root, "decisions.md")):
         partes.append(f"--- decisions.md ---\n{_cap(_enxuto(dec).removeprefix('# Decisões').strip(), TETO['decisions.md'], PASTA + '/decisions.md', fim=True)}")
     if andamento := _em_andamento(_ler(root, "progress.md")):
@@ -337,6 +340,11 @@ def congelar(root: Path, conv_id: int, ocupada=lambda _c: False) -> list[str]:
     outras = [c for c in (achado[1] if achado else []) if c != conv_id and not ocupada(c)]
     assumidas = taskdb.assume(outras, conv_id)
     sync(conv_id)
+    from . import convencoes
+    try:  # o que o projeto declara (stack, strict, lint, testes) antes do bloco congelar
+        convencoes.atualiza(root)
+    except Exception:
+        pass
     BLOCO.set(prompt_block(root))
     return assumidas
 

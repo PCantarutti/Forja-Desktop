@@ -21,7 +21,7 @@ from sqlalchemy import func, or_, select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (baterias, board, checkpoints, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
+from . import (baterias, board, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
@@ -472,7 +472,7 @@ def board_projetos():
 def board_listar(pasta: str):
     projeto = _board(board.projeto_de, pasta)
     return {"projeto": projeto, "issues": board.listar(projeto), "varredura": board.estado_varredura(projeto),
-            "comandos": board.comandos_do_projeto(Path(projeto)), "board_card": board.board_card_ligado(projeto),
+            "comandos": board.comandos_do_projeto(Path(projeto)) or convencoes.comandos(Path(projeto)), "board_card": board.board_card_ligado(projeto),
             "vinculadas": len(board.vinculadas(projeto))}
 
 

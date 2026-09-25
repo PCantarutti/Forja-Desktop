@@ -922,6 +922,9 @@ def _memorias() -> str:
     mem = memory.project_text().strip()
     if mem:
         texto += f"\n\n--- {config.PROJECT_MEMORY_FILE} (memória do projeto, escrita por você) ---\n{mem}"
+    from . import convencoes
+    if conv := convencoes.texto_para_prompt(workspace.root()):  # só se o projeto já tem: agente não cria .forja/
+        texto += f"\n\n--- .forja/knowledge/convencoes.md (convenções do projeto) ---\n{conv}"
     return texto + memory.prompt_block()
 
 

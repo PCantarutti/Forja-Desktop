@@ -1273,7 +1273,35 @@ principalmente ao Maestro e ao Worker. O modo agente também ganha, porque lê o
 parte 4 depende da E1.
 
 ### Parte 1: detectar pelo código, sem LLM
-- [ ] Um detector (`projstate.detectar_convencoes(root)`) lê o que o projeto já declara:
+
+*Feita em 2026-09-25.*
+- **Código:** `convencoes.py`, módulo próprio em vez de `projstate.detectar_convencoes`.
+  - Lê `package.json` (dependências, `"type": "module"`, scripts), o lockfile (npm, pnpm, yarn, bun,
+    uv, poetry, pipenv), `tsconfig` (strict, `paths`, tolerante a comentário), Tailwind (config ou
+    `@tailwind` no CSS), ESLint, Prettier (com `semi` e `singleQuote`), Biome, `pyproject` (Ruff,
+    Black, pytest, mypy, `line-length`, dependências também em lista de uma linha), `requirements*.txt`,
+    `.editorconfig`, Go, Rust, e as pastas de camada até 3 níveis.
+  - Projeto com `back/` e `front/`: cada subpasta com manifesto é lida à parte, e os itens dizem de
+    qual são ("front: TypeScript strict").
+  - Os comandos saem sem `cd pasta &&` (quebrava com espaço no nome e no PowerShell 5.1); a pasta vai
+    à parte.
+- **Onde entra:**
+  - o arquivo é `.forja/knowledge/convencoes.md`, bloco "Detectado" entre marcadores; o resto do
+    arquivo é do usuário e fica preservado. Só regrava quando muda;
+  - o bloco é atualizado quando a execução do Maestro começa (`projstate.congelar`) e antes do
+    `plan_feature`;
+  - entra por extenso no prompt da Maestro e no briefing de todo Worker;
+  - no modo agente, entra só se o arquivo já existir (o agente não cria `.forja/` sozinho);
+  - o board passa a usar os comandos detectados quando o FORJA.md não tem `test_command:`.
+- **Validado no app real** (`.devval/conv-proj`, com `front/` React + TS strict + Tailwind + Vitest e
+  `back/` FastAPI + Ruff + pytest), por MCP: `plan_feature` → `run_task` para o Worker
+  (gpt-oss:120b), concluída. O `convencoes.md` nasceu com cada item e a origem, e o **briefing do
+  Worker** trouxe "Convenções do projeto (siga-as…)".
+- **Nos repositórios reais do usuário** (mesaflow, agenda, forja-desktop), só leitura: a detecção
+  acertou TS strict, Fastify, Next.js, Vitest, Playwright, ESLint, Prettier, os scripts de cada
+  subprojeto e as camadas (routes/, services/, domain/, adapters/).
+
+- [x] Um detector (`projstate.detectar_convencoes(root)`) lê o que o projeto já declara:
   - `tsconfig.json` com `strict`/`noImplicitAny` → "TypeScript strict";
   - `tailwind.config.*` ou `@tailwind` no CSS → "Tailwind";
   - `vitest`/`jest`/`pytest` nas dependências → o framework de testes, que já sugere o `verify_command`;
@@ -1281,10 +1309,10 @@ parte 4 depende da E1.
   - a estrutura de pastas (`services/`, `components/`, `hooks/`, `repositories/`) → como o código é
     separado;
   - o gerenciador de pacotes, pelo lockfile (npm/pnpm/yarn/bun, pip/uv/poetry).
-- [ ] Roda ao abrir um projeto e antes do `plan_feature`. O resultado entra em
+- [x] Roda ao abrir um projeto e antes do `plan_feature`. O resultado entra em
       `.forja/knowledge/convencoes.md` na seção "detectado", sempre com a origem (ex.: "TypeScript strict
       — `tsconfig.json:5`"). Quando o arquivo de origem muda, a entrada é refeita.
-- [ ] Testes com projetos de fixture (TS + Tailwind + Vitest, Python + Ruff + pytest): cada convenção é
+- [x] Testes com projetos de fixture (TS + Tailwind + Vitest, Python + Ruff + pytest): cada convenção é
       detectada com a origem certa.
 
 ### Parte 2: aprender com o que deu errado

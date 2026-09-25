@@ -897,8 +897,13 @@ _CONTRACT_SCHEMA = {
 
 
 def _plan_feature(_root: Path, args: dict) -> str:
-    from . import projstate, workspace  # import tardio: projstate importa este módulo
+    from . import convencoes, projstate, workspace  # import tardio: projstate importa este módulo
     root = workspace.root()
+    if (root / projstate.PASTA).is_dir():  # antes de planejar, o que o projeto declara está em dia
+        try:
+            convencoes.atualiza(root)
+        except Exception:
+            pass
     # Portão do Project State: sem ele, a conversa seguinte começa do zero. Instrução no prompt não
     # bastou (um modelo de 9B leu os arquivos vazios e planejou assim mesmo); aqui não tem como pular.
     from . import qualidade

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from . import config, db, workspace
+from . import config, convencoes, db, workspace
 from .memory import _raiz_projeto
 
 TIPOS = ("bugfix", "feature", "improvement", "visual", "todo", "seguranca")
@@ -437,7 +437,7 @@ def _varre(projeto: str, root: Path) -> None:
         cmds_todos = 0
         for base in pastas_cmd:
             rodar = lambda cmd, base=base: executa_do_projeto(base, cmd, TIMEOUT_COMANDO)  # noqa: E731
-            cmds = comandos_do_projeto(base)
+            cmds = comandos_do_projeto(base) or convencoes.comandos(base)  # FORJA.md manda; senão o detectado (E14)
             cmds_todos += len(cmds)
             for chave, cmd in cmds.items():
                 code, saida = rodar(cmd)
@@ -449,8 +449,8 @@ def _varre(projeto: str, root: Path) -> None:
             estado["avisos"] += avisos
         cmds = cmds_todos
         if not cmds:
-            estado["avisos"].append("Sem test_command/typecheck_command/lint_command no FORJA.md: testes, "
-                                    "tipos e lint não foram rodados.")
+            estado["avisos"].append("Nenhum comando de teste, tipos ou lint (nem no package.json/pyproject, nem "
+                                    "test_command no FORJA.md): só TODOs e dependências foram varridos.")
         vistas = set()
         for a in achados:
             card, novo = criar(projeto, a, "varredura-deterministica")
