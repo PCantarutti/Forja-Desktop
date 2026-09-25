@@ -109,8 +109,8 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     assert (o["width"], o["height"], o["fps"], o["frames"]) == (1664, 960, 32, 65)  # 2× e o dobro de quadros
     lotes.continuar(nova["id"])  # "Gerar as que faltaram" refaz a ampliação, não uma geração
     m = _esperar(nova["id"])
-    assert m["status"] == "pronto" and Path(m["meta"]["images"][0]["path"]).name == "a-00-s7-2x-lanczos-suave.webm"
-    assert feitas[-1] == (str(origem), "a-00-s7-2x-lanczos-suave.webm", 2, True)
+    assert m["status"] == "pronto" and Path(m["meta"]["images"][0]["path"]).name == "a-00-s7-2x-suave (Lanczos).webm"
+    assert feitas[-1] == (str(origem), "a-00-s7-2x-suave (Lanczos).webm", 2, True)
     assert m["meta"]["opts"]["frames"] == 63  # o que saiu, não a conta de antes
     with pytest.raises(lotes.ToolError, match="2× ou 4×"):
         lotes.ampliar(msg.id, str(origem), 3)
@@ -124,7 +124,7 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     m = _esperar(nova["id"])
     assert m["status"] == "pronto" and feitas[-1][0] == str(fora)
     saida = Path(m["meta"]["images"][0]["path"])
-    assert saida.parent == isolado / "videos" and saida.name.endswith("-ferias-2x.webm")
+    assert saida.parent == isolado / "videos" and saida.name.endswith("-ferias-2x (Lanczos).webm")
     with db.session() as s:
         assert s.get(db.Message, nova["id"] - 1).content == "ferias.mp4"  # o pedido é o nome do arquivo
     with pytest.raises(lotes.ToolError, match="não existe"):
@@ -171,14 +171,14 @@ def test_ampliar_imagem_sem_ffmpeg_por_lanczos_gerada_e_do_disco(isolado, monkey
     m = _esperar(lotes.ampliar(msg.id, str(origem), 2, suavizar=True)["id"])
     item = m["meta"]["images"][0]
     assert m["status"] == "pronto" and "unidade" not in item and not m["meta"]["opts"]["ampliacao"]["suavizar"]
-    assert Path(item["path"]).name == "gato-s3-2x-lanczos.png" and Image.open(item["path"]).size == (16, 12)
+    assert Path(item["path"]).name == "gato-s3-2x (Lanczos).png" and Image.open(item["path"]).size == (16, 12)
 
     fora = isolado / "de-fora" / "foto.jpg"
     fora.parent.mkdir()
     Image.new("RGB", (5, 4)).save(fora)
     m = _esperar(lotes.ampliar_arquivo(conv, str(fora), 4)["id"])
     saida = Path(m["meta"]["images"][0]["path"])
-    assert saida.parent == isolado / "imagens" and saida.name.endswith("-foto-4x.png")
+    assert saida.parent == isolado / "imagens" and saida.name.endswith("-foto-4x (Lanczos).png")
     assert Image.open(saida).size == (20, 16) and (m["meta"]["opts"]["width"], m["meta"]["opts"]["height"]) == (20, 16)
 
 
@@ -304,9 +304,9 @@ def test_dois_metodos_na_mesma_imagem_nao_se_sobrescrevem(tmp_path):
     origem.write_bytes(b"x")
     a = lotes._saida_ao_lado(origem, 2, "C:/m/4x-UltraSharp.safetensors", ".png")
     b = lotes._saida_ao_lado(origem, 2, "C:/m/seedvr2_3b_fp16.safetensors", ".png")
-    assert (a.name, b.name) == ("cafe-2x-4x-UltraSharp.png", "cafe-2x-seedvr2_3b_fp16.png")
+    assert (a.name, b.name) == ("cafe-2x (4x-UltraSharp).png", "cafe-2x (seedvr2_3b_fp16).png")
     a.write_bytes(b"x")
-    assert lotes._saida_ao_lado(origem, 2, "C:/m/4x-UltraSharp.safetensors", ".png").name == "cafe-2x-4x-UltraSharp-2.png"
+    assert lotes._saida_ao_lado(origem, 2, "C:/m/4x-UltraSharp.safetensors", ".png").name == "cafe-2x (4x-UltraSharp) 2.png"
 
 
 def test_o_que_o_forja_roda_pelos_nomes_e_formas_das_camadas():

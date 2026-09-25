@@ -616,13 +616,14 @@ def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: d
 
 
 def _saida_ao_lado(origem: Path, fator: int, modelo: str, ext: str, suave: bool = False) -> Path:
-    """Arquivo novo ao lado da origem, com o fator e o método no nome ("cafe-2x-4x-UltraSharp.png"): a mesma imagem
-    ampliada 2× por dois métodos não pode cair no mesmo arquivo (o segundo apagava o primeiro). Já existe: -2, -3…"""
-    metodo = re.sub(r"[^\w.-]+", "", Path(modelo).stem)[:32] if modelo else "lanczos"
-    base = f"{origem.stem}-{fator}x-{metodo}{'-suave' if suave else ''}"
+    """Arquivo novo ao lado da origem, com o fator e, no fim entre parênteses, o método: "cafe-2x (4x-UltraSharp).png",
+    "cafe-2x (Lanczos).png". A mesma imagem ampliada 2× por dois métodos não cai no mesmo arquivo (o segundo apagava o
+    primeiro); já existe: "cafe-2x (Lanczos) 2.png", 3…"""
+    metodo = re.sub(r"[^\w.-]+", "", Path(modelo).stem)[:40] if modelo else "Lanczos"
+    base = f"{origem.stem}-{fator}x{'-suave' if suave else ''} ({metodo})"
     saida, n = origem.with_name(base + ext), 2
     while saida.exists():
-        saida, n = origem.with_name(f"{base}-{n}{ext}"), n + 1
+        saida, n = origem.with_name(f"{base} {n}{ext}"), n + 1
     return saida
 
 
@@ -667,13 +668,13 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
         pasta = imagegen.out_dir()
         pasta.mkdir(parents=True, exist_ok=True)
         nome = re.sub(r"^[0-9a-f]{16}-", "", Path(path).name)  # a do celular chega em referencias/ com o sha na frente
-        saida = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(nome).stem}-{fator}x.png"
+        saida = _saida_ao_lado(pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{nome}", fator, modelo, ".png")
         return _nova_ampliacao(conv_id, path, saida, nome, {"width": w, "height": h}, 0, fator, modelo, False)
     _validar_ampliacao(fator, modelo)
     info = amp.sondar(path)
     pasta = imagegen.video_dir()
     pasta.mkdir(parents=True, exist_ok=True)
-    saida = pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).stem}-{fator}x{'-suave' if suavizar else ''}.webm"
+    saida = _saida_ao_lado(pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", fator, modelo, ".webm", suavizar)
     opts = {"width": info["w"], "height": info["h"], "fps": round(info["fps"]), "frames": info["quadros"]}
     return _nova_ampliacao(conv_id, path, saida, Path(path).name, opts, 0, fator, modelo, suavizar)
 
