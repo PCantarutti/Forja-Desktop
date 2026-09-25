@@ -414,6 +414,20 @@ def create_feature(conv_id: int, title: str, goal: str, tasks: list, feature_id:
     return out
 
 
+MAX_ARQUIVOS_TAREFA = 5
+# "faça X e também Y", "X e depois Y", "X; Y": dois objetivos numa tarefa só.
+_MAIS_DE_UMA_ACAO = re.compile(r"\be também\b|\be depois\b|\balém disso\b|\band then\b|\balso\b|;", re.I)
+
+
+def _grande(tarefa: dict) -> bool:
+    """Aviso, não recusa: o tamanho certo depende do projeto, mas contrato com muitos arquivos ou duas
+    ações é o que mais falha no Worker pequeno."""
+    c = _contrato_bruto(tarefa)
+    arquivos = c.get("relevant_files")
+    n = len(_lista(arquivos)) if arquivos else 0
+    return n > MAX_ARQUIVOS_TAREFA or bool(_MAIS_DE_UMA_ACAO.search(str(c.get("goal") or "")))
+
+
 def _contrato_bruto(tarefa: dict) -> dict:
     """O contrato da tarefa do plano, aceitando os campos soltos na tarefa: o gpt-oss escreveu goal,
     requirements e verify_command ao lado do title, fora de 'contract', e eles sumiam calados."""
@@ -619,6 +633,25 @@ def _verifies(s, feature_id: int) -> list[str]:
         if c and c not in cmds:
             cmds.append(c)
     return cmds
+
+
+def proxima_pronta(conv_id: int) -> str | None:
+    """A próxima tarefa a rodar, escolhida pelo código e não pelo modelo: pendente (ou que falhou e ainda
+    tem tentativas), com as dependências concluídas ou canceladas, maior priority primeiro e depois a
+    ordem do plano. Modelo pequeno escolhia a ordem errada ou esquecia tarefa para trás."""
+    with db.session() as s:
+        feitas = {c for (c,) in s.query(db.Task.code).filter(
+            db.Task.conversation_id == conv_id, db.Task.status.in_(TERMINAL))}
+        candidatas = (s.query(db.Task).join(db.Feature, db.Feature.id == db.Task.feature_id)
+                      .filter(db.Task.conversation_id == conv_id, db.Feature.copiada_para.is_(None),
+                              db.Task.status.in_(("pending", "queued", "failed")))
+                      .order_by(db.Task.priority.desc(), db.Task.id).all())
+        for t in candidatas:
+            if t.status == "failed" and t.attempt_count >= t.max_attempts:
+                continue
+            if all(d in feitas for d in (t.depends_on or [])):
+                return t.code
+    return None
 
 
 def unmet_deps(task: db.Task, conv_id: int | None = None) -> list[str]:
@@ -915,7 +948,11 @@ def _plan_feature(_root: Path, args: dict) -> str:
     for t in out["tasks"]:
         dep = f" (depende de {', '.join(t['depends_on'])})" if t["depends_on"] else ""
         linhas.append(f"  {t['code']} {t['title']}{dep}")
-    linhas.append("Agora execute uma por vez com run_task, respeitando as dependências.")
+    if grandes := [t["code"] for t, bruto in zip(out["tasks"], tarefas) if _grande(bruto)]:
+        linhas.append(f"ATENÇÃO: {', '.join(grandes)} parece(m) grande(s) demais para um Worker (mais de "
+                      f"{MAX_ARQUIVOS_TAREFA} arquivos, ou mais de uma ação no objetivo). Tarefa pequena passa "
+                      "no verify de primeira; considere dividir com update_task + plan_feature.")
+    linhas.append("Agora execute uma por vez com run_task (sem 'code', o Forja escolhe a próxima pronta).")
     if antes:
         linhas.append("ATENÇÃO, trabalho aberto de antes (resolva antes de seguir): " + "; ".join(antes) + ".")
     return "\n".join(linhas)
@@ -949,8 +986,22 @@ PLAN_FEATURE = Tool(
     _plan_feature)
 
 
+def _detalhe(conv: int, code: str) -> str:
+    """Uma tarefa por inteiro: contrato e o resultado completo da última tentativa (o run_task manda
+    à Maestro só o resumo, para não encher a janela dela)."""
+    d = detail(conv, code)
+    ultima = (d["attempts"] or [{}])[-1]
+    return json.dumps({"code": d["code"], "title": d["title"], "status": d["status"],
+                       "blocked_reason": d["blocked_reason"], "contract": d["contract"],
+                       "attempts": len(d["attempts"]), "last_attempt": {
+                           k: ultima.get(k) for k in ("n", "status", "strategy", "error", "worker", "result")}},
+                      ensure_ascii=False, default=str)[:20_000]
+
+
 def _list_tasks(_root: Path, args: dict) -> str:
     conv = _conv()
+    if code := str(args.get("code") or "").strip():
+        return _detalhe(conv, code)
     filtro = str(args.get("status") or "").strip().lower()
     dados = board(conv)
     if not dados["features"]:
@@ -989,7 +1040,9 @@ LIST_TASKS = Tool(
     "Estado atual de todas as tarefas. Chame sempre que precisar decidir o próximo passo e SEMPRE "
     "depois de uma compactação de contexto: as tarefas vivem no banco, não nesta conversa.",
     {"type": "object", "properties": {
-        "status": {"type": "string", "description": "Filtrar por um status (pending, failed, ...)"}}},
+        "status": {"type": "string", "description": "Filtrar por um status (pending, failed, ...)"},
+        "code": {"type": "string", "description": "Uma tarefa só, por inteiro: contrato e o resultado "
+                                                  "completo da última tentativa (saída de teste, erros)"}}},
     _list_tasks, poll=True)
 
 
@@ -1050,8 +1103,10 @@ def _update_task(_root: Path, args: dict) -> str:
         if (p := args.get("priority")) is not None:
             task.priority = int(p)
             mudou.append(f"prioridade={p}")
-        if (m := args.get("max_attempts")) is not None:
-            task.max_attempts = max(1, min(10, int(m)))
+        # 0 é "não mexer": o gpt-oss manda todos os campos com o valor vazio do tipo, e o max(1, …)
+        # trocava o limite da tarefa para 1 tentativa sem ninguém pedir.
+        if (m := args.get("max_attempts")) is not None and int(m) > 0:
+            task.max_attempts = min(10, int(m))
             mudou.append(f"max_attempts={task.max_attempts}")
         task.updated_at = _now()
         s.commit()
@@ -1078,7 +1133,7 @@ UPDATE_TASK = Tool(
         "reason": {"type": "string", "description": "Por quê, quando for blocked/needs_human/failed"},
         "contract": _CONTRACT_SCHEMA,
         "model_slot": {"type": "string", "description": "rapido, capaz ou id de especialista; '' = automático"},
-        "priority": {"type": "integer"},
+        "priority": {"type": "integer", "description": "Maior roda antes (run_task sem code)"},
         "max_attempts": {"type": "integer"}},
      "required": ["code"]},
     # Não é `mutating`: mexe na escrituração do próprio Forja, como o update_tasks — não escreve
@@ -1097,9 +1152,10 @@ RUN_TASK = Tool(
     "em JSON. O Worker recebe só o Implementation Contract, roda num modelo próprio e não vê esta "
     "conversa. Ele NÃO fecha a tarefa: leia o resultado e decida com update_task. "
     "Numa nova tentativa, diga em 'strategy' o que deve ser feito diferente. Várias tarefas "
-    "independentes de uma vez: 'codes' (rodam juntas no modo paralelo).",
+    "independentes de uma vez: 'codes' (rodam juntas no modo paralelo). Sem 'code', o Forja escolhe a "
+    "próxima pronta (dependências feitas, maior priority primeiro, depois a ordem do plano).",
     {"type": "object", "properties": {
-        "code": {"type": "string", "description": "Código da tarefa (TASK-003)"},
+        "code": {"type": "string", "description": "Código da tarefa (TASK-003). Omita para a próxima pronta"},
         "codes": {"type": "array", "items": {"type": "string"},
                   "description": "Várias tarefas independentes numa chamada só (TASK-001, TASK-002)"},
         "strategy": {"type": "string",

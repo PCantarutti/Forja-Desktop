@@ -25,7 +25,9 @@ from .tools import ToolError
 MAX_ERROS = 5          # erros de passo que entram no resultado
 MAX_ERRO_TEXTO = 1500
 MAX_SAIDA_TESTE = 4000
-MAX_DESCARTE = 3000    # diff da tentativa revertida que vai no briefing da próxima
+MAX_LINHAS_TESTE = 20  # da saída de teste que vai para a Maestro
+MAX_RESUMO = 600       # do relatório do Worker que vai para a Maestro
+MAX_DESCARTE = 3000   # diff da tentativa revertida que vai no briefing da próxima
 REGRESSAO_TETO = 300   # s somando os verify das tarefas antigas depois de cada tarefa
 REGRESSAO_CMD = 180    # s por comando, como o verify do Worker
 WRITE_TOOLS = subagents.WRITE_TOOLS
@@ -229,6 +231,12 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     def erro(texto: str) -> None:
         out.update(status="erro", text=texto, meta=meta)
 
+    if not code:  # escalonador: a ordem sai do banco, não da memória do modelo
+        if not (code := taskdb.proxima_pronta(conv_id) or ""):
+            erro("Nenhuma tarefa pronta para rodar: as pendentes esperam dependências, ou não sobrou "
+                 "nenhuma. Veja list_tasks.")
+            return
+        meta["escolhida"] = code
     try:
         task = taskdb.get(code, conv_id)
     except ToolError as e:
@@ -526,7 +534,36 @@ def _para_o_maestro(r: dict) -> str:
                   "descartado vai sozinho no briefing da próxima tentativa.")
     if r.get("regression_partial"):
         cauda += "\n(A regressão parou no teto de tempo: nem todas as tarefas antigas foram conferidas.)"
-    # O diff descartado é para o Worker da próxima tentativa (last_error); na janela da Maestro só
-    # ocuparia tokens.
-    visto = {**r, "rollback": {"files": r["rollback"]["files"]}} if r.get("rollback") else r
-    return json.dumps(visto, ensure_ascii=False, default=str) + "\n\n" + cauda
+    return json.dumps(_enxuto(r), ensure_ascii=False, default=str) + "\n\n" + cauda
+
+
+def _cauda(texto: str, linhas: int) -> str:
+    return "\n".join((texto or "").strip().splitlines()[-linhas:])
+
+
+def _enxuto(r: dict) -> dict:
+    """O que a Maestro precisa para decidir o próximo passo. Antes ia o resultado inteiro (~2–3k tokens
+    por run_task: saída de teste até 4000 caracteres, 5×1500 de erros, modelo, rota...) e numa janela de
+    32k ela compactava a cada 8–10 tarefas. O completo fica no banco: list_tasks(code=...)."""
+    v: dict = {k: r[k] for k in ("task_code", "attempt", "status") if k in r}
+    v["changes"] = [f"{c['path']} ({c.get('status')})" for c in r.get("changes") or []]
+    for k in ("outside_contract", "external_changes", "review", "regression_partial"):
+        if r.get(k):
+            v[k] = r[k]
+    if t := r.get("tests"):
+        v["tests"] = {"command": t.get("command"), "status": t.get("status"),
+                      "output": _cauda(t.get("output"), MAX_LINHAS_TESTE)}
+    # Com o verify passando, os erros são intermediários, que o próprio Worker já corrigiu (ele roda o
+    # teste, vê falhar, conserta). Na validação o gpt-oss leu "FAILURES" num resultado aprovado e
+    # bloqueou a tarefa que estava certa. Continuam no detalhe (list_tasks code=...).
+    if r.get("errors") and r.get("status") != "completed":
+        v["errors"] = [e[:300] for e in r["errors"][:3]]
+    if r.get("regression"):
+        v["regression"] = [{"tasks": f["tasks"], "command": f["command"],
+                            "output": _cauda(f.get("output"), MAX_LINHAS_TESTE)} for f in r["regression"]]
+    if r.get("rollback"):  # o diff descartado é do Worker da próxima tentativa (last_error)
+        v["rollback"] = {"files": r["rollback"]["files"]}
+    if r.get("summary"):
+        v["summary"] = r["summary"][:MAX_RESUMO]
+    v["detail"] = f"list_tasks(code='{r.get('task_code')}') mostra o resultado completo"
+    return v

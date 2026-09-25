@@ -239,20 +239,20 @@ também pode usar o rollback.
       Maestro espera e, com `-np 1`, expulsa o cache do Maestro em **toda** tarefa. O Worker usa um slot
       diferente do principal, ou espera, conforme a política.
 
-- [ ] **Loop de correção dentro do Worker.** Se o `verify` falhar e sobrarem passos (dos 15 de
+- [x] **Loop de correção dentro do Worker.** Se o `verify` falhar e sobrarem passos (dos 15 de
       `config.py:113`), devolver a saída do teste ao Worker como mensagem ("o verify falhou: …, corrija")
       em vez de encerrar a tentativa. Teto de 2 voltas internas, e depois disso a tentativa vai para a
       Maestro como hoje.
-- [ ] **Compactar o histórico do Worker.** Hoje ele cresce sem limite e o resultado de ferramenta entra
+- [x] **Compactar o histórico do Worker.** Hoje ele cresce sem limite e o resultado de ferramenta entra
       inteiro (`subagents.py:603`). Aplicar o `compact.podar` a cada passo e cortar cada resultado a uma
       fração da janela (ver E4).
-- [ ] **Fallback de janela no meio da tentativa.** Hoje ele só existe antes do 1º passo
+- [x] **Fallback de janela no meio da tentativa.** Hoje ele só existe antes do 1º passo
       (`subagents.py:545`). Estourou no meio: podar e tentar de novo uma vez antes de dar erro.
-- [ ] **`task_result` mais enxuto para a Maestro.** Hoje cada `run_task` custa ~2–3k tokens (JSON com
+- [x] **`task_result` mais enxuto para a Maestro.** Hoje cada `run_task` custa ~2–3k tokens (JSON com
       saída de teste de até 4000 caracteres e 5×1500 de erros, `maestro.py:25-27`). Mandar status, as
       últimas 20 linhas relevantes do teste e os arquivos tocados. O resto fica no banco, acessível por
       `list_tasks code=… detail=true`.
-- [ ] **Escalonador determinístico.** Uma função `proxima_pronta()` escolhe a próxima tarefa pendente com
+- [x] **Escalonador determinístico.** Uma função `proxima_pronta()` escolhe a próxima tarefa pendente com
       as dependências feitas, por `priority` e depois pela ordem do plano. A Maestro pode chamar
       `run_task` sem `code`, e o código escolhe. Assim a ordem deixa de depender do modelo pequeno.
 - [ ] **Custo de troca de modelo** (a solução depende do número medido na E0). O Worker é a única
@@ -267,13 +267,35 @@ também pode usar o rollback.
     troca passa a custar só o tempo de carregar mais o de restaurar, sem reprocessar. Combina com a
     opção A.
   - Decidir depois de ver o baseline.
-- [ ] Limite de tamanho de tarefa no `plan_feature`: avisar quando o contrato declarar mais de ~5
+- [x] Limite de tamanho de tarefa no `plan_feature`: avisar quando o contrato declarar mais de ~5
       arquivos ou quando o `goal` tiver mais de uma ação ("e também…"), sugerindo dividir.
-- [ ] Testes:
+- [x] Testes:
   - Worker corrige após um verify falho sem voltar à Maestro;
   - escalonador respeita dependências e prioridade;
   - `task_result` fica abaixo de um teto de caracteres;
   - o Worker nunca usa o slot fixo do principal.
+
+**Feito em 2026-09-25 (parcial):**
+- **Validado no Forja real** (gpt-oss:120b):
+  - `run_task` sem `code` escolheu a tarefa pronta;
+  - o resultado enxuto chegou ao Maestro;
+  - a tarefa virou commit e a entrega fechou.
+- **Loop de correção validado só por teste:** nas duas rodadas reais, o próprio Worker rodou o
+  `pytest`, viu a falha e corrigiu dentro dos passos dele, antes do verify do Forja. O loop do Forja
+  fica como rede para o Worker que não se testa (comum em modelo pequeno; conferir na E16 com modelo
+  local).
+- **Achados da validação, corrigidos:**
+  - `update_task` com `max_attempts: 0` (o gpt-oss manda todos os campos vazios) trocava o limite da
+    tarefa para 1. Agora 0 é "não mexer";
+  - com a tarefa aprovada, os erros intermediários do Worker ("exit code 1… FAILURES", já corrigidos)
+    iam no resumo, e o Maestro bloqueou uma tarefa certa por isso. Agora ficam só no detalhe.
+- **Ficou para depois:**
+  - a política de execução, porque depende da E4;
+  - o custo de troca de modelo, porque depende do número da E0.
+- **Poda do histórico do Worker:**
+  - acima de 60% da janela, os resultados antigos são cortados a 1500 caracteres, em bloco;
+  - cada resultado novo tem teto de 25% da janela;
+  - se estourar no meio da tentativa, poda forte (600) e repete o passo uma vez.
 
 **Pronto quando:** o bench da E0 mostra menos voltas à Maestro por tarefa e menos tempo de relógio.
 
