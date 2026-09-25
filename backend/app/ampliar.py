@@ -520,9 +520,29 @@ def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_
     return {"w": alvo[0], "h": alvo[1]}
 
 
+def _comfy_quadros(trabalho: Path, fator: int, modelo: str, tipo: str, total: int, job_id: str, progresso, previa) -> None:
+    """Os quadros de trabalho/in pelo ComfyUI, para trabalho/out. A fração que ele conta vira quadros feitos (para a
+    barra e o tempo que falta) e o último quadro gravado vira a prévia."""
+    from . import comfy
+    comeco = [0.0]
+
+    def fase(_texto: str | None, fracao: float | None) -> None:
+        if fracao is None or not progresso:
+            return
+        comeco[0] = comeco[0] or time.monotonic()
+        feitos = max(1, round(fracao * total))
+        if previa:
+            prontos = sorted((trabalho / "out").glob("*.png"))
+            if prontos:
+                shutil.copyfile(prontos[-1], previa)
+        progresso(min(feitos, total), total, (time.monotonic() - comeco[0]) / feitos)
+    comfy.ampliar(str(trabalho / "in"), trabalho / "out", fator, modelo, job_id, fase, tipo, quadros=True)
+
+
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: bool = False, job_id: str = "",
             progresso=None, previa: Path | None = None) -> dict:
-    """Amplia `entrada` em `fator` (2 ou 4) e grava `saida` (.webm). `modelo` vazio = Lanczos, sem IA.
+    """Amplia `entrada` em `fator` (2 ou 4) e grava `saida` (.webm). `modelo` vazio = Lanczos, sem IA; ESRGAN pelo
+    sd-cli; SeedVR2 e DAT/HAT/SwinIR pelo ComfyUI (o tipo sai do arquivo, tipo_local).
     `progresso(feitos, total, s_por_quadro)`; `previa` recebe o último quadro ampliado. Devolve a sondagem
     do resultado (tamanho, fps, quadros)."""
     ff = str(_ffmpeg())
@@ -539,8 +559,13 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
             # vídeo do tempo do áudio
             _rodar([ff, "-v", "error", "-i", entrada, "-fps_mode", "cfr", "-r", info["taxa"], str(trabalho / "in" / "%05d.png")], job_id)
             quadros = sorted((trabalho / "in").glob("*.png"))
-            exe = imagegen._exe()
-            gpu = imagegen._gpu(str(exe))
+            tipo = tipo_local(modelo)
+            if tipo in ("seedvr2", "spandrel"):
+                _comfy_quadros(trabalho, fator, modelo, tipo, len(quadros), job_id, progresso, previa)
+                quadros = []  # já ampliados em out/, pelo ComfyUI
+            else:
+                exe = imagegen._exe()
+                gpu = imagegen._gpu(str(exe))
             repeticoes, comeco = 0, time.monotonic()
             for i, q in enumerate(quadros):
                 destino = trabalho / "out" / q.name

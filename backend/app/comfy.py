@@ -53,9 +53,9 @@ def instalar() -> dict:
 
 
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = "", progresso=None,
-            modo: str = "seedvr2", prompt: str = "", forca: float = 0.4, bloco: int = 1024) -> dict:
+            modo: str = "seedvr2", prompt: str = "", forca: float = 0.4, bloco: int = 1024, quadros: bool = False) -> dict:
     """Uma imagem pelo ComfyUI (comfy_job.py no Python do portátil): `modo` seedvr2 (difusão, com o VAE) ou spandrel
-    (DAT/HAT/SwinIR e afins). `progresso(fase, fração)`: a fase quando muda (fração None) e a fração do trabalho
+    (DAT/HAT/SwinIR e afins). `quadros`: vídeo, `entrada` e `saida` são pastas com os quadros PNG. `progresso(fase, fração)`: a fase quando muda (fração None) e a fração do trabalho
     (0..1, contada pelo ComfyUI) quando ela sobe (fase None)."""
     from .ampliar import vae_seedvr2
     py = python()
@@ -69,6 +69,7 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str, job_id: str = ""
                              *(["--vae", vae] if vae else []),
                              *(["--prompt", prompt, "--forca", f"{forca:.2f}", "--bloco", str(bloco), "--passos", "25"]
                                if modo == "redesenhar" else []),
+                             *(["--quadros"] if quadros else []),
                              "--entrada", entrada, "--saida", str(saida), "--fator", str(int(fator))],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())

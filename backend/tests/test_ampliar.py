@@ -206,11 +206,9 @@ def test_esrgan_formato_antigo_e_seedvr2_pelo_conteudo(isolado):
     assert ampliar.vae_seedvr2(seed) == vae  # ao lado do modelo
 
 
-def test_seedvr2_so_imagem_pede_comfyui_e_vram(isolado, monkeypatch):
+def test_seedvr2_pede_comfyui_e_vram(isolado, monkeypatch):
     from app import comfy
     seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
-    with pytest.raises(lotes.ToolError, match="só imagem"):
-        lotes._validar_ampliacao(2, seed, video=True)
     monkeypatch.setattr(comfy, "python", lambda: None)
     with pytest.raises(lotes.ToolError, match="ComfyUI"):
         lotes._validar_ampliacao(2, seed, video=False)
@@ -365,13 +363,11 @@ def test_so_nvidia_pelo_cabecalho():
     assert ampliar._so_nvidia({"blocks.0.mlp.weight_scale_2": {"dtype": "F32"}})
 
 
-def test_dat_hat_swinir_vao_pelo_comfyui_sem_vae_e_so_imagem(isolado, monkeypatch):
+def test_dat_hat_swinir_vao_pelo_comfyui_sem_vae(isolado, monkeypatch):
     import sys
     from app import comfy
     dat = safetensors(isolado / "modelos", "4x-UltraSharpV2.safetensors", ["before_RG.1.weight", "conv_after_body.weight"])
     assert localai.kind_of(Path(dat)) == "ampliador" and ampliar.tipo_local(dat) == "spandrel"
-    with pytest.raises(lotes.ToolError, match="só imagem"):
-        lotes._validar_ampliacao(2, dat, video=True)
     monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
     monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "qwen"})
     lotes._validar_ampliacao(2, dat, video=False)  # leve (< 1 GB): não pede para descarregar o LLM
@@ -446,3 +442,46 @@ def test_comfyui_aparece_como_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(comfy, "instalar", lambda: {"id": "job"})
     assert localai.install_runtime("comfy", "") == {"id": "job"}
     assert "comfy" in localai.set_runtime("comfy", "intel")  # nada a trocar, não quebra
+
+
+def test_video_pelo_comfyui_quadro_a_quadro_com_previa(isolado, monkeypatch):
+    """SeedVR2 e DAT/HAT em vídeo: o ffmpeg separa os quadros, o ComfyUI amplia a pasta inteira (--quadros) e a
+    fração dele vira quadros feitos e prévia. O redesenho segue só imagem (tremeria)."""
+    import sys
+    from PIL import Image
+    from app import comfy
+    seed = safetensors(isolado / "modelos", "seedvr2_3b_fp16.safetensors", ["blocks.0.ada.txt.attn_gate"])
+    ck = safetensors(isolado / "modelos", "ck.safetensors", ["model.diffusion_model.x", "first_stage_model.x",
+                                                             "conditioner.embedders.0.x"])
+    monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
+    monkeypatch.setattr(ampliar, "_ffmpeg", lambda: Path("ffmpeg.exe"))
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    lotes._validar_ampliacao(2, seed, video=True)  # não recusa mais
+    with pytest.raises(lotes.ToolError, match="redesenho amplia só imagem"):
+        lotes._validar_ampliacao(2, ck, video=True)
+    monkeypatch.setattr(ampliar, "codificador", lambda ff: "libvpx-vp9")
+    monkeypatch.setattr(ampliar, "sondar", lambda v: {"w": 4, "h": 2, "fps": 24.0, "taxa": "24/1", "quadros": 3, "audio": False})
+    comandos = []
+
+    def ffmpeg(argv, job_id="", linha=None):
+        comandos.append(argv)
+        if argv[-1].endswith("%05d.png"):  # separar os quadros
+            for i in range(3):
+                Image.new("RGB", (4, 2)).save(Path(argv[-1]).parent / f"{i + 1:05d}.png")
+        return ""
+    monkeypatch.setattr(ampliar, "_rodar", ffmpeg)
+    chamadas, feito = [], []
+
+    def driver(entrada, saida, fator, modelo, job_id, progresso, modo, quadros=False, **_):
+        chamadas.append((modo, quadros, sorted(p.name for p in Path(entrada).glob("*.png"))))
+        for i in range(3):
+            Image.new("RGB", (8, 4), (i, 0, 0)).save(Path(saida) / f"{i + 1:05d}.png")
+            progresso(None, (i + 1) / 3)
+        return {"w": 8, "h": 4}
+    monkeypatch.setattr(comfy, "ampliar", driver)
+    previa = isolado / "previa.png"
+    ampliar.ampliar(str(isolado / "v.mp4"), isolado / "v-2x.webm", 2, seed,
+                    progresso=lambda f, t, s: feito.append((f, t)), previa=previa)
+    assert chamadas == [("seedvr2", True, ["00001.png", "00002.png", "00003.png"])]
+    assert feito == [(1, 3), (2, 3), (3, 3)] and Image.open(previa).getpixel((0, 0))[0] == 2  # o último quadro
+    assert "-framerate" in comandos[-1] and comandos[-1][comandos[-1].index("-i") + 1].endswith("%05d.png")

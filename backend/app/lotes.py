@@ -579,9 +579,10 @@ def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: boo
         raise ToolError("Amplie em 2× ou 4×.")
     tipo = (amp.tipo_local(modelo) or ("redesenhar" if amp.tipo_checkpoint(modelo) else "")) if modelo else ""
     if tipo in ("seedvr2", "spandrel", "redesenhar"):  # pelo ComfyUI
-        nome = {"seedvr2": "O SeedVR2", "spandrel": "Este modelo (DAT/HAT/SwinIR)", "redesenhar": "O redesenho"}[tipo]
+        if video and tipo == "redesenhar":  # redesenharia cada quadro de um jeito: o vídeo tremeria
+            raise ToolError("O redesenho amplia só imagem: para vídeo, use o SeedVR2, um ESRGAN/DAT ou o Lanczos.")
         if video:
-            raise ToolError(f"{nome} aqui amplia só imagem: para vídeo, use um ESRGAN ou o Lanczos.")
+            amp._ffmpeg()  # separa e junta os quadros
         if not comfy.python():
             raise ToolError("Falta o ComfyUI (motor do SeedVR2 e dos DAT/HAT/SwinIR): baixe na lista de ampliação, "
                             "em Baixar o que falta.")

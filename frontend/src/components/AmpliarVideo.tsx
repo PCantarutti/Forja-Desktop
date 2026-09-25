@@ -4,9 +4,10 @@ import { Check, Download, Film, Image, X } from "./icons";
 import { btn, btnPrimary } from "./LocalPanel";
 
 /** O que o backend diz da ampliação: ffmpeg (vídeo) e ComfyUI (SeedVR2) instalados, o catálogo e todos os
- *  modelos no disco. `tipo`: esrgan (sd-cli, rápido, imagem e vídeo) ou seedvr2 (difusão, pesado, só imagem). */
-// spandrel: DAT/HAT/SwinIR e afins, rápidos, pelo ComfyUI; redesenhar: um checkpoint de imagem (SD 1.5/SDXL) refaz
-// a imagem em alta resolução por blocos, com prompt e força
+ *  modelos no disco. `tipo` (do conteúdo do arquivo): esrgan (sd-cli, rápido) ou seedvr2 (difusão, pesado, vídeo por
+ *  trechos). Imagem e vídeo. */
+// spandrel: DAT/HAT/SwinIR e afins, rápidos, pelo ComfyUI; redesenhar (só imagem: em vídeo, cada quadro sairia de um
+// jeito): um checkpoint de imagem (SD 1.5/SDXL) refaz a imagem em alta resolução por blocos, com prompt e força
 type Tipo = "esrgan" | "seedvr2" | "spandrel" | "redesenhar";
 export type CatalogoAmpliacao = {
   modelos: { nome: string; resumo: string; mb: number; presente: string; tipo: Tipo }[];
@@ -62,9 +63,9 @@ export function BaixarAmpliacao(props: {
   if (!cat) return <p className="text-xs text-muted">Carregando…</p>;
   const linhas = [
     ...(props.imagem ? [] : [{ nome: "ffmpeg", titulo: "ffmpeg", resumo: "Lê e grava o vídeo (obrigatório) · ~80 MB", presente: !!cat.ffmpeg }]),
-    ...(props.video ? [] : [{ nome: "comfyui", titulo: `ComfyUI portátil (${GPU[cat.comfy.gpu] ?? cat.comfy.gpu})`,
-      resumo: `Motor do SeedVR2 e dos DAT/HAT/SwinIR, fica com os runtimes · ~${(cat.comfy.mb / 1000).toFixed(1).replace(".", ",")} GB`, presente: !!cat.comfy.instalado }]),
-    ...cat.modelos.filter((m) => !props.video || m.tipo === "esrgan").map((m) => ({
+    { nome: "comfyui", titulo: `ComfyUI portátil (${GPU[cat.comfy.gpu] ?? cat.comfy.gpu})`,
+      resumo: `Motor do SeedVR2 e dos DAT/HAT/SwinIR, fica com os runtimes · ~${(cat.comfy.mb / 1000).toFixed(1).replace(".", ",")} GB`, presente: !!cat.comfy.instalado },
+    ...cat.modelos.map((m) => ({
       nome: m.nome,
       titulo: m.nome.replace(/\.(pth|safetensors)$/, ""),
       resumo: `${m.resumo}${m.mb ? ` · ${m.mb >= 1000 ? `${(m.mb / 1000).toFixed(1).replace(".", ",")} GB` : `${Math.round(m.mb)} MB`}` : ""}`,
@@ -121,7 +122,7 @@ export function PainelAmpliar(props: {
   const [vram, setVram] = useState(""); // a mensagem do 409: tem modelo de texto carregado
   const [prompt, setPrompt] = useState(props.prompt ?? "");
   const [forca, setForca] = useState(0.4); // o FORCA_PADRAO do backend
-  const metodos = (cat?.no_disco ?? []).filter((m) => props.imagem || m.tipo === "esrgan");
+  const metodos = (cat?.no_disco ?? []).filter((m) => props.imagem || m.tipo !== "redesenhar"); // vídeo: tudo menos redesenhar
   const esrgans = metodos.filter((m) => m.tipo === "esrgan");
   // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora); o
   // SeedVR2 nunca é o padrão, leva minutos
@@ -147,8 +148,7 @@ export function PainelAmpliar(props: {
 
   if (!cat) return <p className="px-2.5 text-xs text-muted">Carregando…</p>;
   const semFfmpeg = !cat.ffmpeg && !props.imagem;
-  const falta = semFfmpeg || (props.imagem && !cat.comfy.instalado)
-    || cat.modelos.some((m) => !m.presente && (props.imagem || m.tipo === "esrgan"));
+  const falta = semFfmpeg || !cat.comfy.instalado || cat.modelos.some((m) => !m.presente);
   const opcao = (ligada: boolean) =>
     `rounded-md border px-2 py-1 text-xs ${ligada ? "border-sky-500/60 bg-sky-500/10 text-sky-200" : "border-line text-muted hover:bg-raised hover:text-fg"}`;
   return (
@@ -164,7 +164,7 @@ export function PainelAmpliar(props: {
             <option key={m.path} value={m.path}>
               {m.tipo === "redesenhar" ? `Redesenhar com ${m.name}` : m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos"
                 : m.tipo === "redesenhar" ? "refaz a imagem, leva minutos" : m.tipo === "spandrel" ? "IA, pelo ComfyUI"
-                : props.imagem ? "IA" : "IA, quadro a quadro"})
+                : props.imagem ? "IA" : "IA, quadro a quadro"}{!props.imagem && m.tipo === "seedvr2" ? ", por trechos" : ""})
             </option>
           ))}
           <option value="">Rápido, sem IA (Lanczos)</option>
@@ -184,11 +184,14 @@ export function PainelAmpliar(props: {
           Suavizar movimento ({fmtFps(props.fps ?? 0)} → {fmtFps((props.fps ?? 0) * 2)} fps)
         </label>
       )}
-      {escolhido && !!props.quadros && (
-        <p className="text-faint">{props.quadros} quadros, cada um passa pelo ESRGAN na GPU: vídeo longo leva tempo (o cartão mostra quanto falta).</p>
+      {escolhido && !!props.quadros && tipo !== "seedvr2" && (
+        <p className="text-faint">{props.quadros} quadros, cada um passa pela IA na GPU: vídeo longo leva tempo (o cartão mostra quanto falta).</p>
       )}
       {tipo === "seedvr2" && !semComfy && (
-        <p className="text-faint">Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais).</p>
+        <p className="text-faint">
+          {props.imagem ? "Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais)."
+            : `Difusão feita para vídeo: amplia ${props.quadros ? `os ${props.quadros} quadros` : "os quadros"} em trechos, olhando os vizinhos (sem tremer). O mais pesado: ~7 GB de VRAM e minutos por segundo de vídeo.`}
+        </p>
       )}
       {redesenha && !semComfy && (
         <>

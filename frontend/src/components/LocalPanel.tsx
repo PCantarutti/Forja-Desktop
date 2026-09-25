@@ -1586,8 +1586,9 @@ function ImageTab() {
     <section className={card}>
       <p className="text-fg">Imagem</p>
       <p className="mt-1 text-muted">
-        Acima fica o stable-diffusion.cpp. Para gerar, use a aba <b>Imagens</b> no topo da barra lateral; os modelos e
-        os ajustes de cada um ficam em Modelos. Vídeo tem aba própria aqui ao lado.
+        Acima ficam o stable-diffusion.cpp, que gera, e o ComfyUI, que amplia com IA pesada (SeedVR2, DAT/HAT/SwinIR,
+        Redesenhar). Para gerar, use a aba <b>Imagens</b> no topo da barra lateral; os modelos e os ajustes de cada um
+        ficam em Modelos. Vídeo tem aba própria aqui ao lado.
       </p>
     </section>
   );
@@ -1614,7 +1615,8 @@ function VideoTab(props: { st: LocalState; onDone: () => void; onError: (e: stri
         </span>
         <p className="mb-2 text-faint">
           Mais resolução para as tomadas prontas e para vídeos do PC (aba Vídeo › Ampliar vídeo). O ffmpeg, o motor acima,
-          lê e grava o vídeo; os ESRGAN ampliam quadro a quadro na GPU. Sem ESRGAN, amplia por Lanczos.
+          lê e grava o vídeo; na GPU, os ESRGAN (sd-cli) e os DAT/HAT/SwinIR (ComfyUI) ampliam quadro a quadro, e o SeedVR2
+          (ComfyUI) por trechos, olhando os quadros vizinhos. Sem modelo, amplia por Lanczos.
         </p>
         <BaixarAmpliacao onError={props.onError} soModelos video />
       </section>
