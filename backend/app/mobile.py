@@ -103,7 +103,10 @@ def expose(port: int) -> str:
     base = tailnet_url()
     if not base:
         raise RuntimeError("Tailscale não está ativo neste PC")
-    out = subprocess.run([_tailscale(), "serve", "--bg", f"--https={port}", f"http://127.0.0.1:{port}"],
+    # localhost, e não 127.0.0.1: o Vite (Node 17+) escuta só em [::1], e o proxy do Tailscale apontado para
+    # 127.0.0.1 devolvia 502 no celular. Com localhost ele tenta IPv6 e IPv4 ([::1] entre colchetes o
+    # Tailscale reescreve sem eles e a URL fica inválida).
+    out = subprocess.run([_tailscale(), "serve", "--bg", f"--https={port}", f"http://localhost:{port}"],
                          capture_output=True, text=True, timeout=15,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if out.returncode:

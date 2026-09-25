@@ -352,8 +352,12 @@ def put_model_settings(body: ModelSettingBody):
 
 @app.get("/api/servers")
 async def get_servers():
-    """Servidores iniciados por serve_start nesta sessão."""
-    return {"servers": await asyncio.to_thread(shell.list_servers), "environment": native.describe()}
+    """Servidores iniciados por serve_start nesta sessão, e os de desenvolvimento que o Forja não subiu
+    (Terminal, fora do app) — estes só para o painel Navegador abrir."""
+    servers = await asyncio.to_thread(shell.list_servers)
+    nossas = {s["url"].rsplit(":", 1)[-1].split("/")[0] for s in servers if s.get("url")}
+    detectados = [d for d in await asyncio.to_thread(shell.servidores_detectados) if str(d["port"]) not in nossas]
+    return {"servers": servers, "detectados": detectados, "environment": native.describe()}
 
 
 @app.get("/api/subagents/active")
@@ -2103,11 +2107,16 @@ def mobile_rotate():
 def mobile_expose(name: str):
     """Site que o agente subiu (serve_start) visto do celular: só porta de servidor vivo, nunca uma qualquer."""
     srv = next((x for x in shell.list_servers() if x["name"] == name and x["alive"] and x["url"]), None)
-    port = re.search(r":(\d+)", srv["url"]) if srv else None
+    port = int(m.group(1)) if srv and (m := re.search(r":(\d+)", srv["url"])) else None
+    # Servidor de desenvolvimento aberto fora do Forja (npm run dev no Terminal): "porta-N", e só se N está
+    # entre os detectados agora (processo de dev no localhost que responde HTML), nunca uma porta qualquer.
+    if port is None and (m := re.fullmatch(r"porta-(\d+)", name)) and \
+            int(m.group(1)) in {d["port"] for d in shell.servidores_detectados()}:
+        port = int(m.group(1))
     if not port:
         raise HTTPException(404, "Servidor não está rodando ou não tem URL")
     try:
-        return {"url": mobile.expose(int(port.group(1)))}
+        return {"url": mobile.expose(port)}
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         raise HTTPException(502, str(e))
 

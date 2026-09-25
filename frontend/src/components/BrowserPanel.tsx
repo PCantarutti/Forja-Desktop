@@ -414,13 +414,26 @@ const comandoCurto = (cmd: string) =>
 
 /** Servidores de desenvolvimento no ar (os do serve_start, de qualquer conversa) para abrir com um
  *  clique, sem decorar a porta. Só os que já anunciaram o endereço no log. */
+type Cartao = { chave: string; url: string; onde: string; comando: string; completo: string };
+type Detectado = { port: number; url: string; pid: number; processo: string };
+
 function ServidoresRodando(props: { onAbrir: (url: string) => void }) {
-  const [servidores, setServidores] = useState<ServerInfo[]>([]);
+  const [cartoes, setCartoes] = useState<Cartao[]>([]);
   useEffect(() => {
     let vivo = true;
     const ler = () =>
-      api.get<{ servers: ServerInfo[] }>("/servers")
-        .then((r) => vivo && setServidores(r.servers.filter((x) => x.alive && x.url)))
+      api.get<{ servers: ServerInfo[]; detectados?: Detectado[] }>("/servers")
+        .then((r) => vivo && setCartoes([
+          ...r.servers.filter((x) => x.alive && x.url).map((x) => ({
+            chave: x.name, url: x.url!, completo: x.command, comando: comandoCurto(x.command),
+            onde: x.cwd ? x.cwd.split(/[\\/]/).filter(Boolean).pop()! : "",
+          })),
+          // npm run dev no Terminal, ou fora do app: o Forja não sabe o comando, só o processo e a porta
+          ...(r.detectados ?? []).map((d) => ({
+            chave: `porta-${d.port}`, url: d.url, onde: "fora do Forja", comando: d.processo,
+            completo: `${d.processo} (pid ${d.pid}) escutando na porta ${d.port}`,
+          })),
+        ]))
         .catch(() => {});
     ler();
     const t = setInterval(ler, 4000);
@@ -429,22 +442,22 @@ function ServidoresRodando(props: { onAbrir: (url: string) => void }) {
       clearInterval(t);
     };
   }, []);
-  if (!servidores.length) return null;
+  if (!cartoes.length) return null;
   return (
     <div className="mx-auto mt-6 flex max-w-lg flex-col gap-2">
       <p className="text-center text-xs text-faint">Servidores rodando: clique para abrir aqui.</p>
-      {servidores.map((x) => (
-        <div key={x.name} className="flex items-center gap-3 rounded-xl border border-line bg-panel px-3 py-2">
+      {cartoes.map((x) => (
+        <div key={x.chave} className="flex items-center gap-3 rounded-xl border border-line bg-panel px-3 py-2">
           <div className="min-w-0 flex-1">
             <div className="text-[11px] text-faint">
-              {x.url!.replace(/^https?:\/\//, "")}
-              {x.cwd ? ` · ${x.cwd.split(/[\\/]/).filter(Boolean).pop()}` : ""}
+              {x.url.replace(/^https?:\/\//, "")}
+              {x.onde ? ` · ${x.onde}` : ""}
             </div>
-            <div className="truncate font-mono text-xs text-fg" title={x.command}>{comandoCurto(x.command)}</div>
+            <div className="truncate font-mono text-xs text-fg" title={x.completo}>{x.comando}</div>
           </div>
           <button
             className="shrink-0 rounded-lg bg-raised px-3 py-1 text-xs text-fg hover:bg-line"
-            onClick={() => props.onAbrir(x.url!)}
+            onClick={() => props.onAbrir(x.url)}
           >
             Abrir
           </button>

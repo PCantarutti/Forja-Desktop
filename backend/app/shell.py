@@ -201,7 +201,7 @@ def _start(name: str, command: str, cwd: Path) -> dict:
         log = LOG_DIR / f"{name}.log"
         fh = open(log, "wb")  # fechado em _drop: sem guardar o handle, vazava um descritor por servidor
         proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, **native.popen_kwargs())
+                                stdin=subprocess.DEVNULL, env=native.ambiente_dev(), **native.popen_kwargs())
         _SERVERS[name] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
                           "started": time.time(), "conv": CONV.get()}
     return _info(name)
@@ -282,6 +282,77 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
     return (f"{kind} '{name}' iniciado (pid {info.get('pid')}), {status}.\n{dica}"
             f"Use serve_status(name='{name}') para acompanhar e serve_stop para encerrar.\n"
             f"--- log ---\n{log or '(vazio ainda)'}")
+
+
+# ------------------------------------------------------------------ servidores que o Forja não subiu
+
+# Processo que costuma ser servidor de desenvolvimento. Porta aberta por serviço do sistema (SMB, SQL,
+# Steam...) não interessa ao painel Navegador.
+PROCESSOS_DEV = ("node", "python", "pythonw", "php", "deno", "bun", "ruby", "java", "dotnet", "hugo")
+LOCAIS = ("127.0.0.1", "0.0.0.0", "[::]", "[::1]")
+_DETECTADOS: dict = {"t": 0.0, "lista": []}
+CACHE_DETECTADOS = 8.0  # s: o painel pergunta a cada 4 s, e netstat + tasklist + sondagem custam ~1 s
+
+
+def _escutando(netstat: str) -> dict[int, int]:
+    """porta -> pid das portas TCP em LISTENING no localhost (IPv4 e IPv6) da saída do `netstat -ano`."""
+    portas: dict[int, int] = {}
+    for linha in netstat.splitlines():
+        partes = linha.split()
+        if len(partes) == 5 and partes[0] == "TCP" and partes[3] == "LISTENING":
+            ip, _, porta = partes[1].rpartition(":")
+            if ip in LOCAIS and porta.isdigit() and partes[4].isdigit():
+                portas.setdefault(int(porta), int(partes[4]))
+    return portas
+
+
+def _sonda(porta: int) -> bool:
+    """Responde HTML por HTTP e não é outra janela do próprio Forja."""
+    import http.client
+    try:
+        c = http.client.HTTPConnection("localhost", porta, timeout=0.8)
+        c.request("GET", "/")
+        r = c.getresponse()
+        corpo = r.read(4096).decode("utf-8", "replace")
+        c.close()
+    except (OSError, http.client.HTTPException):
+        return False
+    return r.status < 500 and "html" in (r.getheader("content-type") or "") and "<title>Forja</title>" not in corpo
+
+
+def servidores_detectados() -> list[dict]:
+    """Servidores de desenvolvimento no ar que o Forja NÃO subiu (npm run dev no Terminal, ou fora do
+    app), para o painel Navegador abrir com um clique. Windows: `netstat` + `tasklist`; outro sistema: []."""
+    import os
+    if os.name != "nt":
+        return []
+    if time.monotonic() - _DETECTADOS["t"] < CACHE_DETECTADOS:
+        return _DETECTADOS["lista"]
+    def saida(*cmd: str) -> str:
+        # página de código do console ("Endereço" em cp850): o backend do app roda em modo UTF-8, e
+        # decodificar como UTF-8 matava a leitura (stdout None, /api/servers com 500)
+        return subprocess.run(list(cmd), capture_output=True, encoding="oem", errors="replace", timeout=5,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout or ""
+
+    try:
+        portas = _escutando(saida("netstat", "-ano", "-p", "TCP") + saida("netstat", "-ano", "-p", "TCPv6"))
+        nomes = {}
+        for linha in saida("tasklist", "/FO", "CSV", "/NH").splitlines():
+            campos = [c.strip('"') for c in linha.split('","')]
+            if len(campos) > 1 and campos[1].isdigit():
+                nomes[int(campos[1])] = campos[0].lower().removesuffix(".exe")
+    except (OSError, subprocess.SubprocessError):
+        return []
+    proprias = {config.LOCAL_PORT, int(os.getenv("FORJA_PORT") or 0)}
+    candidatas = [(p, pid) for p, pid in sorted(portas.items())
+                  if p not in proprias and pid != os.getpid() and nomes.get(pid) in PROCESSOS_DEV][:20]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(8) as ex:
+        vivas = list(ex.map(lambda c: _sonda(c[0]), candidatas))
+    lista = [{"port": p, "url": f"http://localhost:{p}", "pid": pid, "processo": nomes[pid]}
+             for (p, pid), ok in zip(candidatas, vivas) if ok]
+    _DETECTADOS.update(t=time.monotonic(), lista=lista)
+    return lista
 
 
 def list_servers() -> list[dict]:

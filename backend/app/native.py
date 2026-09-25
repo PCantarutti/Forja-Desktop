@@ -56,6 +56,13 @@ def term_argv() -> list[str]:
     return ["bash", "-l"]
 
 
+def ambiente_dev() -> dict:
+    """Ambiente dos servidores de desenvolvimento e do Terminal. O Vite (5.4.12+/6) recusa pedido cujo Host
+    não é localhost ("Blocked request. This host is not allowed"): pela tailnet o celular chega como
+    pc.<tailnet>.ts.net e a página abria em branco. Esta variável acrescenta o host sem mexer no projeto."""
+    return {**os.environ, "__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS": ".ts.net"}
+
+
 def popen_kwargs() -> dict:
     """Grupo próprio de processos, para matar a árvore inteira, e sem janela de console no Windows."""
     if WINDOWS:

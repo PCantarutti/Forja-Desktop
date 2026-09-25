@@ -97,6 +97,21 @@ def test_expose_so_servidor_vivo_do_agente(isolado, monkeypatch):
     assert chamadas == [8791]
 
 
+def test_expose_de_servidor_detectado_so_se_ainda_detectado(isolado, monkeypatch):
+    """npm run dev aberto fora do Forja: porta-N abre só se N está entre os detectados agora."""
+    from app import shell
+    chamadas = []
+    monkeypatch.setattr(shell, "list_servers", lambda: [])
+    monkeypatch.setattr(shell, "servidores_detectados", lambda: [{"port": 5173, "url": "http://localhost:5173",
+                                                                  "pid": 1, "processo": "node"}])
+    monkeypatch.setattr(mobile, "expose", lambda p: chamadas.append(p) or f"https://pc.ts.net:{p}")
+    with TestClient(app) as c:
+        h = {"X-Forja-Token": "do-electron"}
+        assert c.post("/api/mobile/expose/porta-5173", headers=h).json() == {"url": "https://pc.ts.net:5173"}
+        assert c.post("/api/mobile/expose/porta-8077", headers=h).status_code == 404   # não detectada
+    assert chamadas == [5173]
+
+
 def test_rede_local_exige_token_em_toda_rota(isolado):
     """Na LAN não há tailnet autenticando: até /api/files e as imagens pedem o token (header ou ?t=)."""
     import httpx

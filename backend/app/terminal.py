@@ -24,7 +24,7 @@ class Term:
     """Shell do sistema lendo do stdin; um thread copia o stdout para o buffer."""
 
     def __init__(self, cwd: Path):
-        self.proc = subprocess.Popen(native.term_argv(), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        self.proc = subprocess.Popen(native.term_argv(), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=native.ambiente_dev(),
                                      stderr=subprocess.STDOUT, **native.popen_kwargs())
         self.buf = ""
         # Total já escrito desde o início, não o tamanho do buffer: é ele que vira o cursor do
