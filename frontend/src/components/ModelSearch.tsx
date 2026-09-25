@@ -68,11 +68,11 @@ function quando(iso: string): string {
 
 /** Busca de modelos no Hugging Face: lista à esquerda, ficha do modelo à direita. */
 export default function ModelSearch(props: {
-  kind: "text" | "image" | "video";
+  kind: "text" | "image" | "video" | "ampliar";
   destino: string;
   hardware?: Hardware;
-  onKind: (k: "text" | "image" | "video") => void;
-  onDownload: (repo: string, file: string) => void;
+  onKind: (k: "text" | "image" | "video" | "ampliar") => void;
+  onDownload: (repo: string, file: string, subpasta?: string) => void;
   onClose: () => void;
   onError: (e: string) => void;
 }) {
@@ -85,7 +85,8 @@ export default function ModelSearch(props: {
   const [baixados, setBaixados] = useState<string[]>([]);
   const pedido = useRef(0);
 
-  const semTermo = props.kind === "video"; // vídeo: vazio = "wan", a lista já abre cheia
+  // vídeo: vazio = "wan"; ampliação: vazio = os de referência. A lista já abre cheia.
+  const semTermo = props.kind === "video" || props.kind === "ampliar";
   async function buscar() {
     if (q.trim().length < 2 && !semTermo) return;
     const meu = ++pedido.current;
@@ -121,7 +122,7 @@ export default function ModelSearch(props: {
   }, [sel, props.kind]);
 
   function baixar(f: HfFile) {
-    props.onDownload(sel, f.path);
+    props.onDownload(sel, f.path, f.subpasta);
     setBaixados((b) => [...b, f.path]);
   }
 
@@ -136,14 +137,15 @@ export default function ModelSearch(props: {
           <input
             autoFocus
             className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
-            placeholder={props.kind === "text" ? "Buscar modelos no Hugging Face…" : props.kind === "image" ? "Buscar modelos de imagem…" : "Buscar modelos de vídeo (Wan)…"}
+            placeholder={props.kind === "text" ? "Buscar modelos no Hugging Face…" : props.kind === "image" ? "Buscar modelos de imagem…"
+              : props.kind === "ampliar" ? "Buscar ampliadores (esrgan, 4x, seedvr2…)" : "Buscar modelos de vídeo (Wan)…"}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && buscar()}
             spellCheck={false}
           />
           <div className="flex shrink-0 gap-0.5 rounded-full border border-line p-0.5">
-            {(["text", "image", "video"] as const).map((k) => (
+            {(["text", "image", "video", "ampliar"] as const).map((k) => (
               <button
                 key={k}
                 onClick={() => {
@@ -153,7 +155,7 @@ export default function ModelSearch(props: {
                 }}
                 className={`rounded-full px-2 py-0.5 ${props.kind === k ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
               >
-                {k === "text" ? "chat" : k === "image" ? "imagem" : "vídeo"}
+                {k === "text" ? "chat" : k === "image" ? "imagem" : k === "video" ? "vídeo" : "ampliação"}
               </button>
             ))}
           </div>
@@ -188,7 +190,9 @@ export default function ModelSearch(props: {
             {buscando && <p className="p-3 text-faint">buscando…</p>}
             {!buscando && lista === null && (
               <p className="p-3 text-faint">
-                {semTermo ? "Só aparecem os Wan, que é o que o stable-diffusion.cpp gera em vídeo." : "Digite o que procura e aperte Enter. Ex.: qwen3, gemma, sdxl."}
+                {props.kind === "ampliar"
+                  ? "Só aparecem os que o Forja roda, conferidos pelo conteúdo do arquivo: ESRGAN (RRDBNet, pelo sd-cli) e SeedVR2 (pelo ComfyUI). DAT, HAT, SwinIR e os compactos ficam de fora."
+                  : semTermo ? "Só aparecem os Wan, que é o que o stable-diffusion.cpp gera em vídeo." : "Digite o que procura e aperte Enter. Ex.: qwen3, gemma, sdxl."}
               </p>
             )}
             {!buscando && lista?.length === 0 && <p className="p-3 text-muted">Nada encontrado.</p>}
@@ -242,7 +246,7 @@ export default function ModelSearch(props: {
                   {repo.ctx_train > 0 && props.kind === "text" && <span className={chip}>CTX {milhares(repo.ctx_train)}</span>}
                   {repo.license && <span className={chip}>{repo.license}</span>}
                   <span className="rounded-md bg-sky-900/50 px-1.5 py-0.5 text-[11px] text-sky-300">
-                    {props.kind === "text" ? "GGUF" : props.kind === "image" ? "imagem" : "vídeo"}
+                    {props.kind === "text" ? "GGUF" : props.kind === "image" ? "imagem" : props.kind === "video" ? "vídeo" : "ampliação"}
                   </span>
                 </div>
 
@@ -286,6 +290,11 @@ export default function ModelSearch(props: {
                     {repo.files.map((f) => (
                       <div key={f.path} className="flex items-center gap-2 rounded-lg border border-line px-2 py-1.5">
                         {f.quant && <span className={`${chip} shrink-0`}>{f.quant}</span>}
+                        {f.tipo && (
+                          <span className={`${chip} shrink-0`} title={f.tipo === "seedvr2" ? "Difusão: mais detalhe, minutos por imagem (precisa do ComfyUI)" : f.tipo === "vae" ? "Peça do SeedVR2: vai junto do modelo" : "Rápido: segundos por imagem"}>
+                            {f.tipo === "seedvr2" ? "SeedVR2 · ComfyUI" : f.tipo === "vae" ? "VAE do SeedVR2" : "ESRGAN · sd-cli"}
+                          </span>
+                        )}
                         {f.papel && f.papel !== "modelo" && (
                           <span className="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[11px] text-muted" title="Peça que o modelo pede à parte">
                             {({ vae: "VAE", t5xxl: "codificador", clip_vision: "CLIP Vision", high_noise_model: "HighNoise" } as Record<string, string>)[f.papel] ?? f.papel}

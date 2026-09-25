@@ -1797,7 +1797,10 @@ WAN_NOME = re.compile(r"(?<![a-z])wan(?=[\d_.\- ]|video|$)", re.I)
 
 def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia") -> list[dict]:
     """kind=text: repos com .gguf (chat). kind=image: modelos de difusão (.safetensors também).
-    kind=video: só Wan, que é o que o sd.cpp gera em vídeo."""
+    kind=video: só Wan, que é o que o sd.cpp gera em vídeo. kind=ampliar: só ampliadores que o Forja roda."""
+    if kind == "ampliar":
+        from .ampliar import buscar_hf
+        return buscar_hf(q, sort, limit)
     tipo = ({"pipeline_tag": "text-to-image"} if kind == "image" else {} if kind == "video"
             else {"filter": "gguf"})
     if kind == "video":
@@ -1937,6 +1940,9 @@ def _serve_para_sd(caminho: str, tamanho: int) -> bool:
 
 
 def files(repo: str, kind: str = "text") -> list[dict]:
+    if kind == "ampliar":
+        from .ampliar import arquivos_hf
+        return arquivos_hf(repo)
     exts = WEIGHTS if kind in ("image", "video", "lora") else (".gguf",)
     r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True,
                   headers=hf_headers(), params={"recursive": "true"})

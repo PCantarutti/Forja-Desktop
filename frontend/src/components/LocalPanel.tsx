@@ -652,7 +652,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       />
       <ListaArquivos
         titulo="Modelos de ampliação"
-        dica="ESRGAN, usados em Ampliar vídeo"
+        dica="ESRGAN e SeedVR2, usados em Ampliar (imagem e vídeo)"
         itens={st.ampliadores ?? []}
         dirs={st.dirs.length}
         onDone={props.onDone}
@@ -1295,7 +1295,7 @@ function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: st
 // ---------------------------------------------------------------- aba Baixar
 
 function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
-  const [kind, setKind] = useState<"text" | "image" | "video">("text");
+  const [kind, setKind] = useState<"text" | "image" | "video" | "ampliar">("text");
   const [buscando, setBuscando] = useState(false);
   // Se a pasta salva saiu da lista (removida), cai na primeira em vez de deixar o select vazio.
   const [destino, setDestino] = useState(
@@ -1319,9 +1319,9 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
     props.onDone();
   }
 
-  function baixar(repo: string, file: string) {
+  function baixar(repo: string, file: string, subpasta = "") {
     api
-      .post("/local/download", { repo, file, folder: destino })
+      .post("/local/download", { repo, file, folder: destino, subpasta })
       .then(props.onDone)
       .catch((e) => props.onError(e.message));
   }

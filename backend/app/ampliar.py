@@ -53,14 +53,33 @@ GH_TTL = 3600
 PASTA = {"esrgan": "Ampliação (ESRGAN)", "seedvr2": "Ampliação (SeedVR2)"}  # subpastas da pasta de modelos
 
 
-def _nomes(p: Path) -> list[str] | bytes:
+def _nomes(p: Path) -> dict | bytes:
     """Nomes das camadas: o pickle do .pth (bytes, sem desserializar) ou o cabeçalho do .safetensors."""
     if p.suffix.lower() == ".pth":
         with zipfile.ZipFile(p) as z:
             pkl = next((n for n in z.namelist() if n.endswith("data.pkl")), None)
             return z.read(pkl) if pkl else b""
     from .loras import cabecalho
-    return list(cabecalho(str(p)))
+    return cabecalho(str(p))  # dict: nomes e formas (a 1ª camada diz se é o 2× com pixel-unshuffle)
+
+
+def tipo_por_nomes(nomes: list[str] | dict | bytes, arquivo: str = "") -> str:
+    """"esrgan" (RRDBNet, formato novo `conv_first`/`rdb1` ou antigo `model.0`/`RDB1`), "seedvr2" (DiT com
+    `blocks.N.ada.txt`) ou "" (o Forja não roda). `nomes`: o cabeçalho do .safetensors (dict, com os formatos,
+    ou só a lista de nomes) ou os bytes do pickle do .pth. O RRDBNet 2× do Real-ESRGAN entra com pixel-unshuffle
+    (12 canais na 1ª camada) e o sd.cpp recusa: pelo formato quando há, senão pelo nome (x2plus)."""
+    if isinstance(nomes, dict):
+        primeira = (nomes.get("conv_first.weight") or nomes.get("model.0.weight") or {}).get("shape") or []
+        if len(primeira) == 4 and primeira[1] != 3:
+            return ""
+    if "x2plus" in Path(arquivo).name.lower():
+        return ""
+    if isinstance(nomes, bytes):
+        return "esrgan" if ((b"conv_first" in nomes and b"rdb1" in nomes) or (b"model.0.weight" in nomes and b"RDB1" in nomes)) else ""
+    if (any(n.startswith("conv_first") for n in nomes) and any(".rdb1." in n for n in nomes)) or \
+            ("model.0.weight" in nomes and any(".RDB1." in n for n in nomes)):
+        return "esrgan"
+    return "seedvr2" if any(".ada.txt." in n for n in nomes) else ""
 
 
 def eh_ampliador(path: str) -> bool:
@@ -74,10 +93,7 @@ def eh_ampliador(path: str) -> bool:
         nomes = _nomes(p)
     except (OSError, ValueError, zipfile.BadZipFile, KeyError, struct.error):
         return False
-    if isinstance(nomes, bytes):
-        return (b"conv_first" in nomes and b"rdb1" in nomes) or (b"model.0.weight" in nomes and b"RDB1" in nomes)
-    return ((any(n.startswith("conv_first") for n in nomes) and any(".rdb1." in n for n in nomes))
-            or ("model.0.weight" in nomes and any(".RDB1." in n for n in nomes)))
+    return tipo_por_nomes(nomes, path) == "esrgan"
 
 
 def eh_seedvr2(path: str) -> bool:
@@ -87,7 +103,7 @@ def eh_seedvr2(path: str) -> bool:
     if p.suffix.lower() != ".safetensors":
         return False
     try:
-        return any(".ada.txt." in n for n in _nomes(p))
+        return tipo_por_nomes(_nomes(p)) == "seedvr2"
     except (OSError, ValueError, KeyError, struct.error):
         return False
 
@@ -149,6 +165,116 @@ def baixar_modelo(nome: str, folder: str = "") -> dict:
     if c["tipo"] == "seedvr2" and not vae_seedvr2(str(pasta / nome)):  # o VAE vem junto, uma vez só
         downloads.start("modelo", VAE_SEEDVR2["nome"], [VAE_SEEDVR2["url"]], pasta / VAE_SEEDVR2["nome"])
     return downloads.start("modelo", nome, [url], pasta / nome)
+
+
+# ---------------------------------------------------------------- Procurar modelos (Hugging Face)
+
+ESRGAN_MAX = 200 << 20  # ESRGAN/UltraSharp têm < 200 MB; acima disso só vale a pena ler o que se chama seedvr2
+PICKLE_INICIO = 1 << 20  # o data.pkl é a 1ª entrada do zip do .pth (sem compressão): 1 MB o contém inteiro
+BUSCA_PADRAO = ("esrgan", "upscale")  # sem termo: o que costuma nomear um ampliador no HF
+# Sem termo, estes abrem a lista: o HF está cheio de cópias do mesmo ESRGAN, e os bons se perdiam no meio
+REFERENCIA = ("Comfy-Org/SeedVR2", "Kim2091/UltraSharp", "ai-forever/Real-ESRGAN")
+ARQUIVOS_POR_REPO = 6  # conferidos por repo na busca (os menores primeiro); a ficha confere todos
+
+
+def _faixa(repo: str, caminho: str, inicio: int, fim: int) -> bytes:
+    from .localai import HF, hf_headers
+    r = httpx.get(f"{HF}/{repo}/resolve/main/{caminho}", timeout=20, follow_redirects=True,
+                  headers={**hf_headers(), "Range": f"bytes={inicio}-{fim}"})
+    if r.status_code not in (200, 206):
+        raise ToolError(f"Hugging Face respondeu {r.status_code} para {caminho}.")
+    return r.content[: fim - inicio + 1]
+
+
+@functools.lru_cache(maxsize=512)
+def tipo_remoto(repo: str, caminho: str, tamanho: int) -> str:
+    """O tipo de um arquivo do HF sem baixá-lo: o cabeçalho do .safetensors (8 bytes + o JSON) ou o começo do
+    zip do .pth, que tem o pickle com os nomes das camadas. "" = incompatível (ou ilegível)."""
+    nome = Path(caminho).name.lower()
+    if nome == VAE_SEEDVR2["nome"]:
+        return "vae"
+    if tamanho > ESRGAN_MAX and not nome.startswith("seedvr2"):
+        return ""
+    try:
+        if nome.endswith(".safetensors"):
+            n = struct.unpack("<Q", _faixa(repo, caminho, 0, 7))[0]
+            if n > 20 << 20:
+                return ""
+            return tipo_por_nomes(json.loads(_faixa(repo, caminho, 8, 7 + n)), caminho)
+        return tipo_por_nomes(_faixa(repo, caminho, 0, PICKLE_INICIO - 1), caminho)
+    except (ToolError, httpx.HTTPError, ValueError, struct.error):
+        return ""
+
+
+def arquivos_hf(repo: str, maximo: int = 0) -> list[dict]:
+    """Os arquivos do repo que o Forja roda, com o tipo e a subpasta onde o catálogo guarda (o VAE do SeedVR2
+    vai junto do modelo). O resto (DAT, HAT, SwinIR, compactos, LoRA) nem aparece."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .localai import HF, hf_headers
+    r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True, headers=hf_headers(),
+                  params={"recursive": "true"})
+    if r.status_code >= 400:
+        raise ToolError(f"Hugging Face respondeu {r.status_code} para {repo}.")
+    candidatos = [(f["path"], f.get("size") or (f.get("lfs") or {}).get("size") or 0) for f in r.json()
+                  if f.get("type") == "file" and f["path"].lower().endswith((".pth", ".safetensors"))]
+    if maximo:
+        candidatos = sorted(candidatos, key=lambda c: c[1])[:maximo]
+    with ThreadPoolExecutor(8) as ex:
+        tipos = list(ex.map(lambda c: tipo_remoto(repo, c[0], c[1]), candidatos))
+    # ponytail: pelo nome; nvfp4/mxfp8 só rodam em NVIDIA recente (Blackwell), então somem nas outras placas
+    from . import comfy
+    so_nvidia = ("nvfp4", "mxfp8")
+    tipos = ["" if t == "seedvr2" and comfy.gpu() != "nvidia" and any(x in c[0].lower() for x in so_nvidia) else t
+             for c, t in zip(candidatos, tipos)]
+    tem_seedvr2 = "seedvr2" in tipos
+    out = [{"path": c[0], "size": c[1], "quant": "", "shards": 1, "tipo": t,
+            "papel": "modelo", "subpasta": PASTA["seedvr2" if t == "vae" else t]}
+           for c, t in zip(candidatos, tipos) if t in ("esrgan", "seedvr2") or (t == "vae" and tem_seedvr2)]
+    return sorted(out, key=lambda f: (f["tipo"] == "vae", f["size"], f["path"]))
+
+
+def buscar_hf(q: str, sort: str = "relevancia", limite: int = 20) -> list[dict]:
+    """Repositórios com pelo menos um ampliador que o Forja roda. O HF não sabe a arquitetura do arquivo: a busca
+    pega candidatos pelo texto e cada um é conferido pelo conteúdo (tipo_remoto), em paralelo."""
+    from concurrent.futures import ThreadPoolExecutor
+    from .localai import HF, ORDENS, _peca_solta, _tags, hf_headers
+    ordem = ORDENS.get(sort, "") or ("" if q.strip() else "downloads")
+    vistos: dict[str, dict] = {}
+    if not q.strip():
+        for repo in REFERENCIA:
+            r = httpx.get(f"{HF}/api/models/{repo}", timeout=20, follow_redirects=True, headers=hf_headers())
+            if r.status_code < 400:
+                vistos[repo] = r.json()
+    for termo in ([q.strip()] if q.strip() else BUSCA_PADRAO):
+        r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True, headers=hf_headers(),
+                      params={"search": termo, "limit": 15 if not q.strip() else 30, "full": "true",
+                              **({"sort": ordem, "direction": -1} if ordem else {})})
+        if r.status_code >= 400:
+            raise ToolError(f"Hugging Face respondeu {r.status_code}.")
+        for m in r.json():
+            nomes = [s.get("rfilename", "") for s in m.get("siblings") or []]
+            if not any(n.lower().endswith((".pth", ".safetensors")) for n in nomes):
+                continue
+            if "mlx" in (m.get("tags") or []) or m.get("library_name") == "mlx":
+                continue  # pesos no layout da Apple (MLX): o sd.cpp lê o do PyTorch
+            if _peca_solta(m["id"].replace("upscaler", ""), [t for t in m.get("tags") or [] if "upscal" not in t]):
+                continue  # LoRA, ControlNet, adapter (o "upscaler" do filtro de imagem aqui é justamente o que se quer)
+            vistos.setdefault(m["id"], m)
+
+    def confere(m: dict) -> dict | None:
+        try:
+            arqs = arquivos_hf(m["id"], ARQUIVOS_POR_REPO)
+        except (ToolError, httpx.HTTPError):
+            return None
+        tipos = sorted({a["tipo"] for a in arqs if a["tipo"] != "vae"})
+        if not tipos:
+            return None
+        return {"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0), "likes": m.get("likes", 0),
+                "updated": m.get("lastModified", ""), "gated": bool(m.get("gated")), "tags": _tags(m.get("tags") or []),
+                "variante_nome": " + ".join({"esrgan": "ESRGAN (sd-cli)", "seedvr2": "SeedVR2 (ComfyUI)"}[t] for t in tipos)}
+    with ThreadPoolExecutor(8) as ex:
+        achados = [x for x in ex.map(confere, list(vistos.values())[: limite * 2]) if x]
+    return achados[:limite]
 
 
 # ---------------------------------------------------------------- ffmpeg

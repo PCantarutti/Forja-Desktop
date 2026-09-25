@@ -472,6 +472,7 @@ class DownloadBody(BaseModel):
     repo: str
     file: str
     folder: str = ""
+    subpasta: str = ""  # ampliação: "Ampliação (ESRGAN)" / "(SeedVR2)", como o catálogo (o VAE fica junto)
 
 
 class PathsBody(BaseModel):
@@ -650,7 +651,7 @@ async def local_repo(repo: str, kind: str = "text"):
 @app.post("/api/local/download")
 async def local_download(body: DownloadBody):
     try:
-        return await asyncio.to_thread(localai.download, body.repo, body.file, body.folder)
+        return await asyncio.to_thread(localai.download, body.repo, body.file, body.folder, body.subpasta)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

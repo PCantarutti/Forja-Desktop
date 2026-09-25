@@ -305,3 +305,14 @@ def test_dois_metodos_na_mesma_imagem_nao_se_sobrescrevem(tmp_path):
     assert (a.name, b.name) == ("cafe-2x-4x-UltraSharp.png", "cafe-2x-seedvr2_3b_fp16.png")
     a.write_bytes(b"x")
     assert lotes._saida_ao_lado(origem, 2, "C:/m/4x-UltraSharp.safetensors", ".png").name == "cafe-2x-4x-UltraSharp-2.png"
+
+
+def test_o_que_o_forja_roda_pelos_nomes_e_formas_das_camadas():
+    """A mesma regra vale para arquivo no disco e para o começo de um arquivo do Hugging Face."""
+    cam = lambda forma: {"conv_first.weight": {"shape": forma}, "body.0.rdb1.conv1.weight": {"shape": [32, 64, 3, 3]}}
+    assert ampliar.tipo_por_nomes(cam([64, 3, 3, 3]), "RealESRGAN_x4plus.safetensors") == "esrgan"
+    assert ampliar.tipo_por_nomes(cam([64, 12, 3, 3]), "qualquer.safetensors") == ""  # 2× com pixel-unshuffle
+    assert ampliar.tipo_por_nomes(b"conv_first.weight body.0.rdb1", "RealESRGAN_x2plus.pth") == ""  # .pth: pelo nome
+    assert ampliar.tipo_por_nomes(b"model.0.weight model.1.sub.0.RDB1.conv1.0", "4x-UltraSharp.pth") == "esrgan"
+    assert ampliar.tipo_por_nomes({"blocks.0.ada.txt.attn_gate": {}}, "seedvr2_3b_fp16.safetensors") == "seedvr2"
+    assert ampliar.tipo_por_nomes({"before_RG.1.weight": {}}, "4x-UltraSharpV2.safetensors") == ""  # DAT
