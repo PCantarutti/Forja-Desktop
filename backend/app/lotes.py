@@ -733,7 +733,7 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
             def fase(texto: str | None, fracao: float | None = None) -> None:
                 if texto:
                     item["fase"] = texto
-                    if texto.startswith("ampliando") and not comeco[0]:
+                    if texto.startswith(("ampliando", "redesenhando")) and not comeco[0]:
                         comeco[0] = time.monotonic()
                 if fracao is not None:
                     item["progress"] = round(fracao, 3)
