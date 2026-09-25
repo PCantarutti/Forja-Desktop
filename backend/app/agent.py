@@ -20,7 +20,7 @@ from typing import AsyncIterator
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*)
+from . import codigo, goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -134,7 +134,7 @@ def _estourou_contexto(e: "llm.LLMError") -> bool:
 TOOL_TAIL = 4000    # cauda dos argumentos guardada para quem reconectar no meio de uma escrita longa
 # Chamadas de leitura que o modelo pede juntas rodam juntas: a inferência já terminou, o que sobra é I/O.
 # Escrita, shell, aprovação e o resto do navegador continuam em fila, na ordem em que o modelo pediu.
-PARALLEL_OK = {"read_file", "list_dir", "glob", "grep", "skill", "session_search", "session_read", "web_search", "fetch_url", "browser_read", "delegate_task"}
+PARALLEL_OK = {"read_file", "list_dir", "tree", "ast", "imports", "glob", "grep", "skill", "session_search", "session_read", "web_search", "fetch_url", "browser_read", "delegate_task"}
 PARALLEL_READS = 4        # leituras simultâneas no total
 PARALLEL_SUBAGENTS = 2    # delegações simultâneas por destino remoto (local é sempre 1)
 KEEP_FINISHED_RUN = 120  # segundos que uma execução terminada continua consultável
@@ -600,6 +600,12 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
     if "grep" in names or "glob" in names:
         rules.append("- Para achar código use grep (conteúdo) e glob (nomes de arquivo), não findstr, "
                      "Select-String, find ou dir pelo shell. Depois leia o que achou com read_file.")
+    if "ast" in names:
+        # Na validação o modelo abriu gitops.py inteiro para mostrar uma função, e procurou "quem importa"
+        # com grep (trazendo as cópias em .claude/worktrees). A descrição da ferramenta sozinha não bastou.
+        rules.append("- Código: tree dá a forma do projeto; ast outline mostra o esqueleto de um arquivo. Para "
+                     "ler ou mostrar UMA função/classe, use ast symbol com o nome, não read_file do arquivo "
+                     "inteiro. 'Quem usa/importa este arquivo' é imports importers, não grep.")
     rules.append("- Resultado grande demais vem cortado, com o caminho do texto completo: leia por partes com "
                  "read_file ou procure nele com grep, em vez de rodar a ferramenta de novo.")
     rules.append("- Tabela na resposta vai em Markdown (`| coluna | coluna |` com a linha de `---` embaixo do "

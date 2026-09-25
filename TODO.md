@@ -646,70 +646,93 @@ instalado, e não há imports nem AST.
 
 ### `tree`
 Árvore de diretórios indentada, para entender a forma de um projeto com poucos tokens.
-- [ ] Fica em `backend/app/tools.py`, junto do `list_dir`. Reaproveitar `IGNORED_DIRS`, `resolve_path` e
+- [x] Fica em `backend/app/tools.py`, junto do `list_dir`. Reaproveitar `IGNORED_DIRS`, `resolve_path` e
       `_rel`.
-- [ ] Parâmetros: `path`, `depth` (padrão 3, máx 10), `dirs_only`, `pattern` (glob; pastas sem nenhum
+- [x] Parâmetros: `path`, `depth` (padrão 3, máx 10), `dirs_only`, `pattern` (glob; pastas sem nenhum
       arquivo que case somem).
-- [ ] Saída com `├──` / `└──` / `│`. Pasta com mais de ~25 filhos mostra os primeiros e resume o resto em
+- [x] Saída com `├──` / `└──` / `│`. Pasta com mais de ~25 filhos mostra os primeiros e resume o resto em
       `… +N arquivos`. Mostra a contagem por pasta e as linhas dos arquivos de texto pequenos (< 1 MB).
-- [ ] Respeitar o `.gitignore` da raiz no subconjunto simples do `fnmatch`, e ignorar também `dist`,
+- [x] Respeitar o `.gitignore` da raiz no subconjunto simples do `fnmatch`, e ignorar também `dist`,
       `build` e `.next`. Teto de saída proporcional à janela (E4) ou de 500 linhas.
-- [ ] Decidir entre uma ferramenta separada e um `format: "tree"` no `list_dir`, pelo peso no catálogo
+- [x] Decidir entre uma ferramenta separada e um `format: "tree"` no `list_dir`, pelo peso no catálogo
       (E4). **Recomendação:** ferramenta separada, com a descrição do `list_dir` apontando para ela.
 
 ### `ast`
 Análise sintática sem language server.
-- [ ] Módulo novo `backend/app/codigo.py`, importado no `agent.py` junto do `lsp`.
-- [ ] Motor:
+- [x] Módulo novo `backend/app/codigo.py`, importado no `agent.py` junto do `lsp`.
+- [x] Motor:
   - Python: `ast` da stdlib.
   - Demais linguagens: tree-sitter (`tree-sitter` + `tree-sitter-language-pack`, com wheels cp312
     win_amd64/Linux). Medir o peso no instalador; se pesar demais, usar os pacotes por linguagem.
   - Linguagens: TS, TSX, JS, JSX, Go, Rust, Java, C#, C/C++, PHP.
   - Sem o tree-sitter instalado, continua funcionando para Python.
-- [ ] Operações:
+- [x] Operações:
   - `outline`: árvore de símbolos com assinatura, intervalo de linhas e a 1ª linha da docstring. Aceita
     uma pasta também.
   - `symbol`: o fonte de um símbolo pelo nome (aceita `Classe.metodo`), no formato do `read_file`.
   - `node_at`: a cadeia de nós até uma linha e coluna.
   - `query`: S-expression do tree-sitter sobre um arquivo ou pasta, com teto de resultados.
-- [ ] Erro de sintaxe não é falha: devolver o que der e avisar "erro de sintaxe perto da linha N".
-- [ ] Cache do parse por `(caminho, mtime, tamanho)`, até ~64 arquivos.
-- [ ] Ajustar as descrições para dividir o uso: ast = estrutura e símbolo por nome; lsp = referências e
+- [x] Erro de sintaxe não é falha: devolver o que der e avisar "erro de sintaxe perto da linha N".
+- [x] Cache do parse por `(caminho, mtime, tamanho)`, até ~64 arquivos.
+- [x] Ajustar as descrições para dividir o uso: ast = estrutura e símbolo por nome; lsp = referências e
       tipos; grep = texto.
 
 ### `imports`
 Grafo de dependências entre os arquivos do projeto.
-- [ ] Operações:
+- [x] Operações:
   - `of`: os imports de um arquivo, com a linha e o destino resolvido, marcando o que é externo e o que
     não resolveu.
   - `importers`: quem importa um arquivo, incluindo reexport.
   - `graph`: as arestas internas de uma pasta.
   - `cycles`: os ciclos encontrados, com no máximo ~20 na saída.
-- [ ] Resolução em Python:
+- [x] Resolução em Python:
   - `import x.y`, `from x import y` e os relativos `.`/`..`, usando `__init__.py`.
   - Raízes: a raiz do projeto e `src/`.
   - `import` dentro de função também conta, marcado `(local)`.
-- [ ] Resolução em JS/TS:
+- [x] Resolução em JS/TS:
   - `import … from`, `import()`, `require()` e `export … from`.
   - Caminho relativo testando as extensões e o `index.*`.
   - `paths`/`baseUrl` do `tsconfig.json`, só o 1º nível.
-- [ ] Índice sob demanda com o `_arquivos()` do `busca.py`, em cache por mtime, com teto de ~5 mil
+- [x] Índice sob demanda com o `_arquivos()` do `busca.py`, em cache por mtime, com teto de ~5 mil
       arquivos.
 
 ### Comum
-- [ ] Adicionar o `tree-sitter` ao `requirements.txt` dos dois repos. Conferir que o `.pyd` entra no
+- [x] Adicionar o `tree-sitter` ao `requirements.txt` dos dois repos. Conferir que o `.pyd` entra no
       Python portátil e no instalador, e fazer o rebuild da imagem Docker.
-- [ ] Usar o `timeout` da `Tool`, para uma pasta grande não travar o passo.
-- [ ] Mostrar rótulo e ícone na UI de chamadas de ferramenta, se ela tiver um mapa por nome
+- [x] Usar o `timeout` da `Tool`, para uma pasta grande não travar o passo.
+- [x] Mostrar rótulo e ícone na UI de chamadas de ferramenta, se ela tiver um mapa por nome
       (`frontend/`, `forja-mobile/src/Chat.tsx`).
-- [ ] Testes em `tests/test_codigo.py` e `tests/test_busca.py`:
+- [x] Testes em `tests/test_codigo.py` e `tests/test_busca.py`:
   - fixtures `.py` e `.ts`;
   - arquivo com erro de sintaxe;
   - tree-sitter ausente;
   - ciclo proposital;
   - alias do `tsconfig`.
-- [ ] Validar no app com o modelo local: "estrutura do repo", "o que importa `tools.py`?" e "mostra só a
+- [x] Validar no app com o modelo local: "estrutura do repo", "o que importa `tools.py`?" e "mostra só a
       `list_dir`". O agente tem de escolher `tree`, `imports` e `ast` sozinho.
+
+**Feito em 2026-09-25.**
+
+Diferenças em relação ao plano:
+- **Onde ficou:** o `tree` foi para o `codigo.py` junto com `ast` e `imports`, e não para o `tools.py`.
+  Continua sendo uma ferramenta própria, e a descrição do `list_dir` aponta para ela.
+- **Parser:** pacotes por linguagem (`tree-sitter` + python/javascript/typescript, ~0,55 MB, MIT). O
+  language pack ficou de fora, então Go, Rust, Java e as outras linguagens ficam para depois.
+- **Repositório aninhado ou worktree** (pasta com `.git` próprio, como `.claude/worktrees/*`) fica fora
+  do `tree` e do índice, porque é cópia do código.
+- **`cycles`** ignora import dentro de função, que é o jeito comum de quebrar um ciclo.
+
+Validação no Forja real (modo agente, gpt-oss:120b, no próprio repositório do Forja):
+- "estrutura do repo" → **`tree`** ✅;
+- "quem importa `gitops.py`" → **`imports importers`** ✅. Na 1ª rodada foi `grep`, e isso mudou com a
+  regra no prompt;
+- "mostra só a função" → **`read_file`** do arquivo inteiro, e não `ast symbol`, mesmo com a regra. É
+  preferência do gpt-oss, que pede todas as leituras de uma vez. Conferir com os modelos locais na E16.
+
+Resta conferir:
+- que o `.pyd` do tree-sitter vai no instalador. O `prepare.mjs` instala o `requirements.txt` no
+  Python portátil, mas o build do instalador não foi feito;
+- levar o `requirements.txt` para o `forja-web`, junto com o sync.
 
 **Pronto quando:** as três ferramentas funcionam sem nenhum language server instalado.
 

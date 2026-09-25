@@ -209,6 +209,17 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   write_file: (a) => `Escrevendo ${arquivo(a.path) ?? "um arquivo"}`,
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
+  tree: (a) => `Olhando a árvore de ${trecho(a.path, 40) ?? "pastas do projeto"}`,
+  ast: (a) => ({ outline: `Lendo a estrutura de ${arquivo(a.path) ?? "um arquivo"}`,
+                 symbol: `Lendo ${trecho(a.name, 30) ?? "um símbolo"} em ${arquivo(a.path) ?? "um arquivo"}`,
+                 node_at: `Localizando o código na linha ${String(a.line ?? "")}`,
+                 query: "Buscando pela estrutura do código" } as Record<string, string>)[String(a.operation)]
+    ?? "Analisando o código",
+  imports: (a) => ({ of: `Vendo o que ${arquivo(a.path) ?? "o arquivo"} importa`,
+                     importers: `Vendo quem importa ${arquivo(a.path) ?? "o arquivo"}`,
+                     graph: "Montando o grafo de imports",
+                     cycles: "Procurando ciclos de import" } as Record<string, string>)[String(a.operation)]
+    ?? "Analisando os imports",
   list_agents: () => "Conferindo os subagentes",
   lsp: (a) => `Consultando o language server (${String(a.operation ?? "")})`,
   session_search: (a) => `Procurando em conversas anteriores ${trecho(a.query, 30) ?? ""}`.trim(),

@@ -229,7 +229,7 @@ register(Tool(
     "lsp",
     "Navegação precisa de código pelo language server: definition (onde o símbolo é definido), references "
     "(todos os usos, com a declaração), implementation, hover (tipo/documentação) e documentSymbol (estrutura "
-    "do arquivo). Use grep/read_file para navegar no dia a dia; use lsp quando o texto é ambíguo ou antes de "
+    "do arquivo; sem servidor, o ast outline faz isso). Use grep/read_file para navegar no dia a dia; use lsp quando o texto é ambíguo ou antes de "
     "uma mudança que precisa achar todas as referências. line e character são 1-based, sobre o símbolo.",
     _obj({"operation": {"type": "string",
                         "enum": ["definition", "references", "implementation", "hover", "documentSymbol"]},
