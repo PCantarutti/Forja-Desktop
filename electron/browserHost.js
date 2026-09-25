@@ -73,6 +73,7 @@ class BrowserHost {
 
   handle(ev) {
     if (ev.type === "create") this.create(ev.key, ev.marker);
+    else if (ev.type === "shot") this.shot(ev.id, ev.marker);
     else if (ev.type === "active") {
       if (ev.marker) this.active.set(ev.key, ev.marker);
       else this.active.delete(ev.key);
@@ -123,6 +124,25 @@ class BrowserHost {
     this.layout();
   }
 
+  /** Foto pedida pelo backend quando o CDP não tem o que fotografar (aba escondida, PC bloqueado): o
+   *  capturePage dá a view por visível enquanto captura, então ela desenha para a foto. */
+  async shot(id, marker) {
+    let data = null;
+    let error = "";
+    try {
+      const img = await this.views.get(marker)?.view.webContents.capturePage();
+      if (!img || img.isEmpty()) error = "A aba não tinha nada desenhado para fotografar.";
+      else data = img.toJPEG(80).toString("base64");
+    } catch (e) {
+      error = String(e?.message || e);
+    }
+    fetch(`${this.api}/api/browser/host/shot`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...this.headers },
+      body: JSON.stringify({ id, data, error }),
+    }).catch(() => {});
+  }
+
   popup(key, url) {
     fetch(`${this.api}/api/browser/host/popup?conv=${encodeURIComponent(key)}`, {
       method: "POST",
@@ -142,7 +162,8 @@ class BrowserHost {
     const zoom = this.win.webContents.getZoomFactor();
     for (const [marker, { view, key }] of this.views) {
       const on = !!this.shown && this.shown.key === key && this.active.get(key) === marker;
-      if (on) view.setBounds(viewBounds(this.shown.bounds, zoom));
+      // Escondida também tem tamanho: sem isso ela fica 0x0 e o capturePage não tem o que desenhar.
+      view.setBounds(on ? viewBounds(this.shown.bounds, zoom) : { x: 0, y: 0, width: 1280, height: 800 });
       view.setVisible(on);
     }
   }

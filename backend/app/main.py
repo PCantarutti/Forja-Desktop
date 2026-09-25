@@ -1455,6 +1455,14 @@ def browser_host():
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+@app.post("/api/browser/host/shot")
+async def browser_host_shot(body: dict):
+    """Resposta do Electron a um pedido `shot`: a foto da view (JPEG em base64) ou o erro."""
+    dados = body.get("data")
+    MANAGER.host_shot_done(str(body.get("id") or ""), base64.b64decode(dados) if dados else None, str(body.get("error") or ""))
+    return {"ok": True}
+
+
 @app.post("/api/browser/host/popup")
 async def browser_host_popup(body: NavigateBody, conv: str = "0"):
     """Uma view nativa quis abrir janela (window.open, target=_blank): vira aba nova da mesma sessão."""

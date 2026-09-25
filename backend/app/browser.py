@@ -505,6 +505,7 @@ class Manager:
         self._lock = asyncio.Lock()
         self._sweeper: asyncio.Task | None = None
         self.hosts: set[asyncio.Queue] = set()  # assinantes de /api/browser/host (o main.js do Electron)
+        self.fotos: dict[str, asyncio.Future] = {}  # pedidos de capturePage ao Electron, por id
 
     @property
     def native(self) -> bool:
@@ -515,6 +516,25 @@ class Manager:
     def host_emit(self, ev: dict) -> None:
         for q in self.hosts:
             q.put_nowait(ev)
+
+    async def host_shot(self, marker: str) -> bytes:
+        """Foto da view pelo Electron (capturePage): desenha a aba mesmo escondida — painel fechado, janela
+        minimizada, PC bloqueado —, quando o Page.captureScreenshot do CDP espera para sempre."""
+        if not marker or not self.hosts:
+            raise ToolError("O app não está ligado ao navegador integrado.")
+        pedido = uuid.uuid4().hex
+        fut = asyncio.get_running_loop().create_future()
+        self.fotos[pedido] = fut
+        try:
+            self.host_emit({"type": "shot", "id": pedido, "marker": marker})
+            return await asyncio.wait_for(fut, 15)
+        finally:
+            self.fotos.pop(pedido, None)
+
+    def host_shot_done(self, pedido: str, jpeg: bytes | None, erro: str = "") -> None:
+        fut = self.fotos.get(pedido)
+        if fut and not fut.done():
+            fut.set_result(jpeg) if jpeg else fut.set_exception(ToolError(erro or "O app não conseguiu fotografar a aba."))
 
     async def host_events(self) -> AsyncIterator[dict]:
         """Eventos para o Electron: `create` (abrir view com o marcador) e `active` (qual view mostrar)."""
@@ -991,17 +1011,18 @@ async def screenshot(_root: Path, args: dict) -> dict:
                 # tamanho do PAINEL (estreito e alto), não o override — o print "desktop" de 1280x720
                 # saía igual ao de celular, e a revisão visual julgava o desktop sem nunca vê-lo. A foto
                 # sai pela mesma sessão CDP que aplicou o tamanho.
-                # Aba que não está desenhando (painel escondido, janela minimizada) nunca devolve a foto:
-                # sem teto próprio a ferramenta esperava os 5 min dela.
+                # Aba que não está desenhando (painel escondido, janela minimizada, PC bloqueado) nunca
+                # devolve a foto pelo CDP: aí quem fotografa é o Electron (capturePage desenha a view escondida).
                 try:
                     r = await asyncio.wait_for(real["cdp"].send(
-                        "Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY, "fromSurface": True}),
-                        PRINT_TIMEOUT / 1000)
+                        "Page.captureScreenshot", {"format": "jpeg", "quality": JPEG_QUALITY, "fromSurface": True}), 5)
+                    jpg = base64.b64decode(r["data"])
                 except asyncio.TimeoutError:
-                    raise ToolError("A aba não está sendo desenhada agora (painel do navegador fechado ou janela do "
-                                    "Forja minimizada), então não saiu foto. Use browser_read ou browser_validate, "
-                                    "que não dependem da tela.") from None
-                jpg = base64.b64decode(r["data"])
+                    try:
+                        jpg = await s._m.host_shot(s.markers.get(id(page), ""))
+                    except (ToolError, asyncio.TimeoutError):
+                        raise ToolError("A aba não está sendo desenhada agora e o app não conseguiu fotografá-la. "
+                                        "Use browser_read ou browser_validate, que não dependem da tela.") from None
             else:
                 jpg = await page.screenshot(**comum)
     except ToolError:
