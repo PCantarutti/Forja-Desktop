@@ -60,7 +60,7 @@ def regressao(conv_id: int, task, root: Path) -> tuple[list[dict], bool]:
         resta = REGRESSAO_TETO - (time.monotonic() - inicio)
         if resta < 10:
             return falhas, True
-        code, saida = shell.exec_in(root, subagents.sem_path(cmd), int(min(REGRESSAO_CMD, resta)))
+        code, saida = shell.executa_do_projeto(root, subagents.sem_path(cmd), int(min(REGRESSAO_CMD, resta)))
         if code != 0:
             falhas.append({"tasks": codes, "command": cmd, "exit": code, "output": saida[-MAX_ERRO_TEXTO:]})
     return falhas, False

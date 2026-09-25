@@ -57,13 +57,20 @@ def _truncate(text: str) -> str:
     return f"{text[:half]}\n\n... ({len(text) - MAX_OUTPUT} caracteres omitidos) ...\n\n{text[-half:]}"
 
 
-def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] | None) -> tuple[int, str, bool]:
+def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] | None,
+             root: Path | None = None) -> tuple[int, str, bool]:
     """Roda e devolve (exit code, saída, estourou o timeout). Lê linha a linha para a UI mostrar ao vivo."""
     chunks: list[str] = []
     timed_out = threading.Event()
     # `with`: no caminho do timeout o pipe ficava aberto, um descritor por comando estourado.
-    with sandbox.popen(native.shell_argv(command), cwd, stdout=subprocess.PIPE,
-                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL) as p:
+    # Com `root`, o comando é do projeto e pode ir para o container (sandbox.plano); sem ele (git, hooks),
+    # roda sempre no Windows.
+    p, aviso = sandbox.popen_comando(command, cwd, root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL) if root else (
+        sandbox.popen(native.shell_argv(command), cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                      stdin=subprocess.DEVNULL), "")
+    chunks.append(aviso)
+    with p:
         def _kill():
             timed_out.set()
             native.kill_tree(p)
@@ -78,11 +85,18 @@ def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] 
                 if sink:
                     sink(line)
             p.wait()
-            chunks.append(sandbox.aviso_limite(p))
+            chunks.append(sandbox.aviso_saida(p))
         finally:
             timer.cancel()
             sandbox.fecha(p)  # o que a árvore deixou para trás morre com o job
     return p.returncode, "".join(chunks), timed_out.is_set()
+
+
+def executa_do_projeto(root: Path, command: str, timeout: int = 60) -> tuple[int, str]:
+    """Como exec_in, mas é um comando do projeto (verify da regressão): vai para o container quando o
+    sandbox isolado estiver ativo."""
+    code, out, timed_out = _execute(command, root, timeout, None, root)
+    return (124, f"Timeout ({timeout}s)") if timed_out else (code, out)
 
 
 def exec_in(root: Path, command: str, timeout: int = 60) -> tuple[int, str]:
@@ -103,7 +117,8 @@ def background(root: Path, args: dict) -> str:
     return texto
 
 
-def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> tuple[int | None, str]:
+def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str,
+                    root: Path | None = None) -> tuple[int | None, str]:
     """Roda gravando num log. Terminou no prazo: (exit code, saída). Não terminou: (None, saída até
     aqui) e o processo SEGUE vivo, registrado como processo em segundo plano `nome`.
 
@@ -113,8 +128,8 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log = LOG_DIR / f"fg-{nome}-{time.time_ns()}.log"
     fh = open(log, "wb")
-    proc = sandbox.popen(native.shell_argv(command), cwd, stdout=fh, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL)
+    proc, aviso_inicio = sandbox.popen_comando(command, cwd, root, stdout=fh, stderr=subprocess.STDOUT,
+                                               stdin=subprocess.DEVNULL)
     lidos, resto = 0, b""
     # Só cabeça e cauda na memória: antes a saída inteira ficava num list (um build verboso de GB ia
     # junto) só para ser cortada em MAX_OUTPUT no fim. O completo continua no log, em disco.
@@ -156,6 +171,10 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
                 "ou procure nele com grep" if completo else "")
         return f"{''.join(cabeca)}\n\n... ({omitidos} caracteres omitidos{onde}) ...\n\n{''.join(cauda)}"
 
+    if aviso_inicio:  # isolamento pedido e não deu (Docker parado, imagem baixando): o modelo precisa saber
+        guarda(aviso_inicio)
+        if sink:
+            sink(aviso_inicio)
     while proc.poll() is None and time.monotonic() < limite:
         time.sleep(0.2)
         puxa()
@@ -171,7 +190,7 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
     fh.close()
     if resto:
         guarda(native.decode(resto))
-    if aviso := sandbox.aviso_limite(proc):
+    if aviso := sandbox.aviso_saida(proc):
         guarda(aviso)
     sandbox.fecha(proc)  # comando acabou: filho que ficou rodando (daemon, watcher) morre junto
     completo = ""
@@ -202,7 +221,7 @@ def run_command(root: Path, args: dict) -> str:
     cwd = resolve_path(root, args.get("cwd"))
     timeout = max(1, min(int(args.get("timeout") or 60), config.SHELL_TIMEOUT_MAX))
     nome = _safe_name(str(args.get("name") or "").strip() or command.split()[0])
-    code, out = _primeiro_plano(command, cwd, timeout, OUTPUT_SINK.get(), nome)
+    code, out = _primeiro_plano(command, cwd, timeout, OUTPUT_SINK.get(), nome, root)
     if code is None:
         return (f"[ainda rodando após {timeout}s; movido para o processo em segundo plano '{nome}']\n"
                 "O comando continua rodando. Você recebe um aviso quando ele terminar; enquanto isso siga com o "

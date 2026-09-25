@@ -15,9 +15,12 @@ Não isola arquivo nem rede: isso é o passo 3 (WSL/Docker) ou 4 (AppContainer) 
 """
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 import subprocess
+import threading
+import time as _time
 from pathlib import Path
 
 from . import config, native
@@ -179,7 +182,174 @@ def aviso_limite(proc: subprocess.Popen) -> str:
 
 
 def fecha(proc: subprocess.Popen) -> None:
-    """Fecha o job: o Windows mata o que ainda estiver vivo na árvore (KILL_ON_JOB_CLOSE)."""
+    """Fecha o job: o Windows mata o que ainda estiver vivo na árvore (KILL_ON_JOB_CLOSE). Comando que
+    rodou num container: o container sai junto (matar só o `docker run` deixaria ele vivo)."""
     if native.WINDOWS and (job := getattr(proc, "_forja_job", None)):
         proc._forja_job = None  # type: ignore[attr-defined]
         _k32.CloseHandle(job)
+    if nome := getattr(proc, "_forja_container", None):
+        proc._forja_container = None  # type: ignore[attr-defined]
+        subprocess.run(["docker", "rm", "-f", nome], capture_output=True, timeout=30,
+                       **native.popen_kwargs())
+
+
+# ------------------------------------------------------------------ passo 3: container (Docker)
+# O comando do agente roda num container que só enxerga a pasta do projeto, sem root e sem rede fora da
+# fase de instalação. O Forja (backend, interface, modelos) continua no Windows: só o comando vai para
+# a caixa. Opcional de propósito: o Docker Desktop come RAM que um PC fraco rodando IA local não tem.
+MODOS_ISOLADO = ("desligado", "autonomo", "sempre")
+IMAGEM_NODE = "node:22-bookworm"      # tem git e python3; para projeto com package.json
+IMAGEM_PYTHON = "python:3.12-bookworm"  # tem git, pip e compiladores; para o resto
+# Instalação de dependência: a única fase com rede. Build, teste e verify rodam com --network none.
+INSTALADOR = re.compile(
+    r"(?:^|[;&|]\s*)(?:(?:npm|pnpm|yarn|bun)\s+(?:install|i|ci|add)\b|(?:yarn|pnpm)\s*$|"
+    r"(?:python3?\s+-m\s+)?pip3?\s+install\b|uv\s+(?:sync|add|pip\s+install)\b|poetry\s+(?:install|add)\b|"
+    r"pipenv\s+install\b|cargo\s+(?:fetch|build|add)\b|go\s+(?:mod\s+download|get)\b|composer\s+install\b)", re.I)
+# () -> bool, posto pelo agente por execução: "esta chamada é de um modo sem aprovação por comando?"
+AUTONOMO: contextvars.ContextVar = contextvars.ContextVar("forja_autonomo", default=lambda: False)
+_DOCKER = {"ok": None, "quando": 0.0}
+_PUXANDO: set[str] = set()
+
+
+def modo_isolado() -> str:
+    m = str(getattr(config, "SANDBOX_ISOLADO", "desligado") or "desligado")
+    return m if m in MODOS_ISOLADO else "desligado"
+
+
+def isolar() -> bool:
+    """O comando desta chamada deve ir para o container? Pelo modo das Configurações e, no 'autonomo',
+    pelo modo de permissão da execução: onde ninguém aprova cada comando (Automático, Ignorar
+    permissões, Maestro). Perguntado na hora: o modo pode mudar no meio (plano aprovado)."""
+    modo = modo_isolado()
+    if modo == "sempre":
+        return True
+    if modo == "autonomo":
+        try:
+            return bool(AUTONOMO.get()())
+        except Exception:
+            return False
+    return False
+
+
+def docker_ok() -> bool:
+    """Daemon do Docker respondendo (cache de 30 s: `docker info` leva ~1 s). Nunca abre o Docker
+    Desktop: parado, os comandos seguem no Windows com aviso."""
+    agora = _time.monotonic()
+    if _DOCKER["ok"] is None or agora - _DOCKER["quando"] > 30:
+        try:
+            r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True,
+                               timeout=15, **native.popen_kwargs())
+            _DOCKER["ok"] = r.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            _DOCKER["ok"] = False
+        _DOCKER["quando"] = agora
+    return bool(_DOCKER["ok"])
+
+
+def imagem(root: Path) -> str:
+    """`sandbox_image:` no FORJA.md; senão node (há package.json) ou python."""
+    try:
+        texto = (root / config.PROJECT_MEMORY_FILE).read_text(encoding="utf-8", errors="replace")
+        if m := re.search(r"(?im)^\s*[-*]?\s*sandbox_image\s*:\s*(\S+)", texto):
+            return m.group(1)
+    except OSError:
+        pass
+    return IMAGEM_NODE if (root / "package.json").is_file() else IMAGEM_PYTHON
+
+
+def _imagem_presente(img: str) -> bool:
+    r = subprocess.run(["docker", "image", "inspect", img], capture_output=True, timeout=30, **native.popen_kwargs())
+    return r.returncode == 0
+
+
+def _puxa(img: str) -> None:
+    """Baixa a imagem em segundo plano, uma vez: o comando que pediu não espera o download."""
+    if img in _PUXANDO:
+        return
+    _PUXANDO.add(img)
+
+    def roda():
+        try:
+            subprocess.run(["docker", "pull", img], capture_output=True, timeout=3600, **native.popen_kwargs())
+        finally:
+            _PUXANDO.discard(img)
+    threading.Thread(target=roda, daemon=True).start()
+
+
+def _cache_dir() -> Path:
+    p = config.DATA_DIR / "sandbox-cache"
+    for sub in ("npm", "pip", "pyuser", "home"):
+        (p / sub).mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def argv_docker(command: str, cwd: Path, root: Path, img: str, nome: str) -> list[str]:
+    """`docker run` que executa `command` (bash) com só a pasta do projeto montada em /workspace."""
+    lim = limites()
+    try:
+        sub = cwd.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        sub = "."
+    trabalho = "/workspace" + ("" if sub in ("", ".") else f"/{sub}")
+    cache = _cache_dir()
+    argv = ["docker", "run", "--rm", "-i", "--init", "--name", nome,
+            "-v", f"{root.resolve()}:/workspace", "-w", trabalho, "-v", f"{cache}:/cache",
+            "--network", "bridge" if INSTALADOR.search(command) else "none",
+            "--user", "1000:1000", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            # Cache de pacote persistente e pip sem root (vai para o usuário, dentro do cache).
+            "-e", "HOME=/cache/home", "-e", "npm_config_cache=/cache/npm", "-e", "PIP_CACHE_DIR=/cache/pip",
+            "-e", "PYTHONUSERBASE=/cache/pyuser", "-e", "PIP_USER=1",
+            "-e", "PATH=/cache/pyuser/bin:/usr/local/bin:/usr/bin:/bin"]
+    if lim["memoria_mb"]:
+        argv += ["--memory", f"{lim['memoria_mb']}m"]
+    if lim["processos"]:
+        argv += ["--pids-limit", str(lim["processos"])]
+    if lim["cpu"] and 0 < lim["cpu"] < 100:
+        argv += ["--cpus", f"{max(0.5, (os.cpu_count() or 2) * lim['cpu'] / 100):.1f}"]
+    for k in sorted(_env_allow(root)):
+        if k in os.environ:
+            argv += ["-e", f"{k}={os.environ[k]}"]
+    return argv + [img, "bash", "-lc", command]
+
+
+def plano(command: str, cwd: Path, root: Path | None) -> tuple[list[str], str, str]:
+    """(argv, nome do container ou '', aviso) para rodar `command`. Fora do isolamento, ou sem Docker,
+    é o shell do Windows de sempre, com um aviso quando o isolamento foi pedido e não deu."""
+    if not (root and isolar()):
+        return native.shell_argv(command), "", ""
+    if not docker_ok():
+        return (native.shell_argv(command), "",
+                "[sandbox isolado ligado, mas o Docker não está rodando: este comando rodou no Windows]\n")
+    img = imagem(root)
+    if not _imagem_presente(img):
+        _puxa(img)
+        return (native.shell_argv(command), "",
+                f"[baixando a imagem do sandbox ({img}); até terminar, os comandos rodam no Windows]\n")
+    nome = f"forja-sbx-{os.getpid()}-{_time.time_ns() % 10**12}"  # "forja-*" puro colide com o compose do forja-web
+    return argv_docker(command, cwd, root, img, nome), nome, ""
+
+
+def popen_comando(command: str, cwd: Path, root: Path | None, **kw) -> tuple[subprocess.Popen, str]:
+    """Popen de um comando do agente, no Windows ou no container conforme `plano`. (proc, aviso)."""
+    argv, nome, aviso = plano(command, cwd, root)
+    proc = popen(argv, cwd, root=root, **kw)
+    if nome:
+        proc._forja_container = nome  # type: ignore[attr-defined]
+    return proc, aviso
+
+
+def aviso_saida(proc: subprocess.Popen) -> str:
+    """No container, estouro de memória vira exit 137 (o kernel mata o processo)."""
+    if getattr(proc, "_forja_container", None) and proc.returncode == 137:
+        return (f"\n[o container passou do limite de memória do sandbox ({limites()['memoria_mb']} MB); o teto "
+                "fica em Configurações, no campo Sandbox: memória por comando]")
+    return aviso_limite(proc)
+
+
+def nota_para_o_modelo() -> str:
+    """Linha do contexto de execução quando os comandos vão para o container: a sintaxe muda."""
+    if not isolar():
+        return ""
+    return ("- run_command roda num container Linux (bash, não PowerShell), com só a pasta do projeto em "
+            "/workspace, sem root, e com rede só em comandos de instalação (npm install, pip install...). "
+            "Use sintaxe bash. Servidores de dev (serve_start) e o terminal continuam no Windows.")

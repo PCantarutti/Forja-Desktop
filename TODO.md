@@ -1000,14 +1000,14 @@ Diferenças em relação ao plano:
   quebraria o resto do sistema.
 
 ### Passo 3: modo sandbox com WSL2 ou Docker (isolamento de verdade)
-- [ ] **Detecção:** se WSL2 ou Docker estiver disponível, a tela oferece "Executar comandos do agente
+- [x] **Detecção:** se WSL2 ou Docker estiver disponível, a tela oferece "Executar comandos do agente
       em sandbox". Vem **ligado por padrão nos modos Automático, Ignorar permissões e Maestro**, e
       desligado no Manual, onde o usuário aprova cada comando. Sem WSL/Docker, avisar uma vez, com o
       link de instalação, e seguir com os passos 1 e 2.
-- [ ] **Arquivos:** só a pasta do projeto é montada (leitura e escrita). O resto do disco não existe
+- [x] **Arquivos:** só a pasta do projeto é montada (leitura e escrita). O resto do disco não existe
       lá dentro. O cache de pacotes (npm, pip, cargo) fica num volume próprio do Forja, para não baixar
       tudo de novo a cada comando.
-- [ ] **Rede por fase:**
+- [x] **Rede por fase:**
   - `install` (npm/pnpm/yarn install, pip install, cargo fetch, …): rede **ligada**, de preferência só
     para os registros de pacotes;
   - `build`, `test`, `verify_command` e regressão: rede **desligada** (`--network none`);
@@ -1015,14 +1015,14 @@ Diferenças em relação ao plano:
 
   A fase é detectada pelo comando (lista de instaladores conhecidos) e o modelo pode pedir outra
   com um motivo. Pedido de rede fora da fase de install pede aprovação.
-- [ ] **Processos:** o processo roda como usuário comum (não root), sem `--privileged`, com os limites
+- [x] **Processos:** o processo roda como usuário comum (não root), sem `--privileged`, com os limites
       do passo 1 (`--memory`, `--cpus`, `--pids-limit`).
-- [ ] **Imagem:** base mínima com node, python e git. O projeto pode declarar a própria imagem no
+- [x] **Imagem:** base mínima com node, python e git. O projeto pode declarar a própria imagem no
       FORJA.md (`sandbox_image`). A imagem é baixada uma vez, com o tamanho mostrado antes.
 - [ ] **Terminal e servidores de dev** também rodam no sandbox, e o `browser_*` acessa a porta exposta.
 - [ ] **Web:** o container do backend deixa de montar o disco C inteiro por padrão (`HOST_MOUNTS` vira
       opt-in), e o forja-runner ganha o mesmo modo sandbox.
-- [ ] Testes:
+- [x] Testes:
   - o sandbox não enxerga um arquivo fora do projeto;
   - `curl` falha na fase de test;
   - `npm install` funciona na fase de install;
@@ -1030,6 +1030,35 @@ Diferenças em relação ao plano:
   - sem Docker/WSL, cai para os passos 1 e 2 com aviso.
 - [ ] Validar no app real com o bench da E0 rodando inteiro no sandbox. Medir o custo de tempo contra
       rodar sem sandbox.
+
+**Passo 3 feito em 2026-09-25 (parcial)**, com a configuração "Sandbox isolado (Docker)".
+
+Validado no Forja real (modo agente, Docker Desktop, imagem python:3.12-bookworm):
+- o comando rodou num Debian (o modelo usou bash, pela linha no contexto), como uid 1000 (não root);
+- viu o arquivo do projeto, mas não o disco do Windows;
+- `pip install six` funcionou (fase de instalação, com rede);
+- `urlopen` fora da instalação falhou (sem rede);
+- nenhum container ficou para trás.
+
+Diferenças em relação ao plano:
+- **Desligado por padrão, e não ligado nos modos autônomos.** O Docker Desktop consome RAM que um PC
+  rodando IA local pode não ter. As opções são: desligado, só nos modos autônomos (Automático, Ignorar
+  permissões e Maestro), e sempre. O Forja **nunca abre o Docker sozinho**: parado, o comando roda no
+  Windows e a saída avisa. Imagem ausente é baixada em segundo plano, e até lá o comando roda no
+  Windows com aviso.
+- **O que vai para o container:** o `run_command` (do agente e do Worker, inclusive o verify) e a
+  regressão da E2. O `git` e os hooks continuam no Windows.
+- **Servidores de dev (`serve_start`) e o terminal continuam no Windows (item acima em aberto).**
+  Assim o navegador do Forja e o celular pela tailnet seguem enxergando o servidor como hoje. Levar
+  para o container exige `-p` (publicar a porta no Windows) e o servidor escutar em `0.0.0.0`, e aí o
+  acesso pelo celular continua. Fica para quando o isolamento do servidor valer o custo.
+- **Imagem:** a `node:22-bookworm` se houver `package.json`, senão a `python:3.12-bookworm`, ou a
+  `sandbox_image:` do FORJA.md. São oficiais e maiores que uma imagem mínima (~380 MB comprimida),
+  em troca de git, pip e compiladores sem build próprio.
+- **Cache de pacotes:** fica em `<dados do Forja>/sandbox-cache`, montado em `/cache`. O pip instala
+  no usuário (`PIP_USER`), já que o processo não é root.
+- **Web:** o `HOST_MOUNTS` opt-in e o forja-runner com o mesmo modo ficam para o sync com o
+  `forja-web`.
 
 ### Passo 4 (depois): AppContainer do Windows
 - [ ] Isolamento nativo sem Docker/WSL. O processo roda num **AppContainer**:

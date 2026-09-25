@@ -52,6 +52,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "sandbox_memoria_mb": config.SANDBOX_MEMORIA_MB,
     "sandbox_processos": config.SANDBOX_PROCESSOS,
     "sandbox_cpu": config.SANDBOX_CPU,
+    "sandbox_isolado": config.SANDBOX_ISOLADO,
 }
 MAX_ESPECIALIDADES = 12
 
@@ -159,6 +160,7 @@ def apply(values: dict | None = None) -> dict:
     config.SANDBOX_MEMORIA_MB = int(values["sandbox_memoria_mb"])
     config.SANDBOX_PROCESSOS = int(values["sandbox_processos"])
     config.SANDBOX_CPU = int(values["sandbox_cpu"])
+    config.SANDBOX_ISOLADO = values["sandbox_isolado"]
     return values
 
 
@@ -256,6 +258,11 @@ def validate(patch: dict, current: dict) -> dict:
             from .modelctl import LIFECYCLES
             if raw not in LIFECYCLES:
                 raise SettingsError(f"model_lifecycle deve ser um de: {', '.join(LIFECYCLES)}.")
+            values[key] = raw
+        elif key == "sandbox_isolado":
+            from .sandbox import MODOS_ISOLADO
+            if raw not in MODOS_ISOLADO:
+                raise SettingsError(f"sandbox_isolado deve ser um de: {', '.join(MODOS_ISOLADO)}.")
             values[key] = raw
         elif key == "browser_stream":
             if raw not in ("png", "jpeg"):

@@ -85,6 +85,9 @@ BROWSER_STREAM = os.getenv("BROWSER_STREAM", "jpeg")                  # jpeg (le
 SANDBOX_MEMORIA_MB = -1   # -1 = automático: metade da RAM, no máximo 4 GB
 SANDBOX_PROCESSOS = 128   # processos vivos ao mesmo tempo na árvore de um comando (fork bomb)
 SANDBOX_CPU = 80          # teto de CPU em %, para o PC continuar usável num build pesado
+# Comandos do agente num container Docker (passo 3): desligado | autonomo (Automático, Ignorar permissões,
+# Maestro) | sempre. Desligado por padrão: o Docker Desktop consome RAM que um PC com IA local pode não ter.
+SANDBOX_ISOLADO = "desligado"
 
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai
 PROVIDERS = {

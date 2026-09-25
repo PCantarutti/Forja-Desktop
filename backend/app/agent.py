@@ -21,7 +21,7 @@ from typing import AsyncIterator
 from . import checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import maestro, mobile, modelctl, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
-from . import codigo, exploracoes, goals, hooks, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports)
+from . import codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
 from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, execute, get_tool, preview_tool,
@@ -544,6 +544,8 @@ def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, name
     elif plan:  # o plano aprovado acompanha o resto do trabalho, mesmo após compactar
         partes.append("Plano aprovado pelo usuário. Siga-o passo a passo; se precisar desviar, diga o porquê "
                       "antes. Se o pedido atual não tiver relação com ele, ignore-o.\n" + plan)
+    if nota := sandbox.nota_para_o_modelo():
+        partes.append(nota)
     texto = "\n".join(partes)
     if maestro_mode:
         texto += projstate.bloco()
@@ -1262,6 +1264,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     chat = req.mode == "chat"  # o Chat também chama ferramentas, mas só as da web
     tools_on = agent or chat
     run.permission = req.permission if agent else "manual"
+    # Sandbox isolado no modo "autonomo": vale onde ninguém aprova cada comando. Lido na hora, porque o
+    # modo muda no meio (plano aprovado).
+    sandbox.AUTONOMO.set(lambda: maestro_mode or run.permission in ("auto", "bypass"))
     # O teto de iterações da Maestro é alto de propósito: o ciclo dela dura o projeto inteiro, e o
     # freio de verdade é max_attempts por tarefa (taskdb), mais o botão Parar.
     max_iterations = config.MAESTRO_MAX_ITERATIONS if maestro_mode else effort_iterations(req.effort)

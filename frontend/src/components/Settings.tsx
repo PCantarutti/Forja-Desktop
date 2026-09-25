@@ -28,6 +28,7 @@ export type AppSettings = {
   sandbox_memoria_mb: number;
   sandbox_processos: number;
   sandbox_cpu: number;
+  sandbox_isolado: string;
   compact_at: number;
   searxng_url: string;
   disabled_tools: string[];
@@ -238,6 +239,13 @@ export default function Settings(props: {
                 </Field>
                 <Field label="Timeout máximo do run_command (s)">
                   <Num value={s.shell_timeout_max} onChange={(v) => set("shell_timeout_max", v)} />
+                </Field>
+                <Field label="Sandbox isolado (Docker)" hint="Roda os comandos do agente num container com só a pasta do projeto, sem root e sem rede fora da instalação de pacotes. O Forja continua no Windows; servidores de dev e o terminal também. Precisa do Docker Desktop aberto (o Forja não o abre), e ele consome RAM: em PC com pouca memória rodando IA local, deixe desligado.">
+                  <select className={input} value={s.sandbox_isolado} onChange={(e) => set("sandbox_isolado", e.target.value)}>
+                    <option value="desligado">Desligado</option>
+                    <option value="autonomo">Só nos modos autônomos (Automático, Ignorar permissões, Maestro)</option>
+                    <option value="sempre">Sempre</option>
+                  </select>
                 </Field>
                 <Field label="Sandbox: memória por comando (MB)" hint="Teto de memória da árvore de um comando do agente (run_command, servidores, terminal). -1 = automático (metade da RAM, até 4 GB); 0 = sem limite.">
                   <Num value={s.sandbox_memoria_mb} onChange={(v) => set("sandbox_memoria_mb", v)} />
