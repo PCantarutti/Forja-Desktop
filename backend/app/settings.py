@@ -11,7 +11,7 @@ import json
 import re
 from typing import Any
 
-from . import config, db
+from . import config, db, llm
 
 ENV_DEFAULTS: dict[str, Any] = {
     "providers": [copy.deepcopy(p) for p in config.PROVIDERS.values()],
@@ -175,6 +175,7 @@ def public(values: dict | None = None) -> dict:
         key = p.pop("api_key", "") or ""
         p["has_api_key"] = bool(key)
         p["api_key_hint"] = f"…{key[-4:]}" if key else ""
+    values["capacidades"] = {t: llm.indisponiveis(t) for t in llm.CAPACIDADES}  # a tela de Provedores mostra
     return values
 
 
@@ -201,8 +202,18 @@ def _providers(new: list, old: list) -> list:
         key = p.get("api_key")
         if key is None:
             key = previous.get(pid, {}).get("api_key", "")
+        janela = p.get("context_window")
+        if janela in ("", None, 0):
+            janela = None
+        else:
+            try:
+                janela = int(janela)
+            except (TypeError, ValueError):
+                raise SettingsError(f"Janela de contexto de '{pid}' precisa ser um número de tokens.") from None
+            if not 1024 <= janela <= 4_194_304:
+                raise SettingsError(f"Janela de contexto de '{pid}' fora do intervalo 1024–4194304.")
         out.append({"id": pid, "name": str(p.get("name") or pid)[:60], "type": p["type"], "url": url,
-                    "api_key": str(key)})
+                    "api_key": str(key), **({"context_window": janela} if janela else {})})
     return out
 
 

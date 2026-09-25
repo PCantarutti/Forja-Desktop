@@ -1294,8 +1294,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             if ev.get("type") == "done":
                 return
     ctx_max = await llm.context_limit(req.provider, req.model, config.NUM_CTX)
-    # Provider que não informa a janela (qualquer OpenAI-compatível, ou LM Studio com a sonda
-    # falhando) devolve None, e com `if ctx_max and ...` a compactação simplesmente nunca disparava:
+    if falta := llm.janela_obrigatoria(req.provider, ctx_max):
+        yield _event(conv_id, "error", falta)
+        yield {"type": "done"}
+        return
+    # Provider que não informa a janela (LM Studio com a sonda falhando; o tipo openai sem janela já
+    # recusou acima) devolve None, e com `if ctx_max and ...` a compactação simplesmente nunca disparava:
     # o prompt crescia até o servidor recusar a requisição. Supor o num_ctx configurado erra menos
     # do que nunca compactar. Para a UI o valor continua None — o anel de contexto não deve chutar.
     teto = ctx_max or config.NUM_CTX

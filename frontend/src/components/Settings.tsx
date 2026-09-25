@@ -17,10 +17,12 @@ export type Provider = {
   api_key?: string; // só enviado; nunca volta do backend
   has_api_key?: boolean;
   api_key_hint?: string;
+  context_window?: number | null; // tokens; obrigatória no tipo openai quando o servidor não informa
 };
 
 export type AppSettings = {
   providers: Provider[];
+  capacidades?: Record<string, { nao: string[]; parcial: string[] }>; // só leitura, vem do backend
   num_ctx: number;
   max_iterations: number;
   max_file_bytes: number;
@@ -1038,6 +1040,17 @@ function ProviderUsage({ id }: { id: string }) {
   );
 }
 
+/** O que o Forja não controla neste tipo de servidor (tabela llm.CAPACIDADES do backend). */
+function Limites({ caps }: { caps?: { nao: string[]; parcial: string[] } }) {
+  if (!caps || (!caps.nao.length && !caps.parcial.length)) return null;
+  return (
+    <p className="text-xs text-muted">
+      {caps.nao.length > 0 && <>Neste tipo o Forja não consegue: {caps.nao.join(", ")}. </>}
+      {caps.parcial.length > 0 && <>Só em parte: {caps.parcial.join(", ")}.</>}
+    </p>
+  );
+}
+
 function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
   const change = (i: number, patch: Partial<Provider>) =>
     set("providers", s.providers.map((p, k) => (k === i ? { ...p, ...patch } : p)));
@@ -1083,6 +1096,21 @@ function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
             placeholder="https://host:porta/v1"
             onChange={(e) => change(i, { url: e.target.value })}
           />
+          {p.type === "openai" && (
+            <Field
+              label="Janela de contexto (tokens)"
+              hint="Vazio: o Forja pergunta ao servidor (vLLM, OpenRouter e llama-server informam). Se o servidor não informar, preencha aqui, ou o agente recusa rodar em vez de chutar 32k. No vLLM é o --max-model-len."
+            >
+              <input
+                type="number"
+                className={`${input} font-mono`}
+                value={p.context_window ?? ""}
+                placeholder="perguntar ao servidor"
+                onChange={(e) => change(i, { context_window: e.target.value ? Number(e.target.value) : null })}
+              />
+            </Field>
+          )}
+          <Limites caps={s.capacidades?.[p.type === "ollama" && p.url.includes("ollama.com") ? "ollama_nuvem" : p.type]} />
           <div className="flex items-center gap-2">
             <input
               type="password"

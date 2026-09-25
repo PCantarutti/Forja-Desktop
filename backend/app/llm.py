@@ -81,11 +81,129 @@ async def list_models(provider: str) -> list[str]:
     return sorted(m["id"] for m in r.json().get("data", []) if "embed" not in m["id"].lower())
 
 
+# ------------------------------------------------------------------ capacidades por backend (E13-A)
+# O que o Forja consegue controlar em cada tipo de servidor. A política de execução (E4) lê daqui, e sem
+# a capacidade o caminho é o seguro: um modelo só, auxiliares em sequência, sem trocar de modelo e sem
+# cache em disco. "parcial" = dá para fazer só uma parte (ver o comentário de cada uma); nunca tentar o
+# que está "nao".
+CAPACIDADES: dict[str, dict[str, str]] = {
+    "llamacpp": dict.fromkeys(("carregar", "vram", "slots", "cache_disco", "timings_cache", "janela",
+                               "parametros_carga"), "sim"),
+    # carregar: keep_alive e /api/generate vazio; vram: /api/ps dá size_vram; carga: só num_ctx por requisição
+    "ollama": {"carregar": "parcial", "vram": "parcial", "slots": "nao", "cache_disco": "nao",
+               "timings_cache": "parcial", "janela": "sim", "parametros_carga": "parcial"},
+    # A nuvem da Ollama não tem modelo "carregado" nem VRAM nossa; a janela é a do modelo (/api/show).
+    "ollama_nuvem": {"carregar": "nao", "vram": "nao", "slots": "nao", "cache_disco": "nao",
+                     "timings_cache": "parcial", "janela": "sim", "parametros_carga": "nao"},
+    # carregar: API REST v0 / lms; janela: loaded_context_length
+    "lmstudio": {"carregar": "parcial", "vram": "nao", "slots": "nao", "cache_disco": "nao",
+                 "timings_cache": "parcial", "janela": "sim", "parametros_carga": "nao"},
+    # janela: max_model_len (vLLM), context_length (OpenRouter, llama-server) ou o campo manual
+    "openai": {"carregar": "nao", "vram": "nao", "slots": "nao", "cache_disco": "nao",
+               "timings_cache": "parcial", "janela": "parcial", "parametros_carga": "nao"},
+}
+ROTULOS_CAPACIDADE = {
+    "carregar": "carregar e descarregar o modelo", "vram": "ler a VRAM",
+    "slots": "rodar em paralelo com slots controlados pelo Forja", "cache_disco": "cache em disco",
+    "timings_cache": "medir quanto do cache foi reaproveitado", "janela": "descobrir a janela sozinho",
+    "parametros_carga": "mudar parâmetros de carga (contexto, KV, camadas na GPU)",
+}
+
+
+def tipo_capacidade(provider: str) -> str:
+    s = spec(provider)
+    return "ollama_nuvem" if s["type"] == "ollama" and CLOUD_HOST in s["url"] else s["type"]
+
+
+def capacidade(provider: str, nome: str) -> str:
+    """'sim' | 'parcial' | 'nao'. Tipo desconhecido não pode nada."""
+    return CAPACIDADES.get(tipo_capacidade(provider), {}).get(nome, "nao")
+
+
+def indisponiveis(tipo: str) -> dict[str, list[str]]:
+    """Para a tela: o que o Forja não faz e o que faz só em parte, neste tipo de servidor."""
+    caps = CAPACIDADES.get(tipo, {})
+    return {n: [ROTULOS_CAPACIDADE[k] for k, v in caps.items() if v == n] for n in ("nao", "parcial")}
+
+
+_JANELAS: dict[tuple[str, str], tuple[int | None, float]] = {}  # (provider, modelo) -> (janela, quando)
+JANELA_TTL = 600  # /models do OpenRouter tem centenas de KB: não a cada turno
+CAMPOS_JANELA = ("max_model_len", "context_length", "max_context_length", "context_window", "n_ctx")
+
+
+def _janela_de(item: dict) -> int | None:
+    for k in CAMPOS_JANELA:
+        if isinstance(item.get(k), int) and item[k] > 0:
+            return item[k]
+    for sub in ("top_provider", "meta"):  # OpenRouter: top_provider.context_length
+        if isinstance(item.get(sub), dict) and (n := _janela_de(item[sub])):
+            return n
+    return None
+
+
+async def _janela_openai(provider: str, model: str) -> int | None:
+    """vLLM, OpenRouter, Groq, llama-server...: cada um põe a janela num campo do /models. O
+    llama-server também responde /props com a janela por slot."""
+    host = base_url(provider)
+    async with httpx.AsyncClient(timeout=10, headers=headers(provider)) as c:
+        try:
+            r = await c.get(f"{host}/models")
+            itens = r.json().get("data") or [] if r.status_code < 400 else []
+            if n := next((_janela_de(i) for i in itens if isinstance(i, dict) and i.get("id") == model), None):
+                return n
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+        try:
+            r = await c.get(f"{host.removesuffix('/v1')}/props")
+            if r.status_code < 400:
+                j = r.json()
+                return _janela_de(j.get("default_generation_settings") or {}) or _janela_de(j)
+        except (httpx.HTTPError, ValueError, AttributeError):
+            pass
+    return None
+
+
+async def _janela_ollama(provider: str, model: str) -> int | None:
+    """Local: a janela carregada de fato (/api/ps), que o Ollama pode cortar por falta de memória. Nuvem:
+    a do modelo (/api/show), porque lá não há o que carregar."""
+    host = base_url(provider).removesuffix("/v1")
+    try:
+        async with httpx.AsyncClient(timeout=5, headers=headers(provider)) as c:
+            if CLOUD_HOST in host:
+                info = (await c.post(f"{host}/api/show", json={"model": model})).json().get("model_info") or {}
+                return next((v for k, v in info.items() if k.endswith(".context_length") and isinstance(v, int)), None)
+            for m in (await c.get(f"{host}/api/ps")).json().get("models") or []:
+                if model in (m.get("name"), m.get("model")) and isinstance(m.get("context_length"), int):
+                    return m["context_length"]
+    except (httpx.HTTPError, ValueError, AttributeError):
+        pass
+    return None
+
+
 async def context_limit(provider: str, model: str, num_ctx: int) -> int | None:
-    """Tamanho real da janela de contexto. Ollama: o num_ctx que enviamos. LM Studio: o carregado."""
+    """Tamanho real da janela de contexto; None = não se sabe (no tipo openai o turno recusa: ver
+    `janela_obrigatoria`).
+
+    llama.cpp: a do slot. LM Studio: a carregada. Ollama: a de /api/ps (nuvem: a do modelo); antes de o
+    modelo carregar, o num_ctx que enviamos. openai: o campo manual do provedor, senão o que o servidor
+    informar."""
     kind = spec(provider)["type"]
     if kind == "ollama":
-        return num_ctx
+        chave = (provider, model)
+        if CLOUD_HOST in base_url(provider) and chave in _JANELAS and time.monotonic() - _JANELAS[chave][1] < JANELA_TTL:
+            return _JANELAS[chave][0] or num_ctx
+        n = await _janela_ollama(provider, model)
+        if CLOUD_HOST in base_url(provider):
+            _JANELAS[chave] = (n, time.monotonic())
+            return n or num_ctx
+        return min(n, num_ctx) if n else num_ctx  # local: pedimos num_ctx; o Ollama pode ter dado menos
+    if kind == "openai":
+        if manual := spec(provider).get("context_window"):
+            return int(manual)
+        chave = (provider, model)
+        if chave not in _JANELAS or time.monotonic() - _JANELAS[chave][1] > JANELA_TTL:
+            _JANELAS[chave] = (await _janela_openai(provider, model), time.monotonic())
+        return _JANELAS[chave][0]
     if kind == "llamacpp":
         st = localai.status()
         return localai.ctx_por_requisicao(st.get("ctx"), st.get("params")) if st.get("running") else None
@@ -98,6 +216,16 @@ async def context_limit(provider: str, model: str, num_ctx: int) -> int | None:
         except (httpx.HTTPError, ValueError, AttributeError):
             return None
     return None
+
+
+def janela_obrigatoria(provider: str, janela: int | None) -> str | None:
+    """Mensagem para recusar o turno quando o tipo genérico não informa a janela e ninguém a preencheu.
+    Supor 32k com um vLLM de 8k fazia a compactação disparar tarde e o servidor recusar no meio."""
+    if janela or spec(provider)["type"] != "openai":
+        return None
+    return (f"O Forja não sabe o tamanho da janela de contexto de '{spec(provider).get('name') or provider}': "
+            "o servidor não informa. Preencha 'Janela de contexto' desse provedor em Configurações › "
+            "Provedores (no vLLM é o --max-model-len).")
 
 
 def _raise_for(provider: str, status: int, body: bytes, cabecalhos=None) -> None:

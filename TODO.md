@@ -313,6 +313,10 @@ primeiro, dentro desta entrega. A parte de cache em disco e dos padrões de KV d
 V1–V4 da E0. O resto da E4 não depende delas. **A política de execução depende da parte A da E13**: ela
 precisa saber o que cada backend deixa o Forja controlar.
 
+- [ ] **O prompt fixo não cabe em 8k.** Medido na E13-A: só o prompt do sistema (~2,7k tokens) e os
+      schemas das ferramentas (~9,7k) somam ~12,5k tokens antes da primeira mensagem. Um vLLM com
+      `--max-model-len 8192` recusa já o primeiro turno. Numa janela pequena, o catálogo tem de
+      encolher (menos ferramentas e descrições curtas), não só os resultados.
 - [ ] **Tetos de leitura proporcionais à janela.** Medido na E6: `session_search` custa ~120 tokens e um
       `session_read` de conversa curta ~600. Mas o teto do `session_read` (`sessoes.MAX_LEITURA`, 12 mil
       caracteres, ~3k tokens) e o do `@conversa:ID` são fixos. Numa janela de 8k, duas leituras cheias
@@ -1175,7 +1179,30 @@ devolve `None` (`llm.py:96`) e o agente supõe 32768 tokens (`NUM_CTX`). Um vLLM
 da E4.
 
 ### Parte A: capacidades por backend e janela real (antes da E4)
-- [ ] **Tabela de capacidades por tipo de backend**, num lugar só (ex.: `llm.CAPACIDADES[tipo]`), com
+
+*Feita em 2026-09-25 (menos a leitura pela `como_rodar`, que nasce na E4).* Resumo:
+- **Tabela e rótulos:** `llm.CAPACIDADES` e `llm.ROTULOS_CAPACIDADE`. Para consultar,
+  `llm.capacidade(provider, nome)`, que devolve "sim", "parcial" ou "nao".
+- **Ollama Cloud como tipo próprio:** `ollama_nuvem`. Lá não há o que carregar nem VRAM nossa, e a
+  janela é a do modelo.
+- **Janela real:** o tipo `openai` usa o campo manual `context_window` quando está preenchido. Sem ele,
+  lê do servidor (`max_model_len`, `context_length`, `top_provider.context_length`, o `/props` do
+  llama-server), com cache de 10 min. Sem nenhum dos dois, o turno recusa (`llm.janela_obrigatoria`).
+- **Ollama:** local lê o `/api/ps`; nuvem lê o `/api/show`.
+- **Tela:** a de Provedores mostra o campo e o que cada tipo não faz.
+- **Testes:** `tests/test_backends.py`.
+
+*Validado no Forja real:*
+- **vLLM falso** (`max_model_len` 8192): o anel de contexto mostrou 8192. Antes o Forja supunha 32768.
+- **Servidor que não informa a janela:** o turno recusa com a mensagem e nem chama o modelo.
+  Preenchida a janela (16000), roda com 16000.
+- **Ollama Cloud (`gpt-oss:120b`):** a janela lida é **131.072**, e não os 32.768 de antes. Conferido
+  com um prompt de 62 mil tokens mandando `num_ctx=32768`: a nuvem **ignora o `num_ctx`**, contou
+  tudo e acertou o último item. O Forja estava compactando a nuvem com 1/4 da janela.
+- **Não confirmado ao vivo:** os "parcial" do Ollama local e do LM Studio (sem servidor ligado aqui,
+  e sem VRAM livre). Confirmar quando a E4 for usar cada um.
+
+- [x] **Tabela de capacidades por tipo de backend**, num lugar só (ex.: `llm.CAPACIDADES[tipo]`), com
       o que o Forja consegue fazer em cada um:
   - carregar e descarregar modelo;
   - ler a VRAM;
@@ -1196,21 +1223,22 @@ da E4.
 
   Os valores "parcial" precisam ser confirmados na versão atual de cada servidor antes de entrar na
   tabela.
-- [ ] **A `como_rodar` e os perfis (E4) leem essa tabela.** Quando o backend não oferece a capacidade,
+- [ ] **A `como_rodar` e os perfis (E4) leem essa tabela.** (Fica para a E4: a tabela e o
+      `llm.capacidade` já existem; falta quem os consulte.) Quando o backend não oferece a capacidade,
       o comportamento é o seguro: um modelo só, chamadas auxiliares em sequência, sem trocar de modelo
       e sem cache em disco. Nunca tentar uma operação que o backend não tem.
-- [ ] **A tela mostra o que fica indisponível** no backend escolhido. Exemplo: "com LM Studio: sem cache
+- [x] **A tela mostra o que fica indisponível** no backend escolhido. Exemplo: "com LM Studio: sem cache
       em disco, sem paralelo controlado pelo Forja, descarga pelo próprio LM Studio".
-- [ ] **Janela real no tipo `openai`:**
+- [x] **Janela real no tipo `openai`:**
   - ler `max_model_len` do `/v1/models` (é o campo que o vLLM informa);
   - ler `context_length`/`max_context_length` quando o servidor informar;
   - sem nenhum dos dois, usar um campo manual **"janela de contexto"** no cadastro do servidor, que
     passa a ser obrigatório para o tipo genérico. **Nunca supor 32k.**
-- [ ] **Janela real no Ollama:** conferir a janela carregada de fato em `/api/ps`, em vez de só confiar no
+- [x] **Janela real no Ollama:** conferir a janela carregada de fato em `/api/ps`, em vez de só confiar no
       `num_ctx` enviado. O Ollama pode limitar a janela pela memória.
-- [ ] Testes com servidor falso de cada tipo: a janela lida corretamente; um `openai` sem janela e sem
+- [x] Testes com servidor falso de cada tipo: a janela lida corretamente; um `openai` sem janela e sem
       campo manual recusa com mensagem clara; a `como_rodar` com um backend sem slots escolhe
-      sequencial.
+      sequencial. (O da `como_rodar` fica para a E4.)
 
 ### Parte B: controle e métricas fora do llama.cpp (depois da E4)
 - [ ] **Cache perdido em qualquer backend** (E0/E10): Ollama por `prompt_eval_count` contra o tamanho do
