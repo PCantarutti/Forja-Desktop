@@ -361,7 +361,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
 
   const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
 
-  const bloco = (kind: "llama" | "sd" | "ffmpeg", titulo: string, descricao: string) => {
+  const bloco = (kind: "llama" | "sd" | "ffmpeg" | "comfy", titulo: string, descricao: string) => {
     const r = st.runtimes[kind];
     return (
       <Field key={kind} label={titulo} hint={descricao}>
@@ -386,14 +386,15 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
           <div className="flex flex-wrap gap-2">
             {r.backends.map((b: string) => {
               const tem = r.available.some((a: any) => a.backend === b);
+              if (kind === "comfy" && tem) return null; // versão fixa: não há o que atualizar
               return (
                 <button
                   key={b}
                   className={btn}
                   onClick={() => acao(api.post("/local/runtime", { kind, backend: b }))}
-                  title={kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
+                  title={kind === "comfy" ? `Pacote portátil oficial para a sua GPU (${b}), com Python e PyTorch: ~${((r.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB.` : kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
                 >
-                  {kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
+                  {kind === "comfy" ? `Baixar (~${((r.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB)` : kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
                 </button>
               );
             })}
@@ -408,6 +409,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
       {bloco("llama", "Motor de chat (llama.cpp)", "CPU, Vulkan e CUDA convivem no disco: dá para trocar a qualquer momento, sem baixar de novo.")}
       {bloco("sd", "Motor de imagem e vídeo (stable-diffusion.cpp)", "Mesma ideia, para gerar imagem e vídeo (e o ESRGAN da ampliação).")}
       {bloco("ffmpeg", "Motor de ampliação de vídeo (ffmpeg)", "Separa os quadros, junta de volta com o áudio e interpola o movimento. Só existe o build de CPU: o pesado (ESRGAN) é na GPU pelo sd.cpp.")}
+      {bloco("comfy", "Motor de ampliação por IA pesada (ComfyUI)", "SeedVR2, DAT/HAT/SwinIR e o Redesenhar com um checkpoint SD 1.5/SDXL. O pacote é o da marca da sua GPU, numa versão fixa testada; roda só enquanto amplia e libera a VRAM no fim.")}
       {!!st.jobs?.filter((j: any) => j.kind === "runtime").length && (
         <div className="space-y-1 text-xs text-muted">
           {st.jobs

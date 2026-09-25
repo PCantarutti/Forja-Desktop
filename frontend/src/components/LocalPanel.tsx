@@ -123,6 +123,7 @@ export default function LocalPanel(props: {
           <Runtime st={st} kind={tab === "Imagem" || tab === "Vídeo" ? "sd" : "llama"} onDone={refresh} onError={setError} />
         )}
         {tab === "Vídeo" && <Runtime st={st} kind="ffmpeg" onDone={refresh} onError={setError} />}
+        {tab === "Imagem" && <Runtime st={st} kind="comfy" onDone={refresh} onError={setError} />}
         <Jobs jobs={st.jobs} onDone={refresh} />
         {tab === "Modelos" && <Models st={st} onDone={refresh} onError={setError} />}
         {tab === "Inferência" && <Inferencia st={st} chatModel={props.chatModel} onError={setError} />}
@@ -222,11 +223,13 @@ function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["load
 
 // ---------------------------------------------------------------- runtime
 
-function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg"; onDone: () => void; onError: (e: string) => void }) {
+const GPU_NOME: Record<string, string> = { intel: "Intel Arc", amd: "AMD", nvidia: "NVIDIA" };
+
+function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg" | "comfy"; onDone: () => void; onError: (e: string) => void }) {
   const info = props.st.runtimes[props.kind];
   const [backend, setBackend] = useState(info.backends.includes("vulkan") ? "vulkan" : info.backends[0]);
   const [busy, setBusy] = useState(false);
-  const nome = { llama: "llama.cpp", sd: "stable-diffusion.cpp", ffmpeg: "ffmpeg" }[props.kind];
+  const nome = { llama: "llama.cpp", sd: "stable-diffusion.cpp", ffmpeg: "ffmpeg", comfy: "ComfyUI" }[props.kind];
 
   async function install() {
     setBusy(true);
@@ -261,9 +264,11 @@ function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg"; onDon
             </option>
           ))}
         </select>
-        <button className="underline hover:text-fg" onClick={install} disabled={busy}>
-          atualizar
-        </button>
+        {props.kind !== "comfy" && ( // versão fixa: "atualizar" baixaria o mesmo pacote de novo
+          <button className="underline hover:text-fg" onClick={install} disabled={busy}>
+            atualizar
+          </button>
+        )}
         <span className="ml-auto truncate" title="Mais motores em Configurações › Runtime">
           {info.available.find((a) => a.backend === (info.chosen || info.backend))?.version}
         </span>
@@ -274,7 +279,11 @@ function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg"; onDon
     <section className={card}>
       <p className="text-fg">{nome} não está instalado.</p>
       <p className="mt-1 text-muted">
-        {props.kind === "ffmpeg"
+        {props.kind === "comfy"
+          ? `É o motor da ampliação de imagem por IA pesada: SeedVR2, DAT/HAT/SwinIR e o Redesenhar com um checkpoint
+        (SD 1.5/SDXL). Pacote para ${GPU_NOME[info.backends[0]] ?? info.backends[0]}, com Python e PyTorch dentro
+        (~${((info.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB). O ESRGAN e o Lanczos não precisam dele.`
+          : props.kind === "ffmpeg"
           ? "É o motor da ampliação de vídeo: separa os quadros, junta de volta com o áudio e interpola o movimento (~80 MB)."
           : `Vulkan roda em qualquer GPU (NVIDIA, AMD, Intel) e é o menor download. CUDA só para NVIDIA, e baixa
         também o runtime da NVIDIA (~370 MB). CPU funciona em qualquer máquina, devagar.`}

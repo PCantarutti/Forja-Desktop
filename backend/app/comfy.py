@@ -1,4 +1,6 @@
-"""ComfyUI portátil como runtime: é o motor do SeedVR2 (ampliação por difusão), que o sd.cpp não roda.
+"""ComfyUI portátil como runtime: o motor da ampliação que o sd.cpp não roda (SeedVR2, DAT/HAT/SwinIR, o ESRGAN 2×
+e o Redesenhar com um checkpoint SD 1.5/SDXL). Aparece com os outros motores em Configurações › Runtime e em
+IA local › Imagem (localai.runtimes()["comfy"]).
 
 Baixado como os outros runtimes (IA local), não empacotado: o .7z oficial do ComfyUI para a marca da GPU
 (1,4-1,8 GB, com Python e PyTorch dentro), aberto pelo `tar` do Windows (libarchive lê 7z). Versão fixa: o

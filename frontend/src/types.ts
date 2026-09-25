@@ -479,7 +479,7 @@ export type ImageOpts = {
   high_noise_cfg: number; // 0 = o mesmo CFG
   variante: string; // "" = pelo nome do arquivo
   loras: { path: string; peso: number }[]; // LoRAs aplicadas (vídeo)
-  ampliacao?: { origem: string; fator: number; modelo: string; suavizar: boolean }; // tomada que é ampliação de outra
+  ampliacao?: { origem: string; fator: number; modelo: string; suavizar: boolean; prompt?: string; forca?: number }; // tomada que é ampliação de outra (prompt/forca: redesenho)
 };
 
 /** Uma variação dentro de um lote da seção Imagens. */
@@ -532,6 +532,7 @@ export type RuntimeInfo = {
   backends: string[]; // o que dá para baixar
   available: { backend: string; exe: string; version: string }[]; // o que já está no disco
   chosen: string; // escolhido à mão em Configurações › Runtime ("" = automático)
+  mb?: number; // ComfyUI: o tamanho do download (o pacote da marca da GPU)
 };
 
 /** Memória da máquina: é o que diz se um modelo cabe na GPU, na RAM, ou em lugar nenhum. */
@@ -545,7 +546,7 @@ export type Hardware = {
 };
 
 export type LocalState = {
-  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo; ffmpeg: RuntimeInfo };
+  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo; ffmpeg: RuntimeInfo; comfy: RuntimeInfo };
   models: LocalModel[];
   server: {
     running: boolean;

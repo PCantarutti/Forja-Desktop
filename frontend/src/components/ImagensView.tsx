@@ -1091,6 +1091,11 @@ function Lote(props: {
           <Chip key={n}>{n}</Chip>
         ))}
         {meta.opts.ampliacao && <Chip>{`ampliada ${meta.opts.ampliacao.fator}×`}</Chip>}
+        {meta.opts.ampliacao?.forca != null && ( // redesenho: a força usada; o prompt no hover (pode ser longo)
+          <span className="rounded-full bg-raised px-2 py-0.5" title={`Prompt do redesenho: ${meta.opts.ampliacao.prompt || "(vazio)"}`}>
+            {`força ${meta.opts.ampliacao.forca.toFixed(2).replace(".", ",")}`}
+          </span>
+        )}
         {!!(props.pedido.meta as PedidoMeta | null)?.refs?.length && (
           <Chip>edição de {(props.pedido.meta as PedidoMeta).refs!.length} imagem(ns)</Chip>
         )}

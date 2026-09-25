@@ -432,3 +432,17 @@ def test_prompt_da_imagem_nao_e_nome_de_arquivo():
     assert lotes.prompt_da_imagem("foto.jpg", {"ampliacao": {"origem": "x"}}) == ""  # ampliação de arquivo do PC
     assert lotes.prompt_da_imagem("a red fox", {"ampliacao": {"origem": "x"}}) == "a red fox"  # ampliação de uma gerada
     assert lotes.prompt_da_imagem("foto.jpg", {"ampliacao": {"prompt": "um gato"}}) == "um gato"  # redesenho anterior
+
+
+def test_comfyui_aparece_como_runtime(monkeypatch, tmp_path):
+    """Configurações › Runtime e IA local › Imagem leem o ComfyUI de runtimes(); baixar vai pelo comfy.instalar."""
+    from app import comfy
+    monkeypatch.setattr(comfy, "gpu", lambda: "intel")
+    monkeypatch.setattr(comfy, "python", lambda: None)
+    r = localai.runtimes()["comfy"]
+    assert (r["installed"], r["backends"], r["available"], r["mb"]) == (False, ["intel"], [], comfy.MB["intel"])
+    monkeypatch.setattr(comfy, "python", lambda: tmp_path / "python.exe")
+    assert localai.runtimes()["comfy"]["available"][0]["version"] == comfy.VERSAO
+    monkeypatch.setattr(comfy, "instalar", lambda: {"id": "job"})
+    assert localai.install_runtime("comfy", "") == {"id": "job"}
+    assert "comfy" in localai.set_runtime("comfy", "intel")  # nada a trocar, não quebra

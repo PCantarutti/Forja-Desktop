@@ -455,7 +455,7 @@ async def stop_server(name: str):
 # descarrega junto com o app.
 
 class RuntimeBody(BaseModel):
-    kind: str = "llama"      # llama | sd
+    kind: str = "llama"      # llama | sd | ffmpeg | comfy
     backend: str = "vulkan"  # vulkan | cpu | cuda
 
 

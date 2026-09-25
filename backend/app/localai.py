@@ -373,6 +373,8 @@ def find_exe(kind: str) -> Path | None:
 
 def set_runtime(kind: str, backend: str) -> dict:
     """Troca o motor sem reinstalar nada: CPU, Vulkan e CUDA convivem lado a lado no disco."""
+    if kind == "comfy":
+        return runtimes()  # um pacote só, o da marca da GPU: não há o que trocar
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
     if backend and not exe_em(kind, backend):
@@ -419,7 +421,18 @@ def runtimes() -> dict:
         out[kind] = {"installed": bool(exe), "exe": str(exe) if exe else "",
                      "backend": exe.parent.name if exe else "", "backends": backends,
                      "available": instalados, "chosen": escolha.get(kind, "")}
+    out["comfy"] = _runtime_comfy()
     return out
+
+
+def _runtime_comfy() -> dict:
+    """O ComfyUI portátil no mesmo formato dos outros motores: um "backend" só, o pacote da marca da GPU (intel, amd
+    ou nvidia), na versão fixa do comfy.py. `mb`: o tamanho do download."""
+    from . import comfy
+    g, exe = comfy.gpu(), comfy.python()
+    return {"installed": bool(exe), "exe": str(exe or ""), "backend": g if exe else "", "backends": [g],
+            "available": [{"backend": g, "exe": str(exe), "version": comfy.VERSAO}] if exe else [], "chosen": "",
+            "mb": comfy.MB[g]}
 
 
 def _releases(kind: str, per_page: int = 12) -> list[dict]:
@@ -453,6 +466,9 @@ def _find_assets(kind: str, backend: str) -> tuple[str, list[str]]:
 
 def install_runtime(kind: str, backend: str) -> dict:
     """Acha o asset do último release e baixa em background. Devolve o job."""
+    if kind == "comfy":
+        from . import comfy
+        return comfy.instalar()  # versão fixa, o pacote da marca da GPU (o `backend` não escolhe nada)
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
     if backend not in BACKENDS or backend not in ASSETS[kind]:
