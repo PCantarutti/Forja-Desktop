@@ -57,3 +57,16 @@ Coisas que já enganaram:
   o modo nativo NÃO está ativo: `FORJA_CDP` não chegou ao backend.
 - O userData padrão de dev é o mesmo do app instalado (`%APPDATA%\Forja`) — por isso a validação
   sobe com `FORJA_DATA` próprio (ver acima). Nunca deixar os dois escrevendo no mesmo `forja.db`.
+
+## PC e celular sempre em sincronia, ao vivo
+
+Toda mudança de estado feita no desktop tem que aparecer no Forja Mobile na hora, e vice-versa, sem
+trocar de página nem recarregar. Exemplos já feitos: conversa nova criada no celular surge na barra
+lateral do PC em ~1 s; turno disparado de um lado aparece e faz stream no outro; o modelo local carregado
+por fora muda o seletor e o indicador.
+
+Como fazer: o PC consulta `GET /api/activity` a cada 4 s e o celular faz o mesmo onde precisa. Informação
+nova que precise sincronizar entra ali como um campo barato (carimbo, id do último turno, alias...), e a
+tela reage quando o valor muda — não criar canal novo à toa. Feature que muda estado compartilhado
+(conversas, turnos, servidores, modelo, configurações que o outro lado usa) só está pronta depois de
+testada nos dois sentidos, com o celular de verdade (adb) e a instância real do desktop.
