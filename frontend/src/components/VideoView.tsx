@@ -1123,6 +1123,7 @@ function AjustesVideo(props: {
               ))}
             </select>
           </Field>
+          <div className="-mb-1 border-t border-line pt-3 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase first:border-0 first:pt-0">Formato e duração</div>
           <div className="grid grid-cols-2 gap-2">
             <Num label="Largura" value={o.width} onChange={(v) => set("width", v)} step={16} />
             <Num label="Altura" value={o.height} onChange={(v) => set("height", v)} step={16} />
@@ -1165,6 +1166,7 @@ function AjustesVideo(props: {
               </div>
             )}
           </Field>
+          <div className="-mb-1 border-t border-line pt-3 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase first:border-0 first:pt-0">Prompt</div>
           <Field label="Modelo do “Melhorar”" hint="O que reescreve o prompt: um LLM rápido basta. Não é o que gera o vídeo.">
             <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
           </Field>
@@ -1173,6 +1175,7 @@ function AjustesVideo(props: {
           </Field>
         </div>
         <div className="flex flex-col gap-2.5">
+          <div className="-mb-1 border-t border-line pt-3 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase first:border-0 first:pt-0">Avançado</div>
           <div className="grid grid-cols-2 gap-2">
             <Num label="Passos" value={o.steps} onChange={(v) => set("steps", v)} />
             <Num label="CFG" value={o.cfg} onChange={(v) => set("cfg", v)} step={0.5} />
