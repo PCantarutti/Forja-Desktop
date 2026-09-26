@@ -670,6 +670,12 @@ export default function ImagensView(props: {
           ) : (
           <>
           <div className="rounded-2xl border border-line bg-surface px-3.5 py-3 shadow-[0_-10px_30px_rgba(0,0,0,.35)] transition-colors duration-150 focus-within:border-focus">
+            <div className="mb-2.5 flex items-center">
+              <button onClick={() => setAmpliarPc(true)} title="Mais resolução para qualquer imagem do PC (ESRGAN ou Lanczos): a original não muda"
+                      className="ml-auto flex items-center gap-1.5 rounded-[8px] px-1.5 py-1 text-xs text-muted hover:text-fg">
+                <TelaCheia className="size-3.5" /> Ampliar uma imagem do PC
+              </button>
+            </div>
             <div className="flex items-start gap-2.5">
               <div className="flex max-w-[45%] shrink-0 flex-wrap gap-1.5">
                 {refs.map((r, i) => (
@@ -789,10 +795,6 @@ export default function ImagensView(props: {
                 className={`rounded-[8px] px-1.5 py-1 ${negAberto || o.negative ? "text-accent-text" : "text-faint hover:text-fg"}`}
               >
                 {negAberto || o.negative ? "− Negativo" : "+ Negativo"}
-              </button>
-              <button onClick={() => setAmpliarPc(true)} title="Ampliar a resolução de uma imagem do PC (ESRGAN ou Lanczos)"
-                      className="rounded-[8px] px-1.5 py-1 text-faint hover:text-fg">
-                Ampliar do PC
               </button>
               <div className="ml-auto flex min-w-0 items-center gap-3">
                 <span className="truncate font-mono text-[11.5px] text-muted" title="Como as variações se dividem entre os modelos">
