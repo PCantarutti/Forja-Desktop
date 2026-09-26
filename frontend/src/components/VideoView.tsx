@@ -1023,10 +1023,22 @@ function AjustesVideo(props: {
   const atual = st.video_models.find((m) => m.path === props.modelo);
   const a14b = !!atual?.params?.high_noise_model || atual?.variante?.includes("a14b");
   const qualidades = Object.keys(props.tamanhos);
+  // Livre: escolhido no botão ou quando o tamanho não bate com nenhuma proporção.
+  const [livre, setLivre] = useState(false);
+  const livreAtivo = livre || !props.prop;
   const aplicaTam = (q: string, pr: Proporcao) => {
     const [w, h] = props.tamanhos[q][pr];
     set("width", w);
     set("height", h);
+  };
+  /** Resolução no formato Livre: o lado menor vai para o da qualidade e a proporção atual fica. */
+  const aplicaQualidadeLivre = (q: string) => {
+    const mult = atual?.req?.multiplo ?? 16;
+    const menor = Math.min(...props.tamanhos[q]["16:9"]);
+    const r = o.width / o.height;
+    const snap = (v: number) => Math.max(mult, Math.round(v / mult) * mult);
+    if (r >= 1) { set("height", snap(menor)); set("width", snap(menor * r)); }
+    else { set("width", snap(menor)); set("height", snap(menor / r)); }
   };
   // Duração: slider em quadros (4k+1) até o dobro do treino; a marca mostra onde o treino acaba.
   const fps = o.fps || 16;
@@ -1111,28 +1123,35 @@ function AjustesVideo(props: {
         </Secao>
 
         <Secao titulo="Formato">
-          <div className="grid grid-cols-4 gap-1.5">
+          <div className="grid grid-cols-5 gap-1.5">
             {PROPORCOES.map((pr) => (
-              <button key={pr} onClick={() => aplicaTam(props.qual ?? qualidades[0], pr)}
-                      className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${props.prop === pr ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
+              <button key={pr} onClick={() => { setLivre(false); aplicaTam(props.qual ?? qualidades[0], pr); }}
+                      className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${!livreAtivo && props.prop === pr ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
                 {forma(pr)}
                 <span className="font-mono text-[10.5px]">{pr}</span>
               </button>
             ))}
+            <button onClick={() => setLivre(true)} title="Personalizado: largura e altura livres, sem proporção travada"
+                    className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${livreAtivo ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
+              <span className="flex h-5 items-center justify-center">
+                <span className="block h-[15px] w-[22px] rounded-[3px] border-[1.5px] border-dashed border-current" />
+              </span>
+              <span className="text-[10.5px]">Livre</span>
+            </button>
           </div>
           <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
             {qualidades.map((q) => {
               const treinou = !atual?.req?.resolucoes || q in atual.req.resolucoes;
               return (
-                <button key={q} onClick={() => aplicaTam(q, props.prop ?? "16:9")}
+                <button key={q} onClick={() => (livreAtivo ? aplicaQualidadeLivre(q) : aplicaTam(q, props.prop ?? "16:9"))}
                         title={treinou ? `${props.tamanhos[q][props.prop ?? "16:9"].join(" × ")}` : `${props.tamanhos[q][props.prop ?? "16:9"].join(" × ")} — acima do que ${atual?.req?.nome ?? "o modelo"} treinou: pede bem mais memória e tempo, e pode perder coerência`}
-                        className={`flex-1 rounded-[6px] py-1 ${props.qual === q ? "bg-raised text-fg" : treinou ? "text-muted hover:text-fg" : "text-faint hover:text-muted"}`}>
+                        className={`flex-1 rounded-[6px] py-1 ${props.qual === q && !livreAtivo ? "bg-raised text-fg" : treinou ? "text-muted hover:text-fg" : "text-faint hover:text-muted"}`}>
                   {q}
                 </button>
               );
             })}
           </div>
-          <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16} prop={props.prop}
+          <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16} prop={livreAtivo ? null : props.prop}
                                 onAplicar={(w, h) => { set("width", w); set("height", h); }} />
           <p className="text-[11px] leading-snug text-faint">{dicaQualidade(st.gpu_video, atual, props.tamanhos)}</p>
         </Secao>
