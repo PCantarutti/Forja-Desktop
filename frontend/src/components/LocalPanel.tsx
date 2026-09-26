@@ -12,10 +12,10 @@ import { useStickyBottom } from "../useStickyBottom";
 const POLL_MS = 3000;
 export const card = "rounded-2xl border border-line bg-surface p-3.5";
 export const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-export const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
+export const btnPrimary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 // `campo` sem largura: quem precisa de outra (w-24, w-auto) usa a base, senão o w-full do `input` vence
 // no CSS e o irmão flex-1 colapsa para zero.
-export const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+export const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 export const input = `w-full ${campo}`;
 
 const CACHE_TYPES = ["f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
@@ -167,7 +167,7 @@ function ErroDeCarga(props: { erro: { message: string; log: string; path: string
         {aberto ? "esconder log" : "ver log do llama-server"}
       </button>
       {aberto && (
-        <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono text-[11px] whitespace-pre-wrap text-muted">
+        <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-code p-2.5 font-mono text-[11px] whitespace-pre-wrap text-muted">
           {props.erro.log || "(vazio)"}
         </pre>
       )}
@@ -605,7 +605,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
           <pre
             ref={caixaDoLog}
             onScroll={seguirLog}
-            className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 pr-8 font-mono text-[11px] whitespace-pre-wrap text-muted"
+            className="max-h-64 overflow-auto rounded-lg bg-code p-2.5 pr-8 font-mono text-[11px] whitespace-pre-wrap text-muted"
           >
             {log || "(vazio)"}
             <div ref={fimDoLog} />

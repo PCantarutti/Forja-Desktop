@@ -315,7 +315,7 @@ export function AmpliarArquivo(props: {
       <button
         onClick={() => entrada.current?.click()}
         className={`relative grid w-full place-items-center overflow-hidden rounded-xl border border-dashed text-xs transition-colors ${
-          sobre ? "border-sky-400 bg-sky-400/10 text-sky-200" : "border-line text-muted hover:border-[#454545] hover:text-fg"
+          sobre ? "border-sky-400 bg-sky-400/10 text-sky-200" : "border-line text-muted hover:border-focus hover:text-fg"
         }`}
         style={{ aspectRatio: info ? info.w / info.h : 16 / 9 }}
         title={props.imagem ? (arq ? "Escolher outra imagem" : "Escolher uma imagem do PC") : arq ? "Escolher outro vídeo" : "Escolher um vídeo do PC"}
@@ -349,7 +349,7 @@ export function AmpliarArquivo(props: {
           onClick={remover}
           title={props.imagem ? "Remover esta imagem" : "Remover este vídeo"}
           aria-label={props.imagem ? "Remover a imagem anexada" : "Remover o vídeo anexado"}
-          className="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full border border-white/15 bg-[#161616]/85 text-fg shadow backdrop-blur-sm hover:bg-[#2a2a2a] focus-visible:ring-2 focus-visible:ring-sky-400/60"
+          className="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full border border-white/15 bg-[#161616]/85 text-fg shadow backdrop-blur-sm hover:bg-raised focus-visible:ring-2 focus-visible:ring-sky-400/60"
         >
           <X className="size-3.5" />
         </button>

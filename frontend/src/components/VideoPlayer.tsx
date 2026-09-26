@@ -319,7 +319,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
         <button
           onClick={tocarPausar}
           aria-label="Tocar"
-          className="absolute left-1/2 top-1/2 grid size-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/15 bg-[#161616]/85 text-fg shadow-xl shadow-black/50 backdrop-blur-md transition hover:scale-105 hover:bg-[#1f1f1f]"
+          className="absolute left-1/2 top-1/2 grid size-14 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/15 bg-[#161616]/85 text-fg shadow-xl shadow-black/50 backdrop-blur-md transition hover:scale-105 hover:bg-surface"
         >
           <Play className="size-6" />
         </button>

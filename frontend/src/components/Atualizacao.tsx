@@ -48,7 +48,7 @@ function textoDasNotas(notas: string) {
 }
 
 const btn = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
-const btnPrimary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
+const btnPrimary = "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 
 /**
  * Pergunta, e só. Levar para Configurações punia quem nunca esteve lá: a pessoa clica num aviso e

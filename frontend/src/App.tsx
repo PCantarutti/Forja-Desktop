@@ -1541,7 +1541,7 @@ export default function App() {
                               setEditing(null);
                               if (text) rewindAndRun(m.id, false, text);
                             }}
-                            className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+                            className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
                           >
                             Enviar de novo
                           </button>
@@ -1808,7 +1808,7 @@ export default function App() {
       </div>
       <div className="flex flex-col gap-2">
         <button autoFocus onClick={() => abreLinkNoForja(linkAberto)}
-                className="flex items-center gap-2.5 rounded-xl bg-fg px-4 py-2.5 text-sm font-medium text-black hover:bg-white">
+                className="flex items-center gap-2.5 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg hover:brightness-110">
           <Globe className="size-4" /> Navegador do Forja
         </button>
         <button onClick={() => { window.open(linkAberto, "_blank"); setLinkAberto(null); }}

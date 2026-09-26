@@ -536,7 +536,7 @@ export default function VideoView(props: {
                   aria-pressed={ampliarPc}
                   title="Mais resolução (e, se quiser, o dobro de quadros) para qualquer vídeo do PC"
                   className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs transition-colors ${
-                    ampliarPc ? "border-[#454545] bg-raised text-fg" : "border-line text-muted hover:text-fg"
+                    ampliarPc ? "border-line-strong bg-raised text-fg" : "border-line text-muted hover:text-fg"
                   }`}
                 >
                   <TelaCheia className="size-3.5" /> Ampliar vídeo
@@ -703,7 +703,7 @@ export default function VideoView(props: {
                     </div>
                   )}
                 </Menu>
-                <label className={`${pilula} focus-within:border-[#555]`} title="Quantas variações gerar">
+                <label className={`${pilula} focus-within:border-focus`} title="Quantas variações gerar">
                   <Copy className="size-3.5" />
                   <input
                     type="number"
@@ -881,7 +881,7 @@ function DuracaoLivre(props: { segundos: number; fps: number; onAplicar: (quadro
         onChange={(e) => setV(e.target.value.replace(/[^\d,.]/g, ""))}
         onBlur={aplicar}
         onKeyDown={(e) => e.key === "Enter" && aplicar()}
-        className="w-14 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-[#555]"
+        className="w-14 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-focus"
       />
       <span className="text-[11px] text-faint">s</span>
     </div>
@@ -899,7 +899,7 @@ function TamanhoLivre(props: { w: number; h: number; passo: number; ativo: boole
   }, [props.w, props.h]);
   const encaixa = (v: string) => Math.min(1920, Math.max(props.passo * 8, Math.round((Number(v) || 0) / props.passo) * props.passo));
   const aplicar = () => props.onAplicar(encaixa(w), encaixa(h));
-  const campo = "w-16 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-[#555]";
+  const campo = "w-16 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-focus";
   return (
     <div>
       <p className={`mb-1 px-1 text-[11px] ${props.ativo ? "text-fg" : "text-faint"}`}>Personalizada</p>
@@ -1041,7 +1041,7 @@ function Vazio(props: {
                 key={m.id}
                 disabled={!pode}
                 onClick={() => props.onExemplo(m)}
-                className="group rounded-2xl border border-line bg-surface p-3.5 text-left transition hover:border-[#454545] hover:bg-raised disabled:opacity-40 disabled:hover:border-line disabled:hover:bg-surface"
+                className="group rounded-2xl border border-line bg-surface p-3.5 text-left transition hover:border-focus hover:bg-raised disabled:opacity-40 disabled:hover:border-line disabled:hover:bg-surface"
                 title={pode ? "Usar este exemplo" : "O modelo escolhido não faz este modo"}
               >
                 <IlustracaoModo modo={m.id} />
@@ -1411,7 +1411,7 @@ function CartaoVideo(props: {
   return (
     <figure
       className={`group relative overflow-hidden rounded-xl border bg-raised transition-colors ${
-        props.marcado ? "border-emerald-500" : "border-line hover:border-[#454545]"
+        props.marcado ? "border-emerald-500" : "border-line hover:border-focus"
       }`}
     >
       {temArquivo ? (
@@ -1508,7 +1508,7 @@ function CartaoVideo(props: {
           aria-label="Manter esta tomada"
           aria-pressed={props.marcado}
           className={`absolute left-2 top-2 grid size-6 place-items-center rounded-full border outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70 ${
-            props.marcado ? "border-emerald-400 bg-emerald-500 text-black" : "border-white/25 bg-black/60 text-white/45 hover:text-white"
+            props.marcado ? "border-emerald-400 bg-emerald-500 text-accent-fg" : "border-white/25 bg-black/60 text-white/45 hover:text-white"
           }`}
         >
           <Check className="size-3.5" />

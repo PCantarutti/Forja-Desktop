@@ -15,8 +15,8 @@ import Sinapse from "./Sinapse";
 // inteira num cherry-pick para o forja-web. ponytail: 4 linhas custam menos que um módulo de estilo.
 const card = "rounded-2xl border border-line bg-surface p-3.5";
 const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
-const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+const btnPrimary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 
 // Os dois modelos da pesquisa são escolha desta aba, não do Chat: quem lê 12 páginas costuma
 // querer um modelo pequeno na extração e o bom só no relatório.
@@ -100,7 +100,7 @@ type Modelos = { escritor: Par; extrator: Par | null };  // extrator null = slot
 function Numero(props: { valor: number; min: number; max: number; unidade: string; dica: string;
                          onChange: (v: number) => void; icone?: React.ReactNode }) {
   return (
-    <label title={props.dica} className={`${pilula} focus-within:border-[#555]`}>
+    <label title={props.dica} className={`${pilula} focus-within:border-focus`}>
       {props.icone}
       <input type="number" min={props.min} max={props.max} value={props.valor}
              onChange={(e) => props.onChange(Number(e.target.value) || props.min)}
@@ -653,7 +653,7 @@ export default function PesquisaView(props: {
                 onClick={() => setAbrirModelos((v) => !v)}
                 title={`Modelos da pesquisa\nRelatório: ${modelos.escritor.model || "—"}\nExtração: ${modelos.extrator?.model ?? "automática"}`}
                 className={`flex min-w-0 max-w-[min(18rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg px-2.5 py-1 text-xs whitespace-nowrap ${
-                  abrirModelos ? "bg-[#333] text-fg" : "bg-raised text-muted hover:text-fg"}`}
+                  abrirModelos ? "bg-line-strong text-fg" : "bg-raised text-muted hover:text-fg"}`}
               >
                 <Cube className="size-3.5 shrink-0" />
                 <span className="min-w-0 truncate">{modelos.escritor.model || "escolher modelo"}</span>

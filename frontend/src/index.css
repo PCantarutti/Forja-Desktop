@@ -1,17 +1,229 @@
 @import "tailwindcss";
 @import "highlight.js/styles/github-dark.css";
 
-/* Paleta neutra estilo Open WebUI / llama.cpp */
+/* Forja Design System. Tema padrão "Forja atual": cinzas neutros + destaque azul. Temas extras via
+   data-theme no <html> (brasa, aco, musgo, violeta, carmim); o destaque pode ser trocado em
+   Configurações › Aplicativo, que escreve --accent/--accent-fg direto no <html>. */
+:root {
+  --accent: #4f8ff7;
+  --accent-fg: #ffffff;
+  --ok: #5fd39a;
+  --err: #e27a6b;
+  --info: #6aa8e6;
+  --agent: #b69ae6;
+  --warn: #f2a14a;
+  --font-ui: "Atkinson Hyperlegible Next Variable", "Atkinson Hyperlegible Next", ui-sans-serif, "Segoe UI", system-ui, sans-serif;
+  --font-code: "JetBrains Mono Variable", "JetBrains Mono", "Cascadia Code", Consolas, ui-monospace, monospace;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+}
+:root[data-font="sistema"] { --font-ui: "Segoe UI", system-ui, sans-serif; --font-code: "Cascadia Code", Consolas, ui-monospace, monospace; }
+
 @theme {
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
+
   --color-bg: #171717;
   --color-side: #0e0e0e;
   --color-surface: #1f1f1f;
   --color-raised: #2a2a2a;
   --color-line: #2f2f2f;
+  --color-line-strong: #454545;
   --color-fg: #ececec;
+  --color-fg-2: #d4d4d4;
   --color-muted: #a3a3a3;
   --color-faint: #737373;
+  --color-code: #0d0d0d;
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-text: color-mix(in srgb, var(--accent) 70%, #ffffff);
+  --color-accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --color-accent-line: color-mix(in srgb, var(--accent) 45%, transparent);
+  --color-focus: color-mix(in srgb, var(--accent) 55%, var(--color-line));
+  --color-ok: var(--ok);
+  --color-err: var(--err);
+  --color-info: var(--info);
+  --color-agent: var(--agent);
+  --color-warn: var(--warn);
+  --color-scrim: rgba(8, 7, 6, .66);
+
+  --shadow-popover: 0 20px 50px rgba(0, 0, 0, .55);
+  --shadow-float: 0 14px 40px rgba(0, 0, 0, .55);
+  --shadow-dialog: 0 30px 90px rgba(0, 0, 0, .6);
+
+  /* As paletas do Tailwind usadas pelo app viram os estados do design: sky = destaque, emerald = ok,
+     red = erro, amber = atenção, violet = subagente. Assim o tema troca tudo junto. */
+  --color-sky-50: color-mix(in srgb, var(--accent), white 88%);
+  --color-sky-100: color-mix(in srgb, var(--accent), white 72%);
+  --color-sky-200: color-mix(in srgb, var(--accent), white 52%);
+  --color-sky-300: color-mix(in srgb, var(--accent), white 30%);
+  --color-sky-400: var(--accent);
+  --color-sky-500: var(--accent);
+  --color-sky-600: color-mix(in srgb, var(--accent), black 18%);
+  --color-sky-700: color-mix(in srgb, var(--accent), black 34%);
+  --color-sky-800: color-mix(in srgb, var(--accent), black 50%);
+  --color-sky-900: color-mix(in srgb, var(--accent), black 64%);
+  --color-sky-950: color-mix(in srgb, var(--accent), black 76%);
+  --color-emerald-50: color-mix(in srgb, var(--ok), white 88%);
+  --color-emerald-100: color-mix(in srgb, var(--ok), white 72%);
+  --color-emerald-200: color-mix(in srgb, var(--ok), white 52%);
+  --color-emerald-300: color-mix(in srgb, var(--ok), white 30%);
+  --color-emerald-400: var(--ok);
+  --color-emerald-500: var(--ok);
+  --color-emerald-600: color-mix(in srgb, var(--ok), black 18%);
+  --color-emerald-700: color-mix(in srgb, var(--ok), black 34%);
+  --color-emerald-800: color-mix(in srgb, var(--ok), black 50%);
+  --color-emerald-900: color-mix(in srgb, var(--ok), black 64%);
+  --color-emerald-950: color-mix(in srgb, var(--ok), black 76%);
+  --color-green-50: color-mix(in srgb, var(--ok), white 88%);
+  --color-green-100: color-mix(in srgb, var(--ok), white 72%);
+  --color-green-200: color-mix(in srgb, var(--ok), white 52%);
+  --color-green-300: color-mix(in srgb, var(--ok), white 30%);
+  --color-green-400: var(--ok);
+  --color-green-500: var(--ok);
+  --color-green-600: color-mix(in srgb, var(--ok), black 18%);
+  --color-green-700: color-mix(in srgb, var(--ok), black 34%);
+  --color-green-800: color-mix(in srgb, var(--ok), black 50%);
+  --color-green-900: color-mix(in srgb, var(--ok), black 64%);
+  --color-green-950: color-mix(in srgb, var(--ok), black 76%);
+  --color-teal-50: color-mix(in srgb, var(--ok), white 88%);
+  --color-teal-100: color-mix(in srgb, var(--ok), white 72%);
+  --color-teal-200: color-mix(in srgb, var(--ok), white 52%);
+  --color-teal-300: color-mix(in srgb, var(--ok), white 30%);
+  --color-teal-400: var(--ok);
+  --color-teal-500: var(--ok);
+  --color-teal-600: color-mix(in srgb, var(--ok), black 18%);
+  --color-teal-700: color-mix(in srgb, var(--ok), black 34%);
+  --color-teal-800: color-mix(in srgb, var(--ok), black 50%);
+  --color-teal-900: color-mix(in srgb, var(--ok), black 64%);
+  --color-teal-950: color-mix(in srgb, var(--ok), black 76%);
+  --color-red-50: color-mix(in srgb, var(--err), white 88%);
+  --color-red-100: color-mix(in srgb, var(--err), white 72%);
+  --color-red-200: color-mix(in srgb, var(--err), white 52%);
+  --color-red-300: color-mix(in srgb, var(--err), white 30%);
+  --color-red-400: var(--err);
+  --color-red-500: var(--err);
+  --color-red-600: color-mix(in srgb, var(--err), black 18%);
+  --color-red-700: color-mix(in srgb, var(--err), black 34%);
+  --color-red-800: color-mix(in srgb, var(--err), black 50%);
+  --color-red-900: color-mix(in srgb, var(--err), black 64%);
+  --color-red-950: color-mix(in srgb, var(--err), black 76%);
+  --color-rose-50: color-mix(in srgb, var(--err), white 88%);
+  --color-rose-100: color-mix(in srgb, var(--err), white 72%);
+  --color-rose-200: color-mix(in srgb, var(--err), white 52%);
+  --color-rose-300: color-mix(in srgb, var(--err), white 30%);
+  --color-rose-400: var(--err);
+  --color-rose-500: var(--err);
+  --color-rose-600: color-mix(in srgb, var(--err), black 18%);
+  --color-rose-700: color-mix(in srgb, var(--err), black 34%);
+  --color-rose-800: color-mix(in srgb, var(--err), black 50%);
+  --color-rose-900: color-mix(in srgb, var(--err), black 64%);
+  --color-rose-950: color-mix(in srgb, var(--err), black 76%);
+  --color-amber-50: color-mix(in srgb, var(--warn), white 88%);
+  --color-amber-100: color-mix(in srgb, var(--warn), white 72%);
+  --color-amber-200: color-mix(in srgb, var(--warn), white 52%);
+  --color-amber-300: color-mix(in srgb, var(--warn), white 30%);
+  --color-amber-400: var(--warn);
+  --color-amber-500: var(--warn);
+  --color-amber-600: color-mix(in srgb, var(--warn), black 18%);
+  --color-amber-700: color-mix(in srgb, var(--warn), black 34%);
+  --color-amber-800: color-mix(in srgb, var(--warn), black 50%);
+  --color-amber-900: color-mix(in srgb, var(--warn), black 64%);
+  --color-amber-950: color-mix(in srgb, var(--warn), black 76%);
+  --color-yellow-50: color-mix(in srgb, var(--warn), white 88%);
+  --color-yellow-100: color-mix(in srgb, var(--warn), white 72%);
+  --color-yellow-200: color-mix(in srgb, var(--warn), white 52%);
+  --color-yellow-300: color-mix(in srgb, var(--warn), white 30%);
+  --color-yellow-400: var(--warn);
+  --color-yellow-500: var(--warn);
+  --color-yellow-600: color-mix(in srgb, var(--warn), black 18%);
+  --color-yellow-700: color-mix(in srgb, var(--warn), black 34%);
+  --color-yellow-800: color-mix(in srgb, var(--warn), black 50%);
+  --color-yellow-900: color-mix(in srgb, var(--warn), black 64%);
+  --color-yellow-950: color-mix(in srgb, var(--warn), black 76%);
+  --color-orange-50: color-mix(in srgb, var(--warn), white 88%);
+  --color-orange-100: color-mix(in srgb, var(--warn), white 72%);
+  --color-orange-200: color-mix(in srgb, var(--warn), white 52%);
+  --color-orange-300: color-mix(in srgb, var(--warn), white 30%);
+  --color-orange-400: var(--warn);
+  --color-orange-500: var(--warn);
+  --color-orange-600: color-mix(in srgb, var(--warn), black 18%);
+  --color-orange-700: color-mix(in srgb, var(--warn), black 34%);
+  --color-orange-800: color-mix(in srgb, var(--warn), black 50%);
+  --color-orange-900: color-mix(in srgb, var(--warn), black 64%);
+  --color-orange-950: color-mix(in srgb, var(--warn), black 76%);
+  --color-violet-50: color-mix(in srgb, var(--agent), white 88%);
+  --color-violet-100: color-mix(in srgb, var(--agent), white 72%);
+  --color-violet-200: color-mix(in srgb, var(--agent), white 52%);
+  --color-violet-300: color-mix(in srgb, var(--agent), white 30%);
+  --color-violet-400: var(--agent);
+  --color-violet-500: var(--agent);
+  --color-violet-600: color-mix(in srgb, var(--agent), black 18%);
+  --color-violet-700: color-mix(in srgb, var(--agent), black 34%);
+  --color-violet-800: color-mix(in srgb, var(--agent), black 50%);
+  --color-violet-900: color-mix(in srgb, var(--agent), black 64%);
+  --color-violet-950: color-mix(in srgb, var(--agent), black 76%);
+  --color-purple-50: color-mix(in srgb, var(--agent), white 88%);
+  --color-purple-100: color-mix(in srgb, var(--agent), white 72%);
+  --color-purple-200: color-mix(in srgb, var(--agent), white 52%);
+  --color-purple-300: color-mix(in srgb, var(--agent), white 30%);
+  --color-purple-400: var(--agent);
+  --color-purple-500: var(--agent);
+  --color-purple-600: color-mix(in srgb, var(--agent), black 18%);
+  --color-purple-700: color-mix(in srgb, var(--agent), black 34%);
+  --color-purple-800: color-mix(in srgb, var(--agent), black 50%);
+  --color-purple-900: color-mix(in srgb, var(--agent), black 64%);
+  --color-purple-950: color-mix(in srgb, var(--agent), black 76%);
+  --color-fuchsia-50: color-mix(in srgb, var(--agent), white 88%);
+  --color-fuchsia-100: color-mix(in srgb, var(--agent), white 72%);
+  --color-fuchsia-200: color-mix(in srgb, var(--agent), white 52%);
+  --color-fuchsia-300: color-mix(in srgb, var(--agent), white 30%);
+  --color-fuchsia-400: var(--agent);
+  --color-fuchsia-500: var(--agent);
+  --color-fuchsia-600: color-mix(in srgb, var(--agent), black 18%);
+  --color-fuchsia-700: color-mix(in srgb, var(--agent), black 34%);
+  --color-fuchsia-800: color-mix(in srgb, var(--agent), black 50%);
+  --color-fuchsia-900: color-mix(in srgb, var(--agent), black 64%);
+  --color-fuchsia-950: color-mix(in srgb, var(--agent), black 76%);
+  --color-blue-50: color-mix(in srgb, var(--info), white 88%);
+  --color-blue-100: color-mix(in srgb, var(--info), white 72%);
+  --color-blue-200: color-mix(in srgb, var(--info), white 52%);
+  --color-blue-300: color-mix(in srgb, var(--info), white 30%);
+  --color-blue-400: var(--info);
+  --color-blue-500: var(--info);
+  --color-blue-600: color-mix(in srgb, var(--info), black 18%);
+  --color-blue-700: color-mix(in srgb, var(--info), black 34%);
+  --color-blue-800: color-mix(in srgb, var(--info), black 50%);
+  --color-blue-900: color-mix(in srgb, var(--info), black 64%);
+  --color-blue-950: color-mix(in srgb, var(--info), black 76%);
+  --color-cyan-50: color-mix(in srgb, var(--info), white 88%);
+  --color-cyan-100: color-mix(in srgb, var(--info), white 72%);
+  --color-cyan-200: color-mix(in srgb, var(--info), white 52%);
+  --color-cyan-300: color-mix(in srgb, var(--info), white 30%);
+  --color-cyan-400: var(--info);
+  --color-cyan-500: var(--info);
+  --color-cyan-600: color-mix(in srgb, var(--info), black 18%);
+  --color-cyan-700: color-mix(in srgb, var(--info), black 34%);
+  --color-cyan-800: color-mix(in srgb, var(--info), black 50%);
+  --color-cyan-900: color-mix(in srgb, var(--info), black 64%);
+  --color-cyan-950: color-mix(in srgb, var(--info), black 76%);
+  --color-indigo-50: color-mix(in srgb, var(--agent), white 88%);
+  --color-indigo-100: color-mix(in srgb, var(--agent), white 72%);
+  --color-indigo-200: color-mix(in srgb, var(--agent), white 52%);
+  --color-indigo-300: color-mix(in srgb, var(--agent), white 30%);
+  --color-indigo-400: var(--agent);
+  --color-indigo-500: var(--agent);
+  --color-indigo-600: color-mix(in srgb, var(--agent), black 18%);
+  --color-indigo-700: color-mix(in srgb, var(--agent), black 34%);
+  --color-indigo-800: color-mix(in srgb, var(--agent), black 50%);
+  --color-indigo-900: color-mix(in srgb, var(--agent), black 64%);
+  --color-indigo-950: color-mix(in srgb, var(--agent), black 76%);
 }
+
+[data-theme="brasa"] { --color-bg: #151311; --color-side: #100e0d; --color-code: #0f0d0c; --color-surface: #1d1a17; --color-raised: #26221f; --color-line: #2e2925; --color-line-strong: #3a322b; --color-fg: #f0ebe5; --color-fg-2: #cfc6bc; --color-muted: #aaa197; --color-faint: #7a7168; --accent: #f2a14a; --accent-fg: #1a1208; }
+[data-theme="aco"] { --color-bg: #13161b; --color-side: #0d1014; --color-code: #0c0f13; --color-surface: #1a1e25; --color-raised: #222833; --color-line: #29303b; --color-line-strong: #36404d; --color-fg: #eceff4; --color-fg-2: #c7cdd6; --color-muted: #9ea7b4; --color-faint: #6c7584; --accent: #4aa3e8; --accent-fg: #06121d; }
+[data-theme="musgo"] { --color-bg: #121513; --color-side: #0d0f0e; --color-code: #0c0e0d; --color-surface: #191d1a; --color-raised: #212722; --color-line: #28302a; --color-line-strong: #353f37; --color-fg: #ebf0ec; --color-fg-2: #c6cfc8; --color-muted: #9ea9a0; --color-faint: #6d786f; --accent: #3fc3a3; --accent-fg: #04160f; }
+[data-theme="violeta"] { --color-bg: #15131a; --color-side: #0f0e13; --color-code: #0e0d12; --color-surface: #1c1a23; --color-raised: #25222e; --color-line: #2d2937; --color-line-strong: #3a3547; --color-fg: #efedf3; --color-fg-2: #cbc7d4; --color-muted: #a59fb2; --color-faint: #736d81; --accent: #a98bf5; --accent-fg: #130a26; }
+[data-theme="carmim"] { --color-bg: #161314; --color-side: #100e0e; --color-code: #0f0d0d; --color-surface: #1e1a1b; --color-raised: #282224; --color-line: #30292b; --color-line-strong: #3e3437; --color-fg: #f1ecec; --color-fg-2: #cfc6c7; --color-muted: #aa9fa1; --color-faint: #7a6f71; --accent: #e8546a; --accent-fg: #1c0508; }
 
 html, body, #root { height: 100%; }
 
@@ -25,7 +237,10 @@ html, body, #root { height: 100%; }
 .arrasta { -webkit-app-region: drag; }
 .arrasta :is(button, a, input, select, textarea, [role="tab"], [role="button"], [role="separator"]) { -webkit-app-region: no-drag; }
 .livre-controles { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 0.75rem); }
-body { background: var(--color-bg); color: var(--color-fg); font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+body { background: var(--color-bg); color: var(--color-fg); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
+code, kbd, pre, samp { font-family: var(--font-mono); }
+/* Movimento do design: 120–150 ms, sem bounce. */
+button, a, [role="button"] { transition-duration: 120ms; transition-timing-function: var(--ease); }
 
 /* Notas de atualização: seção vira rótulo pequeno, lista enxuta (o .md é pensado para respostas longas). */
 .notas { line-height: 1.5; color: var(--color-muted); }
@@ -42,13 +257,13 @@ body { background: var(--color-bg); color: var(--color-fg); font-family: ui-sans
 .md h1 { font-size: 1.3em; } .md h2 { font-size: 1.15em; } .md h3 { font-size: 1.05em; }
 .md ul { list-style: disc; padding-left: 1.4em; }
 .md ol { list-style: decimal; padding-left: 1.4em; }
-.md a { color: #93c5fd; text-decoration: underline; }
+.md a { color: var(--color-accent-text); text-decoration: underline; }
 /* Citacao de fonte: pilula, nao link azul sublinhado (.md a venceria as classes do Tailwind). */
 .md a.fonte { color: var(--color-muted); text-decoration: none; }
 .md a.fonte:hover { color: var(--color-fg); }
 .md strong { color: #fff; }
 .md :not(pre) > code { background: var(--color-raised); color: #f0a8a0; padding: 0.1em 0.35em; border-radius: 5px; font-size: 0.88em; }
-.md pre { background: #0d0d0d; border: 1px solid var(--color-line); border-radius: 12px; padding: 0.9em 1em; overflow-x: auto; font-size: 0.85em; }
+.md pre { background: var(--color-code); border: 1px solid var(--color-line); border-radius: 12px; padding: 0.9em 1em; overflow-x: auto; font-size: 0.85em; }
 .md pre code.hljs { background: transparent; padding: 0; }
 .md h2 { border-bottom: 1px solid var(--color-line); padding-bottom: 0.25em; }
 .md li + li { margin-top: 0.3em; }
@@ -66,4 +281,4 @@ body { background: var(--color-bg); color: var(--color-fg); font-family: ui-sans
 .md td img { max-height: 280px; width: auto; }
 
 /* Scrollbar discreta */
-* { scrollbar-width: thin; scrollbar-color: #3a3a3a transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }

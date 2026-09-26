@@ -58,8 +58,8 @@ const proporcaoDe = (img: LoteImagem, opts?: { width?: number; height?: number }
 function Pilha(props: { n: number; largo?: boolean; children: React.ReactNode }) {
   return (
     <div className={`relative ${props.largo ? "col-span-2" : ""}`}>
-      {props.n > 2 && <div aria-hidden className="absolute inset-0 translate-x-2 -translate-y-2 rotate-[3deg] rounded-xl border border-line bg-[#232323]" />}
-      {props.n > 1 && <div aria-hidden className="absolute inset-0 translate-x-1 -translate-y-1 rotate-[1.5deg] rounded-xl border border-line bg-[#2a2a2a]" />}
+      {props.n > 2 && <div aria-hidden className="absolute inset-0 translate-x-2 -translate-y-2 rotate-[3deg] rounded-xl border border-line bg-surface" />}
+      {props.n > 1 && <div aria-hidden className="absolute inset-0 translate-x-1 -translate-y-1 rotate-[1.5deg] rounded-xl border border-line bg-raised" />}
       <div className="relative">{props.children}</div>
     </div>
   );
@@ -618,7 +618,7 @@ export default function ImagensView(props: {
                   Esta conversa gera só as imagens que o chat pediu para o site. Para refazer uma, use <Refresh className="inline size-3" /> no
                   card ou clique na foto. Imagem avulsa: abra uma conversa nova em Imagens.
                 </span>
-                <label className={`${pilula} focus-within:border-[#555]`} title="Quantas versões cada Regerar gera">
+                <label className={`${pilula} focus-within:border-focus`} title="Quantas versões cada Regerar gera">
                   <Copy className="size-3.5" />
                   <input
                     type="number"
@@ -742,7 +742,7 @@ export default function ImagensView(props: {
                 <Sliders className="size-3.5" />
                 {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""}` : "Escolher modelo"}
               </button>
-              <label className={`${pilula} focus-within:border-[#555]`} title="Quantas variações gerar">
+              <label className={`${pilula} focus-within:border-focus`} title="Quantas variações gerar">
                 <Copy className="size-3.5" />
                 <input
                   type="number"
@@ -1372,7 +1372,7 @@ function Cartao(props: {
           onClick={props.onMarcar}
           title={props.marcada ? "Desmarcar" : "Marcar para manter"}
           className={`absolute left-2 top-2 grid size-6 place-items-center rounded-full border ${
-            props.marcada ? "border-emerald-400 bg-emerald-500 text-black" : "border-line bg-black/60 text-transparent hover:text-white"
+            props.marcada ? "border-emerald-400 bg-emerald-500 text-accent-fg" : "border-line bg-black/60 text-transparent hover:text-white"
           }`}
         >
           <Check className="size-3.5" />
@@ -1485,7 +1485,7 @@ function Variacoes(props: {
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
           spellCheck={false}
-          className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] leading-relaxed text-fg focus:border-[#555] focus:outline-none"
+          className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] leading-relaxed text-fg focus:border-focus focus:outline-none"
         />
       </label>
       <div className="grid min-h-0 grid-cols-2 items-start gap-3 overflow-y-auto p-2 md:grid-cols-3 xl:grid-cols-4">
@@ -1675,7 +1675,7 @@ function EstiloTodas(props: { estilo: string; count: number; imagens: number; on
         rows={3}
         spellCheck={false}
         placeholder="cold blue night light, film grain, minimal"
-        className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] text-fg focus:border-[#555] focus:outline-none"
+        className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-2 text-[13px] text-fg focus:border-focus focus:outline-none"
       />
       <div className="mt-3 flex items-center gap-2">
         <button className={btnPrimary} onClick={() => props.onGerar(estilo.trim())}>

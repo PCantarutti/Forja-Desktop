@@ -13,8 +13,8 @@ import { Menu } from "./Controls";
 const card = "rounded-xl border border-line bg-panel";
 const titulo = "text-[11px] font-medium uppercase tracking-wide text-faint";
 const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
-const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+const btnPrimary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 
 const CORES: Record<CompararItem["status"], string> = {
   pendente: "bg-faint",

@@ -7,7 +7,7 @@ import { ArrowUp, Square } from "./icons";
  */
 export function CaixaPrompt(props: { children: React.ReactNode }) {
   return (
-    <div className="rounded-3xl border border-line bg-surface px-4 pt-3 pb-2.5 focus-within:border-[#454545]">
+    <div className="rounded-3xl border border-line bg-surface px-4 pt-3 pb-2.5 focus-within:border-focus">
       {props.children}
     </div>
   );
@@ -38,8 +38,8 @@ export const larguraNumero = (v: number) => ({ width: `${String(v).length + 0.4}
 export const redondo =
   "grid size-8 shrink-0 cursor-pointer place-items-center rounded-full border border-line text-muted hover:bg-raised hover:text-fg";
 export const enviarClasse =
-  "grid size-9 shrink-0 place-items-center rounded-full bg-fg text-black hover:bg-white disabled:bg-raised disabled:text-faint";
-export const pararClasse = "grid size-9 shrink-0 place-items-center rounded-full bg-raised text-fg hover:bg-[#3a3a3a]";
+  "grid size-9 shrink-0 place-items-center rounded-full bg-accent text-accent-fg hover:brightness-110 disabled:bg-raised disabled:text-faint";
+export const pararClasse = "grid size-9 shrink-0 place-items-center rounded-full bg-raised text-fg hover:bg-line-strong";
 
 /** Enviar (seta) ou, rodando, Parar (quadrado). */
 export function BotaoEnviar(props: {

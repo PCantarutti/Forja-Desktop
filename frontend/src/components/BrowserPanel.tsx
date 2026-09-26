@@ -315,7 +315,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
           onKeyDown={(e) => e.key === "Enter" && submitUrl()}
           placeholder="http://localhost:5173"
           spellCheck={false}
-          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-fg placeholder:text-faint focus:border-[#454545] focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 font-mono text-fg placeholder:text-faint focus:border-focus focus:outline-none"
         />
         <button className={btn} title="Fechar sessão do navegador desta conversa" disabled={!state.open} onClick={() => call("close")}>
           <X className="size-4" />
@@ -330,7 +330,7 @@ export default function BrowserPanel(props: { conv: string; onState: (s: Browser
         <div className="flex items-center gap-2 border-b border-amber-500/40 bg-amber-950/30 px-3 py-1.5 text-amber-100">
           <span className="flex-1">A página pediu um arquivo.</span>
           <input ref={fileInput} type="file" hidden onChange={(e) => uploadChosen(e.target.files?.[0] ?? null)} />
-          <button onClick={() => fileInput.current?.click()} className="rounded-full bg-fg px-3 py-0.5 font-medium text-black hover:bg-white">
+          <button onClick={() => fileInput.current?.click()} className="rounded-full bg-accent px-3 py-0.5 font-medium text-accent-fg hover:brightness-110">
             Escolher arquivo
           </button>
           <button onClick={() => uploadChosen(null)} className="rounded-full border border-line px-3 py-0.5 text-fg hover:bg-raised">

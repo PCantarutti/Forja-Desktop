@@ -152,7 +152,7 @@ export default function ChangesPanel(props: {
   }
 
   const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-  const primary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
+  const primary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
   const iconBtn = "grid size-6 place-items-center rounded text-faint hover:bg-raised hover:text-fg";
 
   if (conv === null)

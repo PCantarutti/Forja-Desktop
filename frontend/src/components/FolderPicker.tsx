@@ -154,7 +154,7 @@ export default function FolderPicker(props: {
               <button
                 disabled={!list}
                 onClick={() => list && props.onPick(list.path)}
-                className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40"
+                className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
               >
                 Usar esta pasta
               </button>

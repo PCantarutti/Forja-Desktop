@@ -601,7 +601,7 @@ export function DiffView({ preview }: { preview: Preview }) {
         <div className="bg-raised px-3 py-1.5 text-xs text-muted">
           Comando · <span className="font-mono">{preview.path}</span>
         </div>
-        <pre className="max-h-64 overflow-auto bg-[#0d0d0d] px-3 py-2.5 font-mono text-xs whitespace-pre-wrap text-fg">
+        <pre className="max-h-64 overflow-auto bg-code px-3 py-2.5 font-mono text-xs whitespace-pre-wrap text-fg">
           <span className="text-faint select-none">$ </span>
           {preview.text}
         </pre>
@@ -613,7 +613,7 @@ export function DiffView({ preview }: { preview: Preview }) {
       <div className="bg-raised px-3 py-1.5 text-xs text-muted">
         {preview.kind === "new" ? "Arquivo novo" : "Diff"} · <span className="font-mono">{preview.path}</span>
       </div>
-      <pre className="max-h-96 overflow-auto bg-[#0d0d0d] py-2 font-mono text-xs leading-5">
+      <pre className="max-h-96 overflow-auto bg-code py-2 font-mono text-xs leading-5">
         {lines.map((l, i) => {
           const cls = l.startsWith("@@")
             ? "text-sky-400"
@@ -720,7 +720,7 @@ export function ToolBlock(props: {
       </button>
 
       {!result && props.live && (
-        <pre className="max-h-48 overflow-auto border-t border-line bg-[#0d0d0d] px-3 py-2 font-mono text-[11px] whitespace-pre-wrap text-muted">
+        <pre className="max-h-48 overflow-auto border-t border-line bg-code px-3 py-2 font-mono text-[11px] whitespace-pre-wrap text-muted">
           {props.live}
         </pre>
       )}
@@ -744,7 +744,7 @@ export function ToolBlock(props: {
           {preview ? (
             <DiffView preview={preview} />
           ) : (
-            <pre className="max-h-64 overflow-auto rounded-xl border border-line bg-[#0d0d0d] p-3 font-mono text-xs whitespace-pre-wrap text-muted">
+            <pre className="max-h-64 overflow-auto rounded-xl border border-line bg-code p-3 font-mono text-xs whitespace-pre-wrap text-muted">
               {JSON.stringify(call.arguments, null, 2)}
             </pre>
           )}
@@ -752,7 +752,7 @@ export function ToolBlock(props: {
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => props.onDecide(true)}
-              className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+              className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
             >
               Aprovar
             </button>
@@ -789,7 +789,7 @@ export function ToolBlock(props: {
             </div>
           )}
           <div className="text-faint">Argumentos</div>
-          <pre className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono whitespace-pre-wrap text-muted">
+          <pre className="max-h-64 overflow-auto rounded-lg bg-code p-2.5 font-mono whitespace-pre-wrap text-muted">
             {JSON.stringify(call.arguments, null, 2)}
           </pre>
           {preview && !waiting && <DiffView preview={preview} />}
@@ -799,7 +799,7 @@ export function ToolBlock(props: {
           {result && (
             <>
               <div className="text-faint">Resultado</div>
-              <pre className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono whitespace-pre-wrap text-muted">
+              <pre className="max-h-64 overflow-auto rounded-lg bg-code p-2.5 font-mono whitespace-pre-wrap text-muted">
                 {result.content}
               </pre>
             </>
@@ -1002,7 +1002,7 @@ export function ActivityGroup(props: {
               title={geradas ? "Abre a conversa de Imagens destas imagens (não gera de novo)" : "Abre a tela Imagens com a fila dos slots"}
               className={geradas
                 ? "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
-                : "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white"}
+                : "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110"}
             >
               {geradas ? `Ver as ${slots.length} imagens` : `Gerar ${slots.length} imagens`}
             </button>
@@ -1186,7 +1186,7 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
   const sel = picked[at] ?? [];
   const livre = (texts[at] ?? "").trim();
   const last = at === qs.length - 1;
-  const primary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
+  const primary = "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
   const secondary = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
 
   function toggle(label: string) {
@@ -1256,7 +1256,7 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
                     {vis.description && <span className="mt-0.5 block text-xs text-muted">{vis.description}</span>}
                   </span>
                   <span
-                    className={`mt-0.5 grid size-4 shrink-0 place-items-center ${q.multi_select ? "rounded" : "rounded-full"} border text-[10px] ${on ? "border-fg bg-fg font-bold text-black" : "border-line text-faint"}`}
+                    className={`mt-0.5 grid size-4 shrink-0 place-items-center ${q.multi_select ? "rounded" : "rounded-full"} border text-[10px] ${on ? "border-accent bg-accent font-bold text-accent-fg" : "border-line text-faint"}`}
                   >
                     {on ? "✓" : i + 1}
                   </span>
@@ -1349,7 +1349,7 @@ export function PlanCard(props: {
               <div className="flex gap-2">
                 <button
                   onClick={() => props.onDecide(false, undefined, feedback)}
-                  className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+                  className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
                 >
                   Enviar observações
                 </button>
@@ -1362,7 +1362,7 @@ export function PlanCard(props: {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => props.onDecide(true, mode)}
-                className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+                className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
               >
                 Aprovar e executar
               </button>

@@ -76,9 +76,9 @@ type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
 // "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
 const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
 
-const input = "w-full rounded-lg border border-line bg-raised px-3 py-1.5 text-sm text-fg focus:border-[#555] focus:outline-none";
+const input = "w-full rounded-lg border border-line bg-raised px-3 py-1.5 text-sm text-fg focus:border-focus focus:outline-none";
 const btn = "rounded-full border border-line px-3 py-1.5 text-sm text-fg hover:bg-raised";
-const btnPrimary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
+const btnPrimary = "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -2047,7 +2047,7 @@ function PersonalMemory({ s, set, save }: {
                 />
               </div>
               {aberta === m.slug && (
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#0d0d0d] px-3 py-2 text-xs text-muted">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-code px-3 py-2 text-xs text-muted">
                   {corpo || "…"}
                 </pre>
               )}

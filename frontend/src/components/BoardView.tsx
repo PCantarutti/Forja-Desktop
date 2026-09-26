@@ -52,8 +52,8 @@ const campo = "rounded-lg border border-line bg-raised px-3 py-1.5 text-sm text-
   + "focus:border-neutral-500 focus:outline-none";
 const btn = "inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-xs text-fg transition-colors "
   + "hover:bg-raised focus-visible:outline focus-visible:outline-1 focus-visible:outline-sky-400 disabled:opacity-40";
-const btnPrimary = "inline-flex items-center gap-1.5 rounded-full bg-fg px-3 py-1 text-xs font-medium text-black transition-colors "
-  + "hover:bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-40";
+const btnPrimary = "inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-fg transition-colors "
+  + "hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-40";
 const icone = "rounded-md p-1 text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline "
   + "focus-visible:outline-1 focus-visible:outline-sky-400";
 

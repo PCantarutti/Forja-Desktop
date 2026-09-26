@@ -152,7 +152,7 @@ export default function TerminalPanel(props: { conv: string }) {
       <pre
         ref={pre}
         onClick={() => document.getElementById("forja-term-input")?.focus()}
-        className="min-h-0 flex-1 overflow-auto bg-[#0d0d0d] p-3 font-mono text-[12px] leading-5 whitespace-pre-wrap text-fg/90"
+        className="min-h-0 flex-1 overflow-auto bg-code p-3 font-mono text-[12px] leading-5 whitespace-pre-wrap text-fg/90"
       >
         {out || "(sem saída ainda: digite um comando abaixo)"}
       </pre>

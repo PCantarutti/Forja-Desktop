@@ -391,7 +391,7 @@ export default function MaestroView(props: {
               Cancelar
             </button>
             <button
-              className="rounded-full bg-fg px-3 py-1.5 font-medium text-black hover:bg-white"
+              className="rounded-full bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110"
               onClick={() => {
                 salvarPadrao();
                 setPerguntaPadrao(false);
@@ -1110,7 +1110,7 @@ function EditorContrato(props: {
     Object.fromEntries(LISTAS_CONTRATO.map(([k]) => [k, (c[k] ?? []).join("\n")])));
   const [slot, setSlot] = useState(props.t.model_slot ?? "");
   const [max, setMax] = useState(props.t.max_attempts);
-  const campo = "w-full rounded-md border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+  const campo = "w-full rounded-md border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
   const salvar = () =>
     props.onSalvar({
       contract: {
@@ -1167,7 +1167,7 @@ function EditorContrato(props: {
                  onChange={(e) => setMax(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} />
         </label>
         <button onClick={salvar}
-                className="ml-auto rounded-full bg-fg px-3 py-1 text-xs font-medium text-black hover:bg-white disabled:opacity-40"
+                className="ml-auto rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
                 disabled={!goal.trim()}>
           Salvar contrato
         </button>

@@ -61,7 +61,7 @@ function Bloco({ texto, vazio, comando }: { texto: string; vazio?: string; coman
   return (
     <pre
       className={`max-h-60 overflow-auto rounded-xl p-2.5 font-mono text-[11px] whitespace-pre-wrap ${
-        comando ? "bg-[#0d0d0d] text-fg/90" : "bg-raised/60 text-muted"
+        comando ? "bg-code text-fg/90" : "bg-raised/60 text-muted"
       } ${texto ? "" : "text-faint italic"}`}
     >
       {texto || vazio}
