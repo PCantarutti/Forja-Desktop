@@ -89,7 +89,7 @@ export default function ContextRing(props: {
           {props.compartilhado && (
             <div className="mb-2 rounded-md bg-raised px-2 py-1.5 leading-snug"
                  title="Com o cache KV unificado, os slots do llama-server dividem um cache só: cada conversa pode crescer até o total, mas a soma de todas não passa dele.">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-3">
                 <span>Compartilhado</span>
                 <span className="text-fg">{fmtK(props.compartilhado.usado)} / {fmtK(props.compartilhado.total)}</span>
               </div>
