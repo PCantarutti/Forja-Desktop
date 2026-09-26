@@ -33,6 +33,7 @@
   --color-muted: #a3a3a3;
   --color-faint: #737373;
   --color-code: #0d0d0d;
+  --color-panel: var(--color-side);
   --color-accent: var(--accent);
   --color-accent-fg: var(--accent-fg);
   --color-accent-text: color-mix(in srgb, var(--accent) 70%, #ffffff);

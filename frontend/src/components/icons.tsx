@@ -11,6 +11,7 @@ const base = (d: React.ReactNode) =>
 
 export const Copy = base(<><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>);
 export const Check = base(<path d="m5 12 5 5 9-10" />);
+export const CheckSquare = base(<><rect x="3.5" y="3.5" width="17" height="17" rx="3" /><path d="m8 12 3 3 5-6" /></>);
 export const Brain = base(<><path d="M9 4a3 3 0 0 0-3 3v.5A3 3 0 0 0 4 10.5a3 3 0 0 0 1 2.2A3 3 0 0 0 6 18a3 3 0 0 0 3 2 3 3 0 0 0 3-3V7a3 3 0 0 0-3-3z" /><path d="M15 4a3 3 0 0 1 3 3v.5a3 3 0 0 1 2 3 3 3 0 0 1-1 2.2 3 3 0 0 1-1 5.3 3 3 0 0 1-3 2 3 3 0 0 1-3-3" /></>);
 export const Chevron = base(<path d="m8 10 4-4 4 4M8 14l4 4 4-4" />);
 export const ChevronDown = base(<path d="m6 9 6 6 6-6" />);

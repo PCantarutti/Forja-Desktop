@@ -7,7 +7,8 @@ export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "t
 // Largura inicial da coluna que o tile abre; arrastar o divisor à esquerda dela muda.
 export const WIDTH: Record<RightTab, number> = { info: 288, browser: 520, servers: 288, plans: 440, changes: 520, terminal: 560, local: 420 };
 const TILE_MIN = 240, MAIN_MIN = 320;
-const card = "rounded-xl border border-line bg-panel";
+const card = "rounded-xl border border-line";
+const tileCard = `${card} bg-side`;
 
 export const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: "info", label: "Info", icon: <Info className="size-4" /> },
@@ -31,19 +32,17 @@ export type EstadoAbas = {
 
 /** O selo de uma aba. Compartilhado com a doca do Maestro: os dois lugares sinalizam igual. */
 export function seloDaAba(id: RightTab, e: EstadoAbas): React.ReactNode {
-  return id === "changes" && e.changesCount > 0 ? (
-    <span className="rounded-full bg-amber-600/80 px-1.5 text-[10px] leading-4 text-white">{e.changesCount}</span>
-  ) : id === "browser" && e.browserOpen ? (
-    <span className="size-1.5 rounded-full bg-emerald-400" />
-  ) : id === "local" && e.localRunning ? (
-    <span className="size-1.5 rounded-full bg-emerald-400" />
-  ) : id === "servers" && e.serversRunning > 0 ? (
-    <span className="rounded-full bg-emerald-600/80 px-1.5 text-[10px] leading-4 text-white">{e.serversRunning}</span>
-  ) : id === "plans" && e.plansPending > 0 ? (
-    <span className="rounded-full bg-sky-600/80 px-1.5 text-[10px] leading-4 text-white">{e.plansPending}</span>
-  ) : id === "plans" && e.plansTotal > 0 ? (
-    <span className="rounded-full bg-raised px-1.5 text-[10px] leading-4 text-muted">{e.plansTotal}</span>
-  ) : null;
+  const n = (v: number, tom = "bg-accent text-accent-fg") => (
+    <span className={`h-[15px] min-w-[15px] rounded-full px-1 text-center font-mono text-[9.5px] leading-[15px] font-semibold ${tom}`}>{v}</span>
+  );
+  const ponto = <span className="mt-1.5 mr-1.5 size-1.5 rounded-full bg-ok" />;
+  return id === "changes" && e.changesCount > 0 ? n(e.changesCount)
+    : id === "browser" && e.browserOpen ? ponto
+    : id === "local" && e.localRunning ? ponto
+    : id === "servers" && e.serversRunning > 0 ? n(e.serversRunning)
+    : id === "plans" && e.plansPending > 0 ? n(e.plansPending)
+    : id === "plans" && e.plansTotal > 0 ? n(e.plansTotal, "bg-raised text-muted")
+    : null;
 }
 
 /** Botões das abas, sempre visíveis no topo direito. Clicar abre um tile daquela aba à direita (os
@@ -54,7 +53,7 @@ export function RightTabsBar(props: EstadoAbas & {
   extras?: { id: string; label: string; icon: React.ReactNode }[];  // abas só de uma tela (a Maestro)
 }) {
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1" role="toolbar" aria-label="Painéis">
+    <div className="ml-auto flex shrink-0 items-center gap-0.5" role="toolbar" aria-label="Painéis">
       {[...TABS, ...(props.extras ?? [])].map((t) => {
         const active = props.abertos.includes(t.id);
         const cheio = !active && props.abertos.length >= MAX_TILES;
@@ -66,12 +65,12 @@ export function RightTabsBar(props: EstadoAbas & {
             title={active ? `${t.label} (clique para fechar)` : cheio ? `${t.label}: feche um painel antes (máximo ${MAX_TILES})` : t.label}
             disabled={cheio}
             onClick={() => props.onSelect(t.id)}
-            className={`relative grid size-7 place-items-center rounded-md disabled:opacity-35 ${
-              active ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
+            className={`relative grid size-[30px] place-items-center rounded-[7px] transition-colors disabled:opacity-35 ${
+              active ? "bg-raised text-accent-text" : "text-muted hover:bg-raised hover:text-fg"
             }`}
           >
             {t.icon}
-            {b && <span className="absolute -top-1 -right-1 grid place-items-center">{b}</span>}
+            {b && <span className={`absolute grid place-items-center ${t.id === "browser" || t.id === "local" ? "top-0 right-0" : "-top-[3px] -right-[3px]"}`}>{b}</span>}
           </button>
         );
       })}
@@ -222,7 +221,7 @@ export default function Tiles(props: {
           setArrastando(true);
           document.body.style.userSelect = "none";
           tile.style.cssText = estilo + ";position:relative;z-index:50;pointer-events:none;opacity:.94;scale:1.025;"
-            + "transition:scale .15s ease-out;box-shadow:0 28px 60px -12px rgb(0 0 0/.65),0 0 0 1px rgb(56 189 248/.55);";
+            + "transition:scale .15s ease-out;box-shadow:0 28px 60px -12px rgb(0 0 0/.65),0 0 0 1px var(--color-accent-line);";
         }
         tile.style.setProperty("translate", `${dx}px ${dy}px`);
         ultimo = alvoEm(t, ev.clientX, ev.clientY);
@@ -296,14 +295,15 @@ export default function Tiles(props: {
                   ? <div key={`h${i}`} className="h-2 shrink-0" />
                   : <Divisor key={`h${i}`} eixo="y" onArrasto={(e) => altura(ci, i - 1, e)} onFim={fim} />]),
                 <section key={t} data-tile={t}
-                         className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${card} overflow-hidden`} flex min-h-0 flex-col`}
+                         className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${tileCard} overflow-hidden`} flex min-h-0 flex-col`}
                          style={fechada ? { flex: "1 1 0" } : rec(t) ? { flex: "0 0 auto" } : { flex: `${c.alturas[i]} 1 0`, minHeight: 120 }}>
                   {rec(t) ? barra(t, fechada) : seu ? props.painel(t, { alca: alca(t), acao: botaoRecolher(t) }) : (
                     <>
                       <div {...alca(t)} title="Segure e arraste para mudar este painel de lugar"
-                           className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-xs">
+                           className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-[7px] text-xs">
                         <span className="text-muted [&>svg]:size-3.5">{r.icon}</span>
                         <span className="truncate font-medium text-fg">{r.label}</span>
+                        {r.resumo && <span className="truncate font-mono text-[11px] text-faint">{r.resumo}</span>}
                         {botaoRecolher(t)}
                         {!g.fixos?.includes(t) && (
                           <button onClick={() => props.onGrade(fechar(g, t))} title={`Fechar ${r.label}`}

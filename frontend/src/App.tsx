@@ -30,11 +30,11 @@ import { Modal } from "./components/Modal";
 import ModeloCarregado from "./components/ModeloCarregado";
 import { LogoMark } from "./components/Logo";
 import {
-  EffortMenu,
   ModeWarning,
   nextPermission,
-  PermissionMenu,
-  SectionTabs,
+  ModeEffortMenu,
+  SectionRail,
+  SECOES,
   type Permission,
   type Section,
 } from "./components/Controls";
@@ -466,6 +466,25 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("forja.sidebar", sidebarHidden ? "hidden" : "visible");
   }, [sidebarHidden]);
+
+  // Atalhos do shell: Ctrl 1–7 troca de seção, Ctrl , abre Configurações, Ctrl K vai para a busca.
+  const atalhos = useRef<(e: KeyboardEvent) => void>(() => {});
+  atalhos.current = (e) => {
+    if (!e.ctrlKey || e.altKey || e.shiftKey) return;
+    const n = Number(e.key);
+    if (n >= 1 && n <= SECOES.length) changeSection(SECOES[n - 1].id);
+    else if (e.key === ",") setShowSettings(true);
+    else if (e.key.toLowerCase() === "k") {
+      setSidebarHidden(false);
+      setTimeout(() => document.getElementById("busca-conversas")?.focus(), 0);
+    } else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => atalhos.current(e);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   useEffect(() => {
     if (currentId === null && config.workspace_padrao !== undefined) setPendingWs((p) => p ?? config.workspace_padrao ?? null);
@@ -2016,10 +2035,14 @@ export default function App() {
               }}
             />
           </label>
-          {agentica && (
-            <PermissionMenu value={settings.permission} onChange={changePermission} running={running} />
-          )}
-          <EffortMenu value={settings.effort} onChange={(effort) => update({ effort })} semExtremo={section === "maestro"} />
+          <ModeEffortMenu
+            permission={agentica ? settings.permission : undefined}
+            onPermission={agentica ? changePermission : undefined}
+            effort={settings.effort}
+            onEffort={(effort) => update({ effort })}
+            running={running}
+            semExtremo={section === "maestro"}
+          />
           <ContextRing
             used={summary.used}
             max={summary.max}
@@ -2047,7 +2070,7 @@ export default function App() {
                 <button
                   onClick={() => send()}
                   title="Enviar para a fila (o agente recebe no próximo passo)"
-                  className="grid size-9 place-items-center rounded-full border border-line text-fg hover:bg-raised"
+                  className="grid size-9 place-items-center rounded-[11px] border border-line text-fg hover:bg-raised"
                 >
                   <ArrowUp />
                 </button>
@@ -2075,6 +2098,13 @@ export default function App() {
 
   return (
     <div className="flex h-full">
+      <SectionRail
+        value={section}
+        onChange={changeSection}
+        listHidden={sidebarHidden}
+        onShowList={() => setSidebarHidden(false)}
+        logo={<img src="/favicon.svg" alt="Forja" className="size-full" />}
+      />
       {!sidebarHidden && (
       <Sidebar
         section={section}
@@ -2146,19 +2176,6 @@ export default function App() {
           </div>
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className="flex min-w-0 flex-1 items-center gap-2">
-          {sidebarHidden && (
-            // Ocupa a largura da barra lateral (w-64) menos o px-3 e o gap-2 desta faixa: o título fica
-            // no mesmo x com a barra aberta ou fechada.
-            <div className="w-[calc(16rem-0.5rem)] shrink-0">
-              <SectionTabs
-                value={section}
-                onChange={changeSection}
-                sidebarHidden={sidebarHidden}
-                onToggleSidebar={() => setSidebarHidden(false)}
-              />
-            </div>
-          )}
-          <Laptop className="size-4 shrink-0 text-muted" />
           <span className="truncate text-sm font-medium text-fg" title={conv?.title}>
             {conv?.title ?? "Nova conversa"}
           </span>
@@ -2167,7 +2184,7 @@ export default function App() {
             onClick={chooseFolder}
             disabled={running || picking}
             title={wsLabel ? `Pasta de trabalho: ${wsLabel}\nClique para trocar` : "Nenhuma pasta escolhida: clique para escolher"}
-            className={`inline-flex max-w-56 shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-xs disabled:opacity-50 ${wsLabel ? "bg-raised text-muted hover:text-fg" : "bg-amber-500/15 text-amber-300 hover:text-amber-200"}`}
+            className={`inline-flex max-w-56 shrink-0 items-center gap-1 rounded-[7px] border px-2 py-[3px] font-mono text-[11.5px] disabled:opacity-50 ${wsLabel ? "border-line bg-raised text-fg-2 hover:border-focus hover:text-fg" : "border-warn/40 bg-warn/10 text-warn hover:text-fg"}`}
           >
             <span className="truncate">
               {picking ? "escolhendo…" : wsLabel ? folderName(wsLabel) : "Escolher pasta"}
@@ -2177,23 +2194,23 @@ export default function App() {
           )}
           {agentica && (
             <>
-              <button onClick={() => openPath(".", "editor")} title="Abrir a pasta da conversa no editor" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
+              <button onClick={() => openPath(".", "editor")} title="Abrir a pasta da conversa no editor" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
                 <ExternalLink className="size-3.5" />
               </button>
-              <button onClick={() => openPath(".", "reveal")} title="Abrir a pasta no Explorer" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
+              <button onClick={() => openPath(".", "reveal")} title="Abrir a pasta no Explorer" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
                 <FolderOpen className="size-3.5" />
               </button>
               <button onClick={() => setShowBoard(true)} title="Board do projeto: backlog, varredura e Iniciar"
-                      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-xs text-muted hover:text-fg">
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] px-2 py-1 text-xs text-muted hover:bg-raised hover:text-fg">
                 <Quadro className="size-3.5" /> Board
               </button>
             </>
           )}
           {agentica && section !== "maestro" && currentId !== null && (
-            <div className="ml-1 flex shrink-0 items-center rounded-md border border-line p-0.5 text-xs" role="tablist" aria-label="Visão da conversa">
+            <div className="ml-1 flex shrink-0 items-center rounded-[9px] border border-line p-0.5 text-xs" role="tablist" aria-label="Visão da conversa">
               {(["chat", "trajetoria"] as const).map((v) => (
                 <button key={v} role="tab" aria-selected={vista === v} onClick={() => setVista(v)}
-                  className={`rounded px-2 py-0.5 ${vista === v ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+                  className={`rounded-[7px] px-2.5 py-1 ${vista === v ? "bg-raised font-medium text-fg" : "text-muted hover:text-fg"}`}>
                   {v === "chat" ? "Chat" : "Trajetória"}
                 </button>
               ))}

@@ -2,14 +2,33 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { Conversation } from "../types";
 import { folderName } from "./FolderPicker";
-import { LogoMark, LogoText } from "./Logo";
-import { SectionTabs, type Section } from "./Controls";
-import { Archive, Chevron, Download, Edit, Gear, More, Pin, Robo, Search, Trash } from "./icons";
+import { SECOES, type Section } from "./Controls";
+import { Archive, CheckSquare, ChevronDown, Download, Edit, Gear, More, PanelLeft, Pin, Robo, Search, Trash } from "./icons";
 import { AvisoAtualizacao } from "./Atualizacao";
 
 export type BulkAction = "archive" | "unarchive" | "pin" | "unpin" | "delete";
 
 const GROUPS_KEY = "forja.groups.collapsed";
+
+/** "há 12 min", "há 2 h", "ontem", "3 dias": a meta de cada item da lista. */
+export function quando(iso: string): string {
+  const d = new Date(iso), agora = new Date();
+  const min = Math.round((+agora - +d) / 60000);
+  if (min < 1) return "agora";
+  if (min < 60) return `há ${min} min`;
+  if (min < 24 * 60 && d.getDate() === agora.getDate()) return `há ${Math.round(min / 60)} h`;
+  const dias = Math.round((+new Date(agora.toDateString()) - +new Date(d.toDateString())) / 864e5);
+  if (dias <= 1) return "ontem";
+  if (dias < 7) return `${dias} dias`;
+  if (dias < 14) return "semana passada";
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
+}
+
+/** Seções sem pasta: grupos por data, como no design (Hoje, Esta semana, Antigas). */
+function grupoData(iso: string): string {
+  const dias = Math.round((+new Date(new Date().toDateString()) - +new Date(new Date(iso).toDateString())) / 864e5);
+  return dias <= 0 ? "Hoje" : dias === 1 ? "Ontem" : dias < 7 ? "Esta semana" : dias < 31 ? "Este mês" : "Antigas";
+}
 
 function loadCollapsed(): Set<string> {
   try {
@@ -166,7 +185,15 @@ export default function Sidebar(props: {
 
   // Agente e Maestro: agrupado por pasta de trabalho (como no Claude); grupo mais recente primeiro.
   const groups = useMemo(() => {
-    if ((props.section !== "agent" && props.section !== "maestro") || q.trim()) return null;
+    if (q.trim()) return null;
+    if (props.section !== "agent" && props.section !== "maestro") {
+      const map = new Map<string, Conversation[]>();
+      for (const c of list) {
+        const key = c.pinned ? "Fixadas" : grupoData(c.updated_at);
+        map.set(key, [...(map.get(key) ?? []), c]);
+      }
+      return [...map.entries()].map(([label, items]) => ({ key: `${props.section}:${label}`, full: label, label, items, latest: 0, pinned: false, pasta: false }));
+    }
     const map = new Map<string, Conversation[]>();
     for (const c of list) {
       const key = c.workspace ?? "";
@@ -180,6 +207,7 @@ export default function Sidebar(props: {
         items,
         latest: Math.max(...items.map((c) => +new Date(c.updated_at))),
         pinned: items.some((c) => c.pinned),
+        pasta: true,
       }))
       .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.latest - a.latest);
   }, [list, props.section, q]);
@@ -222,8 +250,8 @@ export default function Sidebar(props: {
       <div
         key={c.id}
         onClick={() => (selecting ? toggleSelect(c.id) : props.onSelect(c.id))}
-        className={`group relative flex cursor-pointer items-center gap-1.5 rounded-lg px-3 py-2 text-sm ${
-          checked ? "bg-sky-950/40 text-fg" : active ? "bg-raised text-fg" : dim ? "text-faint hover:bg-surface hover:text-muted" : "text-muted hover:bg-surface hover:text-fg"
+        className={`group relative flex cursor-pointer items-center gap-2 rounded-[9px] px-2 py-[7px] text-[13px] ${
+          checked ? "bg-accent-soft text-fg" : active ? "bg-raised text-fg" : dim ? "text-faint hover:bg-surface hover:text-muted" : "text-fg-2 hover:bg-surface hover:text-fg"
         }`}
       >
         {selecting && (
@@ -234,7 +262,7 @@ export default function Sidebar(props: {
           if (!b) return props.unread.has(c.id) && <span className="size-1.5 shrink-0 rounded-full bg-sky-400" title="terminou em segundo plano" />;
           return (
             <span
-              className={`size-1.5 shrink-0 animate-pulse rounded-full ${b.subagents ? "bg-violet-400" : "bg-emerald-400"}`}
+              className={`size-1.5 shrink-0 animate-pulse rounded-full ${b.subagents ? "bg-agent" : "bg-accent"}`}
               title={b.subagents ? `${b.subagents} subagente(s) trabalhando` : "turno em andamento"}
             />
           );
@@ -265,9 +293,9 @@ export default function Sidebar(props: {
             className="w-full rounded bg-bg px-1 text-fg focus:outline-none"
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate" title={c.snippet ? `…${c.snippet}…` : c.title}>
-            {c.title}
-            {c.snippet && <span className="block truncate text-[11px] text-faint">…{c.snippet}…</span>}
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5" title={c.snippet ? `…${c.snippet}…` : c.title}>
+            <span className="truncate">{c.title}</span>
+            <span className="truncate text-[11px] text-faint">{c.snippet ? `…${c.snippet}…` : quando(c.updated_at)}</span>
           </span>
         )}
         {!selecting && (
@@ -296,12 +324,12 @@ export default function Sidebar(props: {
     );
   }
 
-  function groupHeader(g: { key: string; full: string; label: string; items: Conversation[] }) {
+  function groupHeader(g: { key: string; full: string; label: string; items: Conversation[]; pasta: boolean }) {
     const isCollapsed = collapsed.has(g.key);
     const ids = g.items.map((c) => c.id);
     const allSel = ids.every((id) => selected.has(id));
     return (
-      <div key={`h-${g.key}`} className="group/h mt-2 flex items-center gap-1 px-2 py-1 text-[11px] text-faint">
+      <div key={`h-${g.key}`} className="group/h flex items-center gap-1 px-2 pt-3 pb-[5px] font-mono text-[10.5px] font-medium text-faint">
         {selecting && (
           <input
             type="checkbox"
@@ -317,12 +345,12 @@ export default function Sidebar(props: {
             className="size-3.5 accent-sky-500"
           />
         )}
-        <button onClick={() => toggleGroup(g.key)} className="flex min-w-0 flex-1 items-center gap-1 text-left uppercase tracking-wider hover:text-muted" title={g.full}>
-          <Chevron className={`size-3 shrink-0 ${isCollapsed ? "-rotate-90" : ""}`} />
-          <span className="truncate">{g.label}</span>
-          <span className="shrink-0 normal-case tracking-normal">{g.items.length}</span>
+        <button onClick={() => toggleGroup(g.key)} className="flex min-w-0 flex-1 items-center gap-[5px] text-left tracking-[.08em] uppercase hover:text-muted" title={g.full}>
+          <ChevronDown className={`size-3 shrink-0 transition-transform duration-150 ${isCollapsed ? "-rotate-90" : ""}`} />
+          <span className="flex-1 truncate">{g.label}</span>
+          <span className="shrink-0 tracking-normal">{g.items.length}</span>
         </button>
-        {!selecting && (
+        {!selecting && g.pasta && (
           <button
             onClick={() => props.onNewIn(g.key || null)}
             title={`Nova conversa em ${g.full}`}
@@ -338,35 +366,38 @@ export default function Sidebar(props: {
   const bulkBtn = "rounded-full border border-line px-2.5 py-1 text-xs text-fg hover:bg-raised disabled:opacity-40";
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col bg-side">
-      {/* mesma faixa h-12 e px-3 do cabeçalho: abrir/fechar a barra não move o seletor */}
-      <div className="arrasta flex h-12 shrink-0 items-center gap-2 px-3">
-        <SectionTabs value={props.section} onChange={props.onSection} sidebarHidden={false} onToggleSidebar={props.onHide} />
-      </div>
-      <div className="flex items-center gap-2.5 px-4 pt-2 pb-2">
-        <LogoMark className="size-7 shrink-0 text-fg" />
-        <LogoText className="h-3.5 text-fg" />
+    <aside className="flex w-[236px] shrink-0 flex-col border-r border-line bg-side">
+      <div className="arrasta flex h-[52px] shrink-0 items-center gap-2 pr-3.5 pl-2.5">
+        <button onClick={props.onHide} title="Esconder conversas" className="grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg">
+          <PanelLeft />
+        </button>
+        <span className="text-sm font-semibold text-fg">{SECOES.find((x) => x.id === props.section)?.label}</span>
+        <span className="font-mono text-[11px] text-faint">{props.conversations.length}</span>
         <button
           onClick={() => setSelecting((v) => !v)}
           title={selecting ? "Sair da seleção" : "Selecionar várias conversas"}
-          className={`ml-auto rounded-lg px-2 py-1 text-xs ${selecting ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}
+          className={`ml-auto grid h-7 min-w-7 place-items-center rounded-[7px] px-1 text-[11.5px] ${selecting ? "bg-raised px-2 text-fg" : "text-faint hover:bg-raised hover:text-fg"}`}
         >
-          {selecting ? "Cancelar" : "Selecionar"}
+          {selecting ? "Cancelar" : <CheckSquare className="size-3.5" />}
         </button>
-        <button onClick={props.onNew} title={props.section === "chat" ? "Nova conversa de chat" : props.section === "maestro" ? "Nova conversa Maestro" : "Nova conversa do agente"} className="rounded-lg p-1.5 text-muted hover:bg-raised hover:text-fg">
-          <Edit />
+        <button onClick={props.onNew} title={props.section === "chat" ? "Nova conversa de chat" : props.section === "maestro" ? "Nova conversa Maestro" : "Nova conversa do agente"}
+                className="flex items-center gap-1.5 rounded-[9px] border border-accent-line bg-accent-soft py-[5px] pr-[11px] pl-[9px] text-[12.5px] font-medium text-accent-text hover:border-accent hover:bg-accent/20">
+          <Edit className="size-3.5" /> Novo
         </button>
       </div>
-      <label className="mx-3 mt-2 mb-3 flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted focus-within:bg-surface">
-        <Search />
+      <label className="mx-3 mb-2.5 flex items-center gap-2 rounded-[9px] border border-raised bg-surface px-2.5 py-[7px] text-[12.5px] text-faint focus-within:border-focus">
+        <Search className="size-3.5 shrink-0" />
         <input
+          id="busca-conversas"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar (título e conteúdo)"
-          className="w-full bg-transparent text-fg placeholder:text-muted focus:outline-none"
+          placeholder="Buscar"
+          title="Busca no título e no conteúdo"
+          className="min-w-0 flex-1 bg-transparent text-fg placeholder:text-faint focus:outline-none"
         />
+        <kbd className="shrink-0 rounded border border-line px-1 font-mono text-[10.5px] text-faint">Ctrl K</kbd>
       </label>
-      <nav className="flex-1 overflow-y-auto px-2 pb-1">
+      <nav className="flex flex-1 flex-col gap-px overflow-y-auto px-2 pb-1">
         {groups
           ? groups.map((g) => (
               <div key={g.key}>
@@ -378,7 +409,7 @@ export default function Sidebar(props: {
         {q.trim() && !list.length && <div className="px-3 py-2 text-xs text-faint">Nada encontrado.</div>}
         <button
           onClick={() => setShowArchived((v) => !v)}
-          className="mt-2 flex w-full items-center gap-2 rounded-lg px-3 py-1.5 text-xs text-faint hover:bg-surface hover:text-muted"
+          className="mt-2 flex w-full items-center gap-2 rounded-[9px] px-2 py-1.5 text-xs text-faint hover:bg-surface hover:text-muted"
         >
           <Archive className="size-3.5" /> {showArchived ? "Ocultar arquivadas" : "Arquivadas"}
         </button>
@@ -419,9 +450,10 @@ export default function Sidebar(props: {
       <AvisoAtualizacao />
       <button
         onClick={props.onSettings}
-        className="m-2 flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface hover:text-fg"
+        title="Configurações · Ctrl ,"
+        className="flex items-center gap-2.5 border-t border-line px-3 py-2.5 text-[12.5px] text-muted hover:bg-surface hover:text-fg"
       >
-        <Gear /> Configurações
+        <Gear className="size-[15px]" /> Configurações
       </button>
     </aside>
   );
