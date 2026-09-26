@@ -120,18 +120,21 @@ def pos_validacao(conv_id: int, resultado: str, url: str) -> str:
 
 # ------------------------------------------------------------------ revisão visual
 
-async def _pergunta_a_visao(spec: dict, texto: str, anexos: list[dict]) -> str:
+async def _pergunta_a_visao(spec: dict, texto: str, anexos: list[dict], carregar: bool = False,
+                            slot: int | None = None) -> str:
     from . import modelctl, uploads
     from .tools import vision_caps
     caps = vision_caps(await llm.capabilities(spec["provider"], spec["model"]),
                        db.get_model_setting(spec["model"])["vision"])
     if "vision" not in caps:
         raise ToolError(f"o modelo {spec['model']} não tem visão (em IA local, falta o projetor mmproj)")
-    async for _ in modelctl.ensure(spec):  # local: sobe o revisor (a Maestro recarrega o dela depois)
-        pass
+    if carregar:  # só com nada carregado (E4: a revisão visual nunca derruba o modelo do principal)
+        async for _ in modelctl.ensure(spec):
+            pass
     mensagens = [{"role": "system", "content": CHECKLIST}, uploads.user_message(texto, anexos)]
     resposta = ""
-    async for tipo, valor in llm.chat_stream(spec["provider"], spec["model"], mensagens, None, config.NUM_CTX, "baixo"):
+    async for tipo, valor in llm.chat_stream(spec["provider"], spec["model"], mensagens, None, config.NUM_CTX, "baixo",
+                                             **({"slot": slot} if slot is not None else {})):
         if tipo == "content":
             resposta += valor
     return resposta.strip()
@@ -167,12 +170,20 @@ async def _visual_review(_root: Path, args: dict) -> dict:
             linhas.append(f"{url} — {nome} {largura}x{altura}")
     if not spec.get("model"):
         spec = _visao_carregada()
+    from . import modelctl
+    rota = modelctl.como_rodar("visual", spec if spec.get("model") else None)
+    if rota.caminho == "pular" and spec.get("model"):
+        return {"text": (f"REVISÃO VISUAL PULADA: {rota.motivo}. O revisor configurado ({spec['model']}) não "
+                         "está carregado. Os prints estão no chat para o usuário; o visual NÃO foi julgado."),
+                "attachments": anexos}
+    spec = dict(rota.spec or {})
     if not spec.get("model"):
         return {"text": ("REVISÃO VISUAL INDISPONÍVEL: nenhum modelo com visão em Configurações › Maestro › "
                          "Revisão visual. Os prints estão no chat para o usuário; o visual NÃO foi julgado."),
                 "attachments": anexos}
     try:
-        veredito = await _pergunta_a_visao(spec, "Prints:\n" + "\n".join(linhas), anexos)
+        veredito = await _pergunta_a_visao(spec, "Prints:\n" + "\n".join(linhas), anexos,
+                                           carregar=rota.caminho == "trocar-modelo", slot=rota.slot)
     except (ToolError, llm.LLMError) as e:
         return {"text": f"REVISÃO VISUAL INDISPONÍVEL: {e}. O visual NÃO foi julgado.", "attachments": anexos}
     ok = veredito.upper().startswith("VEREDITO: OK")

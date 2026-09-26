@@ -449,7 +449,10 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
     escolha = next(iter(chain("rapido")), None)
     if not escolha or not paths or not gitops.is_repo(root):
         return "", ""
-    spec = escolha[1]
+    rota = modelctl.como_rodar("revisor", escolha[1])  # E4: revisor não troca de modelo
+    if not rota.spec:
+        return "", ""
+    spec = rota.spec
     diff = "\n".join(gitops.diff(root, p) for p in sorted(paths))[:MAX_DIFF]
     if not diff.strip():
         return "", ""
@@ -458,7 +461,8 @@ async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
     texto = ""
     try:
         async for kind, val in llm.chat_stream(spec["provider"], spec["model"], messages, None,
-                                               config.NUM_CTX, "baixo", budget_mult=SUB_BUDGET_MULT):
+                                               config.NUM_CTX, "baixo", budget_mult=SUB_BUDGET_MULT,
+                                               **({"slot": rota.slot} if rota.slot is not None else {})):
             if kind == "content":
                 texto += val
     except llm.LLMError as e:
@@ -506,6 +510,13 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
     used_level, spec = cadeia[0]
     tentados = {used_level}
+    # E4: onde esta chamada roda. Worker pode trocar de modelo (o orquestrador já carregou); o resto usa o
+    # carregado num slot que não é o do principal, ou a nuvem se o papel foi liberado para ela.
+    papel = "worker" if structured else ("explorador" if persona and persona.get("name") == "explorador"
+                                         else "lateral")
+    rota = modelctl.como_rodar(papel, spec)
+    if rota.caminho == "nuvem" and rota.spec:
+        spec = dict(rota.spec)
     provider, model = spec["provider"], spec["model"]
     via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona, structured)
     brief = [task]
@@ -522,7 +533,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     messages: list[dict] = [system, {"role": "user", "content": "\n\n".join(brief)}]
 
     info = {"level": used_level, "provider": provider, "model": model, "steps": [], "tokens": 0,
-            "iterations": 0, "chain": [lvl for lvl, _ in cadeia]}
+            "iterations": 0, "chain": [lvl for lvl, _ in cadeia], "rota": rota.texto(papel)}
     if persona:
         info["agent"] = persona["name"]
     if used_level != level:
@@ -538,7 +549,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
     t0 = time.monotonic()
     final = ""
-    yield estado(f"{nome_do_nivel(used_level)} · {model}: começando…")
+    yield estado(f"{nome_do_nivel(used_level)} · {model}: começando… ({rota.caminho}: {rota.motivo})")
 
     # Worker de contrato vira uma conversa como a do chat: mensagens no mesmo formato, transmitidas
     # ao vivo (a coluna Worker do cockpit desenha com os componentes do chat) e gravadas a cada
@@ -589,7 +600,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 _poda_resultados(messages, manter=2, teto=PODA_TETO)
             try:
                 async for kind, val in llm.chat_stream(provider, model, messages, schemas, config.NUM_CTX,
-                                                       sub_effort, budget_mult=SUB_BUDGET_MULT):
+                                                       sub_effort, budget_mult=SUB_BUDGET_MULT,
+                                                       **({"slot": rota.slot} if rota.slot is not None else {})):
                     if run_obj.cancel.is_set():
                         break
                     if kind != "done" and t_primeiro is None:
@@ -639,6 +651,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                     used_level, spec = proximo
                     tentados.add(used_level)
                     provider, model = spec["provider"], spec["model"]
+                    rota = modelctl.como_rodar(papel, spec)
                     via, auto, caps, tools, schemas, messages[0] = await _setup(spec, run_obj, sub_effort,
                                                                                   persona, structured)
                     info.update(level=used_level, provider=provider, model=model)

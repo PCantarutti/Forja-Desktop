@@ -115,10 +115,11 @@ Regras:
 - Escreva no idioma da conversa."""
 
 
-async def summarize(provider: str, model: str, text: str, num_ctx: int) -> str:
+async def summarize(provider: str, model: str, text: str, num_ctx: int, slot: int | None = None) -> str:
     out = ""
     messages = [{"role": "system", "content": PROMPT}, {"role": "user", "content": text}]
-    async for kind, val in llm.chat_stream(provider, model, messages, None, num_ctx, think=False):
+    async for kind, val in llm.chat_stream(provider, model, messages, None, num_ctx, think=False,
+                                           **({"slot": slot} if slot is not None else {})):
         if kind == "content":
             out += val
     return split_think(out)[1].strip()

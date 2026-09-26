@@ -1140,7 +1140,8 @@ async def _compact(conv_id: int, msgs: list, req: RunRequest, ctx_max: int) -> A
     yield {"type": "status", "text": "Compactando contexto..."}
     try:
         text = compact.transcript(msgs, until, max_chars=int(ctx_max * 4 * 0.5))
-        summary = await compact.summarize(req.provider, req.model, text, config.NUM_CTX)
+        rota = modelctl.como_rodar("compactar", {"provider": req.provider, "model": req.model})
+        summary = await compact.summarize(req.provider, req.model, text, config.NUM_CTX, slot=rota.slot)
     except llm.LLMError as e:
         yield _event(conv_id, "warning", f"Falha ao compactar o contexto: {e}")
         return
@@ -1325,6 +1326,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     caps = vision_caps(detected, setting["vision"])
     vision_source = ("override" if setting["vision"] != "auto"
                      else "detectado" if detected is not None else "desconhecido")
+    # E4: o principal fica no slot fixo do llama-server (auxiliares vão para outro slot ou esperam)
+    rota_principal = modelctl.como_rodar("principal", {"provider": req.provider, "model": req.model})
     loop = LoopDetector()
     placar = progresso.Placar()  # E16: progresso por passo, ciclos, erro repetido, alucinação
     nudges = iterations = retries = 0
@@ -1416,8 +1419,10 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         checado = 0
         # Depois de uma intervenção o próximo turno pensa com metade do teto: é para agir, não repensar.
         mult, placar.teto_menor = (0.5 if placar.teto_menor else 1.0), False
+        extra_llm = {**({"budget_mult": mult} if mult != 1.0 else {}),
+                     **({"slot": rota_principal.slot} if rota_principal.slot is not None else {})}
         fluxo = ate_cancelar(llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort,
-                                             **({"budget_mult": mult} if mult != 1.0 else {})), run.cancel)
+                                             **extra_llm), run.cancel)
         try:
             async for kind, val in fluxo:
                 if kind != "done" and t_first is None:
@@ -1773,11 +1778,14 @@ async def retitle(conv_id: int, provisorio: str, req: RunRequest) -> dict | None
         return None
     texto = "\n\n".join(f"{m.role}: {(m.content or '').strip()[:TITLE_CHARS]}" for m in msgs[:4])
     bruto = ""
+    # E4: título é chamada auxiliar: slot próprio quando existe, nunca troca de modelo
+    rota = modelctl.como_rodar("lateral", {"provider": req.provider, "model": req.model})
     try:
         async for kind, val in llm.chat_stream(req.provider, req.model,
                                                [{"role": "system", "content": TITLE_PROMPT},
                                                 {"role": "user", "content": texto}], None, TITLE_CTX,
-                                               "baixo", think=False):
+                                               "baixo", think=False,
+                                               **({"slot": rota.slot} if rota.slot is not None else {})):
             if kind == "content":
                 bruto += val
     except (llm.LLMError, asyncio.TimeoutError):

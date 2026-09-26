@@ -43,6 +43,9 @@ ENV_DEFAULTS: dict[str, Any] = {
     "model_lifecycle": config.MODEL_LIFECYCLE,
     "maestro_model": {"provider": "", "model": ""},
     "maestro_visual": {"provider": "", "model": ""},
+    # E4: papéis auxiliares que podem ir para a nuvem (slot "nuvem") em vez de usar o modelo do principal.
+    # Desligados: o código sai da máquina.
+    "nuvem_por_papel": {"explorador": False, "revisor": False, "visual": False},
     "maestro_browser": True,
     "auto_review": False,  # modo Automático: o modelo revisa o risco da ação em vez de perguntar
     "workers_do_maestro": False,
@@ -153,6 +156,7 @@ def apply(values: dict | None = None) -> dict:
     config.MODEL_LIFECYCLE = values["model_lifecycle"]
     config.MAESTRO_MODEL = dict(values["maestro_model"])
     config.MAESTRO_VISUAL = dict(values["maestro_visual"])
+    config.NUVEM_POR_PAPEL = {**ENV_DEFAULTS["nuvem_por_papel"], **(values.get("nuvem_por_papel") or {})}
     config.WORKER_ESPECIALIDADES = [dict(e) for e in values["worker_especialidades"]]
     config.MAESTRO_BROWSER = bool(values["maestro_browser"])
     config.AUTO_REVIEW = bool(values["auto_review"])
@@ -257,6 +261,10 @@ def validate(patch: dict, current: dict) -> dict:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out
+        elif key == "nuvem_por_papel":
+            if not isinstance(raw, dict):
+                raise SettingsError("'nuvem_por_papel' precisa ser um objeto {papel: bool}.")
+            values[key] = {p: bool(raw.get(p, values[key].get(p, False))) for p in ENV_DEFAULTS[key]}
         elif key == "worker_especialidades":
             values[key] = _especialidades(raw, {p["id"] for p in values["providers"]} | {"local"})
         elif key in ("maestro_model", "maestro_visual"):

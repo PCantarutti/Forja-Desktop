@@ -334,10 +334,13 @@ def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict,
 
 async def chat_stream(provider: str, model: str, messages: list[dict], tools: list[dict] | None,
                       num_ctx: int, effort: str | None = None, think: bool | None = None,
-                      budget_mult: float = 1.0) -> AsyncIterator[tuple[str, object]]:
+                      budget_mult: float = 1.0, slot: int | None = None) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     messages = list(messages)
     extra: dict = {}
+    if slot is not None and spec(provider)["type"] == "llamacpp":
+        # E4: slot fixo (principal no 0, auxiliar no 1 quando existe) e cache do prompt ligado explícito.
+        extra.update(id_slot=int(slot), cache_prompt=True)
     await _reasoning(provider, model, effort, extra, messages, budget_mult)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     if think is False:  # chamada mecânica (compactar, titular, commit): raciocinar aqui é desperdício

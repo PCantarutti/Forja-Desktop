@@ -362,7 +362,42 @@ precisa saber o que cada backend deixa o Forja controlar.
 
 ### Política de execução (fazer primeiro)
 
-- [ ] **Uma função só decide onde cada chamada roda:** `modelctl.como_rodar(papel, modelo_pedido)`, com
+*Feita em 2026-09-26* (`modelctl.como_rodar` e `Rota`; testes em `tests/test_politica.py`).
+
+Validada no Forja real: o modelo local com 2 slots e uma conversa de agente. No log do llama-server, o
+prompt do principal (14k tokens) ficou no slot 0 e o título (177 tokens) foi para o slot 1, sem tocar no
+cache do principal. Antes, o servidor escolhia sozinho e o principal tinha caído no slot 1.
+
+Como ficou:
+- **`llm.chat_stream(slot=N)`** manda `id_slot` e `cache_prompt: true`, só para o llama.cpp embutido. O
+  principal (agente, Maestro, chat) vai sempre no slot 0.
+- **Quem passa pela `como_rodar`:**
+  - título (`lateral`) e compactação (`compactar`);
+  - `_review` (`revisor`);
+  - o subagente (`explorador` ou `lateral`) e o Worker (`worker`);
+  - a `visual_review` (`visual`), que **não troca mais o modelo carregado**: pula com o motivo, ou usa o
+    carregado se ele tiver visão.
+- **Decisão:**
+  - o mesmo modelo carregado vai para o `outro-slot` (1) quando o servidor tem mais de um;
+  - com `-np 1`, `mesmo-slot-sequencial`, e o motivo avisa que divide o cache;
+  - outro modelo local: o Worker pode `trocar-modelo`, e o resto usa `modelo-do-principal` (a `nuvem`,
+    se o papel foi liberado, entra antes);
+  - visual e embeddings: `pular`;
+  - com nada carregado, carregar é `trocar-modelo`.
+- **Nuvem por papel:** `nuvem_por_papel` com explorador, revisor e visual, desligados. Os interruptores
+  ficam em Configurações › Subagentes, desabilitados sem o slot Nuvem.
+- **Transparência:** a primeira linha de status do subagente ou Worker diz o caminho e o motivo; a
+  `visual_review` pulada explica por quê; cada decisão vira linha `rota` no `FORJA_METRICAS` (E10).
+
+Diferenças em relação ao plano:
+- **`2o-modelo` nunca é escolhido:** o Forja sobe um llama-server por vez. ponytail: vira caminho quando
+  existir multi-modelo (llama-swap).
+- **Paralelo de auxiliares no mesmo modelo:** não há teto de concorrência próprio. O auxiliar vai para o
+  slot 1 quando ele existe, e o limite de fato é o do servidor; a V6 mostrou que estourar a janela
+  unificada dá HTTP 500. Fica para os perfis (bloco "Perfis de hardware").
+- **O Worker ainda troca por tarefa, não em lote.** O lote é da E3, e a E0 mediu que a troca domina.
+
+- [x] **Uma função só decide onde cada chamada roda:** `modelctl.como_rodar(papel, modelo_pedido)`, com
       `papel` ∈ `principal | worker | explorador | revisor | visual | lateral | compactar | embeddings`.
       Devolve um destes caminhos:
   - `mesmo-slot-sequencial`: o modelo carregado, esperando a vez;
@@ -379,17 +414,17 @@ precisa saber o que cada backend deixa o Forja controlar.
   - tipo de slot (`--parallel`, KV unificado, `ctx_por_requisicao`, `localai.py:275`);
   - folga no pool (uso atual do principal + janela pedida);
   - opção de nuvem por papel nas configurações, **desligada** por padrão, porque o código sai da máquina.
-- [ ] **Slot fixo do agente principal.** O principal (Maestro ou agente) usa sempre o mesmo `id_slot`,
+- [x] **Slot fixo do agente principal.** O principal (Maestro ou agente) usa sempre o mesmo `id_slot`,
       com `cache_prompt: true`. Toda chamada auxiliar usa outro slot. Com `-np 1`, ela espera o
       principal ficar ocioso e, depois dela, o custo de reprocessar é conhecido e medido (E0/E10).
       Avaliar sugerir `--parallel 2` + KV unificado como padrão quando a VRAM permitir.
-- [ ] **Concorrência pelo tipo de slot:**
+- [x] **Concorrência pelo tipo de slot:**
   - `-np 1`: estritamente sequencial.
   - Slots com KV unificado (o padrão do Forja: `parallel=0` → 4 slots, `localai.py:282`): sequencial por
     padrão. Paralelo só com teto (2) e só com folga no pool, porque com o pool cheio o cache do
     principal sai primeiro.
   - Slots sem KV unificado: a janela por slot é `ctx/N`. Abaixo do mínimo do papel, sequencial.
-- [ ] **Regra geral: chamada auxiliar não troca de modelo.** Quando o modelo pedido não cabe junto na
+- [x] **Regra geral: chamada auxiliar não troca de modelo.** Quando o modelo pedido não cabe junto na
       VRAM:
   - explorador, revisor, lateral, compactar: `modelo-do-principal`;
   - `visual_review` sem modelo de visão carregável junto: `pular`, com o aviso "revisão visual pulada:
@@ -397,20 +432,20 @@ precisa saber o que cada backend deixa o Forja controlar.
   - embeddings (E6, se um dia existirem): `pular` e usar a busca FTS5;
   - Worker: a única exceção. Pode `trocar-modelo`, mas em lote (E3), nunca por tarefa quando a E0
     mostrar que a troca domina o tempo.
-- [ ] **Nuvem por papel, opt-in:** "exploração/revisão/visual podem usar nuvem", cada uma com o seu
+- [x] **Nuvem por papel, opt-in:** "exploração/revisão/visual podem usar nuvem", cada uma com o seu
       interruptor, todos desligados por padrão. Com a nuvem ligada, ela entra antes do
       `modelo-do-principal`.
-- [ ] **Transparência:** o evento de cada chamada auxiliar mostra o caminho escolhido e o motivo
+- [x] **Transparência:** o evento de cada chamada auxiliar mostra o caminho escolhido e o motivo
       (ex.: `explorador → modelo-do-principal (VRAM: faltam 2,1 GB)`), e a métrica registra o mesmo
       (E10).
-- [ ] **Migrar quem já chama o LLM por fora** para `como_rodar`:
+- [x] **Migrar quem já chama o LLM por fora** para `como_rodar`:
   - Worker (`maestro.py:290`);
   - `subagents._review` (`subagents.py:373`);
   - `visual_review` (`qualidade.py:151`);
   - título e resumo;
   - compactação (`compact.py`);
   - `delegate_task`.
-- [ ] Testes com `hardware()` e os parâmetros do servidor simulados:
+- [x] Testes com `hardware()` e os parâmetros do servidor simulados:
   - cada papel em cada cenário de VRAM e slot;
   - chamada auxiliar nunca recebe o slot do principal;
   - nuvem desligada nunca é escolhida;

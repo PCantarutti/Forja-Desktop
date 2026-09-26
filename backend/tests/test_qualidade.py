@@ -145,7 +145,7 @@ def test_visual_review_reprovado_vira_tarefa(site, monkeypatch):
     _fotos(monkeypatch)
     monkeypatch.setattr(config, "MAESTRO_VISUAL", {"provider": "local", "model": "visao"})
 
-    async def visao(spec, texto, anexos):
+    async def visao(spec, texto, anexos, **kw):  # carregar/slot: a rota da E4
         assert len(anexos) == 2 and "mobile" in texto
         return "VEREDITO: ajustar\n- mobile: botão Comprar cortado na direita\n- desktop: título sem contraste"
 

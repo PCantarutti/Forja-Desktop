@@ -148,6 +148,7 @@ ESPECIALIDADES_PADRAO = [
 ]
 WORKER_ESPECIALIDADES: list[dict] = [dict(e) for e in ESPECIALIDADES_PADRAO]
 MAESTRO_VISUAL = {"provider": "", "model": ""}
+NUVEM_POR_PAPEL = {"explorador": False, "revisor": False, "visual": False}  # E4: opt-in por papel
 WORKERS_DO_MAESTRO = False  # Workers rodam no mesmo modelo da Maestro (sem troca, paralelo no mesmo servidor)  # modelo COM VISÃO que julga os prints (visual_review)
 MAESTRO_BROWSER = True             # a Maestro valida entregas no navegador (browser_validate e browser_*)
 MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)

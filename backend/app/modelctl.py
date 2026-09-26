@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
 from . import config, metricas
@@ -287,3 +288,106 @@ async def after_task(spec: dict | None, maestro: dict | None = None) -> AsyncIte
         return
     async for ev in unload("unload_after_task"):
         yield ev
+
+
+# ------------------------------------------------------------------ política de execução (E4)
+# Uma função decide onde cada chamada ao LLM roda. Regra do plano inteiro: chamada auxiliar não troca o
+# modelo carregado nem toma o slot do principal por conta própria. O Worker é a única exceção (pode trocar),
+# e a E0 mediu o custo: numa máquina de 12 GB a troca Maestro <-> Worker gastou 39% do relógio (carga mais o
+# Maestro reprocessando o contexto inteiro a cada volta, porque os híbridos não restauram do disco).
+
+PAPEIS = ("principal", "worker", "explorador", "revisor", "visual", "lateral", "compactar", "embeddings")
+SLOT_PRINCIPAL = 0      # o principal (agente/Maestro) fica sempre no slot 0, com cache_prompt
+SLOT_AUXILIAR = 1       # auxiliar vai para o 1 quando o servidor tem mais de um slot
+_SLOTS: dict[int, int] = {}  # pid do llama-server -> nº de slots (pergunta ao servidor uma vez)
+
+
+@dataclass
+class Rota:
+    caminho: str            # mesmo-slot | outro-slot | mesmo-slot-sequencial | modelo-do-principal |
+                            # trocar-modelo | nuvem | externo | pular
+    spec: dict | None       # o modelo que de fato atende (None em "pular")
+    slot: int | None        # id_slot do llama-server (None: não fixa)
+    motivo: str
+
+    def texto(self, papel: str) -> str:
+        return f"{papel} → {self.caminho} ({self.motivo})"
+
+
+def slots_do_servidor() -> int:
+    """Quantos slots o llama-server carregado tem: o -np da configuração, ou o servidor diz (0 = automático)."""
+    if localai is None:
+        return 1
+    st = localai.status()
+    if not st.get("running"):
+        return 1
+    n = int((st.get("params") or {}).get("parallel") or 0)
+    if n >= 1:
+        return n
+    pid = int(st.get("pid") or 0)
+    if pid not in _SLOTS:
+        try:
+            import httpx
+            r = httpx.get(f"http://127.0.0.1:{config.LOCAL_PORT}/slots", timeout=3)
+            _SLOTS[pid] = max(1, len(r.json())) if r.status_code == 200 else 1
+        except Exception:
+            _SLOTS[pid] = 1
+    return _SLOTS[pid]
+
+
+def _local_carregado() -> dict | None:
+    if localai is None:
+        return None
+    st = localai.status()
+    return {"provider": config.LOCAL_PROVIDER["id"], "model": st["alias"]} if st.get("running") and st.get("alias") else None
+
+
+def _nuvem(papel: str) -> dict | None:
+    """O slot "nuvem" dos subagentes, se o usuário liberou este papel para a nuvem."""
+    if not (getattr(config, "NUVEM_POR_PAPEL", {}) or {}).get(papel):
+        return None
+    spec = (getattr(config, "SUBAGENTS", {}) or {}).get("nuvem") or {}
+    return spec if spec.get("provider") and spec.get("model") else None
+
+
+def como_rodar(papel: str, pedido: dict | None) -> Rota:
+    """Onde a chamada de `papel` roda, para quem pediu `pedido` ({provider, model}). Nunca carrega nada:
+    quem recebe "trocar-modelo" chama `ensure`. `metricas` registra cada decisão (E10)."""
+    rota = _decide(papel, pedido)
+    metricas.registra("rota", papel=papel, caminho=rota.caminho, modelo=(rota.spec or {}).get("model"),
+                      slot=rota.slot, motivo=rota.motivo)
+    return rota
+
+
+def _decide(papel: str, pedido: dict | None) -> Rota:
+    carregado = _local_carregado()
+    pedido = pedido if pedido and pedido.get("model") else None
+    if papel == "principal":
+        if pedido and gerenciavel(pedido):
+            return Rota("mesmo-slot", pedido, SLOT_PRINCIPAL, "principal fica no slot fixo, com cache_prompt")
+        return Rota("externo", pedido, None, "o provedor cuida do cache")
+    if pedido and not gerenciavel(pedido):
+        return Rota("externo", pedido, None, "provedor fora do Forja (nuvem, Ollama, LM Studio)")
+    if pedido and carregado and pedido["model"] == carregado["model"]:
+        n = slots_do_servidor()
+        if n > 1:
+            return Rota("outro-slot", pedido, SLOT_AUXILIAR, f"mesmo modelo, slot {SLOT_AUXILIAR} de {n}")
+        return Rota("mesmo-slot-sequencial", pedido, SLOT_PRINCIPAL,
+                    "mesmo modelo com um slot só (-np 1): espera o principal e divide o cache com ele")
+    # Daqui em diante o pedido é outro modelo local (ou nenhum): a regra é não trocar.
+    if papel == "worker" and pedido:
+        return Rota("trocar-modelo", pedido, None, "o Worker pode trocar de modelo (a E0 mediu: troca "
+                                                    "+ reprocessar o Maestro custam minutos por tarefa)")
+    if nuvem := _nuvem(papel):
+        return Rota("nuvem", nuvem, None, "este papel está liberado para a nuvem nas configurações")
+    if pedido and not carregado:
+        return Rota("trocar-modelo", pedido, None, "nenhum modelo carregado: carregar não derruba ninguém")
+    if papel in ("visual", "embeddings"):
+        return Rota("pular", None, None, "sem VRAM para carregar o modelo junto: o Forja roda um modelo por "
+                                         "vez, e trocar no meio do trabalho derrubaria o principal")
+    if carregado:
+        n = slots_do_servidor()
+        return Rota("modelo-do-principal", carregado, SLOT_AUXILIAR if n > 1 else SLOT_PRINCIPAL,
+                    f"o pedido ({pedido['model']}) não está carregado e chamada auxiliar não troca de modelo"
+                    if pedido else "usa o modelo carregado")
+    return Rota("pular", None, None, "nenhum modelo disponível")

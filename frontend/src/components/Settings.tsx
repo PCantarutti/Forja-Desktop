@@ -58,6 +58,7 @@ export type AppSettings = {
   maestro_browser: boolean;
   auto_review: boolean;
   maestro_visual: { provider: string; model: string };
+  nuvem_por_papel?: Record<"explorador" | "revisor" | "visual", boolean>;
   worker_especialidades: Especialidade[];
 };
 
@@ -1594,6 +1595,21 @@ function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
           </div>
         </section>
       ))}
+      <section className="space-y-1 rounded-xl border border-line bg-surface p-4">
+        <h3 className="text-sm text-fg">Papéis que podem usar a nuvem</h3>
+        <p className="text-xs text-muted">
+          Quando o modelo pedido não está carregado, o Forja não troca o modelo do principal: usa o que já está na VRAM. Ligue
+          um papel aqui para ele ir ao slot Nuvem nesse caso. O código dele sai da máquina.
+        </p>
+        {([["explorador", "Explorador (explore)", "Varre o código só lendo e devolve um relatório."],
+           ["revisor", "Revisão do diff", "O parecer sobre o que a delegação mudou."],
+           ["visual", "Revisão visual", "Julga os prints das telas. Sem modelo com visão carregado, é pulada."]] as const).map(([k, rotulo, dica]) => (
+          <Toggle key={k} label={rotulo} hint={dica} disabled={!s.subagents.nuvem?.model}
+                  checked={!!s.nuvem_por_papel?.[k]}
+                  onChange={(v) => set("nuvem_por_papel", { explorador: false, revisor: false, visual: false, ...s.nuvem_por_papel, [k]: v })} />
+        ))}
+        {!s.subagents.nuvem?.model && <p className="text-xs text-faint">Configure o slot Nuvem acima para liberar.</p>}
+      </section>
       <Field label="Máximo de passos por subagente" hint="Evita que um subagente fique rodando sem fim.">
         <Num value={s.subagent_max_iterations} onChange={(v) => set("subagent_max_iterations", v)} />
       </Field>
