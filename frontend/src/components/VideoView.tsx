@@ -1153,9 +1153,8 @@ function AjustesVideo(props: {
             </button>
           </div>
           {livreAtivo && (
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-muted">Proporção</span>
-              <div className="ml-auto flex items-center gap-1.5">
+            <div className="flex items-center justify-center">
+              <div className="flex items-center gap-1.5" title="Proporção personalizada (largura : altura)">
                 {[0, 1].map((i) => (
                   <Fragment key={i}>
                     {i === 1 && <span className="font-mono text-faint">:</span>}
