@@ -275,7 +275,12 @@ def defaults_for(path: str = "") -> dict:
                 d[key] = do_help[flag]
     if path:
         d["mmproj"] = projector_for(path)   # visão já vem ligada quando o mmproj está do lado
-    d.update({k: v for k, v in (read_config().get("defaults") or {}).items() if k in d})
+    try:  # E4: o tipo do KV vem do perfil de hardware (Performance f16, Balanced/Low VRAM q8_0)
+        from . import perfis
+        d["cache_type_k"] = d["cache_type_v"] = perfis.valores()["kv"]
+    except Exception:
+        pass
+    d.update({k: v for k, v in (read_config().get("defaults") or {}).items() if k in d})  # o usuário vence
     info = gguf_info(path) if path else None
     if info and info["n_layer"]:
         d["ngl"] = info["n_layer"]                                   # tudo na GPU, como o LM Studio
@@ -647,11 +652,21 @@ def devices_off() -> list[str]:
     return [str(d) for d in (read_config().get("devices_off") or [])]
 
 
+def _reavalia_perfil() -> None:
+    """O Automático muda com o modelo principal e com as GPUs ligadas (E4)."""
+    try:
+        from . import perfis
+        perfis.reavaliar()
+    except Exception:
+        pass
+
+
 def set_device(nome: str, ligado: bool) -> list[dict]:
     """Liga/desliga uma GPU. Com duas placas, dá para dizer qual o modelo usa."""
     fora = set(devices_off())
     fora.discard(nome) if ligado else fora.add(nome)
     _patch("devices_off", sorted(fora))
+    _reavalia_perfil()
     return hardware()["gpus"]
 
 
@@ -1765,6 +1780,7 @@ def load(path: str, patch: dict | None = None, temporario: dict | None = None) -
     data["speed"] = round((anterior + gasto / gb) / 2, 2)  # média simples: a próxima barra já acerta mais
     data["last"] = path
     write_config(data)
+    _reavalia_perfil()
     return status()
 
 

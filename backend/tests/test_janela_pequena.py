@@ -8,7 +8,8 @@ def _janela(n):
     return config.JANELA.set(n)
 
 
-def test_tetos_mudam_com_a_janela():
+def test_tetos_mudam_com_a_janela(monkeypatch):
+    monkeypatch.setattr(config, "FATOR_TETOS", 1.0)  # o perfil de hardware multiplica; aqui só a janela
     tok = _janela(8192)
     try:
         assert config.teto(20_000, 0.2) == int(8192 * 0.2 * 3)

@@ -686,14 +686,14 @@ quando a janela é grande. O enxuto vale para os dois modos, porque as ocultas s
 usuário configurar nada. A detecção por chamada já é a `como_rodar` (acima). O perfil só escolhe os
 **valores** que ela e o resto da E4 usam: é um conjunto de valores, sem lógica nova.
 
-- [ ] **Seletor "Perfil de hardware"** nas configurações, com quatro opções: **Automático (padrão)**,
+- [x] **Seletor "Perfil de hardware"** nas configurações, com quatro opções: **Automático (padrão)**,
       Performance, Balanced e Low VRAM.
   - O Automático escolhe o perfil pela VRAM e pela RAM de `localai.hardware()` (`localai.py:630`) e
     pelo tamanho do modelo principal com o contexto. A tela mostra o escolhido e o motivo (ex.: "8 GB
     de VRAM, modelo de 7,5 GB → Low VRAM").
   - O Automático reavalia ao trocar o modelo principal ou ao ligar ou desligar uma GPU em
     Configurações › Hardware. Não reavalia no meio de uma execução.
-- [ ] **Valores iniciais de cada perfil** (ponto de partida; os números finais saem da E0: V2, V4, V5 e
+- [x] **Valores iniciais de cada perfil** (ponto de partida; os números finais saem da E0: V2, V4, V5 e
       V6):
 
   | Regra | Performance | Balanced | Low VRAM |
@@ -708,25 +708,34 @@ usuário configurar nada. A detecção por chamada já é a `como_rodar` (acima)
   | Descarga por ociosidade | 30 min | 15 min | 5 min |
   | Limites de contexto | janela cheia | proporcionais | proporcionais e mais apertados |
 
-- [ ] **Configuração manual vence o perfil.** O que o usuário mudou à mão continua valendo por cima de
+- [x] **Configuração manual vence o perfil.** O que o usuário mudou à mão continua valendo por cima de
       qualquer perfil, com uma marca "alterado" ao lado. Trocar de perfil não apaga esses ajustes. Um
       botão "voltar ao perfil" desfaz.
-- [ ] **No Low VRAM, trocar de modelo é o último recurso.** Com 8 GB, um modelo só com cache é quase
+- [x] **No Low VRAM, trocar de modelo é o último recurso.** Com 8 GB, um modelo só com cache é quase
       sempre mais rápido que dois se revezando. Se Maestro e Worker estiverem em modelos diferentes,
       avisar: "neste PC, usar o mesmo modelo para os dois é ~N× mais rápido" (N medido na V5), com um
       botão para aplicar.
-- [ ] **Recomendar um modelo menor, sem trocar sozinho.** O Forja nunca troca o modelo escolhido pelo
+- [x] **Recomendar um modelo menor, sem trocar sozinho.** O Forja nunca troca o modelo escolhido pelo
       usuário. Quando o modelo não couber inteiro na GPU (offload na CPU), mostrar: "este modelo de 14B
       roda com parte na CPU; um de 7–8B cabe inteiro e fica ~N× mais rápido", listando os GGUF já
       baixados que cabem, com um botão.
-- [ ] **Transparência:** cada decisão da `como_rodar` cita o perfil ativo no motivo (ex.: `worker →
+- [x] **Transparência:** cada decisão da `como_rodar` cita o perfil ativo no motivo (ex.: `worker →
       sequencial (Low VRAM: 1 worker)`). A tela de métricas da E10 mostra o perfil de cada execução.
-- [ ] Testes com `hardware()` simulado:
+- [x] Testes com `hardware()` simulado (`tests/test_perfis.py`, mais: a GPU integrada não conta como VRAM):
   - 8 GB de VRAM com um modelo de 7 GB → Low VRAM;
   - 24 GB com o mesmo modelo → Performance;
   - ajuste manual sobrevive à troca de perfil;
   - o Automático não troca de perfil no meio de uma execução;
   - o Low VRAM nunca carrega um 2º modelo.
+
+**Feito (2026-09-26):** `app/perfis.py` (valores de cada perfil, `automatico`, `reavaliar` ao carregar e em
+`set_device`), `GET /api/perfil` e `POST /api/perfil/voltar`, seção "Perfil de hardware" em Configurações ›
+Hardware e aviso "um modelo só" na aba Maestro. O perfil governa KV, cache em disco, descarga por
+ociosidade e o fator dos tetos de contexto (`config.FATOR_TETOS`: 1,5 / 1,0 / 0,7). A integrada (Radeon
+que o Vulkan mostra com 16,8 GB) fica fora da conta da VRAM. N do aviso = 2,0 (E0: 112,7 min com dois
+modelos, 55,6 min com um). **Ficou para a E7:** Workers e sessões em paralelo — os números estão em
+`perfis.VALORES` (`max_workers`, `sessoes_paralelo`), mas ligar antes do worktree por Worker escreveria
+na mesma árvore. A tela de métricas por execução fica com a E10.
 
 **Pronto quando:**
 - uma conversa de agente com 40 ferramentas numa janela de 8k não estoura e não perde o cache a cada

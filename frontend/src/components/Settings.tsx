@@ -659,6 +659,7 @@ function HardwareTab(props: { onError: (e: string) => void }) {
         </button>
       </Field>
 
+      <PerfilHardware onError={props.onError} />
       <CacheDisco onError={props.onError} />
 
       <Field label="Proteções de carregamento" hint="O Forja estima a memória antes de subir o modelo; isto diz o que fazer quando não cabe.">
@@ -1372,6 +1373,7 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
           </div>
         </Field>
       ))}
+      <UmModeloSo s={s} set={set} />
       <Especialistas lista={s.worker_especialidades ?? []} minCtx={minimo.min_ctx_worker}
                      onChange={(l) => set("worker_especialidades", l)} />
       <Field label="Execução dos Workers" hint="Sequencial: um por vez — o único modo que troca de modelo local entre tarefas. Paralelo: tarefas independentes e sem arquivo em comum rodam juntas.">
@@ -2405,5 +2407,89 @@ function CacheDisco({ onError }: { onError: (e: string) => void }) {
         )}
       </Field>
     </>
+  );
+}
+
+type Perfil = { perfil: string; motivo: string; auto: boolean; rotulo: string; nomes: Record<string, string>;
+  valores: { kv: string; cache_disco_gb: number; descarregar_ocioso_min: number; fator_tetos: number; um_modelo_so: boolean };
+  alterados: string[]; recomendados: { nome: string; path: string; gb: number }[]; ganho_um_modelo: number };
+
+/** E4: perfil de hardware — o Forja escolhe sozinho pelo que cabe na máquina; o que o usuário mudou à mão vale
+ * por cima (marcado "alterado", com "voltar ao perfil"). */
+function PerfilHardware({ onError }: { onError: (e: string) => void }) {
+  const [p, setP] = useState<Perfil | null>(null);
+  const [escolhido, setEscolhido] = useState("auto");
+  const [carregando, setCarregando] = useState("");
+  const carrega = () => {
+    api.get<Perfil>("/perfil").then(setP).catch((e) => onError(e.message));
+    api.get<any>("/settings").then((s) => setEscolhido(s.perfil_hardware ?? "auto")).catch(() => {});
+  };
+  useEffect(carrega, []);
+  if (!p) return null;
+  const alterado = (k: string) => p.alterados.includes(k) && <span className="ml-1 text-amber-300">(alterado)</span>;
+  const tetos = p.valores.fator_tetos > 1 ? "janela cheia" : p.valores.fator_tetos < 1 ? "mais apertados" : "proporcionais";
+  return (
+    <Field label="Perfil de hardware"
+           hint="Automático escolhe pela VRAM dedicada e pelo tamanho do modelo principal, e reavalia ao trocar o modelo ou ligar/desligar uma GPU (nunca no meio de uma execução). O que você mudar à mão continua valendo.">
+      <div className="space-y-2">
+        <select className={input} value={escolhido}
+                onChange={(e) => { setEscolhido(e.target.value); api.put("/settings", { perfil_hardware: e.target.value }).then(carrega).catch((er) => onError(er.message)); }}>
+          <option value="auto">Automático</option>
+          <option value="performance">Performance</option>
+          <option value="balanced">Balanced</option>
+          <option value="low_vram">Low VRAM</option>
+        </select>
+        <p className="text-xs text-muted"><span className="text-fg">{p.rotulo}</span>: {p.motivo}.</p>
+        <ul className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted">
+          <li>Cache KV: {p.valores.kv}</li>
+          <li>Cache em disco: {String(p.valores.cache_disco_gb).replace(".", ",")} GB{alterado("cache_disco_gb")}</li>
+          <li>Descarregar sem uso: {p.valores.descarregar_ocioso_min} min{alterado("descarregar_ocioso_min")}</li>
+          <li>Limites de contexto: {tetos}</li>
+          {p.valores.um_modelo_so && <li className="col-span-2">Um modelo só para Maestro, Worker e explorador (trocar é o último recurso)</li>}
+        </ul>
+        {p.alterados.length > 0 && (
+          <button className="text-xs text-fg underline-offset-2 hover:underline"
+                  onClick={() => api.post("/perfil/voltar", {}).then(carrega).catch((e) => onError(e.message))}>voltar ao perfil</button>
+        )}
+        {p.recomendados.length > 0 && (
+          <div className="rounded-lg border border-line p-2.5 text-xs text-muted">
+            Se o modelo principal não cabe inteiro na GPU, estes, já baixados, cabem e ficam bem mais rápidos
+            (na E0, um modelo de 9B inteiro na GPU gerou ~2× mais tokens por segundo):
+            <ul className="mt-1 space-y-1">
+              {p.recomendados.map((r) => (
+                <li key={r.path} className="flex items-center justify-between gap-2">
+                  <span className="truncate text-fg">{r.nome} <span className="text-faint">~{String(r.gb).replace(".", ",")} GB</span></span>
+                  <button className={btn} disabled={!!carregando}
+                          onClick={() => { setCarregando(r.path); api.post("/local/load", { path: r.path, params: {} }).then(carrega)
+                            .catch((e) => onError(e.message)).finally(() => setCarregando("")); }}>
+                    {carregando === r.path ? "Carregando…" : "Carregar"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+/** E4: no Low VRAM, Maestro e Workers em modelos diferentes custam caro (E0: ~2× mais lento). Avisa e oferece
+ * aplicar o modelo da Maestro nos Workers — nunca troca sozinho. */
+function UmModeloSo({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
+  const [p, setP] = useState<{ perfil: string; ganho_um_modelo: number } | null>(null);
+  useEffect(() => { api.get<any>("/perfil").then(setP).catch(() => {}); }, []);
+  const m = s.maestro_model;
+  const diferentes = !!m?.model && (["rapido", "capaz"] as const).some((k) => s.subagents[k]?.model && s.subagents[k].model !== m.model);
+  if (!p || p.perfil !== "low_vram" || !diferentes) return null;
+  return (
+    <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">
+      Neste PC (Low VRAM), usar o mesmo modelo para a Maestro e os Workers foi ~{String(p.ganho_um_modelo).replace(".", ",")}×
+      mais rápido no bench: trocar de modelo a cada tarefa faz a Maestro reprocessar o contexto inteiro na volta.
+      <button className={`${btn} ml-2`}
+              onClick={() => set("subagents", { ...s.subagents, rapido: { ...m }, capaz: { ...m } })}>
+        Usar {m.model} nos Workers
+      </button>
+    </div>
   );
 }

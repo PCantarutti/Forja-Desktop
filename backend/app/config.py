@@ -169,6 +169,8 @@ import contextvars as _cv  # noqa: E402
 
 JANELA: _cv.ContextVar[int | None] = _cv.ContextVar("forja_janela", default=None)
 CHARS_POR_TOKEN = 3  # português e código ficam perto de 3 (o chars/4 subestima)
+FATOR_TETOS = 1.0    # o perfil de hardware ajusta: Performance 1,5 · Balanced 1 · Low VRAM 0,7
+PERFIL_HARDWARE = "auto"
 
 
 def teto(padrao: int, fracao: float) -> int:
@@ -176,7 +178,7 @@ def teto(padrao: int, fracao: float) -> int:
     janela = JANELA.get()
     if not janela:
         return padrao
-    return max(min(padrao, 1_000), min(padrao, int(janela * fracao * CHARS_POR_TOKEN)))
+    return max(min(padrao, 1_000), min(padrao, int(janela * fracao * CHARS_POR_TOKEN * FATOR_TETOS)))
 
 
 def teto_linhas(padrao: int, fracao: float, chars_por_linha: int = 50) -> int:
@@ -184,4 +186,4 @@ def teto_linhas(padrao: int, fracao: float, chars_por_linha: int = 50) -> int:
     janela = JANELA.get()
     if not janela:
         return padrao
-    return max(min(padrao, 50), min(padrao, int(janela * fracao * CHARS_POR_TOKEN / chars_por_linha)))
+    return max(min(padrao, 50), min(padrao, int(janela * fracao * CHARS_POR_TOKEN * FATOR_TETOS / chars_por_linha)))

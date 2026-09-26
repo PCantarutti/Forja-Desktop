@@ -359,6 +359,8 @@ def como_rodar(papel: str, pedido: dict | None) -> Rota:
     """Onde a chamada de `papel` roda, para quem pediu `pedido` ({provider, model}). Nunca carrega nada:
     quem recebe "trocar-modelo" chama `ensure`. `metricas` registra cada decisão (E10)."""
     rota = _decide(papel, pedido)
+    from . import perfis  # E4: o motivo cita o perfil ativo (a E10 mostra por execução)
+    rota.motivo = f"{rota.motivo} [perfil {perfis.rotulo()}]"
     metricas.registra("rota", papel=papel, caminho=rota.caminho, modelo=(rota.spec or {}).get("model"),
                       slot=rota.slot, motivo=rota.motivo)
     return rota

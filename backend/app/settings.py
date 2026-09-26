@@ -47,6 +47,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     # Desligados: o código sai da máquina.
     "nuvem_por_papel": {"explorador": False, "revisor": False, "visual": False},
     # E4: cache do prompt em disco (salvar/restaurar slot) e descarga do modelo local ocioso
+    "perfil_hardware": "auto",  # E4: auto | performance | balanced | low_vram
     "cache_disco": True,
     "cache_disco_gb": 4.0,
     "descarregar_ocioso_min": 15,
@@ -123,6 +124,21 @@ def _especialidades(raw, provedores: set[str]) -> list[dict]:
     return out
 
 
+def alterados() -> set[str]:
+    """Chaves que o usuário mudou (as únicas gravadas no banco): o perfil não passa por cima delas."""
+    with db.session() as s:
+        return {row.key for row in s.query(db.AppSetting.key).all()}
+
+
+def voltar_ao_perfil() -> None:
+    """Esquece os ajustes manuais dos valores que o perfil governa."""
+    from . import perfis
+    with db.session() as s:
+        s.query(db.AppSetting).filter(db.AppSetting.key.in_(perfis.GOVERNADOS)).delete(synchronize_session=False)
+        s.commit()
+    apply()
+
+
 def load() -> dict:
     values = copy.deepcopy(ENV_DEFAULTS)
     with db.session() as s:
@@ -166,6 +182,17 @@ def apply(values: dict | None = None) -> dict:
     config.CACHE_DISCO = bool(values["cache_disco"])
     config.CACHE_DISCO_GB = float(values["cache_disco_gb"])
     config.DESCARREGAR_OCIOSO_MIN = int(values["descarregar_ocioso_min"])
+    # E4: o perfil de hardware preenche o que o usuário não mexeu (só o mexido fica gravado no banco)
+    config.PERFIL_HARDWARE = values.get("perfil_hardware") or "auto"
+    from . import perfis
+    perfis.reavaliar()
+    do_perfil = perfis.valores()
+    mexidos = alterados()
+    if "cache_disco_gb" not in mexidos:
+        config.CACHE_DISCO_GB = float(do_perfil["cache_disco_gb"])
+    if "descarregar_ocioso_min" not in mexidos:
+        config.DESCARREGAR_OCIOSO_MIN = int(do_perfil["descarregar_ocioso_min"])
+    config.FATOR_TETOS = float(do_perfil["fator_tetos"])
     config.WORKER_ESPECIALIDADES = [dict(e) for e in values["worker_especialidades"]]
     config.MAESTRO_BROWSER = bool(values["maestro_browser"])
     config.AUTO_REVIEW = bool(values["auto_review"])
@@ -270,6 +297,11 @@ def validate(patch: dict, current: dict) -> dict:
                     raise SettingsError(f"Subagente '{slot}': provedor '{provider}' não existe.")
                 out[slot] = {"provider": provider, "model": model}
             values[key] = out
+        elif key == "perfil_hardware":
+            from .perfis import PERFIS
+            if raw not in PERFIS:
+                raise SettingsError(f"Perfil deve ser um de: {', '.join(PERFIS)}.")
+            values[key] = raw
         elif key == "nuvem_por_papel":
             if not isinstance(raw, dict):
                 raise SettingsError("'nuvem_por_papel' precisa ser um objeto {papel: bool}.")

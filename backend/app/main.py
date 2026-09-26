@@ -754,6 +754,25 @@ async def local_uso():
     return await asyncio.to_thread(localai.uso)
 
 
+@app.get("/api/perfil")
+async def perfil_hardware():
+    """E4: perfil de hardware vigente (e por quê), os valores dele, o que o usuário mudou por cima e, quando o
+    modelo principal não cabe inteiro na GPU, os GGUFs já baixados que cabem."""
+    from . import perfis
+    v = perfis.vigente()
+    rec = await asyncio.to_thread(perfis.recomendados) if v["perfil"] == "low_vram" else []
+    return {**v, "rotulo": perfis.rotulo(), "valores": perfis.valores(), "nomes": perfis.NOMES,
+            "alterados": sorted(set(perfis.GOVERNADOS) & settings.alterados()),
+            "recomendados": rec, "ganho_um_modelo": perfis.BENCH_MESMO_MODELO}
+
+
+@app.post("/api/perfil/voltar")
+def perfil_voltar():
+    """Esquece os ajustes manuais dos valores que o perfil governa."""
+    settings.voltar_ao_perfil()
+    return {"ok": True}
+
+
 @app.get("/api/local/kvcache")
 def local_kvcache():
     """E4: cache do prompt em disco — uso, limite e se o modelo carregado consegue restaurar (e por que não);
