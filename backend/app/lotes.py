@@ -530,6 +530,10 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                     if web:
                         projeto.webp(arquivo)
                 item["status"] = "pronta"
+                if opts.get("hires"):  # o tamanho final é o do sd-cli (escala arredondada por ele): o do arquivo
+                    from PIL import Image
+                    with Image.open(arquivo) as im:
+                        item["w"], item["h"] = im.size
                 if item.get("s_passo") and medido.get("segundos"):  # base do "≈ N min", em qualquer conversa
                     localai.anotar_tempo(item["model"], imagegen._opts({**opts, "model": item["model"]}),
                                          float(item["s_passo"]), float(medido["segundos"]))

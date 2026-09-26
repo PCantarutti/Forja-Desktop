@@ -1092,3 +1092,19 @@ def test_te_na_cpu_escolhe_a_gpu_dedicada():
     assert imagegen.escolhe_gpu(listagem) == "vulkan1"
     assert imagegen.escolhe_gpu("CUDA0\tNVIDIA GeForce RTX 4070\nCPU\tx\n") == "cuda0"
     assert imagegen.escolhe_gpu("CPU\tx\n") == "cpu"
+
+
+def test_argv_alta_resolucao(isolado):
+    """Hires fix: escala, denoise e ampliador vão para o sd-cli; um ESRGAN vai como pasta + nome sem extensão (é assim
+    que o sd-cli acha o modelo). Desligado, nenhuma flag; em vídeo não se aplica."""
+    localai.set_image({"model": "C:/m/sd15.safetensors"})
+    assert "--hires" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
+    a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts({"hires": True, "hires_denoise": 0.3}))
+    assert [a[a.index(k) + 1] for k in ("--hires-scale", "--hires-denoising-strength", "--hires-upscaler")] == ["1.5", "0.3", "Latent"]
+    esrgan = isolado / "Ampliação" / "4x-UltraSharp.pth"
+    esrgan.parent.mkdir()
+    esrgan.write_bytes(b"x")
+    a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts({"hires": True, "hires_upscaler": str(esrgan)}))
+    assert a[a.index("--hires-upscaler") + 1] == "4x-UltraSharp"
+    pasta = Path(a[a.index("--hires-upscalers-dir") + 1])
+    assert (pasta / "4x-UltraSharp.pth").is_file() and str(pasta).isascii()  # "Ampliação": a pasta vai pelo 8.3

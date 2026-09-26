@@ -469,6 +469,11 @@ export type ImageOpts = {
   sampler: string;
   negative: string;
   seed: number; // 0 = aleatória
+  // alta resolução (hires fix do sd-cli): amplia e o próprio modelo redesenha por cima com o denoise
+  hires?: boolean;
+  hires_scale?: number;
+  hires_denoise?: number;
+  hires_upscaler?: string; // "Latent", "Lanczos" ou o caminho de um ESRGAN
   descarte_dias: number; // prazo das imagens reprovadas em descartadas/ (0 = guardar para sempre)
   // vídeo (Wan)
   frames: number; // 4k+1
@@ -497,6 +502,8 @@ export type LoteImagem = {
   fase?: string; // ampliação SeedVR2 em andamento: "iniciando o ComfyUI", "ampliando"
   width?: number; // tamanho próprio do slot (skill gerar-imagens); nas outras vale o do lote
   height?: number;
+  w?: number; // tamanho real do arquivo, quando a alta resolução mudou o do pedido
+  h?: number;
   com_previa?: boolean; // o modelo gera com prévia: o card não usa o líquido, nem antes da 1ª
   s_passo?: number; // segundos por passo, lido do sd-cli
   restante?: number; // segundos até o fim da amostragem

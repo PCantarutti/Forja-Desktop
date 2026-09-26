@@ -124,6 +124,13 @@ DEFAULT_IMAGE = {
     # VAE em blocos: o do Qwen-Image 2.1 pede 4,7 GB de uma vez em 1024² e derrubou a Arc de 12 GB
     # ("device lost") no fim de uma edição de 11 min. Em blocos cabe em poucas centenas de MB.
     "vae_tiling": False,
+    # Alta resolução (hires fix do sd-cli): gera no tamanho pedido, amplia `hires_scale` vezes e o próprio modelo
+    # redesenha por cima com `hires_denoise` (0,2 limpa; 0,7 inventa detalhe). `hires_upscaler`: "Latent", "Lanczos"
+    # ou o caminho de um ESRGAN (o sd-cli só roda esse tipo de modelo aqui). Não vale para vídeo.
+    "hires": False,
+    "hires_scale": 1.5,
+    "hires_denoise": 0.45,
+    "hires_upscaler": "Latent",
     # Codificador de texto na CPU: os 5+ GB do Qwen-VL saem da VRAM e a difusão cabe inteira na GPU,
     # sem "Pesos na RAM". Qwen-Image 2.1 Q8 na B580, 512², 4 passos: gerar 25 s → 19 s; editar
     # 37 s → 66 s (a visão lendo a referência na CPU custa 30 s, e a amostragem quase não muda).

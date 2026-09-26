@@ -219,14 +219,18 @@ def _curto(p: Path) -> str:
     return buf.value if 0 < n < len(buf) else str(p)
 
 
-def caminho_ascii(p: Path) -> str:
+def caminho_ascii(p: Path, manter_nome: bool = False) -> str:
     """O caminho de um arquivo que existe, só com ASCII, para programas que não abrem caminho com acento (o sd-cli:
     "Ampliação", "Área de Trabalho", "Vídeos" viram "file not found"). O curto 8.3 do Windows; em disco sem nomes
-    8.3, um link (ou cópia) com nome ASCII numa pasta temporária."""
+    8.3, um link (ou cópia) com nome ASCII numa pasta temporária. `manter_nome`: quem acha o arquivo pelo nome e
+    pela extensão (o --hires-upscaler do sd-cli): só a pasta vira 8.3, e o nome curto do arquivo (4X-ULT~1.SAF) não vale."""
     if str(p).isascii():
         return str(p)
+    pasta = _curto(p.parent)
+    if manter_nome and p.name.isascii() and pasta.isascii():
+        return str(Path(pasta) / p.name)
     curto = _curto(p)
-    if curto.isascii():
+    if curto.isascii() and not manter_nome:
         return curto
     import hashlib
     alvo = pasta_ascii() / (hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:16] + p.suffix.lower())

@@ -130,6 +130,18 @@ def modo_previa(o: dict) -> str | None:
     return modo
 
 
+def hires(o: dict) -> list[str]:
+    """As flags da alta resolução (hires fix): a escala, o denoise da 2ª passada e o ampliador. Um ESRGAN vai como
+    pasta + nome sem extensão (é como o sd-cli acha o modelo), por um caminho só com ASCII."""
+    a = ["--hires", "--hires-scale", f"{float(o.get('hires_scale') or 1.5):g}",
+         "--hires-denoising-strength", f"{float(o.get('hires_denoise') or 0.45):g}"]
+    amp = str(o.get("hires_upscaler") or "Latent")
+    if amp.lower().endswith((".pth", ".safetensors")):
+        p = Path(native.caminho_ascii(Path(amp), manter_nome=True))
+        return a + ["--hires-upscalers-dir", str(p.parent), "--hires-upscaler", p.stem]
+    return a + ["--hires-upscaler", amp]
+
+
 def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = ()) -> list[str]:
     pasta_lora = ""
     if o.get("loras"):  # vão no prompt; o sd.cpp as tira de lá e aplica (ver loras.py)
@@ -184,6 +196,8 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
             # bloco vai pela VRAM livre na hora (bloco maior = menos emendas, mais rápido).
             t = o.get("_bloco") or bloco_vae(o.get("_vram_livre_gb"))
             a += ["--vae-tile-size", f"{t}x{t}", "--temporal-tiling"]
+    if o.get("hires") and not video:
+        a += hires(o)
     if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
         # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
         a += ["--backend", f"{_gpu(str(exe))},te=cpu"]
