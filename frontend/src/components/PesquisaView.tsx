@@ -4,7 +4,7 @@ import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato, PesquisaP
   from "../types";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import type { CloudUsage } from "../types";
-import { ArrowUp, Check, Clipboard, Clock, Copy, Cube, ExternalLink, Refresh, Search, Square, X } from "./icons";
+import { ArrowRight, ArrowUp, Bubble, Check, Clipboard, Clock, Copy, Cube, Download, ExternalLink, Refresh, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
@@ -14,8 +14,8 @@ import Sinapse from "./Sinapse";
 // Estas classes moram no LocalPanel.tsx, que é só do desktop. Repetidas aqui para esta aba viajar
 // inteira num cherry-pick para o forja-web. ponytail: 4 linhas custam menos que um módulo de estilo.
 const card = "rounded-xl border border-line bg-surface p-3.5";
-const btn = "rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-const btnPrimary = "rounded-[9px] bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const btn = "inline-flex items-center gap-1.5 rounded-[9px] border border-line-strong px-3 py-1.5 text-fg hover:border-focus hover:bg-raised disabled:opacity-40";
+const btnPrimary = "inline-flex items-center gap-1.5 rounded-[9px] border border-accent bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 
 // Os dois modelos da pesquisa são escolha desta aba, não do Chat: quem lê 12 páginas costuma
@@ -424,10 +424,10 @@ export default function PesquisaView(props: {
               </div>
 
           {terminou && (
-            <div className={`flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-sm ${
+            <div className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px] ${
               terminou.status === "pronto"
-                ? "border-emerald-800/70 bg-emerald-950/30 text-emerald-200"
-                : "border-amber-800/70 bg-amber-950/30 text-amber-200"}`}>
+                ? "border-ok/55 bg-ok/[.08] text-ok"
+                : "border-warn/55 bg-warn/[.07] text-warn"}`}>
               <Check className="size-4 shrink-0" />
               <span className="min-w-0 flex-1">
                 {terminou.status === "pronto"
@@ -447,7 +447,7 @@ export default function PesquisaView(props: {
           )}
 
               {estado.resumo && (
-                <div className={`${card} border-accent-line`}>
+                <div className={`${card} border-accent/60! ring-[3px] ring-accent/10`}>
                   <p className="font-mono text-[10.5px] font-medium tracking-[.08em] text-accent-text uppercase">Resumo</p>
                   <div className="mt-1 text-sm">
                     <Markdown text={estado.resumo} />
@@ -460,22 +460,23 @@ export default function PesquisaView(props: {
                   {estado.relatorio && (
                     <button className={btnPrimary}
                             onClick={() => window.open(`/api/pesquisa/${estado.message_id}/relatorio`)}>
-                      <ExternalLink className="mr-1 inline size-3.5" />
+                      <ExternalLink className="size-3.5" />
                       Abrir relatório
                     </button>
                   )}
                   {estado.relatorio && (
                     <button className={btn}
                             onClick={() => rodar(estado.pergunta, "", estado.message_id)}>
+                      <ArrowRight className="size-3.5" />
                       Continuar pesquisa
                     </button>
                   )}
-                  {estado.relatorio && <button className={btn} onClick={discutir}>Discutir no chat</button>}
+                  {estado.relatorio && <button className={btn} onClick={discutir}><Bubble className="size-3.5" /> Discutir no chat</button>}
                   <button className={btn} onClick={copiar}>
-                    {copiado ? <Check className="mr-1 inline size-3.5" /> : <Copy className="mr-1 inline size-3.5" />}
+                    {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                     Copiar .md
                   </button>
-                  <button className={btn} onClick={baixar}>Baixar .md</button>
+                  <button className={btn} onClick={baixar}><Download className="size-3.5" /> Baixar .md</button>
                   <span className="text-faint">
                     extração: {estado.stats.extrator} · relatório: {estado.stats.escritor}
                     {estado.formato_usado && ` · formato: ${estado.formato_usado}`} · {numeros(estado)}

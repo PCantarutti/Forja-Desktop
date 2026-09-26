@@ -55,7 +55,7 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
       aceita esses tamanhos sem cortar e se a estimativa de tempo/memória avisa antes de estourar a VRAM
 - [ ] Persistir `tema`, `corDestaque`, `fonte` no `/settings` (hoje em `localStorage` `forja.aparencia`) — e o celular ler daí
 - [ ] Lista de conversas: miniatura (34px) em Imagem/Vídeo e modelo usado na meta ("há 12 min · Qwen3.6") — precisa vir no `GET /conversations`
-- [ ] Rodapé da lista: estado do runtime (ex.: "● Vulkan") num campo barato do `/activity`
+- [x] Rodapé da lista: estado do runtime ("● Vulkan") — feito só no front, lendo `/local` a cada 60 s (o mesmo que Configurações › Runtime usa); se ficar pesado, virar um campo barato do `/activity`
 - [ ] Trajetória: "Pensou por N s" exige a duração do raciocínio por mensagem
 - [ ] Multiplicadores de esforço (0,4× · 1× · 1,6× · 3× · 4× multi) vieram do design e estão **comentados** em
       `frontend/src/components/Controls.tsx` (`MULT_ESFORCO` e o `<span>` no menu). Definir no backend o que medem

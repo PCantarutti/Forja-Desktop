@@ -107,6 +107,25 @@ function ItemMenu(props: {
   );
 }
 
+type Llama = { chosen?: string; backend?: string; available?: { backend: string; version?: string }[] };
+const NOME_RUNTIME: Record<string, string> = { vulkan: "Vulkan", cuda: "CUDA", cpu: "CPU", rocm: "ROCm", metal: "Metal" };
+
+/** O motor do llama.cpp em uso (o mesmo de Configurações › Runtime), para o pé da lista. */
+function useRuntime(): { nome: string; ok: boolean; titulo: string } | null {
+  const [llama, setLlama] = useState<Llama | null>(null);
+  useEffect(() => {
+    const carrega = () => api.get<{ runtimes?: { llama?: Llama } }>("/local").then((r) => setLlama(r.runtimes?.llama ?? null)).catch(() => {});
+    carrega();
+    const t = setInterval(carrega, 60_000); // troca de motor é rara; o painel de Runtime atualiza por conta própria
+    return () => clearInterval(t);
+  }, []);
+  if (!llama) return null;
+  const qual = llama.chosen || llama.backend || "";
+  const inst = llama.available?.find((a) => a.backend === qual);
+  if (!inst) return { nome: "sem runtime", ok: false, titulo: "llama.cpp não está instalado: baixe em Configurações › Runtime" };
+  return { nome: NOME_RUNTIME[qual] ?? qual, ok: true, titulo: `llama.cpp: ${NOME_RUNTIME[qual] ?? qual}${inst.version ? ` · ${inst.version}` : ""}` };
+}
+
 export default function Sidebar(props: {
   conversations: Conversation[];
   current: number | null;
@@ -125,6 +144,7 @@ export default function Sidebar(props: {
   onSection: (s: Section) => void;
   onHide: () => void;
 }) {
+  const runtime = useRuntime();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Conversation[] | null>(null); // busca por conteúdo no servidor
   const [menu, setMenu] = useState<number | null>(null);
@@ -454,6 +474,12 @@ export default function Sidebar(props: {
         className="flex items-center gap-2.5 border-t border-line px-3 py-2.5 text-[12.5px] text-muted hover:bg-surface hover:text-fg"
       >
         <Gear className="size-[15px]" /> Configurações
+        {runtime && (
+          <span className="ml-auto flex items-center gap-1.5 font-mono text-[10.5px] text-faint" title={runtime.titulo}>
+            <span className={`size-1.5 rounded-full ${runtime.ok ? "bg-ok" : "bg-faint"}`} />
+            {runtime.nome}
+          </span>
+        )}
       </button>
     </aside>
   );
