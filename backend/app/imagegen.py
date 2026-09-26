@@ -135,7 +135,7 @@ def hires(o: dict) -> list[str]:
     pasta + nome sem extensão (é como o sd-cli acha o modelo), por um caminho só com ASCII."""
     a = ["--hires", "--hires-scale", f"{float(o.get('hires_scale') or 1.5):g}",
          "--hires-denoising-strength", f"{float(o.get('hires_denoise') or 0.45):g}"]
-    amp = str(o.get("hires_upscaler") or "Latent")
+    amp = str(o.get("hires_upscaler") or "Lanczos")
     if amp.lower().endswith((".pth", ".safetensors")):
         p = Path(native.caminho_ascii(Path(amp), manter_nome=True))
         return a + ["--hires-upscalers-dir", str(p.parent), "--hires-upscaler", p.stem]

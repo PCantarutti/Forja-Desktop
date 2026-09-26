@@ -130,7 +130,9 @@ DEFAULT_IMAGE = {
     "hires": False,
     "hires_scale": 1.5,
     "hires_denoise": 0.45,
-    "hires_upscaler": "Latent",
+    # Lanczos, não o "Latent" (o padrão do sd-cli): no Qwen-Image 2.1, 512 -> 768 com denoise 0,45, o latente deixou
+    # fantasmas e contornos duplicados; o Lanczos saiu limpo e com mais detalhe
+    "hires_upscaler": "Lanczos",
     # Codificador de texto na CPU: os 5+ GB do Qwen-VL saem da VRAM e a difusão cabe inteira na GPU,
     # sem "Pesos na RAM". Qwen-Image 2.1 Q8 na B580, 512², 4 passos: gerar 25 s → 19 s; editar
     # 37 s → 66 s (a visão lendo a referência na CPU custa 30 s, e a amostragem quase não muda).

@@ -1488,7 +1488,7 @@ export function AnelProgresso({ pct, lado = "dir" }: { pct: number; lado?: "esq"
 const fmtNum = (n: number) => String(n).replace(".", ",");
 
 /** Alta resolução (hires fix do sd-cli): o modelo gera, a imagem é ampliada e ele redesenha por cima com o denoise.
- *  Os ESRGAN do disco (pelo conteúdo do arquivo) entram como ampliador, além do latente e do Lanczos. */
+ *  Os ESRGAN do disco (pelo conteúdo do arquivo) entram como ampliador, além do Lanczos e do latente. */
 function AltaResolucao(props: { o: ImageOpts; set: <K extends keyof ImageOpts>(k: K, v: ImageOpts[K]) => void; onError: (e: string) => void }) {
   const { o, set } = props;
   const [esrgans, setEsrgans] = useState<{ path: string; name: string }[]>([]);
@@ -1521,9 +1521,9 @@ function AltaResolucao(props: { o: ImageOpts; set: <K extends keyof ImageOpts>(k
                    onChange={(e) => set("hires_denoise", Number(e.target.value))} className={numeroCaixa} />
           </Caixa>
           <Caixa rotulo="Ampliador">
-            <select value={o.hires_upscaler || "Latent"} onChange={(e) => set("hires_upscaler", e.target.value)} className={`${numeroCaixa} -ml-1 cursor-pointer`}>
-              <option value="Latent">Latente</option>
+            <select value={o.hires_upscaler || "Lanczos"} onChange={(e) => set("hires_upscaler", e.target.value)} className={`${numeroCaixa} -ml-1 cursor-pointer`}>
               <option value="Lanczos">Lanczos</option>
+              <option value="Latent">Latente (pede denoise alto)</option>
               {esrgans.map((m) => <option key={m.path} value={m.path}>{m.name}</option>)}
             </select>
           </Caixa>

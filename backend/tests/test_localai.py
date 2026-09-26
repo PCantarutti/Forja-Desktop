@@ -1100,7 +1100,7 @@ def test_argv_alta_resolucao(isolado):
     localai.set_image({"model": "C:/m/sd15.safetensors"})
     assert "--hires" not in imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts())
     a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts({"hires": True, "hires_denoise": 0.3}))
-    assert [a[a.index(k) + 1] for k in ("--hires-scale", "--hires-denoising-strength", "--hires-upscaler")] == ["1.5", "0.3", "Latent"]
+    assert [a[a.index(k) + 1] for k in ("--hires-scale", "--hires-denoising-strength", "--hires-upscaler")] == ["1.5", "0.3", "Lanczos"]
     esrgan = isolado / "Ampliação" / "4x-UltraSharp.pth"
     esrgan.parent.mkdir()
     esrgan.write_bytes(b"x")
