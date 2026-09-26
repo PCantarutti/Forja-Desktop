@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { createPortal } from "react-dom";
 import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
@@ -531,17 +532,14 @@ export default function VideoView(props: {
             </div>
           )}
           {perguntando && (
-            <div className="mb-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
-              <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
-              <p className="mt-1 text-amber-200/80">
-                O sd.cpp precisa dessa memória. Descarregar derruba o cache de contexto do chat: a próxima
-                mensagem de lá reprocessa o histórico inteiro. A conversa em si não se perde.
-              </p>
-              <div className="mt-2 flex gap-2">
-                <button className={btnPrimary} onClick={() => gerar(true)}>Descarregar e gerar</button>
-                <button className={btn} onClick={() => setPerguntando(false)}>Cancelar</button>
-              </div>
-            </div>
+            <CartaoEstado tom="aviso" className="mb-2" titulo={`O modelo ${st.server.alias} está carregado na VRAM.`}
+              acoes={<>
+                <button className={botaoEstadoPrimario} onClick={() => gerar(true)}>Descarregar e gerar</button>
+                <button className={botaoEstado} onClick={() => setPerguntando(false)}>Cancelar</button>
+              </>}>
+              O sd.cpp precisa dessa memória. Descarregar derruba o cache de contexto do chat: a próxima mensagem de lá
+              reprocessa o histórico inteiro. A conversa em si não se perde.
+            </CartaoEstado>
           )}
 
           <div
@@ -1417,13 +1415,13 @@ function Tomada(props: {
         )}
       </div>
       {vram && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
-          <span className="flex-1">Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória.</span>
-          <button className={btnPrimary} onClick={() => chamar("continuar", { confirm: true }).then((ok) => ok && setVram(false))}>
-            Descarregar e continuar
-          </button>
-          <button className={btn} onClick={() => setVram(false)}>Cancelar</button>
-        </div>
+        <CartaoEstado tom="aviso" className="mt-2" titulo="Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória."
+          acoes={<>
+            <button className={botaoEstadoPrimario} onClick={() => chamar("continuar", { confirm: true }).then((ok) => ok && setVram(false))}>
+              Descarregar e continuar
+            </button>
+            <button className={botaoEstado} onClick={() => setVram(false)}>Cancelar</button>
+          </>} />
       )}
     </section>
   );

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, PedidoMeta, SeedMode, SlotImagem } from "../types";
 import type { Section } from "./Controls";
@@ -599,27 +600,17 @@ export default function ImagensView(props: {
             </div>
           )}
           {perguntando && (
-            <div className="mb-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
-              {motivo.startsWith("Outro programa") ? (
-                <p className="font-medium">{motivo}</p>
-              ) : (
-                <>
-                  <p className="font-medium">O modelo {st.server.alias} está carregado na VRAM.</p>
-                  <p className="mt-1 text-amber-200/80">
-                    O sd.cpp precisa dessa memória. Descarregar derruba o cache de contexto do chat: a próxima
-                    mensagem de lá reprocessa o histórico inteiro. A conversa em si não se perde.
-                  </p>
-                </>
-              )}
-              <div className="mt-2 flex gap-2">
-                <button className={btnPrimary} onClick={() => perguntando?.()}>
+            <CartaoEstado tom="aviso" className="mb-2"
+              titulo={motivo.startsWith("Outro programa") ? motivo : `O modelo ${st.server.alias} está carregado na VRAM.`}
+              acoes={<>
+                <button className={botaoEstadoPrimario} onClick={() => perguntando?.()}>
                   {motivo.startsWith("Outro programa") ? "Gerar mesmo assim" : "Descarregar e gerar"}
                 </button>
-                <button className={btn} onClick={() => setPerguntando(null)}>
-                  Cancelar
-                </button>
-              </div>
-            </div>
+                <button className={botaoEstado} onClick={() => setPerguntando(null)}>Cancelar</button>
+              </>}>
+              {!motivo.startsWith("Outro programa") &&
+                "O sd.cpp precisa dessa memória. Descarregar derruba o cache de contexto do chat: a próxima mensagem de lá reprocessa o histórico inteiro. A conversa em si não se perde."}
+            </CartaoEstado>
           )}
 
           {slotsPendentes && (
@@ -1341,15 +1332,14 @@ function Lote(props: {
         )}
       </div>
       {vram && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-amber-800/70 bg-amber-950/30 p-2.5 text-xs text-amber-200">
-          <span className="flex-1">
-            {vram.startsWith("Outro programa") ? vram : "Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória."}
-          </span>
-          <button className={btnPrimary} onClick={() => continuar(true)}>
-            {vram.startsWith("Outro programa") ? "Continuar mesmo assim" : "Descarregar e continuar"}
-          </button>
-          <button className={btn} onClick={() => setVram("")}>Cancelar</button>
-        </div>
+        <CartaoEstado tom="aviso" className="mt-2"
+          titulo={vram.startsWith("Outro programa") ? vram : "Tem um modelo carregado na VRAM, e o sd.cpp precisa dessa memória."}
+          acoes={<>
+            <button className={botaoEstadoPrimario} onClick={() => continuar(true)}>
+              {vram.startsWith("Outro programa") ? "Continuar mesmo assim" : "Descarregar e continuar"}
+            </button>
+            <button className={botaoEstado} onClick={() => setVram("")}>Cancelar</button>
+          </>} />
       )}
     </section>
   );

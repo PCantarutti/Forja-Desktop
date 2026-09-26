@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Balanca, Bubble, Check, ChevronDown, Clipboard, Code, Film, Gauge, Image, PanelLeft, Search, Shield, Sliders, Split, X } from "./icons";
+import CartaoEstado from "./CartaoEstado";
+import { Balanca, Bubble, Check, ChevronDown, Code, Film, Image, PanelLeft, Search, Split } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
 export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
@@ -291,20 +292,11 @@ export function ModeWarning({ permission }: { permission: Permission }) {
   };
 
   return (
-    <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-500/40 bg-surface px-3 py-1.5 text-xs text-amber-200">
-      <Sliders className="size-3.5 shrink-0" />
-      <span className="min-w-0 flex-1">
-        Modo <strong>Ignorar permissões</strong>: comandos e alterações rodam sem perguntar. Só comando
+    <CartaoEstado tom="erro" compacto onFechar={fechar} className="mb-2">
+      <span className="min-w-0">
+        <strong className="font-semibold">Ignorar permissões</strong>: tudo passa sem perguntar, inclusive shell. Só comando
         destrutivo (apagar, formatar, desligar, sudo, force push) ainda pede confirmação.
       </span>
-      <button
-        onClick={fechar}
-        title="Fechar o aviso (volta se você trocar de modo e voltar)"
-        aria-label="Fechar o aviso"
-        className="shrink-0 rounded-md p-1 text-amber-200/70 hover:bg-amber-500/20 hover:text-amber-100"
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
+    </CartaoEstado>
   );
 }
