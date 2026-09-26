@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 APELIDOS: dict[str, tuple[str, ...]] = {
+    "mais_ferramentas": ("more_tools", "enable_tools", "load_tools", "tool_search"),
     "read_file": ("read", "cat", "open", "open_file", "view", "view_file", "read_text_file", "file_read",
                   "readfile", "get_file_contents", "get_file", "show_file", "read_file_content"),
     "write_file": ("write", "create_file", "write_to_file", "file_write", "save_file", "new_file", "create",

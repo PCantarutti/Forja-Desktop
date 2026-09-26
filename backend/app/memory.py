@@ -82,7 +82,7 @@ def project_text() -> str:
         text = p.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
-    return text[:MAX_PROJECT_MEMORY]
+    return text[:config.teto(MAX_PROJECT_MEMORY, 0.08)]  # E4: proporcional à janela
 
 
 # ------------------------------------------------------------------ AGENTS.md / CLAUDE.md
@@ -116,10 +116,11 @@ def instrucoes_workspace(root: Path, tocados: list[str] | None = None) -> str:
             blocos.append((a, a.read_text(encoding="utf-8", errors="replace")[:1_000_000]))
         except OSError:
             continue
-    while blocos and sum(len(t) for _, t in blocos) > MAX_INSTRUCOES and len(blocos) > 1:
+    maximo = config.teto(MAX_INSTRUCOES, 0.15)  # E4: numa janela de 8k, ~3,7k caracteres de AGENTS.md
+    while blocos and sum(len(t) for _, t in blocos) > maximo and len(blocos) > 1:
         blocos.pop(0)  # estourou: sai primeiro o mais amplo
-    if blocos and len(blocos[-1][1]) > MAX_INSTRUCOES:
-        blocos[-1] = (blocos[-1][0], blocos[-1][1][:MAX_INSTRUCOES])  # e o mais específico é cortado
+    if blocos and len(blocos[-1][1]) > maximo:
+        blocos[-1] = (blocos[-1][0], blocos[-1][1][:maximo])  # e o mais específico é cortado
     texto = ""
     if blocos:
         texto = ("\n\nAs instruções do workspace abaixo podem ser relevantes para o seu trabalho. Use-as quando "
@@ -285,7 +286,7 @@ def index(refresh: bool = False) -> str:
                 linhas.append(f"- {m['name']} ({m['type']}) — {m['description']} (detalhes: recall)")
         texto = chr(10).join(linhas)
         _INDEX[chave] = texto[:INDEX_MAX]
-    return _INDEX[chave]
+    return _INDEX[chave][:config.teto(INDEX_MAX, 0.08)]  # E4: proporcional à janela
 
 
 def prompt_block() -> str:

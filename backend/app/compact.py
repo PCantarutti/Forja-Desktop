@@ -21,6 +21,7 @@ PODA_ACIMA = 8192
 PODA_CABECA = 4096
 PODA_CAUDA = 1024
 PODA_MANTEM = 4   # os últimos resultados ficam inteiros: é neles que o modelo está trabalhando
+PODA_BLOCO = 8    # E4: o corte anda de 8 em 8 resultados, não a cada passo (cada poda invalida o cache)
 
 
 def podar(texto: str) -> str:
@@ -123,3 +124,20 @@ async def summarize(provider: str, model: str, text: str, num_ctx: int, slot: in
         if kind == "content":
             out += val
     return split_think(out)[1].strip()
+
+
+def split_point_turno(msgs, manter: int = PODA_MANTEM) -> int | None:
+    """Dentro de um turno só: id da última mensagem a resumir, deixando as `manter` últimas ferramentas inteiras.
+    O corte cai no fim de um bloco de resultados, para o que fica começar numa resposta do assistente (resultado
+    de ferramenta sem a chamada dele quebra o formato nativo)."""
+    prev = last_summary(msgs)
+    covered = prev[1] if prev else 0
+    ferramentas = [i for i, m in enumerate(msgs) if m.role == "tool" and m.id > covered]
+    if len(ferramentas) <= manter + 2:
+        return None
+    i = ferramentas[-manter - 1]
+    while i + 1 < len(msgs) and msgs[i + 1].role == "tool":
+        i += 1
+    if i + 1 >= len(msgs):
+        return None
+    return msgs[i].id

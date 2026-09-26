@@ -1860,12 +1860,14 @@ async def compact_now(conv_id: int, body: dict):
     if active_run(conv_id):
         raise HTTPException(409, "Espere a execução atual terminar")
     msgs = _load(conv_id)
-    until = compact.split_point(msgs)
+    until = compact.split_point(msgs) or compact.split_point_turno(msgs)
     if until is None:
         raise HTTPException(409, "Nada para compactar: a conversa só tem os últimos turnos.")
     try:
-        text = compact.transcript(msgs, until, max_chars=int(config.NUM_CTX * 4 * 0.5))
-        summary = await compact.summarize(body["provider"], body["model"], text, config.NUM_CTX)
+        # E4: a janela real do modelo (antes: o num_ctx configurado, que não é a do llama.cpp nem a da nuvem)
+        janela = await llm.context_limit(body["provider"], body["model"], config.NUM_CTX) or config.NUM_CTX
+        text = compact.transcript(msgs, until, max_chars=int(janela * 4 * 0.5))
+        summary = await compact.summarize(body["provider"], body["model"], text, janela)
     except (KeyError, llm.LLMError) as e:
         raise HTTPException(400, f"Falha ao compactar: {e}")
     if not summary:

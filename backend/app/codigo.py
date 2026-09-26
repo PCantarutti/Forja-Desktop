@@ -21,6 +21,7 @@ import warnings
 from collections import OrderedDict
 from pathlib import Path
 
+from . import config
 from .tools import IGNORED_DIRS, Tool, ToolError, _obj, _rel, register, resolve_leitura, resolve_path
 
 LINGUAS = {".py": "python", ".pyi": "python", ".js": "javascript", ".jsx": "javascript",
@@ -778,7 +779,7 @@ def tree(root: Path, args: dict) -> str:
         itens = pastas + ([] if so_pastas else arquivos)
         mostrar, resto = itens[:MAX_FILHOS], itens[MAX_FILHOS:]
         for i, x in enumerate(mostrar):
-            if len(saida) >= MAX_TREE_LINHAS:
+            if len(saida) >= config.teto_linhas(MAX_TREE_LINHAS, 0.1):
                 return
             ultimo = i == len(mostrar) - 1 and not resto
             ramo = "└── " if ultimo else "├── "
@@ -797,8 +798,9 @@ def tree(root: Path, args: dict) -> str:
             saida.append(f"{prefixo}└── … +{descr}")
 
     desenha(base, "", 0)
-    nota = f"\n(árvore cortada em {MAX_TREE_LINHAS} linhas: use path de uma subpasta)" \
-        if len(saida) >= MAX_TREE_LINHAS else ""
+    corte = config.teto_linhas(MAX_TREE_LINHAS, 0.1)
+    nota = f"\n(árvore cortada em {corte} linhas: use path de uma subpasta)" \
+        if len(saida) >= corte else ""
     return ("\n".join(saida) + f"\n({totais['pastas']} pastas e {totais['arquivos']} arquivos mostrados; "
             f"profundidade {profundidade}){nota}")
 

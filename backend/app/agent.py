@@ -19,7 +19,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import kvcache, maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
+from . import catalogo, kvcache, maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -28,6 +28,7 @@ from .tools import (EXTRA, LIDOS, REGISTRY, Tool, ToolError, active, blocked, ex
                     resolve_path, spill, vision_caps)
 
 MAX_NUDGES = 2
+CONTEXTO_PREFIXO = "Contexto atual de execução."  # 1ª linha da mensagem 'contexto' (o anel conta como sistema)
 MAX_REESCRITAS = 5  # alterações no mesmo arquivo num turno antes do lembrete de abordagem travada
 def _props(nome: str) -> dict | None:
     """Schema de argumentos de uma ferramenta, para os apelidos não renomearem argumento que ela tem."""
@@ -547,7 +548,7 @@ def regras_plano(names: list[str]) -> list[str]:
 
 def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, names: list[str]) -> str:
     """O que muda durante a conversa, numa mensagem só (DeepSeek Harness: runtime-context snapshot)."""
-    partes = ["Contexto atual de execução. Substitui os contextos anteriores.",
+    partes = [CONTEXTO_PREFIXO + " Substitui os contextos anteriores.",
               f"- Modo de permissão: {MODE_LABEL.get(permission, permission)}."]
     if permission == "plan":
         partes += regras_plano(names)
@@ -994,7 +995,8 @@ def _join_user(a, b):
 def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None,
                   permission: str = "manual", effort: str = "medio", plan: str | None = None,
                   chat: bool = False, reasoning_back: bool = False, prefixo_estavel: bool = False,
-                  maestro_mode: bool = False, podar: bool = False, contexto: bool = False) -> list[dict]:
+                  maestro_mode: bool = False, podar: bool = False, contexto: bool = False,
+                  ocultas: set[str] | None = None) -> list[dict]:
     """Histórico no formato do provider.
 
     `contexto`: o system leva só a base fixa (`prompt_base`); modo, plano e memórias vêm dos eventos
@@ -1012,7 +1014,8 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
     """
     native = via == "native"
     contexto = contexto and via != "none" and not chat
-    sistema = (prompt_base(via, caps, effort=effort, maestro_mode=maestro_mode) if contexto else
+    # `ocultas`: ferramentas que o catálogo enxuto escondeu (E4); as regras delas saem do prompt junto
+    sistema = (prompt_base(via, caps, exclude=ocultas, effort=effort, maestro_mode=maestro_mode) if contexto else
                system_prompt(via, caps, permission=permission, effort=effort, plan=plan,
                              chat=chat, maestro_mode=maestro_mode))
     out: list[dict] = [{"role": "system", "content": sistema}]
@@ -1025,7 +1028,16 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
         msgs = [m for m in msgs if m.id > summary[1]]
     # `podar`: antes de gastar uma chamada de resumo, os resultados de ferramenta antigos e grandes
     # ficam com cabeça e cauda (compact.podar). Os últimos seguem inteiros.
-    inteiros = {m.id for m in [m for m in msgs if m.role == "tool"][-compact.PODA_MANTEM:]} if podar else None
+    # E4: em blocos. Com a janela deslizante dos "últimos 4" o prefixo podado mudava a cada passo e o cache
+    # do servidor era refeito dali em diante; agora o corte só anda a cada PODA_BLOCO resultados novos.
+    inteiros = None
+    if podar:
+        ids = [m.id for m in msgs if m.role == "tool"]
+        corte = max(0, (len(ids) - compact.PODA_MANTEM) // compact.PODA_BLOCO * compact.PODA_BLOCO)
+        inteiros = set(ids[corte:])
+    # E4: só a última versão da mensagem "contexto" vai ao modelo (as antigas repetiam AGENTS.md, FORJA.md e
+    # memórias a cada mudança de modo/plano). Custa reprocessar uma vez, quando o contexto muda.
+    vigente = _ultimo_contexto(msgs) if contexto else None
     # Imagens devolvidas por ferramentas (screenshot) entram como mensagem "user" com image_url logo
     # depois do bloco de resultados: é o único formato que OpenAI-compatível e Ollama aceitam.
     #
@@ -1058,6 +1070,8 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
         if m.role == "user":
             out.append(uploads.user_message(m.content, (m.meta or {}).get("attachments")))
         elif m.role == "event" and (m.meta or {}).get("to_model"):
+            if contexto and (m.meta or {}).get("kind") == "contexto" and vigente and m.id != vigente.id:
+                continue
             # Nudge vai como "user": o template do Qwen rejeita "system" fora da 1ª posição.
             out.append({"role": "user", "content": m.content})
         elif m.role == "assistant":
@@ -1134,7 +1148,9 @@ def _estimate(messages: list[dict], tools: list[dict] | None) -> int:
 
 
 async def _compact(conv_id: int, msgs: list, req: RunRequest, ctx_max: int) -> AsyncIterator[dict]:
-    until = compact.split_point(msgs)
+    # E4: turno único com dezenas de ferramentas (sem turnos antigos para resumir): resume os pares
+    # ferramenta/resultado mais antigos do próprio turno, deixando os últimos inteiros.
+    until = compact.split_point(msgs) or compact.split_point_turno(msgs)
     if until is None:
         return  # só restam os últimos turnos; nada a resumir
     yield {"type": "status", "text": "Compactando contexto..."}
@@ -1155,8 +1171,11 @@ async def _compact(conv_id: int, msgs: list, req: RunRequest, ctx_max: int) -> A
 def partes_do_contexto(messages: list[dict], tools: list[dict] | None) -> dict:
     """Quanto do prompt é system, schema de ferramenta e conversa (estimativa chars/4, como o medidor do dsh)."""
     sistema = _estimate(messages[:1], None) if messages and messages[0].get("role") == "system" else 0
-    return {"sistema": sistema, "ferramentas": _estimate([], tools) if tools else 0,
-            "mensagens": _estimate(messages[1:] if sistema else messages, None)}
+    resto = messages[1:] if sistema else messages
+    # E4: a mensagem "contexto" (modo, plano, AGENTS.md, memórias) é sistema, não conversa
+    ctx = [m for m in resto if isinstance(m.get("content"), str) and m["content"].startswith(CONTEXTO_PREFIXO)]
+    return {"sistema": sistema + _estimate(ctx, None), "ferramentas": _estimate([], tools) if tools else 0,
+            "mensagens": _estimate([m for m in resto if m not in ctx], None)}
 
 
 def _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, model) -> dict:
@@ -1335,11 +1354,13 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     loop = LoopDetector()
     placar = progresso.Placar()  # E16: progresso por passo, ciclos, erro repetido, alucinação
     nudges = iterations = retries = 0
+    ultimo_real = 0  # prompt + resposta da última volta, medidos pelo servidor (E4)
     forcar_compactar = estourou = False
 
     def current_tools() -> list[Tool]:
         if agent:
-            return available_tools(caps, run.permission, maestro_mode=maestro_mode)
+            # E4: janela pequena esconde os grupos de nicho atrás de mais_ferramentas
+            return catalogo.filtra(available_tools(caps, run.permission, maestro_mode=maestro_mode), conv_id, teto)
         return chat_tools(caps) if chat else []
 
     def tools_sent() -> dict:
@@ -1380,6 +1401,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             if parou or run.cancel.is_set():
                 break
 
+        config.JANELA.set(teto)  # E4: tetos de leitura/saída proporcionais à janela (volta a cada passo:
+        #                          um Worker no meio pode ter posto a janela dele)
         msgs = _load(conv_id)
         mode_at_start = run.permission
         if run.plan is None:
@@ -1396,19 +1419,28 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 yield {"type": "event", "message": m.to_dict()}
                 msgs = _load(conv_id)
 
+        ocultas = ({t.name for t in available_tools(caps, run.permission, maestro_mode=maestro_mode)}
+                   - {t.name for t in current_tools()}) if agent else set()
+
         def historia(ms, podar: bool = False) -> list[dict]:
             return build_history(ms, via, caps, run.permission, req.effort, run.plan, chat,
                                  reasoning_back=llm.is_local(req.provider),
                                  prefixo_estavel=llm.is_local(req.provider),
-                                 maestro_mode=maestro_mode, podar=podar, contexto=agent)
+                                 maestro_mode=maestro_mode, podar=podar, contexto=agent, ocultas=ocultas)
 
         messages = historia(msgs)
-        tools = [t.openai_schema() for t in current_tools()] if via == "native" else None
-        if forcar_compactar or _estimate(messages, tools) > config.COMPACT_AT * teto:
+        curto = agent and catalogo.enxuto(available_tools(caps, run.permission, maestro_mode=maestro_mode), teto)
+        tools = [catalogo.schema(t, curto) for t in current_tools()] if via == "native" else None
+        # E4: o gatilho usa o maior entre o prompt real da última volta (o servidor mede) e a estimativa em
+        # chars/3 (chars/4 subestima português e código).
+        def usado(ms) -> int:
+            return max(_estimate(ms, tools) * 4 // 3, ultimo_real)
+
+        if forcar_compactar or usado(messages) > config.COMPACT_AT * teto:
             # Primeiro a poda, que não custa modelo; o resumo só se ela não bastar (ou se o provedor
             # já recusou por contexto estourado).
             messages = historia(msgs, podar=True)
-            if forcar_compactar or _estimate(messages, tools) > config.COMPACT_AT * teto:
+            if forcar_compactar or _estimate(messages, tools) * 4 // 3 > config.COMPACT_AT * teto:
                 async for ev in _compact(conv_id, msgs, req, teto):
                     yield ev
                 messages = historia(_load(conv_id), podar=True)
@@ -1500,6 +1532,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             iterations -= 1
             continue
         retries = 0
+        ultimo_real = (done.get("prompt_tokens") or 0) + (done.get("completion_tokens") or 0)
         # E0: cada volta do principal, com o que o llama-server reaproveitou do cache (timings.cache_n)
         metricas.registra("llm", papel="maestro" if maestro_mode else "agente", conv=conv_id, model=req.model,
                           prompt_tokens=done.get("prompt_tokens"), completion_tokens=done.get("completion_tokens"),

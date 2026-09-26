@@ -350,11 +350,11 @@ primeiro, dentro desta entrega. A parte de cache em disco e dos padrões de KV d
 V1–V4 da E0. O resto da E4 não depende delas. **A política de execução depende da parte A da E13**: ela
 precisa saber o que cada backend deixa o Forja controlar.
 
-- [ ] **O prompt fixo não cabe em 8k.** Medido na E13-A: só o prompt do sistema (~2,7k tokens) e os
+- [x] **O prompt fixo não cabe em 8k.** Medido na E13-A: só o prompt do sistema (~2,7k tokens) e os
       schemas das ferramentas (~9,7k) somam ~12,5k tokens antes da primeira mensagem. Um vLLM com
       `--max-model-len 8192` recusa já o primeiro turno. Numa janela pequena, o catálogo tem de
       encolher (menos ferramentas e descrições curtas), não só os resultados.
-- [ ] **Tetos de leitura proporcionais à janela.** Medido na E6: `session_search` custa ~120 tokens e um
+- [x] **Tetos de leitura proporcionais à janela.** Medido na E6: `session_search` custa ~120 tokens e um
       `session_read` de conversa curta ~600. Mas o teto do `session_read` (`sessoes.MAX_LEITURA`, 12 mil
       caracteres, ~3k tokens) e o do `@conversa:ID` são fixos. Numa janela de 8k, duas leituras cheias
       ocupam quase metade. Esses tetos e os do `read_file`, `code_search` e `tree` passam a sair do
@@ -602,14 +602,58 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
 
 ### Contexto em janela pequena
 
-- [ ] **Só a última mensagem "contexto" vai ao modelo.** Hoje cada versão carrega AGENTS.md, FORJA.md,
+*Feito em 2026-09-26* (`app/catalogo.py`, `config.JANELA`/`teto`, `compact.split_point_turno`; testes em
+`tests/test_janela_pequena.py`).
+
+Validado no Forja real: gemma-4-12b com janela de 8k e `-np 1`, pedindo para abrir 12 arquivos um por vez.
+- **Antes:** o primeiro turno pedia ~16,4k tokens de prefixo e nem caberia.
+- **Agora:** o primeiro prompt teve 2.597 tokens, com o catálogo de 11 ferramentas (núcleo +
+  `mais_ferramentas`).
+- **Cache:** reaproveitado a cada passo, com o cache de cada volta ≈ o prompt da anterior.
+- **Compactação no meio do turno:** ao passar de 80% da janela (6.766 tokens), resumiu as leituras
+  antigas e seguiu sem estourar (6.118 tokens de prompt, 2.518 do cache). A resposta saiu certa
+  (nota07).
+
+Como ficou:
+- **Janela real:** a execução põe a janela real em `config.JANELA` a cada passo. `config.teto(padrão,
+  fração)` e `teto_linhas` cortam os tetos:
+  - spill: 25%;
+  - `run_command`: 20%;
+  - `browser_read`: 15%;
+  - `read_file`: 30% em linhas;
+  - `tree`: 10%;
+  - cadeia de AGENTS.md: 15%;
+  - FORJA.md e índice de memória: 8%;
+  - `session_read`: 12%.
+
+  Sem janela conhecida, o padrão de sempre.
+- **Catálogo:** medidos ~12,7k tokens de schema (56 ferramentas) mais ~3,75k de prompt base. Acima de 20%
+  da janela, as descrições vão para a primeira frase e os grupos de nicho ficam atrás de
+  `mais_ferramentas` (documentos, imagens, metas, terminal, memória, navegador extra, agentes, ast/
+  imports, board). Abaixo de 12k, saem também navegador, servidores, web, subagentes e busca. As regras
+  do prompt base dessas ferramentas saem junto (`prompt_base(exclude=...)`). O que foi ligado vale até
+  o fim da conversa. O prefixo fixo ficou em ~3,2k tokens em 8k (39%) e ~6,8k em 16k (41%).
+- **Só a última mensagem "contexto" vai ao modelo.** Custa reprocessar uma vez, quando o contexto muda;
+  antes as versões antigas ficavam repetidas.
+- **Compactar dentro do turno:** turno único com muitas ferramentas resume os pares antigos e deixa as 4
+  últimas inteiras. O corte cai no fim de um bloco de resultados. Vale também no `/compact` manual, que
+  passou a usar a janela real.
+- **Gatilho:** o maior entre o `prompt_tokens` real da última volta e chars/3.
+- **Poda em blocos de 8:** o corte só anda a cada 8 resultados novos.
+- **Anel de contexto:** conta a mensagem "contexto" como sistema.
+- **`run_command`:** já guardava o log completo na pasta de spill quando cortava (feito antes).
+
+Diferença: **o modo texto (tool calling por prompt) ainda lista todas as ferramentas** no system prompt
+quando a janela é grande. O enxuto vale para os dois modos, porque as ocultas saem do `prompt_base`.
+
+- [x] **Só a última mensagem "contexto" vai ao modelo.** Hoje cada versão carrega AGENTS.md, FORJA.md,
       memórias e skills, e todas continuam no histórico com `to_model=True` (`agent.py:1026`). As versões
       antigas passam a `to_model=False`. Cuidado com o cache: a troca acontece exatamente onde a mensagem
       nova entra, então o prefixo anterior continua valendo. Atualizar `test_prefixo.py`.
-- [ ] **Compactar dentro do turno.** `split_point` (`compact.py:47`) devolve `None` quando há uma única
+- [x] **Compactar dentro do turno.** `split_point` (`compact.py:47`) devolve `None` quando há uma única
       pergunta seguida de 40 chamadas de ferramenta. Nesse caso, resumir os pares ferramenta/resultado
       mais antigos do turno atual, mantendo os últimos N inteiros.
-- [ ] **Tetos proporcionais à janela.** Criar `config.teto(fração)`, que usa o `context_limit` real, e
+- [x] **Tetos proporcionais à janela.** Criar `config.teto(fração)`, que usa o `context_limit` real, e
       aplicar em:
   - spill (`tools.py:234`, hoje 24k)
   - `MAX_OUTPUT` do `run_command` (`shell.py:21`, hoje 20k)
@@ -617,23 +661,23 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
   - `read_file` (`tools.py:349`, hoje 2000 linhas)
   - cadeia de AGENTS.md (`memory.py:95`, hoje **64k**)
   - FORJA.md e o índice de memória (8k cada)
-- [ ] **`run_command` sem perder o meio.** Fazer o spill antes de cortar e não apagar o log
+- [x] **`run_command` sem perder o meio.** Fazer o spill antes de cortar e não apagar o log
       (`shell.py:125`). O modelo recebe cabeça e cauda mais o caminho do log completo, para ler com
       `read_file`.
-- [ ] **O gatilho usa `prompt_tokens` real**, que o servidor devolve, e não chars/4. O chars/4 subestima
+- [x] **O gatilho usa `prompt_tokens` real**, que o servidor devolve, e não chars/4. O chars/4 subestima
       português e código (~3 caracteres por token).
-- [ ] **O `/compact` manual usa a janela real** (`main.py:1649` usa `config.NUM_CTX`).
-- [ ] **A poda não pode deslizar a cada passo.** Hoje a janela de "últimos 4" invalida o cache a cada
+- [x] **O `/compact` manual usa a janela real** (`main.py:1649` usa `config.NUM_CTX`).
+- [x] **A poda não pode deslizar a cada passo.** Hoje a janela de "últimos 4" invalida o cache a cada
       poda. Podar em blocos: quando podar, podar até um marco fixo e não mexer de novo até o próximo
       gatilho.
-- [ ] **Catálogo de ferramentas mais leve.** São ~60 ferramentas com descrições longas em toda
+- [x] **Catálogo de ferramentas mais leve.** São ~60 ferramentas com descrições longas em toda
       requisição. Medir os tokens do schema. Se passar de ~20% da janela, encurtar as descrições e
       esconder as ferramentas de nicho (mídia, documentos, goals) atrás de uma ferramenta
       `mais_ferramentas`, que as liga sob demanda. O catálogo continua estável dentro da conversa, por
       causa do cache.
-- [ ] O anel de contexto (`ContextRing.tsx`) passa a contar a mensagem "contexto" como **sistema**, não
+- [x] O anel de contexto (`ContextRing.tsx`) passa a contar a mensagem "contexto" como **sistema**, não
       como mensagens.
-- [ ] Testes: compactação dentro de um turno longo; só a última mensagem "contexto" vai ao modelo; tetos
+- [x] Testes: compactação dentro de um turno longo; só a última mensagem "contexto" vai ao modelo; tetos
       mudam com a janela; spill do `run_command` preserva o log.
 
 ### Perfis de hardware (Automático, Performance, Balanced, Low VRAM)

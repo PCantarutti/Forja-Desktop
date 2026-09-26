@@ -128,16 +128,22 @@ def test_poda_mantem_os_ultimos_resultados_inteiros():
     grande = "A" * 5000 + "MEIO" + "Z" * 5000
     assert "[... meio do resultado podado ...]" in compact.podar(grande)
     assert compact.podar("curto") == "curto"
-    msgs = [db.Message(id=1, role="user", content="oi")]
-    for i in range(2, 8):
-        msgs.append(db.Message(id=i, role="assistant", content="", tool_calls=[
-            {"id": f"t{i}", "name": "read_file", "arguments": {}}]))
-        msgs.append(db.Message(id=100 + i, role="tool", tool_call_id=f"t{i}", name="read_file",
-                               status="ok", content=grande))
-    hist = agent.build_history(msgs, "native", podar=True)
-    tools = [m["content"] for m in hist if m["role"] == "tool"]
-    assert sum("podado" in t for t in tools) == len(tools) - compact.PODA_MANTEM
-    assert "MEIO" in tools[-1]
+    def conversa(n):
+        msgs = [db.Message(id=1, role="user", content="oi")]
+        for i in range(2, 2 + n):
+            msgs.append(db.Message(id=i, role="assistant", content="", tool_calls=[
+                {"id": f"t{i}", "name": "read_file", "arguments": {}}]))
+            msgs.append(db.Message(id=1000 + i, role="tool", tool_call_id=f"t{i}", name="read_file",
+                                   status="ok", content=grande))
+        tools = [m["content"] for m in agent.build_history(msgs, "native", podar=True) if m["role"] == "tool"]
+        return [("podado" in t) for t in tools]
+
+    # E4: em blocos de PODA_BLOCO. Com 6 resultados ainda não poda; com 14, os 8 primeiros; e com 15 o corte
+    # continua no mesmo lugar (o prefixo não muda a cada passo, e o cache do servidor vale).
+    assert not any(conversa(6))
+    com14, com15 = conversa(14), conversa(15)
+    assert sum(com14) == compact.PODA_BLOCO and not com14[-1]
+    assert com15[:14] == com14 and not com15[-1]
 
 
 def test_retomada_do_resumo_usa_checkpoint():

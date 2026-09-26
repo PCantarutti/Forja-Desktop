@@ -711,7 +711,7 @@ async def read(_root: Path, args: dict) -> str:
         snap = await loc.aria_snapshot(mode="ai", timeout=ACT_TIMEOUT)
     except Exception as e:
         raise ToolError(_act_err(selector, e) if selector else f"Falha ao ler a página: {_err(e)}") from e
-    max_chars = max(1_000, min(int(args.get("max_chars") or 15_000), 100_000))
+    max_chars = max(1_000, min(int(args.get("max_chars") or config.teto(15_000, 0.15)), 100_000))  # E4
     more = (f"\n(truncado em {max_chars} de {len(snap)} caracteres; passe selector para focar numa região)"
             if len(snap) > max_chars else "")
     return f"{UNTRUSTED}{await _summary(page)}\n\n{snap[:max_chars]}{more}"

@@ -51,10 +51,11 @@ def limpa_logs(dias: int = LOG_DIAS) -> int:
 
 
 def _truncate(text: str) -> str:
-    if len(text) <= MAX_OUTPUT:
+    limite = config.teto(MAX_OUTPUT, 0.2)  # E4: proporcional à janela
+    if len(text) <= limite:
         return text
-    half = MAX_OUTPUT // 2
-    return f"{text[:half]}\n\n... ({len(text) - MAX_OUTPUT} caracteres omitidos) ...\n\n{text[-half:]}"
+    half = limite // 2
+    return f"{text[:half]}\n\n... ({len(text) - limite} caracteres omitidos) ...\n\n{text[-half:]}"
 
 
 def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] | None,
@@ -136,7 +137,8 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str,
     cabeca: list[str] = []
     cauda: collections.deque[str] = collections.deque()
     tam = {"cabeca": 0, "cauda": 0, "total": 0}
-    metade = MAX_OUTPUT // 2
+    maximo = config.teto(MAX_OUTPUT, 0.2)  # E4: proporcional à janela
+    metade = maximo // 2
     limite = time.monotonic() + timeout
 
     def guarda(linha: str) -> None:
@@ -195,7 +197,7 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str,
     sandbox.fecha(proc)  # comando acabou: filho que ficou rodando (daemon, watcher) morre junto
     completo = ""
     try:
-        if tam["total"] > MAX_OUTPUT:
+        if tam["total"] > maximo:
             # Saída cortada: o log vira o arquivo completo que o modelo pode ler por partes (antes era
             # apagado, e o meio de um log de build sumia para sempre).
             from .tools import SPILL_DIR

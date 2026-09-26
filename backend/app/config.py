@@ -160,3 +160,28 @@ MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)
 # prompt no meio do trabalho. Modelo de nuvem fica de fora: a janela dele não é o usuário que escolhe.
 MAESTRO_MIN_CTX = int(os.getenv("MAESTRO_MIN_CTX", "32768"))
 WORKER_MIN_CTX = int(os.getenv("WORKER_MIN_CTX", "16384"))
+
+
+# ------------------------------------------------------------------ tetos proporcionais à janela (E4)
+# Os tetos de leitura e de saída foram pensados para 32k. Com 8k, um único resultado enchia a janela. Cada
+# execução põe aqui a janela real do modelo (tokens); `teto` corta o padrão para uma fração dela.
+import contextvars as _cv  # noqa: E402
+
+JANELA: _cv.ContextVar[int | None] = _cv.ContextVar("forja_janela", default=None)
+CHARS_POR_TOKEN = 3  # português e código ficam perto de 3 (o chars/4 subestima)
+
+
+def teto(padrao: int, fracao: float) -> int:
+    """Teto em caracteres: o menor entre o padrão e `fracao` da janela real (sem janela conhecida, o padrão)."""
+    janela = JANELA.get()
+    if not janela:
+        return padrao
+    return max(min(padrao, 1_000), min(padrao, int(janela * fracao * CHARS_POR_TOKEN)))
+
+
+def teto_linhas(padrao: int, fracao: float, chars_por_linha: int = 50) -> int:
+    """O mesmo em linhas (read_file, tree)."""
+    janela = JANELA.get()
+    if not janela:
+        return padrao
+    return max(min(padrao, 50), min(padrao, int(janela * fracao * CHARS_POR_TOKEN / chars_por_linha)))

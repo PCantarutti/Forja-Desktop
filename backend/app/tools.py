@@ -237,13 +237,15 @@ SPILL_TAIL = 6_000
 
 
 def spill(texto: str, nome: str) -> str:
-    if len(texto) <= SPILL_CHARS:
+    limite = config.teto(SPILL_CHARS, 0.25)  # E4: numa janela de 8k, ~6k caracteres
+    if len(texto) <= limite:
         return texto
+    cabeca, cauda = limite * 2 // 3, limite // 4
     destino = SPILL_DIR / f"{nome}.txt"
     destino.parent.mkdir(parents=True, exist_ok=True)
     destino.write_text(texto, encoding="utf-8")
-    omitidos = len(texto) - SPILL_HEAD - SPILL_TAIL
-    return (f"{texto[:SPILL_HEAD]}\n\n[...]\n\n{texto[-SPILL_TAIL:]}\n\n(Omitidos {omitidos} caracteres. "
+    omitidos = len(texto) - cabeca - cauda
+    return (f"{texto[:cabeca]}\n\n[...]\n\n{texto[-cauda:]}\n\n(Omitidos {omitidos} caracteres. "
             f"Resultado completo em: {destino}. Leia por partes com read_file (start_line/end_line) ou "
             "procure nele com grep.)")
 
@@ -405,7 +407,7 @@ def read_file(root: Path, args: dict) -> str:
     marcar_lido(p)
     start = max(int(args.get("start_line") or 1), 1)
     end = int(args.get("end_line") or len(lines))
-    end = min(end, len(lines), start + MAX_READ_LINES - 1)
+    end = min(end, len(lines), start + config.teto_linhas(MAX_READ_LINES, 0.3) - 1)  # E4: cabe na janela
     if not lines:
         return f"(arquivo vazio: {_rel(root, p)})"
     if start > len(lines):
