@@ -130,7 +130,7 @@ const MD_COMPONENTS = { pre: CodeBlock, table: Table, a: Link, img: Imagem };
  */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
-    <div className="md text-[15px]">
+    <div className="md text-[14.5px] text-fg">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={MD_COMPONENTS}>
         {text}
       </ReactMarkdown>
@@ -145,20 +145,20 @@ export function Thinking({ text, live }: { text: string; live?: boolean }) {
   const isOpen = open ?? !!live;
   if (!text) return null;
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
+    <div className="mb-2">
       <button
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-4 py-2.5 font-mono text-sm text-muted hover:text-fg"
+        className="flex items-center gap-2 py-1 text-[13px] text-faint hover:text-muted"
       >
-        <Brain className={`size-4 ${live ? "animate-pulse" : ""}`} />
-        {live ? "Raciocinando..." : "Raciocínio"}
-        <Chevron className="ml-auto size-4" />
+        <Brain className={`size-3.5 ${live ? "animate-pulse" : ""}`} />
+        {live ? "Raciocinando…" : "Raciocínio"}
+        <ChevronDown className={`size-3 transition-transform duration-150 ${isOpen ? "" : "-rotate-90"}`} />
       </button>
       {isOpen && (
         <div
           ref={caixa}
           onScroll={seguirTexto}
-          className="max-h-80 overflow-y-auto border-t border-line px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap text-fg/85"
+          className="max-h-80 overflow-y-auto py-1 text-[13px] leading-relaxed whitespace-pre-wrap text-faint italic"
         >
           {text}
           <div ref={fimDoTexto} />
@@ -493,7 +493,7 @@ export function CopyButton({ text, html, bg }: { text: string | (() => string); 
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md bg-raised px-2 py-0.5 text-xs text-muted">{children}</span>
+    <span className="inline-flex items-center gap-1.5 rounded-[5px] bg-raised px-2 py-0.5 font-mono text-[11.5px] text-fg-2">{children}</span>
   );
 }
 
@@ -557,28 +557,28 @@ export function resultadosDe(messages: Message[]): Map<string, Message> {
 
 export function StatsRow({ s, live, instances, instancesLabel, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; instancesLabel?: string; onInstances?: () => void; phase?: string }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11.5px] text-faint [&_svg]:size-[13px]">
       <Chip>
         <Cube className="size-3.5" /> {s.model}
       </Chip>
-      {live && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" title="gerando: valores em tempo real" />}
+      {live && <span className="size-1.5 animate-pulse rounded-full bg-accent" title="gerando: valores em tempo real" />}
       <span className="inline-flex items-center gap-1.5" title={live ? "contagem em tempo real (aproximada)" : s.estimated ? "estimado (chars/4)" : "informado pelo provider"}>
         <Tokens className="size-3.5" /> {s.estimated || live ? "~" : ""}
         {s.tokens.toLocaleString("pt-BR")} tokens
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <Clock className="size-3.5" /> {s.seconds < 60 ? `${s.seconds.toFixed(1)}s` : `${Math.floor(s.seconds / 60)}m${Math.round(s.seconds % 60)}s`}
+        <Clock className="size-3.5" /> {s.seconds < 60 ? `${s.seconds.toFixed(1).replace(".", ",")} s` : `${Math.floor(s.seconds / 60)}m${Math.round(s.seconds % 60)}s`}
       </span>
       {s.tps != null && (
         <span className="inline-flex items-center gap-1.5">
-          <Gauge className="size-3.5" /> {s.tps.toFixed(2)} t/s
+          <Gauge className="size-3.5" /> {s.tps.toFixed(2).replace(".", ",")} t/s
         </span>
       )}
       {(!!instances || !!phase) && (
         <button
           onClick={onInstances}
           title={instances ? "Subagentes e processos desta conversa — clique para abrir a aba Instâncias" : undefined}
-          className="inline-flex items-center gap-1.5 text-sky-300 hover:text-sky-200"
+          className="inline-flex items-center gap-1.5 font-sans text-accent-text hover:text-fg"
         >
           {phase ? (
             <span className="size-3 animate-spin rounded-full border border-sky-400/30 border-t-sky-300" />
@@ -598,7 +598,7 @@ export function DiffView({ preview }: { preview: Preview }) {
   if (preview.kind === "command")
     return (
       <div className="overflow-hidden rounded-xl border border-line">
-        <div className="bg-raised px-3 py-1.5 text-xs text-muted">
+        <div className="bg-raised px-3 py-1.5 text-[11.5px] text-muted">
           Comando · <span className="font-mono">{preview.path}</span>
         </div>
         <pre className="max-h-64 overflow-auto bg-code px-3 py-2.5 font-mono text-xs whitespace-pre-wrap text-fg">
@@ -610,19 +610,19 @@ export function DiffView({ preview }: { preview: Preview }) {
   const lines = preview.kind === "new" ? preview.text.split("\n").map((l) => "+" + l) : preview.text.split("\n");
   return (
     <div className="overflow-hidden rounded-xl border border-line">
-      <div className="bg-raised px-3 py-1.5 text-xs text-muted">
+      <div className="bg-raised px-3 py-1.5 text-[11.5px] text-muted">
         {preview.kind === "new" ? "Arquivo novo" : "Diff"} · <span className="font-mono">{preview.path}</span>
       </div>
       <pre className="max-h-96 overflow-auto bg-code py-2 font-mono text-xs leading-5">
         {lines.map((l, i) => {
           const cls = l.startsWith("@@")
-            ? "text-sky-400"
+            ? "text-info"
             : l.startsWith("+++") || l.startsWith("---")
               ? "text-faint"
               : l.startsWith("+")
-                ? "bg-emerald-950/70 text-emerald-300"
+                ? "bg-diff-add text-diff-add-fg"
                 : l.startsWith("-")
-                  ? "bg-red-950/70 text-red-300"
+                  ? "bg-diff-del text-diff-del-fg"
                   : "text-muted";
           return (
             <div key={i} className={`px-3 whitespace-pre ${cls}`}>
@@ -636,12 +636,12 @@ export function DiffView({ preview }: { preview: Preview }) {
 }
 
 const STATUS: Record<string, [string, string]> = {
-  ok: ["ok", "text-emerald-400"],
-  erro: ["erro", "text-red-400"],
-  rejeitada: ["rejeitada", "text-orange-400"],
+  ok: ["ok", "text-ok"],
+  erro: ["erro", "text-err"],
+  rejeitada: ["rejeitada", "text-warn"],
   cancelada: ["cancelada", "text-faint"],
-  aguardando: ["aguardando aprovação", "text-amber-300"],
-  executando: ["executando…", "text-sky-400"],
+  aguardando: ["aguardando aprovação", "text-accent-text"],
+  executando: ["executando…", "text-info"],
   fila: ["na fila", "text-faint"],
   pendente: ["não executada", "text-faint"],
 };
@@ -651,16 +651,18 @@ export function TasksCard({ tasks, live }: { tasks: Task[]; live?: boolean }) {
   if (!tasks.length) return null;
   const done = tasks.filter((t) => t.status === "done").length;
   return (
-    <div className={`my-3 rounded-2xl border ${live ? "border-sky-500/40" : "border-line"} bg-surface px-4 py-3 text-sm`}>
-      <div className="mb-2 flex items-center gap-2 text-xs text-muted">
-        <Clipboard className="size-3.5" /> Tarefas · {done}/{tasks.length} concluídas
-        {live && <span className="ml-auto animate-pulse text-sky-300">em andamento</span>}
+    <div className={`my-3 rounded-xl border ${live ? "border-accent-line" : "border-line"} bg-bg px-3 py-2 text-[13px]`}>
+      <div className="mb-2 flex items-center gap-2">
+        <Clipboard className="size-3.5 text-muted" /> <span className="font-medium text-fg">Tarefas</span>
+        <span className="text-muted">{done} de {tasks.length} concluídas</span>
+        <span className="h-[3px] w-16 rounded-full bg-line"><span className="block h-full rounded-full bg-accent" style={{ width: `${(done / tasks.length) * 100}%` }} /></span>
+        {live && <span className="ml-auto animate-pulse text-accent-text">em andamento</span>}
       </div>
       <ul className="space-y-1">
         {tasks.map((t, i) => (
           <li key={i} className="flex items-start gap-2">
             <span className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded border text-[10px] ${
-              t.status === "done" ? "border-emerald-500 bg-emerald-600/80 text-white" : t.status === "doing" ? "border-sky-400 text-sky-300" : "border-line text-transparent"
+              t.status === "done" ? "border-ok bg-ok/80 text-bg" : t.status === "doing" ? "border-accent text-accent-text" : "border-line text-transparent"
             }`}>
               {t.status === "done" ? "✓" : t.status === "doing" ? "›" : ""}
             </span>
@@ -711,11 +713,11 @@ export function ToolBlock(props: {
   const target = preview?.path ?? (call.name.startsWith("browser_") ? hint : "");
 
   return (
-    <div className={`my-2 overflow-hidden rounded-2xl border ${waiting ? "border-amber-500/50" : "border-line"} bg-surface`}>
-      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-raised/50">
-        <span className="font-mono text-fg">{call.name}</span>
-        <span className="truncate font-mono text-faint">{hint}</span>
-        <span className={`ml-auto shrink-0 text-xs ${cls}`}>● {label}</span>
+    <div className={`my-2 overflow-hidden ${waiting ? "rounded-2xl border-accent-line" : "rounded-xl border-line"} border bg-surface`}>
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3.5 py-2 text-left text-[13px] hover:bg-raised/50">
+        <span className="font-mono text-[12.5px] text-fg">{call.name}</span>
+        <span className="truncate text-faint">{hint}</span>
+        <span className={`ml-auto shrink-0 text-[11.5px] ${cls}`}>● {label}</span>
         <Chevron className="size-4 shrink-0 text-faint" />
       </button>
 
@@ -738,8 +740,8 @@ export function ToolBlock(props: {
 
       {waiting && !approval?.sent && (
         <div className="space-y-3 border-t border-line p-4">
-          <div className="text-sm text-fg">
-            O agente quer {verb} <span className="font-mono">{target}</span>
+          <div className="text-[13.5px] text-fg">
+            O agente quer {verb} <span className="font-mono text-[12.5px]">{target}</span>
           </div>
           {preview ? (
             <DiffView preview={preview} />
@@ -748,7 +750,7 @@ export function ToolBlock(props: {
               {JSON.stringify(call.arguments, null, 2)}
             </pre>
           )}
-          {approval?.nota && <div className="mb-2 text-xs text-amber-200/90">{approval.nota}</div>}
+          {approval?.nota && <div className="mb-2 text-xs text-warn">{approval.nota}</div>}
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => props.onDecide(true)}
@@ -954,20 +956,20 @@ export function ActivityGroup(props: {
   const summary =
     (props.live && !tools.length ? "Trabalhando" : soNotas ? "Avisos ao agente"
       : tools.length > 1 ? `${head}, usou ${tools.length} ferramentas` : head) +
-    (fails ? ` (${fails} falha${fails > 1 ? "s" : ""})` : "") +
     (props.live ? "…" : "");
 
   return (
     <div className="my-3">
       <button
         onClick={() => setOpen(!isOpen)}
-        className="flex items-center gap-1.5 text-sm text-faint transition-colors hover:text-muted"
+        className="flex items-center gap-1.5 text-[13.5px] text-faint transition-colors hover:text-muted"
       >
         <span className={props.live ? "animate-pulse" : ""}>{summary}</span>
-        <ChevronDown className={`size-3.5 transition-transform ${isOpen ? "" : "-rotate-90"}`} />
+        {!!fails && <span className="text-err">({fails} falha{fails > 1 ? "s" : ""})</span>}
+        <ChevronDown className={`size-3.5 transition-transform duration-150 ${isOpen ? "" : "-rotate-90"}`} />
       </button>
       {isOpen && (
-        <div className="mt-1 border-l border-line pl-3">
+        <div className="mt-2 border-l border-line pl-3.5">
           {props.items.map((p, k) =>
             p.kind === "thinking" ? (
               <Thinking key={p.id} text={p.text} />
@@ -1015,11 +1017,11 @@ export function ActivityGroup(props: {
 }
 
 const EVENT_STYLE: Record<string, string> = {
-  warning: "border-amber-500/30 text-amber-200",
-  error: "border-red-500/30 text-red-200",
-  nudge: "border-sky-500/30 text-sky-200",
+  warning: "border-warn/30 bg-warn/[.07] text-fg-2",
+  error: "border-err/30 bg-err/[.08] text-fg-2",
+  nudge: "border-accent-line text-fg-2",
   info: "border-line text-muted",
-  imagens: "border-sky-500/30 text-muted whitespace-pre-wrap", // uma linha por imagem
+  imagens: "border-accent-line text-muted whitespace-pre-wrap", // uma linha por imagem
 };
 
 /** agent.py: "... Tentando de novo em 2.0s (2/5)..." */

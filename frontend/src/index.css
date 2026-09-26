@@ -46,6 +46,10 @@
   --color-agent: var(--agent);
   --color-warn: var(--warn);
   --color-scrim: rgba(8, 7, 6, .66);
+  --color-diff-add: rgba(95, 211, 154, .09);
+  --color-diff-add-fg: #9fe3bf;
+  --color-diff-del: rgba(226, 122, 107, .10);
+  --color-diff-del-fg: #e9a095;
 
   --shadow-popover: 0 20px 50px rgba(0, 0, 0, .55);
   --shadow-float: 0 14px 40px rgba(0, 0, 0, .55);
@@ -262,8 +266,8 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 /* Citacao de fonte: pilula, nao link azul sublinhado (.md a venceria as classes do Tailwind). */
 .md a.fonte { color: var(--color-muted); text-decoration: none; }
 .md a.fonte:hover { color: var(--color-fg); }
-.md strong { color: #fff; }
-.md :not(pre) > code { background: var(--color-raised); color: #f0a8a0; padding: 0.1em 0.35em; border-radius: 5px; font-size: 0.88em; }
+.md strong { color: var(--color-fg); font-weight: 600; }
+.md :not(pre) > code { background: var(--color-raised); color: var(--color-accent-text); padding: 0.1em 0.35em; border-radius: 5px; font-size: 0.88em; }
 .md pre { background: var(--color-code); border: 1px solid var(--color-line); border-radius: 12px; padding: 0.9em 1em; overflow-x: auto; font-size: 0.85em; }
 .md pre code.hljs { background: transparent; padding: 0; }
 .md h2 { border-bottom: 1px solid var(--color-line); padding-bottom: 0.25em; }

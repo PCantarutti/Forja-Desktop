@@ -1542,7 +1542,7 @@ export default function App() {
                 return (
                   <div key={m.id} className="group my-6 flex flex-col items-end">
                     {!so && editing?.id === m.id ? (
-                      <div className="w-full rounded-3xl border border-line bg-surface p-3">
+                      <div className="w-full rounded-[18px] border border-focus bg-surface p-3">
                         <textarea
                           autoFocus
                           rows={Math.min(10, editing.text.split("\n").length + 1)}
@@ -1569,7 +1569,7 @@ export default function App() {
                     ) : (
                       <>
                         {!!m.content && (
-                          <div className="max-w-[85%] rounded-3xl bg-raised px-5 py-2.5 whitespace-pre-wrap">{m.content}</div>
+                          <div className="max-w-[85%] rounded-[22px] bg-raised px-[18px] py-2.5 text-[14.5px] leading-[1.65] whitespace-pre-wrap">{m.content}</div>
                         )}
                         <Attachments list={m.meta?.attachments ?? []} />
                         {!so && <div className="mt-1 flex opacity-0 transition group-hover:opacity-100">
