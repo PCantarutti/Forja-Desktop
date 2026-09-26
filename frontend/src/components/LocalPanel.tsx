@@ -10,9 +10,9 @@ import { BaixarAmpliacao } from "./AmpliarVideo";
 import { useStickyBottom } from "../useStickyBottom";
 
 const POLL_MS = 3000;
-export const card = "rounded-2xl border border-line bg-surface p-3.5";
-export const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-export const btnPrimary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+export const card = "rounded-xl border border-line bg-surface p-3.5";
+export const btn = "rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
+export const btnPrimary = "rounded-[9px] bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 // `campo` sem largura: quem precisa de outra (w-24, w-auto) usa a base, senão o w-full do `input` vence
 // no CSS e o irmão flex-1 colapsa para zero.
 export const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
@@ -109,7 +109,7 @@ export default function LocalPanel(props: {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`rounded-full px-2.5 py-0.5 ${tab === t ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+            className={`rounded-[9px] px-2.5 py-0.5 ${tab === t ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
           >
             {t}
           </button>
@@ -197,7 +197,7 @@ function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["load
   const l = props.loading;
   return (
     <div className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center">
-      <div className="pointer-events-auto w-80 rounded-2xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
+      <div className="pointer-events-auto w-80 rounded-xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-fg">Carregando {l.name}</span>
           <span className="shrink-0 text-muted">{l.percent}%</span>

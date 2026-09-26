@@ -815,7 +815,7 @@ function Menu(props: { rotulo: React.ReactNode; titulo?: string; children: (fech
         {props.rotulo}
       </button>
       {aberto && (
-        <div className="absolute bottom-full left-0 z-30 mb-2 rounded-xl border border-line bg-surface p-1.5 text-xs shadow-2xl shadow-black/50">
+        <div className="absolute bottom-full left-0 z-30 mb-2 rounded-xl border border-line bg-surface p-1.5 text-xs shadow-popover">
           {props.children(() => setAberto(false))}
         </div>
       )}
@@ -1021,7 +1021,7 @@ function Vazio(props: {
       <div className="text-3xl font-semibold">Vídeo</div>
       <div className="text-3xl text-faint">Descreva a cena, anime uma imagem ou ligue dois quadros.</div>
       {props.semRuntime || props.semModelo ? (
-        <div className="mx-auto mt-6 max-w-md rounded-2xl border border-line bg-surface p-4 text-sm">
+        <div className="mx-auto mt-6 max-w-md rounded-xl border border-line bg-surface p-4 text-sm">
           <p className="text-muted">
             {props.semRuntime
               ? "O stable-diffusion.cpp ainda não está instalado. Ele vem com o runtime, na aba IA local."
@@ -1041,7 +1041,7 @@ function Vazio(props: {
                 key={m.id}
                 disabled={!pode}
                 onClick={() => props.onExemplo(m)}
-                className="group rounded-2xl border border-line bg-surface p-3.5 text-left transition hover:border-focus hover:bg-raised disabled:opacity-40 disabled:hover:border-line disabled:hover:bg-surface"
+                className="group rounded-xl border border-line bg-surface p-3.5 text-left transition hover:border-focus hover:bg-raised disabled:opacity-40 disabled:hover:border-line disabled:hover:bg-surface"
                 title={pode ? "Usar este exemplo" : "O modelo escolhido não faz este modo"}
               >
                 <IlustracaoModo modo={m.id} />
@@ -1099,7 +1099,7 @@ function AjustesVideo(props: {
   const atual = st.video_models.find((m) => m.path === props.modelo);
   const a14b = !!atual?.params?.high_noise_model || atual?.variante?.includes("a14b");
   return (
-    <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+    <div className="mb-2 rounded-xl border border-line bg-surface p-3.5 text-xs">
       <div className="mb-2.5 flex items-center gap-2">
         <span className="font-medium text-fg">Ajustes do vídeo</span>
         {atual?.req?.doc && (
@@ -1192,7 +1192,7 @@ function AjustesVideo(props: {
                 <button
                   key={s.id}
                   onClick={() => props.onSeedMode(s.id)}
-                  className={`rounded-full px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                  className={`rounded-[9px] px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
                 >
                   {s.label}
                 </button>
@@ -1662,7 +1662,7 @@ function Foco(props: {
           tecladoGlobal
           atalhosExtras={[["↑ · ↓", "tomada anterior · próxima"], ["M · X", "manter · descartar e ir à próxima"], ["Esc", "fechar"]]}
           marcas={refs.length === 2}
-          className="rounded-xl shadow-2xl shadow-black"
+          className="rounded-xl shadow-popover shadow-black"
           // cabe inteiro com folga em volta: 88% da área, e a altura deixa respiro em cima e embaixo
           style={{ aspectRatio: w / h, width: `min(88%, calc((100vh - 200px) * ${w / h}))` }}
         />

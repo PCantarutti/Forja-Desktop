@@ -73,7 +73,7 @@ export default function ModeloCarregado() {
       <button
         onClick={() => setAberto(true)}
         title="IA local: modelo carregado e memória"
-        className="flex max-w-80 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
+        className="flex max-w-80 items-center gap-2 rounded-[9px] border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
       >
         <span className={`size-2 shrink-0 rounded-full ${ponto}`} />
         <span className={`min-w-0 truncate ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
@@ -87,7 +87,7 @@ export default function ModeloCarregado() {
       </button>
 
       {aberto && (
-        <Modal onClose={() => setAberto(false)} label="IA local" className="w-full max-w-md space-y-5 rounded-2xl border border-line bg-surface p-5">
+        <Modal onClose={() => setAberto(false)} label="IA local" className="w-full max-w-md space-y-5 rounded-xl border border-line bg-surface p-5">
           <div className="flex items-start gap-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-raised text-muted"><Cpu className="size-4" /></span>
             <div className="min-w-0 flex-1">

@@ -47,8 +47,8 @@ function textoDasNotas(notas: string) {
   return new DOMParser().parseFromString(notas, "text/html").body.textContent ?? "";
 }
 
-const btn = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
-const btnPrimary = "rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const btn = "rounded-[9px] border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
+const btnPrimary = "rounded-[9px] bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 
 /**
  * Pergunta, e só. Levar para Configurações punia quem nunca esteve lá: a pessoa clica num aviso e
@@ -70,7 +70,7 @@ function ModalAtualizacao(props: { onClose: () => void }) {
     <Modal
       onClose={props.onClose}
       label="Atualização do Forja"
-      className="w-[min(34rem,92vw)] rounded-2xl border border-line bg-surface p-5 shadow-2xl"
+      className="w-[min(34rem,92vw)] rounded-xl border border-line bg-surface p-5 shadow-popover"
     >
       <div className="flex items-start gap-3">
         <span className="mt-0.5 text-amber-300">

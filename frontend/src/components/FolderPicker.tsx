@@ -57,7 +57,7 @@ export default function FolderPicker(props: {
           <Folder className="size-4 text-muted" />
           <h2 className="flex-1 text-sm font-medium">Pasta de trabalho</h2>
           {props.onNative && (
-            <button onClick={props.onNative} className="rounded-full border border-line px-3 py-1 text-xs text-fg hover:bg-raised">
+            <button onClick={props.onNative} className="rounded-[9px] border border-line px-3 py-1 text-xs text-fg hover:bg-raised">
               Abrir seletor do sistema
             </button>
           )}
@@ -154,7 +154,7 @@ export default function FolderPicker(props: {
               <button
                 disabled={!list}
                 onClick={() => list && props.onPick(list.path)}
-                className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
+                className="rounded-[9px] bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
               >
                 Usar esta pasta
               </button>

@@ -441,7 +441,7 @@ export default function ImagensView(props: {
       )}
       {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
       {ampliarPc && (
-        <Modal label="Ampliar imagem do PC" onClose={() => setAmpliarPc(false)} className="w-full max-w-2xl rounded-2xl border border-line bg-surface p-4">
+        <Modal label="Ampliar imagem do PC" onClose={() => setAmpliarPc(false)} className="w-full max-w-2xl rounded-xl border border-line bg-surface p-4">
           <p className="mb-3 text-sm text-fg">Ampliar imagem do PC</p>
           <AmpliarArquivo
             imagem
@@ -577,7 +577,7 @@ export default function ImagensView(props: {
           )}
 
           {slotsPendentes && (
-            <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+            <div className="mb-2 rounded-xl border border-line bg-surface p-3.5 text-xs">
               <div className="mb-2 flex items-center gap-2">
                 <span className="font-medium text-fg">
                   {slotsPendentes.slots.length} {visiveis.length ? "imagens novas" : "imagens"} pedidas pelo chat
@@ -612,7 +612,7 @@ export default function ImagensView(props: {
 
           {origem ? (
             !slotsPendentes && (
-              <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-line bg-surface px-3.5 py-2.5 text-xs text-muted">
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface px-3.5 py-2.5 text-xs text-muted">
                 <Robo className="size-4 shrink-0 text-sky-300/80" />
                 <span className="min-w-0 flex-1">
                   Esta conversa gera só as imagens que o chat pediu para o site. Para refazer uma, use <Refresh className="inline size-3" /> no
@@ -836,7 +836,7 @@ function Ajustes(props: {
   }
 
   return (
-    <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+    <div className="mb-2 rounded-xl border border-line bg-surface p-3.5 text-xs">
       <div className="mb-2.5 flex items-center gap-2">
         <span className="font-medium text-fg">Ajustes da geração</span>
         <button onClick={props.onFechar} className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
@@ -879,7 +879,7 @@ function Ajustes(props: {
                       set("width", p.width);
                       set("height", p.height);
                     }}
-                    className={`rounded-full px-2.5 py-0.5 ${ativo ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                    className={`rounded-[9px] px-2.5 py-0.5 ${ativo ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
                   >
                     {p.label}
                   </button>
@@ -911,7 +911,7 @@ function Ajustes(props: {
                 <button
                   key={s.id}
                   onClick={() => props.onSeedMode(s.id)}
-                  className={`rounded-full px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                  className={`rounded-[9px] px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
                 >
                   {s.label}
                 </button>
@@ -1051,7 +1051,7 @@ function Lote(props: {
   return (
     <section className="my-8">
       {ampliando && (
-        <Modal label="Ampliar imagem" onClose={() => setAmpliando(null)} className="w-full max-w-sm rounded-2xl border border-line bg-surface p-4">
+        <Modal label="Ampliar imagem" onClose={() => setAmpliando(null)} className="w-full max-w-sm rounded-xl border border-line bg-surface p-4">
           <p className="mb-3 text-sm text-fg">Ampliar imagem</p>
           <PainelAmpliar
             imagem
@@ -1448,7 +1448,7 @@ function Variacoes(props: {
   const editado = prompt.trim() !== original.trim();
   const rodando = [...new Set(props.itens.filter((v) => v.lote.status === "running").map((v) => v.lote.id))];
   return (
-    <Modal onClose={props.onClose} label={`Variações de ${nome}`} className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-2xl border border-line bg-surface p-4 text-xs">
+    <Modal onClose={props.onClose} label={`Variações de ${nome}`} className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-xl border border-line bg-surface p-4 text-xs">
       <div className="mb-3 flex items-center gap-2">
         <span className="font-mono text-sm text-fg">{nome}</span>
         <span className="text-faint">{props.itens.length} versões · a de borda verde é a que o site mostra</span>
@@ -1591,7 +1591,7 @@ function Origem(props: {
   onEstilo: () => void;
 }) {
   const { origem } = props;
-  const acao = "flex items-center gap-1 rounded-full border border-line px-2.5 py-1 text-fg hover:bg-raised disabled:opacity-40";
+  const acao = "flex items-center gap-1 rounded-[9px] border border-line px-2.5 py-1 text-fg hover:bg-raised disabled:opacity-40";
   // Duas linhas: quem pediu (identidade + volta ao chat) e o que dá para fazer com todas as imagens.
   return (
     <div className="mb-3 overflow-hidden rounded-2xl border border-sky-900/50 bg-sky-950/15 text-xs">
@@ -1609,7 +1609,7 @@ function Origem(props: {
           <button
             onClick={() => props.onAbrir(origem.chat!.id, origem.chat!.kind)}
             title={`Abrir o chat que pediu estas imagens: “${origem.chat.title}”`}
-            className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1.5 rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+            className="flex min-w-0 max-w-[45%] shrink-0 items-center gap-1.5 rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised"
           >
             <span className="shrink-0 text-faint">Chat</span>
             <span className="truncate">{origem.chat.title}</span>
@@ -1658,7 +1658,7 @@ function Origem(props: {
 function EstiloTodas(props: { estilo: string; count: number; imagens: number; onGerar: (estilo: string) => void; onClose: () => void }) {
   const [estilo, setEstilo] = useState(props.estilo);
   return (
-    <Modal onClose={props.onClose} label="Regerar todas com outro estilo" className="w-full max-w-xl rounded-2xl border border-line bg-surface p-4 text-xs">
+    <Modal onClose={props.onClose} label="Regerar todas com outro estilo" className="w-full max-w-xl rounded-xl border border-line bg-surface p-4 text-xs">
       <div className="mb-2 flex items-center gap-2">
         <span className="text-sm font-medium text-fg">Outro estilo para as {props.imagens} imagens do site</span>
         <button onClick={props.onClose} title="Fechar" className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">

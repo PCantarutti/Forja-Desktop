@@ -216,7 +216,7 @@ export default function ServersPanel(props: {
         {props.onOpen && (
           <button
             onClick={() => props.onOpen?.(s.conversation_id)}
-            className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+            className="rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised"
           >
             Abrir conversa
           </button>
@@ -231,7 +231,7 @@ export default function ServersPanel(props: {
       <div className="text-faint">Em execução</div>
       {recentes(meusSubs, (s) => s.seconds).map(cartaoSubagente)}
       {servers && !meusVivos.length && !meusSubs.length && (
-        <div className="rounded-2xl border border-line bg-surface p-3.5 text-muted">
+        <div className="rounded-xl border border-line bg-surface p-3.5 text-muted">
           Nada rodando nesta conversa. Quando o agente delegar para um subagente ou subir um processo (npm run dev,
           uma build…), aparece aqui — e você pode parar.
         </div>

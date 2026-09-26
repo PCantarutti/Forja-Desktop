@@ -95,7 +95,7 @@ function Tools({ list, info }: { list: { name: string; mutating: boolean; blocke
 
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border border-line bg-surface p-3.5">
+    <section className="rounded-xl border border-line bg-surface p-3.5">
       <div className="mb-2 flex items-center justify-between">
         <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">{title}</h3>
         {action}

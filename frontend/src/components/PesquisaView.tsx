@@ -13,9 +13,9 @@ import Sinapse from "./Sinapse";
 
 // Estas classes moram no LocalPanel.tsx, que é só do desktop. Repetidas aqui para esta aba viajar
 // inteira num cherry-pick para o forja-web. ponytail: 4 linhas custam menos que um módulo de estilo.
-const card = "rounded-2xl border border-line bg-surface p-3.5";
-const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-const btnPrimary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const card = "rounded-xl border border-line bg-surface p-3.5";
+const btn = "rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
+const btnPrimary = "rounded-[9px] bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 
 // Os dois modelos da pesquisa são escolha desta aba, não do Chat: quem lê 12 páginas costuma
@@ -540,7 +540,7 @@ export default function PesquisaView(props: {
 
           {abrirModelos && (
             // Como os ajustes da tela Imagem: um painel acima da caixa, em vez de seletores no rodapé.
-            <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+            <div className="mb-2 rounded-xl border border-line bg-surface p-3.5 text-xs">
               <div className="mb-2.5 flex items-center gap-2">
                 <span className="font-medium text-fg">Modelos da pesquisa</span>
                 <button onClick={() => setAbrirModelos(false)} title="Fechar"
@@ -568,7 +568,7 @@ export default function PesquisaView(props: {
                         return (
                           <button key={id} role="radio" aria-checked={ligado}
                                   onClick={() => setModelos((m) => ({ ...m, extrator: id === "auto" ? null : m.extrator ?? { ...m.escritor } }))}
-                                  className={`rounded-full px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                                  className={`rounded-[9px] px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
                             {rotulo}
                           </button>
                         );

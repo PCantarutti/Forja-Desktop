@@ -588,7 +588,7 @@ function HardwareTab(props: { onError: (e: string) => void }) {
                 </p>
               </div>
               <button
-                className={`rounded-full px-3 py-1 text-xs ${g.enabled ? "bg-sky-600 text-white" : "border border-line text-muted"}`}
+                className={`rounded-[9px] px-3 py-1 text-xs ${g.enabled ? "bg-sky-600 text-white" : "border border-line text-muted"}`}
                 onClick={() => acao(api.put("/local/device", { id: g.id, enabled: !g.enabled }))}
               >
                 {g.enabled ? "ON" : "OFF"}
@@ -1143,7 +1143,7 @@ function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
         <span className="font-mono">openai</span> é o padrão para serviços com chave (OpenRouter, OpenAI, Groq...).
       </p>
       {s.providers.map((p, i) => (
-        <div key={i} className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+        <div key={i} className="space-y-3 rounded-xl border border-line bg-surface p-4">
           <div className="flex gap-2">
             <input
               className={input}
@@ -1588,7 +1588,7 @@ function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
         não é oferecida ao modelo.
       </p>
       {SLOTS.map((slot) => (
-        <section key={slot.key} className="space-y-2 rounded-2xl border border-line bg-surface p-4">
+        <section key={slot.key} className="space-y-2 rounded-xl border border-line bg-surface p-4">
           <h3 className="text-sm text-fg">{slot.title}</h3>
           <p className="text-xs text-muted">{slot.hint}</p>
           <div className="grid grid-cols-[10rem_1fr] gap-2">
@@ -1780,7 +1780,7 @@ function ClaudeControla() {
   const copia = (t: string, o: string) => navigator.clipboard.writeText(t).then(() => setMsg(`${o} copiado.`));
   if (!c) return null;
   return (
-    <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+    <section className="space-y-3 rounded-xl border border-line bg-surface p-4">
       <div className="flex items-start gap-3">
         <button
           role="switch"
@@ -2280,7 +2280,7 @@ function SkillsTab({ onError }: { onError: (e: string) => void }) {
       </p>
 
       {editando ? (
-        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+        <div className="space-y-3 rounded-xl border border-line bg-surface p-4">
           <div className="text-sm font-medium">{editando.antigo ? `Editar /${editando.antigo}` : "Nova skill"}</div>
           <Field label="Nome" hint="Vira o comando: minúsculas, números e hífens.">
             <input className={input} value={editando.name} placeholder="revisar-textos" spellCheck={false}

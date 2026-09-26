@@ -153,7 +153,7 @@ export default function ContextRing(props: {
             }}
             disabled={!props.canCompact}
             title="Resume o histórico antigo agora (também: /compactar)"
-            className="mt-2 w-full rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40"
+            className="mt-2 w-full rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40"
           >
             Compactar agora
           </button>

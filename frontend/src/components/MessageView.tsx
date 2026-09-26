@@ -174,7 +174,7 @@ export function ToolDraft({ tool }: { tool: { name: string; path?: string; text:
   const { ref: caixa, fim: fimDoTexto, onScroll: seguirTexto } = useStickyBottom<HTMLDivElement>([tool.text]);
   const kb = (tool.chars ?? tool.text.length) / 1024;
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
+    <div className="mb-3 overflow-hidden rounded-xl border border-line bg-surface">
       <div className="flex w-full items-center gap-2 px-4 py-2.5 font-mono text-sm text-muted">
         <Edit className="size-4 animate-pulse" />
         <span className="truncate">
@@ -230,7 +230,7 @@ export function Lightbox({ src, onClose, titulo }: { src: string; onClose: () =>
     <div onClick={onClose} role="dialog" aria-label={nome}
          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
       <div onClick={(e) => e.stopPropagation()}
-           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl">
+           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-popover">
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
           <span className="min-w-0 truncate text-sm text-fg" title={nome}>{nome}</span>
           {medida && <span className="shrink-0 text-[11px] text-faint">{medida[0]}×{medida[1]}</span>}
@@ -1030,7 +1030,7 @@ export const TENTATIVA = /Tentando de novo.*\((\d+\/\d+)\)/;
 /** O aviso de reconexão ao modelo, um só, atualizado a cada tentativa. */
 export function Reconectando({ texto, n }: { texto: string; n: string }) {
   return (
-    <div className="my-3 flex items-start gap-2.5 rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
+    <div className="my-3 flex items-start gap-2.5 rounded-xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
       <span className="mt-1 size-3 shrink-0 animate-spin rounded-full border-2 border-faint border-t-transparent" />
       <div className="min-w-0">
         <div className="text-fg">Reconectando ao modelo · tentativa {n}</div>
@@ -1045,7 +1045,7 @@ export function EventNotice({ m }: { m: Message }) {
   if (kind === "tasks") return <TasksCard tasks={m.meta?.tasks ?? []} />;
   if (kind === "summary")
     return (
-      <details className="my-3 rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
+      <details className="my-3 rounded-xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
         <summary className="cursor-pointer select-none">
           Contexto compactado: o histórico anterior foi resumido para caber na janela do modelo
         </summary>

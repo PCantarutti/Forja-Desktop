@@ -310,7 +310,7 @@ export default function ModelSearch(props: {
                           {tamanho(f.size)}
                         </span>
                         <button
-                          className="shrink-0 rounded-full bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
+                          className="shrink-0 rounded-[9px] bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
                           disabled={baixados.includes(f.path)}
                           onClick={() => baixar(f)}
                         >

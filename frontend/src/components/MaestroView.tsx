@@ -379,7 +379,7 @@ export default function MaestroView(props: {
                    onSalvarLayout={mostraSalvarPadrao ? () => setPerguntaPadrao(true) : undefined} />
       </div>
       {perguntaPadrao && (
-        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] rounded-xl border border-line bg-surface p-5 shadow-popover">
           <h2 className="text-sm font-medium">Salvar este layout como padrão?</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted">
             Conversas novas da Maestro vão começar com os blocos e os painéis nesta posição, neste tamanho e
@@ -391,7 +391,7 @@ export default function MaestroView(props: {
               Cancelar
             </button>
             <button
-              className="rounded-full bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110"
+              className="rounded-[9px] bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110"
               onClick={() => {
                 salvarPadrao();
                 setPerguntaPadrao(false);
@@ -1167,7 +1167,7 @@ function EditorContrato(props: {
                  onChange={(e) => setMax(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} />
         </label>
         <button onClick={salvar}
-                className="ml-auto rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
+                className="ml-auto rounded-[9px] bg-accent px-3 py-1 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
                 disabled={!goal.trim()}>
           Salvar contrato
         </button>

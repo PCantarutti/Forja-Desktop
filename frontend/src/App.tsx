@@ -1551,7 +1551,7 @@ export default function App() {
                           className="w-full resize-none bg-transparent text-[15px] text-fg focus:outline-none"
                         />
                         <div className="mt-2 flex justify-end gap-2">
-                          <button onClick={() => setEditing(null)} className="rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised">
+                          <button onClick={() => setEditing(null)} className="rounded-[9px] border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised">
                             Cancelar
                           </button>
                           <button
@@ -1560,7 +1560,7 @@ export default function App() {
                               setEditing(null);
                               if (text) rewindAndRun(m.id, false, text);
                             }}
-                            className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
+                            className="rounded-[9px] bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
                           >
                             Enviar de novo
                           </button>
@@ -1713,7 +1713,7 @@ export default function App() {
               );
             })}
             {!so && rewindAsk?.conv === currentId && (
-              <div className="my-4 rounded-2xl border border-line bg-surface p-3 text-sm">
+              <div className="my-4 rounded-xl border border-line bg-surface p-3 text-sm">
                 <p className="text-amber-300">
                   O agente alterou {rewindAsk.files.length} arquivo(s) a partir desta mensagem. Desfazer essas alterações também?
                 </p>
@@ -1721,11 +1721,11 @@ export default function App() {
                   {rewindAsk.files.map((f) => <li key={f}>• {f}</li>)}
                 </ul>
                 <div className="flex gap-2">
-                  <button className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                  <button className="rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised"
                           onClick={() => rewindAndRun(rewindAsk.messageId, rewindAsk.keep, rewindAsk.content, true)}>
                     Desfazer os arquivos
                   </button>
-                  <button className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                  <button className="rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised"
                           onClick={() => rewindAndRun(rewindAsk.messageId, rewindAsk.keep, rewindAsk.content, false)}>
                     Manter os arquivos
                   </button>
@@ -1814,7 +1814,7 @@ export default function App() {
   const conversaBlock = (
   <>
   {linkAberto && (
-    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-sm space-y-4 rounded-2xl border border-line bg-surface p-5">
+    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-sm space-y-4 rounded-xl border border-line bg-surface p-5">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-base font-medium text-fg">Abrir link</div>

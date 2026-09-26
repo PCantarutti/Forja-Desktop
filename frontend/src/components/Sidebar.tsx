@@ -94,7 +94,7 @@ function ItemMenu(props: {
           <button onClick={() => { props.onDelete(); props.onClose(); }} className="rounded-full bg-red-600 px-2.5 py-0.5 text-xs font-medium text-white hover:bg-red-500">
             Sim
           </button>
-          <button onClick={() => setConfirming(false)} className="rounded-full border border-line px-2.5 py-0.5 text-xs text-fg hover:bg-raised">
+          <button onClick={() => setConfirming(false)} className="rounded-[9px] border border-line px-2.5 py-0.5 text-xs text-fg hover:bg-raised">
             Não
           </button>
         </div>
@@ -363,7 +363,7 @@ export default function Sidebar(props: {
     );
   }
 
-  const bulkBtn = "rounded-full border border-line px-2.5 py-1 text-xs text-fg hover:bg-raised disabled:opacity-40";
+  const bulkBtn = "rounded-[9px] border border-line px-2.5 py-1 text-xs text-fg hover:bg-raised disabled:opacity-40";
 
   return (
     <aside className="flex w-[236px] shrink-0 flex-col border-r border-line bg-side">

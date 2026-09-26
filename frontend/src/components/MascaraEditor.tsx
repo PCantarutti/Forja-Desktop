@@ -81,7 +81,7 @@ export default function MascaraEditor(props: { src: string; onPronta: (png: Blob
     <div onClick={props.onClose} role="dialog" aria-label="Marcar a área a editar"
          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
       <div onClick={(e) => e.stopPropagation()}
-           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl">
+           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-popover">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2 text-xs">
           <button className={`${botao} ${modo === "mascara" ? ligado : ""}`} onClick={() => setModo("mascara")}
                   title="Pinte o que deve mudar: vai uma máscara separada e a imagem segue intacta">

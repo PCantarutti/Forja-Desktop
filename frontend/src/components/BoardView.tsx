@@ -50,9 +50,9 @@ const nomePasta = (p: string) => p.split("/").filter(Boolean).pop() ?? p;
 
 const campo = "rounded-lg border border-line bg-raised px-3 py-1.5 text-sm text-fg placeholder:text-faint "
   + "focus:border-neutral-500 focus:outline-none";
-const btn = "inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1 text-xs text-fg transition-colors "
+const btn = "inline-flex items-center gap-1.5 rounded-[9px] border border-line px-3 py-1 text-xs text-fg transition-colors "
   + "hover:bg-raised focus-visible:outline focus-visible:outline-1 focus-visible:outline-sky-400 disabled:opacity-40";
-const btnPrimary = "inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1 text-xs font-medium text-accent-fg transition-colors "
+const btnPrimary = "inline-flex items-center gap-1.5 rounded-[9px] bg-accent px-3 py-1 text-xs font-medium text-accent-fg transition-colors "
   + "hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:opacity-40";
 const icone = "rounded-md p-1 text-faint transition-colors hover:bg-raised hover:text-fg focus-visible:outline "
   + "focus-visible:outline-1 focus-visible:outline-sky-400";
@@ -645,7 +645,7 @@ function Detalhe(props: {
                     {(["agent", "maestro"] as const).map((m) => (
                       <button key={m} role="radio" aria-checked={modo === m} onClick={() => setModo(m)}
                         title={c.modo_sugerido === m ? "Sugerido para este card" : undefined}
-                        className={`rounded-full px-2.5 py-0.5 text-xs transition-colors ${modo === m ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+                        className={`rounded-[9px] px-2.5 py-0.5 text-xs transition-colors ${modo === m ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
                         {m === "agent" ? "Agente" : "Maestro"}{c.modo_sugerido === m ? " ·" : ""}
                       </button>
                     ))}
@@ -752,7 +752,7 @@ function Detalhe(props: {
             ) : (
               <span className="flex items-center gap-2 text-xs">
                 <span className="text-muted">Apagar de vez?</span>
-                <button className="rounded-full border border-red-400/40 px-2.5 py-0.5 text-red-300 hover:bg-red-500/10"
+                <button className="rounded-[9px] border border-red-400/40 px-2.5 py-0.5 text-red-300 hover:bg-red-500/10"
                   onClick={() => props.acao(async () => { await api.del(`/board/issues/${c.id}`); props.onFechar(); })}>Apagar</button>
                 <button className="text-faint hover:text-fg" onClick={() => setApagar(false)}>Cancelar</button>
               </span>

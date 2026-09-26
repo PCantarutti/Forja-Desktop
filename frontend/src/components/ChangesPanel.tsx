@@ -151,14 +151,14 @@ export default function ChangesPanel(props: {
     }
   }
 
-  const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-  const primary = "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+  const btn = "rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
+  const primary = "rounded-[9px] bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
   const iconBtn = "grid size-6 place-items-center rounded text-faint hover:bg-raised hover:text-fg";
 
   if (conv === null)
     return (
       <div className="p-3 text-xs">
-        <div className="rounded-2xl border border-line bg-surface p-3.5 text-muted">Abra uma conversa para ver as alterações e o git da pasta dela.</div>
+        <div className="rounded-xl border border-line bg-surface p-3.5 text-muted">Abra uma conversa para ver as alterações e o git da pasta dela.</div>
       </div>
     );
 
@@ -173,7 +173,7 @@ export default function ChangesPanel(props: {
         </div>
       )}
 
-      <section className="rounded-2xl border border-line bg-surface">
+      <section className="rounded-xl border border-line bg-surface">
         <div className="flex items-center gap-2 px-3.5 py-2.5">
           <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">Alterações do agente</h3>
           <span className="text-faint">{files.length} arquivo{files.length === 1 ? "" : "s"}</span>
@@ -232,7 +232,7 @@ export default function ChangesPanel(props: {
         )}
       </section>
 
-      <section className="rounded-2xl border border-line bg-surface">
+      <section className="rounded-xl border border-line bg-surface">
         <div className="flex items-center gap-2 px-3.5 py-2.5">
           <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">Git</h3>
           {git?.repo && (
