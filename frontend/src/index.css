@@ -294,13 +294,6 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 
 /* O tracejado do formato Livre, parado, se distrai sozinho de vez em quando (Formato.tsx sorteia uma).
    Parado no hover, selecionado ou para quem pediu menos movimento. */
-@keyframes livre-forma {
-  0%, 100% { width: 22px; height: 15px; }
-  18% { width: 12px; height: 20px; }
-  36% { width: 17px; height: 17px; }
-  54% { width: 26px; height: 11px; }
-  72% { width: 14px; height: 19px; }
-}
 @keyframes livre-onda {
   0%, 100% { transform: skewX(0) rotate(0); border-radius: 3px; }
   15% { transform: skewX(14deg) rotate(-3deg); border-radius: 8px 2px 8px 2px; }
@@ -336,14 +329,13 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
   45% { transform: rotate(80deg); }
   80% { transform: rotate(-12deg); }
 }
-.livre-forma { animation: livre-forma 1.8s cubic-bezier(.34, 1.56, .64, 1); }
 .livre-onda { animation: livre-onda 1.3s ease-in-out; }
 .livre-achata { animation: livre-achata 1s cubic-bezier(.34, 1.56, .64, 1); transform-origin: 50% 100%; }
 .livre-pisca { animation: livre-pisca 1.1s linear; }
 .livre-pulo { animation: livre-pulo 1s ease-out; transform-origin: 50% 100%; }
 .livre-gira { animation: livre-gira 1.4s cubic-bezier(.34, 1.56, .64, 1); }
 @media (prefers-reduced-motion: reduce) {
-  .livre-forma, .livre-onda, .livre-achata, .livre-pisca, .livre-pulo, .livre-gira { animation: none; }
+  .livre-onda, .livre-achata, .livre-pisca, .livre-pulo, .livre-gira { animation: none; }
 }
 
 /* Scrollbar discreta */

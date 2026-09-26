@@ -2,43 +2,94 @@ import { Fragment, useEffect, useState } from "react";
 import { Caixa, numeroCaixa } from "./ImagensView";
 import { Trocar } from "./icons";
 import { outroLado, razaoSimples, tamanhoNaRazao } from "./videoConta";
+import { FIGURAS, caminho, retangulo } from "./formasLivre";
 
 /** Um botão de formato: o id é a proporção ("16:9") e w/h o tamanho do desenho (as medidas do protótipo). */
 export type Forma = { id: string; w: number; h: number };
 /** Uma resolução do seletor ("720p", "1024"). `apagada`: fora do que o modelo aguenta bem (o título explica). */
 export type Qualidade = { id: string; titulo?: string; apagada?: boolean };
 
-// As distrações do tracejado do Livre parado (keyframes em index.css) e quanto cada uma dura.
-const TRUQUES: [string, number][] = [["livre-forma", 1800], ["livre-onda", 1300], ["livre-achata", 1000], ["livre-pisca", 1100], ["livre-pulo", 1000], ["livre-gira", 1400]];
+// As distrações do tracejado do Livre parado. `figura`: vira outra forma geométrica (morph do path);
+// `classe`: um keyframe de index.css (sozinho ou por cima da figura: a estrela gira, a bola quica).
+type Truque = { figura?: string; classe?: string; dura: number };
+const TRUQUES: Truque[] = [
+  { figura: "estrela", classe: "livre-gira", dura: 2600 },
+  { figura: "bola", classe: "livre-pulo", dura: 2600 },
+  { figura: "octogono", classe: "livre-onda", dura: 2600 },
+  { figura: "cubo", dura: 2400 },
+  { figura: "paralelepipedo", dura: 2400 },
+  { figura: "triangulo", classe: "livre-achata", dura: 2500 },
+  { figura: "losango", classe: "livre-pisca", dura: 2500 },
+  { classe: "livre-onda", dura: 1300 },
+  { classe: "livre-achata", dura: 1000 },
+  { classe: "livre-pisca", dura: 1100 },
+  { classe: "livre-pulo", dura: 1000 },
+];
+const CLASSE_DURA: Record<string, number> = { "livre-gira": 1400, "livre-pulo": 1000, "livre-onda": 1300, "livre-achata": 1000, "livre-pisca": 1100 };
 
 /** Sorteia um truque a cada 4–9 s, nunca o mesmo duas vezes seguidas; `quieto` para tudo na hora. */
-function useTruque(quieto: boolean): string {
-  const [truque, setTruque] = useState("");
+function useTruque(quieto: boolean): { figura: string; classe: string } {
+  const [estado, setEstado] = useState({ figura: "", classe: "" });
   useEffect(() => {
-    if (quieto || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return setTruque("");
-    let vivo = true, ultimo = "", t: ReturnType<typeof setTimeout>;
-    const proximo = () => {
-      t = setTimeout(() => {
-        if (!vivo) return;
-        const opcoes = TRUQUES.filter(([n]) => n !== ultimo);
-        const [nome, dura] = opcoes[Math.floor(Math.random() * opcoes.length)];
-        ultimo = nome;
-        setTruque(nome);
-        t = setTimeout(() => {
-          if (!vivo) return;
-          setTruque("");
-          proximo();
-        }, dura);
-      }, 4000 + Math.random() * 5000);
-    };
+    const limpa = { figura: "", classe: "" };
+    if (quieto || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return setEstado(limpa);
+    let vivo = true, ultimo = -1;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const depois = (ms: number, f: () => void) => timers.push(setTimeout(() => vivo && f(), ms));
+    const proximo = () =>
+      depois(4000 + Math.random() * 5000, () => {
+        let i = Math.floor(Math.random() * TRUQUES.length);
+        if (i === ultimo) i = (i + 1) % TRUQUES.length;
+        ultimo = i;
+        const t = TRUQUES[i];
+        if (t.figura) {
+          // vira a figura, faz a graça dela no meio, e volta a ser retângulo
+          setEstado({ figura: t.figura, classe: "" });
+          if (t.classe) {
+            depois(650, () => setEstado({ figura: t.figura!, classe: t.classe! }));
+            depois(650 + CLASSE_DURA[t.classe], () => setEstado({ figura: t.figura!, classe: "" }));
+          }
+          depois(t.dura, () => setEstado(limpa));
+          depois(t.dura + 700, proximo);
+        } else {
+          setEstado({ figura: "", classe: t.classe! });
+          depois(t.dura, () => setEstado(limpa));
+          depois(t.dura + 100, proximo);
+        }
+      });
     proximo();
     return () => {
       vivo = false;
-      clearTimeout(t);
-      setTruque("");
+      timers.forEach(clearTimeout);
+      setEstado(limpa);
     };
   }, [quieto]);
-  return truque;
+  return estado;
+}
+
+/** O desenho do Livre: um path tracejado de N pontos. Ativo, é o retângulo da proporção escolhida (e
+ *  acompanha a proporção); parado, de vez em quando vira outra figura. */
+function IconeLivre(props: { ativo: boolean; razao: [number, number]; quieto: boolean }) {
+  const { figura, classe } = useTruque(props.quieto);
+  const escala = Math.min(26 / props.razao[0], 20 / props.razao[1]);
+  const base = props.ativo ? retangulo(props.razao[0] * escala - 1.5, props.razao[1] * escala - 1.5) : retangulo(22, 15);
+  const f = figura ? FIGURAS[figura] : null;
+  const d = caminho(f ? f.pontos : base);
+  // o traço de dentro (cubo, paralelepípedo) some junto com a figura
+  const [dentro, setDentro] = useState("");
+  useEffect(() => {
+    if (f?.dentro) setDentro(f.dentro);
+  }, [f?.dentro]);
+  const mola = figura || !props.ativo ? "d .6s cubic-bezier(.34, 1.56, .64, 1)" : "d .2s cubic-bezier(.2, 0, 0, 1)";
+  const traco = { fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeDasharray: "3 2", strokeLinejoin: "round" as const };
+  return (
+    <svg viewBox="0 0 26 20" width={26} height={20} className={`overflow-visible ${classe}`} aria-hidden>
+      <path {...traco} style={{ d: `path("${d}")`, transition: mola } as React.CSSProperties} />
+      {dentro && (
+        <path {...traco} d={dentro} style={{ opacity: f?.dentro ? 1 : 0, transition: "opacity .35s" }} />
+      )}
+    </svg>
+  );
 }
 
 const razaoDe = (id: string) => {
@@ -67,15 +118,12 @@ export default function SeletorFormato(props: {
   const [livre, setLivre] = useState(false);
   const livreAtivo = livre || !props.prop;
   const [sobreLivre, setSobreLivre] = useState(false);
-  const truque = useTruque(livreAtivo || sobreLivre);
   const [razaoLivre, setRazaoLivre] = useState<[number, number]>(() => (props.prop ? par(props.prop) : razaoSimples(props.w, props.h)));
   const mudaRazao = (a: number, b: number) => {
     const ra = Math.max(1, Math.min(64, Math.round(a) || 1)), rb = Math.max(1, Math.min(64, Math.round(b) || 1));
     setRazaoLivre([ra, rb]);
     props.onTamanho(...tamanhoNaRazao(props.w, props.h, ra, rb, props.mult));
   };
-  // desenho tracejado do Livre: a proporção cabe numa caixa de 26×20 e muda de forma com transição
-  const escala = Math.min(26 / razaoLivre[0], 20 / razaoLivre[1]);
   const base = props.formas[0].id;
   /** Resolução no Livre: o lado menor vai para o da resolução e a proporção atual fica. */
   const qualidadeLivre = (q: string) => {
@@ -104,8 +152,7 @@ export default function SeletorFormato(props: {
                 onPointerEnter={() => setSobreLivre(true)} onPointerLeave={() => setSobreLivre(false)}
                 className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${livreAtivo ? aceso : apagado}`}>
           <span className="flex h-5 items-center justify-center">
-            <span className={`block rounded-[3px] border-[1.5px] border-dashed border-current transition-[width,height] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${truque}`}
-                  style={livreAtivo ? { width: razaoLivre[0] * escala, height: razaoLivre[1] * escala } : { width: 22, height: 15 }} />
+            <IconeLivre ativo={livreAtivo} razao={razaoLivre} quieto={livreAtivo || sobreLivre} />
           </span>
           <span className={livreAtivo ? "font-mono text-[10.5px]" : "text-[10.5px]"}>{livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : "Livre"}</span>
         </button>
