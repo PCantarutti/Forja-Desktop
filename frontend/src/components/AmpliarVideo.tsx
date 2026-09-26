@@ -126,7 +126,7 @@ export function PainelAmpliar(props: {
   const esrgans = metodos.filter((m) => m.tipo === "esrgan");
   // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora); o
   // SeedVR2 nunca é o padrão, leva minutos
-  const escolhido = modelo ?? (esrgans.find((m) => new RegExp(`x${fator}(?!\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? "";
+  const escolhido = modelo ?? (esrgans.find((m) => new RegExp(`x${fator}(?!\\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? "";
   const tipo = metodos.find((m) => m.path === escolhido)?.tipo;
   const pesado = tipo === "seedvr2" || tipo === "redesenhar";
   const redesenha = tipo === "redesenhar";
