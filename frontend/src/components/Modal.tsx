@@ -59,7 +59,7 @@ export function Modal(props: {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
       onClick={() => (!canClose || canClose()) && onClose()}
     >
       <div
@@ -68,7 +68,7 @@ export function Modal(props: {
         aria-modal="true"
         aria-label={props.label}
         tabIndex={-1}
-        className={props.className + " focus:outline-none"}
+        className={props.className + " shadow-dialog focus:outline-none"}
         onClick={(e) => e.stopPropagation()}
       >
         {props.children}

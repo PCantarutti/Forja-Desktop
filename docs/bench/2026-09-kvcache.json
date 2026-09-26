@@ -1,0 +1,849 @@
+{
+  "validacoes": {
+    "maquina": {
+      "gpu": "Intel Arc B580 12 GB (Vulkan)",
+      "ram_gb": 30,
+      "llama_server": "C:\\Users\\pedro\\AppData\\Roaming\\Forja\\runtimes\\llama\\vulkan\\llama-server.exe",
+      "quando": "2026-09-26T03:42:57"
+    },
+    "V1_comum": {
+      "kv_unificado": {
+        "primeira": {
+          "prompt_n": 10000,
+          "cache_n": 0,
+          "prompt_ms": 4172,
+          "predito_n": 4,
+          "tok_s": 117.8,
+          "parede_s": 4.22
+        },
+        "salvo": {
+          "ok": true,
+          "ms": 165,
+          "mb": 273.7,
+          "n": 10003
+        },
+        "restaurado": {
+          "ok": true,
+          "ms": 83,
+          "parede_ms": 78,
+          "n": 10003
+        },
+        "segunda": {
+          "prompt_n": 17,
+          "cache_n": 10000,
+          "prompt_ms": 147,
+          "predito_n": 4,
+          "tok_s": 116.8,
+          "parede_s": 0.2
+        },
+        "cache_da_segunda_pct": 100.0,
+        "passa": true
+      },
+      "controle_np1": {
+        "primeira": {
+          "prompt_n": 10000,
+          "cache_n": 0,
+          "prompt_ms": 4171,
+          "predito_n": 4,
+          "tok_s": 118.2,
+          "parede_s": 4.23
+        },
+        "salvo": {
+          "ok": true,
+          "ms": 164,
+          "mb": 273.7,
+          "n": 10003
+        },
+        "restaurado": {
+          "ok": true,
+          "ms": 88,
+          "parede_ms": 109,
+          "n": 10003
+        },
+        "segunda": {
+          "prompt_n": 17,
+          "cache_n": 10000,
+          "prompt_ms": 146,
+          "predito_n": 4,
+          "tok_s": 117.7,
+          "parede_s": 0.2
+        },
+        "cache_da_segunda_pct": 100.0,
+        "passa": true
+      }
+    },
+    "V2_comum": {
+      "carga_s": 2.1,
+      "5000": {
+        "do_zero_ms": 1246,
+        "restaurar_ms": 63,
+        "prompt_depois_ms": 88,
+        "cache_depois": 5000,
+        "restaurar_total_ms": 151,
+        "bin_mb": 136.9,
+        "razao": 0.121,
+        "restaurou": true
+      },
+      "10000": {
+        "do_zero_ms": 4159,
+        "restaurar_ms": 110,
+        "prompt_depois_ms": 145,
+        "cache_depois": 10000,
+        "restaurar_total_ms": 255,
+        "bin_mb": 273.7,
+        "razao": 0.061,
+        "restaurou": true
+      },
+      "20000": {
+        "do_zero_ms": 15341,
+        "restaurar_ms": 172,
+        "prompt_depois_ms": 261,
+        "cache_depois": 20000,
+        "restaurar_total_ms": 433,
+        "bin_mb": 547.3,
+        "razao": 0.028,
+        "restaurou": true
+      },
+      "passa": true
+    },
+    "V3_swa_v1": {
+      "kv_unificado": {
+        "primeira": {
+          "prompt_n": 10000,
+          "cache_n": 0,
+          "prompt_ms": 18945,
+          "predito_n": 4,
+          "tok_s": 22.1,
+          "parede_s": 19.12
+        },
+        "salvo": {
+          "ok": true,
+          "ms": 194,
+          "mb": 253.2,
+          "n": 10003
+        },
+        "restaurado": {
+          "ok": true,
+          "ms": 107,
+          "parede_ms": 140,
+          "n": 10003
+        },
+        "segunda": {
+          "prompt_n": 10017,
+          "cache_n": 0,
+          "prompt_ms": 19032,
+          "predito_n": 4,
+          "tok_s": 22.0,
+          "parede_s": 19.19
+        },
+        "cache_da_segunda_pct": 0.0,
+        "passa": false
+      },
+      "controle_np1": {
+        "primeira": {
+          "prompt_n": 10000,
+          "cache_n": 0,
+          "prompt_ms": 18819,
+          "predito_n": 4,
+          "tok_s": 23.7,
+          "parede_s": 18.98
+        },
+        "salvo": {
+          "ok": true,
+          "ms": 207,
+          "mb": 253.2,
+          "n": 10003
+        },
+        "restaurado": {
+          "ok": true,
+          "ms": 100,
+          "parede_ms": 125,
+          "n": 10003
+        },
+        "segunda": {
+          "prompt_n": 10017,
+          "cache_n": 0,
+          "prompt_ms": 18885,
+          "predito_n": 4,
+          "tok_s": 24.3,
+          "parede_s": 19.01
+        },
+        "cache_da_segunda_pct": 0.0,
+        "passa": false
+      }
+    },
+    "V3_swa_v2": {
+      "carga_s": 4.7,
+      "5000": {
+        "do_zero_ms": 6794,
+        "restaurar_ms": 93,
+        "prompt_depois_ms": 6786,
+        "cache_depois": 0,
+        "restaurar_total_ms": 6879,
+        "bin_mb": 211.6,
+        "razao": 1.013,
+        "restaurou": true
+      },
+      "10000": {
+        "do_zero_ms": 18762,
+        "restaurar_ms": 125,
+        "prompt_depois_ms": 18799,
+        "cache_depois": 0,
+        "restaurar_total_ms": 18924,
+        "bin_mb": 253.2,
+        "razao": 1.009,
+        "restaurou": true
+      },
+      "20000": {
+        "do_zero_ms": 58429,
+        "restaurar_ms": 156,
+        "prompt_depois_ms": 58502,
+        "cache_depois": 0,
+        "restaurar_total_ms": 58658,
+        "bin_mb": 336.4,
+        "razao": 1.004,
+        "restaurou": true
+      },
+      "passa": false
+    },
+    "V3_hibrido_v1": {
+      "kv_unificado": {
+        "primeira": {
+          "prompt_n": 10000,
+          "cache_n": 0,
+          "prompt_ms": 52091,
+          "predito_n": 4,
+          "tok_s": 31.1,
+          "parede_s": 52.22
+        },
+        "salvo": {
+          "ok": true,
+          "ms": 172,
+          "mb": 166.9,
+          "n": 10003
+        },
+        "restaurado": {
+          "ok": true,
+          "ms": 101,
+          "parede_ms": 109,
+          "n": 10003
+        },
+        "segunda": {
+          "prompt_n": 10017,
+          "cache_n": 0,
+          "prompt_ms": 59302,
+          "predito_n": 4,
+          "tok_s": 31.2,
+          "parede_s": 59.42
+        },
+        "cache_da_segunda_pct": 0.0,
+        "passa": false
+      },
+      "controle_np1": {
+        "primeira": {
+          "prompt_n": 10000,
+          "cache_n": 0,
+          "prompt_ms": 70152,
+          "predito_n": 4,
+          "tok_s": 31.6,
+          "parede_s": 70.28
+        },
+        "salvo": {
+          "ok": true,
+          "ms": 444,
+          "mb": 166.9,
+          "n": 10003
+        },
+        "restaurado": {
+          "ok": true,
+          "ms": 99,
+          "parede_ms": 109,
+          "n": 10003
+        },
+        "segunda": {
+          "prompt_n": 10017,
+          "cache_n": 0,
+          "prompt_ms": 69350,
+          "predito_n": 4,
+          "tok_s": 27.7,
+          "parede_s": 69.52
+        },
+        "cache_da_segunda_pct": 0.0,
+        "passa": false
+      }
+    },
+    "V3_hibrido_v2": {
+      "carga_s": 7.3,
+      "5000": {
+        "do_zero_ms": 37350,
+        "restaurar_ms": 78,
+        "prompt_depois_ms": 17819,
+        "cache_depois": 0,
+        "restaurar_total_ms": 17897,
+        "bin_mb": 114.9,
+        "razao": 0.479,
+        "restaurou": true
+      },
+      "10000": {
+        "do_zero_ms": 38438,
+        "restaurar_ms": 109,
+        "prompt_depois_ms": 38265,
+        "cache_depois": 0,
+        "restaurar_total_ms": 38374,
+        "bin_mb": 166.9,
+        "razao": 0.998,
+        "restaurou": true
+      },
+      "20000": {
+        "do_zero_ms": 82089,
+        "restaurar_ms": 156,
+        "prompt_depois_ms": 80796,
+        "cache_depois": 0,
+        "restaurar_total_ms": 80952,
+        "bin_mb": 270.9,
+        "razao": 0.986,
+        "restaurou": true
+      },
+      "passa": false
+    },
+    "V3_swa": {
+      "ganho": -0.009,
+      "ganho_do_comum": 0.939,
+      "passa": false
+    },
+    "V3_hibrido": {
+      "ganho": 0.002,
+      "ganho_do_comum": 0.939,
+      "passa": false
+    },
+    "V5": {
+      "carga_s": {
+        "maestro": 11.4,
+        "worker": 11.4,
+        "maestro_de_novo": 20.8,
+        "maestro_de_novo_2": 8.3
+      },
+      "prompt_inicial_ms": 114165,
+      "salvo": {
+        "ok": true,
+        "ms": 1416,
+        "mb": 270.9,
+        "n": 20003
+      },
+      "worker": {
+        "prompt_n": 5000,
+        "cache_n": 0,
+        "prompt_ms": 6804,
+        "predito_n": 64,
+        "tok_s": 30.5,
+        "parede_s": 8.89
+      },
+      "sem_cache": {
+        "primeira_resposta_ms": 113861,
+        "cache_n": 0
+      },
+      "com_cache_em_disco": {
+        "restaurar": {
+          "ok": true,
+          "ms": 206,
+          "parede_ms": 234,
+          "n": 20003
+        },
+        "prompt_ms": 111938,
+        "cache_n": 0,
+        "primeira_resposta_ms": 112172
+      },
+      "ciclo_troca_s": {
+        "sem_cache": 146.1,
+        "com_cache": 131.9
+      }
+    },
+    "V6": {
+      "vram_antes": {
+        "Vulkan0": {
+          "total": 17211,
+          "livre": 16351
+        },
+        "Vulkan1": {
+          "total": 12118,
+          "livre": 11349
+        }
+      },
+      "ctx_8192": {
+        "carga_s": 8.8,
+        "vram_carregado": {
+          "Vulkan0": {
+            "total": 17211,
+            "livre": 16351
+          },
+          "Vulkan1": {
+            "total": 12118,
+            "livre": 11349
+          }
+        },
+        "1_sessoes": {
+          "sessoes": 1,
+          "tok_s_cada": [
+            30.0
+          ],
+          "tok_s_total": 3.5,
+          "parede_s": 36.1,
+          "erros": []
+        },
+        "2_sessoes": {
+          "sessoes": 2,
+          "tok_s_cada": [
+            17.1,
+            26.4
+          ],
+          "tok_s_total": 20.7,
+          "parede_s": 12.4,
+          "erros": []
+        },
+        "4_sessoes": {
+          "sessoes": 4,
+          "tok_s_cada": [
+            10.2,
+            10.2,
+            16.0,
+            16.0
+          ],
+          "tok_s_total": 29.1,
+          "parede_s": 17.6,
+          "erros": []
+        },
+        "grande": {
+          "prompt_n": 6692,
+          "cache_n": 0,
+          "prompt_ms": 27794,
+          "predito_n": 4,
+          "tok_s": 32.4,
+          "parede_s": 27.94
+        },
+        "prompt_curto_sozinho_ms": 1844,
+        "prompt_curto_na_disputa": {
+          "prompt_n": 500,
+          "cache_n": 0,
+          "prompt_ms": 16269,
+          "predito_n": 4,
+          "tok_s": 0.7,
+          "parede_s": 26.81
+        },
+        "prompt_grande_tokens": 6692,
+        "quatro_sessoes_de": 3276,
+        "estouro": {
+          "sessoes": 4,
+          "tok_s_cada": [],
+          "tok_s_total": 0,
+          "parede_s": 23.1,
+          "erros": [
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}"
+          ]
+        },
+        "cache_da_primeira_depois": 0,
+        "vram_durante": {
+          "Vulkan0": {
+            "total": 17211,
+            "livre": 16351
+          },
+          "Vulkan1": {
+            "total": 12118,
+            "livre": 11349
+          }
+        }
+      },
+      "ctx_32768": {
+        "carga_s": 10.0,
+        "vram_carregado": {
+          "Vulkan0": {
+            "total": 17211,
+            "livre": 16351
+          },
+          "Vulkan1": {
+            "total": 12118,
+            "livre": 11349
+          }
+        },
+        "1_sessoes": {
+          "sessoes": 1,
+          "tok_s_cada": [
+            35.6
+          ],
+          "tok_s_total": 4.5,
+          "parede_s": 28.6,
+          "erros": []
+        },
+        "2_sessoes": {
+          "sessoes": 2,
+          "tok_s_cada": [
+            10.7,
+            26.1
+          ],
+          "tok_s_total": 21.1,
+          "parede_s": 12.1,
+          "erros": []
+        },
+        "4_sessoes": {
+          "sessoes": 4,
+          "tok_s_cada": [
+            10.6,
+            10.6,
+            16.3,
+            16.3
+          ],
+          "tok_s_total": 29.6,
+          "parede_s": 17.3,
+          "erros": []
+        },
+        "grande": {
+          "prompt_n": 20000,
+          "cache_n": 0,
+          "prompt_ms": 83931,
+          "predito_n": 4,
+          "tok_s": 29.4,
+          "parede_s": 84.09
+        },
+        "prompt_curto_sozinho_ms": 1835,
+        "prompt_curto_na_disputa": {
+          "prompt_n": 500,
+          "cache_n": 0,
+          "prompt_ms": 15949,
+          "predito_n": 4,
+          "tok_s": 0.1,
+          "parede_s": 45.94
+        },
+        "prompt_grande_tokens": 20000,
+        "quatro_sessoes_de": 13107,
+        "estouro": {
+          "sessoes": 4,
+          "tok_s_cada": [],
+          "tok_s_total": 0,
+          "parede_s": 114.5,
+          "erros": [
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}",
+            "/completion: HTTP 500 {\"error\":{\"code\":500,\"message\":\"Context size has been exceeded.\",\"type\":\"server_error\"}}"
+          ]
+        },
+        "cache_da_primeira_depois": 0,
+        "vram_durante": {
+          "Vulkan0": {
+            "total": 17211,
+            "livre": 16351
+          },
+          "Vulkan1": {
+            "total": 12118,
+            "livre": 11349
+          }
+        }
+      },
+      "ganho_2_sessoes": {
+        "ctx_8192": 1.45,
+        "ctx_32768": 1.03
+      },
+      "paralelo_vale_a_pena": {
+        "ctx_8192": true,
+        "ctx_32768": false
+      },
+      "tok_s_somado_por_sessoes": {
+        "ctx_8192": {
+          "1": 30.0,
+          "2": 43.5,
+          "4": 52.4
+        },
+        "ctx_32768": {
+          "1": 35.6,
+          "2": 36.8,
+          "4": 53.8
+        }
+      },
+      "ganho_4_sessoes": {
+        "ctx_8192": 1.75,
+        "ctx_32768": 1.51
+      },
+      "nota": "tok_s_total (tokens/parede) inclui o prompt e o aquecimento da 1ª requisição; o ganho vale pela soma do tok/s de cada sessão. VRAM não medida: o --list-devices de outro processo não refletiu o uso (mesmo livre antes e com o modelo carregado)."
+    },
+    "qwen38_v2_5k": {
+      "carga_s": 12.6,
+      "5000": {
+        "do_zero_ms": 8973,
+        "restaurar_ms": 172,
+        "prompt_depois_ms": 8919,
+        "cache_depois": 0,
+        "restaurar_total_ms": 9091,
+        "bin_mb": 462.4,
+        "razao": 1.013,
+        "restaurou": true
+      },
+      "passa": false
+    },
+    "variantes_5k": {
+      "qwen38_checkpoints": {
+        "do_zero_ms": 8948,
+        "restaurou": true,
+        "cache_depois": 0,
+        "prompt_depois_ms": 8931,
+        "bin_mb": 462.4,
+        "razao": 1.014
+      },
+      "gemma_swa_full": {
+        "do_zero_ms": 6839,
+        "restaurou": true,
+        "cache_depois": 5000,
+        "prompt_depois_ms": 218,
+        "bin_mb": 211.6,
+        "razao": 0.043
+      }
+    }
+  },
+  "a-mesmo-modelo-kv-f16": {
+    "rotulo": "a-mesmo-modelo-kv-f16",
+    "quando": "2026-09-25T23:53:53",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Qwen3.6-35B-A3B-Q4_K_M",
+    "kv": "f16",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\a-mesmo-modelo-kv-f16-20260925-235351",
+    "estado": "terminou",
+    "relogio_s": 5081.2,
+    "aprovacoes_pedidas": [
+      {
+        "ferramenta": "run_command",
+        "argumentos": "{'command': 'cd C:/Projetos/Forja/.devbench/a-mesmo-modelo-kv-f16-20260925-235351/ws/bench-tarefas; Remove-Item test_verify.json,out.csv -ErrorAction SilentlyContinue; $env:TAREFAS_ARQUIVO=\"tarefas.js",
+        "respondida": true
+      }
+    ],
+    "banco": {
+      "tarefas": 11,
+      "por_status": {
+        "blocked": 1,
+        "cancelled": 3,
+        "completed": 3,
+        "pending": 3,
+        "reviewing": 1
+      },
+      "needs_human": 0,
+      "tentativas_total": 11,
+      "segundos_nos_workers": 3668.7,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 1,
+        "TASK-003": 2,
+        "TASK-004": 3,
+        "TASK-005": 0,
+        "TASK-006": 0,
+        "TASK-007": 0,
+        "TASK-008": 4,
+        "TASK-009": 0,
+        "TASK-010": 0,
+        "TASK-011": 0
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "Criar `tarefas/__init__.py` e `tarefas/__main__.py`",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "Criar `tarefas/modelo.py` com PRIORIDADES e a classe Tarefa (dataclass).",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-003",
+          "title": "Criar `tarefas/armazem.py` com a classe Armazem e testes.",
+          "status": "completed",
+          "attempt_count": 2
+        },
+        {
+          "code": "TASK-004",
+          "title": "Criar `tarefas/cli.py` com `main(argv)` e testes.",
+          "status": "blocked",
+          "attempt_count": 3
+        },
+        {
+          "code": "TASK-005",
+          "title": "Criar `tests/test_modelo.py` cobrindo Tarefa, PRIORIDADES, para_dict/de_dict, validações.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-006",
+          "title": "Criar `tests/test_armazem.py` cobrindo Armazem (adicionar, obter, concluir, remover, listar, atrasadas).",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-007",
+          "title": "Criar `tests/test_cli.py` cobrindo todos os subcomandos (add, list, done, rm, stats, export).",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-008",
+          "title": "Implementar `tarefas/cli.py` com main(argv) completo usando argparse.",
+          "status": "reviewing",
+          "attempt_count": 4
+        },
+        {
+          "code": "TASK-009",
+          "title": "Criar `tests/test_cli.py` cobrindo todos os subcomandos da CLI.",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-010",
+          "title": "Testar a suíte completa: python -m pytest -q passa inteiro.",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-011",
+          "title": "Testar a suíte completa: python -m pytest -q passa inteiro.",
+          "status": "pending",
+          "attempt_count": 0
+        }
+      ],
+      "features": [
+        {
+          "title": "Construir pacote `tarefas` (CLI)",
+          "status": "active"
+        },
+        {
+          "title": "Implementar CLI e testes restantes",
+          "status": "active"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 46,
+          "segundos": 1371.5,
+          "prompt_tokens": 1984944,
+          "completion_tokens": 33252,
+          "prompt_processado": 58769,
+          "prompt_do_cache": 1926175,
+          "taxa_cache": 0.97,
+          "prompt_ms": 368463,
+          "geracao_ms": 977626
+        },
+        "worker": {
+          "chamadas": 139,
+          "segundos": 3575.9,
+          "prompt_tokens": 2075329,
+          "completion_tokens": 88585,
+          "prompt_processado": 215327,
+          "prompt_do_cache": 1860002,
+          "taxa_cache": 0.896,
+          "prompt_ms": 1087735,
+          "geracao_ms": 2450918
+        }
+      },
+      "trocas_de_modelo": 1,
+      "segundos_em_troca": 16.2,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 16.22
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 11,
+        "prompt_reprocessado_total": 9399,
+        "prompt_reprocessado_medio": 854,
+        "ms_reprocessando_total": 81184,
+        "voltas": [
+          {
+            "prompt_processado": 361,
+            "prompt_do_cache": 29553,
+            "prompt_ms": 2547
+          },
+          {
+            "prompt_processado": 428,
+            "prompt_do_cache": 30385,
+            "prompt_ms": 2627
+          },
+          {
+            "prompt_processado": 787,
+            "prompt_do_cache": 32650,
+            "prompt_ms": 6573
+          },
+          {
+            "prompt_processado": 410,
+            "prompt_do_cache": 34112,
+            "prompt_ms": 3028
+          },
+          {
+            "prompt_processado": 1403,
+            "prompt_do_cache": 39195,
+            "prompt_ms": 9834
+          },
+          {
+            "prompt_processado": 1350,
+            "prompt_do_cache": 41248,
+            "prompt_ms": 11150
+          },
+          {
+            "prompt_processado": 1361,
+            "prompt_do_cache": 47428,
+            "prompt_ms": 11890
+          },
+          {
+            "prompt_processado": 1396,
+            "prompt_do_cache": 54005,
+            "prompt_ms": 12807
+          },
+          {
+            "prompt_processado": 803,
+            "prompt_do_cache": 57962,
+            "prompt_ms": 8292
+          },
+          {
+            "prompt_processado": 679,
+            "prompt_do_cache": 59467,
+            "prompt_ms": 7508
+          },
+          {
+            "prompt_processado": 421,
+            "prompt_do_cache": 64776,
+            "prompt_ms": 4928
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 28,
+        "failed": 0,
+        "error": 0,
+        "resumo": "28 passed in 0.07s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 3,
+        "failed": 3,
+        "error": 0,
+        "resumo": "3 failed, 3 passed in 0.58s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 84.7,
+      "troca_de_modelo_min": 0.3,
+      "chamadas_ao_llm_min": 82.5,
+      "tarefas": 11,
+      "needs_human": 0,
+      "tentativas": 11,
+      "aceite": "3/6",
+      "suite_do_projeto_passa": true
+    }
+  }
+}

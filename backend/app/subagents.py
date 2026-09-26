@@ -23,7 +23,7 @@ import uuid
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import apelidos, compact, config, db, gitops, llm, modelctl, skills, workspace
+from . import apelidos, compact, config, db, gitops, llm, metricas, modelctl, skills, workspace
 from .parsing import parse_text_tool_calls, split_think
 from .tools import Tool, ToolError, register, resolve_path, vision_caps
 
@@ -650,6 +650,10 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 out.update(status="erro", text=f"Subagente falhou ({model}): {e}", meta=meta)
                 return
             info["tokens"] += done.get("completion_tokens") or len(content) // 4
+            metricas.registra("llm", papel="worker" if structured else "subagente", conv=conv_id, model=model,
+                              prompt_tokens=done.get("prompt_tokens"), completion_tokens=done.get("completion_tokens"),
+                              cached_tokens=done.get("cached_tokens"), timings=done.get("timings"),
+                              segundos=round(time.monotonic() - t_passo, 2), tarefa=pid)
 
             pensou, visible = split_think(content)
             calls = done.get("tool_calls") or []

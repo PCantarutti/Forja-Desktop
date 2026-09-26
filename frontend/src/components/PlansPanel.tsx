@@ -34,7 +34,7 @@ export default function PlansPanel(props: { plans: PlanEntry[]; onJump: (callId:
   if (!list.length)
     return (
       <div className="p-3 text-xs">
-        <div className="rounded-2xl border border-line bg-surface p-3.5 text-muted">
+        <div className="rounded-xl border border-line bg-surface p-3.5 text-muted">
           Nenhum plano nesta conversa. Com a permissão em <span className="text-fg">Plano</span>, o agente investiga sem
           alterar nada e propõe um plano aqui antes de executar.
         </div>
@@ -49,7 +49,7 @@ export default function PlansPanel(props: { plans: PlanEntry[]; onJump: (callId:
         const [label, cls] = STATUS[p.status];
         const isOpen = open === p.callId;
         return (
-          <section key={p.callId} className="overflow-hidden rounded-2xl border border-line bg-surface">
+          <section key={p.callId} className="overflow-hidden rounded-xl border border-line bg-surface">
             <button onClick={() => setOpen(isOpen ? null : p.callId)} className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left hover:bg-raised/50">
               <span className="shrink-0 rounded bg-raised px-1.5 font-mono text-[10px] text-muted">#{p.order}</span>
               <span className="min-w-0 flex-1 truncate text-fg" title={title(p.plan)}>
@@ -65,7 +65,7 @@ export default function PlansPanel(props: { plans: PlanEntry[]; onJump: (callId:
                 </div>
                 <div className="flex items-center gap-2 border-t border-line px-3.5 py-2 text-faint">
                   {p.mode && <span>executado em modo {p.mode}</span>}
-                  <button onClick={() => props.onJump(p.callId)} className="ml-auto rounded-full border border-line px-3 py-1 text-fg hover:bg-raised">
+                  <button onClick={() => props.onJump(p.callId)} className="ml-auto rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised">
                     ir ao chat
                   </button>
                 </div>

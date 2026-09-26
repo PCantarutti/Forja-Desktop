@@ -10,12 +10,12 @@ import { BaixarAmpliacao } from "./AmpliarVideo";
 import { useStickyBottom } from "../useStickyBottom";
 
 const POLL_MS = 3000;
-export const card = "rounded-2xl border border-line bg-surface p-3.5";
-export const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-export const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
+export const card = "rounded-xl border border-line bg-surface p-3.5";
+export const btn = "rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
+export const btnPrimary = "rounded-[9px] bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 // `campo` sem largura: quem precisa de outra (w-24, w-auto) usa a base, senão o w-full do `input` vence
 // no CSS e o irmão flex-1 colapsa para zero.
-export const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+export const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 export const input = `w-full ${campo}`;
 
 const CACHE_TYPES = ["f16", "q8_0", "q5_1", "q5_0", "q4_1", "q4_0"];
@@ -109,7 +109,7 @@ export default function LocalPanel(props: {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`rounded-full px-2.5 py-0.5 ${tab === t ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+            className={`rounded-[7px] px-2.5 py-1 ${tab === t ? "bg-raised font-medium text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}
           >
             {t}
           </button>
@@ -167,7 +167,7 @@ function ErroDeCarga(props: { erro: { message: string; log: string; path: string
         {aberto ? "esconder log" : "ver log do llama-server"}
       </button>
       {aberto && (
-        <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono text-[11px] whitespace-pre-wrap text-muted">
+        <pre className="mt-1.5 max-h-64 overflow-auto rounded-lg bg-code p-2.5 font-mono text-[11px] whitespace-pre-wrap text-muted">
           {props.erro.log || "(vazio)"}
         </pre>
       )}
@@ -197,7 +197,7 @@ function LoadingOverlay(props: { loading: NonNullable<LocalState["server"]["load
   const l = props.loading;
   return (
     <div className="pointer-events-none fixed inset-x-0 top-3 z-50 flex justify-center">
-      <div className="pointer-events-auto w-80 rounded-2xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
+      <div className="pointer-events-auto w-80 rounded-xl border border-line bg-surface/95 p-3 shadow-xl backdrop-blur">
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 truncate text-fg">Carregando {l.name}</span>
           <span className="shrink-0 text-muted">{l.percent}%</span>
@@ -374,7 +374,7 @@ function Dica({ texto }: { texto: string }) {
 function Rotulo(props: { label: string; chave?: string; mudado?: boolean; onReset?: () => void }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span className={props.mudado ? "text-sky-400" : "text-muted"}>{props.label}</span>
+      <span className={props.mudado ? "font-medium text-accent-text" : "text-muted"}>{props.label}</span>
       <Dica texto={props.chave ? AJUDA[props.chave] : ""} />
       {props.mudado && props.onReset && (
         <button onClick={props.onReset} title="Voltar ao padrão" className="text-faint hover:text-fg">
@@ -605,7 +605,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
           <pre
             ref={caixaDoLog}
             onScroll={seguirLog}
-            className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 pr-8 font-mono text-[11px] whitespace-pre-wrap text-muted"
+            className="max-h-64 overflow-auto rounded-lg bg-code p-2.5 pr-8 font-mono text-[11px] whitespace-pre-wrap text-muted"
           >
             {log || "(vazio)"}
             <div ref={fimDoLog} />
@@ -685,12 +685,40 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               </div>
               <div className="mt-1.5 flex gap-2">
                 <span className="rounded-lg bg-surface px-2 py-1 text-muted">
-                  GPU <span className="ml-1 font-medium text-fg">{gb(est.gpu)}</span>
+                  GPU <span className="ml-1 font-mono font-medium text-fg">{gb(est.gpu)}</span>
                 </span>
                 <span className="rounded-lg bg-surface px-2 py-1 text-muted">
-                  Total <span className="ml-1 font-medium text-fg">{gb(est.total)}</span>
+                  Total <span className="ml-1 font-mono font-medium text-fg">{gb(est.total)}</span>
                 </span>
               </div>
+              {(() => {
+                // Barra segmentada: o que vai para a GPU (pesos, cache KV, buffers) e o que fica na RAM.
+                const buffers = Math.max(0, est.gpu - est.weights_gpu - est.kv_gpu);
+                const kvRam = Math.max(0, est.kv - est.kv_gpu);
+                const partes = [
+                  { v: est.weights_gpu, cor: "bg-accent", rotulo: "pesos na GPU" },
+                  { v: est.kv_gpu, cor: "bg-agent", rotulo: "cache KV na GPU" },
+                  { v: buffers, cor: "bg-info", rotulo: "buffers" },
+                  { v: est.weights_cpu + kvRam, cor: "bg-warn/70", rotulo: "na RAM" },
+                ].filter((p) => p.v > 0);
+                const total = partes.reduce((a, p) => a + p.v, 0) || 1;
+                return (
+                  <>
+                    <div className="mt-2 flex h-2 gap-px overflow-hidden rounded-full bg-line">
+                      {partes.map((p) => (
+                        <span key={p.rotulo} className={p.cor} style={{ width: `${(p.v / total) * 100}%` }} title={`${p.rotulo}: ${gb(p.v)}`} />
+                      ))}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-faint">
+                      {partes.map((p) => (
+                        <span key={p.rotulo} className="inline-flex items-center gap-1">
+                          <span className={`size-1.5 rounded-full ${p.cor}`} /> {p.rotulo} <span className="font-mono">{gb(p.v)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
               <p className="mt-1.5 text-faint">
                 pesos {gb(est.weights_gpu)} na GPU + {gb(est.weights_cpu)} na RAM · cache KV {gb(est.kv)} ({gb(est.kv_gpu)}{" "}
                 na GPU) · {est.layers_gpu}/{est.n_layer} camadas na GPU

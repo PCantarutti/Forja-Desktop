@@ -12,9 +12,10 @@ descarregar. `CAPS` diz o que cada um aceita, e quem chama pergunta antes em vez
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import AsyncIterator, Callable
 
-from . import config
+from . import config, metricas
 from .tools import ToolError
 
 try:  # localai só existe no Forja desktop; no Docker não há modelo local embutido
@@ -186,6 +187,7 @@ async def ensure(spec: dict, out: dict | None = None,
     # `load` é síncrono e segura o _proc_lock por até LOAD_TIMEOUT; numa thread o event loop segue
     # publicando eventos e atendendo o botão Parar. Ele já descarrega o anterior sozinho.
     carga = (localai.load, caminho, None, temporario) if temporario else (localai.load, caminho)
+    t0 = time.monotonic()
     tarefa = asyncio.create_task(asyncio.to_thread(*carga))
     if cancel is not None:
         espera = asyncio.ensure_future(cancel.wait())
@@ -201,6 +203,7 @@ async def ensure(spec: dict, out: dict | None = None,
     except Exception as e:
         yield _evento("error", model=alvo)
         raise ToolError(f"Falha ao carregar '{alvo}': {e}") from e
+    metricas.registra("troca", de=anterior, para=alvo, segundos=round(time.monotonic() - t0, 2))  # E0
     yield _evento("ready", previous=anterior, model=alvo)
 
 

@@ -110,7 +110,7 @@ export default function Trajetoria({ messages }: { messages: Message[] }) {
   }, [todas, porDuracao]);
 
   const botao = (ativo: boolean) =>
-    `rounded-md px-2 py-0.5 text-xs ${ativo ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`;
+    `rounded-[7px] px-2.5 py-1 text-xs ${ativo ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`;
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -126,18 +126,18 @@ export default function Trajetoria({ messages }: { messages: Message[] }) {
           <button className={botao(comChamadas)} onClick={() => setComChamadas((v) => !v)} title="Mostrar as chamadas de ferramenta na lista">
             Chamadas
           </button>
-          <label className="ml-auto flex w-56 items-center gap-1.5 rounded-md border border-line px-2 py-0.5 text-xs text-muted">
+          <label className="ml-auto flex w-56 items-center gap-1.5 rounded-[9px] border border-line bg-surface px-2.5 py-1 text-xs text-muted focus-within:border-focus">
             <Search className="size-3.5" />
             <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar" className="min-w-0 flex-1 bg-transparent text-fg placeholder:text-faint focus:outline-none" />
           </label>
         </div>
 
         {/* linha do tempo em três faixas */}
-        <div className="grid grid-cols-[auto_1fr] gap-x-2 border-b border-line px-3 py-2 font-mono text-[10px] text-faint">
+        <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 border-b border-line px-3 py-3 font-mono text-[10.5px] text-faint">
           {(["Entrada", "Modelo", "Ferramentas"] as const).map((faixa) => (
             <div key={faixa} className="contents">
               <span className="text-right leading-4">{faixa}</span>
-              <div className="relative h-4">
+              <div className="relative h-4 rounded-[3px] bg-surface">
                 {faixa === "Entrada" &&
                   marcasEntrada.map(({ l, esq }) => (
                     <button key={l.id} onClick={() => setSel(l.id)} title={l.texto}
@@ -149,10 +149,10 @@ export default function Trajetoria({ messages }: { messages: Message[] }) {
                     .filter((l) => (faixa === "Modelo" ? l.tipo === "assistente" : l.tipo === "ferramenta"))
                     .map((l) => {
                       const p = posicoes.get(l.id)!;
-                      const cor = faixa === "Modelo" ? "bg-violet-400/60" : l.status && l.status !== "ok" && l.status !== "rodando" ? "bg-red-400/80" : "bg-amber-400/80";
+                      const cor = faixa === "Modelo" ? "bg-agent/60" : l.status && l.status !== "ok" && l.status !== "rodando" ? "bg-err/85" : l.call?.name === "delegate_task" ? "bg-agent" : "bg-warn/85";
                       return (
                         <button key={l.id} onClick={() => setSel(l.id)} title={`${l.texto.slice(0, 120)} · ${fmtSeg(l.segundos)}`}
-                          className={`absolute top-0.5 h-3 rounded-sm ${cor} ${sel === l.id ? "ring-1 ring-fg" : ""}`}
+                          className={`absolute top-0.5 h-3 rounded-sm ${cor} ${sel === l.id ? "ring-2 ring-fg" : ""}`}
                           style={{ left: `${p.esq}%`, width: `max(2px, calc(${p.larg}% - 1px))` }} />
                       );
                     })}

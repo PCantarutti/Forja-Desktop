@@ -4,7 +4,7 @@ import type { Message, PesquisaEstado, PesquisaFonte, PesquisaFormato, PesquisaP
   from "../types";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import type { CloudUsage } from "../types";
-import { ArrowUp, Check, Clipboard, Clock, Copy, Cube, ExternalLink, Refresh, Search, Square, X } from "./icons";
+import { ArrowRight, ArrowUp, Bubble, Check, Clipboard, Clock, Copy, Cube, Download, ExternalLink, Refresh, Search, Square, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
@@ -13,10 +13,10 @@ import Sinapse from "./Sinapse";
 
 // Estas classes moram no LocalPanel.tsx, que é só do desktop. Repetidas aqui para esta aba viajar
 // inteira num cherry-pick para o forja-web. ponytail: 4 linhas custam menos que um módulo de estilo.
-const card = "rounded-2xl border border-line bg-surface p-3.5";
-const btn = "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
-const btnPrimary = "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white disabled:opacity-40";
-const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+const card = "rounded-xl border border-line bg-surface p-3.5";
+const btn = "inline-flex items-center gap-1.5 rounded-[9px] border border-line-strong px-3 py-1.5 text-fg hover:border-focus hover:bg-raised disabled:opacity-40";
+const btnPrimary = "inline-flex items-center gap-1.5 rounded-[9px] border border-accent bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
 
 // Os dois modelos da pesquisa são escolha desta aba, não do Chat: quem lê 12 páginas costuma
 // querer um modelo pequeno na extração e o bom só no relatório.
@@ -100,7 +100,7 @@ type Modelos = { escritor: Par; extrator: Par | null };  // extrator null = slot
 function Numero(props: { valor: number; min: number; max: number; unidade: string; dica: string;
                          onChange: (v: number) => void; icone?: React.ReactNode }) {
   return (
-    <label title={props.dica} className={`${pilula} focus-within:border-[#555]`}>
+    <label title={props.dica} className={`${pilula} focus-within:border-focus`}>
       {props.icone}
       <input type="number" min={props.min} max={props.max} value={props.valor}
              onChange={(e) => props.onChange(Number(e.target.value) || props.min)}
@@ -378,7 +378,8 @@ export default function PesquisaView(props: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-4xl flex-col gap-3">
+        <div className="mx-auto flex max-w-6xl flex-col items-start gap-3 xl:flex-row">
+        <div className="flex w-full min-w-0 flex-1 flex-col gap-3">
           {!estado && (
             <div className={`${card} text-xs text-muted`}>
               <p className="text-sm text-fg">Uma pergunta, várias páginas lidas, um relatório com fontes.</p>
@@ -411,7 +412,7 @@ export default function PesquisaView(props: {
                 {estado.aviso && <p className="mt-2 text-xs text-amber-300">{estado.aviso}</p>}
                 {!!estado.plano.perguntas.length && (
                   <details className="mt-2 text-xs text-muted">
-                    <summary className="cursor-pointer text-faint hover:text-fg">Plano da pesquisa</summary>
+                    <summary className="cursor-pointer font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase hover:text-fg">Plano da pesquisa</summary>
                     <ul className="mt-1 list-disc pl-5">
                       {estado.plano.perguntas.map((p) => <li key={p}>{p}</li>)}
                     </ul>
@@ -423,10 +424,10 @@ export default function PesquisaView(props: {
               </div>
 
           {terminou && (
-            <div className={`flex items-center gap-2 rounded-2xl border px-3.5 py-2.5 text-sm ${
+            <div className={`flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-[13px] ${
               terminou.status === "pronto"
-                ? "border-emerald-800/70 bg-emerald-950/30 text-emerald-200"
-                : "border-amber-800/70 bg-amber-950/30 text-amber-200"}`}>
+                ? "border-ok/55 bg-ok/[.08] text-ok"
+                : "border-warn/55 bg-warn/[.07] text-warn"}`}>
               <Check className="size-4 shrink-0" />
               <span className="min-w-0 flex-1">
                 {terminou.status === "pronto"
@@ -446,8 +447,8 @@ export default function PesquisaView(props: {
           )}
 
               {estado.resumo && (
-                <div className={card}>
-                  <p className="text-[11px] uppercase tracking-wider text-faint">Resumo</p>
+                <div className={`${card} border-accent/60! ring-[3px] ring-accent/10`}>
+                  <p className="font-mono text-[10.5px] font-medium tracking-[.08em] text-accent-text uppercase">Resumo</p>
                   <div className="mt-1 text-sm">
                     <Markdown text={estado.resumo} />
                   </div>
@@ -459,56 +460,59 @@ export default function PesquisaView(props: {
                   {estado.relatorio && (
                     <button className={btnPrimary}
                             onClick={() => window.open(`/api/pesquisa/${estado.message_id}/relatorio`)}>
-                      <ExternalLink className="mr-1 inline size-3.5" />
+                      <ExternalLink className="size-3.5" />
                       Abrir relatório
                     </button>
                   )}
                   {estado.relatorio && (
                     <button className={btn}
                             onClick={() => rodar(estado.pergunta, "", estado.message_id)}>
+                      <ArrowRight className="size-3.5" />
                       Continuar pesquisa
                     </button>
                   )}
-                  {estado.relatorio && <button className={btn} onClick={discutir}>Discutir no chat</button>}
+                  {estado.relatorio && <button className={btn} onClick={discutir}><Bubble className="size-3.5" /> Discutir no chat</button>}
                   <button className={btn} onClick={copiar}>
-                    {copiado ? <Check className="mr-1 inline size-3.5" /> : <Copy className="mr-1 inline size-3.5" />}
+                    {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
                     Copiar .md
                   </button>
-                  <button className={btn} onClick={baixar}>Baixar .md</button>
+                  <button className={btn} onClick={baixar}><Download className="size-3.5" /> Baixar .md</button>
                   <span className="text-faint">
                     extração: {estado.stats.extrator} · relatório: {estado.stats.escritor}
                     {estado.formato_usado && ` · formato: ${estado.formato_usado}`} · {numeros(estado)}
                   </span>
                 </div>
               )}
-              {!!estado.fontes.length && (
-                <div className={card}>
-                  {estado.fontes.map((f) => (
-                    <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
-                      <div className="flex items-center gap-2">
-                        <button className="min-w-0 flex-1 truncate text-left text-fg hover:underline"
-                                onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
-                          {f.titulo}
-                        </button>
-                        <span className="shrink-0 text-faint">{f.dominio}</span>
-                        <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
-                        <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
-                           className="shrink-0 text-faint hover:text-fg">
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                      </div>
-                      {aberta === f.id && (
-                        <div className="mt-1 border-l border-line pl-3 text-muted">
-                          <p>{f.resumo || f.erro || "Sem resumo."}</p>
-                          {f.trecho && <p className="mt-1 italic text-faint">“{f.trecho}”</p>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
 
             </>
+          )}
+        </div>
+          {estado && !!estado.fontes.length && (
+            <aside className={`${card} w-full shrink-0 xl:sticky xl:top-0 xl:w-[300px]`}>
+              <p className="mb-2 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Fontes · {estado.fontes.length}</p>
+              {estado.fontes.map((f) => (
+                <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
+                  <button className="line-clamp-2 w-full text-left text-fg hover:underline"
+                          onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
+                    {f.titulo}
+                  </button>
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{f.dominio}</span>
+                    <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
+                    <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
+                       className="shrink-0 text-faint hover:text-fg">
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </div>
+                  {aberta === f.id && (
+                    <div className="mt-1 border-l border-line pl-3 text-muted">
+                      <p>{f.resumo || f.erro || "Sem resumo."}</p>
+                      {f.trecho && <p className="mt-1 italic text-faint">“{f.trecho}”</p>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </aside>
           )}
         </div>
       </div>
@@ -540,7 +544,7 @@ export default function PesquisaView(props: {
 
           {abrirModelos && (
             // Como os ajustes da tela Imagem: um painel acima da caixa, em vez de seletores no rodapé.
-            <div className="mb-2 rounded-2xl border border-line bg-surface p-3.5 text-xs">
+            <div className="mb-2 rounded-xl border border-line bg-surface p-3.5 text-xs">
               <div className="mb-2.5 flex items-center gap-2">
                 <span className="font-medium text-fg">Modelos da pesquisa</span>
                 <button onClick={() => setAbrirModelos(false)} title="Fechar"
@@ -568,7 +572,7 @@ export default function PesquisaView(props: {
                         return (
                           <button key={id} role="radio" aria-checked={ligado}
                                   onClick={() => setModelos((m) => ({ ...m, extrator: id === "auto" ? null : m.extrator ?? { ...m.escritor } }))}
-                                  className={`rounded-full px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                                  className={`rounded-[9px] px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
                             {rotulo}
                           </button>
                         );
@@ -653,7 +657,7 @@ export default function PesquisaView(props: {
                 onClick={() => setAbrirModelos((v) => !v)}
                 title={`Modelos da pesquisa\nRelatório: ${modelos.escritor.model || "—"}\nExtração: ${modelos.extrator?.model ?? "automática"}`}
                 className={`flex min-w-0 max-w-[min(18rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg px-2.5 py-1 text-xs whitespace-nowrap ${
-                  abrirModelos ? "bg-[#333] text-fg" : "bg-raised text-muted hover:text-fg"}`}
+                  abrirModelos ? "bg-line-strong text-fg" : "bg-raised text-muted hover:text-fg"}`}
               >
                 <Cube className="size-3.5 shrink-0" />
                 <span className="min-w-0 truncate">{modelos.escritor.model || "escolher modelo"}</span>

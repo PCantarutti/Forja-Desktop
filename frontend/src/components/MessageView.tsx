@@ -1,4 +1,5 @@
 import { createContext, memo, useContext, useEffect, useRef, useState } from "react";
+import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -130,7 +131,7 @@ const MD_COMPONENTS = { pre: CodeBlock, table: Table, a: Link, img: Imagem };
  */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
   return (
-    <div className="md text-[15px]">
+    <div className="md text-[14.5px] text-fg">
       <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={MD_COMPONENTS}>
         {text}
       </ReactMarkdown>
@@ -145,20 +146,20 @@ export function Thinking({ text, live }: { text: string; live?: boolean }) {
   const isOpen = open ?? !!live;
   if (!text) return null;
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
+    <div className="mb-2">
       <button
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-4 py-2.5 font-mono text-sm text-muted hover:text-fg"
+        className="flex items-center gap-2 py-1 text-[13px] text-faint hover:text-muted"
       >
-        <Brain className={`size-4 ${live ? "animate-pulse" : ""}`} />
-        {live ? "Raciocinando..." : "Raciocínio"}
-        <Chevron className="ml-auto size-4" />
+        <Brain className={`size-3.5 ${live ? "animate-pulse" : ""}`} />
+        {live ? "Raciocinando…" : "Raciocínio"}
+        <ChevronDown className={`size-3 transition-transform duration-150 ${isOpen ? "" : "-rotate-90"}`} />
       </button>
       {isOpen && (
         <div
           ref={caixa}
           onScroll={seguirTexto}
-          className="max-h-80 overflow-y-auto border-t border-line px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap text-fg/85"
+          className="max-h-80 overflow-y-auto py-1 text-[13px] leading-relaxed whitespace-pre-wrap text-faint italic"
         >
           {text}
           <div ref={fimDoTexto} />
@@ -174,7 +175,7 @@ export function ToolDraft({ tool }: { tool: { name: string; path?: string; text:
   const { ref: caixa, fim: fimDoTexto, onScroll: seguirTexto } = useStickyBottom<HTMLDivElement>([tool.text]);
   const kb = (tool.chars ?? tool.text.length) / 1024;
   return (
-    <div className="mb-3 overflow-hidden rounded-2xl border border-line bg-surface">
+    <div className="mb-3 overflow-hidden rounded-xl border border-line bg-surface">
       <div className="flex w-full items-center gap-2 px-4 py-2.5 font-mono text-sm text-muted">
         <Edit className="size-4 animate-pulse" />
         <span className="truncate">
@@ -230,7 +231,7 @@ export function Lightbox({ src, onClose, titulo }: { src: string; onClose: () =>
     <div onClick={onClose} role="dialog" aria-label={nome}
          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
       <div onClick={(e) => e.stopPropagation()}
-           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-2xl">
+           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-popover">
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
           <span className="min-w-0 truncate text-sm text-fg" title={nome}>{nome}</span>
           {medida && <span className="shrink-0 text-[11px] text-faint">{medida[0]}×{medida[1]}</span>}
@@ -493,7 +494,7 @@ export function CopyButton({ text, html, bg }: { text: string | (() => string); 
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md bg-raised px-2 py-0.5 text-xs text-muted">{children}</span>
+    <span className="inline-flex items-center gap-1.5 rounded-[5px] bg-raised px-2 py-0.5 font-mono text-[11.5px] text-fg-2">{children}</span>
   );
 }
 
@@ -557,28 +558,28 @@ export function resultadosDe(messages: Message[]): Map<string, Message> {
 
 export function StatsRow({ s, live, instances, instancesLabel, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; instancesLabel?: string; onInstances?: () => void; phase?: string }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11.5px] text-faint [&_svg]:size-[13px]">
       <Chip>
         <Cube className="size-3.5" /> {s.model}
       </Chip>
-      {live && <span className="size-1.5 animate-pulse rounded-full bg-sky-400" title="gerando: valores em tempo real" />}
+      {live && <span className="size-1.5 animate-pulse rounded-full bg-accent" title="gerando: valores em tempo real" />}
       <span className="inline-flex items-center gap-1.5" title={live ? "contagem em tempo real (aproximada)" : s.estimated ? "estimado (chars/4)" : "informado pelo provider"}>
         <Tokens className="size-3.5" /> {s.estimated || live ? "~" : ""}
         {s.tokens.toLocaleString("pt-BR")} tokens
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <Clock className="size-3.5" /> {s.seconds < 60 ? `${s.seconds.toFixed(1)}s` : `${Math.floor(s.seconds / 60)}m${Math.round(s.seconds % 60)}s`}
+        <Clock className="size-3.5" /> {s.seconds < 60 ? `${s.seconds.toFixed(1).replace(".", ",")} s` : `${Math.floor(s.seconds / 60)}m${Math.round(s.seconds % 60)}s`}
       </span>
       {s.tps != null && (
         <span className="inline-flex items-center gap-1.5">
-          <Gauge className="size-3.5" /> {s.tps.toFixed(2)} t/s
+          <Gauge className="size-3.5" /> {s.tps.toFixed(2).replace(".", ",")} t/s
         </span>
       )}
       {(!!instances || !!phase) && (
         <button
           onClick={onInstances}
           title={instances ? "Subagentes e processos desta conversa — clique para abrir a aba Instâncias" : undefined}
-          className="inline-flex items-center gap-1.5 text-sky-300 hover:text-sky-200"
+          className="inline-flex items-center gap-1.5 font-sans text-accent-text hover:text-fg"
         >
           {phase ? (
             <span className="size-3 animate-spin rounded-full border border-sky-400/30 border-t-sky-300" />
@@ -598,10 +599,10 @@ export function DiffView({ preview }: { preview: Preview }) {
   if (preview.kind === "command")
     return (
       <div className="overflow-hidden rounded-xl border border-line">
-        <div className="bg-raised px-3 py-1.5 text-xs text-muted">
+        <div className="bg-raised px-3 py-1.5 text-[11.5px] text-muted">
           Comando · <span className="font-mono">{preview.path}</span>
         </div>
-        <pre className="max-h-64 overflow-auto bg-[#0d0d0d] px-3 py-2.5 font-mono text-xs whitespace-pre-wrap text-fg">
+        <pre className="max-h-64 overflow-auto bg-code px-3 py-2.5 font-mono text-xs whitespace-pre-wrap text-fg">
           <span className="text-faint select-none">$ </span>
           {preview.text}
         </pre>
@@ -610,19 +611,19 @@ export function DiffView({ preview }: { preview: Preview }) {
   const lines = preview.kind === "new" ? preview.text.split("\n").map((l) => "+" + l) : preview.text.split("\n");
   return (
     <div className="overflow-hidden rounded-xl border border-line">
-      <div className="bg-raised px-3 py-1.5 text-xs text-muted">
+      <div className="bg-raised px-3 py-1.5 text-[11.5px] text-muted">
         {preview.kind === "new" ? "Arquivo novo" : "Diff"} · <span className="font-mono">{preview.path}</span>
       </div>
-      <pre className="max-h-96 overflow-auto bg-[#0d0d0d] py-2 font-mono text-xs leading-5">
+      <pre className="max-h-96 overflow-auto bg-code py-2 font-mono text-xs leading-5">
         {lines.map((l, i) => {
           const cls = l.startsWith("@@")
-            ? "text-sky-400"
+            ? "text-info"
             : l.startsWith("+++") || l.startsWith("---")
               ? "text-faint"
               : l.startsWith("+")
-                ? "bg-emerald-950/70 text-emerald-300"
+                ? "bg-diff-add text-diff-add-fg"
                 : l.startsWith("-")
-                  ? "bg-red-950/70 text-red-300"
+                  ? "bg-diff-del text-diff-del-fg"
                   : "text-muted";
           return (
             <div key={i} className={`px-3 whitespace-pre ${cls}`}>
@@ -636,12 +637,12 @@ export function DiffView({ preview }: { preview: Preview }) {
 }
 
 const STATUS: Record<string, [string, string]> = {
-  ok: ["ok", "text-emerald-400"],
-  erro: ["erro", "text-red-400"],
-  rejeitada: ["rejeitada", "text-orange-400"],
+  ok: ["ok", "text-ok"],
+  erro: ["erro", "text-err"],
+  rejeitada: ["rejeitada", "text-warn"],
   cancelada: ["cancelada", "text-faint"],
-  aguardando: ["aguardando aprovação", "text-amber-300"],
-  executando: ["executando…", "text-sky-400"],
+  aguardando: ["aguardando aprovação", "text-accent-text"],
+  executando: ["executando…", "text-info"],
   fila: ["na fila", "text-faint"],
   pendente: ["não executada", "text-faint"],
 };
@@ -651,16 +652,18 @@ export function TasksCard({ tasks, live }: { tasks: Task[]; live?: boolean }) {
   if (!tasks.length) return null;
   const done = tasks.filter((t) => t.status === "done").length;
   return (
-    <div className={`my-3 rounded-2xl border ${live ? "border-sky-500/40" : "border-line"} bg-surface px-4 py-3 text-sm`}>
-      <div className="mb-2 flex items-center gap-2 text-xs text-muted">
-        <Clipboard className="size-3.5" /> Tarefas · {done}/{tasks.length} concluídas
-        {live && <span className="ml-auto animate-pulse text-sky-300">em andamento</span>}
+    <div className={`my-3 rounded-xl border ${live ? "border-accent-line" : "border-line"} bg-bg px-3 py-2 text-[13px]`}>
+      <div className="mb-2 flex items-center gap-2">
+        <Clipboard className="size-3.5 text-muted" /> <span className="font-medium text-fg">Tarefas</span>
+        <span className="text-muted">{done} de {tasks.length} concluídas</span>
+        <span className="h-[3px] w-16 rounded-full bg-line"><span className="block h-full rounded-full bg-accent" style={{ width: `${(done / tasks.length) * 100}%` }} /></span>
+        {live && <span className="ml-auto animate-pulse text-accent-text">em andamento</span>}
       </div>
       <ul className="space-y-1">
         {tasks.map((t, i) => (
           <li key={i} className="flex items-start gap-2">
             <span className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded border text-[10px] ${
-              t.status === "done" ? "border-emerald-500 bg-emerald-600/80 text-white" : t.status === "doing" ? "border-sky-400 text-sky-300" : "border-line text-transparent"
+              t.status === "done" ? "border-ok bg-ok/80 text-bg" : t.status === "doing" ? "border-accent text-accent-text" : "border-line text-transparent"
             }`}>
               {t.status === "done" ? "✓" : t.status === "doing" ? "›" : ""}
             </span>
@@ -711,16 +714,16 @@ export function ToolBlock(props: {
   const target = preview?.path ?? (call.name.startsWith("browser_") ? hint : "");
 
   return (
-    <div className={`my-2 overflow-hidden rounded-2xl border ${waiting ? "border-amber-500/50" : "border-line"} bg-surface`}>
-      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-raised/50">
-        <span className="font-mono text-fg">{call.name}</span>
-        <span className="truncate font-mono text-faint">{hint}</span>
-        <span className={`ml-auto shrink-0 text-xs ${cls}`}>● {label}</span>
+    <div className={`my-2 overflow-hidden ${waiting ? "rounded-2xl border-accent-line" : "rounded-xl border-line"} border bg-surface`}>
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 px-3.5 py-2 text-left text-[13px] hover:bg-raised/50">
+        <span className="font-mono text-[12.5px] text-fg">{call.name}</span>
+        <span className="truncate text-faint">{hint}</span>
+        <span className={`ml-auto shrink-0 text-[11.5px] ${cls}`}>● {label}</span>
         <Chevron className="size-4 shrink-0 text-faint" />
       </button>
 
       {!result && props.live && (
-        <pre className="max-h-48 overflow-auto border-t border-line bg-[#0d0d0d] px-3 py-2 font-mono text-[11px] whitespace-pre-wrap text-muted">
+        <pre className="max-h-48 overflow-auto border-t border-line bg-code px-3 py-2 font-mono text-[11px] whitespace-pre-wrap text-muted">
           {props.live}
         </pre>
       )}
@@ -738,21 +741,21 @@ export function ToolBlock(props: {
 
       {waiting && !approval?.sent && (
         <div className="space-y-3 border-t border-line p-4">
-          <div className="text-sm text-fg">
-            O agente quer {verb} <span className="font-mono">{target}</span>
+          <div className="text-[13.5px] text-fg">
+            O agente quer {verb} <span className="font-mono text-[12.5px]">{target}</span>
           </div>
           {preview ? (
             <DiffView preview={preview} />
           ) : (
-            <pre className="max-h-64 overflow-auto rounded-xl border border-line bg-[#0d0d0d] p-3 font-mono text-xs whitespace-pre-wrap text-muted">
+            <pre className="max-h-64 overflow-auto rounded-xl border border-line bg-code p-3 font-mono text-xs whitespace-pre-wrap text-muted">
               {JSON.stringify(call.arguments, null, 2)}
             </pre>
           )}
-          {approval?.nota && <div className="mb-2 text-xs text-amber-200/90">{approval.nota}</div>}
+          {approval?.nota && <div className="mb-2 text-xs text-warn">{approval.nota}</div>}
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => props.onDecide(true)}
-              className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+              className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
             >
               Aprovar
             </button>
@@ -789,7 +792,7 @@ export function ToolBlock(props: {
             </div>
           )}
           <div className="text-faint">Argumentos</div>
-          <pre className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono whitespace-pre-wrap text-muted">
+          <pre className="max-h-64 overflow-auto rounded-lg bg-code p-2.5 font-mono whitespace-pre-wrap text-muted">
             {JSON.stringify(call.arguments, null, 2)}
           </pre>
           {preview && !waiting && <DiffView preview={preview} />}
@@ -799,7 +802,7 @@ export function ToolBlock(props: {
           {result && (
             <>
               <div className="text-faint">Resultado</div>
-              <pre className="max-h-64 overflow-auto rounded-lg bg-[#0d0d0d] p-2.5 font-mono whitespace-pre-wrap text-muted">
+              <pre className="max-h-64 overflow-auto rounded-lg bg-code p-2.5 font-mono whitespace-pre-wrap text-muted">
                 {result.content}
               </pre>
             </>
@@ -954,20 +957,20 @@ export function ActivityGroup(props: {
   const summary =
     (props.live && !tools.length ? "Trabalhando" : soNotas ? "Avisos ao agente"
       : tools.length > 1 ? `${head}, usou ${tools.length} ferramentas` : head) +
-    (fails ? ` (${fails} falha${fails > 1 ? "s" : ""})` : "") +
     (props.live ? "…" : "");
 
   return (
     <div className="my-3">
       <button
         onClick={() => setOpen(!isOpen)}
-        className="flex items-center gap-1.5 text-sm text-faint transition-colors hover:text-muted"
+        className="flex items-center gap-1.5 text-[13.5px] text-faint transition-colors hover:text-muted"
       >
         <span className={props.live ? "animate-pulse" : ""}>{summary}</span>
-        <ChevronDown className={`size-3.5 transition-transform ${isOpen ? "" : "-rotate-90"}`} />
+        {!!fails && <span className="text-err">({fails} falha{fails > 1 ? "s" : ""})</span>}
+        <ChevronDown className={`size-3.5 transition-transform duration-150 ${isOpen ? "" : "-rotate-90"}`} />
       </button>
       {isOpen && (
-        <div className="mt-1 border-l border-line pl-3">
+        <div className="mt-2 border-l border-line pl-3.5">
           {props.items.map((p, k) =>
             p.kind === "thinking" ? (
               <Thinking key={p.id} text={p.text} />
@@ -1002,7 +1005,7 @@ export function ActivityGroup(props: {
               title={geradas ? "Abre a conversa de Imagens destas imagens (não gera de novo)" : "Abre a tela Imagens com a fila dos slots"}
               className={geradas
                 ? "rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
-                : "rounded-full bg-fg px-3 py-1 font-medium text-black hover:bg-white"}
+                : "rounded-full bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110"}
             >
               {geradas ? `Ver as ${slots.length} imagens` : `Gerar ${slots.length} imagens`}
             </button>
@@ -1015,11 +1018,11 @@ export function ActivityGroup(props: {
 }
 
 const EVENT_STYLE: Record<string, string> = {
-  warning: "border-amber-500/30 text-amber-200",
-  error: "border-red-500/30 text-red-200",
-  nudge: "border-sky-500/30 text-sky-200",
+  warning: "border-warn/30 bg-warn/[.07] text-fg-2",
+  error: "border-err/30 bg-err/[.08] text-fg-2",
+  nudge: "border-accent-line text-fg-2",
   info: "border-line text-muted",
-  imagens: "border-sky-500/30 text-muted whitespace-pre-wrap", // uma linha por imagem
+  imagens: "border-accent-line text-muted whitespace-pre-wrap", // uma linha por imagem
 };
 
 /** agent.py: "... Tentando de novo em 2.0s (2/5)..." */
@@ -1028,13 +1031,10 @@ export const TENTATIVA = /Tentando de novo.*\((\d+\/\d+)\)/;
 /** O aviso de reconexão ao modelo, um só, atualizado a cada tentativa. */
 export function Reconectando({ texto, n }: { texto: string; n: string }) {
   return (
-    <div className="my-3 flex items-start gap-2.5 rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
-      <span className="mt-1 size-3 shrink-0 animate-spin rounded-full border-2 border-faint border-t-transparent" />
-      <div className="min-w-0">
-        <div className="text-fg">Reconectando ao modelo · tentativa {n}</div>
-        <div className="truncate text-xs">{texto.split(" Tentando de novo")[0]}</div>
-      </div>
-    </div>
+    <CartaoEstado tom="info" compacto girando className="my-3">
+      <span className="shrink-0">Reconectando ao modelo… tentativa {n}</span>
+      <span className="min-w-0 truncate text-xs text-faint" title={texto}>{texto.split(" Tentando de novo")[0]}</span>
+    </CartaoEstado>
   );
 }
 
@@ -1043,9 +1043,12 @@ export function EventNotice({ m }: { m: Message }) {
   if (kind === "tasks") return <TasksCard tasks={m.meta?.tasks ?? []} />;
   if (kind === "summary")
     return (
-      <details className="my-3 rounded-2xl border border-line bg-surface px-4 py-2.5 text-sm text-muted">
-        <summary className="cursor-pointer select-none">
-          Contexto compactado: o histórico anterior foi resumido para caber na janela do modelo
+      <details className="group/c my-3 rounded-xl border border-line px-3 py-[9px] text-[12.5px] text-muted">
+        <summary className="flex cursor-pointer list-none items-center gap-2 select-none">
+          <span>Contexto compactado</span>
+          <span className="truncate text-faint">o histórico anterior foi resumido para caber na janela do modelo</span>
+          <span className="ml-auto shrink-0 text-faint group-open/c:hidden">expandir ▾</span>
+          <span className="ml-auto hidden shrink-0 text-faint group-open/c:inline">recolher ▴</span>
         </summary>
         <div className="mt-2 border-t border-line pt-2">
           <Markdown text={m.content} />
@@ -1186,8 +1189,8 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
   const sel = picked[at] ?? [];
   const livre = (texts[at] ?? "").trim();
   const last = at === qs.length - 1;
-  const primary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
-  const secondary = "rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised";
+  const primary = botaoEstadoPrimario;
+  const secondary = botaoEstado;
 
   function toggle(label: string) {
     setPicked((p) =>
@@ -1209,16 +1212,14 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
   }
 
   return (
-    <div className={`my-3 overflow-hidden rounded-2xl border ${decided ? "border-line" : "border-amber-500/50"} bg-surface`}>
-      <div className="flex items-start gap-2 border-b border-line px-4 py-2.5 text-sm">
+    <div className={`my-3 overflow-hidden rounded-[14px] border ${decided ? "border-line" : "border-accent-line"} bg-surface`}>
+      <div className="flex items-start gap-2 border-b border-line px-3.5 py-2.5 text-[13px]">
         {decided ? (
-          <span className="text-fg">{qs.length > 1 ? "Perguntas do agente" : "Pergunta do agente"}</span>
+          <b className="font-semibold text-fg">{qs.length > 1 ? "O agente perguntou" : "O agente perguntou"}</b>
         ) : (
           <>
-            <span className="mt-0.5 shrink-0 font-mono text-[11px] text-amber-300">
-              {at + 1}/{qs.length}
-            </span>
-            <span className="font-medium text-fg">{q.question}</span>
+            <b className="shrink-0 font-semibold text-fg">O agente pergunta</b>
+            {qs.length > 1 && <span className="mt-px shrink-0 font-mono text-[11px] text-accent-text">{at + 1}/{qs.length}</span>}
             {q.header && <span className="ml-auto shrink-0 pl-2 text-xs text-faint">{q.header}</span>}
           </>
         )}
@@ -1241,7 +1242,8 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
         </div>
       ) : (
         <>
-          <div className="space-y-2 p-4">
+          <div className="space-y-1.5 px-3.5 py-3">
+            <div className="pb-1 text-[13px] text-fg-2">{q.question}</div>
             {q.options.map((o, i) => {
               const on = sel.includes(o.label);
               const vis = parteOpcao(o);
@@ -1249,14 +1251,14 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
                 <button
                   key={i}
                   onClick={() => toggle(o.label)}
-                  className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left ${on ? "border-fg/50 bg-raised" : "border-line hover:bg-raised/60"}`}
+                  className={`flex w-full items-start gap-3 rounded-[8px] border px-2.5 py-1.5 text-left ${on ? "border-accent bg-accent/[.08]" : "border-line hover:bg-raised/60"}`}
                 >
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm text-fg">{vis.label}</span>
                     {vis.description && <span className="mt-0.5 block text-xs text-muted">{vis.description}</span>}
                   </span>
                   <span
-                    className={`mt-0.5 grid size-4 shrink-0 place-items-center ${q.multi_select ? "rounded" : "rounded-full"} border text-[10px] ${on ? "border-fg bg-fg font-bold text-black" : "border-line text-faint"}`}
+                    className={`mt-0.5 grid size-4 shrink-0 place-items-center ${q.multi_select ? "rounded" : "rounded-full"} border text-[10px] ${on ? "border-accent bg-accent font-bold text-accent-fg" : "border-line text-faint"}`}
                   >
                     {on ? "✓" : i + 1}
                   </span>
@@ -1266,9 +1268,9 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
             {!!q.options.length && (
               <button
                 onClick={() => livreRef.current?.focus()}
-                className="flex w-full items-center gap-3 rounded-xl border border-line px-3 py-2.5 text-left hover:bg-raised/60"
+                className="flex w-full items-center gap-3 rounded-[8px] border border-dashed border-line-strong px-2.5 py-1.5 text-left text-faint hover:bg-raised/60 hover:text-fg"
               >
-                <span className="flex-1 text-sm text-fg">Outro</span>
+                <span className="flex-1 text-sm">Outra resposta…</span>
                 <span className="grid size-4 shrink-0 place-items-center rounded-full border border-line text-[10px] text-faint">
                   {q.options.length + 1}
                 </span>
@@ -1286,7 +1288,7 @@ export function QuestionCard(props: { questions: AskQuestion[]; done?: Message; 
                 }
               }}
               placeholder="Digite sua própria resposta aqui"
-              className="w-full rounded-xl border border-line bg-raised px-3 py-2 text-sm text-fg focus:outline-none"
+              className="w-full rounded-[8px] border border-line bg-bg px-2.5 py-1.5 text-sm text-fg focus:border-focus focus:outline-none"
             />
             <div className="flex items-center gap-2 pt-1">
               {at > 0 && (
@@ -1349,7 +1351,7 @@ export function PlanCard(props: {
               <div className="flex gap-2">
                 <button
                   onClick={() => props.onDecide(false, undefined, feedback)}
-                  className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+                  className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
                 >
                   Enviar observações
                 </button>
@@ -1362,7 +1364,7 @@ export function PlanCard(props: {
             <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => props.onDecide(true, mode)}
-                className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+                className="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
               >
                 Aprovar e executar
               </button>

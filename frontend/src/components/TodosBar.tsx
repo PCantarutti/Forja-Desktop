@@ -16,12 +16,15 @@ export default function TodosBar({ tasks, live }: { tasks: Task[]; live?: boolea
     n("pending") ? `${n("pending")} pendente${n("pending") === 1 ? "" : "s"}` : "",
   ].filter(Boolean).join(" · ");
   return (
-    <div className="mb-2 rounded-xl border border-line bg-surface text-sm">
+    <div className="mb-2 rounded-xl border border-line bg-bg text-[13px]">
       <button onClick={() => setAberta((v) => !v)} aria-expanded={aberta}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left">
+        className="flex w-full items-center gap-2 px-3 py-[7px] text-left">
         <Clipboard className="size-3.5 shrink-0 text-muted" />
         <span className="font-medium text-fg">Tarefas</span>
         <span className="truncate text-muted">{resumo}</span>
+        <span className="h-[3px] w-16 shrink-0 rounded-full bg-line">
+          <span className="block h-full rounded-full bg-accent" style={{ width: `${(n("done") / tasks.length) * 100}%` }} />
+        </span>
         {live && n("doing") > 0 && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-sky-400" />}
         <ChevronDown className={`ml-auto size-4 shrink-0 text-faint transition-transform ${aberta ? "rotate-180" : ""}`} />
       </button>

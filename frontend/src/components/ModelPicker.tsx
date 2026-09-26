@@ -162,7 +162,7 @@ export default function ModelPicker(props: {
       {open && (
         <div
           style={pos ?? undefined}
-          className={`${pos ? "fixed" : "absolute right-0 bottom-full mb-2"} z-50 flex h-80 w-[34rem] max-w-[90vw] overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl shadow-black/50`}
+          className={`${pos ? "fixed" : "absolute right-0 bottom-full mb-2"} z-50 flex h-80 w-[34rem] max-w-[90vw] overflow-hidden rounded-xl border border-line bg-surface shadow-popover`}
         >
           <ul className="w-40 shrink-0 space-y-0.5 overflow-y-auto border-r border-line bg-side p-2 text-sm">
             {catalog === null && <li className="px-2 py-1 text-muted">carregando…</li>}

@@ -1,13 +1,14 @@
-import { useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Activity, Clipboard, Cpu, Expandir, GitBranch, Globe, Info, Recolher, Terminal, X } from "./icons";
-import { MAX_TILES, fechar, mover, type Grade, type Lado } from "./tiles";
+import { MAX_TILES, abertos, fechar, mover, type Grade, type Lado } from "./tiles";
 
 export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "terminal" | "local";
 
 // Largura inicial da coluna que o tile abre; arrastar o divisor à esquerda dela muda.
 export const WIDTH: Record<RightTab, number> = { info: 288, browser: 520, servers: 288, plans: 440, changes: 520, terminal: 560, local: 420 };
 const TILE_MIN = 240, MAIN_MIN = 320;
-const card = "rounded-xl border border-line bg-panel";
+const card = "rounded-xl border border-line";
+const tileCard = `${card} bg-side`;
 
 export const TABS: { id: RightTab; label: string; icon: React.ReactNode }[] = [
   { id: "info", label: "Info", icon: <Info className="size-4" /> },
@@ -31,19 +32,17 @@ export type EstadoAbas = {
 
 /** O selo de uma aba. Compartilhado com a doca do Maestro: os dois lugares sinalizam igual. */
 export function seloDaAba(id: RightTab, e: EstadoAbas): React.ReactNode {
-  return id === "changes" && e.changesCount > 0 ? (
-    <span className="rounded-full bg-amber-600/80 px-1.5 text-[10px] leading-4 text-white">{e.changesCount}</span>
-  ) : id === "browser" && e.browserOpen ? (
-    <span className="size-1.5 rounded-full bg-emerald-400" />
-  ) : id === "local" && e.localRunning ? (
-    <span className="size-1.5 rounded-full bg-emerald-400" />
-  ) : id === "servers" && e.serversRunning > 0 ? (
-    <span className="rounded-full bg-emerald-600/80 px-1.5 text-[10px] leading-4 text-white">{e.serversRunning}</span>
-  ) : id === "plans" && e.plansPending > 0 ? (
-    <span className="rounded-full bg-sky-600/80 px-1.5 text-[10px] leading-4 text-white">{e.plansPending}</span>
-  ) : id === "plans" && e.plansTotal > 0 ? (
-    <span className="rounded-full bg-raised px-1.5 text-[10px] leading-4 text-muted">{e.plansTotal}</span>
-  ) : null;
+  const n = (v: number, tom = "bg-accent text-accent-fg") => (
+    <span className={`h-[15px] min-w-[15px] rounded-full px-1 text-center font-mono text-[9.5px] leading-[15px] font-semibold ${tom}`}>{v}</span>
+  );
+  const ponto = <span className="mt-1.5 mr-1.5 size-1.5 rounded-full bg-ok" />;
+  return id === "changes" && e.changesCount > 0 ? n(e.changesCount)
+    : id === "browser" && e.browserOpen ? ponto
+    : id === "local" && e.localRunning ? ponto
+    : id === "servers" && e.serversRunning > 0 ? n(e.serversRunning)
+    : id === "plans" && e.plansPending > 0 ? n(e.plansPending)
+    : id === "plans" && e.plansTotal > 0 ? n(e.plansTotal, "bg-raised text-muted")
+    : null;
 }
 
 /** Botões das abas, sempre visíveis no topo direito. Clicar abre um tile daquela aba à direita (os
@@ -54,7 +53,7 @@ export function RightTabsBar(props: EstadoAbas & {
   extras?: { id: string; label: string; icon: React.ReactNode }[];  // abas só de uma tela (a Maestro)
 }) {
   return (
-    <div className="ml-auto flex shrink-0 items-center gap-1" role="toolbar" aria-label="Painéis">
+    <div className="ml-auto flex shrink-0 items-center gap-0.5" role="toolbar" aria-label="Painéis">
       {[...TABS, ...(props.extras ?? [])].map((t) => {
         const active = props.abertos.includes(t.id);
         const cheio = !active && props.abertos.length >= MAX_TILES;
@@ -66,12 +65,12 @@ export function RightTabsBar(props: EstadoAbas & {
             title={active ? `${t.label} (clique para fechar)` : cheio ? `${t.label}: feche um painel antes (máximo ${MAX_TILES})` : t.label}
             disabled={cheio}
             onClick={() => props.onSelect(t.id)}
-            className={`relative grid size-7 place-items-center rounded-md disabled:opacity-35 ${
-              active ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
+            className={`relative grid size-[30px] place-items-center rounded-[7px] transition-colors disabled:opacity-35 ${
+              active ? "bg-raised text-accent-text" : "text-muted hover:bg-raised hover:text-fg"
             }`}
           >
             {t.icon}
-            {b && <span className="absolute -top-1 -right-1 grid place-items-center">{b}</span>}
+            {b && <span className={`absolute grid place-items-center ${t.id === "browser" || t.id === "local" ? "top-0 right-0" : "-top-[3px] -right-[3px]"}`}>{b}</span>}
           </button>
         );
       })}
@@ -138,6 +137,72 @@ export default function Tiles(props: {
   const area = useRef<HTMLDivElement>(null);
   const [arrastando, setArrastando] = useState(false);
   const [indicador, setIndicador] = useState<{ caixa: Caixa; centro: boolean } | null>(null);
+
+  // Abrir/fechar anima pela posição onde o tile cai: coluna nova desliza do lado; empilhado numa coluna
+  // que já existe, de baixo. (A ordem não importa: na Maestro o primeiro já cai embaixo do Worker.)
+  type Dir = "lado" | "baixo";
+  const entrada = useRef(new Map<string, Dir>());
+  const vistos = useRef<Set<string> | null>(null);
+  if (vistos.current === null) vistos.current = new Set(abertos(props.grade));  // os do começo não animam
+  {
+    const agora = new Set(abertos(props.grade));
+    for (const c of props.grade.colunas)
+      for (const t of c.tabs)
+        if (!vistos.current.has(t)) entrada.current.set(t, c.tabs.some((x) => vistos.current!.has(x)) ? "baixo" : "lado");
+    vistos.current = agora;
+  }
+  useEffect(() => {
+    if (!entrada.current.size) return;
+    const ks = [...entrada.current.keys()];
+    setTimeout(() => ks.forEach((k) => entrada.current.delete(k)), 400);  // arrastar depois não repete a entrada
+  });
+  // Fechar: a grade anterior fica na tela enquanto o tile sai (vale para o X e para os ícones do topo).
+  const [saindo, setSaindo] = useState<{ grade: Grade<string>; tabs: Map<string, Dir> } | null>(null);
+  const anterior = useRef(props.grade);
+  // layout effect: roda antes da pintura; com useEffect aparecia um quadro já sem o tile (a piscada)
+  useLayoutEffect(() => {
+    const prev = anterior.current;
+    anterior.current = props.grade;
+    const agora = new Set(abertos(props.grade));
+    const foram = new Map<string, Dir>();
+    for (const c of prev.colunas) for (const t of c.tabs) if (!agora.has(t)) foram.set(t, c.tabs.length === 1 ? "lado" : "baixo");
+    if (!foram.size) return;
+    setSaindo({ grade: prev, tabs: foram });
+    const id = setTimeout(() => setSaindo(null), 180);
+    return () => {
+      clearTimeout(id);
+      setSaindo(null);
+    };
+  }, [props.grade]);
+  const gv = saindo?.grade ?? g;
+
+  // Recolher/expandir: tamanhos medidos ainda no layout antigo (durante o render), e no layout effect
+  // cada tile/coluna que mudou anima do tamanho antigo para o novo (as vizinhas acompanham).
+  const chaveRec = [...props.grade.recolhidos].sort().join("|");
+  const recAntes = useRef(chaveRec);
+  const tamanhos = useRef<Map<Element, DOMRect> | null>(null);
+  if (chaveRec !== recAntes.current && area.current && !saindo) {
+    const m = new Map<Element, DOMRect>();
+    area.current.querySelectorAll(":scope > [data-coluna], :scope > [data-coluna] > [data-tile]").forEach((e) => m.set(e, e.getBoundingClientRect()));
+    tamanhos.current = m;
+  }
+  recAntes.current = chaveRec;
+  useLayoutEffect(() => {
+    const antes = tamanhos.current;
+    tamanhos.current = null;
+    if (!antes || !area.current) return;
+    const anima = { duration: 180, easing: "cubic-bezier(.2, 0, 0, 1)" };
+    area.current.querySelectorAll<HTMLElement>(":scope > [data-coluna]").forEach((col) => {
+      const a = antes.get(col), b = col.getBoundingClientRect();
+      if (a && Math.abs(a.width - b.width) > 1)
+        col.animate([{ flex: `0 0 ${a.width}px`, minWidth: 0 }, { flex: `0 0 ${b.width}px`, minWidth: 0 }], anima);
+      col.querySelectorAll<HTMLElement>(":scope > [data-tile]").forEach((t) => {
+        const ta = antes.get(t), tb = t.getBoundingClientRect();
+        if (ta && Math.abs(ta.height - tb.height) > 1)
+          t.animate([{ flex: `0 0 ${ta.height}px`, minHeight: 0 }, { flex: `0 0 ${tb.height}px`, minHeight: 0 }], anima);
+      });
+    });
+  }, [chaveRec]);  // a que aparece: a anterior enquanto um tile sai
 
   if (props.soPrincipal) return <div className="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>;
 
@@ -222,7 +287,7 @@ export default function Tiles(props: {
           setArrastando(true);
           document.body.style.userSelect = "none";
           tile.style.cssText = estilo + ";position:relative;z-index:50;pointer-events:none;opacity:.94;scale:1.025;"
-            + "transition:scale .15s ease-out;box-shadow:0 28px 60px -12px rgb(0 0 0/.65),0 0 0 1px rgb(56 189 248/.55);";
+            + "transition:scale .15s ease-out;box-shadow:0 28px 60px -12px rgb(0 0 0/.65),0 0 0 1px var(--color-accent-line);";
         }
         tile.style.setProperty("translate", `${dx}px ${dy}px`);
         ultimo = alvoEm(t, ev.clientX, ev.clientY);
@@ -270,40 +335,50 @@ export default function Tiles(props: {
     );
   };
 
+  // overflow-clip: o tile deslizando (entrar/sair) passa da borda; sem isso a página ganha rolagem por um instante
   return (
-    <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 p-2 pt-0">
+    <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 overflow-clip p-2 pt-0">
       {!semPrincipal && (
         <main className={`${card} flex min-w-0 flex-1 flex-col overflow-hidden`} style={{ minWidth: MAIN_MIN }}>
           {props.children}
         </main>
       )}
-      {g.colunas.map((c, ci) => {
+      {gv.colunas.map((c, ci) => {
         const fechada = c.tabs.every(rec);  // coluna toda recolhida: vira uma faixa fina em pé
-        const vizinhaFechada = ci > 0 && g.colunas[ci - 1].tabs.every(rec);
+        const vizinhaFechada = ci > 0 && gv.colunas[ci - 1].tabs.every(rec);
+        // Coluna que nasce/some inteira com o tile: a largura dela anima, e o conteúdo ao lado acompanha.
+        const colAnim = c.tabs.every((t) => saindo?.tabs.get(t) === "lado") ? "col-sai"
+          : c.tabs.every((t) => entrada.current.get(t) === "lado") ? "col-entra" : "";
         return [
           ...(semPrincipal && ci === 0 ? [] : [fechada || (semPrincipal && vizinhaFechada)
             ? <div key={`d${ci}`} className="w-2 shrink-0" />
             : <Divisor key={`d${ci}`} eixo="x" onArrasto={(e) => largura(ci, e)} onFim={fim} />]),
-          <div key={`c${ci}`} data-coluna className="flex min-h-0 min-w-0 flex-col"
+          <div key={`c${ci}`} data-coluna className={`flex min-h-0 min-w-0 flex-col ${colAnim}`}
                style={fechada ? { flex: "0 0 2rem" }
                  : semPrincipal ? { flex: `${c.largura} 1 0px`, minWidth: COL_MIN }
                  : { flex: `0 1 ${c.largura}px`, minWidth: TILE_MIN }}>
             {c.tabs.flatMap((t, i) => {
               const r = info(t);
               const seu = props.proprio?.(t);
+              const sai = saindo?.tabs.get(t), entra = entrada.current.get(t);
+              const anim = sai ? `tile-sai-${sai}` : entra ? `tile-entra-${entra}` : "";
               return [
                 ...(i === 0 ? [] : [rec(t) || rec(c.tabs[i - 1])
                   ? <div key={`h${i}`} className="h-2 shrink-0" />
                   : <Divisor key={`h${i}`} eixo="y" onArrasto={(e) => altura(ci, i - 1, e)} onFim={fim} />]),
                 <section key={t} data-tile={t}
-                         className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${card} overflow-hidden`} flex min-h-0 flex-col`}
-                         style={fechada ? { flex: "1 1 0" } : rec(t) ? { flex: "0 0 auto" } : { flex: `${c.alturas[i]} 1 0`, minHeight: 120 }}>
+                         className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${tileCard} overflow-hidden`} flex min-h-0 flex-col ${anim}`}
+                         style={{
+                           ...(fechada ? { flex: "1 1 0" } : rec(t) ? { flex: "0 0 auto" } : { flex: `${c.alturas[i]} 1 0`, minHeight: 120 }),
+                           ...(colAnim && !semPrincipal ? { minWidth: c.largura } : {}),
+                         }}>
                   {rec(t) ? barra(t, fechada) : seu ? props.painel(t, { alca: alca(t), acao: botaoRecolher(t) }) : (
                     <>
                       <div {...alca(t)} title="Segure e arraste para mudar este painel de lugar"
-                           className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-xs">
+                           className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-[7px] text-xs">
                         <span className="text-muted [&>svg]:size-3.5">{r.icon}</span>
                         <span className="truncate font-medium text-fg">{r.label}</span>
+                        {r.resumo && <span className="truncate font-mono text-[11px] text-faint">{r.resumo}</span>}
                         {botaoRecolher(t)}
                         {!g.fixos?.includes(t) && (
                           <button onClick={() => props.onGrade(fechar(g, t))} title={`Fechar ${r.label}`}

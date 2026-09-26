@@ -74,7 +74,9 @@ function emOrdemDeLeitura(tasks: MaestroTask[]): MaestroTask[] {
 }
 
 const card = "rounded-xl border border-line bg-panel";
-const titulo = "px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-faint";
+// Maestro e Worker leem conversa: o mesmo fundo do Agente e do Chat (o card principal é bg).
+const cardConversa = "rounded-xl border border-line bg-bg";
+const titulo = "px-3 py-2 font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint";
 
 const gb = (n?: number | null) => (n == null ? "—" : `${(n / 1024 ** 3).toFixed(1)} GB`);
 const dur = (s?: number | null) => (s == null ? "" : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}`);
@@ -379,7 +381,7 @@ export default function MaestroView(props: {
                    onSalvarLayout={mostraSalvarPadrao ? () => setPerguntaPadrao(true) : undefined} />
       </div>
       {perguntaPadrao && (
-        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] rounded-2xl border border-line bg-surface p-5 shadow-2xl">
+        <Modal onClose={() => setPerguntaPadrao(false)} label="Salvar layout como padrão" className="w-[min(28rem,92vw)] rounded-xl border border-line bg-surface p-5 shadow-popover">
           <h2 className="text-sm font-medium">Salvar este layout como padrão?</h2>
           <p className="mt-2 text-xs leading-relaxed text-muted">
             Conversas novas da Maestro vão começar com os blocos e os painéis nesta posição, neste tamanho e
@@ -391,7 +393,7 @@ export default function MaestroView(props: {
               Cancelar
             </button>
             <button
-              className="rounded-full bg-fg px-3 py-1.5 font-medium text-black hover:bg-white"
+              className="rounded-[9px] bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110"
               onClick={() => {
                 salvarPadrao();
                 setPerguntaPadrao(false);
@@ -602,6 +604,15 @@ function Arvore(props: {
           ))
         )}
       </div>
+      {/* Legenda das marcas, sempre no rodapé (como no design). */}
+      <div className="flex shrink-0 flex-wrap gap-x-3 gap-y-2 border-t border-line px-3 py-2.5 font-mono text-[10.5px] text-faint">
+        {(["completed", "implementing", "reviewing", "needs_human", "pending"] as TaskStatus[]).map((k) => (
+          <span key={k} className="inline-flex items-center gap-1">
+            <span className={ESTADO[k].cor}>{ESTADO[k].marca}</span>
+            {k === "reviewing" ? "revisão" : ESTADO[k].label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -616,7 +627,7 @@ function ColunaMaestro(props: {
   acao?: React.ReactNode;
 }) {
   return (
-    <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
+    <div className={`${cardConversa} flex min-h-0 flex-col overflow-hidden`}>
       <div {...props.alca} className={`${titulo} flex items-center`}>Maestro{props.acao}</div>
       {props.conversa}
       <div className="shrink-0">{props.composer}</div>
@@ -679,9 +690,9 @@ function ColunaWorker(props: {
     (w.mensagens ?? []).some((m) => (m.tool_calls ?? []).some((c) => props.approvals[c.id]));
 
   return (
-    <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
+    <div className={`${cardConversa} flex min-h-0 flex-col overflow-hidden`}>
       <div {...props.alca} className="flex shrink-0 items-center gap-1 px-3 py-1.5">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-faint">
+        <span className="text-[10.5px] font-medium font-mono uppercase tracking-[.08em] text-faint">
           {props.abas.filter((x) => x.tipo === "vivo" && x.w.status).length > 1 ? "Workers" : "Worker"}
         </span>
         <div className="ml-1 flex min-w-0 gap-1 overflow-x-auto">
@@ -1110,7 +1121,7 @@ function EditorContrato(props: {
     Object.fromEntries(LISTAS_CONTRATO.map(([k]) => [k, (c[k] ?? []).join("\n")])));
   const [slot, setSlot] = useState(props.t.model_slot ?? "");
   const [max, setMax] = useState(props.t.max_attempts);
-  const campo = "w-full rounded-md border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-[#555] focus:outline-none";
+  const campo = "w-full rounded-md border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
   const salvar = () =>
     props.onSalvar({
       contract: {
@@ -1167,7 +1178,7 @@ function EditorContrato(props: {
                  onChange={(e) => setMax(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} />
         </label>
         <button onClick={salvar}
-                className="ml-auto rounded-full bg-fg px-3 py-1 text-xs font-medium text-black hover:bg-white disabled:opacity-40"
+                className="ml-auto rounded-[9px] bg-accent px-3 py-1 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
                 disabled={!goal.trim()}>
           Salvar contrato
         </button>

@@ -1,0 +1,929 @@
+{
+  "a-mesmo-modelo": {
+    "rotulo": "a-mesmo-modelo",
+    "quando": "2026-09-25T21:51:31",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Qwen3.6-35B-A3B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\a-mesmo-modelo-20260925-215129",
+    "estado": "terminou",
+    "relogio_s": 3336.1,
+    "banco": {
+      "tarefas": 8,
+      "por_status": {
+        "cancelled": 3,
+        "completed": 5
+      },
+      "needs_human": 0,
+      "tentativas_total": 8,
+      "segundos_nos_workers": 2754.4,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 3,
+        "TASK-003": 2,
+        "TASK-004": 1,
+        "TASK-005": 0,
+        "TASK-006": 0,
+        "TASK-007": 0,
+        "TASK-008": 1
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "modelo.py — Tarefa + PRIORIDADES",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "armazem.py — Armazem com persistência",
+          "status": "completed",
+          "attempt_count": 3
+        },
+        {
+          "code": "TASK-003",
+          "title": "cli.py — main() + subcomandos (add, list, done, rm, stats, export)",
+          "status": "completed",
+          "attempt_count": 2
+        },
+        {
+          "code": "TASK-004",
+          "title": "Pacote: __init__.py, __main__.py, estrutura",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-005",
+          "title": "test_modelo.py — testes do dataclass Tarefa",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-006",
+          "title": "test_armazem.py — testes do Armazem",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-007",
+          "title": "test_cli.py — testes da CLI",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-008",
+          "title": "Verificacao final — pytest -q passa inteiro",
+          "status": "completed",
+          "attempt_count": 1
+        }
+      ],
+      "features": [
+        {
+          "title": "pacote tarefas — CLI de gerenciamento de tarefas",
+          "status": "done"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 20,
+          "segundos": 525.9,
+          "prompt_tokens": 504135,
+          "completion_tokens": 10246,
+          "prompt_processado": 24049,
+          "prompt_do_cache": 480086,
+          "taxa_cache": 0.952,
+          "prompt_ms": 170990,
+          "geracao_ms": 350195
+        },
+        "worker": {
+          "chamadas": 96,
+          "segundos": 2712.3,
+          "prompt_tokens": 1271961,
+          "completion_tokens": 61382,
+          "prompt_processado": 151099,
+          "prompt_do_cache": 1120862,
+          "taxa_cache": 0.881,
+          "prompt_ms": 736297,
+          "geracao_ms": 1964901
+        }
+      },
+      "trocas_de_modelo": 1,
+      "segundos_em_troca": 29.6,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 29.61
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 5,
+        "prompt_reprocessado_total": 6936,
+        "prompt_reprocessado_medio": 1387,
+        "ms_reprocessando_total": 41082,
+        "voltas": [
+          {
+            "prompt_processado": 2358,
+            "prompt_do_cache": 19332,
+            "prompt_ms": 13595
+          },
+          {
+            "prompt_processado": 3502,
+            "prompt_do_cache": 24495,
+            "prompt_ms": 19716
+          },
+          {
+            "prompt_processado": 266,
+            "prompt_do_cache": 28607,
+            "prompt_ms": 2283
+          },
+          {
+            "prompt_processado": 446,
+            "prompt_do_cache": 29177,
+            "prompt_ms": 2738
+          },
+          {
+            "prompt_processado": 364,
+            "prompt_do_cache": 31302,
+            "prompt_ms": 2750
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 73,
+        "failed": 0,
+        "error": 0,
+        "resumo": "73 passed in 0.21s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 4,
+        "failed": 2,
+        "error": 0,
+        "resumo": "2 failed, 4 passed in 0.58s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 55.6,
+      "troca_de_modelo_min": 0.5,
+      "chamadas_ao_llm_min": 54.0,
+      "tarefas": 8,
+      "needs_human": 0,
+      "tentativas": 8,
+      "aceite": "4/6",
+      "suite_do_projeto_passa": true
+    }
+  },
+  "b-worker-gemma-travou": {
+    "rotulo": "b-worker-gemma-travou",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "gemma-4-12b-it-Q4_K_M",
+    "estado": "abortado à mão às 23:20",
+    "motivo": "Na 9ª chamada da TASK-001 o Worker (gemma-4-12b) entrou numa resposta sem fim: 27,7 mil tokens gerados numa única chamada a 18 t/s, durante 27 min, e seguia (o llama-server desloca o contexto e não para). O laço do Worker não tem teto de tokens de saída nem o filtro de degeneração da E16 (que só existe no laço do agente/Maestro). Sem intervenção, a etapa gastaria os 150 min numa tarefa.",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\b-modelos-diferentes-20260925-224712",
+    "banco": {
+      "tarefas": 7,
+      "por_status": {
+        "implementing": 1,
+        "pending": 6
+      },
+      "needs_human": 0,
+      "tentativas_total": 1,
+      "segundos_nos_workers": 0.0,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 0,
+        "TASK-003": 0,
+        "TASK-004": 0,
+        "TASK-005": 0,
+        "TASK-006": 0,
+        "TASK-007": 0
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "Estrutura do pacote + modelo.py",
+          "status": "implementing",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "armazem.py — Armazem",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-003",
+          "title": "cli.py + __main__.py",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-004",
+          "title": "testes do modelo",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-005",
+          "title": "testes do armazém",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-006",
+          "title": "testes da CLI",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-007",
+          "title": "validar com python -m pytest -q",
+          "status": "pending",
+          "attempt_count": 0
+        }
+      ],
+      "features": [
+        {
+          "title": "pacote tarefas",
+          "status": "active"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 6,
+          "segundos": 253.1,
+          "prompt_tokens": 87976,
+          "completion_tokens": 4843,
+          "prompt_processado": 15585,
+          "prompt_do_cache": 72391,
+          "taxa_cache": 0.823,
+          "prompt_ms": 99879,
+          "geracao_ms": 152812
+        },
+        "worker": {
+          "chamadas": 8,
+          "segundos": 72.3,
+          "prompt_tokens": 42147,
+          "completion_tokens": 1814,
+          "prompt_processado": 6568,
+          "prompt_do_cache": 35579,
+          "taxa_cache": 0.844,
+          "prompt_ms": 12412,
+          "geracao_ms": 59531
+        }
+      },
+      "trocas_de_modelo": 2,
+      "segundos_em_troca": 33.5,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 20.86
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "gemma-4-12b-it-Q4_K_M",
+          "segundos": 12.67
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 0,
+        "prompt_reprocessado_total": 0,
+        "prompt_reprocessado_medio": null,
+        "ms_reprocessando_total": 0,
+        "voltas": []
+      }
+    }
+  },
+  "b-ornith-travou-na-aprovacao": {
+    "rotulo": "b-ornith-travou-na-aprovacao",
+    "quando": "2026-09-25T23:22:24",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Ornith-1.5-9B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\b-modelos-diferentes-20260925-232221",
+    "estado": "travou: 15 min sem nenhuma chamada terminar",
+    "relogio_s": 1883.1,
+    "banco": {
+      "tarefas": 7,
+      "por_status": {
+        "completed": 1,
+        "pending": 5,
+        "reviewing": 1
+      },
+      "needs_human": 0,
+      "tentativas_total": 2,
+      "segundos_nos_workers": 248.7,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 1,
+        "TASK-003": 0,
+        "TASK-004": 0,
+        "TASK-005": 0,
+        "TASK-006": 0,
+        "TASK-007": 0
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "modelo.py",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "armazem.py",
+          "status": "reviewing",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-003",
+          "title": "cli.py + __main__.py",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-004",
+          "title": "test_modelo.py",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-005",
+          "title": "test_armazem.py",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-006",
+          "title": "test_cli.py",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-007",
+          "title": "Verificação final",
+          "status": "pending",
+          "attempt_count": 0
+        }
+      ],
+      "features": [
+        {
+          "title": "pacote-tarefas",
+          "status": "active"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 8,
+          "segundos": 555.8,
+          "prompt_tokens": 136979,
+          "completion_tokens": 6079,
+          "prompt_processado": 56761,
+          "prompt_do_cache": 80218,
+          "taxa_cache": 0.586,
+          "prompt_ms": 348186,
+          "geracao_ms": 206921
+        },
+        "worker": {
+          "chamadas": 23,
+          "segundos": 239.4,
+          "prompt_tokens": 169158,
+          "completion_tokens": 12960,
+          "prompt_processado": 17367,
+          "prompt_do_cache": 151791,
+          "taxa_cache": 0.897,
+          "prompt_ms": 14578,
+          "geracao_ms": 223983
+        }
+      },
+      "trocas_de_modelo": 5,
+      "segundos_em_troca": 146.3,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 36.81
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 14.66
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 39.27
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 16.22
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 39.33
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 2,
+        "prompt_reprocessado_total": 39112,
+        "prompt_reprocessado_medio": 19556,
+        "ms_reprocessando_total": 235984,
+        "voltas": [
+          {
+            "prompt_processado": 19227,
+            "prompt_do_cache": 0,
+            "prompt_ms": 118107
+          },
+          {
+            "prompt_processado": 19885,
+            "prompt_do_cache": 0,
+            "prompt_ms": 117877
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 10,
+        "failed": 0,
+        "error": 0,
+        "resumo": "10 passed in 0.02s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 3,
+        "failed": 3,
+        "error": 0,
+        "resumo": "3 failed, 3 passed in 0.43s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 31.4,
+      "troca_de_modelo_min": 2.4,
+      "chamadas_ao_llm_min": 13.3,
+      "tarefas": 7,
+      "needs_human": 0,
+      "tentativas": 2,
+      "aceite": "3/6",
+      "suite_do_projeto_passa": true
+    },
+    "motivo": "O Maestro pediu Remove-Item _sanity.py, _sanity2.py -Force (scripts soltos do Worker); comando destrutivo pede aprovação até em Ignorar permissões, ninguém aprovou e o cão de guarda encerrou depois de 15 min parado."
+  },
+  "b-modelos-diferentes": {
+    "rotulo": "b-modelos-diferentes",
+    "quando": "2026-09-26T01:50:10",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Ornith-1.5-9B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\b-modelos-diferentes-20260926-015007",
+    "estado": "terminou",
+    "relogio_s": 6762.7,
+    "aprovacoes_pedidas": [
+      {
+        "ferramenta": "run_command",
+        "argumentos": "{'command': \"if exist '/tmp/_check.json' { Remove-Item '/tmp/_check.json' }; if (Test-Path '/tmp/_check.json') { }\"}",
+        "respondida": true
+      }
+    ],
+    "banco": {
+      "tarefas": 21,
+      "por_status": {
+        "cancelled": 15,
+        "completed": 3,
+        "failed": 1,
+        "pending": 2
+      },
+      "needs_human": 0,
+      "tentativas_total": 11,
+      "segundos_nos_workers": 2271.7,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 1,
+        "TASK-003": 1,
+        "TASK-004": 3,
+        "TASK-005": 0,
+        "TASK-006": 0,
+        "TASK-007": 0,
+        "TASK-008": 0,
+        "TASK-009": 0,
+        "TASK-010": 1,
+        "TASK-011": 1,
+        "TASK-012": 1,
+        "TASK-013": 0,
+        "TASK-014": 0,
+        "TASK-015": 0,
+        "TASK-016": 0,
+        "TASK-017": 0,
+        "TASK-018": 1,
+        "TASK-019": 1,
+        "TASK-020": 0,
+        "TASK-021": 0
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "Criar `tarefas/__init__.py` vazio.",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "Implementar `tarefas/modelo.py` com PRIORIDADES e dataclass Tarefa.",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-003",
+          "title": "Testes unitários de `tarefas/modelo.py` com pytest.",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-004",
+          "title": "Implementar o módulo `tarefas/armazem.py` com a classe Armazem.",
+          "status": "cancelled",
+          "attempt_count": 3
+        },
+        {
+          "code": "TASK-005",
+          "title": "Testes unitários de `tarefas/armazem.py` com pytest.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-006",
+          "title": "Implementar `tarefas/cli.py` com `main(argv) -> int` e todos os subcomandos.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-007",
+          "title": "Testes de CLI com pytest.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-008",
+          "title": "Criar `tarefas/__main__.py` para `python -m tarefas`.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-009",
+          "title": "Rodar `python -m pytest -q` e verificar que tudo passa.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-010",
+          "title": "Criar o arquivo `tarefas/armazem.py` COMPLETO com a classe Armazem.",
+          "status": "cancelled",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-011",
+          "title": "Reescrever tarefas/armazem.py COMPLETO e corrigir tarefas/modelo.py COMPLETO para atender aos requisitos.",
+          "status": "cancelled",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-012",
+          "title": "Reescrever tarefas/modelo.py com PRIORIDADES=('baixa','media','alta') e Tarefa(id,titulo,feita,prioridade,prazo,tags).",
+          "status": "cancelled",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-013",
+          "title": "Reescrever tarefas/armazem.py COMPLETO com todos os métodos necessários.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-014",
+          "title": "Criar testes/test_modelo.py e testes/test_armazem.py com pytest.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-015",
+          "title": "Implementar tarefas/cli.py com todos os subcomandos.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-016",
+          "title": "Testes de cli.py com pytest.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-017",
+          "title": "Criar tarefas/__main__.py e rodar pytest final.",
+          "status": "cancelled",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-018",
+          "title": "Criar TODOS os arquivos do projeto: modelo.py, armazem.py, cli.py, __main__.py, test_modelo.py, test_armazem.py, test_cli.py.",
+          "status": "cancelled",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-019",
+          "title": "Criar tarefas/modelo.py, tarefas/armazem.py, tarefas/cli.py, tarefas/__main__.py.",
+          "status": "failed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-020",
+          "title": "Criar tests/test_modelo.py, tests/test_armazem.py, tests/test_cli.py.",
+          "status": "pending",
+          "attempt_count": 0
+        },
+        {
+          "code": "TASK-021",
+          "title": "Criar tests/__init__.py e rodar `python -m pytest -q` final.",
+          "status": "pending",
+          "attempt_count": 0
+        }
+      ],
+      "features": [
+        {
+          "title": "Pacote tarefas — gerenciador CLI",
+          "status": "active"
+        },
+        {
+          "title": "Armazém implementation",
+          "status": "active"
+        },
+        {
+          "title": "Correcao modelo+armazem",
+          "status": "active"
+        },
+        {
+          "title": "Pacote tarefas — implementacao completa",
+          "status": "active"
+        },
+        {
+          "title": "Implementacao completa do pacote tarefas",
+          "status": "active"
+        },
+        {
+          "title": "Pacote tarefas completo",
+          "status": "active"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 43,
+          "segundos": 3962.5,
+          "prompt_tokens": 1438807,
+          "completion_tokens": 38765,
+          "prompt_processado": 398985,
+          "prompt_do_cache": 1039822,
+          "taxa_cache": 0.723,
+          "prompt_ms": 2344747,
+          "geracao_ms": 1612857
+        },
+        "worker": {
+          "chamadas": 129,
+          "segundos": 2217.2,
+          "prompt_tokens": 1054225,
+          "completion_tokens": 120650,
+          "prompt_processado": 116772,
+          "prompt_do_cache": 937453,
+          "taxa_cache": 0.889,
+          "prompt_ms": 105566,
+          "geracao_ms": 2106961
+        }
+      },
+      "trocas_de_modelo": 23,
+      "segundos_em_troca": 503.6,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 18.84
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 15.76
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 26.44
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 15.19
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 27.55
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 14.75
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 31.17
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 15.28
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 31.16
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 15.28
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 33.78
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 16.24
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 32.01
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 14.75
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 30.55
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 15.67
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 26.88
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 14.66
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 27.2
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 14.72
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 27.09
+        },
+        {
+          "de": "Qwen3.6-35B-A3B-Q4_K_M",
+          "para": "Ornith-1.5-9B-Q4_K_M",
+          "segundos": 14.69
+        },
+        {
+          "de": "Ornith-1.5-9B-Q4_K_M",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 23.91
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 11,
+        "prompt_reprocessado_total": 368282,
+        "prompt_reprocessado_medio": 33480,
+        "ms_reprocessando_total": 2129863,
+        "voltas": [
+          {
+            "prompt_processado": 19600,
+            "prompt_do_cache": 0,
+            "prompt_ms": 113177
+          },
+          {
+            "prompt_processado": 20125,
+            "prompt_do_cache": 0,
+            "prompt_ms": 118190
+          },
+          {
+            "prompt_processado": 20746,
+            "prompt_do_cache": 0,
+            "prompt_ms": 131807
+          },
+          {
+            "prompt_processado": 21320,
+            "prompt_do_cache": 0,
+            "prompt_ms": 129129
+          },
+          {
+            "prompt_processado": 21919,
+            "prompt_do_cache": 0,
+            "prompt_ms": 129067
+          },
+          {
+            "prompt_processado": 28743,
+            "prompt_do_cache": 0,
+            "prompt_ms": 162617
+          },
+          {
+            "prompt_processado": 34278,
+            "prompt_do_cache": 0,
+            "prompt_ms": 185791
+          },
+          {
+            "prompt_processado": 41344,
+            "prompt_do_cache": 0,
+            "prompt_ms": 230777
+          },
+          {
+            "prompt_processado": 45589,
+            "prompt_do_cache": 0,
+            "prompt_ms": 268844
+          },
+          {
+            "prompt_processado": 53610,
+            "prompt_do_cache": 0,
+            "prompt_ms": 300232
+          },
+          {
+            "prompt_processado": 61008,
+            "prompt_do_cache": 0,
+            "prompt_ms": 360232
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 2,
+        "passed": 0,
+        "failed": 0,
+        "error": 1,
+        "resumo": "1 error in 0.10s"
+      },
+      "aceite": {
+        "exit": 2,
+        "passed": 0,
+        "failed": 0,
+        "error": 1,
+        "resumo": "1 error in 0.12s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 112.7,
+      "troca_de_modelo_min": 8.4,
+      "chamadas_ao_llm_min": 103.0,
+      "tarefas": 21,
+      "needs_human": 0,
+      "tentativas": 11,
+      "aceite": "0/6",
+      "suite_do_projeto_passa": false
+    }
+  }
+}

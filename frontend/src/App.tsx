@@ -29,12 +29,13 @@ import Confirma from "./components/Confirma";
 import { Modal } from "./components/Modal";
 import ModeloCarregado from "./components/ModeloCarregado";
 import { LogoMark } from "./components/Logo";
+import { lerAparencia } from "./aparencia";
 import {
-  EffortMenu,
   ModeWarning,
   nextPermission,
-  PermissionMenu,
-  SectionTabs,
+  ModeEffortMenu,
+  SectionRail,
+  SECOES,
   type Permission,
   type Section,
 } from "./components/Controls";
@@ -63,9 +64,11 @@ import {
   turnosDe,
   type TurnStats,
 } from "./components/MessageView";
-import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X } from "./components/icons";
+import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X, PanelLeft } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
+import Saudacao from "./components/Saudacao";
+import AberturaSobreposta, { useAbertura } from "./components/AberturaSobreposta";
 
 /** Notificação do sistema quando o Forja não está em foco (execução terminou, aprovação pendente).
  * "Sem foco", não "minimizada": com a janela só atrás de outro programa, document.hidden é falso e o
@@ -466,6 +469,40 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("forja.sidebar", sidebarHidden ? "hidden" : "visible");
   }, [sidebarHidden]);
+
+  const [iniciais, setIniciais] = useState(() => lerAparencia().iniciais);
+  useEffect(() => {
+    const h = () => setIniciais(lerAparencia().iniciais);
+    window.addEventListener("forja-aparencia", h);
+    return () => window.removeEventListener("forja-aparencia", h);
+  }, []);
+
+  // Atalhos do shell: Ctrl 1–7 troca de seção, Ctrl , abre Configurações, Ctrl K vai para a busca.
+  const atalhos = useRef<(e: KeyboardEvent) => void>(() => {});
+  atalhos.current = (e) => {
+    // Esc sem diálogo aberto e fora de campo de texto: fecha o último tile (o Esc do composer limpa o texto).
+    if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[role="dialog"]')) {
+      const alvo = e.target as HTMLElement | null;
+      if (alvo?.closest?.("input, textarea, select, [contenteditable=true]")) return;
+      const ultimo = soltos(gradeTela).at(-1);
+      if (ultimo) setRight((r) => fecharTile(r, ultimo));
+      return;
+    }
+    if (!e.ctrlKey || e.altKey || e.shiftKey) return;
+    const n = Number(e.key);
+    if (n >= 1 && n <= SECOES.length) changeSection(SECOES[n - 1].id);
+    else if (e.key === ",") setShowSettings(true);
+    else if (e.key.toLowerCase() === "k") {
+      setSidebarHidden(false);
+      setTimeout(() => document.getElementById("busca-conversas")?.focus(), 0);
+    } else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => atalhos.current(e);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, []);
 
   useEffect(() => {
     if (currentId === null && config.workspace_padrao !== undefined) setPendingWs((p) => p ?? config.workspace_padrao ?? null);
@@ -1217,6 +1254,9 @@ export default function App() {
     if (s.action === "changes") abrir("changes");
   }
 
+  // Primeiro prompt de uma conversa vazia: a abertura do app toca por cima (a conversa não espera).
+  const ab = useAbertura();
+
   async function send(texto?: string, skill = false): Promise<void> {
     const content = (texto ?? input).trim();
     if (!skill && menuSkill && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
@@ -1244,6 +1284,7 @@ export default function App() {
     }
     setError("");
     setInput("");
+    if (!messages.length) ab.disparar();
     const files = attachments;
     setAttachments([]);
     let id: number;
@@ -1523,7 +1564,7 @@ export default function App() {
                 return (
                   <div key={m.id} className="group my-6 flex flex-col items-end">
                     {!so && editing?.id === m.id ? (
-                      <div className="w-full rounded-3xl border border-line bg-surface p-3">
+                      <div className="w-full rounded-[18px] border border-focus bg-surface p-3">
                         <textarea
                           autoFocus
                           rows={Math.min(10, editing.text.split("\n").length + 1)}
@@ -1532,7 +1573,7 @@ export default function App() {
                           className="w-full resize-none bg-transparent text-[15px] text-fg focus:outline-none"
                         />
                         <div className="mt-2 flex justify-end gap-2">
-                          <button onClick={() => setEditing(null)} className="rounded-full border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised">
+                          <button onClick={() => setEditing(null)} className="rounded-[9px] border border-line px-4 py-1.5 text-sm text-fg hover:bg-raised">
                             Cancelar
                           </button>
                           <button
@@ -1541,7 +1582,7 @@ export default function App() {
                               setEditing(null);
                               if (text) rewindAndRun(m.id, false, text);
                             }}
-                            className="rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white"
+                            className="rounded-[9px] bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110"
                           >
                             Enviar de novo
                           </button>
@@ -1550,7 +1591,7 @@ export default function App() {
                     ) : (
                       <>
                         {!!m.content && (
-                          <div className="max-w-[85%] rounded-3xl bg-raised px-5 py-2.5 whitespace-pre-wrap">{m.content}</div>
+                          <div className="max-w-[85%] rounded-[22px] bg-raised px-[18px] py-2.5 text-[14.5px] leading-[1.65] whitespace-pre-wrap">{m.content}</div>
                         )}
                         <Attachments list={m.meta?.attachments ?? []} />
                         {!so && <div className="mt-1 flex opacity-0 transition group-hover:opacity-100">
@@ -1694,7 +1735,7 @@ export default function App() {
               );
             })}
             {!so && rewindAsk?.conv === currentId && (
-              <div className="my-4 rounded-2xl border border-line bg-surface p-3 text-sm">
+              <div className="my-4 rounded-xl border border-line bg-surface p-3 text-sm">
                 <p className="text-amber-300">
                   O agente alterou {rewindAsk.files.length} arquivo(s) a partir desta mensagem. Desfazer essas alterações também?
                 </p>
@@ -1702,11 +1743,11 @@ export default function App() {
                   {rewindAsk.files.map((f) => <li key={f}>• {f}</li>)}
                 </ul>
                 <div className="flex gap-2">
-                  <button className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                  <button className="rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised"
                           onClick={() => rewindAndRun(rewindAsk.messageId, rewindAsk.keep, rewindAsk.content, true)}>
                     Desfazer os arquivos
                   </button>
-                  <button className="rounded-full border border-line px-3 py-1 text-fg hover:bg-raised"
+                  <button className="rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised"
                           onClick={() => rewindAndRun(rewindAsk.messageId, rewindAsk.keep, rewindAsk.content, false)}>
                     Manter os arquivos
                   </button>
@@ -1795,7 +1836,7 @@ export default function App() {
   const conversaBlock = (
   <>
   {linkAberto && (
-    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-sm space-y-4 rounded-2xl border border-line bg-surface p-5">
+    <Modal onClose={() => setLinkAberto(null)} label="Abrir link" className="w-full max-w-sm space-y-4 rounded-xl border border-line bg-surface p-5">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="text-base font-medium text-fg">Abrir link</div>
@@ -1808,7 +1849,7 @@ export default function App() {
       </div>
       <div className="flex flex-col gap-2">
         <button autoFocus onClick={() => abreLinkNoForja(linkAberto)}
-                className="flex items-center gap-2.5 rounded-xl bg-fg px-4 py-2.5 text-sm font-medium text-black hover:bg-white">
+                className="flex items-center gap-2.5 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-accent-fg hover:brightness-110">
           <Globe className="size-4" /> Navegador do Forja
         </button>
         <button onClick={() => { window.open(linkAberto, "_blank"); setLinkAberto(null); }}
@@ -1842,28 +1883,39 @@ export default function App() {
     }}
   >
     <div className="mx-auto max-w-3xl px-5 py-6">
-      {!messages.length && !draft && (
-        <div className="mt-[22vh]">
-          <LogoMark className="mb-4 size-14 text-fg" title="Forja" />
-          <div className="text-3xl font-semibold">Olá!</div>
-          <div className="text-3xl text-faint">Como posso ajudar hoje?</div>
-          <div className="mt-4 text-sm text-muted">
-            {section === "agent" ? (
+      {!messages.length && !draft && !running && !ab.voo && (
+        <Saudacao
+          ref={ab.saudacao}
+          titulo="Olá!"
+          sub="Como posso ajudar hoje?"
+          nota={
+            section === "agent" ? (
               <>
-                Agente: {wsLabel ? <>lê e escreve em <span className="font-mono text-fg">{wsLabel}</span></> : <span className="text-amber-300">escolha uma pasta de trabalho no topo para começar.</span>}
+                <b className="font-medium text-fg">Agente</b>
+                <span className="text-faint">·</span>
+                {wsLabel ? <span>lê e escreve em <span className="font-mono text-fg">{wsLabel}</span></span> : <span className="text-warn">escolha uma pasta de trabalho no topo para começar</span>}
               </>
             ) : section === "maestro" ? (
               <>
-                Maestro: diga o objetivo; ela planeja, delega aos Workers e valida em{" "}
-                {wsLabel ? <span className="font-mono text-fg">{wsLabel}</span> : <span className="text-amber-300">uma pasta — escolha no topo para começar.</span>}
+                <b className="font-medium text-fg">Maestro</b>
+                <span className="text-faint">·</span>
+                <span>
+                  planeja, delega aos Workers e valida em{" "}
+                  {wsLabel ? <span className="font-mono text-fg">{wsLabel}</span> : <span className="text-warn">uma pasta — escolha no topo</span>}
+                </span>
               </>
             ) : (
-              "Chat: conversa com busca na web, sem acesso a arquivos."
-            )}
-          </div>
-        </div>
+              <>
+                <b className="font-medium text-fg">Chat</b>
+                <span className="text-faint">·</span>
+                <span>conversa com busca na web, sem acesso a arquivos</span>
+              </>
+            )
+          }
+        />
       )}
 
+      {ab.voo && <AberturaSobreposta voo={ab.voo} onFim={ab.fim} />}
       {conversaDe(messages, { draft, status, stats: running ? liveStats : null, fase })}
       <div ref={fimDoChat} />
     </div>
@@ -2016,10 +2068,14 @@ export default function App() {
               }}
             />
           </label>
-          {agentica && (
-            <PermissionMenu value={settings.permission} onChange={changePermission} running={running} />
-          )}
-          <EffortMenu value={settings.effort} onChange={(effort) => update({ effort })} semExtremo={section === "maestro"} />
+          <ModeEffortMenu
+            permission={agentica ? settings.permission : undefined}
+            onPermission={agentica ? changePermission : undefined}
+            effort={settings.effort}
+            onEffort={(effort) => update({ effort })}
+            running={running}
+            semExtremo={section === "maestro"}
+          />
           <ContextRing
             used={summary.used}
             max={summary.max}
@@ -2047,7 +2103,7 @@ export default function App() {
                 <button
                   onClick={() => send()}
                   title="Enviar para a fila (o agente recebe no próximo passo)"
-                  className="grid size-9 place-items-center rounded-full border border-line text-fg hover:bg-raised"
+                  className="grid size-9 place-items-center rounded-[11px] border border-line text-fg hover:bg-raised"
                 >
                   <ArrowUp />
                 </button>
@@ -2073,46 +2129,120 @@ export default function App() {
   </div>
   );
 
+  // Espiar a lista com ela fechada: "dentro" (aparecendo), "saindo" (animação de saída) ou "fora".
+  // Abrir/fechar a lista anima a largura (o conteúdo ao lado acompanha); fechar só esconde no fim.
+  const [fechandoLista, setFechandoLista] = useState(false);
+  const [abrindoLista, setAbrindoLista] = useState(false);
+  const alternaLista = () => {
+    if (sidebarHidden) {
+      setAbrindoLista(true);
+      setTimeout(() => setAbrindoLista(false), 200);
+      return setSidebarHidden(false);
+    }
+    if (fechandoLista) return;
+    setFechandoLista(true);
+    setTimeout(() => {
+      setSidebarHidden(true);
+      setFechandoLista(false);
+    }, 180);
+  };
+  const [espiando, setEspiando] = useState<"fora" | "dentro" | "saindo">("fora");
+  const fechaEspiada = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const espiar = (entra: boolean) => {
+    if (fechaEspiada.current) clearTimeout(fechaEspiada.current);
+    if (entra) return setEspiando("dentro");
+    // um respiro para o mouse ir do botão até a lista sem ela sumir no caminho
+    fechaEspiada.current = setTimeout(() => {
+      setEspiando("saindo");
+      fechaEspiada.current = setTimeout(() => setEspiando("fora"), 140);
+    }, 220);
+  };
+  useEffect(() => {
+    if (!sidebarHidden) setEspiando("fora");
+  }, [sidebarHidden]);
+
+  const lista = (
+    <Sidebar
+      section={section}
+      onSection={changeSection}
+      conversations={conversations}
+      current={currentId}
+      unread={unread}
+      busy={activity.conversations}
+      onSelect={openConversation}
+      onNew={newConversation}
+      onNewIn={(ws) => {
+        // Nova conversa já na pasta do grupo: vira a pasta da conversa no primeiro envio.
+        newConversation();
+        if (ws) setPendingWs(ws);
+      }}
+      onDelete={deleteConversation}
+      onBulk={async (ids, action) => {
+        try {
+          const r = await api.post<{ done: number; skipped: number[] }>("/conversations/bulk", { ids, action });
+          if (r.skipped?.length) setError(`${r.skipped.length} conversa(s) em execução não foram apagadas.`);
+          if ((action === "delete" || action === "archive") && currentId !== null && ids.includes(currentId)) newConversation();
+        } catch (e: any) {
+          setError(e.message);
+        }
+        refreshConversations();
+      }}
+      onRename={(id, title) => patchConversation(id, { title })}
+      onPin={(id, pinned) => patchConversation(id, { pinned })}
+      onArchive={(id, archived) => {
+        patchConversation(id, { archived });
+        if (archived && id === currentId) newConversation();
+      }}
+      onSettings={() => {
+        setTrajetoriaEm(null); // voltar das Configurações abre no Chat
+        setShowSettings(true);
+      }}
+    />
+
+  );
+
+  // Onde o cabeçalho começa na janela: o CSS (.cab-centro) usa para pôr o indicador no centro da janela.
+  const cabecalho = useRef<HTMLDivElement>(null);
+  const indicador = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = cabecalho.current, ind = indicador.current;
+    if (!el || !ind) return;
+    const mede = () => {
+      el.style.setProperty("--x0", `${el.getBoundingClientRect().left}px`);
+      el.style.setProperty("--wi", `${ind.offsetWidth}px`);
+      el.style.setProperty("--wr", `${(el.lastElementChild as HTMLElement).offsetWidth}px`);
+    };
+    const ro = new ResizeObserver(mede);
+    ro.observe(el);
+    ro.observe(ind);
+    ro.observe(el.lastElementChild!);
+    return () => ro.disconnect();
+  }, []);
+
   return (
     <div className="flex h-full">
-      {!sidebarHidden && (
-      <Sidebar
-        section={section}
-        onSection={changeSection}
-        onHide={() => setSidebarHidden(true)}
-        conversations={conversations}
-        current={currentId}
-        unread={unread}
-        busy={activity.conversations}
-        onSelect={openConversation}
-        onNew={newConversation}
-        onNewIn={(ws) => {
-          // Nova conversa já na pasta do grupo: vira a pasta da conversa no primeiro envio.
-          newConversation();
-          if (ws) setPendingWs(ws);
-        }}
-        onDelete={deleteConversation}
-        onBulk={async (ids, action) => {
-          try {
-            const r = await api.post<{ done: number; skipped: number[] }>("/conversations/bulk", { ids, action });
-            if (r.skipped?.length) setError(`${r.skipped.length} conversa(s) em execução não foram apagadas.`);
-            if ((action === "delete" || action === "archive") && currentId !== null && ids.includes(currentId)) newConversation();
-          } catch (e: any) {
-            setError(e.message);
-          }
-          refreshConversations();
-        }}
-        onRename={(id, title) => patchConversation(id, { title })}
-        onPin={(id, pinned) => patchConversation(id, { pinned })}
-        onArchive={(id, archived) => {
-          patchConversation(id, { archived });
-          if (archived && id === currentId) newConversation();
-        }}
-        onSettings={() => {
-          setTrajetoriaEm(null); // voltar das Configurações abre no Chat
-          setShowSettings(true);
-        }}
+      <SectionRail
+        value={section}
+        onChange={changeSection}
+        logo={<img src="/favicon.svg" alt="Forja" className="size-full" />}
+        pe={
+          <button onClick={() => setShowSettings(true)} title="Configurações · Ctrl ,"
+                  className="grid size-[30px] place-items-center rounded-full bg-raised text-[11px] font-semibold text-fg-2 hover:text-fg">
+            {iniciais}
+          </button>
+        }
       />
+      {!sidebarHidden && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : abrindoLista ? "lista-abre" : ""}`}>{lista}</div>}
+      {sidebarHidden && espiando !== "fora" && (
+        // A lista por cima do conteúdo, sem empurrar: aparece no hover do botão e fica enquanto o mouse
+        // estiver no botão ou nela.
+        <div
+          onPointerEnter={() => espiar(true)}
+          onPointerLeave={() => espiar(false)}
+          className={`fixed top-0 bottom-0 left-[60px] z-20 flex shadow-dialog ${espiando === "saindo" ? "bandeja-sai" : "bandeja-entra"}`}
+        >
+          {lista}
+        </div>
       )}
       {showSettings && (
         <SettingsDialog onClose={() => setShowSettings(false)} tools={allTools} mcp={mcp} onChanged={refreshTools} />
@@ -2138,28 +2268,11 @@ export default function App() {
 
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
-      <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className="arrasta livre-controles relative flex h-12 shrink-0 items-center gap-2 px-3">
-          {/* Indicador da IA local no meio do cabeçalho, em todas as seções. */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-center">
-            <div className="pointer-events-auto"><ModeloCarregado /></div>
-          </div>
+      <div className="@container/cab flex min-w-0 flex-1 flex-col bg-bg">
+        <div ref={cabecalho} className={`arrasta livre-controles cab-centro grid h-12 shrink-0 items-center gap-3 px-3`}>
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-          {sidebarHidden && (
-            // Ocupa a largura da barra lateral (w-64) menos o px-3 e o gap-2 desta faixa: o título fica
-            // no mesmo x com a barra aberta ou fechada.
-            <div className="w-[calc(16rem-0.5rem)] shrink-0">
-              <SectionTabs
-                value={section}
-                onChange={changeSection}
-                sidebarHidden={sidebarHidden}
-                onToggleSidebar={() => setSidebarHidden(false)}
-              />
-            </div>
-          )}
-          <Laptop className="size-4 shrink-0 text-muted" />
-          <span className="truncate text-sm font-medium text-fg" title={conv?.title}>
+          <div className={`flex min-w-0 items-center gap-2 overflow-hidden ${sidebarHidden ? "pl-9" : ""}`}>
+          <span className="min-w-12 truncate text-sm font-medium text-fg" title={conv?.title}>
             {conv?.title ?? "Nova conversa"}
           </span>
           {agentica && (
@@ -2167,7 +2280,7 @@ export default function App() {
             onClick={chooseFolder}
             disabled={running || picking}
             title={wsLabel ? `Pasta de trabalho: ${wsLabel}\nClique para trocar` : "Nenhuma pasta escolhida: clique para escolher"}
-            className={`inline-flex max-w-56 shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-xs disabled:opacity-50 ${wsLabel ? "bg-raised text-muted hover:text-fg" : "bg-amber-500/15 text-amber-300 hover:text-amber-200"}`}
+            className={`inline-flex min-w-0 max-w-56 items-center gap-1 rounded-[7px] border px-2 py-[3px] font-mono text-[11.5px] disabled:opacity-50 ${wsLabel ? "border-line bg-raised text-fg-2 hover:border-focus hover:text-fg" : "border-warn/40 bg-warn/10 text-warn hover:text-fg"}`}
           >
             <span className="truncate">
               {picking ? "escolhendo…" : wsLabel ? folderName(wsLabel) : "Escolher pasta"}
@@ -2177,23 +2290,23 @@ export default function App() {
           )}
           {agentica && (
             <>
-              <button onClick={() => openPath(".", "editor")} title="Abrir a pasta da conversa no editor" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
+              <button onClick={() => openPath(".", "editor")} title="Abrir a pasta da conversa no editor" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
                 <ExternalLink className="size-3.5" />
               </button>
-              <button onClick={() => openPath(".", "reveal")} title="Abrir a pasta no Explorer" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
+              <button onClick={() => openPath(".", "reveal")} title="Abrir a pasta no Explorer" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
                 <FolderOpen className="size-3.5" />
               </button>
               <button onClick={() => setShowBoard(true)} title="Board do projeto: backlog, varredura e Iniciar"
-                      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-xs text-muted hover:text-fg">
-                <Quadro className="size-3.5" /> Board
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] px-2 py-1 text-xs text-muted hover:bg-raised hover:text-fg">
+                <Quadro className="size-3.5" /> <span className="@max-[760px]/cab:hidden">Board</span>
               </button>
             </>
           )}
           {agentica && section !== "maestro" && currentId !== null && (
-            <div className="ml-1 flex shrink-0 items-center rounded-md border border-line p-0.5 text-xs" role="tablist" aria-label="Visão da conversa">
+            <div className="ml-1 flex shrink-0 items-center rounded-[9px] border border-line p-0.5 text-xs" role="tablist" aria-label="Visão da conversa">
               {(["chat", "trajetoria"] as const).map((v) => (
                 <button key={v} role="tab" aria-selected={vista === v} onClick={() => setVista(v)}
-                  className={`rounded px-2 py-0.5 ${vista === v ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+                  className={`rounded-[7px] px-2.5 py-1 ${vista === v ? "bg-raised font-medium text-fg" : "text-muted hover:text-fg"}`}>
                   {v === "chat" ? "Chat" : "Trajetória"}
                 </button>
               ))}
@@ -2201,6 +2314,8 @@ export default function App() {
           )}
           {picking && <span className="text-xs text-muted">Escolha a pasta na janela do sistema (pode estar atrás do navegador).</span>}
           </div>
+          {/* Indicador da IA local no centro da janela (ver .cab-centro no index.css). */}
+          <div ref={indicador}><ModeloCarregado /></div>
           <RightTabsBar
             abertos={soltos(gradeTela)}
             onSelect={(tab) => setRight((r) => (abertos(r).includes(tab) ? fecharTile(r, tab) : abrirTile(r, tab, larguraDe(tab))))}
@@ -2336,6 +2451,20 @@ export default function App() {
         </Tiles>
       </div>
       <LocalLoading />
+      {/* Mostrar/esconder a lista: um botão só, fixo à direita do logo e na altura dele. Com a lista
+          aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. Fica por último
+          no DOM: no Electron a região de arrastar que vem depois engole o no-drag de quem veio antes. */}
+      <button
+        onClick={alternaLista}
+        title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
+        aria-pressed={!sidebarHidden}
+        onPointerEnter={() => sidebarHidden && espiar(true)}
+        onPointerLeave={() => sidebarHidden && espiar(false)}
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        className="fixed top-[12px] left-[68px] z-30 grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg"
+      >
+        <PanelLeft />
+      </button>
     </div>
   );
 }

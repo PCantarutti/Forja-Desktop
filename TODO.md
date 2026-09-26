@@ -61,9 +61,46 @@ que cria uma chamada nova ao LLM sem passar por ela não está pronta.
 **Por quê:** sem um número de antes, não dá para saber se o resto do plano melhorou alguma coisa.
 **Depende de:** nada.
 
-- [ ] Criar um projeto de benchmark pequeno e fixo, versionado em `backend/tests/bench/` ou num repo à
+**Feita em 2026-09-25/26.** Resumo completo e o que cada número decide: `docs/bench/README.md`. Dados:
+`docs/bench/2026-09-baseline.json` e `2026-09-kvcache.json`. Ferramentas: `backend/tests/bench/` (projeto,
+pedido e suíte de aceite escondida), `scripts/bench_maestro.py`, `scripts/bench_kvcache.py`,
+`scripts/bench_e0.ps1` e o registro `FORJA_METRICAS` (`app/metricas.py`).
+
+Principais números (Arc B580 12 GB, 30 GB RAM, Qwen3.6-35B-A3B com 24 camadas MoE na CPU):
+- **(a) mesmo modelo:** 55,6 min, 5 de 8 tarefas, aceite 4/6. O Maestro perdeu só 41 s reprocessando
+  contexto depois dos Workers (os checkpoints mantêm o contexto na memória).
+- **(b) modelos diferentes** (Worker Ornith-1.5-9B): 112,7 min, 3 de 21 tarefas, aceite 0/6.
+  - A troca de modelo domina: 8,4 min de carga (23 trocas) mais **35,5 min do Maestro reprocessando o
+    contexto inteiro** a cada volta (33,5k tokens por volta), 39% do relógio.
+  - Confirma a suspeita da troca de modelo (`maestro.py:290`).
+- **V1/V2:** passam no modelo comum (restaurar custa 3–12% de reprocessar).
+- **V3:** o SWA (gemma) só restaura com `--swa-full`. Os **híbridos Qwen3.5/3.6/3.8 não restauram** do
+  disco, nem com `--ctx-checkpoints`.
+- **V4:** `q8_0` não piorou (n=1).
+- **V5:** ciclo de troca de 146 s sem cache e 132 s com o restore, que no híbrido não reaproveita nada.
+- **V6:** o paralelo vale com janela de 8k (2 sessões = 1,45×) e não com 32k (1,03×). Estourar a janela
+  unificada dá HTTP 500, e não descarte de cache.
+
+Achados que viram trabalho em outras entregas:
+- Worker sem teto de tokens de saída: uma resposta do gemma teve 27,7k tokens em 27 min (E16-B).
+- Comando destrutivo trava o modo autônomo em silêncio esperando aprovação (E16-C).
+- O Maestro encerra com tarefas abertas e gira replanejando (E1/E16).
+- O Worker desvia da especificação e os próprios testes não pegam (E8).
+- **Velocidade real metade da do bench:** no Forja do usuário, o Qwen3.6 no modo agente gera 12 t/s com
+  contexto de 16–40k, contra 22–25 no bench, com a mesma linha de comando. Suspeita: pouca RAM livre para os
+  especialistas mapeados, com o PC em uso. Vale medir nos perfis da E4.
+
+Diferenças em relação ao plano:
+- **O script sobe o backend (uvicorn) sem Electron,** com dados em `.devbench`.
+- **Cão de guarda:** 15 min sem nenhuma chamada terminar encerra a rodada como "travou".
+- **Aprovações:** o bench aprova sozinho o que for pedido e conta as aprovações.
+- **Configuração (b):** usou o Ornith-1.5-9B depois de o gemma travar.
+- **V4:** sem a bateria do Comparar (só o bench do Maestro, n=1).
+- **VRAM da V6:** não medida, porque o `--list-devices` de outro processo não refletiu o uso.
+
+- [x] Criar um projeto de benchmark pequeno e fixo, versionado em `backend/tests/bench/` ou num repo à
       parte: por exemplo uma API de tarefas com CLI e testes, que dê ~10 tarefas no Maestro.
-- [ ] Escrever um script (`scripts/bench_maestro.py`) que:
+- [x] Escrever um script (`scripts/bench_maestro.py`) que:
   - sobe o backend com `FORJA_DATA` próprio;
   - cria a conversa em modo Maestro com o pedido fixo;
   - espera terminar ou dar tempo esgotado;
@@ -74,20 +111,20 @@ que cria uma chamada nova ao LLM sem passar por ela não está pronta.
     tokens de prompt foram reprocessados (`prompt_n` − `cache_n` dos timings do llama-server,
     `llm.py:250`). É o número que mostra se a política da E4 funciona;
   - **restaurar vs reprocessar:** ver a validação V2 abaixo.
-- [ ] Rodar em duas configurações:
+- [x] Rodar em duas configurações:
   - (a) Maestro e Worker no **mesmo** modelo local;
   - (b) Maestro e Worker em modelos **diferentes**.
 
   Esta medição confirma ou derruba a suspeita de que a troca de modelo (`maestro.py:290`,
   `agent.py:1331`/`1619`) domina o tempo.
-- [ ] Salvar os resultados em `docs/bench/2026-09-baseline.json`.
+- [x] Salvar os resultados em `docs/bench/2026-09-baseline.json`.
 
 ### Validações que decidem os padrões da E4 (cache em disco e KV)
 
 Cada item tem método, critério e o que fazer se falhar. O resultado vai para
 `docs/bench/2026-09-kvcache.json` e é citado na E4 antes de mudar qualquer padrão.
 
-- [ ] **V1: save/restore de slot com `--kv-unified`.**
+- [x] **V1: save/restore de slot com `--kv-unified`.**
   - Método:
     1. subir o llama-server embutido com `--kv-unified --slot-save-path` e `-np` automático;
     2. mandar um prompt de ~10k tokens e salvar o slot;
@@ -98,25 +135,25 @@ Cada item tem método, critério e o que fazer se falhar. O resultado vai para
   - Passa se: o restore responde ok e `cache_n` da 2ª requisição ≥ 95% do prompt original.
   - Se falhar: o cache em disco fica desligado quando o KV é unificado (com o motivo no log e na tela),
     e o KV unificado continua como padrão.
-- [ ] **V2: restaurar vs reprocessar.** Prompts de ~5k, ~10k e ~20k tokens: comparar o tempo de
+- [x] **V2: restaurar vs reprocessar.** Prompts de ~5k, ~10k e ~20k tokens: comparar o tempo de
       processar do zero com o de restaurar, e anotar o tamanho do `.bin`.
   - Passa se: restaurar custa ≤ 30% do tempo de reprocessar com 10k tokens.
   - Se falhar: o cache em disco fica desligado por padrão nesta classe de máquina e vira opção.
-- [ ] **V3: ganho em modelo SWA/híbrido.** Repetir a V1 e a V2 com um modelo de janela deslizante
+- [x] **V3: ganho em modelo SWA/híbrido.** Repetir a V1 e a V2 com um modelo de janela deslizante
       (Gemma 3 ou gpt-oss) e, se couber na VRAM, um híbrido (Qwen3-Next).
   - Passa se: o ganho for ≥ 50% do ganho medido no modelo comum.
   - Se falhar: nesses modelos o cache em disco só salva e restaura o slot inteiro (sem prefixo
     parcial), e a tela avisa "ganho menor neste modelo".
-- [ ] **V4: qualidade com KV `q8_0`.** Rodar o bench do Maestro (acima) e uma bateria do Comparar
+- [x] **V4: qualidade com KV `q8_0`.** Rodar o bench do Maestro (acima) e uma bateria do Comparar
       (`baterias.py`) com o modelo pequeno do bench, uma vez com o KV em `f16` e outra em `q8_0`.
   - Passa se: a taxa de sucesso das tarefas e a nota da bateria caem no máximo 2 pontos percentuais.
   - Se falhar: o padrão continua `f16`, e o `q8_0` aparece como recomendação na tela, com o ganho de
     VRAM calculado.
-- [ ] **V5: troca de modelo com cache em disco.** Com Maestro e Worker em modelos diferentes, medir o
+- [x] **V5: troca de modelo com cache em disco.** Com Maestro e Worker em modelos diferentes, medir o
       tempo até a 1ª resposta do Maestro depois de Maestro → Worker → Maestro, com e sem o cache em
       disco.
   - Resultado: é o número que decide entre as opções A, B e C da E3.
-- [ ] **V6: sessões em paralelo no mesmo modelo.** Com o mesmo modelo carregado, rodar 1, 2 e 4
+- [x] **V6: sessões em paralelo no mesmo modelo.** Com o mesmo modelo carregado, rodar 1, 2 e 4
       sessões gerando ao mesmo tempo, com o `ctx` padrão (8192) e com um `ctx` maior (32768).
       Medir:
   - tok/s de cada sessão e o total;

@@ -5,7 +5,8 @@ import type { Especialidade } from "../types";
 import Confirma from "./Confirma";
 import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
-import { Shield, Trash, Wrench } from "./icons";
+import { Shield, Trash, Wrench, X } from "./icons";
+import { FONTES, TEMAS, lerAparencia, salvarAparencia } from "../aparencia";
 import ModelPicker from "./ModelPicker";
 import qrcode from "qrcode-generator";
 
@@ -71,22 +72,50 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular"] as const;
-type Tab = (typeof BASE_TABS)[number] | "Aplicativo";
-// "Aplicativo" (janela, bandeja, início com o Windows) só existe dentro do Electron.
-const tabs = (): Tab[] => (window.forja?.desktop ? ["Aplicativo", ...BASE_TABS] : [...BASE_TABS]);
+const BASE_TABS = ["Aplicativo", "Tema", "Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular"] as const;
+type Tab = (typeof BASE_TABS)[number];
+// Navegação agrupada do redesign. "Tema" (cores e fonte) vale no desktop e na web; janela, bandeja e
+// início com o Windows (em "Aplicativo") só aparecem dentro do Electron.
+const GRUPOS: { titulo: string; tabs: Tab[] }[] = [
+  { titulo: "App", tabs: ["Aplicativo", "Tema", "Geral", "Pastas"] },
+  { titulo: "Máquina", tabs: ["Runtime", "Hardware"] },
+  { titulo: "Modelos", tabs: ["Provedores", "Subagentes", "Maestro"] },
+  { titulo: "Agente", tabs: ["Ferramentas", "Skills", "Permissões", "MCP", "Memória"] },
+  { titulo: "Integrações", tabs: ["Celular"] },
+];
 
-const input = "w-full rounded-lg border border-line bg-raised px-3 py-1.5 text-sm text-fg focus:border-[#555] focus:outline-none";
-const btn = "rounded-full border border-line px-3 py-1.5 text-sm text-fg hover:bg-raised";
-const btnPrimary = "rounded-full bg-fg px-4 py-1.5 text-sm font-medium text-black hover:bg-white disabled:opacity-40";
+// O subtítulo ao lado do nome da aba, no cabeçalho (como no design).
+const SUBTITULO: Partial<Record<Tab, string>> = {
+  Aplicativo: "Janela, bandeja, inicialização e atualização",
+  Tema: "Cores, destaque e fonte",
+  Geral: "Prompt, limites e navegador",
+  Pastas: "Onde as coisas ficam",
+  Runtime: "llama.cpp e stable-diffusion.cpp",
+  Hardware: "O que o motor atual enxerga",
+  Provedores: "Onde os modelos rodam",
+  Subagentes: "delegate_task: o agente escolhe o nível",
+  Maestro: "Planeja, despacha e valida",
+  Ferramentas: "O que está desligado não vai no tools nem no prompt",
+  Skills: "Comandos / seus, do projeto e do Forja",
+  MCP: "mcp.json na pasta de dados",
+  Celular: "App Forja Mobile",
+};
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+const input = "w-full rounded-[9px] border border-line bg-surface px-3 py-1.5 text-[13px] text-fg focus:border-focus focus:outline-none";
+const btn = "rounded-[9px] border border-line px-3 py-1.5 text-[12.5px] text-fg hover:bg-raised";
+const btnPrimary = "rounded-[9px] bg-accent px-4 py-1.5 text-[12.5px] font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+
+function Field({ label, hint, children, div }: { label: string; hint?: string; children: React.ReactNode; div?: boolean }) {
+  // `div`: o controle são botões; num <label>, clicar no texto acionaria o primeiro deles.
+  const Tag = div ? "div" : "label";
   return (
-    <label className="block">
-      <span className="text-sm text-fg">{label}</span>
-      {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
-      <div className="mt-1.5">{children}</div>
-    </label>
+    <Tag className="grid grid-cols-[280px_minmax(0,1fr)] items-start gap-6 border-b border-line py-3.5">
+      <span>
+        <span className="block text-[13.5px] text-fg">{label}</span>
+        {hint && <span className="mt-0.5 block text-xs leading-snug text-faint">{hint}</span>}
+      </span>
+      <div className="min-w-0">{children}</div>
+    </Tag>
   );
 }
 
@@ -191,33 +220,40 @@ export default function Settings(props: {
         return false;
       }}
       label="Configurações"
-      className="flex h-[85vh] w-full max-w-4xl overflow-hidden rounded-2xl border border-line bg-bg"
+      className="flex h-[min(760px,90vh)] w-full max-w-[1080px] overflow-hidden rounded-[18px] border border-line-strong bg-bg shadow-dialog"
     >
-        <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-line bg-side p-3">
-          <div className="mb-2 px-2 text-sm font-medium">Configurações</div>
-          {tabs().map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`rounded-lg px-3 py-1.5 text-left text-sm ${tab === t ? "bg-raised text-fg" : "text-muted hover:bg-surface hover:text-fg"}`}
-            >
-              {t}
-            </button>
+        <nav className="flex w-[230px] shrink-0 flex-col overflow-y-auto border-r border-line bg-side p-3">
+          <div className="mb-1 px-2.5 pt-1 text-[15px] font-semibold text-fg">Configurações</div>
+          {GRUPOS.map((g) => (
+            <div key={g.titulo} className="mt-3">
+              <div className="px-2.5 pb-1 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">{g.titulo}</div>
+              {g.tabs.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`relative flex w-full rounded-[9px] px-2.5 py-1.5 text-left text-[13px] ${tab === t ? "bg-raised text-fg" : "text-muted hover:bg-surface hover:text-fg"}`}
+                >
+                  {tab === t && <span className="absolute top-1.5 bottom-1.5 -left-3 w-[3px] rounded-r-[3px] bg-accent" />}
+                  {t}
+                </button>
+              ))}
+            </div>
           ))}
-          <div className="mt-auto px-3 py-1.5">
+          <div className="mt-auto px-2.5 pt-4 pb-1">
             <Confirma
               rotulo="Restaurar padrões"
               pergunta="Voltar tudo ao .env?"
-              className="text-left text-xs text-muted hover:text-red-300"
+              className="text-left text-xs text-err hover:text-fg"
               onSim={() => void resetAll()}
             />
           </div>
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center gap-3 border-b border-line px-5 py-3">
-            <h2 className="flex-1 text-sm text-muted">{tab}</h2>
-            {error && <span className="truncate text-sm text-red-300">{error}</span>}
+          <header className="flex items-center gap-3 border-b border-line px-6 py-3.5">
+            <h2 className="text-[17px] font-semibold text-fg">{tab}</h2>
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">{SUBTITULO[tab]}</span>
+            {error && <span className="truncate text-sm text-err">{error}</span>}
             {descartar && (
               <span className="inline-flex items-center gap-1.5 text-xs">
                 <span className="text-amber-300">Descartar as alterações não salvas?</span>
@@ -225,20 +261,17 @@ export default function Settings(props: {
                 <button className="px-2 text-muted hover:text-fg" onClick={() => setDescartar(false)}>Continuar editando</button>
               </span>
             )}
-            {saved && <span className="text-sm text-emerald-400">{saved}</span>}
-            {!["MCP", "Memória", "Aplicativo", "Pastas", "Runtime", "Hardware", "Skills"].includes(tab) && (
-              <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
-                Salvar
-              </button>
-            )}
-            <button onClick={props.onClose} className={btn}>
-              Fechar
+            {saved && <span className="text-sm text-ok">{saved}</span>}
+            <button onClick={props.onClose} title="Fechar (Esc)" aria-label="Fechar" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
+              <X className="size-4" />
             </button>
           </header>
 
-          <div className="flex-1 overflow-y-auto p-5">
+          <div className="flex-1 overflow-y-auto px-6 py-2">
             {tab === "Aplicativo" ? (
               <AppTab />
+            ) : tab === "Tema" ? (
+              <div className="max-w-3xl"><Aparencia /></div>
             ) : tab === "Skills" ? (
               <SkillsTab onError={setError} />
             ) : tab === "Pastas" ? (
@@ -252,7 +285,7 @@ export default function Settings(props: {
             ) : !s ? (
               <div className="text-muted">Carregando…</div>
             ) : tab === "Geral" ? (
-              <div className="max-w-xl space-y-5">
+              <div className="max-w-3xl">
                 <Field label="Instruções personalizadas" hint="Vão no fim do system prompt, em todas as conversas.">
                   <textarea
                     rows={5}
@@ -346,6 +379,17 @@ export default function Settings(props: {
               </>
             )}
           </div>
+          <footer className="flex items-center gap-2 border-t border-line px-6 py-3">
+            <span className="flex-1 text-xs text-faint">Vale na próxima requisição, sem reiniciar.</span>
+            <button onClick={props.onClose} className={btn}>
+              {Object.keys(dirty).length ? "Cancelar" : "Fechar"}
+            </button>
+            {!["MCP", "Memória", "Aplicativo", "Tema", "Pastas", "Runtime", "Hardware", "Skills"].includes(tab) && (
+              <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
+                Salvar
+              </button>
+            )}
+          </footer>
         </div>
     </Modal>
   );
@@ -408,10 +452,37 @@ function CelularTab(props: { onError: (e: string) => void }) {
 
 // ------------------------------------------------------------------ aplicativo (Electron)
 
+/** Interruptor do design (34×20): ligado na cor de destaque. */
+function Interruptor({ ligado, onChange, disabled, rotulo }: { ligado: boolean; onChange: (v: boolean) => void; disabled?: boolean; rotulo?: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={ligado} disabled={disabled} onClick={() => onChange(!ligado)}
+            className={`inline-flex items-center gap-2.5 text-[13px] text-fg-2 ${disabled ? "cursor-default opacity-45" : ""}`}>
+      <span className={`relative h-5 w-[34px] shrink-0 rounded-full transition-colors ${ligado ? "bg-accent" : "bg-line-strong"}`}>
+        <span className={`absolute top-[3px] size-3.5 rounded-full bg-fg transition-[left] ${ligado ? "left-[17px]" : "left-[3px]"}`} />
+      </span>
+      {rotulo ?? (ligado ? "Ligado" : "Desligado")}
+    </button>
+  );
+}
+
+/** Seletor segmentado do design: uma opção ativa, fundo mais claro. */
+function Segmentado<T extends string | boolean>({ opcoes, valor, onChange }: { opcoes: { v: T; label: string }[]; valor: T; onChange: (v: T) => void }) {
+  return (
+    <div className="inline-flex rounded-[9px] border border-line bg-surface p-0.5 text-[12.5px]">
+      {opcoes.map((o) => (
+        <button key={String(o.v)} type="button" onClick={() => onChange(o.v)}
+                className={`rounded-[7px] px-3 py-[5px] ${valor === o.v ? "bg-line text-fg" : "text-muted hover:text-fg"}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
   return (
-    <label className={`flex items-start gap-3 rounded-xl border border-line bg-surface p-3 ${disabled ? "opacity-50" : "cursor-pointer hover:border-[#3d3d3d]"}`}>
-      <input type="checkbox" className="mt-0.5 size-4 accent-white" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+    <label className={`flex items-start gap-3 rounded-xl border border-line bg-surface p-3 ${disabled ? "opacity-50" : "cursor-pointer hover:border-focus"}`}>
+      <input type="checkbox" className="mt-0.5 size-4 accent-[var(--accent)]" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       <span className="min-w-0">
         <span className="block text-sm text-fg">{label}</span>
         {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
@@ -479,7 +550,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
   };
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-3xl">
       {bloco("llama", "Motor de chat (llama.cpp)", "CPU, Vulkan e CUDA convivem no disco: dá para trocar a qualquer momento, sem baixar de novo.")}
       {bloco("sd", "Motor de imagem e vídeo (stable-diffusion.cpp)", "Mesma ideia, para gerar imagem e vídeo (e o ESRGAN da ampliação).")}
       {bloco("ffmpeg", "Motor de ampliação de vídeo (ffmpeg)", "Separa os quadros, junta de volta com o áudio e interpola o movimento. Só existe o build de CPU: o pesado (ESRGAN) é na GPU pelo sd.cpp.")}
@@ -527,7 +598,7 @@ function HardwareTab(props: { onError: (e: string) => void }) {
   ];
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-3xl">
       <Field label="Processador">
         <div className="rounded-lg border border-line bg-raised px-3 py-2 text-sm">
           <p className="text-fg">{hw.cpu.name || "desconhecido"}</p>
@@ -564,7 +635,7 @@ function HardwareTab(props: { onError: (e: string) => void }) {
                 </p>
               </div>
               <button
-                className={`rounded-full px-3 py-1 text-xs ${g.enabled ? "bg-sky-600 text-white" : "border border-line text-muted"}`}
+                className={`rounded-[9px] px-3 py-1 text-xs ${g.enabled ? "bg-sky-600 text-white" : "border border-line text-muted"}`}
                 onClick={() => acao(api.put("/local/device", { id: g.id, enabled: !g.enabled }))}
               >
                 {g.enabled ? "ON" : "OFF"}
@@ -719,7 +790,7 @@ function PastasTab(props: { onError: (e: string) => void; onChanged: () => void 
   );
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-3xl">
       <Field
         label="Modelos baixados"
         hint="Para onde vão os downloads do painel IA local. As outras pastas continuam sendo varridas; troque lá quem é a padrão do download."
@@ -840,7 +911,7 @@ const ATUALIZACAO: Record<UpdateState["state"], string> = {
  * Atualização pelo GitHub Releases. Nada baixa nem instala sem clique: o instalador é grande, e
  * quem decide gastar a internet é quem está pagando por ela.
  */
-function Atualizacao() {
+function Atualizacao({ versao, dev }: { versao: string; dev: boolean }) {
   const bridge = window.forja?.update;
   const [u, setU] = useState<UpdateState | null>(null);
 
@@ -852,178 +923,167 @@ function Atualizacao() {
     return () => clearInterval(t);
   }, [bridge]);
 
-  if (!bridge || !u) return null;
-  const ocupado = u.state === "checking" || u.state === "downloading";
-
+  const ocupado = !!u && (u.state === "checking" || u.state === "downloading");
+  const nova = !!u && (u.state === "available" || u.state === "ready");
+  const ponto = !u ? "bg-faint" : u.error ? "bg-err" : nova ? "bg-accent" : "bg-ok";
+  const estado = !u
+    ? dev ? "desenvolvimento" : ""
+    : `${ATUALIZACAO[u.state]}${u.version && nova ? ` Versão ${u.version}.` : ""}${u.state === "downloading" ? ` ${u.percent}%` : ""}`;
   return (
-    <div className="space-y-2">
-      <div className="text-sm text-fg">Atualização</div>
-      <div className="space-y-2 rounded-xl border border-line bg-surface p-3">
-        <div className="text-xs text-muted">
-          {ATUALIZACAO[u.state]}
-          {u.version && (u.state === "available" || u.state === "ready") ? ` Versão ${u.version}.` : ""}
-          {u.state === "downloading" ? ` ${u.percent}%` : ""}
-        </div>
-        {u.error && <div className="text-xs text-red-300">{u.error}</div>}
-        {/* O que muda na versão nova, como foi escrito no release-notes.md e guardado no latest.yml. */}
-        {u.notes && (u.state === "available" || u.state === "ready") && (
-          <div className="whitespace-pre-wrap rounded-lg border border-line bg-raised p-2 text-xs text-muted">{u.notes.trim()}</div>
+    <Field div label="Versão" hint="O app pergunta ao GitHub na abertura; nada baixa sem você clicar.">
+      <div className="flex items-center gap-2.5 rounded-[10px] border border-line bg-surface px-3 py-2.5">
+        <span className={`size-[7px] shrink-0 rounded-full ${ponto}`} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="text-[13px] text-fg">Forja {versao}{dev ? " (desenvolvimento)" : ""}</span>
+          {estado && <span className="truncate font-mono text-[11.5px] text-faint" title={estado}>{estado}</span>}
+        </span>
+        {bridge && u && (
+          u.state === "available" ? <button className={btnPrimary} onClick={() => bridge.download().then(setU)}>Baixar</button>
+          : u.state === "ready" ? <button className={btnPrimary} onClick={() => bridge.install()}>Reiniciar e instalar</button>
+          : <button className={btn} disabled={ocupado} onClick={() => bridge.check().then(setU)}>Procurar atualizações</button>
         )}
-        <div className="flex flex-wrap gap-2">
-          <button className={btn} disabled={ocupado} onClick={() => bridge.check().then(setU)}>
-            Procurar atualizações
-          </button>
-          {u.state === "available" && (
-            <button className={btnPrimary} onClick={() => bridge.download().then(setU)}>
-              Baixar
-            </button>
-          )}
-          {u.state === "ready" && (
-            <button className={btnPrimary} onClick={() => bridge.install()}>
-              Reiniciar e instalar
-            </button>
-          )}
-        </div>
       </div>
-    </div>
+      {u?.error && <div className="mt-1.5 text-xs text-err">{u.error}</div>}
+      {/* O que muda na versão nova, como foi escrito no release-notes.md e guardado no latest.yml. */}
+      {u?.notes && nova && (
+        <div className="mt-1.5 whitespace-pre-wrap rounded-[10px] border border-line bg-surface p-2.5 text-xs text-muted">{u.notes.trim()}</div>
+      )}
+    </Field>
+  );
+}
+
+/** Tema, destaque e fonte: aplicam na hora, sem Salvar. */
+function Aparencia() {
+  const [a, setA] = useState(lerAparencia);
+  const muda = (p: Partial<typeof a>) => {
+    const n = { ...a, ...p };
+    setA(n);
+    salvarAparencia(n);
+  };
+  const tema = TEMAS.find((t) => t.id === a.tema) ?? TEMAS[0];
+  return (
+    <>
+      <Field div label="Tema" hint="Cinzas e destaque da interface inteira. Vale na hora.">
+        <div className="grid grid-cols-3 gap-2">
+          {TEMAS.map((t) => (
+            <button key={t.id} type="button" onClick={() => muda({ tema: t.id, destaque: null })}
+                    className={`flex items-center gap-2.5 rounded-[9px] border px-2.5 py-2 text-left text-[12.5px] ${
+                      a.tema === t.id ? "border-accent-line bg-accent-soft text-fg" : "border-line text-fg-2 hover:border-focus hover:text-fg"}`}>
+              <span className="grid size-6 shrink-0 place-items-center rounded-md border border-line-strong" style={{ background: t.bg }}>
+                <span className="size-2.5 rounded-full" style={{ background: t.accent }} />
+              </span>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field div label="Cor de destaque" hint="Botão principal, foco, item ativo e progresso. Em branco, a do tema.">
+        <div className="flex items-center gap-2">
+          <input type="color" value={a.destaque ?? tema.accent} onChange={(e) => muda({ destaque: e.target.value })}
+                 className="h-8 w-12 cursor-pointer rounded-[7px] border border-line bg-surface p-0.5" />
+          <span className="font-mono text-xs text-muted">{a.destaque ?? tema.accent}</span>
+          {a.destaque && <button type="button" className={btn} onClick={() => muda({ destaque: null })}>Usar a do tema</button>}
+        </div>
+      </Field>
+      <Field div label="Fonte" hint="Interface e código (números, caminhos, sementes).">
+        <div className="grid gap-2">
+          {FONTES.map((f) => (
+            <button key={f.id} type="button" onClick={() => muda({ fonte: f.id })}
+                    className={`rounded-[9px] border px-3 py-2 text-left ${a.fonte === f.id ? "border-accent-line bg-accent-soft" : "border-line hover:border-focus"}`}>
+              <span className="block text-[13px] text-fg">{f.label}</span>
+              <span className="block text-xs text-faint">{f.hint}</span>
+            </button>
+          ))}
+        </div>
+      </Field>
+    </>
+  );
+}
+
+/** As iniciais do círculo no pé do trilho (ficam no localStorage, junto da aparência). */
+function Iniciais() {
+  const [a, setA] = useState(lerAparencia);
+  return (
+    <Field label="Iniciais" hint="O círculo no pé do trilho de seções. Até 3 letras.">
+      <input className={`${input} w-24! font-mono uppercase`} maxLength={3} value={a.iniciais}
+             onChange={(e) => {
+               const n = { ...a, iniciais: e.target.value.toUpperCase() };
+               setA(n);
+               salvarAparencia(n);
+             }} />
+    </Field>
   );
 }
 
 function AppTab() {
-  const bridge = window.forja!.desktop;
+  const bridge = window.forja?.desktop;
+  if (!bridge) return <div className="max-w-3xl"><Iniciais /></div>;
+  return <AppTabDesktop bridge={bridge} />;
+}
+
+function AppTabDesktop({ bridge }: { bridge: NonNullable<NonNullable<typeof window.forja>["desktop"]> }) {
   const [d, setD] = useState<DesktopState | null>(null);
 
   useEffect(() => {
     bridge.get().then(setD);
   }, [bridge]);
 
-  if (!d) return <div className="text-muted">Carregando…</div>;
+  if (!d) return <div className="py-3 text-muted">Carregando…</div>;
   const patch = (p: Parameters<typeof bridge.set>[0]) => bridge.set(p).then(setD);
+  const zoom = (z: "in" | "out" | "reset") => bridge.zoom(z).then((zoom) => setD({ ...d, zoom }));
+  const passo = "grid size-8 place-items-center text-muted hover:bg-raised hover:text-fg";
 
   return (
-    <div className="max-w-xl space-y-5">
-      <Field label="Zoom da interface" hint="O mesmo que Ctrl + (+), Ctrl + (−) e Ctrl + 0 na janela, ou Ctrl + roda do mouse.">
+    <div className="max-w-3xl">
+      <Field div label="Zoom da interface" hint="O mesmo que Ctrl + (+), Ctrl + (−) e Ctrl + 0 na janela, ou Ctrl + roda do mouse.">
         <div className="flex items-center gap-2">
-          <button className={btn} onClick={() => bridge.zoom("out").then((zoom) => setD({ ...d, zoom }))} title="Diminuir (Ctrl -)">
-            −
-          </button>
-          <span className="w-16 text-center font-mono text-sm text-fg">{Math.round(d.zoom * 100)}%</span>
-          <button className={btn} onClick={() => bridge.zoom("in").then((zoom) => setD({ ...d, zoom }))} title="Aumentar (Ctrl +)">
-            +
-          </button>
-          <button className={btn} onClick={() => bridge.zoom("reset").then((zoom) => setD({ ...d, zoom }))} title="Voltar para 100% (Ctrl 0)">
-            100%
-          </button>
+          <div className="inline-flex items-center overflow-hidden rounded-[9px] border border-line bg-surface">
+            <button className={passo} onClick={() => zoom("out")} title="Diminuir (Ctrl -)">−</button>
+            <span className="w-16 border-x border-line text-center font-mono text-[13px] leading-8 text-fg">{Math.round(d.zoom * 100)}%</span>
+            <button className={passo} onClick={() => zoom("in")} title="Aumentar (Ctrl +)">+</button>
+          </div>
+          {Math.round(d.zoom * 100) !== 100 && (
+            <button className="text-[12.5px] text-muted hover:text-fg" onClick={() => zoom("reset")} title="Voltar para 100% (Ctrl 0)">voltar a 100%</button>
+          )}
         </div>
       </Field>
 
-      <div className="space-y-2">
-        <div className="text-sm text-fg">Ao fechar a janela</div>
-        <div className="text-xs text-muted">O agente continua rodando enquanto o Forja estiver na bandeja.</div>
-        <div className="mt-1.5 grid gap-2">
-          {[
-            { v: false, label: "Fechar o Forja", hint: "O X encerra o app e o backend. Nada fica rodando." },
-            { v: true, label: "Minimizar para a bandeja", hint: "O X esconde a janela; o ícone ao lado do relógio reabre ou sai." },
-          ].map((o) => (
-            <label
-              key={String(o.v)}
-              className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${d.closeToTray === o.v ? "border-[#4d4d4d] bg-raised" : "border-line bg-surface hover:border-[#3d3d3d]"}`}
-            >
-              <input type="radio" name="close" className="mt-0.5 size-4 accent-white" checked={d.closeToTray === o.v} onChange={() => patch({ closeToTray: o.v })} />
-              <span className="min-w-0">
-                <span className="block text-sm text-fg">{o.label}</span>
-                <span className="mt-0.5 block text-xs text-muted">{o.hint}</span>
-              </span>
-            </label>
+      <Field div label="O X da janela" hint="Fechar de verdade ou minimizar para a bandeja. Na bandeja o agente continua rodando.">
+        <Segmentado opcoes={[{ v: false, label: "Fechar" }, { v: true, label: "Minimizar para a bandeja" }]}
+                    valor={d.closeToTray} onChange={(v) => patch({ closeToTray: v })} />
+      </Field>
+
+      <Field div label="Abrir junto com o Windows"
+             hint={d.packaged ? "E, se quiser, já direto na bandeja (precisa do X minimizar para a bandeja)." : "Só vale no app instalado; em desenvolvimento não mexe no registro."}>
+        <div className="flex flex-col items-start gap-2.5">
+          <Interruptor ligado={d.startWithWindows} disabled={!d.packaged} onChange={(v) => patch({ startWithWindows: v })} />
+          <Interruptor ligado={d.startMinimized} disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
+                       rotulo="Iniciar direto na bandeja, sem abrir a janela" onChange={(v) => patch({ startMinimized: v })} />
+        </div>
+      </Field>
+
+      <Field div label="Manter o PC acordado para o celular"
+             hint="Com o Forja aberto o Windows não entra em suspensão (a tela ainda apaga); desligado, só segura o sono enquanto um turno roda.">
+        <Interruptor ligado={d.manterAcordado} onChange={(v) => patch({ manterAcordado: v })} />
+      </Field>
+
+      <Iniciais />
+
+      <Atualizacao versao={d.version} dev={!d.packaged} />
+
+      <Field div label="Atalhos"
+             hint="O forja.db guarda conversas, provedores, chaves e configurações; cada conversa também é espelhada em Markdown (só leitura). Desinstalar não apaga nada disso.">
+        <div className="flex flex-wrap gap-1.5">
+          {([
+            ["data", "Pasta de dados", d.paths.data],
+            ["db", "Banco (forja.db)", d.paths.db],
+            ["md", "Conversas em Markdown", d.paths.md],
+            ["log", "Log", d.paths.log],
+          ] as const).map(([k, rotulo, caminho]) => (
+            <button key={k} className={btn} title={caminho} onClick={() => bridge.open(k)}>{rotulo}</button>
           ))}
         </div>
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-sm text-fg">Inicialização</div>
-        <div className="grid gap-2">
-          <Toggle
-            label="Abrir o Forja junto com o Windows"
-            hint={d.packaged ? undefined : "Só vale no app instalado; em desenvolvimento não mexe no registro."}
-            checked={d.startWithWindows}
-            disabled={!d.packaged}
-            onChange={(v) => patch({ startWithWindows: v })}
-          />
-          <Toggle
-            label="Iniciar direto na bandeja, sem abrir a janela"
-            hint="Precisa de abrir com o Windows e de fechar-para-bandeja ligados."
-            checked={d.startMinimized}
-            disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
-            onChange={(v) => patch({ startMinimized: v })}
-          />
-          <Toggle
-            label="Manter o PC acordado para o celular"
-            hint="Com o Forja aberto o Windows não entra em suspensão (a tela ainda apaga e pode ficar bloqueada), então o celular manda pedidos a qualquer hora. Desligado, ele só segura o sono enquanto um turno roda."
-            checked={d.manterAcordado}
-            onChange={(v) => patch({ manterAcordado: v })}
-          />
-        </div>
-      </div>
-
-      <Atualizacao />
-
-      <div className="space-y-2">
-        <div className="text-sm text-fg">Sobre</div>
-        <div className="space-y-2 rounded-xl border border-line bg-surface p-3 text-xs">
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Versão</span>
-            <span className="font-mono text-fg">
-              {d.version}
-              {d.packaged ? "" : " (desenvolvimento)"}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Dados</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.data}>
-              {d.paths.data}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Conversas</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.db}>
-              {d.paths.db}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Markdown</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.md}>
-              {d.paths.md}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Log</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.log}>
-              {d.paths.log}
-            </span>
-          </div>
-          <div className="flex gap-2 pt-1">
-            <button className={btn} onClick={() => bridge.open("data")}>
-              Abrir a pasta de dados
-            </button>
-            <button className={btn} onClick={() => bridge.open("md")}>
-              Abrir as conversas em Markdown
-            </button>
-            <button className={btn} onClick={() => bridge.open("db")}>
-              Mostrar o banco
-            </button>
-            <button className={btn} onClick={() => bridge.open("log")}>
-              Mostrar o log
-            </button>
-          </div>
-        </div>
-        <p className="text-xs text-muted">
-          O banco <span className="font-mono">forja.db</span> guarda as conversas, provedores, chaves e configurações. Em
-          paralelo, cada conversa é espelhada em Markdown em <span className="font-mono">conversas\forja-code</span> (agente) e{" "}
-          <span className="font-mono">conversas\forja-chat</span> — arquivos soltos, prontos para copiar para outro PC, um backup
-          ou o git. O espelho é só de leitura: editar o .md não muda a conversa, e apagar a conversa no Forja apaga o .md junto.
-          Desinstalar o Forja não apaga nada disso.
-        </p>
-      </div>
+      </Field>
     </div>
   );
 }
@@ -1058,14 +1118,14 @@ function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
     set("providers", s.providers.map((p, k) => (k === i ? { ...p, ...patch } : p)));
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="max-w-3xl">
       <p className="text-sm text-muted">
         Servidores compatíveis com a API da OpenAI. O tipo muda o jeito de falar: <span className="font-mono">ollama</span> usa
         a API nativa (respeita num_ctx), <span className="font-mono">lmstudio</span> lê a janela do modelo carregado,{" "}
         <span className="font-mono">openai</span> é o padrão para serviços com chave (OpenRouter, OpenAI, Groq...).
       </p>
       {s.providers.map((p, i) => (
-        <div key={i} className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+        <div key={i} className="space-y-3 rounded-xl border border-line bg-surface p-4">
           <div className="flex gap-2">
             <input
               className={input}
@@ -1276,7 +1336,7 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
     api.get<{ min_ctx_maestro?: number; min_ctx_worker?: number }>("/config").then(setMinimo).catch(() => {});
   }, []);
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-3xl">
       <Field label="Modelo padrão da Maestro" hint="Usado na seção Maestro. Separado do modelo do chat e do agente: trocar um não troca o outro. Vazio = o modelo escolhido no chat.">
         <div className="flex items-center gap-2 [&>div]:ml-0">
           <ModelPicker
@@ -1502,7 +1562,7 @@ function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
   const change = (slot: (typeof SLOTS)[number]["key"], patch: Partial<{ provider: string; model: string }>) =>
     set("subagents", { ...s.subagents, [slot]: { ...spec(slot), ...patch } });
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-3xl">
       <p className="text-sm text-muted">
         O agente principal pode delegar uma subtarefa com <span className="font-mono">delegate_task</span> e escolhe o nível
         pela dificuldade. O subagente usa as mesmas ferramentas, aprovações e pasta de trabalho; só o relatório final dele
@@ -1510,7 +1570,7 @@ function Subagents({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
         não é oferecida ao modelo.
       </p>
       {SLOTS.map((slot) => (
-        <section key={slot.key} className="space-y-2 rounded-2xl border border-line bg-surface p-4">
+        <section key={slot.key} className="space-y-2 rounded-xl border border-line bg-surface p-4">
           <h3 className="text-sm text-fg">{slot.title}</h3>
           <p className="text-xs text-muted">{slot.hint}</p>
           <div className="grid grid-cols-[10rem_1fr] gap-2">
@@ -1557,14 +1617,14 @@ function Tools({ tools, disabled, onToggle }: { tools: ToolInfo[]; disabled: str
     groups.set(g, [...(groups.get(g) ?? []), t]);
   }
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-3xl">
       <p className="text-sm text-muted">
         Ferramentas desligadas não são enviadas ao modelo nem podem ser chamadas. O painel lateral sempre mostra a lista real.
       </p>
       {[...groups].map(([group, list]) => (
         <section key={group}>
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">{group}</h3>
+            <h3 className="text-[10.5px] font-medium tracking-[.08em] text-faint font-mono uppercase">{group}</h3>
             <button className="text-xs text-muted hover:text-fg" onClick={() => onToggle([...off].filter((n) => !list.some((t) => t.name === n)))}>
               ligar todas
             </button>
@@ -1643,7 +1703,7 @@ function ListEditor({ title, hint, placeholder, value, onChange }: {
 
 function Permissions({ s, save }: { s: AppSettings; save: (patch: Partial<AppSettings>) => void }) {
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-3xl">
       <div className="flex items-start gap-2 rounded-xl border border-line bg-surface p-3 text-sm text-muted">
         <Shield className="mt-0.5 size-4 shrink-0 text-amber-200" />
         <span>
@@ -1702,7 +1762,7 @@ function ClaudeControla() {
   const copia = (t: string, o: string) => navigator.clipboard.writeText(t).then(() => setMsg(`${o} copiado.`));
   if (!c) return null;
   return (
-    <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+    <section className="space-y-3 rounded-xl border border-line bg-surface p-4">
       <div className="flex items-start gap-3">
         <button
           role="switch"
@@ -1859,7 +1919,7 @@ function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void 
   }
 
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="max-w-3xl">
       <ClaudeControla />
       <h3 className="pt-2 text-sm font-medium text-fg">Servidores que o Forja usa</h3>
       <p className="text-sm text-muted">
@@ -2047,7 +2107,7 @@ function PersonalMemory({ s, set, save }: {
                 />
               </div>
               {aberta === m.slug && (
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#0d0d0d] px-3 py-2 text-xs text-muted">
+                <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-code px-3 py-2 text-xs text-muted">
                   {corpo || "…"}
                 </pre>
               )}
@@ -2090,7 +2150,7 @@ function MemoryTab() {
 
   const entities = m.entities.filter((e) => JSON.stringify(e).toLowerCase().includes(q.toLowerCase()));
   return (
-    <div className="max-w-2xl space-y-4">
+    <div className="max-w-3xl">
       <div className="flex items-center gap-3">
         <input className={input} placeholder="Buscar na memória" value={q} onChange={(e) => setQ(e.target.value)} />
         <button className={btn} onClick={load}>
@@ -2202,7 +2262,7 @@ function SkillsTab({ onError }: { onError: (e: string) => void }) {
       </p>
 
       {editando ? (
-        <div className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+        <div className="space-y-3 rounded-xl border border-line bg-surface p-4">
           <div className="text-sm font-medium">{editando.antigo ? `Editar /${editando.antigo}` : "Nova skill"}</div>
           <Field label="Nome" hint="Vira o comando: minúsculas, números e hífens.">
             <input className={input} value={editando.name} placeholder="revisar-textos" spellCheck={false}

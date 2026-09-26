@@ -72,22 +72,23 @@ export default function ModeloCarregado() {
     <>
       <button
         onClick={() => setAberto(true)}
-        title="IA local: modelo carregado e memória"
-        className="flex max-w-80 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
+        title={`${titulo}
+IA local: modelo carregado e memória`}
+        className="flex min-w-0 max-w-80 items-center gap-2 rounded-[9px] border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
       >
         <span className={`size-2 shrink-0 rounded-full ${ponto}`} />
-        <span className={`min-w-0 truncate ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
+        <span className={`min-w-0 truncate max-[1060px]:hidden ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
         {/* Sem modelo, a placa "mais usada" pode ser a integrada: o número confundia. Fica no painel. */}
         {m && g && (
           <>
             <span className="w-12 shrink-0"><Barra usado={g.usado} total={g.total} /></span>
-            <span className="shrink-0 font-mono text-[11px] text-faint">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>
+            <span className="shrink-0 font-mono text-[11px] text-faint max-[1060px]:hidden">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>
           </>
         )}
       </button>
 
       {aberto && (
-        <Modal onClose={() => setAberto(false)} label="IA local" className="w-full max-w-md space-y-5 rounded-2xl border border-line bg-surface p-5">
+        <Modal onClose={() => setAberto(false)} label="IA local" className="w-full max-w-md space-y-5 rounded-xl border border-line bg-surface p-5">
           <div className="flex items-start gap-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-raised text-muted"><Cpu className="size-4" /></span>
             <div className="min-w-0 flex-1">
@@ -122,7 +123,7 @@ export default function ModeloCarregado() {
           )}
 
           <div className="space-y-3">
-            <div className="text-[11px] tracking-wider text-faint uppercase">Memória da máquina</div>
+            <div className="text-[10.5px] tracking-[.08em] text-faint font-mono uppercase">Memória da máquina</div>
             {uso.gpus.map((x) => <Memoria key={x.nome} rotulo={x.nome} usado={x.usado} total={x.total} />)}
             <Memoria rotulo="RAM" usado={uso.ram.usado} total={uso.ram.total} />
             {uso.gerando_imagem && <div className="text-xs text-sky-300">Gerando imagem ou vídeo agora: a GPU está com o sd.cpp.</div>}
