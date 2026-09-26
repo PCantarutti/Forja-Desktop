@@ -64,7 +64,7 @@ import {
   turnosDe,
   type TurnStats,
 } from "./components/MessageView";
-import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X } from "./components/icons";
+import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X, PanelLeft } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
 
@@ -2112,13 +2112,80 @@ export default function App() {
   </div>
   );
 
+  // Espiar a lista com ela fechada: "dentro" (aparecendo), "saindo" (animação de saída) ou "fora".
+  const [espiando, setEspiando] = useState<"fora" | "dentro" | "saindo">("fora");
+  const fechaEspiada = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const espiar = (entra: boolean) => {
+    if (fechaEspiada.current) clearTimeout(fechaEspiada.current);
+    if (entra) return setEspiando("dentro");
+    // um respiro para o mouse ir do botão até a lista sem ela sumir no caminho
+    fechaEspiada.current = setTimeout(() => {
+      setEspiando("saindo");
+      fechaEspiada.current = setTimeout(() => setEspiando("fora"), 140);
+    }, 220);
+  };
+  useEffect(() => {
+    if (!sidebarHidden) setEspiando("fora");
+  }, [sidebarHidden]);
+
+  const lista = (
+    <Sidebar
+      section={section}
+      onSection={changeSection}
+      conversations={conversations}
+      current={currentId}
+      unread={unread}
+      busy={activity.conversations}
+      onSelect={openConversation}
+      onNew={newConversation}
+      onNewIn={(ws) => {
+        // Nova conversa já na pasta do grupo: vira a pasta da conversa no primeiro envio.
+        newConversation();
+        if (ws) setPendingWs(ws);
+      }}
+      onDelete={deleteConversation}
+      onBulk={async (ids, action) => {
+        try {
+          const r = await api.post<{ done: number; skipped: number[] }>("/conversations/bulk", { ids, action });
+          if (r.skipped?.length) setError(`${r.skipped.length} conversa(s) em execução não foram apagadas.`);
+          if ((action === "delete" || action === "archive") && currentId !== null && ids.includes(currentId)) newConversation();
+        } catch (e: any) {
+          setError(e.message);
+        }
+        refreshConversations();
+      }}
+      onRename={(id, title) => patchConversation(id, { title })}
+      onPin={(id, pinned) => patchConversation(id, { pinned })}
+      onArchive={(id, archived) => {
+        patchConversation(id, { archived });
+        if (archived && id === currentId) newConversation();
+      }}
+      onSettings={() => {
+        setTrajetoriaEm(null); // voltar das Configurações abre no Chat
+        setShowSettings(true);
+      }}
+    />
+
+  );
+
   return (
     <div className="flex h-full">
+      {/* Mostrar/esconder a lista: um botão só, fixo à direita do logo e na altura dele. Com a lista
+          aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. */}
+      <button
+        onClick={() => setSidebarHidden((v) => !v)}
+        title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
+        aria-pressed={!sidebarHidden}
+        onPointerEnter={() => sidebarHidden && espiar(true)}
+        onPointerLeave={() => sidebarHidden && espiar(false)}
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        className="fixed top-[12px] left-[68px] z-30 grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg"
+      >
+        <PanelLeft />
+      </button>
       <SectionRail
         value={section}
         onChange={changeSection}
-        listHidden={sidebarHidden}
-        onShowList={() => setSidebarHidden((v) => !v)}
         logo={<img src="/favicon.svg" alt="Forja" className="size-full" />}
         pe={
           <button onClick={() => setShowSettings(true)} title="Configurações · Ctrl ,"
@@ -2127,43 +2194,17 @@ export default function App() {
           </button>
         }
       />
-      {!sidebarHidden && (
-      <Sidebar
-        section={section}
-        onSection={changeSection}
-        conversations={conversations}
-        current={currentId}
-        unread={unread}
-        busy={activity.conversations}
-        onSelect={openConversation}
-        onNew={newConversation}
-        onNewIn={(ws) => {
-          // Nova conversa já na pasta do grupo: vira a pasta da conversa no primeiro envio.
-          newConversation();
-          if (ws) setPendingWs(ws);
-        }}
-        onDelete={deleteConversation}
-        onBulk={async (ids, action) => {
-          try {
-            const r = await api.post<{ done: number; skipped: number[] }>("/conversations/bulk", { ids, action });
-            if (r.skipped?.length) setError(`${r.skipped.length} conversa(s) em execução não foram apagadas.`);
-            if ((action === "delete" || action === "archive") && currentId !== null && ids.includes(currentId)) newConversation();
-          } catch (e: any) {
-            setError(e.message);
-          }
-          refreshConversations();
-        }}
-        onRename={(id, title) => patchConversation(id, { title })}
-        onPin={(id, pinned) => patchConversation(id, { pinned })}
-        onArchive={(id, archived) => {
-          patchConversation(id, { archived });
-          if (archived && id === currentId) newConversation();
-        }}
-        onSettings={() => {
-          setTrajetoriaEm(null); // voltar das Configurações abre no Chat
-          setShowSettings(true);
-        }}
-      />
+      {!sidebarHidden && lista}
+      {sidebarHidden && espiando !== "fora" && (
+        // A lista por cima do conteúdo, sem empurrar: aparece no hover do botão e fica enquanto o mouse
+        // estiver no botão ou nela.
+        <div
+          onPointerEnter={() => espiar(true)}
+          onPointerLeave={() => espiar(false)}
+          className={`fixed top-0 bottom-0 left-[60px] z-20 flex shadow-dialog ${espiando === "saindo" ? "bandeja-sai" : "bandeja-entra"}`}
+        >
+          {lista}
+        </div>
       )}
       {showSettings && (
         <SettingsDialog onClose={() => setShowSettings(false)} tools={allTools} mcp={mcp} onChanged={refreshTools} />
@@ -2190,7 +2231,7 @@ export default function App() {
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
       <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className="arrasta livre-controles relative flex h-12 shrink-0 items-center gap-2 px-3">
+        <div className={`arrasta livre-controles relative flex h-12 shrink-0 items-center gap-2 px-3 ${sidebarHidden ? "pl-12" : ""}`}>
           {/* Indicador da IA local no meio do cabeçalho, em todas as seções. */}
           <div className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-center">
             <div className="pointer-events-auto"><ModeloCarregado /></div>

@@ -338,5 +338,12 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
   .livre-onda, .livre-achata, .livre-pisca, .livre-pulo, .livre-gira { animation: none; }
 }
 
+/* Lista de conversas espiada (lista fechada, mouse no botão): entra deslizando da esquerda, sem empurrar. */
+@keyframes bandeja-entra { from { transform: translateX(-14px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes bandeja-sai { from { transform: none; opacity: 1; } to { transform: translateX(-14px); opacity: 0; } }
+.bandeja-entra { animation: bandeja-entra .16s cubic-bezier(.2, 0, 0, 1); }
+.bandeja-sai { animation: bandeja-sai .14s cubic-bezier(.2, 0, 0, 1) forwards; }
+@media (prefers-reduced-motion: reduce) { .bandeja-entra, .bandeja-sai { animation: none; } }
+
 /* Scrollbar discreta */
 * { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }

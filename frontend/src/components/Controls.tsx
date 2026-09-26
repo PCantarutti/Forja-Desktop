@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import CartaoEstado from "./CartaoEstado";
-import { Balanca, Bubble, Check, ChevronDown, Code, Film, Image, PanelLeft, Search, Split } from "./icons";
+import { Balanca, Bubble, Check, ChevronDown, Code, Film, Image, Search, Split } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
 export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
@@ -213,19 +213,12 @@ export const SECOES: { id: Section; label: string; title: string; icon: React.Re
 export function SectionRail(props: {
   value: Section;
   onChange: (v: Section) => void;
-  listHidden: boolean;
-  onShowList: () => void; // alterna a lista (mostrar/esconder)
   logo: React.ReactNode;
   pe?: React.ReactNode; // rodapé do trilho (as iniciais)
 }) {
   return (
     <nav className="arrasta flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-line bg-side pt-3 pb-2.5" aria-label="Seção">
       <div className="mb-3.5 size-[30px]">{props.logo}</div>
-      {/* sempre aqui, aberta ou fechada a lista: o botão não muda de lugar */}
-      <button onClick={props.onShowList} title={props.listHidden ? "Mostrar conversas" : "Esconder conversas"} aria-pressed={!props.listHidden}
-              className="mb-1.5 grid h-7 w-8 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg">
-        <PanelLeft />
-      </button>
       <div role="radiogroup" className="flex flex-col items-center gap-1">
         {SECOES.map((t, i) => {
           const on = props.value === t.id;

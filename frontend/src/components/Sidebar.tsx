@@ -386,7 +386,7 @@ export default function Sidebar(props: {
 
   return (
     <aside className="flex w-[236px] shrink-0 flex-col border-r border-line bg-side">
-      <div className="arrasta flex h-[52px] shrink-0 items-center gap-2 pr-3.5 pl-4">
+      <div className="arrasta flex h-[52px] shrink-0 items-center gap-2 pr-3.5 pl-12">
         <span className="text-sm font-semibold text-fg">{SECOES.find((x) => x.id === props.section)?.label}</span>
         <span className="font-mono text-[11px] text-faint">{props.conversations.length}</span>
         <button
