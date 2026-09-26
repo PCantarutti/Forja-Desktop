@@ -285,7 +285,15 @@ export type LlamaParams = {
   n_expert: number;
   mmproj: string;
   fit: boolean; // deixa o llama.cpp ajustar o que não couber
+  spec_type?: string; // geração especulativa: "" desligada | draft-mtp | ngram-mod | draft-simple ...
+  spec_draft_n_max?: number; // tokens por rascunho (0 = padrão do llama.cpp)
+  spec_draft_model?: string; // GGUF rascunho (draft-simple/eagle3)
+  spec_draft_ngl?: number; // camadas do rascunho na GPU (-1 = padrão)
+  extra_args?: Record<string, string>; // qualquer outra opção do llama-server: {"--flag": "valor" | ""}
 };
+
+/** Uma opção do --help do llama-server (lista "todas as opções" do painel). */
+export type OpcaoLlama = { flag: string; nomes: string[]; arg: string; descricao: string; controlada: boolean; env?: string };
 
 export type LocalModel = {
   path: string;
@@ -339,6 +347,7 @@ export type ImageParams = {
 /** Metadados lidos do cabeçalho do .gguf. */
 export type ModelInfo = {
   arch: string;
+  mtp?: boolean; // o GGUF traz as camadas de MTP (nextn): serve para a geração especulativa draft-mtp
   n_layer: number;
   n_head_kv: number;
   head_dim: number;

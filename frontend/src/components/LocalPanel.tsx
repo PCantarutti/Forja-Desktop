@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, LocalState, ModelView,
+import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, OpcaoLlama, LocalState, ModelView,
   VideoKit } from "../types";
 import { Check, ChevronDown, Download, ExternalLink, Film, FolderOpen, Search, Square, Trash, X } from "./icons";
 import Confirma from "./Confirma";
@@ -47,6 +47,10 @@ const AJUDA: Record<string, string> = {
   mlock: "Trava o modelo na memória para o Windows não empurrar para o disco.",
   mmap: "Mapeia o arquivo em vez de copiar tudo para a RAM. Ligado carrega mais rápido; com especialistas na CPU o llama.cpp sugere desligar.",
   mmproj: "Arquivo mmproj-*.gguf do mesmo modelo: liga a visão, e aí as imagens do chat chegam ao modelo.",
+  spec_type: "O modelo adivinha vários tokens de uma vez e confere num passo só: mesma resposta, mais tokens por segundo quando o palpite acerta. MTP usa as camadas de predição do próprio modelo (só se o GGUF as tiver); n-grama reaproveita trechos que já apareceram (bom para código e edições); modelo rascunho usa um modelo menor da mesma família.",
+  spec_draft_n_max: "Quantos tokens o rascunho adivinha por vez. Mais tokens rendem mais quando acerta e desperdiçam quando erra. 0 = o padrão do llama.cpp (3).",
+  spec_draft_model: "GGUF pequeno da mesma família (mesmo vocabulário) que faz os palpites. Só nos tipos com modelo rascunho.",
+  spec_draft_ngl: "Camadas do modelo rascunho na GPU. -1 = o padrão do llama.cpp.",
   fit: "Deixa o llama.cpp reduzir sozinho o que não couber na memória (-fit on). A estimativa acima é estimativa; ele mede na hora.",
   temperature: "Quanto o modelo arrisca. Baixo (0,2) responde sempre parecido e obedece mais; alto (1,0+) inventa mais. Para agente, baixo costuma ser melhor.",
   top_k: "Só os K tokens mais prováveis entram no sorteio. 0 desliga o corte.",
@@ -467,12 +471,141 @@ function Toggle(props: {
 
 // ---------------------------------------------------------------- aba Modelos
 
+function Secao(props: { titulo: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2.5 border-t border-line pt-2.5">
+      <span className="text-[11px] font-medium tracking-wide text-faint uppercase">{props.titulo}</span>
+      {props.children}
+    </div>
+  );
+}
+
+const NOME_ESPECULATIVA: Record<string, string> = {
+  "": "Desligada",
+  "draft-mtp": "MTP (camadas do próprio modelo)",
+  "ngram-mod": "N-grama (reaproveita trechos repetidos)",
+  "ngram-simple": "N-grama simples",
+  "ngram-map-k": "N-grama por mapa",
+  "ngram-cache": "N-grama com cache",
+  "draft-simple": "Modelo rascunho",
+  "draft-eagle3": "Modelo rascunho EAGLE-3",
+};
+
+/** Geração especulativa: tipo, tokens por rascunho e (nos tipos com rascunho) o GGUF rascunho. */
+function Especulativa(p: {
+  form: LlamaParams;
+  set: <K extends keyof LlamaParams>(k: K, v: LlamaParams[K]) => void;
+  mudou: (k: keyof LlamaParams) => boolean;
+  reset: (k: keyof LlamaParams) => void;
+  tipos: string[];
+  mtp: boolean;
+}) {
+  const tipo = p.form.spec_type ?? "";
+  const comRascunho = tipo === "draft-simple" || tipo === "draft-eagle3";
+  if (!p.tipos.length) return <p className="text-faint">O llama.cpp instalado não oferece geração especulativa.</p>;
+  return (
+    <>
+      <Field label="Tipo" chave="spec_type" mudado={p.mudou("spec_type")} onReset={() => p.reset("spec_type")}
+             hint={tipo === "draft-mtp" && !p.mtp ? "Este GGUF não tem as camadas de MTP: a conversão veio sem elas. Use n-grama ou outro arquivo."
+               : p.mtp && !tipo ? "Este modelo tem camadas de MTP: dá para ligar sem modelo extra." : undefined}>
+        <select className={input} value={tipo} onChange={(e) => p.set("spec_type", e.target.value)}>
+          {["", ...p.tipos].map((t) => (
+            <option key={t} value={t}>{NOME_ESPECULATIVA[t] ?? t}{t === "draft-mtp" && p.mtp ? " · disponível neste modelo" : ""}</option>
+          ))}
+        </select>
+      </Field>
+      {tipo && (
+        <Num label="Tokens por rascunho" chave="spec_draft_n_max" value={p.form.spec_draft_n_max ?? 0} max={16}
+             onChange={(v) => p.set("spec_draft_n_max", v)} mudado={p.mudou("spec_draft_n_max")} onReset={() => p.reset("spec_draft_n_max")} hint="0 = padrão (3)" />
+      )}
+      {comRascunho && (
+        <>
+          <Field label="Modelo rascunho (GGUF)" chave="spec_draft_model" mudado={p.mudou("spec_draft_model")} onReset={() => p.reset("spec_draft_model")}>
+            <input className={input} value={p.form.spec_draft_model ?? ""} onChange={(e) => p.set("spec_draft_model", e.target.value)} placeholder="caminho do .gguf menor" />
+          </Field>
+          <Num label="Camadas do rascunho na GPU" chave="spec_draft_ngl" value={p.form.spec_draft_ngl ?? -1}
+               onChange={(v) => p.set("spec_draft_ngl", v)} mudado={p.mudou("spec_draft_ngl")} onReset={() => p.reset("spec_draft_ngl")} hint="-1 = padrão" />
+        </>
+      )}
+    </>
+  );
+}
+
+/** Todas as opções do llama-server instalado (do --help dele). As que o painel já controla aparecem só para
+ *  consulta; as outras podem ser ligadas, com valor quando a opção pede. */
+function TodasOpcoes(p: { secoes: { nome: string; opcoes: OpcaoLlama[] }[]; valor: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
+  const [q, setQ] = useState("");
+  const [so, setSo] = useState(false);
+  const nomeSecao: Record<string, string> = { common: "Gerais", sampling: "Amostragem (padrões do servidor; por modelo, use a aba Inferência)", speculative: "Geração especulativa", "example-specific": "Servidor" };
+  const filtro = q.trim().toLowerCase();
+  const muda = (flag: string, ligado: boolean, v = "") => {
+    const novo = { ...p.valor };
+    if (ligado) novo[flag] = v;
+    else delete novo[flag];
+    p.onChange(novo);
+  };
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line p-2.5">
+      <div className="flex items-center gap-2">
+        <input className={`${input} flex-1`} placeholder="buscar opção (ex.: cache-reuse, split, numa)" value={q} onChange={(e) => setQ(e.target.value)} />
+        <label className="flex shrink-0 items-center gap-1.5 text-faint">
+          <input type="checkbox" checked={so} onChange={(e) => setSo(e.target.checked)} /> só as ligadas
+        </label>
+      </div>
+      {Object.keys(p.valor).length > 0 && (
+        <p className="font-mono text-[11px] text-sky-300">
+          {Object.entries(p.valor).map(([f, v]) => (v ? `${f} ${v}` : f)).join("  ")}
+        </p>
+      )}
+      <div className="max-h-96 overflow-y-auto pr-1">
+        {p.secoes.map((s) => {
+          const lista = s.opcoes.filter((o) => (!so || o.flag in p.valor)
+            && (!filtro || o.nomes.join(" ").toLowerCase().includes(filtro) || o.descricao.toLowerCase().includes(filtro)));
+          if (!lista.length) return null;
+          return (
+            <div key={s.nome} className="mb-3">
+              <div className="sticky top-0 bg-surface py-1 text-[11px] font-medium tracking-wide text-faint uppercase">{nomeSecao[s.nome] ?? s.nome}</div>
+              {lista.map((o) => {
+                const ligado = o.flag in p.valor;
+                return (
+                  <div key={o.flag} className="flex items-start gap-2 border-b border-line/60 py-1.5">
+                    <input type="checkbox" className="mt-0.5" disabled={o.controlada} checked={ligado}
+                           title={o.controlada ? "Já está no painel acima (ou o Forja controla)" : "Passar esta opção ao llama-server"}
+                           onChange={(e) => muda(o.flag, e.target.checked)} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-x-2">
+                        <span className={`font-mono text-[11.5px] ${o.controlada ? "text-faint" : "text-fg"}`}>{o.nomes.join(", ")}</span>
+                        {o.arg && <span className="font-mono text-[11px] text-faint">{o.arg}</span>}
+                        {o.controlada && <span className="text-[10.5px] text-faint">no painel</span>}
+                      </div>
+                      <div className="text-[11.5px] leading-snug text-muted">{o.descricao}</div>
+                      {ligado && o.arg && (
+                        <input className={`${input} mt-1`} value={p.valor[o.flag]} placeholder={o.arg}
+                               onChange={(e) => muda(o.flag, true, e.target.value)} />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Models(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
   const { st } = props;
   const [sel, setSel] = useState("");
   const [view, setView] = useState<ModelView | null>(null);
   const [form, setForm] = useState<LlamaParams | null>(null);
   const [adv, setAdv] = useState(false);
+  const [todas, setTodas] = useState(false);
+  const [opcoes, setOpcoes] = useState<{ secoes: { nome: string; opcoes: OpcaoLlama[] }[]; spec_tipos: string[] } | null>(null);
+  useEffect(() => {
+    api.get<NonNullable<typeof opcoes>>("/local/opcoes").then(setOpcoes).catch(() => setOpcoes({ secoes: [], spec_tipos: [] }));
+  }, []);
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
   const [logAberto, setLogAberto] = useState(false);
@@ -795,6 +928,8 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
                 </select>
               </Field>
             </div>
+            <Num label="Camadas MoE na CPU" chave="n_cpu_moe" value={form.n_cpu_moe} max={info?.n_layer || undefined} onChange={(v) => set("n_cpu_moe", v)} mudado={mudou("n_cpu_moe")} onReset={() => reset("n_cpu_moe")} hint="0 = nenhuma" />
+            <Num label="Previsões simultâneas" chave="parallel" value={form.parallel} onChange={(v) => set("parallel", v)} mudado={mudou("parallel")} onReset={() => reset("parallel")} hint="0 = automático" />
             <Num
               label="Threads da CPU"
               chave="threads"
@@ -804,31 +939,43 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               onReset={() => reset("threads")}
               hint="0 = automático"
             />
+            <Field label="Projetor multimodal (mmproj)" chave="mmproj" mudado={mudou("mmproj")} onReset={() => reset("mmproj")}>
+              <input className={input} value={form.mmproj} onChange={(e) => set("mmproj", e.target.value)} placeholder="opcional" />
+            </Field>
+
+            <Secao titulo="Geração especulativa">
+              <Especulativa form={form} set={set} mudou={mudou} reset={reset} tipos={opcoes?.spec_tipos ?? []} mtp={!!info?.mtp} />
+            </Secao>
 
             <button className="mt-1 self-start text-faint underline hover:text-fg" onClick={() => setAdv(!adv)}>
-              {adv ? "esconder avançado" : "avançado"}
+              {adv ? "esconder mais opções" : "mais opções"}
             </button>
             {adv && (
-              <div className="flex flex-col gap-2.5 border-t border-line pt-2.5">
-                <Num label="Lote de avaliação" chave="batch" value={form.batch} onChange={(v) => set("batch", v)} mudado={mudou("batch")} onReset={() => reset("batch")} />
-                <Num label="Lote físico" chave="ubatch" value={form.ubatch} onChange={(v) => set("ubatch", v)} mudado={mudou("ubatch")} onReset={() => reset("ubatch")} />
-                <Num label="Previsões simultâneas" chave="parallel" value={form.parallel} onChange={(v) => set("parallel", v)} mudado={mudou("parallel")} onReset={() => reset("parallel")} hint="0 = automático" />
-                <Num label="Checkpoints de contexto" chave="ctx_checkpoints" value={form.ctx_checkpoints} onChange={(v) => set("ctx_checkpoints", v)} mudado={mudou("ctx_checkpoints")} onReset={() => reset("ctx_checkpoints")} />
-                <Num label="Camadas MoE na CPU" chave="n_cpu_moe" value={form.n_cpu_moe} max={info?.n_layer || undefined} onChange={(v) => set("n_cpu_moe", v)} mudado={mudou("n_cpu_moe")} onReset={() => reset("n_cpu_moe")} hint="0 = nenhuma" />
-                <Num label="Número de especialistas" chave="n_expert" value={form.n_expert} onChange={(v) => set("n_expert", v)} mudado={mudou("n_expert")} onReset={() => reset("n_expert")} />
-                <Num label="Semente" chave="seed" value={form.seed} onChange={(v) => set("seed", v)} mudado={mudou("seed")} onReset={() => reset("seed")} hint="0 = aleatória" />
-                <Num label="RoPE freq. base" chave="rope_freq_base" value={form.rope_freq_base} onChange={(v) => set("rope_freq_base", v)} mudado={mudou("rope_freq_base")} onReset={() => reset("rope_freq_base")} hint="0 = automático" />
-                <Num label="RoPE escala" chave="rope_freq_scale" value={form.rope_freq_scale} onChange={(v) => set("rope_freq_scale", v)} mudado={mudou("rope_freq_scale")} onReset={() => reset("rope_freq_scale")} hint="0 = automático" />
-                <Toggle label="Ajustar para caber na memória" chave="fit" value={form.fit} onChange={(v) => set("fit", v)} mudado={mudou("fit")} onReset={() => reset("fit")} />
-                <Toggle label="Cache KV unificado" chave="kv_unified" value={form.kv_unified} onChange={(v) => set("kv_unified", v)} mudado={mudou("kv_unified")} onReset={() => reset("kv_unified")} />
-                <Toggle label="Guardar a janela inteira" chave="swa_full" value={!!form.swa_full} onChange={(v) => set("swa_full", v)} mudado={mudou("swa_full")} onReset={() => reset("swa_full")} />
-                <Toggle label="Descarregar cache KV para a GPU" chave="no_kv_offload" value={!form.no_kv_offload} onChange={(v) => set("no_kv_offload", !v)} mudado={mudou("no_kv_offload")} onReset={() => reset("no_kv_offload")} />
-                <Toggle label="Manter modelo na memória" chave="mlock" value={form.mlock} onChange={(v) => set("mlock", v)} mudado={mudou("mlock")} onReset={() => reset("mlock")} />
-                <Toggle label="Tentar mmap()" chave="mmap" value={form.mmap} onChange={(v) => set("mmap", v)} mudado={mudou("mmap")} onReset={() => reset("mmap")} />
-                <Field label="Projetor multimodal (mmproj)" chave="mmproj" mudado={mudou("mmproj")} onReset={() => reset("mmproj")}>
-                  <input className={input} value={form.mmproj} onChange={(e) => set("mmproj", e.target.value)} placeholder="opcional" />
-                </Field>
-              </div>
+              <>
+                <Secao titulo="Desempenho e memória">
+                  <Num label="Lote de avaliação" chave="batch" value={form.batch} onChange={(v) => set("batch", v)} mudado={mudou("batch")} onReset={() => reset("batch")} />
+                  <Num label="Lote físico" chave="ubatch" value={form.ubatch} onChange={(v) => set("ubatch", v)} mudado={mudou("ubatch")} onReset={() => reset("ubatch")} />
+                  <Num label="Checkpoints de contexto" chave="ctx_checkpoints" value={form.ctx_checkpoints} onChange={(v) => set("ctx_checkpoints", v)} mudado={mudou("ctx_checkpoints")} onReset={() => reset("ctx_checkpoints")} />
+                  <Toggle label="Ajustar para caber na memória" chave="fit" value={form.fit} onChange={(v) => set("fit", v)} mudado={mudou("fit")} onReset={() => reset("fit")} />
+                  <Toggle label="Cache KV unificado" chave="kv_unified" value={form.kv_unified} onChange={(v) => set("kv_unified", v)} mudado={mudou("kv_unified")} onReset={() => reset("kv_unified")} />
+                  <Toggle label="Guardar a janela inteira" chave="swa_full" value={!!form.swa_full} onChange={(v) => set("swa_full", v)} mudado={mudou("swa_full")} onReset={() => reset("swa_full")} />
+                  <Toggle label="Descarregar cache KV para a GPU" chave="no_kv_offload" value={!form.no_kv_offload} onChange={(v) => set("no_kv_offload", !v)} mudado={mudou("no_kv_offload")} onReset={() => reset("no_kv_offload")} />
+                  <Toggle label="Manter modelo na memória" chave="mlock" value={form.mlock} onChange={(v) => set("mlock", v)} mudado={mudou("mlock")} onReset={() => reset("mlock")} />
+                  <Toggle label="Tentar mmap()" chave="mmap" value={form.mmap} onChange={(v) => set("mmap", v)} mudado={mudou("mmap")} onReset={() => reset("mmap")} />
+                </Secao>
+                <Secao titulo="Modelo">
+                  <Num label="Número de especialistas" chave="n_expert" value={form.n_expert} onChange={(v) => set("n_expert", v)} mudado={mudou("n_expert")} onReset={() => reset("n_expert")} />
+                  <Num label="Semente" chave="seed" value={form.seed} onChange={(v) => set("seed", v)} mudado={mudou("seed")} onReset={() => reset("seed")} hint="0 = aleatória" />
+                  <Num label="RoPE freq. base" chave="rope_freq_base" value={form.rope_freq_base} onChange={(v) => set("rope_freq_base", v)} mudado={mudou("rope_freq_base")} onReset={() => reset("rope_freq_base")} hint="0 = automático" />
+                  <Num label="RoPE escala" chave="rope_freq_scale" value={form.rope_freq_scale} onChange={(v) => set("rope_freq_scale", v)} mudado={mudou("rope_freq_scale")} onReset={() => reset("rope_freq_scale")} hint="0 = automático" />
+                </Secao>
+                <button className="self-start text-faint underline hover:text-fg" onClick={() => setTodas(!todas)}>
+                  {todas ? "esconder todas as opções do llama.cpp" : `todas as opções do llama.cpp (${opcoes?.secoes.reduce((n, s) => n + s.opcoes.length, 0) ?? "…"})`}
+                </button>
+                {todas && opcoes && (
+                  <TodasOpcoes secoes={opcoes.secoes} valor={form.extra_args ?? {}} onChange={(v) => set("extra_args", v)} />
+                )}
+              </>
             )}
           </div>
 

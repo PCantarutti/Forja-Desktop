@@ -1113,3 +1113,51 @@ def test_argv_alta_resolucao(isolado):
     assert a[a.index("--hires-upscaler") + 1] == "4x-UltraSharp"
     pasta = Path(a[a.index("--hires-upscalers-dir") + 1])
     assert (pasta / "4x-UltraSharp.pth").is_file() and str(pasta).isascii()  # "Ampliação": a pasta vai pelo 8.3
+
+
+AJUDA_FALSA = """----- common params -----
+-c,    --ctx-size N                     size of the prompt context (default: 4096)
+                                        (env: LLAMA_ARG_CTX_SIZE)
+--cache-reuse N                         min chunk size to attempt reusing from the cache via KV shifting
+                                        (default: 0)
+----- speculative params -----
+--spec-type none,draft-simple,draft-mtp,ngram-mod
+                                        comma-separated list of types of speculative decoding to use
+--spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)
+----- example-specific params -----
+--port PORT                             port to listen (default: 8080)
+--no-webui                              Disable the Web UI (default: enabled)
+"""
+
+
+def test_opcoes_do_help_em_estrutura_e_as_controladas_marcadas(monkeypatch):
+    monkeypatch.setattr(localai, "_help", lambda exe: AJUDA_FALSA)
+    secoes = localai.opcoes("x")
+    assert [s["nome"] for s in secoes] == ["common", "speculative", "example-specific"]
+    reuse = next(o for o in secoes[0]["opcoes"] if o["flag"] == "--cache-reuse")
+    assert reuse["arg"] == "N" and "(default: 0)" in reuse["descricao"] and not reuse["controlada"]
+    ctx = secoes[0]["opcoes"][0]
+    assert ctx["nomes"] == ["-c", "--ctx-size"] and ctx["controlada"] and ctx["env"] == "LLAMA_ARG_CTX_SIZE"
+    assert localai.tipos_especulativos("x") == ["draft-mtp", "ngram-mod", "draft-simple"]
+
+
+def test_argv_com_geracao_especulativa_e_opcoes_extras():
+    known = frozenset({"--spec-type", "--spec-draft-n-max", "--cache-reuse", "--no-webui", "--port"})
+    p = {**localai.DEFAULT_PARAMS, "spec_type": "draft-mtp", "spec_draft_n_max": 2,
+         "extra_args": {"--cache-reuse": "256", "--no-webui": "", "--port": "1", "--inventada": "x"}}
+    a = localai.argv(Path("llama-server.exe"), "m.gguf", p, known)
+    assert a[a.index("--spec-type") + 1] == "draft-mtp" and a[a.index("--spec-draft-n-max") + 1] == "2"
+    assert a[a.index("--cache-reuse") + 1] == "256" and "--no-webui" in a
+    assert a.count("--port") == 1 and "--inventada" not in a      # controlada e desconhecida ficam de fora
+    sem = localai.argv(Path("llama-server.exe"), "m.gguf", localai.DEFAULT_PARAMS, known)
+    assert "--spec-type" not in sem
+
+
+def test_parametros_novos_validados():
+    import pytest
+    from app.tools import ToolError
+    with pytest.raises(ToolError):
+        localai._clean_params({"spec_type": "turbo"})
+    with pytest.raises(ToolError):
+        localai._clean_params({"extra_args": {"cache-reuse": "1"}})
+    assert localai._clean_params({"extra_args": {"--cache-reuse": 256}}) == {"extra_args": {"--cache-reuse": "256"}}

@@ -89,6 +89,31 @@ DEFAULT_PARAMS = {
     "mmproj": "",             # projetor multimodal: dá visão ao modelo
     "fit": True,              # -fit on: o llama.cpp ajusta o que não foi definido para caber na memória
     "swa_full": False,        # --swa-full: KV de todas as camadas em modelo SWA (é o que deixa restaurar do disco)
+    # Geração especulativa: o modelo (ou um rascunho) adivinha vários tokens e o principal confere de uma vez.
+    "spec_type": "",          # --spec-type: "" desligada | draft-mtp | draft-simple | ngram-simple | ngram-mod ...
+    "spec_draft_n_max": 0,    # --spec-draft-n-max: tokens por rascunho (0 = o padrão do llama.cpp, 3)
+    "spec_draft_model": "",   # --spec-draft-model: GGUF rascunho (draft-simple/eagle3)
+    "spec_draft_ngl": -1,     # --spec-draft-ngl: camadas do rascunho na GPU (-1 = o padrão)
+    # Qualquer outra opção do llama-server, lida do --help deste binário: {"--flag": "valor" | ""}.
+    "extra_args": {},
+}
+
+# Tipos de geração especulativa que o painel oferece (o --help diz quais esta build aceita).
+SPEC_TIPOS = ("draft-mtp", "ngram-mod", "ngram-simple", "ngram-map-k", "ngram-cache", "draft-simple", "draft-eagle3")
+
+# Opções que o Forja controla (ou que não fazem sentido num servidor gerenciado): fora da lista "todas as opções".
+CONTROLADAS = {
+    "-m", "--model", "--host", "--port", "--alias", "--jinja", "--no-jinja", "-h", "--help", "--usage", "--version",
+    "--list-devices", "--completion-bash", "-cl", "--api-key", "--api-key-file", "--path", "--api-prefix",
+    "--slot-save-path", "-c", "--ctx-size", "-ngl", "--gpu-layers", "--n-gpu-layers", "-t", "--threads",
+    "-b", "--batch-size", "-ub", "--ubatch-size", "-np", "--parallel", "-fa", "--flash-attn", "-ctk",
+    "--cache-type-k", "-ctv", "--cache-type-v", "-kvu", "--kv-unified", "-nkvo", "--no-kv-offload", "--mlock",
+    "--no-mmap", "--mmap", "--load-mode", "--seed", "-s", "--rope-freq-base", "--rope-freq-scale", "--mmproj",
+    "-mm", "--swa-full", "--ctx-checkpoints", "--n-cpu-moe", "-ncmoe", "-fit", "--fit", "--device", "-dev",
+    "--override-kv", "--reasoning-budget", "--spec-type", "--spec-draft-n-max", "--spec-draft-model", "-md",
+    "--model-draft", "--spec-draft-ngl", "-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft", "--log-file",
+    "-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-hft", "--hf-token", "-mu", "--model-url", "-dr",
+    "--docker-repo", "--offline",
 }
 
 # Amostragem: padrão do llama.cpp, sobrescrito pelo que o próprio gguf recomenda (general.sampling.*).
@@ -370,7 +395,25 @@ def _clean_params(patch: dict) -> dict:
             out[k] = bool(v) if isinstance(default, bool) else type(default)(v)
         except (TypeError, ValueError):
             raise ToolError(f"Valor inválido para '{k}': {v!r}")
+    if out.get("spec_type") and out["spec_type"] not in SPEC_TIPOS:
+        raise ToolError(f"Geração especulativa desconhecida: {out['spec_type']!r}")
+    if "extra_args" in out:
+        extra = {}
+        for flag, valor in out["extra_args"].items():
+            flag = str(flag).strip()
+            if not flag.startswith("-") or " " in flag:
+                raise ToolError(f"Opção inválida do llama.cpp: {flag!r}")
+            extra[flag] = str(valor if valor is not None else "")[:500]
+        out["extra_args"] = extra
     return out
+
+
+def tipos_especulativos(exe: str | None = None) -> list[str]:
+    """Os tipos de geração especulativa que ESTE binário aceita, na ordem do painel."""
+    exe = exe or (str(find_exe("llama")) if find_exe("llama") else "")
+    ajuda = _help(exe) if exe else ""
+    linha = next((l for l in ajuda.splitlines() if l.startswith("--spec-type")), "")
+    return [t for t in SPEC_TIPOS if t in linha] if linha else []
 
 
 # ------------------------------------------------------------------ runtimes
@@ -1549,10 +1592,72 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
         a += ["--mmproj", str(p["mmproj"])]
     if p.get("swa_full") and ok("--swa-full"):
         a.append("--swa-full")
+    if p.get("spec_type") and ok("--spec-type"):
+        a += ["--spec-type", str(p["spec_type"])]
+        if int(p.get("spec_draft_n_max") or 0) > 0 and ok("--spec-draft-n-max"):
+            a += ["--spec-draft-n-max", str(int(p["spec_draft_n_max"]))]
+        if p.get("spec_draft_model") and ok("--spec-draft-model"):
+            a += ["--spec-draft-model", str(p["spec_draft_model"])]
+            if int(p.get("spec_draft_ngl", -1)) >= 0 and ok("--spec-draft-ngl"):
+                a += ["--spec-draft-ngl", str(int(p["spec_draft_ngl"]))]
+    a += _extras(p.get("extra_args") or {}, known)
     from . import kvcache  # E4: cache do prompt em disco, onde o modelo consegue restaurar
     if ok("--slot-save-path") and kvcache.suportado(str(path), p)[0]:
         a += ["--slot-save-path", str(kvcache.pasta())]
     return a
+
+
+def _extras(extra: dict, known: frozenset[str]) -> list[str]:
+    """Opções escolhidas na lista "todas as opções": só as que o binário conhece e o Forja não controla.
+    Vão como argumentos separados (sem shell), então valor com espaço não quebra nem injeta nada."""
+    out = []
+    for flag, valor in extra.items():
+        flag = str(flag).strip()
+        if not flag.startswith("-") or flag in CONTROLADAS or (known and flag not in known):
+            continue
+        valor = str(valor if valor is not None else "").replace("\n", " ").strip()
+        out += [flag, valor] if valor else [flag]
+    return out
+
+
+def opcoes(exe: str) -> list[dict]:
+    """O --help do llama-server em estrutura: seções, cada opção com nomes, argumento, descrição e se o Forja já
+    controla. É o que a lista "todas as opções do llama.cpp" do painel mostra."""
+    secoes: list[dict] = []
+    atual = None
+    for linha in _help(exe).splitlines():
+        if linha.startswith("-----"):
+            atual = {"nome": linha.strip("- ").replace(" params", ""), "opcoes": []}
+            secoes.append(atual)
+            continue
+        if atual is None:
+            continue
+        if linha[:1] == "-":
+            # "-c,    --ctx-size N      descrição": a descrição começa no 1º bloco de espaços que não segue vírgula
+            corte = next((m.start() for m in re.finditer(r" {2,}", linha) if not linha[:m.start()].rstrip().endswith(",")),
+                         len(linha))
+            cabeca, descricao = linha[:corte].strip(), linha[corte:].strip()
+            partes = [x.strip() for x in cabeca.split(",")]
+            nomes, arg = [], ""
+            for x in partes:
+                nome, _, resto = x.partition(" ")
+                if nome.startswith("-"):
+                    nomes.append(nome)
+                    arg = arg or resto.strip()
+            longo = max(nomes, key=len) if nomes else cabeca.split()[0]
+            atual["opcoes"].append({"flag": longo, "nomes": nomes, "arg": arg, "descricao": descricao,
+                                    "controlada": any(n in CONTROLADAS for n in nomes)})
+        elif atual["opcoes"] and linha.startswith(" "):
+            texto = linha.strip()
+            o = atual["opcoes"][-1]
+            if texto.startswith("(env:"):
+                o["env"] = texto.strip("()").removeprefix("env:").strip()
+            elif texto:
+                o["descricao"] = f"{o['descricao']} {texto}".strip()
+    for s in secoes:  # o --help traz link de imagem em markdown ("[(card)](https://...)") em algumas descrições
+        for o in s["opcoes"]:
+            o["descricao"] = re.sub(r"\s*\[\([^)]*\)\]\([^)]*\)", "", o["descricao"]).strip()
+    return [s for s in secoes if s["opcoes"]]
 
 
 def _load_mode(mlock: bool, mmap: bool, known: frozenset[str]) -> list[str]:
@@ -2483,7 +2588,10 @@ def model_view(path: str, patch: dict | None = None) -> dict:
     """Tudo que o painel precisa de um modelo: metadados, padrões, o que foi mudado e a estimativa."""
     d = defaults_for(path)
     atual = {**d, **overrides(path), **_clean_params(patch or {})}
-    info = {k: v for k, v in gguf_info(path).items() if k != "tensors"}
+    bruto = gguf_info(path)
+    info = {k: v for k, v in bruto.items() if k != "tensors"}
+    # Camadas de MTP (nextn) no GGUF: é o que a geração especulativa "draft-mtp" usa. Conversão sem elas = sem MTP.
+    info["mtp"] = any(".nextn." in nome for nome, _ in bruto.get("tensors") or [])
     from . import db  # import local: db não é necessário para nada mais deste módulo
     inf_d = inference_defaults(path)
     inf = {**inf_d, **(db.get_model_setting(alias_of(path)).get("inference") or {})}

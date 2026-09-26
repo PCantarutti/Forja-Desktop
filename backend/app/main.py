@@ -821,6 +821,17 @@ def perfil_voltar():
     return {"ok": True}
 
 
+@app.get("/api/local/opcoes")
+async def local_opcoes():
+    """Todas as opções do llama-server instalado (lidas do --help dele), por seção, e os tipos de geração
+    especulativa que ele aceita. O painel mostra as principais em cima e esta lista inteira embaixo."""
+    exe = localai.find_exe("llama")
+    if not exe:
+        return {"secoes": [], "spec_tipos": [], "versao": ""}
+    secoes = await asyncio.to_thread(localai.opcoes, str(exe))
+    return {"secoes": secoes, "spec_tipos": localai.tipos_especulativos(str(exe))}
+
+
 @app.get("/api/local/kvcache")
 def local_kvcache(path: str = ""):
     """E4: cache do prompt em disco — uso, limite e se o modelo carregado consegue restaurar (e por que não);

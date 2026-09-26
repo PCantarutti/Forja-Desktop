@@ -176,6 +176,7 @@ def main() -> None:
     ap.add_argument("--effort", default="medio")
     ap.add_argument("--workers", type=int, default=1, help="Workers em paralelo (E7): abre N+1 slots e usa o perfil Balanced")
     ap.add_argument("--sandbox", action="store_true", help="comandos no sandbox isolado (E12), modo 'sempre'")
+    ap.add_argument("--sem-mmap", action="store_true", help="carrega os modelos com mmap desligado (tudo copiado para a RAM/VRAM)")
     ap.add_argument("--instancia", default="", help="URL da API de uma instância aberta (ex.: http://127.0.0.1:8799)")
     ap.add_argument("--token", default="", help="x-forja-token da instância")
     ap.add_argument("--metricas", default="", help="arquivo FORJA_METRICAS com que a instância subiu")
@@ -186,6 +187,8 @@ def main() -> None:
     extra = {"cache_type_k": a.kv, "cache_type_v": a.kv} if a.kv else {}
     if a.workers > 1:
         extra["parallel"] = a.workers + 1  # o slot 0 é do Maestro
+    if a.sem_mmap:
+        extra["mmap"] = False
     dados = RAIZ.parent / ".devbench" / f"{a.rotulo}-{datetime.now():%Y%m%d-%H%M%S}"
     if a.instancia:
         dados.mkdir(parents=True)
@@ -207,7 +210,7 @@ def main() -> None:
     inicio = time.time()
     resultado: dict = {"rotulo": a.rotulo, "quando": datetime.now().isoformat(timespec="seconds"),
                        "maestro": alias["maestro"], "worker": alias["worker"], "kv": a.kv or "do usuário",
-                       "effort": a.effort, "dados": str(dados), "workers": a.workers, "sandbox": a.sandbox}
+                       "effort": a.effort, "dados": str(dados), "workers": a.workers, "sandbox": a.sandbox, "mmap": not a.sem_mmap}
     try:
         worker = {"provider": "local", "model": alias["worker"]}
         r = api.put("/settings", json={"maestro_model": {"provider": "local", "model": alias["maestro"]},
