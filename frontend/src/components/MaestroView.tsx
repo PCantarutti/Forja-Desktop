@@ -74,7 +74,7 @@ function emOrdemDeLeitura(tasks: MaestroTask[]): MaestroTask[] {
 }
 
 const card = "rounded-xl border border-line bg-panel";
-const titulo = "px-3 py-2 text-[11px] font-medium uppercase tracking-wide text-faint";
+const titulo = "px-3 py-2 font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint";
 
 const gb = (n?: number | null) => (n == null ? "—" : `${(n / 1024 ** 3).toFixed(1)} GB`);
 const dur = (s?: number | null) => (s == null ? "" : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, "0")}`);

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import { useStickyBottom } from "../useStickyBottom";
 import type { CompararEntrada, CompararEstado, CompararItem, Message, PlacarLinha } from "../types";
-import { ArrowUp, Balanca, Check, Copy, Cube, Eye, EyeOff, Gauge, Plus, Refresh, Split, Square, Trash, X } from "./icons";
+import { ArrowUp, Balanca, Check, Copy, Cube, Eye, EyeOff, Gauge, Plus, Refresh, Split, Square, Trash, X, Star } from "./icons";
 import { Markdown, TestarCodigo, Thinking } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada } from "./Composer";
@@ -11,7 +11,7 @@ import { Menu } from "./Controls";
 // Mesma linguagem visual do cockpit da Maestro: cartões escuros com borda fina e títulos em caixa
 // alta pequena. Repetidas aqui para esta aba viajar inteira num cherry-pick para o forja-web.
 const card = "rounded-xl border border-line bg-panel";
-const titulo = "text-[11px] font-medium uppercase tracking-wide text-faint";
+const titulo = "font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint";
 const btn = "rounded-[9px] border border-line px-3 py-1 text-fg hover:bg-raised disabled:opacity-40";
 const btnPrimary = "rounded-[9px] bg-accent px-3 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 const campo = "rounded-lg border border-line bg-raised px-2 py-1 text-xs text-fg focus:border-focus focus:outline-none";
@@ -529,7 +529,7 @@ export default function CompararView(props: {
               {placar.map((l) => (
                 <div key={l.nome} className="flex items-center gap-3 border-t border-line py-1.5 text-xs first:border-0">
                   <span className="flex-1 truncate text-fg">{l.nome}</span>
-                  <span className="text-muted">{l.vitorias} 🏆</span>
+                  <span className="inline-flex items-center gap-1 text-muted"><Star className="size-3" cheia /> {l.vitorias}</span>
                   <span className="text-faint">{l.rodadas} rodadas</span>
                   {l.tps && <span className="text-faint">{l.tps} tok/s</span>}
                   {!!l.erros && <span className="text-red-300">{l.erros} erros</span>}
@@ -754,7 +754,7 @@ function ColunaResposta(props: {
   const gerando = item.status === "rodando";
   const { ref, fim, onScroll } = useStickyBottom<HTMLDivElement>([item.content, item.reasoning, item.status]);
   return (
-    <div className={`${card} flex min-w-0 flex-col overflow-hidden ${estado.voto === item.id ? "border-amber-700/70" : ""}`}>
+    <div className={`${card} flex min-w-0 flex-col overflow-hidden ${estado.voto === item.id ? "border-accent-line" : ""}`}>
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <span className={`size-2 shrink-0 rounded-full ${CORES[item.status]}`} title={ROTULOS[item.status]} />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-fg" title={rotuloDe(item, estado)}>
@@ -765,7 +765,7 @@ function ColunaResposta(props: {
           <button
             title="Gerar esta resposta de novo (alucinou, entrou em laço, deu erro)"
             onClick={props.onRefazer}
-            className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[11px] text-faint hover:bg-raised hover:text-fg"
+            className="flex items-center gap-1 rounded-[7px] border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-raised hover:text-fg"
           >
             <Refresh className="size-3" /> Refazer
           </button>
@@ -780,13 +780,14 @@ function ColunaResposta(props: {
           <button
             title={estado.voto === item.id ? "Desfazer voto" : "Marcar como melhor resposta"}
             onClick={props.onVotar}
-            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${
+            className={`flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] ${
               estado.voto === item.id
-                ? "border-amber-700/70 bg-amber-950/40 text-amber-300"
-                : "border-line text-faint hover:bg-raised hover:text-fg"
+                ? "border-accent bg-accent font-medium text-accent-fg ring-[3px] ring-accent/15"
+                : "border-line text-muted hover:bg-raised hover:text-fg"
             }`}
           >
-            {estado.voto === item.id ? "Vencedor" : "Votar"} 🏆
+            <Star className="size-3" cheia={estado.voto === item.id} />
+            {estado.voto === item.id ? "Melhor resposta" : "Votar"}
           </button>
         )}
       </div>

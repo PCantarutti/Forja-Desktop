@@ -88,4 +88,9 @@ export const Pip = base(<><rect x="2.5" y="4.5" width="19" height="15" rx="2" />
 export const Trocar = base(<path d="M7 7h11l-3-3M17 17H6l3 3" />);
 export const Teclado = base(<><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h1M10.5 10h1M14.5 10h1M6.5 14h11" /></>);
 export const Raio = base(<path d="M13 2 4 14h7l-1 8 9-12h-7z" />);
+export const Star = ({ className = "size-4", cheia }: P & { cheia?: boolean }) => (
+  <svg viewBox="0 0 24 24" fill={cheia ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" className={className} aria-hidden>
+    <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />
+  </svg>
+);
 export const Camera = base(<><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="3.5" /></>);

@@ -411,7 +411,7 @@ export default function PesquisaView(props: {
                 {estado.aviso && <p className="mt-2 text-xs text-amber-300">{estado.aviso}</p>}
                 {!!estado.plano.perguntas.length && (
                   <details className="mt-2 text-xs text-muted">
-                    <summary className="cursor-pointer text-faint hover:text-fg">Plano da pesquisa</summary>
+                    <summary className="cursor-pointer font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase hover:text-fg">Plano da pesquisa</summary>
                     <ul className="mt-1 list-disc pl-5">
                       {estado.plano.perguntas.map((p) => <li key={p}>{p}</li>)}
                     </ul>
@@ -446,8 +446,8 @@ export default function PesquisaView(props: {
           )}
 
               {estado.resumo && (
-                <div className={card}>
-                  <p className="text-[11px] uppercase tracking-wider text-faint">Resumo</p>
+                <div className={`${card} border-accent-line`}>
+                  <p className="font-mono text-[10.5px] font-medium tracking-[.08em] text-accent-text uppercase">Resumo</p>
                   <div className="mt-1 text-sm">
                     <Markdown text={estado.resumo} />
                   </div>
@@ -483,6 +483,7 @@ export default function PesquisaView(props: {
               )}
               {!!estado.fontes.length && (
                 <div className={card}>
+                  <p className="mb-2 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Fontes · {estado.fontes.length}</p>
                   {estado.fontes.map((f) => (
                     <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
                       <div className="flex items-center gap-2">
@@ -490,7 +491,7 @@ export default function PesquisaView(props: {
                                 onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
                           {f.titulo}
                         </button>
-                        <span className="shrink-0 text-faint">{f.dominio}</span>
+                        <span className="shrink-0 font-mono text-[11px] text-faint">{f.dominio}</span>
                         <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
                         <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
                            className="shrink-0 text-faint hover:text-fg">
