@@ -3,7 +3,7 @@ import { api } from "../api";
 import type { Conversation } from "../types";
 import { folderName } from "./FolderPicker";
 import { SECOES, type Section } from "./Controls";
-import { Archive, CheckSquare, ChevronDown, Download, Edit, Gear, More, PanelLeft, Pin, Robo, Search, Trash } from "./icons";
+import { Archive, CheckSquare, ChevronDown, Download, Edit, Gear, More, Pin, Robo, Search, Trash } from "./icons";
 import { AvisoAtualizacao } from "./Atualizacao";
 
 export type BulkAction = "archive" | "unarchive" | "pin" | "unpin" | "delete";
@@ -142,7 +142,6 @@ export default function Sidebar(props: {
   onSettings: () => void;
   section: Section;
   onSection: (s: Section) => void;
-  onHide: () => void;
 }) {
   const runtime = useRuntime();
   const [q, setQ] = useState("");
@@ -387,10 +386,7 @@ export default function Sidebar(props: {
 
   return (
     <aside className="flex w-[236px] shrink-0 flex-col border-r border-line bg-side">
-      <div className="arrasta flex h-[52px] shrink-0 items-center gap-2 pr-3.5 pl-2.5">
-        <button onClick={props.onHide} title="Esconder conversas" className="grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg">
-          <PanelLeft />
-        </button>
+      <div className="arrasta flex h-[52px] shrink-0 items-center gap-2 pr-3.5 pl-4">
         <span className="text-sm font-semibold text-fg">{SECOES.find((x) => x.id === props.section)?.label}</span>
         <span className="font-mono text-[11px] text-faint">{props.conversations.length}</span>
         <button

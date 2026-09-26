@@ -2118,7 +2118,7 @@ export default function App() {
         value={section}
         onChange={changeSection}
         listHidden={sidebarHidden}
-        onShowList={() => setSidebarHidden(false)}
+        onShowList={() => setSidebarHidden((v) => !v)}
         logo={<img src="/favicon.svg" alt="Forja" className="size-full" />}
         pe={
           <button onClick={() => setShowSettings(true)} title="Configurações · Ctrl ,"
@@ -2131,7 +2131,6 @@ export default function App() {
       <Sidebar
         section={section}
         onSection={changeSection}
-        onHide={() => setSidebarHidden(true)}
         conversations={conversations}
         current={currentId}
         unread={unread}
