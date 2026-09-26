@@ -358,7 +358,9 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 /* Lista de conversas fechando: a largura (236px, a do Sidebar) recolhe até 0 e o conteúdo acompanha. */
 @keyframes lista-fecha { from { width: 236px; } to { width: 0; opacity: 0; } }
 .lista-fecha { overflow: hidden; animation: lista-fecha .18s cubic-bezier(.4, 0, 1, 1) forwards; }
-@media (prefers-reduced-motion: reduce) { .lista-fecha { animation-duration: 1ms; } }
+@keyframes lista-abre { from { width: 0; opacity: 0; } to { width: 236px; } }
+.lista-abre { overflow: hidden; animation: lista-abre .18s cubic-bezier(.2, 0, 0, 1); }
+@media (prefers-reduced-motion: reduce) { .lista-fecha, .lista-abre { animation-duration: 1ms; } }
 
 /* Tiles abrindo/fechando (RightPanel.tsx): coluna nova pelo lado, empilhado por baixo. O espaço anima
    junto (sem "to"/"from" o fim é o valor do style inline): a coluna cresce/encolhe a largura e o tile

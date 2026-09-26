@@ -174,7 +174,35 @@ export default function Tiles(props: {
       setSaindo(null);
     };
   }, [props.grade]);
-  const gv = saindo?.grade ?? g;  // a que aparece: a anterior enquanto um tile sai
+  const gv = saindo?.grade ?? g;
+
+  // Recolher/expandir: tamanhos medidos ainda no layout antigo (durante o render), e no layout effect
+  // cada tile/coluna que mudou anima do tamanho antigo para o novo (as vizinhas acompanham).
+  const chaveRec = [...props.grade.recolhidos].sort().join("|");
+  const recAntes = useRef(chaveRec);
+  const tamanhos = useRef<Map<Element, DOMRect> | null>(null);
+  if (chaveRec !== recAntes.current && area.current && !saindo) {
+    const m = new Map<Element, DOMRect>();
+    area.current.querySelectorAll(":scope > [data-coluna], :scope > [data-coluna] > [data-tile]").forEach((e) => m.set(e, e.getBoundingClientRect()));
+    tamanhos.current = m;
+  }
+  recAntes.current = chaveRec;
+  useLayoutEffect(() => {
+    const antes = tamanhos.current;
+    tamanhos.current = null;
+    if (!antes || !area.current) return;
+    const anima = { duration: 180, easing: "cubic-bezier(.2, 0, 0, 1)" };
+    area.current.querySelectorAll<HTMLElement>(":scope > [data-coluna]").forEach((col) => {
+      const a = antes.get(col), b = col.getBoundingClientRect();
+      if (a && Math.abs(a.width - b.width) > 1)
+        col.animate([{ flex: `0 0 ${a.width}px`, minWidth: 0 }, { flex: `0 0 ${b.width}px`, minWidth: 0 }], anima);
+      col.querySelectorAll<HTMLElement>(":scope > [data-tile]").forEach((t) => {
+        const ta = antes.get(t), tb = t.getBoundingClientRect();
+        if (ta && Math.abs(ta.height - tb.height) > 1)
+          t.animate([{ flex: `0 0 ${ta.height}px`, minHeight: 0 }, { flex: `0 0 ${tb.height}px`, minHeight: 0 }], anima);
+      });
+    });
+  }, [chaveRec]);  // a que aparece: a anterior enquanto um tile sai
 
   if (props.soPrincipal) return <div className="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>;
 

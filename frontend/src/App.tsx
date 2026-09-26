@@ -2113,10 +2113,15 @@ export default function App() {
   );
 
   // Espiar a lista com ela fechada: "dentro" (aparecendo), "saindo" (animação de saída) ou "fora".
-  // Fechar a lista anima (recolhe a largura) e só então esconde; abrir é na hora.
+  // Abrir/fechar a lista anima a largura (o conteúdo ao lado acompanha); fechar só esconde no fim.
   const [fechandoLista, setFechandoLista] = useState(false);
+  const [abrindoLista, setAbrindoLista] = useState(false);
   const alternaLista = () => {
-    if (sidebarHidden) return setSidebarHidden(false);
+    if (sidebarHidden) {
+      setAbrindoLista(true);
+      setTimeout(() => setAbrindoLista(false), 200);
+      return setSidebarHidden(false);
+    }
     if (fechandoLista) return;
     setFechandoLista(true);
     setTimeout(() => {
@@ -2210,7 +2215,7 @@ export default function App() {
           </button>
         }
       />
-      {!sidebarHidden && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : ""}`}>{lista}</div>}
+      {!sidebarHidden && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : abrindoLista ? "lista-abre" : ""}`}>{lista}</div>}
       {sidebarHidden && espiando !== "fora" && (
         // A lista por cima do conteúdo, sem empurrar: aparece no hover do botão e fica enquanto o mouse
         // estiver no botão ou nela.
