@@ -328,9 +328,16 @@ def atualiza(root: Path) -> dict:
     return det
 
 
-def texto_para_prompt(root: Path) -> str:
-    """O arquivo inteiro (detectado + o que o usuário escreveu), enxuto, para o prompt e o contrato."""
+def texto_para_prompt(root: Path, arquivos: list[str] | None = None) -> str:
+    """O arquivo inteiro (detectado + o que o usuário escreveu), enxuto, para o prompt e o contrato. As regras
+    aprendidas (E14) entram só as da área de `arquivos` (None = todas)."""
+    from . import preferencias
     t = _texto(Path(root) / ARQUIVO)
+    if preferencias.INICIO in t and preferencias.FIM in t:
+        t = t[:t.index(preferencias.INICIO)] + t[t.index(preferencias.FIM) + len(preferencias.FIM):]
+    if apr := preferencias.para_contrato(Path(root), list(arquivos or []) if arquivos is not None else [],
+                                         limite=MAX_PROMPT // 2):
+        t = t.rstrip() + "\n\n## Aprendido neste projeto\n" + apr
     t = t.replace(INICIO, "").replace(FIM, "")
     t = re.sub(r"(?m)^_Gerado pelo Forja.*$\n?", "", t)
     t = re.sub(r"\n{3,}", "\n\n", t).strip()

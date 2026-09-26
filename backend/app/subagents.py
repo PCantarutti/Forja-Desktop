@@ -529,7 +529,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     if done_when:
         brief.append(f"Critério de pronto: ao final será executado `{done_when}`. Faça o necessário para passar.")
     from . import convencoes
-    if conv := convencoes.texto_para_prompt(root):  # o Worker começa do zero: sem isto inventa um estilo por tarefa
+    if conv := convencoes.texto_para_prompt(root, files):  # o Worker começa do zero: sem isto inventa um estilo por tarefa
         brief.append("Convenções do projeto (siga-as; não invente outro estilo):\n" + conv)
     if structured:  # execução autônoma: cada `python -c` para esperando o usuário clicar
         brief.append("Para conferir, rode os testes (pytest, npm test...) em vez de `python -c`/`node -e`: "

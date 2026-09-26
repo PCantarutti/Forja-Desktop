@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import checkpoints, config, critico, db, gitops, modelctl, subagents, taskdb, workspace
+from . import checkpoints, config, critico, db, gitops, modelctl, preferencias, subagents, taskdb, workspace
 from .tools import ToolError
 
 MAX_ERROS = 5          # erros de passo que entram no resultado
@@ -472,6 +472,9 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
         taskdb.set_status(task.code, "testing", conv_id)
         task = taskdb.get(task.code, conv_id)  # recarrega: o status mudou desde o get inicial
         resultado = collect_result(task, attempt_n, sub_out, raiz)
+        if (resultado.get("tests") or {}).get("status") not in (None, "ok"):  # E14: lint/tipo que se repete
+            preferencias.do_verify(root, resultado["tests"].get("output") or "",
+                                   contrato.get("relevant_files") or [], task.code)
         resultado["route"] = f"{subagents.nome_do_nivel(nivel)} — {motivo_rota}"
         if externas:
             resultado["external_changes"] = externas
@@ -483,7 +486,12 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
             for volta in range(2):
                 yield {"type": "task_update", "code": task.code, "status": "reviewing", "attempt": attempt_n}
                 alvos = {c["path"] for c in resultado["changes"] if c.get("path")}
-                rev = await critico.revisar(raiz, contrato, alvos, {"provider": req.provider, "model": req.model})
+                # E14: regras do projeto sem checagem automática entram como critério do revisor
+                extras = preferencias.sem_checagem(root, contrato.get("relevant_files") or [])
+                rev = await critico.revisar(raiz, {**contrato, "acceptance_criteria": [
+                    *(contrato.get("acceptance_criteria") or []), *extras]} if extras else contrato, alvos,
+                    {"provider": req.provider, "model": req.model})
+                preferencias.do_revisor(root, rev["criterios"], contrato.get("relevant_files") or [], task.code)
                 resultado["criteria"], resultado["criteria_model"] = rev["criterios"], rev["modelo"]
                 if rev["motivo"]:
                     resultado["criteria_note"] = rev["motivo"]

@@ -1380,6 +1380,11 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 "tools": [{"name": t.name, "mutating": t.mutating} for t in current_tools()]}
 
     yield tools_sent()
+    if agent and req.content:  # E14: "não use classes", "sempre use async/await" viram regra do projeto
+        from . import preferencias
+        if novas := preferencias.do_chat(workspace.root(), req.content):
+            yield _event(conv_id, "info", f"Regra do projeto aprendida ({', '.join(novas)}): fica em "
+                                          ".forja/knowledge/convencoes.md, e dá para apagar ou editar lá.")
     # DeepSeek Harness (model-selection): o modelo novo precisa saber que as respostas acima não são dele.
     if (anterior := _modelo_anterior(_load(conv_id))) and anterior != req.model:
         yield _event(conv_id, "mudanca", f"[modelo trocado: as respostas acima foram geradas por {anterior}; a "

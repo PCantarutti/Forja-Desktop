@@ -1578,44 +1578,56 @@ parte 4 depende da E1.
       detectada com a origem certa.
 
 ### Parte 2: aprender com o que deu errado
-- [ ] Sinais que viram **candidatas**, cada uma com a evidência:
+- [x] Sinais que viram **candidatas**, cada uma com a evidência:
   - verify que falhou por lint ou tipo;
   - critério reprovado pelo revisor (E8);
   - o usuário editando um arquivo que o Worker acabou de entregar (diff entre o commit da tarefa, E2,
     e a edição seguinte);
   - uma correção explícita no chat ("não use classes", "sempre async/await").
-- [ ] **A candidata só vira regra** depois de 2–3 ocorrências do mesmo tipo, ou quando o usuário
+- [x] **A candidata só vira regra** depois de 2–3 ocorrências do mesmo tipo, ou quando o usuário
       confirma. Isso evita gravar como preferência algo que foi acaso.
-- [ ] Na conversa, a confirmação é uma pergunta curta ("percebi X em 3 tarefas; vira regra do
+- [x] Na conversa, a confirmação é uma pergunta curta ("percebi X em 3 tarefas; vira regra do
       projeto?"), no máximo uma por execução, para não interromper o Maestro autônomo. No modo
       autônomo, as candidatas ficam numa lista para o usuário revisar depois.
-- [ ] As regras aprendidas ficam em `convencoes.md` na seção "aprendido", com a data, as evidências e um
+- [x] As regras aprendidas ficam em `convencoes.md` na seção "aprendido", com a data, as evidências e um
       contador. O usuário pode apagar ou editar à mão.
 
 ### Parte 3: mandar só o relevante no contrato
-- [ ] Cada regra tem uma **área**: `frontend`, `backend`, `testes`, `geral` ou um glob (`src/**/*.tsx`).
-- [ ] O contrato do Worker (`taskdb.py:135`) leva só as regras cujas áreas casam com os arquivos da
+- [x] Cada regra tem uma **área**: `frontend`, `backend`, `testes`, `geral` ou um glob (`src/**/*.tsx`).
+- [x] O contrato do Worker (`taskdb.py:135`) leva só as regras cujas áreas casam com os arquivos da
       tarefa, com um teto proporcional à janela (E4).
-- [ ] O explorador (E11) também recebe as regras da área que vai ler, para o relatório já apontar os
+- [x] O explorador (E11) também recebe as regras da área que vai ler, para o relatório já apontar os
       desvios.
 
 ### Parte 4: virar checagem sempre que der
-- [ ] Com modelo pequeno, a regra escrita no prompt é ignorada com frequência, e um lint não. Para cada
+- [x] Com modelo pequeno, a regra escrita no prompt é ignorada com frequência, e um lint não. Para cada
       regra, o Forja tenta achar uma checagem automática:
   - "TypeScript strict" → `tsc --noEmit`;
   - "evitar classes" → regra do ESLint (`no-restricted-syntax` para `ClassDeclaration`);
   - "async/await" → `prefer-promise-reject-errors`/regra equivalente, ou um grep simples em `.then(`;
   - "testes Vitest" → `vitest run` no verify.
-- [ ] A checagem é **sugerida**, nunca instalada sozinha:
+- [x] A checagem é **sugerida**, nunca instalada sozinha:
   - acrescentar ao `verify_command` das tarefas daquela área (E1);
   - ou adicionar a regra ao config de lint do projeto.
 
   Mudar o config do projeto exige aprovação. Acrescentar ao verify, não.
-- [ ] Regra sem checagem possível fica só no contrato, marcada como "sem checagem": o revisor (E8)
+- [x] Regra sem checagem possível fica só no contrato, marcada como "sem checagem": o revisor (E8)
       confere essas regras de propósito.
 
-- [ ] Testes: a candidata vira regra só depois de N ocorrências; o contrato de uma tarefa `.py` não leva
+- [x] Testes: a candidata vira regra só depois de N ocorrências; o contrato de uma tarefa `.py` não leva
       regra de frontend; "TypeScript strict" sugere o `tsc --noEmit` no verify.
+
+**Feito (2026-09-26), partes 2–4:** `app/preferencias.py`. Estado em `.forja/knowledge/aprendido.json`, regras
+no bloco "Aprendido" do `convencoes.md` (apagar/editar a linha vale). Sinais: código de lint/tipo do verify
+que falhou (ruff, eslint, tsc, mypy), critério reprovado pelo revisor e correção imperativa no chat ("não
+use", "sempre use", "evite", "prefira"), que já é a confirmação. Candidata vira regra com 3 ocorrências.
+Área por regra (frontend/backend/testes/geral ou glob); `convencoes.texto_para_prompt(root, arquivos)` leva
+só as da área ao Worker e ao explorador. Checagem conhecida (tsc, mypy) vira sugestão no retorno do
+`plan_feature`; regra sem checagem vai ao revisor da E8 como critério. Validado no Forja real: "Não use lambda
+neste projeto" no pedido virou R1, entrou no briefing do Worker e foi conferida pelo revisor.
+**Diferenças:** sem pergunta de confirmação na conversa (a regra nasce com 3 ocorrências ou da frase do
+usuário); o sinal "usuário editou o que o Worker entregou" ficou de fora; não há aviso de "N regras novas"
+no modo autônomo além do evento na conversa.
 
 **Pronto quando:** depois de ~5 tarefas no bench da E0, o contrato do Worker já traz as convenções
 detectadas e aprendidas, e os desvios de estilo caem nas tarefas seguintes (medido pelo revisor e pelo

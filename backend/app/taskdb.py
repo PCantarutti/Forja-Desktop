@@ -970,6 +970,13 @@ def _plan_feature(_root: Path, args: dict) -> str:
     for t in out["tasks"]:
         dep = f" (depende de {', '.join(t['depends_on'])})" if t["depends_on"] else ""
         linhas.append(f"  {t['code']} {t['title']}{dep}")
+    from . import preferencias  # E14: checagem que a área da tarefa tem e o verify não roda (só sugestão)
+    for t, bruto in zip(out["tasks"], tarefas):
+        c = bruto.get("contract") or {}
+        if sug := preferencias.sugestoes_de_verify(workspace.root(), c.get("relevant_files") or [],
+                                                   c.get("verify_command") or ""):
+            linhas.append(f"Sugestão para {t['code']}: as regras do projeto têm checagem ({', '.join(f'`{s}`' for s in sug)}); "
+                          "acrescente ao verify_command com update_task se fizer sentido.")
     if grandes := [t["code"] for t, bruto in zip(out["tasks"], tarefas) if _grande(bruto)]:
         linhas.append(f"ATENÇÃO: {', '.join(grandes)} parece(m) grande(s) demais para um Worker (mais de "
                       f"{MAX_ARQUIVOS_TAREFA} arquivos, ou mais de uma ação no objetivo). Tarefa pequena passa "
