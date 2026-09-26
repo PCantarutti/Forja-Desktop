@@ -302,6 +302,7 @@ def _inference(provider: str, model: str, extra: dict) -> None:
             extra["reasoning_budget"] = int(cfg["reasoning_budget"])
 
 
+ULTIMO_USO: dict = {"t": time.monotonic()}  # última chamada ao LLM (descarga por ociosidade, E4)
 NO_THINK = chr(10) + "/no_think"   # interruptor por texto do template do Qwen3
 
 
@@ -336,6 +337,7 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
                       num_ctx: int, effort: str | None = None, think: bool | None = None,
                       budget_mult: float = 1.0, slot: int | None = None) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
+    ULTIMO_USO["t"] = time.monotonic()  # E4: a descarga por ociosidade conta a partir daqui
     messages = list(messages)
     extra: dict = {}
     if slot is not None and spec(provider)["type"] == "llamacpp":
@@ -348,6 +350,7 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
     try:
         async for ev in impl(provider, model, messages, tools, num_ctx, extra):
             yield ev
+        ULTIMO_USO["t"] = time.monotonic()
     except httpx.HTTPError as e:
         raise _conn_error(provider, e) from e
 

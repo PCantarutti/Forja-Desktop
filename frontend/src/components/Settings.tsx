@@ -659,6 +659,8 @@ function HardwareTab(props: { onError: (e: string) => void }) {
         </button>
       </Field>
 
+      <CacheDisco onError={props.onError} />
+
       <Field label="Proteções de carregamento" hint="O Forja estima a memória antes de subir o modelo; isto diz o que fazer quando não cabe.">
         <div className="space-y-1">
           {NIVEIS.map(([v, titulo, desc]) => (
@@ -2344,5 +2346,64 @@ function SkillsTab({ onError }: { onError: (e: string) => void }) {
         );
       })}
     </div>
+  );
+}
+
+/** E4: cache do prompt em disco e descarga do modelo ocioso. Configurações do app (não do modelo), então lê e
+ * grava pela /settings; o uso e o "consegue restaurar?" vêm da /local/kvcache. */
+function CacheDisco({ onError }: { onError: (e: string) => void }) {
+  const [c, setC] = useState<{ cache_disco: boolean; cache_disco_gb: number; descarregar_ocioso_min: number } | null>(null);
+  const [k, setK] = useState<{ bytes: number; conversas: number; modelo: string; suportado: boolean | null; motivo: string;
+    tipo: string; ocioso: { alias?: string; carga_s?: number } } | null>(null);
+  const carrega = () => {
+    api.get<any>("/settings").then((s) => setC({ cache_disco: s.cache_disco, cache_disco_gb: s.cache_disco_gb,
+      descarregar_ocioso_min: s.descarregar_ocioso_min })).catch((e) => onError(e.message));
+    api.get<any>("/local/kvcache").then(setK).catch(() => {});
+  };
+  useEffect(carrega, []);
+  const muda = (patch: Record<string, unknown>) => api.put("/settings", patch).then(carrega).catch((e) => onError(e.message));
+  if (!c) return null;
+  const gb = (b: number) => (b / 2 ** 30).toFixed(b >= 2 ** 30 ? 1 : 2).replace(".", ",");
+  return (
+    <>
+      <Field label="Cache do prompt em disco"
+             hint="Guarda o cache da conversa quando outra toma o modelo, ele descarrega ou troca, e restaura na volta: a resposta não reprocessa o prompt inteiro. Só em modelo comum, ou de janela deslizante com 'Guardar a janela inteira' ligado; nos híbridos (Qwen3.5/3.6/3.8) o llama.cpp não restaura.">
+        <div className="space-y-2">
+          <Toggle checked={c.cache_disco} onChange={(v) => muda({ cache_disco: v })} label="Ligado" />
+          <label className="flex items-center gap-2 text-sm text-muted">
+            limite
+            <input type="number" min={0} step={0.5} className={`${input} !w-24`} value={c.cache_disco_gb}
+                   onChange={(e) => setC({ ...c, cache_disco_gb: Number(e.target.value) })}
+                   onBlur={() => muda({ cache_disco_gb: c.cache_disco_gb })} />
+            GB (0 desliga)
+          </label>
+          {k && (
+            <p className="text-xs text-muted">
+              Em uso: {gb(k.bytes)} GB de {gb(c.cache_disco_gb * 2 ** 30)} GB, {k.conversas} conversa{k.conversas === 1 ? "" : "s"} (as menos usadas saem primeiro).
+              {k.modelo && (k.suportado ? ` ${k.modelo}: restaura do disco.` : ` ${k.modelo}: ${k.motivo}.`)}
+              {k.bytes > 0 && (
+                <button className="ml-2 text-fg underline-offset-2 hover:underline"
+                        onClick={() => api.post("/local/kvcache/limpar", {}).then(carrega)}>limpar</button>
+              )}
+            </p>
+          )}
+        </div>
+      </Field>
+      <Field label="Descarregar modelo sem uso"
+             hint="Tira o modelo local da VRAM depois de N minutos sem nenhuma execução, carga ou imagem (0 = nunca). O cache vai para o disco antes, e a próxima mensagem carrega de novo.">
+        <label className="flex items-center gap-2 text-sm text-muted">
+          após
+          <input type="number" min={0} max={1440} className={`${input} !w-24`} value={c.descarregar_ocioso_min}
+                 onChange={(e) => setC({ ...c, descarregar_ocioso_min: Number(e.target.value) })}
+                 onBlur={() => muda({ descarregar_ocioso_min: c.descarregar_ocioso_min })} />
+          min
+        </label>
+        {k?.ocioso?.alias && (
+          <p className="mt-1 text-xs text-muted">
+            {k.ocioso.alias} foi descarregado por ociosidade: carrega na próxima mensagem{k.ocioso.carga_s ? ` (~${k.ocioso.carga_s} s)` : ""}.
+          </p>
+        )}
+      </Field>
+    </>
   );
 }

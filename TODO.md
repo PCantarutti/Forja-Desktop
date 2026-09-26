@@ -453,17 +453,61 @@ Diferenças em relação ao plano:
 
 ### Cache do prompt em disco (salvar e restaurar slot)
 
+*Feito em 2026-09-26* (`app/kvcache.py`; a descarga fica em `modelctl.vigia_ociosidade`; testes em
+`tests/test_kvcache.py`).
+
+Validado no Forja real, com o modelo comum (qwen2.5-coder-1.5b), `-np 1` e duas conversas:
+- ao voltar para a primeira, o log mostra "salvou a conversa 67; restaurou a conversa 66";
+- com a descarga por ociosidade em 1 min, o modelo saiu da VRAM depois de 90 s (a vigia olha a cada
+  minuto);
+- a mensagem seguinte recarregou o modelo e **restaurou o cache do disco**: 14.128 de 14.148 tokens,
+  resposta em 0,89 s, contra 8,2 s da primeira resposta daquela conversa.
+
+Como ficou:
+- **O que o llama.cpp consegue restaurar, pela E0:**
+  - modelo comum: liga sozinho;
+  - SWA: só com o novo parâmetro de modelo "Guardar a janela inteira" (`swa_full` → `--swa-full`);
+  - **híbridos (Qwen3.5/3.6/3.8): desligado**, e a tela diz por quê.
+
+  `--slot-save-path` só entra na carga quando o modelo restaura.
+- **Troca de dono do slot:** antes de cada volta do principal, o `kvcache.assume` salva o cache de quem
+  estava no slot e restaura o da conversa. Chamada auxiliar no slot do principal (`-np 1`) chama o
+  `kvcache.cede` antes. Trocar ou descarregar o modelo salva todos antes (`modelctl.ensure`/`unload`).
+- **Arquivos:** `DATA_DIR/kvcache/<hash da chave>-<conversa>.bin`, mais um `.json` com a chave: GGUF,
+  tamanho, mtime, ctx, tipos do KV, unificado e swa_full. O llama-server não aceita subpasta no
+  `filename`. Chave diferente apaga sem tentar; restore que falha apaga e segue.
+- **Padrões novos:** `kv_unified: True` e KV `q8_0` (V1 e V4). Sem flash attention, o argv volta para
+  `f16`.
+- **Configurações** (Configurações › Hardware): cache em disco ligado com limite de 4 GB (LRU pelo mtime,
+  0 desliga), o uso, "limpar" e se o modelo carregado restaura; "Descarregar modelo sem uso" (padrão
+  15 min, 0 = nunca), com o aviso "descarregado por ociosidade: carrega na próxima mensagem (~N s)".
+- **Descarga:** só sem execução ativa, carga ou imagem; execução parada em aprovação espera o dobro. A
+  próxima mensagem de qualquer modo recarrega quando não há modelo no ar (`recarregar_sob_demanda`); com
+  outro modelo carregado, não troca.
+- Apagar a conversa apaga o cache dela.
+
+Diferenças em relação ao plano:
+- **Sem o aviso "isto descarta N MB de cache" ao mudar parâmetro.** A chave nova descarta sozinha no
+  próximo restore.
+- **Sem a mensagem única de migração com "desfazer".** Os padrões novos valem para o que o usuário não
+  mexeu, porque os overrides guardam só o que difere do padrão.
+- **Sem pré-carga ao focar a caixa de mensagem.**
+- **Sem salvar as conversas abertas ao fechar o app.** O Electron mata o processo antes. ponytail: a
+  descarga por ociosidade e a troca de conversa já cobrem o caso comum.
+- **A `como_rodar` ainda não pesa o cache em disco no custo da troca.** Nos híbridos, que são o modelo
+  do usuário, ele não existe.
+
 Hoje, um unload perde o KV cache, e a primeira resposta depois do reload reprocessa o prompt inteiro:
 dezenas de segundos a minutos com 20k tokens. Com `-np 1`, alternar entre dois chats também faz cada um
 expulsar o cache do outro. O llama-server consegue salvar o cache de um slot em arquivo e restaurá-lo
 depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
 
-- [ ] **Vale para todas as conversas**: chat, agente, Maestro, Worker e chamadas auxiliares. Só não vale
+- [x] **Vale para todas as conversas**: chat, agente, Maestro, Worker e chamadas auxiliares. Só não vale
       para LM Studio e Ollama, porque o Forja não controla o processo deles. Nesses, o recurso aparece
       desligado, com a explicação.
-- [ ] **Subir o llama-server com `--slot-save-path <FORJA_DATA>/kvcache/`**, sempre que o Forja for o
+- [x] **Subir o llama-server com `--slot-save-path <FORJA_DATA>/kvcache/`**, sempre que o Forja for o
       dono do processo.
-- [ ] **Padrões novos, ligados sem o usuário precisar configurar nada** (`localai.DEFAULT_PARAMS`,
+- [x] **Padrões novos, ligados sem o usuário precisar configurar nada** (`localai.DEFAULT_PARAMS`,
       `localai.py:67`):
   - `kv_unified: True`, explícito. Hoje é `False`, e só vale porque `parallel=0` deixa o llama.cpp
     unificar sozinho. Cada slot enxerga a janela inteira.
@@ -482,27 +526,27 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
 - [ ] **Aviso ao mudar um parâmetro que invalida o cache** (`ctx`, `cache_type_k/v`, `kv_unified`,
       troca do GGUF): "isto descarta os N MB de cache salvo deste modelo". A regra prática, na própria
       tela: escolher os parâmetros uma vez por modelo e não mexer mais.
-- [ ] **Os padrões acima só mudam depois das validações V1–V4 da E0.** O que cada resultado decide:
+- [x] **Os padrões acima só mudam depois das validações V1–V4 da E0.** O que cada resultado decide:
   - V1 falhou: cache em disco desligado quando o KV é unificado;
   - V2 falhou: cache em disco opcional, e não padrão;
   - V3 falhou: aviso de ganho menor nos modelos SWA/híbridos;
   - V4 falhou: o KV continua `f16`.
 
   Citar no commit o arquivo `docs/bench/2026-09-kvcache.json` com os números.
-- [ ] **Salvar antes de perder.** Chamar `POST /slots/{id}?action=save` com o arquivo
+- [x] **Salvar antes de perder.** Chamar `POST /slots/{id}?action=save` com o arquivo
       `<hash-do-modelo>/<conversa>-<papel>.bin` sempre que o cache de uma conversa for sair do slot:
   - antes de um unload ou de uma troca de modelo (`modelctl`, o Worker da E3);
   - com `-np 1`, antes de outra conversa ou chamada auxiliar tomar o slot;
   - ao fechar o app, só para as conversas abertas.
-- [ ] **Restaurar ao voltar.** Antes da 1ª requisição de uma conversa num slot que não tem o cache dela,
+- [x] **Restaurar ao voltar.** Antes da 1ª requisição de uma conversa num slot que não tem o cache dela,
       chamar `POST /slots/{id}?action=restore`. O servidor aproveita o prefixo que casar e processa
       só o resto.
   - Se o restore falhar (arquivo de outro modelo ou parâmetros diferentes), seguir sem cache, apagar
     o arquivo e registrar no log. Nunca travar o turno por isso.
-- [ ] **Chave de validade.** O cache só vale para o mesmo GGUF (hash ou caminho + tamanho + mtime) e os
+- [x] **Chave de validade.** O cache só vale para o mesmo GGUF (hash ou caminho + tamanho + mtime) e os
       mesmos parâmetros que mudam o KV: `ctx`, `cache-type-k/v`, KV unificado, versão do llama-server.
       Guardar isso num `.json` ao lado do `.bin`. Chave diferente: descartar sem tentar restaurar.
-- [ ] **Configuração "Cache em disco"**, na tela de modelos locais:
+- [x] **Configuração "Cache em disco"**, na tela de modelos locais:
   - interruptor ligado/desligado (padrão ligado);
   - **limite de tamanho em disco** (padrão 4 GB, mínimo 256 MB, com 0 desligando), sem teto
     artificial;
@@ -510,7 +554,7 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
   - mostrar o uso atual ("1,8 GB de 4 GB, 23 conversas") e um botão "limpar cache";
   - apagar o cache de uma conversa quando ela for apagada, e todo o cache de um modelo quando o GGUF
     for removido.
-- [ ] **Descarregar modelo ocioso** (para não ocupar a VRAM sem necessidade). Hoje só existem
+- [x] **Descarregar modelo ocioso** (para não ocupar a VRAM sem necessidade). Hoje só existem
       `persistent` e `unload_after_task` (`config.py:138`, `modelctl.py:34`). Não há descarga por tempo
       ocioso.
   - Configuração nova "Descarregar modelo após N minutos sem uso", na tela de modelos locais: padrão
@@ -541,19 +585,19 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
     - salva o cache antes de descarregar;
     - a próxima mensagem recarrega e restaura;
     - N = 0 nunca descarrega.
-- [ ] **Privacidade:** o arquivo guarda a conversa codificada (código, prompts). Fica só em
+- [x] **Privacidade:** o arquivo guarda a conversa codificada (código, prompts). Fica só em
       `FORJA_DATA`, nunca vai para o mirror ou o mobile, e sai junto no "limpar dados".
 - [ ] **Política de execução:** a `como_rodar` passa a saber se existe cache em disco válido para
       aquele papel e modelo, e o custo estimado de trocar de modelo cai de "carregar + reprocessar"
       para "carregar + restaurar". Mesmo assim, a regra "chamada auxiliar não troca de modelo" continua
       valendo, porque carregar o modelo ainda custa.
-- [ ] Testes (servidor falso, como o `lsp_falso.py`):
+- [x] Testes (servidor falso, como o `lsp_falso.py`):
   - save antes do unload e restore depois do reload;
   - chave diferente descarta sem restaurar;
   - o limite de disco apaga o mais antigo;
   - restore que falha não trava o turno;
   - apagar a conversa apaga o cache.
-- [ ] Validar no app real com o bench da E0: tempo da 1ª resposta depois de uma troca Maestro → Worker
+- [x] Validar no app real com o bench da E0: tempo da 1ª resposta depois de uma troca Maestro → Worker
       → Maestro, com e sem o cache em disco.
 
 ### Contexto em janela pequena

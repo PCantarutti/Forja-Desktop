@@ -22,7 +22,7 @@ from sqlalchemy import func, or_, select
 from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
-               localai, lotes, lsp,
+               kvcache, localai, lotes, lsp,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
@@ -51,6 +51,8 @@ async def lifespan(_app):
     shell.limpa_logs()  # logs de comando e servidor com mais de 7 dias em %TEMP%\forja-serve
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
     vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
+    vigia = asyncio.create_task(modelctl.vigia_ociosidade())  # E4: descarrega o modelo local sem uso
+    vivas.add(vigia)
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
@@ -62,6 +64,7 @@ async def lifespan(_app):
         yield
     await mobile.desliga_lan()
     task.cancel()
+    vigia.cancel()  # laço sem fim: sem o cancel o gather abaixo esperava para sempre
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
@@ -749,6 +752,22 @@ async def local_inference(model: str, path: str = ""):
 async def local_uso():
     """Modelo carregado + VRAM/RAM em uso: o indicador do rodapé (PC) e do cabeçalho (celular)."""
     return await asyncio.to_thread(localai.uso)
+
+
+@app.get("/api/local/kvcache")
+def local_kvcache():
+    """E4: cache do prompt em disco — uso, limite e se o modelo carregado consegue restaurar (e por que não);
+    mais o último modelo descarregado por ociosidade."""
+    st = localai.status()
+    ok, motivo = kvcache.suportado(st["path"], st.get("params") or {}) if st.get("running") else (None, "")
+    return {**kvcache.uso(), "modelo": st.get("alias") or "", "suportado": ok, "motivo": motivo,
+            "tipo": kvcache.tipo_de_cache(st["path"]) if st.get("running") else "",
+            "ocioso": modelctl.OCIOSO if not st.get("running") else {}}
+
+
+@app.post("/api/local/kvcache/limpar")
+def local_kvcache_limpar():
+    return {"apagados": kvcache.limpar()}
 
 
 @app.get("/api/local/carregando")
@@ -2131,6 +2150,7 @@ async def delete_conversation(conv_id: int):
         s.delete(c)
         s.commit()
     mirror.remove(conv_id)  # o .md espelhado vai junto
+    kvcache.apagar_conversa(conv_id)  # E4: e o cache do prompt dela em disco
     await MANAGER.close(str(conv_id))  # a sessão do navegador morre com a conversa
     return {"ok": True}
 

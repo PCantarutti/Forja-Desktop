@@ -35,19 +35,24 @@ def test_argv_manda_so_o_que_o_usuario_mexeu():
     assert ["-c", "8192"] == a[a.index("-c"):a.index("-c") + 2]
     assert ["-fa", "on"] == a[a.index("-fa"):a.index("-fa") + 2]
     # zeros/padrões não viram flag: quem decide é o llama.cpp
-    for ausente in ("-t", "-b", "-ub", "-np", "--cache-type-k", "--mlock", "--seed", "--mmproj"):
+    for ausente in ("-t", "-b", "-ub", "-np", "--mlock", "--seed", "--mmproj"):
         assert ausente not in a
+    # E4: padrões validados na E0 (V1: KV unificado; V4: q8_0 não piorou)
+    assert a[a.index("--cache-type-k") + 1] == "q8_0" and "--kv-unified" in a
 
 
 def test_argv_traduz_os_controles_avancados():
     p = {**localai.DEFAULT_PARAMS, "ctx": 131072, "ngl": 19, "threads": 6, "batch": 2048, "ubatch": 512,
-         "parallel": 2, "flash_attn": False, "cache_type_k": "q8_0", "cache_type_v": "q8_0",
+         "parallel": 2, "flash_attn": True, "cache_type_k": "q8_0", "cache_type_v": "q8_0",
          "kv_unified": True, "mlock": True, "mmap": False, "seed": 42, "rope_freq_base": 10000.0,
          "n_cpu_moe": 30, "n_expert": 8, "mmproj": "C:/m/mmproj.gguf", "ctx_checkpoints": 32}
     a = localai.argv(Path("llama-server.exe"), "C:/m/qwen3-a3b.gguf", p)
+    # KV quantizado sem flash attention volta para f16 (o padrão do llama.cpp): nenhuma flag de tipo
+    sem_fa = localai.argv(Path("llama-server.exe"), "C:/m/qwen3-a3b.gguf", {**p, "flash_attn": False})
+    assert "--cache-type-k" not in sem_fa and sem_fa[sem_fa.index("-fa") + 1] == "off"
 
     esperado = {"-c": "131072", "-ngl": "19", "-t": "6", "-b": "2048", "-ub": "512", "-np": "2",
-                "-fa": "off", "--cache-type-k": "q8_0", "--cache-type-v": "q8_0", "--seed": "42",
+                "-fa": "on", "--cache-type-k": "q8_0", "--cache-type-v": "q8_0", "--seed": "42",
                 "--rope-freq-base": "10000.0", "--n-cpu-moe": "30", "--ctx-checkpoints": "32",
                 "--mmproj": "C:/m/mmproj.gguf"}  # --override-kv depende da arquitetura: teste separado
     for flag, valor in esperado.items():

@@ -42,6 +42,7 @@ const AJUDA: Record<string, string> = {
   rope_freq_base: "Ajuste do RoPE para esticar o contexto além do treinado. 0 = o valor do próprio modelo.",
   rope_freq_scale: "Escala do RoPE, junto com a frequência base. 0 = o valor do próprio modelo.",
   kv_unified: "Um cache KV único para todos os slots, em vez de um pedaço por slot.",
+  swa_full: "Modelo de janela deslizante (Gemma): guarda o cache de todas as camadas. Usa mais VRAM, e é o que deixa o cache do prompt em disco restaurar.",
   no_kv_offload: "Cache KV na VRAM. Desligue para deixá-lo na RAM: libera VRAM e custa velocidade.",
   mlock: "Trava o modelo na memória para o Windows não empurrar para o disco.",
   mmap: "Mapeia o arquivo em vez de copiar tudo para a RAM. Ligado carrega mais rápido; com especialistas na CPU o llama.cpp sugere desligar.",
@@ -798,6 +799,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
                 <Num label="RoPE escala" chave="rope_freq_scale" value={form.rope_freq_scale} onChange={(v) => set("rope_freq_scale", v)} mudado={mudou("rope_freq_scale")} onReset={() => reset("rope_freq_scale")} hint="0 = automático" />
                 <Toggle label="Ajustar para caber na memória" chave="fit" value={form.fit} onChange={(v) => set("fit", v)} mudado={mudou("fit")} onReset={() => reset("fit")} />
                 <Toggle label="Cache KV unificado" chave="kv_unified" value={form.kv_unified} onChange={(v) => set("kv_unified", v)} mudado={mudou("kv_unified")} onReset={() => reset("kv_unified")} />
+                <Toggle label="Guardar a janela inteira" chave="swa_full" value={!!form.swa_full} onChange={(v) => set("swa_full", v)} mudado={mudou("swa_full")} onReset={() => reset("swa_full")} />
                 <Toggle label="Descarregar cache KV para a GPU" chave="no_kv_offload" value={!form.no_kv_offload} onChange={(v) => set("no_kv_offload", !v)} mudado={mudou("no_kv_offload")} onReset={() => reset("no_kv_offload")} />
                 <Toggle label="Manter modelo na memória" chave="mlock" value={form.mlock} onChange={(v) => set("mlock", v)} mudado={mudou("mlock")} onReset={() => reset("mlock")} />
                 <Toggle label="Tentar mmap()" chave="mmap" value={form.mmap} onChange={(v) => set("mmap", v)} mudado={mudou("mmap")} onReset={() => reset("mmap")} />

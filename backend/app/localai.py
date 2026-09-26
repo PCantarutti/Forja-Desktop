@@ -72,9 +72,11 @@ DEFAULT_PARAMS = {
     "ubatch": 0,          # -ub  lote físico
     "parallel": 0,        # -np  previsões simultâneas (0 = o llama.cpp decide)
     "flash_attn": True,   # -fa
-    "cache_type_k": "f16",
-    "cache_type_v": "f16",
-    "kv_unified": False,      # --kv-unified
+    # E4 (validado na E0): q8_0 não piorou o bench (V4) e corta pela metade a VRAM do KV e o arquivo do cache
+    # em disco; KV unificado passou na V1. q8_0 exige flash attention: sem ele o argv volta para f16.
+    "cache_type_k": "q8_0",
+    "cache_type_v": "q8_0",
+    "kv_unified": True,       # --kv-unified
     "no_kv_offload": False,   # --no-kv-offload (cache KV fora da GPU)
     "mlock": False,           # manter o modelo na memória (não vai para o swap)
     "mmap": True,             # mapear o arquivo em vez de copiar tudo para a RAM (padrão do llama.cpp)
@@ -86,6 +88,7 @@ DEFAULT_PARAMS = {
     "n_expert": 0,            # nº de especialistas ativos (override do gguf)
     "mmproj": "",             # projetor multimodal: dá visão ao modelo
     "fit": True,              # -fit on: o llama.cpp ajusta o que não foi definido para caber na memória
+    "swa_full": False,        # --swa-full: KV de todas as camadas em modelo SWA (é o que deixa restaurar do disco)
 }
 
 # Amostragem: padrão do llama.cpp, sobrescrito pelo que o próprio gguf recomenda (general.sampling.*).
@@ -1498,7 +1501,8 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
         a += ["-np", str(int(p["parallel"]))]
     a += ["-fa", "on" if p.get("flash_attn") else "off"]
     for key, flag in (("cache_type_k", "--cache-type-k"), ("cache_type_v", "--cache-type-v")):
-        if p.get(key) and p[key] != "f16" and ok(flag):
+        # KV quantizado sem flash attention: o llama.cpp recusa ou fica lento; cai para f16 (o padrão dele)
+        if p.get(key) and p[key] != "f16" and p.get("flash_attn") and ok(flag):
             a += [flag, str(p[key])]
     for key, flag in (("kv_unified", "--kv-unified"), ("no_kv_offload", "--no-kv-offload")):
         if p.get(key) and ok(flag):
@@ -1514,6 +1518,11 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
         a += ["--override-kv", f"{arch}.expert_used_count=int:{int(p['n_expert'])}"]
     if p.get("mmproj") and ok("--mmproj"):
         a += ["--mmproj", str(p["mmproj"])]
+    if p.get("swa_full") and ok("--swa-full"):
+        a.append("--swa-full")
+    from . import kvcache  # E4: cache do prompt em disco, onde o modelo consegue restaurar
+    if ok("--slot-save-path") and kvcache.suportado(str(path), p)[0]:
+        a += ["--slot-save-path", str(kvcache.pasta())]
     return a
 
 

@@ -19,7 +19,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
+from . import kvcache, maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -1141,6 +1141,8 @@ async def _compact(conv_id: int, msgs: list, req: RunRequest, ctx_max: int) -> A
     try:
         text = compact.transcript(msgs, until, max_chars=int(ctx_max * 4 * 0.5))
         rota = modelctl.como_rodar("compactar", {"provider": req.provider, "model": req.model})
+        if rota.caminho == "mesmo-slot-sequencial":
+            await asyncio.to_thread(kvcache.cede, rota.slot)
         summary = await compact.summarize(req.provider, req.model, text, config.NUM_CTX, slot=rota.slot)
     except llm.LLMError as e:
         yield _event(conv_id, "warning", f"Falha ao compactar o contexto: {e}")
@@ -1294,7 +1296,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     # Entre tarefas o orquestrador troca o GGUF para o do Worker, e o llama.cpp ignora o campo `model`
     # do pedido — sem isto a Maestro rodaria calada no modelo do Worker, e a janela medida seria a dele.
     maestro_spec = {"provider": req.provider, "model": req.model}
-    if maestro_mode:
+    # E4: também fora do Maestro quando não há modelo nenhum no ar (descarregado por ociosidade): a mensagem
+    # carrega o mesmo modelo de novo. Com outro modelo carregado não troca: foi escolha do usuário.
+    if maestro_mode or modelctl.recarregar_sob_demanda(maestro_spec):
         async for ev in _garante_modelo(conv_id, maestro_spec, run):
             yield ev
             if ev.get("type") == "done":
@@ -1419,6 +1423,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         checado = 0
         # Depois de uma intervenção o próximo turno pensa com metade do teto: é para agir, não repensar.
         mult, placar.teto_menor = (0.5 if placar.teto_menor else 1.0), False
+        if rota_principal.slot is not None:  # E4: guarda o cache de quem estava no slot e traz o desta conversa
+            if feito := await asyncio.to_thread(kvcache.assume, conv_id, rota_principal.slot):
+                yield _event(conv_id, "info", f"Cache do prompt em disco: {feito}.")
         extra_llm = {**({"budget_mult": mult} if mult != 1.0 else {}),
                      **({"slot": rota_principal.slot} if rota_principal.slot is not None else {})}
         fluxo = ate_cancelar(llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort,
@@ -1780,6 +1787,8 @@ async def retitle(conv_id: int, provisorio: str, req: RunRequest) -> dict | None
     bruto = ""
     # E4: título é chamada auxiliar: slot próprio quando existe, nunca troca de modelo
     rota = modelctl.como_rodar("lateral", {"provider": req.provider, "model": req.model})
+    if rota.caminho == "mesmo-slot-sequencial":  # o título vai usar o slot do principal: salva antes
+        await asyncio.to_thread(kvcache.cede, rota.slot)
     try:
         async for kind, val in llm.chat_stream(req.provider, req.model,
                                                [{"role": "system", "content": TITLE_PROMPT},

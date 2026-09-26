@@ -46,6 +46,10 @@ ENV_DEFAULTS: dict[str, Any] = {
     # E4: papéis auxiliares que podem ir para a nuvem (slot "nuvem") em vez de usar o modelo do principal.
     # Desligados: o código sai da máquina.
     "nuvem_por_papel": {"explorador": False, "revisor": False, "visual": False},
+    # E4: cache do prompt em disco (salvar/restaurar slot) e descarga do modelo local ocioso
+    "cache_disco": True,
+    "cache_disco_gb": 4.0,
+    "descarregar_ocioso_min": 15,
     "maestro_browser": True,
     "auto_review": False,  # modo Automático: o modelo revisa o risco da ação em vez de perguntar
     "workers_do_maestro": False,
@@ -66,6 +70,8 @@ MAX_ESPECIALIDADES = 12
 LISTS = ("disabled_tools", "auto_approve_tools", "auto_approve_commands", "trusted_hooks")
 
 NUMBERS = {  # chave: (tipo, mínimo, máximo)
+    "cache_disco_gb": (float, 0, 1024),  # 0 desliga
+    "descarregar_ocioso_min": (int, 0, 1440),  # 0 = nunca
     "num_ctx": (int, 1024, 4_194_304),
     "max_iterations": (int, 1, 200),
     "max_file_bytes": (int, 1_000, 200_000_000),
@@ -157,6 +163,9 @@ def apply(values: dict | None = None) -> dict:
     config.MAESTRO_MODEL = dict(values["maestro_model"])
     config.MAESTRO_VISUAL = dict(values["maestro_visual"])
     config.NUVEM_POR_PAPEL = {**ENV_DEFAULTS["nuvem_por_papel"], **(values.get("nuvem_por_papel") or {})}
+    config.CACHE_DISCO = bool(values["cache_disco"])
+    config.CACHE_DISCO_GB = float(values["cache_disco_gb"])
+    config.DESCARREGAR_OCIOSO_MIN = int(values["descarregar_ocioso_min"])
     config.WORKER_ESPECIALIDADES = [dict(e) for e in values["worker_especialidades"]]
     config.MAESTRO_BROWSER = bool(values["maestro_browser"])
     config.AUTO_REVIEW = bool(values["auto_review"])
@@ -275,7 +284,7 @@ def validate(patch: dict, current: dict) -> dict:
                 raise SettingsError(f"Modelo da Maestro: provedor '{provider}' não existe.")
             values[key] = {"provider": provider, "model": model}
         elif key in ("project_memory", "personal_memory", "maestro_browser", "workers_do_maestro", "auto_review",
-                     "mcp_servidor"):
+                     "mcp_servidor", "cache_disco"):
             values[key] = bool(raw)
         elif key == "project_memory_file":
             name = str(raw).strip() or "FORJA.md"

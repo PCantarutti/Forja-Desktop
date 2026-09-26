@@ -515,6 +515,9 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     papel = "worker" if structured else ("explorador" if persona and persona.get("name") == "explorador"
                                          else "lateral")
     rota = modelctl.como_rodar(papel, spec)
+    if rota.caminho == "mesmo-slot-sequencial":  # E4: vai ocupar o slot do principal; o cache dele vai p/ disco
+        from . import kvcache
+        await asyncio.to_thread(kvcache.cede, rota.slot)
     if rota.caminho == "nuvem" and rota.spec:
         spec = dict(rota.spec)
     provider, model = spec["provider"], spec["model"]

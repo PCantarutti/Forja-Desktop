@@ -181,6 +181,9 @@ async def ensure(spec: dict, out: dict | None = None,
 
     anterior = localai.status().get("alias") or ""
     out.update(swapped=True, previous=anterior, model=alvo)
+    if anterior:  # E4: o cache das conversas no slot vai para o disco antes de o modelo sair
+        from . import kvcache
+        await asyncio.to_thread(kvcache.salvar_todos)
     if anterior:
         yield _evento("unloading", previous=anterior, model=alvo)
     yield _evento("loading", previous=anterior, model=alvo)
@@ -214,6 +217,8 @@ async def unload(motivo: str = "") -> AsyncIterator[dict]:
         return
     anterior = localai.status().get("alias") or ""
     yield _evento("unloading", previous=anterior, model="", reason=motivo)
+    from . import kvcache
+    await asyncio.to_thread(kvcache.salvar_todos)  # E4: salvar antes de perder
     await asyncio.to_thread(localai.unload)
     yield _evento("unloaded", previous=anterior, model="", reason=motivo)
 
@@ -391,3 +396,54 @@ def _decide(papel: str, pedido: dict | None) -> Rota:
                     f"o pedido ({pedido['model']}) não está carregado e chamada auxiliar não troca de modelo"
                     if pedido else "usa o modelo carregado")
     return Rota("pular", None, None, "nenhum modelo disponível")
+
+# ------------------------------------------------------------------ descarga por ociosidade (E4)
+OCIOSO: dict = {}   # último descarregado por ociosidade: {"alias", "path", "quando", "carga_s"}
+
+
+def em_uso() -> bool:
+    """Algo usando o modelo agora: execução de agente/Maestro/Worker, subagente em segundo plano, carga ou
+    geração de imagem. Execução parada numa aprovação conta como ociosa só depois do dobro do tempo."""
+    from . import agent, llm
+    limite = int(getattr(config, "DESCARREGAR_OCIOSO_MIN", 15)) * 60
+    for run in list(agent.RUNS.values()):
+        if run.finished:
+            continue
+        if run.approvals and time.monotonic() - llm.ULTIMO_USO["t"] < 2 * limite:
+            return True
+        if not run.approvals:
+            return True
+    return bool(localai and (localai.image_busy() or localai._loading))
+
+
+def precisa_descarregar() -> bool:
+    minutos = int(getattr(config, "DESCARREGAR_OCIOSO_MIN", 15))
+    if minutos <= 0 or localai is None or not localai.status().get("running"):
+        return False
+    from . import llm
+    return not em_uso() and time.monotonic() - llm.ULTIMO_USO["t"] > minutos * 60
+
+
+async def vigia_ociosidade(intervalo: float = 60) -> None:
+    """A cada minuto, como a varredura do navegador: modelo local sem uso há N minutos sai da VRAM (o cache das
+    conversas vai para o disco antes). A próxima mensagem carrega de novo (agent._garante_modelo)."""
+    while True:
+        await asyncio.sleep(intervalo)
+        try:
+            if precisa_descarregar():
+                st = localai.status()
+                from pathlib import Path
+                gb = Path(st["path"]).stat().st_size / 2**30 if st.get("path") else 0
+                OCIOSO.update(alias=st.get("alias"), path=st.get("path"), quando=time.time(),
+                              carga_s=round(float(localai.read_config().get("speed") or 0) * gb))  # s/GB medido
+                async for _ in unload("ociosidade"):
+                    pass
+                metricas.registra("ociosidade", alias=st.get("alias"))
+        except Exception as e:  # a vigia nunca morre por um erro de uma volta
+            print(f"Forja: descarga por ociosidade falhou: {e}", flush=True)
+
+
+def recarregar_sob_demanda(spec: dict | None) -> bool:
+    """A conversa quer um modelo local e não há nenhum carregado (descarregado por ociosidade, ou o app
+    acabou de abrir): carregar de novo não derruba ninguém."""
+    return bool(spec) and gerenciavel(spec) and localai is not None and not localai.status().get("running")

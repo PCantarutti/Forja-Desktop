@@ -149,6 +149,9 @@ ESPECIALIDADES_PADRAO = [
 WORKER_ESPECIALIDADES: list[dict] = [dict(e) for e in ESPECIALIDADES_PADRAO]
 MAESTRO_VISUAL = {"provider": "", "model": ""}
 NUVEM_POR_PAPEL = {"explorador": False, "revisor": False, "visual": False}  # E4: opt-in por papel
+CACHE_DISCO = True             # E4: salvar/restaurar o KV dos slots em DATA_DIR/kvcache
+CACHE_DISCO_GB = 4.0           # limite em disco (LRU); 0 desliga
+DESCARREGAR_OCIOSO_MIN = 15    # descarrega o modelo local sem uso há N min; 0 = nunca
 WORKERS_DO_MAESTRO = False  # Workers rodam no mesmo modelo da Maestro (sem troca, paralelo no mesmo servidor)  # modelo COM VISÃO que julga os prints (visual_review)
 MAESTRO_BROWSER = True             # a Maestro valida entregas no navegador (browser_validate e browser_*)
 MODEL_LIFECYCLE = "persistent"      # persistent | unload_after_task (Etapa 4)

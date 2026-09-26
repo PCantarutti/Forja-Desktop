@@ -272,6 +272,7 @@ export type LlamaParams = {
   cache_type_k: string;
   cache_type_v: string;
   kv_unified: boolean;
+  swa_full?: boolean;
   no_kv_offload: boolean;
   mlock: boolean;
   mmap: boolean;
