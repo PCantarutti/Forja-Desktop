@@ -601,7 +601,7 @@ def test_resultado_sem_verificacao_ganha_revisao(conv, monkeypatch):
     """Sem comando que prove nada, a revisão do diff é o único parecer disponível."""
     monkeypatch.setattr(llm, "chat_stream", _fala())
 
-    async def revisao(root, task, paths):
+    async def revisao(root, task, paths, *_):
         return "revisor-3b", "VEREDITO: ajustar\nfalta tratar divisão por zero em calc.py"
 
     monkeypatch.setattr(subagents, "_review", revisao)
@@ -618,7 +618,7 @@ def test_resultado_verificado_nao_chama_revisao(conv, monkeypatch):
     monkeypatch.setattr(llm, "chat_stream", _fala())
     chamou = []
 
-    async def revisao(root, task, paths):
+    async def revisao(root, task, paths, *_):
         chamou.append(1)
         return "x", "y"
 

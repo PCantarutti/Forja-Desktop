@@ -88,6 +88,7 @@ SANDBOX_CPU = 80          # teto de CPU em %, para o PC continuar usável num bu
 # Comandos do agente num container Docker (passo 3): desligado | autonomo (Automático, Ignorar permissões,
 # Maestro) | sempre. Desligado por padrão: o Docker Desktop consome RAM que um PC com IA local pode não ter.
 SANDBOX_ISOLADO = "desligado"
+REVISAO = "avisa"  # E8: revisão de código por critério de aceite (off | avisa | bloqueia)
 # Qual Docker: auto (o Desktop se estiver aberto, senão o Engine dentro do WSL) | desktop | wsl.
 SANDBOX_MOTOR = "auto"
 # E17: o Claude (Claude Code/Desktop) controla o Forja por MCP em /mcp. Desligado por padrão; as ações dele

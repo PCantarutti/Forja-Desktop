@@ -61,6 +61,7 @@ ENV_DEFAULTS: dict[str, Any] = {
     "sandbox_processos": config.SANDBOX_PROCESSOS,
     "sandbox_cpu": config.SANDBOX_CPU,
     "sandbox_isolado": config.SANDBOX_ISOLADO,
+    "revisao": config.REVISAO,
     "mcp_servidor": config.MCP_SERVIDOR,
     "mcp_permissao": config.MCP_PERMISSAO,
     "sandbox_motor": config.SANDBOX_MOTOR,
@@ -205,6 +206,7 @@ def apply(values: dict | None = None) -> dict:
     config.SANDBOX_PROCESSOS = int(values["sandbox_processos"])
     config.SANDBOX_CPU = int(values["sandbox_cpu"])
     config.SANDBOX_ISOLADO = values["sandbox_isolado"]
+    config.REVISAO = values["revisao"]
     config.MCP_SERVIDOR = bool(values["mcp_servidor"])
     config.MCP_PERMISSAO = values["mcp_permissao"]
     config.SANDBOX_MOTOR = values["sandbox_motor"]
@@ -342,6 +344,11 @@ def validate(patch: dict, current: dict) -> dict:
             from .policy import MODES
             if raw not in MODES or raw == "plan":
                 raise SettingsError(f"mcp_permissao deve ser um de: {', '.join(m for m in MODES if m != 'plan')}.")
+            values[key] = raw
+        elif key == "revisao":
+            from .critico import MODOS as MODOS_REVISAO
+            if raw not in MODOS_REVISAO:
+                raise SettingsError(f"revisao deve ser um de: {', '.join(MODOS_REVISAO)}.")
             values[key] = raw
         elif key == "sandbox_isolado":
             from .sandbox import MODOS_ISOLADO

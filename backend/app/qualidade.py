@@ -229,6 +229,10 @@ def faltas_para_entregar(conv_id: int, desde, root: Path) -> list[str]:
     revisoes = [c for n, st, c, _ in msgs if n == "visual_review" and st == "ok"]
     if not revisoes:
         faltas.append("rode visual_review nas páginas principais")
+    elif "REVISÃO VISUAL PULADA" in revisoes[-1]:
+        # E8: pulada por VRAM não é aprovada: o usuário precisa saber que ninguém julgou o visual
+        faltas.append("a revisão visual foi PULADA (sem VRAM para o modelo de visão junto): o visual não foi julgado — "
+                      "avise o usuário para conferir os prints, ou carregue um modelo com visão e rode de novo")
     elif not (revisoes[-1].split("\n", 1)[-1].upper().startswith("VEREDITO: OK")
               or "REVISÃO VISUAL INDISPONÍVEL" in revisoes[-1]):
         faltas.append("a revisão visual pediu ajustes: execute as tarefas criadas e rode visual_review de novo")

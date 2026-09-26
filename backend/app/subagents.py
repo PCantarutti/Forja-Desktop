@@ -441,15 +441,16 @@ def schemas_de(tools: list, via: str) -> list | None:
     return [t.openai_schema() for t in tools] if via == "native" else None
 
 
-async def _review(root: Path, task: str, paths: set[str]) -> tuple[str, str]:
+async def _review(root: Path, task: str, paths: set[str], pedido: dict | None = None) -> tuple[str, str]:
     """(modelo, parecer) sobre o que ESTA delegação mudou, quando nenhum comando provou o resultado.
     O diff sai por arquivo tocado, não do repo inteiro: o usuário quase sempre tem trabalho não
     commitado do lado. É uma pergunta só, sem ferramentas e sem a conversa — conselho para o
     principal, nunca portão."""
-    escolha = next(iter(chain("rapido")), None)
+    # E8: o modelo de quem pediu (a Maestro) por padrão; senão o Worker rápido
+    escolha = pedido if pedido and pedido.get("model") else (next(iter(chain("rapido")), (None, None))[1])
     if not escolha or not paths or not gitops.is_repo(root):
         return "", ""
-    rota = modelctl.como_rodar("revisor", escolha[1])  # E4: revisor não troca de modelo
+    rota = modelctl.como_rodar("revisor", escolha)  # E4: revisor não troca de modelo
     if not rota.spec:
         return "", ""
     spec = rota.spec
@@ -796,7 +797,7 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
         alvos = {s["arguments"].get("path") for s in info["steps"]
                  if s["name"] in WRITE_TOOLS and s["status"] == "ok" and s["arguments"].get("path")}
         yield estado("revisando o diff…" if alvos else "")
-        revisor, parecer = await _review(root, task, alvos)
+        revisor, parecer = await _review(root, task, alvos, {"provider": req.provider, "model": req.model})
         if parecer:
             info["review"] = parecer
             final += f"\n\nRevisão do diff ({revisor}, não bloqueante — julgue você mesmo):\n{parecer}"

@@ -1040,24 +1040,35 @@ sequencial.
 bloqueia nada.
 **Depende de:** E2 (revisa o diff do commit da tarefa, não a árvore suja) e E4 (política de execução).
 
-- [ ] **Revisão depois de o verify passar**, e não só quando a tarefa sai "unverified". Recebe o diff da
+- [x] **Revisão depois de o verify passar**, e não só quando a tarefa sai "unverified". Recebe o diff da
       tarefa (E2), o contrato e os `acceptance_criteria`.
-- [ ] **Checagem objetiva dos `acceptance_criteria`.** O revisor responde por critério
+- [x] **Checagem objetiva dos `acceptance_criteria`.** O revisor responde por critério
       `atendido`/`não atendido`, com uma linha de evidência (arquivo:linha). Um "não atendido" devolve a
       tarefa ao Worker, com teto de 1 volta.
-- [ ] **Qual modelo usa o revisor: `como_rodar("revisor", …)` da E4.**
+- [x] **Qual modelo usa o revisor: `como_rodar("revisor", …)` da E4.**
   - Por padrão, o modelo do Maestro.
   - Um modelo de revisão diferente só se couber na VRAM junto, **nunca uma troca de modelo por
     revisão**.
   - Nuvem só com o interruptor de revisão ligado.
-- [ ] **`visual_review` também passa pela política** (`como_rodar("visual", …)`). Sem modelo de visão
+- [x] **`visual_review` também passa pela política** (`como_rodar("visual", …)`). Sem modelo de visão
       que caiba junto: pula com aviso. No portão de entrega (`qualidade.faltas_para_entregar`,
       `qualidade.py:201`), "pulada por VRAM" aparece como pendência explícita para o usuário, e não
       como aprovada.
-- [ ] **Configurável:** `revisao: off | avisa | bloqueia` no FORJA.md ou nas configurações. O padrão é
+- [x] **Configurável:** `revisao: off | avisa | bloqueia` no FORJA.md ou nas configurações. O padrão é
       `avisa`.
-- [ ] Renomear ou documentar o `revisor.py` (aprovação) para ninguém confundir com a revisão de código.
-- [ ] Testes: um critério não atendido bloqueia no modo `bloqueia`; o modo `avisa` não bloqueia.
+- [x] Renomear ou documentar o `revisor.py` (aprovação) para ninguém confundir com a revisão de código.
+- [x] Testes: um critério não atendido bloqueia no modo `bloqueia`; o modo `avisa` não bloqueia.
+
+**Feito (2026-09-26):** `app/critico.py` (revisão de código; o `revisor.py` segue sendo aprovação de
+ferramenta, e o docstring dele diz isso). Roda em `maestro._run_uma` depois do verify e da regressão, antes
+do `update_task` que vira commit, com `como_rodar("revisor", modelo da Maestro)` — pula em vez de trocar de
+modelo. Resposta ilegível vira "sem veredito", nunca reprova às cegas. `revisao` nas configurações (aba
+Maestro) e `revisao: …` no FORJA.md. O `_review` das tarefas sem verify também passou a usar o modelo da
+Maestro. Revisão visual pulada por VRAM virou pendência explícita no portão de entrega.
+Validado no Forja real (gpt-oss:120b, modo bloqueia): 2 critérios conferidos contra o diff, os dois
+atendidos, e o commit saiu depois. O caminho "não atendido → volta ao Worker → falha" está coberto por
+teste (`tests/test_critico.py`); forçar um Worker real a ignorar um critério do próprio contrato não
+é reproduzível.
 
 **Pronto quando:** uma tarefa que passa no teste mas ignora um critério de aceite é pega antes de virar
 commit.

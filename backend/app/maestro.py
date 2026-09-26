@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
-from . import checkpoints, config, db, gitops, modelctl, subagents, taskdb, workspace
+from . import checkpoints, config, critico, db, gitops, modelctl, subagents, taskdb, workspace
 from .tools import ToolError
 
 MAX_ERROS = 5          # erros de passo que entram no resultado
@@ -452,6 +452,44 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
             resultado["regression"] = falhas
         if parcial:
             resultado["regression_partial"] = True
+    modo_rev = critico.modo(root)
+    if resultado["status"] == "completed" and modo_rev != "off" and not run_obj.cancel.is_set():
+        # E8: o teste prova que funciona; os critérios provam que é o que foi pedido. Antes do update_task
+        # (que vira commit), com o modelo da Maestro. No modo 'bloqueia', um critério não atendido volta
+        # ao Worker uma vez; persistindo, a tentativa falha.
+        for volta in range(2):
+            yield {"type": "task_update", "code": task.code, "status": "reviewing", "attempt": attempt_n}
+            alvos = {c["path"] for c in resultado["changes"] if c.get("path")}
+            rev = await critico.revisar(root, contrato, alvos, {"provider": req.provider, "model": req.model})
+            resultado["criteria"], resultado["criteria_model"] = rev["criterios"], rev["modelo"]
+            if rev["motivo"]:
+                resultado["criteria_note"] = rev["motivo"]
+            if not critico.falhas(rev["criterios"]) or modo_rev != "bloqueia" or run_obj.cancel.is_set():
+                break
+            if volta:
+                resultado["status"], resultado["criteria_blocked"] = "failed", True
+                break
+            for st in ("queued", "implementing"):
+                taskdb.set_status(task.code, st, conv_id)
+            yield {"type": "task_update", "code": task.code, "status": "implementing", "attempt": attempt_n}
+            volta_call = {**sub_call, "arguments": {**sub_call["arguments"],
+                                                    "task": brief + "\n\n" + critico.para_o_worker(rev["criterios"])}}
+            volta_out: dict = {}
+            try:
+                async with _travas(conv_id, arquivos):
+                    async for ev in subagents.run(conv_id, volta_call, req, run_obj, volta_out, run_call,
+                                                  structured=True,
+                                                  ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
+                        yield ev
+            except Exception as e:
+                volta_out = {"status": "erro", "text": f"{e.__class__.__name__}: {e}"}
+            taskdb.set_status(task.code, "testing", conv_id)
+            antes = {c["path"]: c for c in resultado["changes"]}
+            novo = collect_result(task, attempt_n, volta_out, root)
+            novo["changes"] = list({**antes, **{c["path"]: c for c in novo["changes"]}}.values())
+            resultado = {**resultado, **{k: v for k, v in novo.items() if v is not None}}
+            if resultado["status"] != "completed":
+                break
     if resultado["status"] in ("failed", "error"):
         # Tentativa que falhou não deixa sujeira: a próxima começa do estado de antes dela, e o que foi
         # descartado vai no briefing (last_error) para o Worker não repetir às cegas.
@@ -467,7 +505,7 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
         taskdb.set_status(task.code, "reviewing", conv_id)
         yield {"type": "task_update", "code": task.code, "status": "reviewing", "attempt": attempt_n}
         alvos = {c["path"] for c in resultado["changes"] if c.get("path")}
-        revisor, parecer = await subagents._review(root, brief, alvos)
+        revisor, parecer = await subagents._review(root, brief, alvos, {"provider": req.provider, "model": req.model})
         if parecer:
             resultado["review"] = f"({revisor}) {parecer}"
     # 'unverified' não é falha: nada provou nem desprovou, e quem decide é o Maestro na revisão.
@@ -483,6 +521,7 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
     quebradas = [c for f in resultado.get("regression") or [] for c in f["tasks"]]
     taskdb.set_status(task.code, "failed" if falhou else "reviewing", conv_id,
                       (f"Quebrou {', '.join(quebradas)} (regressão)." if quebradas
+                       else "Critério de aceite não atendido (revisão de código)." if resultado.get("criteria_blocked")
                        else "A verificação falhou." if resultado["status"] == "failed"
                        else (sub_out.get("text") or "O Worker falhou.")[:500]) if falhou else "")
     yield {"type": "task_update", "code": task.code, "status": resultado["status"],
@@ -570,6 +609,12 @@ def _para_o_maestro(r: dict) -> str:
     elif fora := r.get("outside_contract"):
         cauda += (f"\nATENÇÃO: o Worker escreveu fora do contrato ({', '.join(fora)}). Confira se não desfez "
                   "o trabalho de outra tarefa antes de fechar esta.")
+    if nao := [i for i in r.get("criteria") or [] if i.get("atendido") is False]:
+        lista = "; ".join(f"{i['criterio']} ({i.get('evidencia') or 'sem evidência'})" for i in nao)
+        cauda += (f"\nREVISÃO DE CÓDIGO: critério(s) NÃO atendido(s), mesmo após uma volta ao Worker: {lista}. Rode "
+                  "run_task de novo com 'strategy' focada neles." if r.get("criteria_blocked") else
+                  f"\nATENÇÃO, REVISÃO DE CÓDIGO: critério(s) NÃO atendido(s): {lista}. Confira antes de fechar; se "
+                  "o revisor estiver certo, redespache com 'strategy'.")
     if r.get("rollback"):
         cauda += ("\nOs arquivos desta tentativa foram REVERTIDOS ao estado de antes dela; o diff do que foi "
                   "descartado vai sozinho no briefing da próxima tentativa.")
@@ -588,7 +633,10 @@ def _enxuto(r: dict) -> dict:
     32k ela compactava a cada 8–10 tarefas. O completo fica no banco: list_tasks(code=...)."""
     v: dict = {k: r[k] for k in ("task_code", "attempt", "status") if k in r}
     v["changes"] = [f"{c['path']} ({c.get('status')})" for c in r.get("changes") or []]
-    for k in ("outside_contract", "external_changes", "review", "regression_partial"):
+    if crit := r.get("criteria"):
+        v["criteria"] = [f"{'ok' if i['atendido'] else '?' if i['atendido'] is None else 'NÃO'}: {i['criterio'][:80]}"
+                         for i in crit]
+    for k in ("outside_contract", "external_changes", "review", "regression_partial", "criteria_note"):
         if r.get(k):
             v[k] = r[k]
     if t := r.get("tests"):

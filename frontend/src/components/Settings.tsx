@@ -54,6 +54,7 @@ export type AppSettings = {
   maestro_max_attempts: number;
   max_workers: number;
   model_lifecycle: string;
+  revisao?: "off" | "avisa" | "bloqueia";
   maestro_model: { provider: string; model: string };
   maestro_browser: boolean;
   auto_review: boolean;
@@ -1392,6 +1393,14 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
             </label>
           )}
         </div>
+      </Field>
+      <Field label="Revisão de código"
+             hint="Depois de o teste da tarefa passar, o modelo da Maestro confere cada critério de aceite contra o diff, antes do commit. Avisa: aponta o que não foi atendido e a Maestro decide. Bloqueia: devolve ao Worker uma vez e, persistindo, a tentativa falha. O FORJA.md do projeto pode mudar com a linha 'revisao: bloqueia'.">
+        <select className={input} value={s.revisao ?? "avisa"} onChange={(e) => set("revisao", e.target.value as AppSettings["revisao"])}>
+          <option value="off">Desligada</option>
+          <option value="avisa">Avisa (padrão)</option>
+          <option value="bloqueia">Bloqueia</option>
+        </select>
       </Field>
       <Field label="Ciclo de vida do modelo local" hint={CICLOS.find((c) => c[0] === s.model_lifecycle)?.[2]}>
         <select className={input} value={s.model_lifecycle} onChange={(e) => set("model_lifecycle", e.target.value)}>

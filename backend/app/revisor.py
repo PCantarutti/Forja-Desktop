@@ -1,4 +1,6 @@
-"""Revisor automático de aprovações (porte do experimental/auto-review do DeepSeek Harness).
+"""Revisor automático de APROVAÇÕES de ferramenta — não revisa código (isso é o `critico.py`, E8).
+
+Porte do experimental/auto-review do DeepSeek Harness).
 
 Ligado nas Configurações e só no modo Automático: a ação que pediria o card de aprovação vai antes
 para o próprio modelo da conversa, que classifica o risco pelo EFEITO real (não pelo nome da

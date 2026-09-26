@@ -398,7 +398,7 @@ def test_endpoint_das_ativas():
 def _com_revisao_falsa(monkeypatch):
     chamadas = []
 
-    async def fake_review(_root, task, _paths):
+    async def fake_review(_root, task, _paths, *_):
         chamadas.append(task)
         return "nano", "VEREDITO: ajustar"
 

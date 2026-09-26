@@ -11,7 +11,7 @@ def pasta(tmp_path, monkeypatch):
     root = tmp_path / "projeto"
     root.mkdir()
     monkeypatch.setattr(config, "WORKSPACE_ROOT", root)
-    workspace.CURRENT.set(root)
+    token = workspace.CURRENT.set(root)
 
     async def nada(*a):
         return None
@@ -20,7 +20,8 @@ def pasta(tmp_path, monkeypatch):
     settings.reset()
     config.SUBAGENTS = {"capaz": {"provider": "lmstudio", "model": "coder-14b"},
                         "rapido": {"provider": "", "model": ""}, "nuvem": {"provider": "", "model": ""}}
-    return root
+    yield root
+    workspace.CURRENT.reset(token)  # sem isto a pasta temporária vaza para os testes seguintes
 
 
 @pytest.fixture
