@@ -107,6 +107,8 @@ def resumo(dias: int = 7) -> dict:
         tentativas = {t.id: t.attempt_count for t in tarefas}
         status = Counter(t.status for t in tarefas)
         primeira = sum(1 for t in tarefas if t.status == "completed" and t.attempt_count <= 1)
+        cards_ia = [(i.tipo, i.status) for i in s.query(db.Issue).filter(db.Issue.origem == "varredura-ia",
+                                                                         db.Issue.updated_at >= desde)]
     por = defaultdict(list)
     for tipo, d in linhas:
         por[tipo].append(d)
@@ -139,4 +141,7 @@ def resumo(dias: int = 7) -> dict:
         "juiz": Counter(d.get("veredito") for d in por["juiz"]),
         "filtro_abortos": len(por["filtro_raciocinio"]),
         "exploracoes": len(por["exploracao"]),
+        "varredura_ia": {tipo: {"aceitos": sum(1 for t, st in cards_ia if t == tipo and st not in ("novo", "rejeitado")),
+                                "rejeitados": sum(1 for t, st in cards_ia if t == tipo and st == "rejeitado")}
+                         for tipo in sorted({t for t, _ in cards_ia})},
     }

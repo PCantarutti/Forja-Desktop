@@ -1768,7 +1768,7 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - o card segue o status da conversa.
 
 ### Parte B: varredura com IA (camadas 2 a 4)
-- [ ] **Camada 2, código:** o explorador só de leitura (E11), com `tree`/`ast`/`imports` (E5), procura:
+- [x] **Camada 2, código:** o explorador só de leitura (E11), com `tree`/`ast`/`imports` (E5), procura:
   - bugs prováveis;
   - telas faltando (rota sem tela, botão ou link sem ação, formulário sem validação);
   - código morto (`imports`: ninguém importa);
@@ -1776,30 +1776,42 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - ideias de melhoria.
 
   Cada achado **precisa** trazer `arquivo:linha` e um trecho. Achado sem isso é descartado.
-- [ ] **Varredura incremental:** só os arquivos mudados desde a última varredura (`git diff` contra o
+- [x] **Varredura incremental:** só os arquivos mudados desde a última varredura (`git diff` contra o
       commit da última varredura, guardado no projeto). A primeira varredura de um repo grande é
       dividida por pasta e pode ser retomada. Varrer tudo a cada vez é inviável com modelo local.
 - [ ] **Camada 3, visual:** `visual_review` (`qualidade.py:151`) nas páginas principais, em desktop e
       mobile, com o screenshot salvo como evidência. Sem modelo de visão que caiba (política da E4),
       a camada é pulada e o motivo aparece.
-- [ ] **Camada 4, triagem:** uma chamada que:
+- [x] **Camada 4, triagem:** uma chamada que:
   - junta achados repetidos;
   - classifica tipo, área e severidade;
   - escreve o **prompt pronto**: contexto, arquivos, critério de aceite e o `verify_command` sugerido,
     no formato que o `plan_feature` e o contrato do Worker esperam;
   - recebe os motivos de rejeição recentes do projeto, para não repetir o mesmo falso positivo.
-- [ ] **Custo e momento:**
+- [x] **Custo e momento:** *(agendamento ficou de fora: só manual)*
   - a varredura é um papel da `como_rodar` (E4), `varredura`, de **prioridade mínima**: só roda com o
     modelo ocioso e para (salvando onde estava) quando o usuário ou o Maestro precisam do modelo.
     Nunca troca de modelo;
   - agendamento opcional (ex.: toda noite, ou N minutos depois do último commit), mais o manual;
   - teto de cards por varredura (padrão 20). O resto fica numa fila "mais achados", para não inundar a
     triagem.
-- [ ] **Qualidade medida:** a taxa de aceite dos cards da varredura com IA, por camada e tipo, entra nas
+- [x] **Qualidade medida:** a taxa de aceite dos cards da varredura com IA, por camada e tipo, entra nas
       métricas (E10). Uma camada com aceite abaixo de ~30% fica desligada por padrão naquele projeto,
       com um aviso.
-- [ ] Testes: achado sem `arquivo:linha` é descartado; a varredura incremental só lê os arquivos
+- [x] Testes: achado sem `arquivo:linha` é descartado; a varredura incremental só lê os arquivos
       mudados; a varredura para quando o principal pede o modelo; o teto de cards é respeitado.
+
+**Feito (2026-09-26), menos a camada 3:** `app/board_ia.py`, botão "Varrer com IA" no board. Lotes de
+arquivos rastreados pelo git (~45% da janela cada), incremental pelo commit da última varredura, com
+pendentes e achados parciais salvos (retoma depois de ceder o modelo). Achado só vale com arquivo do projeto,
+linha dentro dele e o trecho de verdade a ±3 linhas. Triagem com o trecho e os últimos rejeitados; `verify`
+só com nomes que aparecem no trecho, senão vazio. Papel `varredura` da `como_rodar` (nunca carrega nem troca
+modelo), cede quando `modelctl.em_uso()`. Até 20 cards; o resto em "mais achados" (botão "trazer mais").
+Aceite por tipo no board e em Métricas; abaixo de 30% com 10+ cards triados, desliga no projeto com aviso e
+"varrer mesmo assim". Validado no Forja real (gpt-oss:120b): um `calc.py` com 3 bugs plantados virou 3 cards
+com `arquivo:linha` em 5 s; na 1ª rodada a triagem inventou uma assinatura no `verify`, e o prompt foi
+corrigido. **Ficou:** a camada 3 (visual) na varredura, que precisa de servidor no ar e de modelo de visão
+junto, e o agendamento (toda noite / depois do commit).
 
 ### Parte C: execução automática ("sozinho", de ponta a ponta)
 

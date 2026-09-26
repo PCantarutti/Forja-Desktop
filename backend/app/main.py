@@ -479,7 +479,9 @@ def board_projetos():
 @app.get("/api/board")
 def board_listar(pasta: str):
     projeto = _board(board.projeto_de, pasta)
+    from . import board_ia
     return {"projeto": projeto, "issues": board.listar(projeto), "varredura": board.estado_varredura(projeto),
+            "varredura_ia": board_ia.estado(projeto), "aceite_ia": board_ia.aceite(projeto),
             "comandos": board.comandos_do_projeto(Path(projeto)) or convencoes.comandos(Path(projeto)), "board_card": board.board_card_ligado(projeto),
             "vinculadas": len(board.vinculadas(projeto))}
 
@@ -560,6 +562,19 @@ def mcp_servidor_hooks(body: dict):
         return mcp_servidor.instala_hooks(str(body.get("pasta") or ""))
     except (ValueError, OSError, workspace.WorkspaceError) as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/board/varrer-ia")
+async def board_varrer_ia(body: dict):
+    """E15-B: varredura com IA em segundo plano (incremental, prioridade mínima, até 20 cards)."""
+    from . import board_ia
+    return _board(board_ia.varrer, str(body.get("pasta") or ""), bool(body.get("forcar")))
+
+
+@app.post("/api/board/mais")
+def board_mais(body: dict):
+    from . import board_ia
+    return _board(board_ia.trazer_mais, str(body.get("pasta") or ""))
 
 
 @app.post("/api/board/pedir")

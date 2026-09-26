@@ -19,6 +19,9 @@ export type Issue = {
   historico: { quando: string; texto: string }[]; modo_sugerido: "agent" | "maestro"; updated_at: string;
 };
 type Varredura = { rodando: boolean; etapa?: string; criados: number; encontrados: number; avisos: string[] } | null;
+// E15-B: varredura com IA (incremental, cede o modelo, até 20 cards; o resto fica em "mais achados")
+type VarreduraIA = { rodando: boolean; etapa?: string; total?: number; lidos?: number; criados?: number;
+  descartados?: number; mais: number; parou?: string; avisos: string[] } | null;
 
 const COLUNAS = [
   { id: "novo", nome: "Novo", ponto: "bg-amber-400", vazio: "A varredura e a IA põem os achados aqui para você triar." },
@@ -128,6 +131,9 @@ export default function BoardView(props: {
   const [pasta, setPasta] = useState<string | null>(props.pasta);
   const [issues, setIssues] = useState<Issue[]>([]);
   const [varredura, setVarredura] = useState<Varredura>(null);
+  const [ia, setIa] = useState<VarreduraIA>(null);
+  const [aceiteIa, setAceiteIa] = useState<{ pct: number | null; aceitos: number; rejeitados: number } | null>(null);
+  const [iaVisto, setIaVisto] = useState(false);
   const [comandos, setComandos] = useState<Record<string, string>>({});
   const [erro, setErro] = useState("");
   const [busca, setBusca] = useState("");
@@ -161,8 +167,10 @@ export default function BoardView(props: {
   const carregar = () => {
     if (!pasta) return;
     api.get<{ issues: Issue[]; varredura: Varredura; comandos: Record<string, string>; projeto: string;
-      board_card: boolean; vinculadas: number }>(`/board?pasta=${encodeURIComponent(pasta)}`)
+      board_card: boolean; vinculadas: number; varredura_ia: VarreduraIA;
+      aceite_ia: Record<string, { pct: number | null; aceitos: number; rejeitados: number }> }>(`/board?pasta=${encodeURIComponent(pasta)}`)
       .then((r) => { setIssues(r.issues); setVarredura(r.varredura); setComandos(r.comandos);
+        setIa(r.varredura_ia); setAceiteIa(r.aceite_ia?.total ?? null);
         setIaCria(r.board_card); setNVinc(r.vinculadas); })
       .catch((e) => setErro(e.message));
     api.get<NonNullable<typeof auto>>(`/board/auto?pasta=${encodeURIComponent(pasta)}`).then(setAuto).catch(() => {});
@@ -175,6 +183,12 @@ export default function BoardView(props: {
     const t = setInterval(carregar, 2000);
     return () => clearInterval(t);
   }, [varredura?.rodando, pasta]);
+  useEffect(() => {
+    if (!ia?.rodando) return;
+    setIaVisto(false);
+    const t = setInterval(carregar, 2000);
+    return () => clearInterval(t);
+  }, [ia?.rodando, pasta]);
 
   const acao = async (fn: () => Promise<unknown>) => {
     setErro("");  // o recarregar de depois não limpa: senão o erro da ação sumia na hora
@@ -276,6 +290,18 @@ export default function BoardView(props: {
               : "TODOs e auditoria de dependências. Ponha test_command/typecheck_command/lint_command no FORJA.md para rodar também."}
             onClick={() => acao(() => api.post("/board/varrer", { pasta }))}>
             <Refresh className="size-3.5" /> Varrer
+          </button>
+          {ia?.rodando && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted" aria-live="polite">
+              <span className="size-1.5 animate-pulse rounded-full bg-violet-400" />
+              IA: {ia.etapa === "triagem" ? "triagem…" : `lendo ${ia.lidos ?? 0}/${ia.total ?? 0}`}
+            </span>
+          )}
+          <button className={btn} disabled={!pasta || !!ia?.rodando}
+            title={"O modelo lê o código mudado desde a última vez e sugere até 20 cards, cada um com arquivo, linha e trecho. "
+              + "Para sozinho quando o agente ou o Maestro precisam do modelo." + (aceiteIa?.pct != null ? ` Aceite até aqui: ${aceiteIa.pct}%.` : "")}
+            onClick={() => acao(() => api.post("/board/varrer-ia", { pasta }))}>
+            <Raio className="size-3.5" /> Varrer com IA
           </button>
           <button className={`${btn} ${painel === "pedir" ? "bg-raised" : ""}`} disabled={!pasta}
             onClick={() => setPainel((v) => (v === "pedir" ? null : "pedir"))}
@@ -441,6 +467,29 @@ export default function BoardView(props: {
           <span className="text-fg">Varredura: {varredura.criados} card{varredura.criados === 1 ? "" : "s"} novo{varredura.criados === 1 ? "" : "s"}.</span>
           {varredura.avisos.join(" ")}
           <button className="ml-auto text-faint hover:text-fg" onClick={() => setAvisosVistos(true)} aria-label="Dispensar"><X className="size-3.5" /></button>
+        </p>
+      )}
+
+      {!ia?.rodando && ia && (ia.avisos.length > 0 || ia.parou || ia.mais > 0 || ia.criados != null) && !iaVisto && (
+        <p className="flex flex-wrap items-center gap-2 border-b border-line px-5 py-2 text-xs text-muted">
+          {ia.criados != null && (
+            <span className="text-fg">
+              Varredura com IA: {ia.criados} card{ia.criados === 1 ? "" : "s"} em Novo{ia.descartados ? `, ${ia.descartados} achado(s) sem prova descartado(s)` : ""}.
+            </span>
+          )}
+          {ia.parou && <span>Parou: {ia.parou}.</span>}
+          {ia.avisos.join(" ")}
+          {ia.avisos.some((a) => a.includes("mesmo assim")) && (
+            <button className="underline underline-offset-2 hover:text-fg" onClick={() => acao(() => api.post("/board/varrer-ia", { pasta, forcar: true }))}>
+              varrer mesmo assim
+            </button>
+          )}
+          {ia.mais > 0 && (
+            <button className="underline underline-offset-2 hover:text-fg" onClick={() => acao(() => api.post("/board/mais", { pasta }))}>
+              trazer mais {Math.min(20, ia.mais)} de {ia.mais} achado(s)
+            </button>
+          )}
+          <button className="ml-auto text-faint hover:text-fg" onClick={() => setIaVisto(true)} aria-label="Dispensar"><X className="size-3.5" /></button>
         </p>
       )}
 

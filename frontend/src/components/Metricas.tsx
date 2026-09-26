@@ -12,6 +12,7 @@ type Resumo = {
   juiz: Record<string, number>;
   filtro_abortos: number;
   exploracoes: number;
+  varredura_ia: Record<string, { aceitos: number; rejeitados: number }>;
 };
 
 const pct = (v: number | null | undefined) => (v == null ? "—" : `${String(v).replace(".", ",")}%`);
@@ -102,6 +103,11 @@ export default function Metricas({ onError }: { onError: (e: string) => void }) 
                ["Raciocínios abortados pelo filtro", String(r.filtro_abortos)],
                ["Explorações", String(r.exploracoes)],
              ]} />
+      <Lista titulo="Varredura com IA do board: aceite por tipo" vazio="Nenhum card da varredura com IA triado no período."
+             itens={Object.entries(r.varredura_ia ?? {}).map(([t, v]) => {
+               const n = v.aceitos + v.rejeitados;
+               return [t, n ? `${v.aceitos}/${n} aceitos (${pct(Math.round((1000 * v.aceitos) / n) / 10)})` : "sem triagem"] as [string, string];
+             })} />
     </div>
   );
 }
