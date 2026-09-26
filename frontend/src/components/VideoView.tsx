@@ -1,12 +1,13 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { createPortal } from "react-dom";
 import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
 import { ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trash, Trocar, X } from "./icons";
 import { campoPrompt } from "./Composer";
+import SeletorFormato, { type Forma } from "./Formato";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
-import { PROPORCOES, RAZAO, estimarTempo, outroLado, proporcaoPerto, quadrosDe, razaoSimples, tamanhoNaRazao, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
+import { PROPORCOES, estimarTempo, proporcaoPerto, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
 import { A_REFAZER, AnelProgresso, BarraTopo, Caixa, Chip, duracao, Fundo, Liquido, listras, numeroCaixa, rotuloSementes, Secao, SEEDS, Stepper, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
@@ -763,6 +764,11 @@ export default function VideoView(props: {
 
 // ---------------------------------------------------------------- peças pequenas
 
+// Desenhos do formato com as medidas do protótipo (PVideo).
+const FORMAS_VIDEO: Forma[] = [
+  { id: "16:9", w: 26, h: 15 }, { id: "9:16", w: 12, h: 20 }, { id: "1:1", w: 17, h: 17 }, { id: "4:3", w: 22, h: 16 },
+];
+
 
 
 /** A dica sai da conta, não de faixas fixas: o modelo cabe inteiro na VRAM da GPU do sd.cpp? E quanto a
@@ -787,57 +793,6 @@ function dicaQualidade(gpu: LocalState["gpu_video"], modelo: LocalModel | undefi
 }
 
 
-/** Tamanho livre. Com uma proporção escolhida (e travada), mexer num lado calcula o outro na hora; os dois
- *  vão para o múltiplo do modelo ao confirmar (Enter ou sair do campo), para não brigar com quem digita. */
-function TamanhoPersonalizado(props: { w: number; h: number; passo: number; razao: number | null; rotulo: string; onAplicar: (w: number, h: number) => void }) {
-  const [w, setW] = useState(String(props.w));
-  const [h, setH] = useState(String(props.h));
-  const [travada, setTravada] = useState(true);
-  useEffect(() => {
-    setW(String(props.w));
-    setH(String(props.h));
-  }, [props.w, props.h]);
-  const razao = travada ? props.razao : null;
-  const encaixa = (v: number) => Math.min(3840, Math.max(props.passo * 8, Math.round((v || 0) / props.passo) * props.passo));
-  const muda = (eixo: "w" | "h", v: string) => {
-    const n = v.replace(/\D/g, "");
-    if (eixo === "w") {
-      setW(n);
-      if (razao && Number(n)) setH(String(outroLado(Number(n), razao, "w", props.passo)));
-    } else {
-      setH(n);
-      if (razao && Number(n)) setW(String(outroLado(Number(n), razao, "h", props.passo)));
-    }
-  };
-  const aplicar = () => props.onAplicar(encaixa(Number(w)), encaixa(Number(h)));
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] text-muted">Personalizada</span>
-        {props.razao && (
-          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-faint" title="Mexer num lado calcula o outro pela proporção">
-            <input type="checkbox" checked={travada} onChange={(e) => setTravada(e.target.checked)} className="accent-[var(--accent)]" />
-            travar em {props.rotulo}
-          </label>
-        )}
-      </div>
-      <div className="flex items-center gap-1.5">
-        <Caixa rotulo="Largura" passo={props.passo}>
-          <input aria-label="Largura" inputMode="numeric" value={w} onChange={(e) => muda("w", e.target.value)}
-                 onBlur={aplicar} onKeyDown={(e) => e.key === "Enter" && aplicar()} className={numeroCaixa} />
-        </Caixa>
-        <span className="flex shrink-0 flex-col items-center leading-none" title={`Os dois lados vão para múltiplos de ${props.passo} (o que o modelo pede)`}>
-          <span className="font-mono text-[9.5px] text-faint">{props.passo}</span>
-          <span className="text-faint">×</span>
-        </span>
-        <Caixa rotulo="Altura" passo={props.passo}>
-          <input aria-label="Altura" inputMode="numeric" value={h} onChange={(e) => muda("h", e.target.value)}
-                 onBlur={aplicar} onKeyDown={(e) => e.key === "Enter" && aplicar()} className={numeroCaixa} />
-        </Caixa>
-      </div>
-    </div>
-  );
-}
 
 /** Slot de quadro do composer: clique, soltar arquivo, ou arrastar um vídeo do feed. */
 function SlotQuadro(props: {
@@ -1024,34 +979,6 @@ function AjustesVideo(props: {
   const atual = st.video_models.find((m) => m.path === props.modelo);
   const a14b = !!atual?.params?.high_noise_model || atual?.variante?.includes("a14b");
   const qualidades = Object.keys(props.tamanhos);
-  // Livre: escolhido no botão ou quando o tamanho não bate com nenhuma proporção.
-  const [livre, setLivre] = useState(false);
-  const livreAtivo = livre || !props.prop;
-  // A proporção do Livre (5:7, 3:2…): nasce da fração mais perto do tamanho atual.
-  const [razaoLivre, setRazaoLivre] = useState<[number, number]>(() => (props.prop ? (props.prop.split(":").map(Number) as [number, number]) : razaoSimples(o.width, o.height)));
-  const mudaRazao = (a: number, b: number) => {
-    const ra = Math.max(1, Math.min(64, Math.round(a) || 1)), rb = Math.max(1, Math.min(64, Math.round(b) || 1));
-    setRazaoLivre([ra, rb]);
-    const [w, h] = tamanhoNaRazao(o.width, o.height, ra, rb, atual?.req?.multiplo ?? 16);
-    set("width", w);
-    set("height", h);
-  };
-  // desenho tracejado do Livre: a proporção cabe numa caixa de 26×20, e muda de forma com transição
-  const escala = Math.min(26 / razaoLivre[0], 20 / razaoLivre[1]);
-  const aplicaTam = (q: string, pr: Proporcao) => {
-    const [w, h] = props.tamanhos[q][pr];
-    set("width", w);
-    set("height", h);
-  };
-  /** Resolução no formato Livre: o lado menor vai para o da qualidade e a proporção atual fica. */
-  const aplicaQualidadeLivre = (q: string) => {
-    const mult = atual?.req?.multiplo ?? 16;
-    const menor = Math.min(...props.tamanhos[q]["16:9"]);
-    const r = o.width / o.height;
-    const snap = (v: number) => Math.max(mult, Math.round(v / mult) * mult);
-    if (r >= 1) { set("height", snap(menor)); set("width", snap(menor * r)); }
-    else { set("width", snap(menor)); set("height", snap(menor / r)); }
-  };
   // Duração: slider em quadros (4k+1) até o dobro do treino; a marca mostra onde o treino acaba.
   const fps = o.fps || 16;
   const treino = atual?.req?.quadros_treino ?? 81;
@@ -1063,15 +990,6 @@ function AjustesVideo(props: {
   const gbModelo = atual ? atual.size / 2 ** 30 : 0;
   const gbGpu = st.gpu_video?.gb ?? 0;
   const fracao = gbGpu ? Math.min(1, gbModelo / gbGpu) : 0;
-  // Medidas do protótipo (PVideo): cada desenho tem o tamanho exato, não uma conta pela razão.
-  const FORMA: Record<Proporcao, { w: number; h: number }> = {
-    "16:9": { w: 26, h: 15 }, "9:16": { w: 12, h: 20 }, "1:1": { w: 17, h: 17 }, "4:3": { w: 22, h: 16 },
-  };
-  const forma = (pr: Proporcao) => (
-    <span className="flex h-5 items-center justify-center">
-      <span className="block rounded-[3px] border-[1.5px] border-current" style={{ width: FORMA[pr].w, height: FORMA[pr].h }} />
-    </span>
-  );
 
   return (
     <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side text-xs">
@@ -1135,60 +1053,22 @@ function AjustesVideo(props: {
         </Secao>
 
         <Secao titulo="Formato">
-          <div className="grid grid-cols-5 gap-1.5">
-            {PROPORCOES.map((pr) => (
-              <button key={pr} onClick={() => { setLivre(false); aplicaTam(props.qual ?? qualidades[0], pr); }}
-                      className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${!livreAtivo && props.prop === pr ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
-                {forma(pr)}
-                <span className="font-mono text-[10.5px]">{pr}</span>
-              </button>
-            ))}
-            <button onClick={() => { if (!livreAtivo) setRazaoLivre(props.prop ? (props.prop.split(":").map(Number) as [number, number]) : razaoSimples(o.width, o.height)); setLivre(true); }}
-                    title="Personalizado: escolha uma proporção qualquer (5:7, 3:2…)"
-                    className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${livreAtivo ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
-              <span className="flex h-5 items-center justify-center">
-                <span className="block rounded-[3px] border-[1.5px] border-dashed border-current transition-[width,height] duration-200 ease-[cubic-bezier(.2,0,0,1)]"
-                      style={livreAtivo ? { width: razaoLivre[0] * escala, height: razaoLivre[1] * escala } : { width: 22, height: 15 }} />
-              </span>
-              <span className={livreAtivo ? "font-mono text-[10.5px]" : "text-[10.5px]"}>{livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : "Livre"}</span>
-            </button>
-          </div>
-          {livreAtivo && (
-            <div className="flex items-center justify-center">
-              <div className="flex items-center gap-1.5" title="Proporção personalizada (largura : altura)">
-                {[0, 1].map((i) => (
-                  <Fragment key={i}>
-                    {i === 1 && <span className="font-mono text-faint">:</span>}
-                    <label data-arrasta data-passo={1} className="rounded-[8px] border border-line bg-surface px-2 py-1 focus-within:border-focus">
-                      <input type="number" min={1} max={64} step={1} value={razaoLivre[i]} aria-label={i === 0 ? "Proporção: largura" : "Proporção: altura"}
-                             onChange={(e) => mudaRazao(i === 0 ? Number(e.target.value) : razaoLivre[0], i === 1 ? Number(e.target.value) : razaoLivre[1])}
-                             className={`${numeroCaixa} w-8 text-center`} />
-                    </label>
-                  </Fragment>
-                ))}
-                <button onClick={() => mudaRazao(razaoLivre[1], razaoLivre[0])} title="Inverter (retrato ↔ paisagem)" aria-label="Inverter a proporção"
-                        className="grid size-7 place-items-center rounded-[7px] text-faint hover:bg-raised hover:text-fg">
-                  <Trocar className="size-3.5" />
-                </button>
-              </div>
-            </div>
-          )}
-          <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" title={dicaQualidade(st.gpu_video, atual, props.tamanhos)}>
-            {qualidades.map((q) => {
+          <SeletorFormato
+            w={o.width}
+            h={o.height}
+            mult={atual?.req?.multiplo ?? 16}
+            formas={FORMAS_VIDEO}
+            quals={qualidades.map((q) => {
               const treinou = !atual?.req?.resolucoes || q in atual.req.resolucoes;
-              return (
-                <button key={q} onClick={() => (livreAtivo ? aplicaQualidadeLivre(q) : aplicaTam(q, props.prop ?? "16:9"))}
-                        title={treinou ? `${props.tamanhos[q][props.prop ?? "16:9"].join(" × ")}` : `${props.tamanhos[q][props.prop ?? "16:9"].join(" × ")} — acima do que ${atual?.req?.nome ?? "o modelo"} treinou: pede bem mais memória e tempo, e pode perder coerência`}
-                        className={`flex-1 rounded-[6px] py-1 ${props.qual === q && !livreAtivo ? "bg-raised text-fg" : treinou ? "text-muted hover:text-fg" : "text-faint hover:text-muted"}`}>
-                  {q}
-                </button>
-              );
+              const t = props.tamanhos[q][props.prop ?? "16:9"].join(" × ");
+              return { id: q, apagada: !treinou, titulo: treinou ? t : `${t} — acima do que ${atual?.req?.nome ?? "o modelo"} treinou: pede bem mais memória e tempo, e pode perder coerência` };
             })}
-          </div>
-          <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16}
-                                razao={livreAtivo ? razaoLivre[0] / razaoLivre[1] : props.prop ? RAZAO[props.prop] : null}
-                                rotulo={livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : props.prop ?? ""}
-                                onAplicar={(w, h) => { set("width", w); set("height", h); }} />
+            tamanhoPara={(f, q) => props.tamanhos[q][f as Proporcao]}
+            prop={props.prop}
+            qual={props.qual}
+            dicaQuals={dicaQualidade(st.gpu_video, atual, props.tamanhos)}
+            onTamanho={(w, h) => { set("width", w); set("height", h); }}
+          />
         </Secao>
 
         <Secao titulo="Duração" extra={<span className="font-mono text-[13px] font-medium text-fg">{fmtS(segundosDe(o.frames, fps))}</span>}>
