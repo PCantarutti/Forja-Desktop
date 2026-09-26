@@ -18,19 +18,26 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 ## Falta (front)
 - [x] Imagens: inspetor 292px, barra de decisão flutuante, marcação com anel accent
 - [x] Vídeo: inspetor 300px, marcação com anel accent
-- [ ] Vídeo: seções do inspetor como no design (FORMATO com desenho, DURAÇÃO em slider, ACELERAR em toggle), hover com scrub accent
+- [x] Vídeo: inspetor em seções, barra de decisão flutuante, scrub accent, marcação accent
+- [ ] Vídeo: FORMATO com desenho da proporção, DURAÇÃO em slider com marca do limite de treino
 - [x] Comparar: voto com estrela ("Votar" / "Melhor resposta"), Refazer, rótulos mono (card PROMPT e Analisar já existiam)
 - [x] Pesquisa: RESUMO com borda accent, plano recolhível e FONTES com rótulo mono
-- [ ] Pesquisa: coluna Fontes 300px à direita
+- [x] Pesquisa: coluna Fontes 300px à direita (≥ xl)
 - [x] Maestro: marcas ✓ ⟳ ◆ ? ○ com as cores de estado
-- [ ] Maestro: legenda no rodapé da árvore
+- [x] Maestro: legenda no rodapé da árvore
 - [x] Trajetória: 3 faixas, delegação violeta, toggles no estilo novo
-- [ ] IA local e modais (seletor de modelo, player, máscara, ampliar, cartões de estado)
-- [ ] Esc fecha o último tile
-- [ ] TasksBar recolhível no topo do composer (hoje é card na conversa)
+- [x] Imagens: galeria em mosaico pela proporção real (`mosaico.ts`, com teste)
+- [x] Modais: scrim e sombra do design; rótulos caixa-alta em mono em todas as telas
+- [ ] IA local: barra segmentada de uso de memória, grade de parâmetros com valor alterado em accent, busca do Hugging Face com opções coloridas
+- [ ] Cartões de estado (VRAM, atualização, ask_user, compactação, reconexão) no desenho da referência 9f
+- [x] Esc fecha o último tile (fora de campo de texto e sem diálogo)
+- [x] TasksBar recolhível no topo do composer, com barrinha de progresso
 - [x] Portado para o forja-web: branch `feat/redesign` (worktree `forja-web/.claude/worktrees/redesign`), sem Vídeo/IA local/Board que o web não tem
 - [ ] forja-web: validar com o Docker de pé (localhost:7001) — só vi o visual com Vite, sem dados
 - [ ] O que for feito daqui em diante no desktop: portar com `git merge-file` (base = desktop `c8e802a`)
+
+## Dados de teste
+- `scripts/fake_midia.py`: lotes fake de Imagem (proporções misturadas, todos os estados) e Vídeo no `.devredesign`, sem carregar modelo.
 
 ## Backend (depois)
 - [ ] Persistir `tema`, `corDestaque`, `fonte` no `/settings` (hoje em `localStorage` `forja.aparencia`) — e o celular ler daí
