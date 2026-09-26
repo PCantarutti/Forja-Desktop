@@ -35,4 +35,4 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [ ] Multiplicadores de esforço (0,4× · 1× · 1,6× · 3× · 4× multi) vieram do design e estão **comentados** em
       `frontend/src/components/Controls.tsx` (`MULT_ESFORCO` e o `<span>` no menu). Definir no backend o que medem
       (tokens? tempo? chamadas? relativo ao Médio), expor no `/settings` ou num endpoint barato, e descomentar lendo de lá.
-- [ ] Iniciais do trilho (`forja.aparencia.iniciais`, padrão "EU") junto com tema/destaque/fonte no `/settings"
+- [ ] Iniciais do trilho (`forja.aparencia.iniciais`, padrão "EU") junto com tema/destaque/fonte no `/settings`
