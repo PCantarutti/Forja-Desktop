@@ -1170,3 +1170,12 @@ def test_kv_unificado_com_varios_slots_desliga_o_cache_em_ram():
     assert a[a.index("--cache-ram") + 1] == "0"
     for outro in ({**p, "parallel": 1}, {**p, "kv_unified": False}, {**p, "extra_args": {"--cache-ram": "2048"}}):
         assert "--cache-ram 0" not in " ".join(localai.argv(Path("llama-server.exe"), "m.gguf", outro))
+
+
+def test_mtp_automatico_vai_com_2_tokens_por_rascunho():
+    p = {**localai.DEFAULT_PARAMS, "spec_type": "draft-mtp"}
+    a = localai.argv(Path("llama-server.exe"), "m.gguf", p)
+    assert a[a.index("--spec-draft-n-max") + 1] == "2"
+    a = localai.argv(Path("llama-server.exe"), "m.gguf", {**p, "spec_draft_n_max": 4})
+    assert a[a.index("--spec-draft-n-max") + 1] == "4"
+    assert "--spec-draft-n-max" not in localai.argv(Path("llama-server.exe"), "m.gguf", {**p, "spec_type": "ngram-mod"})

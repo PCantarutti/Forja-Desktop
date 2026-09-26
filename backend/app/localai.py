@@ -91,7 +91,7 @@ DEFAULT_PARAMS = {
     "swa_full": False,        # --swa-full: KV de todas as camadas em modelo SWA (é o que deixa restaurar do disco)
     # Geração especulativa: o modelo (ou um rascunho) adivinha vários tokens e o principal confere de uma vez.
     "spec_type": "",          # --spec-type: "" desligada | draft-mtp | draft-simple | ngram-simple | ngram-mod ...
-    "spec_draft_n_max": 0,    # --spec-draft-n-max: tokens por rascunho (0 = o padrão do llama.cpp, 3)
+    "spec_draft_n_max": 0,    # --spec-draft-n-max: tokens por rascunho (0 = 2 no MTP, senão o padrão do llama.cpp, 3)
     "spec_draft_model": "",   # --spec-draft-model: GGUF rascunho (draft-simple/eagle3)
     "spec_draft_ngl": -1,     # --spec-draft-ngl: camadas do rascunho na GPU (-1 = o padrão)
     # Qualquer outra opção do llama-server, lida do --help deste binário: {"--flag": "valor" | ""}.
@@ -1600,8 +1600,11 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
         a.append("--swa-full")
     if p.get("spec_type") and ok("--spec-type"):
         a += ["--spec-type", str(p["spec_type"])]
-        if int(p.get("spec_draft_n_max") or 0) > 0 and ok("--spec-draft-n-max"):
-            a += ["--spec-draft-n-max", str(int(p["spec_draft_n_max"]))]
+        # MTP com 0 (automático) vai com 2: no Ornith-1.5-9B, 60,8 tok/s sem, 67,7 com 1, 74,8 com 2 e 72,3
+        # com 3 (o padrão do llama.cpp) — acima de 2 o aceite cai para 51% e o rascunho errado custa mais.
+        n = int(p.get("spec_draft_n_max") or 0) or (2 if p["spec_type"] == "draft-mtp" else 0)
+        if n > 0 and ok("--spec-draft-n-max"):
+            a += ["--spec-draft-n-max", str(n)]
         if p.get("spec_draft_model") and ok("--spec-draft-model"):
             a += ["--spec-draft-model", str(p["spec_draft_model"])]
             if int(p.get("spec_draft_ngl", -1)) >= 0 and ok("--spec-draft-ngl"):

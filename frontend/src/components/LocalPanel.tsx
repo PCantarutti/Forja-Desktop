@@ -48,7 +48,7 @@ const AJUDA: Record<string, string> = {
   mmap: "Mapeia o arquivo em vez de copiar tudo para a RAM. Ligado carrega mais rápido; com especialistas na CPU o llama.cpp sugere desligar.",
   mmproj: "Arquivo mmproj-*.gguf do mesmo modelo: liga a visão, e aí as imagens do chat chegam ao modelo.",
   spec_type: "O modelo adivinha vários tokens de uma vez e confere num passo só: mesma resposta, mais tokens por segundo quando o palpite acerta. MTP usa as camadas de predição do próprio modelo (só se o GGUF as tiver); n-grama reaproveita trechos que já apareceram (bom para código e edições); modelo rascunho usa um modelo menor da mesma família.",
-  spec_draft_n_max: "Quantos tokens o rascunho adivinha por vez. Mais tokens rendem mais quando acerta e desperdiçam quando erra. 0 = o padrão do llama.cpp (3).",
+  spec_draft_n_max: "Quantos tokens o rascunho adivinha por vez. Mais tokens rendem mais quando acerta e desperdiçam quando erra. 0 = automático: 2 no MTP (o que rendeu mais no bench), 3 nos outros.",
   spec_draft_model: "GGUF pequeno da mesma família (mesmo vocabulário) que faz os palpites. Só nos tipos com modelo rascunho.",
   spec_draft_ngl: "Camadas do modelo rascunho na GPU. -1 = o padrão do llama.cpp.",
   fit: "Deixa o llama.cpp reduzir sozinho o que não couber na memória (-fit on). A estimativa acima é estimativa; ele mede na hora.",
@@ -516,7 +516,7 @@ function Especulativa(p: {
       </Field>
       {tipo && (
         <Num label="Tokens por rascunho" chave="spec_draft_n_max" value={p.form.spec_draft_n_max ?? 0} max={16}
-             onChange={(v) => p.set("spec_draft_n_max", v)} mudado={p.mudou("spec_draft_n_max")} onReset={() => p.reset("spec_draft_n_max")} hint="0 = padrão (3)" />
+             onChange={(v) => p.set("spec_draft_n_max", v)} mudado={p.mudou("spec_draft_n_max")} onReset={() => p.reset("spec_draft_n_max")} hint="0 = automático (2 no MTP, 3 nos outros)" />
       )}
       {comRascunho && (
         <>
