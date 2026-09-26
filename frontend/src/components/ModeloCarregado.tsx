@@ -72,16 +72,17 @@ export default function ModeloCarregado() {
     <>
       <button
         onClick={() => setAberto(true)}
-        title="IA local: modelo carregado e memória"
-        className="flex max-w-80 items-center gap-2 rounded-[9px] border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
+        title={`${titulo}
+IA local: modelo carregado e memória`}
+        className="flex min-w-0 max-w-80 items-center gap-2 rounded-[9px] border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
       >
         <span className={`size-2 shrink-0 rounded-full ${ponto}`} />
-        <span className={`min-w-0 truncate ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
+        <span className={`min-w-0 truncate @max-[620px]/cab:hidden ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
         {/* Sem modelo, a placa "mais usada" pode ser a integrada: o número confundia. Fica no painel. */}
         {m && g && (
           <>
             <span className="w-12 shrink-0"><Barra usado={g.usado} total={g.total} /></span>
-            <span className="shrink-0 font-mono text-[11px] text-faint">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>
+            <span className="shrink-0 font-mono text-[11px] text-faint @max-[620px]/cab:hidden">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>
           </>
         )}
       </button>

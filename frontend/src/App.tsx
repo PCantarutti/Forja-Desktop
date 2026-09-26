@@ -2218,14 +2218,10 @@ export default function App() {
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
       <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className={`arrasta livre-controles relative flex h-12 shrink-0 items-center gap-2 px-3 ${sidebarHidden ? "pl-12" : ""}`}>
-          {/* Indicador da IA local no meio do cabeçalho, em todas as seções. */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 flex h-12 items-center justify-center">
-            <div className="pointer-events-auto"><ModeloCarregado /></div>
-          </div>
+        <div className={`arrasta livre-controles @container/cab grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_max-content] items-center gap-3 px-3 ${sidebarHidden ? "pl-12" : ""}`}>
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="truncate text-sm font-medium text-fg" title={conv?.title}>
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <span className="min-w-12 truncate text-sm font-medium text-fg" title={conv?.title}>
             {conv?.title ?? "Nova conversa"}
           </span>
           {agentica && (
@@ -2233,7 +2229,7 @@ export default function App() {
             onClick={chooseFolder}
             disabled={running || picking}
             title={wsLabel ? `Pasta de trabalho: ${wsLabel}\nClique para trocar` : "Nenhuma pasta escolhida: clique para escolher"}
-            className={`inline-flex max-w-56 shrink-0 items-center gap-1 rounded-[7px] border px-2 py-[3px] font-mono text-[11.5px] disabled:opacity-50 ${wsLabel ? "border-line bg-raised text-fg-2 hover:border-focus hover:text-fg" : "border-warn/40 bg-warn/10 text-warn hover:text-fg"}`}
+            className={`inline-flex min-w-0 max-w-56 items-center gap-1 rounded-[7px] border px-2 py-[3px] font-mono text-[11.5px] disabled:opacity-50 ${wsLabel ? "border-line bg-raised text-fg-2 hover:border-focus hover:text-fg" : "border-warn/40 bg-warn/10 text-warn hover:text-fg"}`}
           >
             <span className="truncate">
               {picking ? "escolhendo…" : wsLabel ? folderName(wsLabel) : "Escolher pasta"}
@@ -2251,7 +2247,7 @@ export default function App() {
               </button>
               <button onClick={() => setShowBoard(true)} title="Board do projeto: backlog, varredura e Iniciar"
                       className="inline-flex shrink-0 items-center gap-1.5 rounded-[7px] px-2 py-1 text-xs text-muted hover:bg-raised hover:text-fg">
-                <Quadro className="size-3.5" /> Board
+                <Quadro className="size-3.5" /> <span className="@max-[760px]/cab:hidden">Board</span>
               </button>
             </>
           )}
@@ -2267,6 +2263,9 @@ export default function App() {
           )}
           {picking && <span className="text-xs text-muted">Escolha a pasta na janela do sistema (pode estar atrás do navegador).</span>}
           </div>
+          {/* Indicador da IA local entre o título e os botões: coluna própria, para não cair por cima deles
+              quando a janela estreita (o título é quem encolhe). */}
+          <ModeloCarregado />
           <RightTabsBar
             abertos={soltos(gradeTela)}
             onSelect={(tab) => setRight((r) => (abertos(r).includes(tab) ? fecharTile(r, tab) : abrirTile(r, tab, larguraDe(tab))))}
