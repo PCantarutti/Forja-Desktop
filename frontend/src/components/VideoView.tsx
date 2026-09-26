@@ -13,6 +13,7 @@ import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
 import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
 import Saudacao from "./Saudacao";
+import AberturaSobreposta, { useAbertura } from "./AberturaSobreposta";
 
 /** Aba Vídeo: o Wan no stable-diffusion.cpp. O motor é o dos lotes de imagem (um lote = uma tomada,
  *  com variações, manter/descartar e "Continuar"); a tela é outra porque vídeo se olha tocando. */
@@ -82,6 +83,7 @@ export default function VideoView(props: {
   carimbo?: string; // muda quando qualquer conversa muda (/api/activity): lote criado pelo celular aparece sem recarregar
   onAbrirBaixar: () => void;
 }) {
+  const ab = useAbertura();  // abertura no primeiro envio da tela vazia
   const [st, setSt] = useState<LocalState | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [o, setO] = useState<ImageOpts | null>(null);
@@ -312,6 +314,7 @@ export default function VideoView(props: {
     try {
       // O que está na tela também vira o padrão da ferramenta video_generate do agente.
       await api.put("/local/video/defaults", { ...o, model: modelo });
+      if (!lotes.length) ab.disparar();
       const conv = await props.ensureConversation();
       await api.post(`/imagens/${conv}/gerar`, {
         prompt,
@@ -490,8 +493,10 @@ export default function VideoView(props: {
       />
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-[1400px] px-5 py-4">
-          {!lotes.length && (
+          {ab.voo && <AberturaSobreposta voo={ab.voo} onFim={ab.fim} />}
+          {!lotes.length && !ab.voo && (
             <Vazio
+              saudacao={ab.saudacao}
               semRuntime={semRuntime}
               semModelo={semModelo}
               modos={modos}
@@ -878,6 +883,7 @@ function SlotQuadro(props: {
 // ---------------------------------------------------------------- estado vazio
 
 function Vazio(props: {
+  saudacao?: React.Ref<HTMLDivElement>;
   semRuntime: boolean;
   semModelo: boolean;
   modos: ModoVideo[];
@@ -885,7 +891,7 @@ function Vazio(props: {
   onExemplo: (m: (typeof MODOS)[number]) => void;
 }) {
   return (
-    <Saudacao titulo="Vídeo" sub="Descreva a cena, anime uma imagem ou ligue dois quadros.">
+    <Saudacao ref={props.saudacao} titulo="Vídeo" sub="Descreva a cena, anime uma imagem ou ligue dois quadros.">
       {props.semRuntime || props.semModelo ? (
         <div className="mx-auto mt-6 max-w-md rounded-xl border border-line bg-surface p-4 text-sm">
           <p className="text-muted">
