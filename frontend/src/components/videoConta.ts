@@ -74,3 +74,24 @@ export function estimarTempo(tempos: Tempo[], chave: string, o: Pedido): { s: nu
   const passos = o.steps + Math.max(0, o.high_noise_steps);
   return { s: carga + passos * sPasso, minimo: tokens(ref) !== alvo && !pares.length };
 }
+
+/** A fração pequena mais perto de w/h (até 32 no denominador): 1008×480 vira 21:10, 832×480 vira 26:15. */
+export function razaoSimples(w: number, h: number): [number, number] {
+  if (!w || !h) return [16, 9];
+  const r = w / h;
+  let melhor: [number, number] = [Math.round(r), 1], erro = Infinity;
+  for (let b = 1; b <= 32; b++) {
+    const a = Math.max(1, Math.round(r * b));
+    const e = Math.abs(a / b - r);
+    if (e < erro - 1e-9) { erro = e; melhor = [a, b]; }
+    if (e < 0.005) break; // já é a fração "bonita" (primeira que chega perto)
+  }
+  return melhor;
+}
+
+/** Tamanho com a proporção a:b mantendo o lado menor, no múltiplo do modelo. */
+export function tamanhoNaRazao(w: number, h: number, a: number, b: number, mult: number): [number, number] {
+  const menor = Math.min(w, h), r = a / b;
+  const snap = (v: number) => Math.max(mult, Math.round(v / mult) * mult);
+  return r >= 1 ? [snap(menor * r), snap(menor)] : [snap(menor), snap(menor / r)];
+}

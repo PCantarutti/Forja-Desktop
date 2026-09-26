@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { duracoesDe, estimarTempo, outroLado, proporcaoPerto, quadrosDe, tamanhosDe, type Tempo } from "./videoConta.ts";
+import { duracoesDe, estimarTempo, outroLado, proporcaoPerto, quadrosDe, razaoSimples, tamanhoNaRazao, tamanhosDe, type Tempo } from "./videoConta.ts";
 
 test("tamanhos saem da resolução de treino e do múltiplo da variante", () => {
   const ti2v = tamanhosDe({ multiplo: 32, resolucoes: { "480p": [832, 480], "720p": [1280, 704] } });
@@ -50,4 +50,12 @@ test("com uma medição só, a estimativa vira 'pelo menos'; sem nenhuma, não h
   const e = estimarTempo(medidos.slice(0, 1), chave, { width: 1280, height: 704, frames: 17, steps: 12, high_noise_steps: -1 })!;
   assert.equal(e.minimo, true);
   assert.equal(estimarTempo(medidos, "outro.gguf", { width: 832, height: 480, frames: 17, steps: 12, high_noise_steps: -1 }), null);
+});
+
+test("proporção livre: fração simples e tamanho mantendo o lado menor", () => {
+  assert.deepEqual(razaoSimples(1920, 1080), [16, 9]);
+  assert.deepEqual(razaoSimples(1008, 480), [21, 10]);
+  assert.deepEqual(razaoSimples(500, 700), [5, 7]);
+  assert.deepEqual(tamanhoNaRazao(832, 480, 5, 7, 16), [480, 672]);
+  assert.deepEqual(tamanhoNaRazao(832, 480, 3, 2, 16), [720, 480]);
 });

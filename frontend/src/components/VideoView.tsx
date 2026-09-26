@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { createPortal } from "react-dom";
 import { api, uploadReferencia } from "../api";
@@ -6,7 +6,7 @@ import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, 
 import { ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trocar, X } from "./icons";
 import { campoPrompt } from "./Composer";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
-import { PROPORCOES, RAZAO, estimarTempo, outroLado, proporcaoPerto, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
+import { PROPORCOES, RAZAO, estimarTempo, outroLado, proporcaoPerto, quadrosDe, razaoSimples, tamanhoNaRazao, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
 import { A_REFAZER, AnelProgresso, BarraTopo, Caixa, Chip, duracao, Fundo, Liquido, listras, numeroCaixa, rotuloSementes, Secao, SEEDS, Stepper, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
@@ -788,7 +788,7 @@ function dicaQualidade(gpu: LocalState["gpu_video"], modelo: LocalModel | undefi
 
 /** Tamanho livre. Com uma proporção escolhida (e travada), mexer num lado calcula o outro na hora; os dois
  *  vão para o múltiplo do modelo ao confirmar (Enter ou sair do campo), para não brigar com quem digita. */
-function TamanhoPersonalizado(props: { w: number; h: number; passo: number; prop: Proporcao | null; onAplicar: (w: number, h: number) => void }) {
+function TamanhoPersonalizado(props: { w: number; h: number; passo: number; razao: number | null; rotulo: string; onAplicar: (w: number, h: number) => void }) {
   const [w, setW] = useState(String(props.w));
   const [h, setH] = useState(String(props.h));
   const [travada, setTravada] = useState(true);
@@ -796,7 +796,7 @@ function TamanhoPersonalizado(props: { w: number; h: number; passo: number; prop
     setW(String(props.w));
     setH(String(props.h));
   }, [props.w, props.h]);
-  const razao = travada && props.prop ? RAZAO[props.prop] : null;
+  const razao = travada ? props.razao : null;
   const encaixa = (v: number) => Math.min(3840, Math.max(props.passo * 8, Math.round((v || 0) / props.passo) * props.passo));
   const muda = (eixo: "w" | "h", v: string) => {
     const n = v.replace(/\D/g, "");
@@ -813,10 +813,10 @@ function TamanhoPersonalizado(props: { w: number; h: number; passo: number; prop
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
         <span className="text-[11px] text-muted">Personalizada</span>
-        {props.prop && (
+        {props.razao && (
           <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-faint" title="Mexer num lado calcula o outro pela proporção">
             <input type="checkbox" checked={travada} onChange={(e) => setTravada(e.target.checked)} className="accent-[var(--accent)]" />
-            travar em {props.prop}
+            travar em {props.rotulo}
           </label>
         )}
       </div>
@@ -1026,6 +1026,17 @@ function AjustesVideo(props: {
   // Livre: escolhido no botão ou quando o tamanho não bate com nenhuma proporção.
   const [livre, setLivre] = useState(false);
   const livreAtivo = livre || !props.prop;
+  // A proporção do Livre (5:7, 3:2…): nasce da fração mais perto do tamanho atual.
+  const [razaoLivre, setRazaoLivre] = useState<[number, number]>(() => (props.prop ? (props.prop.split(":").map(Number) as [number, number]) : razaoSimples(o.width, o.height)));
+  const mudaRazao = (a: number, b: number) => {
+    const ra = Math.max(1, Math.min(64, Math.round(a) || 1)), rb = Math.max(1, Math.min(64, Math.round(b) || 1));
+    setRazaoLivre([ra, rb]);
+    const [w, h] = tamanhoNaRazao(o.width, o.height, ra, rb, atual?.req?.multiplo ?? 16);
+    set("width", w);
+    set("height", h);
+  };
+  // desenho tracejado do Livre: a proporção cabe numa caixa de 26×20, e muda de forma com transição
+  const escala = Math.min(26 / razaoLivre[0], 20 / razaoLivre[1]);
   const aplicaTam = (q: string, pr: Proporcao) => {
     const [w, h] = props.tamanhos[q][pr];
     set("width", w);
@@ -1131,14 +1142,37 @@ function AjustesVideo(props: {
                 <span className="font-mono text-[10.5px]">{pr}</span>
               </button>
             ))}
-            <button onClick={() => setLivre(true)} title="Personalizado: largura e altura livres, sem proporção travada"
+            <button onClick={() => { if (!livreAtivo) setRazaoLivre(props.prop ? (props.prop.split(":").map(Number) as [number, number]) : razaoSimples(o.width, o.height)); setLivre(true); }}
+                    title="Personalizado: escolha uma proporção qualquer (5:7, 3:2…)"
                     className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${livreAtivo ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
               <span className="flex h-5 items-center justify-center">
-                <span className="block h-[15px] w-[22px] rounded-[3px] border-[1.5px] border-dashed border-current" />
+                <span className="block rounded-[3px] border-[1.5px] border-dashed border-current transition-[width,height] duration-200 ease-[cubic-bezier(.2,0,0,1)]"
+                      style={livreAtivo ? { width: razaoLivre[0] * escala, height: razaoLivre[1] * escala } : { width: 22, height: 15 }} />
               </span>
-              <span className="text-[10.5px]">Livre</span>
+              <span className={livreAtivo ? "font-mono text-[10.5px]" : "text-[10.5px]"}>{livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : "Livre"}</span>
             </button>
           </div>
+          {livreAtivo && (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-muted">Proporção</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                {[0, 1].map((i) => (
+                  <Fragment key={i}>
+                    {i === 1 && <span className="font-mono text-faint">:</span>}
+                    <label data-arrasta data-passo={1} className="rounded-[8px] border border-line bg-surface px-2 py-1 focus-within:border-focus">
+                      <input type="number" min={1} max={64} step={1} value={razaoLivre[i]} aria-label={i === 0 ? "Proporção: largura" : "Proporção: altura"}
+                             onChange={(e) => mudaRazao(i === 0 ? Number(e.target.value) : razaoLivre[0], i === 1 ? Number(e.target.value) : razaoLivre[1])}
+                             className={`${numeroCaixa} w-8 text-center`} />
+                    </label>
+                  </Fragment>
+                ))}
+                <button onClick={() => mudaRazao(razaoLivre[1], razaoLivre[0])} title="Inverter (retrato ↔ paisagem)" aria-label="Inverter a proporção"
+                        className="grid size-7 place-items-center rounded-[7px] text-faint hover:bg-raised hover:text-fg">
+                  <Trocar className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
           <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
             {qualidades.map((q) => {
               const treinou = !atual?.req?.resolucoes || q in atual.req.resolucoes;
@@ -1151,7 +1185,9 @@ function AjustesVideo(props: {
               );
             })}
           </div>
-          <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16} prop={livreAtivo ? null : props.prop}
+          <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16}
+                                razao={livreAtivo ? razaoLivre[0] / razaoLivre[1] : props.prop ? RAZAO[props.prop] : null}
+                                rotulo={livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : props.prop ?? ""}
                                 onAplicar={(w, h) => { set("width", w); set("height", h); }} />
           <p className="text-[11px] leading-snug text-faint">{dicaQualidade(st.gpu_video, atual, props.tamanhos)}</p>
         </Secao>
