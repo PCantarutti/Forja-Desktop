@@ -8,8 +8,10 @@ import "@fontsource/ibm-plex-mono/400.css";
 import "@fontsource/ibm-plex-mono/500.css";
 import "./index.css";
 import { aplicarAparencia, lerAparencia } from "./aparencia";
+import { instalarArrasto } from "./arrastaNumero";
 
 aplicarAparencia(lerAparencia());
+instalarArrasto();
 
 /**
  * Sem isto, um erro de render derruba a árvore inteira e sobra a página vazia (tela preta que não

@@ -821,12 +821,15 @@ function TamanhoPersonalizado(props: { w: number; h: number; passo: number; prop
         )}
       </div>
       <div className="flex items-center gap-1.5">
-        <Caixa rotulo="Largura">
+        <Caixa rotulo="Largura" passo={props.passo}>
           <input aria-label="Largura" inputMode="numeric" value={w} onChange={(e) => muda("w", e.target.value)}
                  onBlur={aplicar} onKeyDown={(e) => e.key === "Enter" && aplicar()} className={numeroCaixa} />
         </Caixa>
-        <span className="text-faint">×</span>
-        <Caixa rotulo="Altura">
+        <span className="flex shrink-0 flex-col items-center leading-none" title={`Os dois lados vão para múltiplos de ${props.passo} (o que o modelo pede)`}>
+          <span className="font-mono text-[9.5px] text-faint">{props.passo}</span>
+          <span className="text-faint">×</span>
+        </span>
+        <Caixa rotulo="Altura" passo={props.passo}>
           <input aria-label="Altura" inputMode="numeric" value={h} onChange={(e) => muda("h", e.target.value)}
                  onBlur={aplicar} onKeyDown={(e) => e.key === "Enter" && aplicar()} className={numeroCaixa} />
         </Caixa>
@@ -1129,7 +1132,6 @@ function AjustesVideo(props: {
               );
             })}
           </div>
-          <span className="font-mono text-[11px] text-faint">{o.width} × {o.height} · múltiplos de {atual?.req?.multiplo ?? 16}</span>
           <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16} prop={props.prop}
                                 onAplicar={(w, h) => { set("width", w); set("height", h); }} />
           <p className="text-[11px] leading-snug text-faint">{dicaQualidade(st.gpu_video, atual, props.tamanhos)}</p>

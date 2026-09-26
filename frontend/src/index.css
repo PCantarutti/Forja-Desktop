@@ -234,6 +234,9 @@
 html, body, #root { height: 100%; }
 /* Controles nativos (lista do <select>, calendário, barras) no tema escuro, não no claro do sistema. */
 :root { color-scheme: dark; }
+/* Campo numérico arrastável (arrastaNumero.ts): o cursor avisa enquanto o campo não está em edição. */
+input[type="number"]:not(:focus):not(:disabled), [data-arrasta]:not(:focus-within) input:not(:disabled) { cursor: ew-resize; }
+[data-arrasta]:has(input:not(:disabled)):not(:focus-within) { cursor: ew-resize; }
 select option, select optgroup { background: var(--color-surface); color: var(--color-fg); }
 
 /* Card de imagem gerando: a crista do "líquido" corre de lado; quem pediu menos movimento vê só o nível. */

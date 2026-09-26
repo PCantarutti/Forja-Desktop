@@ -1033,9 +1033,10 @@ export function Secao(props: { titulo: string; dica?: string; extra?: React.Reac
 }
 
 /** Campo numérico em caixa (rótulo pequeno em cima, valor mono embaixo), a grade do design. */
-export function Caixa(props: { rotulo: string; children: React.ReactNode }) {
+export function Caixa(props: { rotulo: string; passo?: number; children: React.ReactNode }) {
+  // data-arrasta: arrastar para os lados na caixa muda o número (arrastaNumero.ts)
   return (
-    <label className="flex min-w-0 flex-col gap-0.5 rounded-[8px] border border-line bg-surface px-2.5 py-1.5 focus-within:border-focus">
+    <label data-arrasta data-passo={props.passo} className="flex min-w-0 flex-col gap-0.5 rounded-[8px] border border-line bg-surface px-2.5 py-1.5 focus-within:border-focus">
       <span className="text-[10.5px] text-faint">{props.rotulo}</span>
       {props.children}
     </label>
