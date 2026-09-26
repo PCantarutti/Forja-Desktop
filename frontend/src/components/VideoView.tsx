@@ -1203,6 +1203,19 @@ function AjustesVideo(props: {
 function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
   const { st } = props;
   const [dias, setDias] = useState(st.image.descarte_dias ?? 0);
+  const [pasta, setPasta] = useState(st.video_dir);
+  // a pasta dos vídeos é uma das pastas padrão (Configurações › Pastas): grava pela mesma rota
+  async function gravarPasta(nova: string) {
+    const alvo = nova.trim();
+    if (!alvo || alvo === st.video_dir) return setPasta(st.video_dir);
+    try {
+      const r = await api.put<{ video_dir: string }>("/local/paths", { video_dir: alvo });
+      setPasta(r.video_dir);
+    } catch (e: any) {
+      setPasta(st.video_dir);
+      props.onError(e.message);
+    }
+  }
   const [limpando, setLimpando] = useState("");
   async function prazo(d: number) {
     setDias(d);
@@ -1224,9 +1237,14 @@ function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
     <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3 text-[11.5px] text-muted">
       <div className="flex items-center gap-1.5">
         <span className="shrink-0">Salvar em</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-fg-2" title={st.video_dir}>{st.video_dir}</span>
-        <button title="Abrir a pasta dos vídeos" className="shrink-0 rounded-[6px] p-1 text-faint hover:bg-raised hover:text-fg"
-                onClick={() => api.post("/open", { path: st.video_dir, mode: "open" }).catch((e: any) => props.onError(e.message))}>
+        <input value={pasta} onChange={(e) => setPasta(e.target.value)} spellCheck={false} title={pasta}
+               onBlur={() => gravarPasta(pasta)} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+               className="min-w-0 flex-1 truncate bg-transparent font-mono text-fg-2 outline-none focus:text-fg" />
+        <button title="Escolher pasta" className="shrink-0 rounded-[6px] p-1 text-faint hover:bg-raised hover:text-fg"
+                onClick={async () => {
+                  const escolhida = window.forja ? await window.forja.pickFolder(pasta) : "";
+                  if (escolhida) gravarPasta(escolhida);
+                }}>
           <FolderOpen className="size-3.5" />
         </button>
       </div>
