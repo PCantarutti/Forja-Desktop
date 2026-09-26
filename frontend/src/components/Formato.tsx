@@ -27,33 +27,40 @@ const TRUQUES: Truque[] = [
 ];
 const CLASSE_DURA: Record<string, number> = { "livre-gira": 1400, "livre-pulo": 1000, "livre-onda": 1300, "livre-achata": 1000, "livre-pisca": 1100 };
 
-/** Sorteia um truque a cada 4–9 s, nunca o mesmo duas vezes seguidas; `quieto` para tudo na hora. */
+/** Sorteia um truque a cada 4–9 s, nunca o mesmo duas vezes seguidas. Virou figura, fica figura: os
+ *  truques seguintes só fazem graça em cima dela. Volta ao retângulo quando `quieto` liga (mouse em cima,
+ *  selecionado), quando o componente sai da tela ou quando a janela fica escondida. */
 function useTruque(quieto: boolean): { figura: string; classe: string } {
   const [estado, setEstado] = useState({ figura: "", classe: "" });
+  const [sumiu, setSumiu] = useState(0); // janela escondida: recomeça do retângulo
+  useEffect(() => {
+    const some = () => document.hidden && setSumiu((n) => n + 1);
+    document.addEventListener("visibilitychange", some);
+    return () => document.removeEventListener("visibilitychange", some);
+  }, []);
   useEffect(() => {
     const limpa = { figura: "", classe: "" };
     if (quieto || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return setEstado(limpa);
-    let vivo = true, ultimo = -1;
+    let vivo = true, ultimo = -1, figura = "";
     const timers: ReturnType<typeof setTimeout>[] = [];
     const depois = (ms: number, f: () => void) => timers.push(setTimeout(() => vivo && f(), ms));
     const proximo = () =>
       depois(4000 + Math.random() * 5000, () => {
-        let i = Math.floor(Math.random() * TRUQUES.length);
-        if (i === ultimo) i = (i + 1) % TRUQUES.length;
+        // já é figura: só os truques de classe (a graça em cima da figura)
+        const opcoes = TRUQUES.map((t, i) => [t, i] as const).filter(([t, i]) => i !== ultimo && (!figura || !t.figura));
+        const [t, i] = opcoes[Math.floor(Math.random() * opcoes.length)];
         ultimo = i;
-        const t = TRUQUES[i];
         if (t.figura) {
-          // vira a figura, faz a graça dela no meio, e volta a ser retângulo
-          setEstado({ figura: t.figura, classe: "" });
+          figura = t.figura;
+          setEstado({ figura, classe: "" });
           if (t.classe) {
-            depois(650, () => setEstado({ figura: t.figura!, classe: t.classe! }));
-            depois(650 + CLASSE_DURA[t.classe], () => setEstado({ figura: t.figura!, classe: "" }));
+            depois(650, () => setEstado({ figura, classe: t.classe! }));
+            depois(650 + CLASSE_DURA[t.classe], () => setEstado({ figura, classe: "" }));
           }
-          depois(t.dura, () => setEstado(limpa));
-          depois(t.dura + 700, proximo);
+          depois(t.dura, proximo);
         } else {
-          setEstado({ figura: "", classe: t.classe! });
-          depois(t.dura, () => setEstado(limpa));
+          setEstado({ figura, classe: t.classe! });
+          depois(t.dura, () => setEstado({ figura, classe: "" }));
           depois(t.dura + 100, proximo);
         }
       });
@@ -63,7 +70,7 @@ function useTruque(quieto: boolean): { figura: string; classe: string } {
       timers.forEach(clearTimeout);
       setEstado(limpa);
     };
-  }, [quieto]);
+  }, [quieto, sumiu]);
   return estado;
 }
 
