@@ -2168,6 +2168,24 @@ export default function App() {
 
   );
 
+  // Onde o cabeçalho começa na janela: o CSS (.cab-centro) usa para pôr o indicador no centro da janela.
+  const cabecalho = useRef<HTMLDivElement>(null);
+  const indicador = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = cabecalho.current, ind = indicador.current;
+    if (!el || !ind) return;
+    const mede = () => {
+      el.style.setProperty("--x0", `${el.getBoundingClientRect().left}px`);
+      el.style.setProperty("--wi", `${ind.offsetWidth}px`);
+      el.style.setProperty("--wr", `${(el.lastElementChild as HTMLElement).offsetWidth}px`);
+    };
+    const ro = new ResizeObserver(mede);
+    ro.observe(el);
+    ro.observe(ind);
+    ro.observe(el.lastElementChild!);
+    return () => ro.disconnect();
+  }, []);
+
   return (
     <div className="flex h-full">
       <SectionRail
@@ -2217,10 +2235,10 @@ export default function App() {
 
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
-      <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className={`arrasta livre-controles cab-centro @container/cab grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-3`}>
+      <div className="@container/cab flex min-w-0 flex-1 flex-col bg-bg">
+        <div ref={cabecalho} className={`arrasta livre-controles cab-centro grid h-12 shrink-0 items-center gap-3 px-3`}>
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
-          <div className={`flex min-w-0 flex-1 items-center gap-2 overflow-hidden ${sidebarHidden ? "pl-9" : ""}`}>
+          <div className={`flex min-w-0 items-center gap-2 overflow-hidden ${sidebarHidden ? "pl-9" : ""}`}>
           <span className="min-w-12 truncate text-sm font-medium text-fg" title={conv?.title}>
             {conv?.title ?? "Nova conversa"}
           </span>
@@ -2263,9 +2281,8 @@ export default function App() {
           )}
           {picking && <span className="text-xs text-muted">Escolha a pasta na janela do sistema (pode estar atrás do navegador).</span>}
           </div>
-          {/* Indicador da IA local no centro do cabeçalho: as laterais são 1fr iguais, então ele só sai do
-              meio quando os botões da direita não cabem na metade deles (em vez de cair por cima). */}
-          <ModeloCarregado />
+          {/* Indicador da IA local no centro da janela (ver .cab-centro no index.css). */}
+          <div ref={indicador}><ModeloCarregado /></div>
           <RightTabsBar
             abertos={soltos(gradeTela)}
             onSelect={(tab) => setRight((r) => (abertos(r).includes(tab) ? fecharTile(r, tab) : abrirTile(r, tab, larguraDe(tab))))}
