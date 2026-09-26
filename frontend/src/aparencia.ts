@@ -3,7 +3,7 @@
 
 export type Tema = "forja" | "brasa" | "aco" | "musgo" | "violeta" | "carmim";
 export type Fonte = "atkinson" | "plex" | "sistema";
-export type Aparencia = { tema: Tema; destaque: string | null; fonte: Fonte };
+export type Aparencia = { tema: Tema; destaque: string | null; fonte: Fonte; iniciais: string };
 
 export const TEMAS: { id: Tema; label: string; bg: string; accent: string }[] = [
   { id: "forja", label: "Forja atual", bg: "#171717", accent: "#4f8ff7" },
@@ -21,7 +21,7 @@ export const FONTES: { id: Fonte; label: string; hint: string }[] = [
 ];
 
 const CHAVE = "forja.aparencia";
-const PADRAO: Aparencia = { tema: "forja", destaque: null, fonte: "atkinson" };
+const PADRAO: Aparencia = { tema: "forja", destaque: null, fonte: "atkinson", iniciais: "EU" };
 
 export function lerAparencia(): Aparencia {
   try {
@@ -58,4 +58,5 @@ export function salvarAparencia(a: Aparencia) {
     localStorage.setItem(CHAVE, JSON.stringify(a));
   } catch { /* sem storage: vale só nesta sessão */ }
   aplicarAparencia(a);
+  window.dispatchEvent(new Event("forja-aparencia")); // o trilho redesenha as iniciais
 }

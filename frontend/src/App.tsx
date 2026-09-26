@@ -29,6 +29,7 @@ import Confirma from "./components/Confirma";
 import { Modal } from "./components/Modal";
 import ModeloCarregado from "./components/ModeloCarregado";
 import { LogoMark } from "./components/Logo";
+import { lerAparencia } from "./aparencia";
 import {
   ModeWarning,
   nextPermission,
@@ -466,6 +467,13 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("forja.sidebar", sidebarHidden ? "hidden" : "visible");
   }, [sidebarHidden]);
+
+  const [iniciais, setIniciais] = useState(() => lerAparencia().iniciais);
+  useEffect(() => {
+    const h = () => setIniciais(lerAparencia().iniciais);
+    window.addEventListener("forja-aparencia", h);
+    return () => window.removeEventListener("forja-aparencia", h);
+  }, []);
 
   // Atalhos do shell: Ctrl 1–7 troca de seção, Ctrl , abre Configurações, Ctrl K vai para a busca.
   const atalhos = useRef<(e: KeyboardEvent) => void>(() => {});
@@ -2104,6 +2112,12 @@ export default function App() {
         listHidden={sidebarHidden}
         onShowList={() => setSidebarHidden(false)}
         logo={<img src="/favicon.svg" alt="Forja" className="size-full" />}
+        pe={
+          <button onClick={() => setShowSettings(true)} title="Configurações · Ctrl ,"
+                  className="grid size-[30px] place-items-center rounded-full bg-raised text-[11px] font-semibold text-fg-2 hover:text-fg">
+            {iniciais}
+          </button>
+        }
       />
       {!sidebarHidden && (
       <Sidebar

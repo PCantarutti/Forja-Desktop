@@ -13,6 +13,7 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [x] Agente: balão 22px, grupo de atividade (falhas em vermelho), raciocínio inline, bloco aguardando com borda accent, diff com cores novas, estatísticas mono pt-BR, tarefas com barrinha
 - [x] Configurações: 1080×760, nav agrupada (App/Máquina/Modelos/Agente/Integrações), linhas rótulo|controle, rodapé Salvar, Tema/Destaque/Fonte
 - [x] Atalhos Ctrl 1–7, Ctrl , e Ctrl K
+- [x] Iniciais configuráveis no pé do trilho (Configurações › Aplicativo), clique abre Configurações
 
 ## Falta (front)
 - [ ] Imagens: inspetor 292px, barra de decisão flutuante, marcação com anel accent
@@ -31,4 +32,7 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [ ] Lista de conversas: miniatura (34px) em Imagem/Vídeo e modelo usado na meta ("há 12 min · Qwen3.6") — precisa vir no `GET /conversations`
 - [ ] Rodapé da lista: estado do runtime (ex.: "● Vulkan") num campo barato do `/activity`
 - [ ] Trajetória: "Pensou por N s" exige a duração do raciocínio por mensagem
-- [ ] Multiplicadores de esforço (0,4× · 1× · 1,6× · 3× · 4× multi) vieram do design: confirmar contra o custo real ou expor pelo backend
+- [ ] Multiplicadores de esforço (0,4× · 1× · 1,6× · 3× · 4× multi) vieram do design e estão **comentados** em
+      `frontend/src/components/Controls.tsx` (`MULT_ESFORCO` e o `<span>` no menu). Definir no backend o que medem
+      (tokens? tempo? chamadas? relativo ao Médio), expor no `/settings` ou num endpoint barato, e descomentar lendo de lá.
+- [ ] Iniciais do trilho (`forja.aparencia.iniciais`, padrão "EU") junto com tema/destaque/fonte no `/settings"

@@ -95,8 +95,9 @@ export function Menu<T extends string>(props: {
 }
 
 const COR_MODO: Record<Permission, string> = { auto: "bg-ok", manual: "bg-muted", edits: "bg-info", plan: "bg-agent", bypass: "bg-err" };
-// ponytail: multiplicadores de custo vindos do design; confirmar com as contas reais do backend.
-const MULT_ESFORCO: Record<Effort, string> = { baixo: "0,4×", medio: "1×", alto: "1,6×", maximo: "3×", extremo: "4× · multi" };
+// Multiplicadores de custo que o design mostra ao lado de cada esforço. Fora da tela até o backend dizer
+// o que são de verdade (tokens/tempo relativos ao Médio); ver REDESIGN-CHECKLIST.md › Backend.
+// const MULT_ESFORCO: Record<Effort, string> = { baixo: "0,4×", medio: "1×", alto: "1,6×", maximo: "3×", extremo: "4× · multi" };
 const NIVEL_ESFORCO: Record<Effort, number> = { baixo: 1, medio: 2, alto: 3, maximo: 4, extremo: 4 };
 
 /** Pílula única de Modo · Esforço no composer (o Chat só tem esforço). Abre o menu de duas colunas:
@@ -183,7 +184,7 @@ export function ModeEffortMenu(props: {
                       ))}
                     </span>
                     <span className="flex-1 text-[13px]">{e.label}</span>
-                    <span className="font-mono text-[10.5px] text-faint">{MULT_ESFORCO[e.id]}</span>
+                    {/* <span className="font-mono text-[10.5px] text-faint">{MULT_ESFORCO[e.id]}</span> */}
                   </button>
                 );
               })}
@@ -214,6 +215,7 @@ export function SectionRail(props: {
   listHidden: boolean;
   onShowList: () => void;
   logo: React.ReactNode;
+  pe?: React.ReactNode; // rodapé do trilho (as iniciais)
 }) {
   return (
     <nav className="arrasta flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-line bg-side pt-3 pb-2.5" aria-label="Seção">
@@ -244,6 +246,8 @@ export function SectionRail(props: {
           );
         })}
       </div>
+      <div className="flex-1" />
+      {props.pe}
     </nav>
   );
 }

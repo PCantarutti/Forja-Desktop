@@ -946,6 +946,10 @@ function Aparencia() {
           {a.destaque && <button type="button" className={btn} onClick={() => muda({ destaque: null })}>Usar a do tema</button>}
         </div>
       </Field>
+      <Field label="Iniciais" hint="O círculo no pé do trilho de seções. Até 3 letras.">
+        <input className={`${input} w-24 font-mono uppercase`} maxLength={3} value={a.iniciais}
+               onChange={(e) => muda({ iniciais: e.target.value.toUpperCase() })} />
+      </Field>
       <Field div label="Fonte" hint="Interface e código (números, caminhos, sementes).">
         <div className="grid gap-2">
           {FONTES.map((f) => (
