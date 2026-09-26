@@ -13,6 +13,7 @@ import { colunasPara, distribuir } from "./mosaico";
 import MascaraEditor, { type ModoPintura } from "./MascaraEditor";
 import { Modal } from "./Modal";
 import ModelPicker from "./ModelPicker";
+import Saudacao from "./Saudacao";
 
 const POLL_MS = 1500; // só enquanto um lote roda; fora disso a tela fica parada
 // O modelo que reescreve o prompt é separado do modelo do Chat: quem gera imagem costuma querer
@@ -533,17 +534,15 @@ export default function ImagensView(props: {
             />
           )}
           {!visiveis.length && !origem && (
-            <div className="mt-[18vh] text-center">
-              <div className="text-3xl font-semibold">Imagens</div>
-              <div className="text-3xl text-faint">Descreva, gere várias, fique com as boas.</div>
-              <p className="mx-auto mt-4 max-w-lg text-sm text-muted">
-                {semRuntime
-                  ? "O stable-diffusion.cpp ainda não está instalado — baixe o runtime em IA local › Imagem."
-                  : semModelo
-                    ? "Nenhum modelo de imagem nas pastas — baixe um .safetensors em IA local › Baixar."
-                    : "As reprovadas vão para a subpasta descartadas/ e somem sozinhas depois do prazo — nada é apagado na hora."}
-              </p>
-            </div>
+            <Saudacao
+              titulo="Imagens"
+              sub="Descreva, gere várias, fique com as boas."
+              nota={
+                semRuntime ? <span className="text-warn">O stable-diffusion.cpp ainda não está instalado — baixe o runtime em IA local › Imagem.</span>
+                  : semModelo ? <span className="text-warn">Nenhum modelo de imagem nas pastas — baixe um .safetensors em IA local › Baixar.</span>
+                  : "As reprovadas vão para descartadas/ e somem sozinhas depois do prazo — nada é apagado na hora."
+              }
+            />
           )}
 
           {visiveis.map(({ pedido, resposta }, i) => (

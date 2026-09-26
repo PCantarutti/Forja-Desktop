@@ -67,6 +67,7 @@ import {
 import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X, PanelLeft } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
+import Saudacao from "./components/Saudacao";
 
 /** Notificação do sistema quando o Forja não está em foco (execução terminou, aprovação pendente).
  * "Sem foco", não "minimizada": com a janela só atrás de outro programa, document.hidden é falso e o
@@ -1252,6 +1253,9 @@ export default function App() {
     if (s.action === "changes") abrir("changes");
   }
 
+  // Primeiro prompt de uma conversa vazia: a logo da saudação toca a abertura do app antes da conversa.
+  const [abertura, setAbertura] = useState(false);
+
   async function send(texto?: string, skill = false): Promise<void> {
     const content = (texto ?? input).trim();
     if (!skill && menuSkill && slashMatches.length) return applySkill(slashMatches[slashIndex] ?? slashMatches[0]);
@@ -1279,6 +1283,7 @@ export default function App() {
     }
     setError("");
     setInput("");
+    if (!messages.length) setAbertura(true);
     const files = attachments;
     setAttachments([]);
     let id: number;
@@ -1877,29 +1882,40 @@ export default function App() {
     }}
   >
     <div className="mx-auto max-w-3xl px-5 py-6">
-      {!messages.length && !draft && (
-        <div className="mt-[22vh]">
-          <LogoMark className="mb-4 size-14 text-fg" title="Forja" />
-          <div className="text-3xl font-semibold">Olá!</div>
-          <div className="text-3xl text-faint">Como posso ajudar hoje?</div>
-          <div className="mt-4 text-sm text-muted">
-            {section === "agent" ? (
+      {((!messages.length && !draft) || abertura) && (
+        <Saudacao
+          animando={abertura}
+          onFimAnimacao={() => setAbertura(false)}
+          titulo="Olá!"
+          sub="Como posso ajudar hoje?"
+          nota={
+            section === "agent" ? (
               <>
-                Agente: {wsLabel ? <>lê e escreve em <span className="font-mono text-fg">{wsLabel}</span></> : <span className="text-amber-300">escolha uma pasta de trabalho no topo para começar.</span>}
+                <b className="font-medium text-fg">Agente</b>
+                <span className="text-faint">·</span>
+                {wsLabel ? <span>lê e escreve em <span className="font-mono text-fg">{wsLabel}</span></span> : <span className="text-warn">escolha uma pasta de trabalho no topo para começar</span>}
               </>
             ) : section === "maestro" ? (
               <>
-                Maestro: diga o objetivo; ela planeja, delega aos Workers e valida em{" "}
-                {wsLabel ? <span className="font-mono text-fg">{wsLabel}</span> : <span className="text-amber-300">uma pasta — escolha no topo para começar.</span>}
+                <b className="font-medium text-fg">Maestro</b>
+                <span className="text-faint">·</span>
+                <span>
+                  planeja, delega aos Workers e valida em{" "}
+                  {wsLabel ? <span className="font-mono text-fg">{wsLabel}</span> : <span className="text-warn">uma pasta — escolha no topo</span>}
+                </span>
               </>
             ) : (
-              "Chat: conversa com busca na web, sem acesso a arquivos."
-            )}
-          </div>
-        </div>
+              <>
+                <b className="font-medium text-fg">Chat</b>
+                <span className="text-faint">·</span>
+                <span>conversa com busca na web, sem acesso a arquivos</span>
+              </>
+            )
+          }
+        />
       )}
 
-      {conversaDe(messages, { draft, status, stats: running ? liveStats : null, fase })}
+      {!abertura && conversaDe(messages, { draft, status, stats: running ? liveStats : null, fase })}
       <div ref={fimDoChat} />
     </div>
   </div>

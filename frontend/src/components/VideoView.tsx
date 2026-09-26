@@ -12,6 +12,7 @@ import { A_REFAZER, AnelProgresso, BarraTopo, Caixa, Chip, duracao, Fundo, Liqui
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
 import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
+import Saudacao from "./Saudacao";
 
 /** Aba Vídeo: o Wan no stable-diffusion.cpp. O motor é o dos lotes de imagem (um lote = uma tomada,
  *  com variações, manter/descartar e "Continuar"); a tela é outra porque vídeo se olha tocando. */
@@ -884,9 +885,7 @@ function Vazio(props: {
   onExemplo: (m: (typeof MODOS)[number]) => void;
 }) {
   return (
-    <div className="mt-[12vh] text-center">
-      <div className="text-3xl font-semibold">Vídeo</div>
-      <div className="text-3xl text-faint">Descreva a cena, anime uma imagem ou ligue dois quadros.</div>
+    <Saudacao titulo="Vídeo" sub="Descreva a cena, anime uma imagem ou ligue dois quadros.">
       {props.semRuntime || props.semModelo ? (
         <div className="mx-auto mt-6 max-w-md rounded-xl border border-line bg-surface p-4 text-sm">
           <p className="text-muted">
@@ -900,7 +899,7 @@ function Vazio(props: {
           </button>
         </div>
       ) : (
-        <div className="mx-auto mt-8 grid max-w-3xl gap-3 text-left sm:grid-cols-3">
+        <div className="mx-auto mt-8 grid w-full max-w-3xl gap-3 text-left sm:grid-cols-3">
           {MODOS.map((m) => {
             const pode = props.modos.includes(m.id);
             return (
@@ -920,7 +919,7 @@ function Vazio(props: {
           })}
         </div>
       )}
-    </div>
+    </Saudacao>
   );
 }
 
