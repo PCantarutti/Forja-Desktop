@@ -21,6 +21,7 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [x] Vídeo: inspetor em seções, barra de decisão flutuante, scrub accent, marcação accent
 - [x] Vídeo: FORMATO com desenho da proporção (menu de Proporção)
 - [x] Vídeo: DURAÇÃO em slider com a marca do limite de treino
+- [x] Vídeo: formato 4:3, resoluções 480p/720p/1080p/4K sempre visíveis (as fora do treino ficam apagadas, com aviso) e personalizada com proporção travada
 - [x] Imagem e Vídeo no desenho do protótipo: painel **Parâmetros** fixo à direita (liga/desliga no topo, lembra), composer novo
       (miniaturas/quadros + texto; Melhorar · + Negativo · Ampliar do PC · estimativa · Gerar N Enter), barra do topo com
       contagem/filtros e estado da GPU, cabeçalho de lote (Lote N / letra, meta mono, ação), cards com sobreposição
@@ -50,6 +51,8 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - `scripts/fake_midia.py`: lotes fake de Imagem (proporções misturadas, todos os estados) e Vídeo no `.devredesign`, sem carregar modelo.
 
 ## Backend (depois)
+- [ ] Vídeo em 1080p e 4K: a tela agora oferece (lado menor 1080/2160, no múltiplo do modelo); conferir se o backend/sd.cpp
+      aceita esses tamanhos sem cortar e se a estimativa de tempo/memória avisa antes de estourar a VRAM
 - [ ] Persistir `tema`, `corDestaque`, `fonte` no `/settings` (hoje em `localStorage` `forja.aparencia`) — e o celular ler daí
 - [ ] Lista de conversas: miniatura (34px) em Imagem/Vídeo e modelo usado na meta ("há 12 min · Qwen3.6") — precisa vir no `GET /conversations`
 - [ ] Rodapé da lista: estado do runtime (ex.: "● Vulkan") num campo barato do `/activity`
