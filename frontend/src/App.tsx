@@ -1442,7 +1442,7 @@ export default function App() {
       cache: promptComCache ? comCache.reduce((n, s) => n + (s.cached ?? 0), 0) / promptComCache : null,
     };
     const partes = (ctx as { partes?: Stats["partes"] } | null)?.partes ?? lastStats?.partes ?? null;
-    return { used, max, out: lastTurn?.tokens ?? null, avg, models, sessao, partes };
+    return { used, max, out: lastTurn?.tokens ?? null, avg, models, sessao, partes, compartilhado: lastStats?.compartilhado ?? null };
   }, [messages, turns, ctx]);
 
   /** Abre uma conversa de outra seção (ex.: Imagens ⇄ o chat que pediu as imagens). */
@@ -2110,6 +2110,7 @@ export default function App() {
             avg={summary.avg}
             partes={summary.partes}
             sessao={summary.sessao}
+            compartilhado={summary.compartilhado}
             canCompact={currentId !== null && !running}
             onCompact={compactNow}
             provider={settings.provider}

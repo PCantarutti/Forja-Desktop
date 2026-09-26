@@ -305,6 +305,63 @@ PAPEIS = ("principal", "worker", "explorador", "revisor", "visual", "lateral", "
 SLOT_PRINCIPAL = 0      # o principal (agente/Maestro) fica sempre no slot 0, com cache_prompt
 SLOT_AUXILIAR = 1       # auxiliar vai para o 1 quando o servidor tem mais de um slot
 _SLOTS: dict[int, int] = {}  # pid do llama-server -> nº de slots (pergunta ao servidor uma vez)
+# Slots auxiliares em uso: um Worker reserva o dele pela tentativa inteira; chamada curta (título, revisão, juiz)
+# ocupa só enquanto gera. Sem isto todo auxiliar ia para o slot 1, e dois Workers "em paralelo" faziam fila nele.
+_EM_USO: dict[int, int] = {}
+# Quanto cada slot ocupa do cache agora (tokens: o prompt já processado + o que veio do cache + o gerado), pelo
+# timings do llama-server. Com o KV unificado os slots dividem um cache só, e a soma é o que está ocupado.
+USO_SLOT: dict[int, int] = {}
+_USO_PID = {"pid": 0}
+
+
+def slot_auxiliar() -> int:
+    """O slot auxiliar livre de menor número; todos ocupados, o menos usado. Nunca o do principal (0)."""
+    n = slots_do_servidor()
+    if n <= 1:
+        return SLOT_PRINCIPAL
+    aux = range(1, n)
+    livres = [s for s in aux if not _EM_USO.get(s)]
+    return livres[0] if livres else min(aux, key=lambda s: _EM_USO.get(s, 0))
+
+
+def ocupa(slot: int | None, delta: int) -> None:
+    if slot is None or slot == SLOT_PRINCIPAL:
+        return
+    _EM_USO[slot] = max(0, _EM_USO.get(slot, 0) + delta)
+
+
+def registra_uso(slot: int | None, timings: dict | None) -> None:
+    """Depois de cada resposta no llama.cpp embutido: quanto do cache aquele slot ocupa agora."""
+    if slot is None or not isinstance(timings, dict) or timings.get("prompt_n") is None:
+        return
+    pid = int((localai.status() if localai else {}).get("pid") or 0)
+    if pid != _USO_PID["pid"]:  # servidor novo: o cache antigo sumiu junto
+        USO_SLOT.clear()
+        _USO_PID["pid"] = pid
+    USO_SLOT[int(slot)] = int(timings.get("prompt_n") or 0) + int(timings.get("cache_n") or 0) + \
+        int(timings.get("predicted_n") or 0)
+
+
+def kv_compartilhado() -> dict | None:
+    """Com KV unificado e mais de um slot, o cache é um só para todos: {slots, total, usado}. Senão None."""
+    if localai is None or not (st := localai.status()).get("running"):
+        return None
+    prm = st.get("params") or {}
+    n = slots_do_servidor()
+    if n <= 1 or not prm.get("kv_unified"):
+        return None
+    total = int(st.get("ctx") or prm.get("ctx") or 0)
+    return {"slots": n, "total": total, "usado": sum(USO_SLOT.values())} if total else None
+
+
+def janela_livre(slot: int, janela: int) -> int:
+    """A janela que este slot ainda pode usar sem estourar o cache compartilhado: o total menos o que os outros
+    slots ocupam (nunca abaixo de um quarto da janela, para não compactar à toa por uma medida velha)."""
+    k = kv_compartilhado()
+    if not k:
+        return janela
+    outros = sum(v for s, v in USO_SLOT.items() if s != slot)
+    return max(janela // 4, min(janela, k["total"] - outros))
 
 
 @dataclass
@@ -419,7 +476,8 @@ def _decide(papel: str, pedido: dict | None) -> Rota:
     if pedido and carregado and pedido["model"] == carregado["model"]:
         n = slots_do_servidor()
         if n > 1:
-            return Rota("outro-slot", pedido, SLOT_AUXILIAR, f"mesmo modelo, slot {SLOT_AUXILIAR} de {n}")
+            s = slot_auxiliar()
+            return Rota("outro-slot", pedido, s, f"mesmo modelo, slot {s} de {n}")
         return Rota("mesmo-slot-sequencial", pedido, SLOT_PRINCIPAL,
                     "mesmo modelo com um slot só (-np 1): espera o principal e divide o cache com ele")
     # Daqui em diante o pedido é outro modelo local (ou nenhum): a regra é não trocar.
@@ -434,7 +492,7 @@ def _decide(papel: str, pedido: dict | None) -> Rota:
                                          "vez, e trocar no meio do trabalho derrubaria o principal")
     if carregado:
         n = slots_do_servidor()
-        return Rota("modelo-do-principal", carregado, SLOT_AUXILIAR if n > 1 else SLOT_PRINCIPAL,
+        return Rota("modelo-do-principal", carregado, slot_auxiliar() if n > 1 else SLOT_PRINCIPAL,
                     f"o pedido ({pedido['model']}) não está carregado e chamada auxiliar não troca de modelo"
                     if pedido else "usa o modelo carregado")
     return Rota("pular", None, None, "nenhum modelo disponível")

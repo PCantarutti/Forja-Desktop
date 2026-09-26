@@ -186,6 +186,7 @@ export type Stats = {
   ttft?: number | null;  // segundos até o 1º token (processar o prompt + fila/rede)
   // Processamento do prompt desta chamada: tokens processados agora, em quanto tempo e a que velocidade
   prompt_proc?: { tokens: number; seconds: number; tps: number | null; aproximado: boolean } | null;
+  compartilhado?: { slots: number; total: number; usado: number } | null;  // cache KV unificado entre slots
   partes?: { sistema: number; ferramentas: number; mensagens: number };  // estimativa por tipo
 };
 

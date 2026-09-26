@@ -1479,12 +1479,15 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         def usado(ms) -> int:
             return max(_estimate(ms, tools) * 4 // 3, ultimo_real)
 
-        if forcar_compactar or usado(messages) > config.COMPACT_AT * teto:
+        # Cache KV unificado com mais de um slot: a janela que sobra é o total menos o que os outros slots ocupam
+        # (Workers no mesmo servidor). Compactar pela janela inteira deixaria a soma estourar o cache.
+        teto_livre = modelctl.janela_livre(rota_principal.slot, teto) if rota_principal.slot is not None else teto
+        if forcar_compactar or usado(messages) > config.COMPACT_AT * teto_livre:
             # Primeiro a poda, que não custa modelo; o resumo só se ela não bastar (ou se o provedor
             # já recusou por contexto estourado).
             messages = historia(msgs, podar=True)
-            if forcar_compactar or _estimate(messages, tools) * 4 // 3 > config.COMPACT_AT * teto:
-                async for ev in _compact(conv_id, msgs, req, teto):
+            if forcar_compactar or _estimate(messages, tools) * 4 // 3 > config.COMPACT_AT * teto_livre:
+                async for ev in _compact(conv_id, msgs, req, teto_livre):
                     yield ev
                 messages = historia(_load(conv_id), podar=True)
             forcar_compactar = False
@@ -1604,6 +1607,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                           chamadas=[c["name"] for c in done.get("tool_calls") or []])
 
         stats = _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, req.model)
+        if rota_principal.slot is not None and (compart := modelctl.kv_compartilhado()):
+            stats["compartilhado"] = compart  # a janela mostra o cache dividido entre os slots, não só o deste
         stats["partes"] = partes_do_contexto(messages, tools)
         yield {"type": "context", "used": stats["prompt_tokens"], "estimated": stats["estimated"], "max": ctx_max,
                "partes": stats["partes"]}

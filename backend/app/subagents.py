@@ -71,6 +71,7 @@ AGENTS_DIR = ".forja/agents"   # personas do projeto, no formato das skills
 MAX_AGENTS = 20
 
 ATIVAS: dict[str, dict] = {}   # delegações rodando agora, para a aba Instâncias
+RESERVAS: dict[str, int] = {}  # delegação -> slot auxiliar que ela reservou (modelctl.ocupa)
 
 
 EXPLORADOR_TOOLS = ["read_file", "list_dir", "glob", "grep", "lsp", "tree", "ast", "imports", "code_search"]
@@ -516,6 +517,9 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     papel = "worker" if structured else ("explorador" if persona and persona.get("name") == "explorador"
                                          else "lateral")
     rota = modelctl.como_rodar(papel, spec)
+    if rota.caminho == "outro-slot":  # o slot é deste subagente pela tentativa inteira (o run() solta no fim)
+        modelctl.ocupa(rota.slot, +1)
+        RESERVAS[pid] = rota.slot
     if rota.caminho == "mesmo-slot-sequencial":  # E4: vai ocupar o slot do principal; o cache dele vai p/ disco
         from . import kvcache
         await asyncio.to_thread(kvcache.cede, rota.slot)
@@ -599,7 +603,9 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             t_passo, t_primeiro = time.monotonic(), None
             if structured:
                 yield {"type": "sub_assistant_start", "parent": pid}
-            if ctx_max and _est(messages) > ctx_max * PODA_FRACAO:
+            # cache KV compartilhado com o Maestro e outros Workers: vale o que sobra dele, não a janela inteira
+            janela = modelctl.janela_livre(rota.slot, ctx_max) if ctx_max and rota.slot is not None else ctx_max
+            if janela and _est(messages) > janela * PODA_FRACAO:
                 # Poda em bloco, não a cada passo: cada poda invalida o cache do prefixo a partir dali.
                 _poda_resultados(messages, manter=2, teto=PODA_TETO)
             try:
@@ -682,6 +688,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                 (t.parameters.get("properties") or {} for t in tools if t.name == n), None))
             if structured:
                 stats = _stats(messages, schemas, content, reasoning, done, t_passo, t_primeiro, ctx_max, model)
+                if rota.slot is not None and (compart := modelctl.kv_compartilhado()):
+                    stats["compartilhado"] = compart
                 yield {"type": "sub_message", "parent": pid, "message": registra({
                     "role": "assistant", "content": visible, "thinking": (reasoning + "\n" + pensou).strip(),
                     "tool_calls": [{"id": c["id"], "name": c["name"], "arguments": c["arguments"]}
@@ -821,5 +829,7 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
             yield ev
     finally:
         ATIVAS.pop(call["id"], None)
+        if (s := RESERVAS.pop(call["id"], None)) is not None:
+            modelctl.ocupa(s, -1)
     if saida := hooks.texto(await hooks.rodar_async("subagent_stop", workspace.root(), "", tarefa)):
         out["text"] = f"{out.get('text') or ''}\n\n{saida}"

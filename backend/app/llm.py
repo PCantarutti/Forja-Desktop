@@ -389,19 +389,28 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
         ULTIMO_EXTERNO.update(provider=provider, model=model, t=time.monotonic())
     messages = list(messages)
     extra: dict = {}
-    if slot is not None and spec(provider)["type"] == "llamacpp":
-        # E4: slot fixo (principal no 0, auxiliar no 1 quando existe) e cache do prompt ligado explícito.
+    embutido = slot is not None and spec(provider)["type"] == "llamacpp"
+    if embutido:
+        # E4: slot fixo (principal no 0, auxiliares nos outros) e cache do prompt ligado explícito.
         extra.update(id_slot=int(slot), cache_prompt=True)
     await _reasoning(provider, model, effort, extra, messages, budget_mult)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     if think is False:  # chamada mecânica (compactar, titular, commit): raciocinar aqui é desperdício
         extra, messages = _sem_pensar(provider, extra, messages)
+    from . import modelctl
+    if embutido:
+        modelctl.ocupa(slot, +1)  # o slot auxiliar fica marcado enquanto gera (a escolha do próximo o evita)
     try:
         async for ev in impl(provider, model, messages, tools, num_ctx, extra):
+            if embutido and ev[0] == "done" and isinstance(ev[1], dict):
+                modelctl.registra_uso(slot, ev[1].get("timings"))
             yield ev
         ULTIMO_USO["t"] = time.monotonic()
     except httpx.HTTPError as e:
         raise _conn_error(provider, e) from e
+    finally:
+        if embutido:
+            modelctl.ocupa(slot, -1)
 
 
 # ------------------------------------------------------------------ OpenAI-compatível

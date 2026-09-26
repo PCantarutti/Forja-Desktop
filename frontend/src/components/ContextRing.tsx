@@ -22,6 +22,8 @@ export default function ContextRing(props: {
   // Divisão do prompt por tipo (estimativa) e números da conversa, como no painel do DeepSeek Harness.
   partes?: { sistema: number; ferramentas: number; mensagens: number } | null;
   sessao?: { turnos: number; passos: number; tokens: number; cache: number | null; ttft?: number | null };
+  // Cache KV unificado com vários slots (Maestro + Workers no mesmo servidor): um cache só para todos.
+  compartilhado?: { slots: number; total: number; usado: number } | null;
 }) {
   const [open, setOpen] = useState(false);
   // Só consulta a cota com o popover aberto. Mostra TODO provedor de nuvem configurado, mesmo
@@ -84,6 +86,19 @@ export default function ContextRing(props: {
             <span>Contexto</span>
             <span className="text-fg">{props.used == null ? "—" : `${fmt(props.used)} / ${props.max ? fmt(props.max) : "?"}`}</span>
           </div>
+          {props.compartilhado && (
+            <div className="mb-2 rounded-md bg-raised px-2 py-1.5 leading-snug"
+                 title="Com o cache KV unificado, os slots do llama-server dividem um cache só: cada conversa pode crescer até o total, mas a soma de todas não passa dele.">
+              <div className="flex items-center justify-between">
+                <span>Compartilhado · {props.compartilhado.slots} slots</span>
+                <span className="text-fg">{fmtK(props.compartilhado.usado)} / {fmtK(props.compartilhado.total)}</span>
+              </div>
+              <div className="mt-1 flex h-1 overflow-hidden rounded-full bg-line">
+                <div className="h-full bg-accent" style={{ width: `${Math.min(100, (props.compartilhado.usado / props.compartilhado.total) * 100)}%` }} />
+              </div>
+              <div className="mt-1 text-faint">em uso por todos os slots (este e os Workers)</div>
+            </div>
+          )}
           {partesVisiveis ? (
             <>
               {/* Barra empilhada: cada parte na proporção do que ocupa da janela. */}

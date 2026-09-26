@@ -726,6 +726,7 @@ function ColunaWorker(props: {
               onCompact={() => {}}
               provider=""
               models={[...new Set(doModelo.map((s) => s.model).filter(Boolean))]}
+              compartilhado={doModelo[doModelo.length - 1]?.compartilhado ?? null}
               abaixo
             />
           </div>
