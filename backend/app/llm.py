@@ -363,6 +363,7 @@ async def _openai_stream(provider, model, messages, tools, num_ctx, extra: dict 
             body.setdefault("parallel_tool_calls", True)
     calls: dict[int, dict] = {}
     prompt_tokens = completion_tokens = cached_tokens = None
+    timings: dict | None = None
     async with httpx.AsyncClient(timeout=TIMEOUT, headers=headers(provider)) as c:
         async with c.stream("POST", f"{base_url(provider)}/chat/completions", json=body) as r:
             if r.status_code >= 400:
@@ -380,7 +381,7 @@ async def _openai_stream(provider, model, messages, tools, num_ctx, extra: dict 
                     cached_tokens = (chunk["usage"].get("prompt_tokens_details") or {}).get("cached_tokens",
                                                                                               cached_tokens)
                 if chunk.get("timings"):  # llama-server: quanto do prompt veio do cache (cache_n) e quanto processou
-                    t = chunk["timings"]
+                    t = timings = chunk["timings"]
                     if t.get("cache_n") is not None:
                         cached_tokens = t["cache_n"]
                         prompt_tokens = prompt_tokens or (t["cache_n"] + (t.get("prompt_n") or 0))
@@ -412,7 +413,7 @@ async def _openai_stream(provider, model, messages, tools, num_ctx, extra: dict 
             args = {"__raw__": acc["arguments"]}
         out.append({"id": acc["id"] or _new_id(), "name": acc["name"], "arguments": args})
     yield "done", {"tool_calls": out, "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-                   "cached_tokens": cached_tokens}
+                   "cached_tokens": cached_tokens, "timings": timings}
 
 
 # ------------------------------------------------------------------ Ollama nativo

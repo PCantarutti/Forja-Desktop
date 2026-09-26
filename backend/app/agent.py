@@ -19,7 +19,7 @@ from datetime import date
 from typing import AsyncIterator
 
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import maestro, mobile, modelctl, progresso, projstate, qualidade, taskdb
+from . import maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -1488,6 +1488,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             iterations -= 1
             continue
         retries = 0
+        # E0: cada volta do principal, com o que o llama-server reaproveitou do cache (timings.cache_n)
+        metricas.registra("llm", papel="maestro" if maestro_mode else "agente", conv=conv_id, model=req.model,
+                          prompt_tokens=done.get("prompt_tokens"), completion_tokens=done.get("completion_tokens"),
+                          cached_tokens=done.get("cached_tokens"), timings=done.get("timings"),
+                          segundos=round(time.monotonic() - t0, 2),
+                          chamadas=[c["name"] for c in done.get("tool_calls") or []])
 
         stats = _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, req.model)
         stats["partes"] = partes_do_contexto(messages, tools)
