@@ -3,7 +3,7 @@ import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalState, LoteImagem, LoteMeta, Message, PedidoMeta, SeedMode, SlotImagem } from "../types";
 import type { Section } from "./Controls";
 import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
-import { ArrowRight, ArrowUp, Check, Copy, Edit, FolderOpen, Image, Paperclip, Refresh, Robo, Search, Sliders, Square, TelaCheia, Trash, Undo, X } from "./icons";
+import { ArrowRight, ArrowUp, Check, Copy, Edit, FolderOpen, Image, PanelRight, Paperclip, Plus, Refresh, Robo, Search, Sliders, Square, TelaCheia, Trash, Undo, X } from "./icons";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada, redondo } from "./Composer";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
@@ -16,6 +16,7 @@ const POLL_MS = 1500; // só enquanto um lote roda; fora disso a tela fica parad
 // O modelo que reescreve o prompt é separado do modelo do Chat: quem gera imagem costuma querer
 // um modelo pequeno e rápido aqui, não o mesmo que responde no chat.
 const KEY_LLM = "forja.imagem.llm";
+const KEY_PARAMETROS = "forja.imagem.parametros";
 
 /** Proporções comuns em múltiplos de 64 (o que o sd.cpp pede). */
 const PROPORCOES: { label: string; width: number; height: number }[] = [
@@ -113,7 +114,23 @@ export default function ImagensView(props: {
   const [pintando, setPintando] = useState<string | null>(null);  // referência aberta no editor de máscara  // "Reanexar": o próximo arquivo escolhido entra no lugar desta
   const [count, setCount] = useState(4);
   const [seedMode, setSeedMode] = useState<SeedMode>("incremental");
-  const [abrirAjustes, setAbrirAjustes] = useState(false);
+  // Painel Parâmetros: fixo à direita (o design), liga/desliga no botão do topo; lembra a escolha.
+  const [abrirAjustes, setAbrirAjustesBruto] = useState(() => {
+    try {
+      return localStorage.getItem(KEY_PARAMETROS) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const setAbrirAjustes = (v: boolean | ((a: boolean) => boolean)) =>
+    setAbrirAjustesBruto((a) => {
+      const n = typeof v === "function" ? v(a) : v;
+      try {
+        localStorage.setItem(KEY_PARAMETROS, n ? "1" : "0");
+      } catch { /* sem storage: vale só agora */ }
+      return n;
+    });
+  const [negAberto, setNegAberto] = useState(false);
   // Tem LLM na VRAM: guarda o pedido para repetir com confirm=true se a pessoa aceitar descarregar.
   const [perguntando, setPerguntando] = useState<(() => void) | null>(null);
   // 409: ou é o LLM deste Forja (o texto fixo abaixo) ou outro programa na GPU (a mensagem do backend)
@@ -483,8 +500,25 @@ export default function ImagensView(props: {
       )}
       <div className="flex min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
+      <BarraTopo
+        contagem={visiveis.reduce((n, l) => n + (l.resposta.meta as LoteMeta).images.length, 0)}
+        unidade={["imagem", "imagens"]}
+        status={(() => {
+          const viva = visiveis.find((l) => rodando(l.resposta));
+          if (viva) {
+            const imgs = (viva.resposta.meta as LoteMeta).images;
+            const feitas = imgs.filter((i) => ["pronta", "mantida", "descartada"].includes(i.status)).length;
+            const resta = imgs.reduce((t, i) => t + (i.status === "gerando" ? i.restante ?? 0 : 0), 0);
+            return { cor: "bg-accent animate-pulse", texto: `Gerando ${Math.min(feitas + 1, imgs.length)} de ${imgs.length}`, meta: resta ? duracao(resta) : "" };
+          }
+          if (st.image_busy) return { cor: "bg-warn", texto: "GPU ocupada com outra geração", meta: "" };
+          return st.gpu_video?.nome ? { cor: "bg-ok", texto: "GPU livre para o sd.cpp", meta: `${st.gpu_video.nome}${st.gpu_video.gb ? ` · ${Math.round(st.gpu_video.gb)} GB` : ""}` } : null;
+        })()}
+        parametros={abrirAjustes}
+        onParametros={() => setAbrirAjustes((v) => !v)}
+      />
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-5 py-6">
+        <div className="mx-auto max-w-[1400px] px-5 py-4">
           {origem && (
             <Origem
               origem={origem}
@@ -518,9 +552,11 @@ export default function ImagensView(props: {
             </div>
           )}
 
-          {visiveis.map(({ pedido, resposta }) => (
+          {visiveis.map(({ pedido, resposta }, i) => (
             <Lote
               key={resposta.id}
+              numero={i + 1}
+              ultimo={i === visiveis.length - 1}
               pedido={pedido}
               resposta={resposta}
               noSite={noSite}
@@ -545,7 +581,7 @@ export default function ImagensView(props: {
       </div>
 
       <div className="shrink-0 px-5 pb-4">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-[1400px]">
           {erro && (
             <div className="mb-2 flex items-start gap-2 rounded-xl border border-red-900/70 bg-red-950/30 p-2.5 text-xs text-red-200">
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words">{erro}</p>
@@ -649,9 +685,9 @@ export default function ImagensView(props: {
             )
           ) : (
           <>
-          <CaixaPrompt>
-            {refs.length > 0 && (
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+          <div className="rounded-2xl border border-line bg-surface px-3.5 py-3 shadow-[0_-10px_30px_rgba(0,0,0,.35)] transition-colors duration-150 focus-within:border-focus">
+            <div className="flex items-start gap-2.5">
+              <div className="flex max-w-[45%] shrink-0 flex-wrap gap-1.5">
                 {refs.map((r, i) => (
                   <div key={r} className="relative" title={sumidas.has(r) ? `Não encontrada: ${r}` : r}>
                     {sumidas.has(r) ? (
@@ -660,7 +696,7 @@ export default function ImagensView(props: {
                           trocar.current = r;
                           arquivo.current?.click();
                         }}
-                        className="grid size-14 place-items-center rounded-lg border border-dashed border-amber-500/70 bg-amber-500/5 px-1 text-center text-[10px] leading-tight text-amber-300 hover:bg-amber-500/10"
+                        className="grid size-[52px] place-items-center rounded-[9px] border border-dashed border-warn/70 bg-warn/5 px-1 text-center text-[10px] leading-tight text-warn hover:bg-warn/10"
                       >
                         não achada
                         <span className="underline">Reanexar</span>
@@ -670,126 +706,128 @@ export default function ImagensView(props: {
                         src={urlDa(r)}
                         alt={`referência ${i + 1}`}
                         onError={() => setSumidas((s) => new Set(s).add(r))}
-                        className="size-14 rounded-lg border border-line object-cover"
+                        className="size-[52px] rounded-[9px] border border-line-strong object-cover"
                       />
                     )}
                     {!sumidas.has(r) && (
                       <button
                         onClick={() => setPintando(r)}
                         title="Marcar onde editar: máscara, círculos ou pintura (Qwen-Image 2.1)"
-                        className="absolute -bottom-1.5 -left-1.5 grid size-5 place-items-center rounded-full border border-line bg-surface text-faint hover:text-fg"
+                        className="absolute -bottom-1.5 -left-1.5 grid size-4 place-items-center rounded-full border border-line-strong bg-raised text-muted hover:text-fg"
                       >
-                        <Edit className="size-3" />
+                        <Edit className="size-2.5" />
                       </button>
                     )}
                     <button
                       onClick={() => setRefs((atual) => atual.filter((x) => x !== r))}
                       title="Tirar da edição"
-                      className="absolute -right-1.5 -top-1.5 grid size-5 place-items-center rounded-full border border-line bg-surface text-faint hover:text-fg"
+                      className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full border border-line-strong bg-raised text-muted hover:text-fg"
                     >
-                      <X className="size-3" />
+                      <X className="size-2.5" />
                     </button>
                   </div>
                 ))}
-                <span className={naoEditam.length || refs.length > MAX_REFS || refs.some((r) => sumidas.has(r)) ? "text-amber-400" : "text-muted"}>
-                  {refs.some((r) => sumidas.has(r))
-                    ? "Imagem de referência não encontrada no lugar de antes (movida ou apagada): reanexe ou tire da edição."
-                    : naoEditam.length
-                    ? `${naoEditam.join(", ")} não edita imagem — escolha um modelo que edita (ex.: Qwen-Image 2.1).`
-                    : refs.length > MAX_REFS
-                    ? `${refs.length} imagens: o máximo são ${MAX_REFS}, máscaras incluídas.`
-                    : `Editando ${refs.length} imagem(ns): descreva a mudança abaixo (o lápis marca onde mudar).`}
-                </span>
+                <button
+                  onClick={() => arquivo.current?.click()}
+                  title="Anexar uma imagem para editar (modelos que editam, como o Qwen-Image 2.1)"
+                  className="grid size-[52px] place-items-center rounded-[9px] border border-dashed border-line-strong text-faint hover:border-focus hover:text-fg"
+                >
+                  <Plus className="size-4" />
+                </button>
               </div>
-            )}
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  gerar();
-                }
-              }}
-              rows={2}
-              placeholder={
-                refs.length
-                  ? "change the sky to a sunset, keep everything else the same"
-                  : "a red fox in the snow, cinematic lighting — em inglês funciona melhor"
-              }
-              className={campoPrompt}
-            />
-            <RodapePrompt>
-              <input
-                ref={arquivo}
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                multiple
-                hidden
-                onChange={(e) => {
-                  anexar(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-              <button
-                onClick={() => arquivo.current?.click()}
-                title="Anexar uma imagem para editar (modelos que editam, como o Qwen-Image 2.1)"
-                className={redondo}
-              >
-                <Paperclip className="size-4" />
-              </button>
-              <button onClick={() => setAmpliarPc(true)} title="Ampliar a resolução de uma imagem do PC (ESRGAN ou Lanczos)" className={redondo}>
-                <TelaCheia className="size-4" />
-              </button>
-              <button
-                onClick={() => setAbrirAjustes((v) => !v)}
-                title={`Modelos, tamanho, passos, sementes\n${
-                  models.length > 1
-                    ? [...divisao].map(([m, n]) => `${n}× ${m.split(/[\\/]/).pop()}`).join(" · ")
-                    : `${o.width}×${o.height} · ${o.steps} passos · CFG ${o.cfg}`}`}
-                className={`${pilula} ${abrirAjustes ? pilulaLigada : ""}`}
-              >
-                <Sliders className="size-3.5" />
-                {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""}` : "Escolher modelo"}
-              </button>
-              <label className={`${pilula} focus-within:border-focus`} title="Quantas variações gerar">
-                <Copy className="size-3.5" />
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={count}
-                  onChange={(e) => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-                  className={numeroPilula}
-                  style={larguraNumero(count)}
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                {refs.length > 0 && (
+                  <span className={`text-[11.5px] ${naoEditam.length || refs.length > MAX_REFS || refs.some((r) => sumidas.has(r)) ? "text-warn" : "text-accent-text"}`}>
+                    {refs.some((r) => sumidas.has(r))
+                      ? "Imagem de referência não encontrada no lugar de antes (movida ou apagada): reanexe ou tire da edição."
+                      : naoEditam.length
+                      ? `${naoEditam.join(", ")} não edita imagem — escolha um modelo que edita (ex.: Qwen-Image 2.1).`
+                      : refs.length > MAX_REFS
+                      ? `${refs.length} imagens: o máximo são ${MAX_REFS}, máscaras incluídas.`
+                      : `Editando ${refs.length} ${refs.length === 1 ? "imagem" : "imagens"} · o lápis marca onde mudar`}
+                  </span>
+                )}
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      gerar();
+                    }
+                  }}
+                  rows={2}
+                  placeholder={
+                    refs.length
+                      ? "change the sky to a sunset, keep everything else the same"
+                      : "a red fox in the snow, cinematic lighting — em inglês funciona melhor"
+                  }
+                  className={campoPrompt}
                 />
-                {count === 1 ? "variação" : "variações"}
-              </label>
+                {(negAberto || !!o.negative) && (
+                  <input
+                    autoFocus={negAberto && !o.negative}
+                    value={o.negative}
+                    onChange={(e) => set("negative", e.target.value)}
+                    placeholder="Negativo: o que evitar na imagem"
+                    className="w-full border-t border-line bg-transparent pt-1.5 text-[13px] text-fg-2 placeholder:text-faint focus:outline-none"
+                  />
+                )}
+              </div>
+            </div>
+            <input
+              ref={arquivo}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              multiple
+              hidden
+              onChange={(e) => {
+                anexar(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-line pt-2.5 text-xs">
               <button
                 onClick={melhorar}
                 disabled={!prompt.trim() || !llm.model || melhorando}
-                title={llm.model ? `Reescrever o prompt com ${llm.model} (o modelo à direita)` : "Escolha à direita o modelo que reescreve"}
-                className={pilula}
+                title={llm.model ? `Reescrever o prompt com ${llm.model} (troque em Parâmetros)` : "Escolha em Parâmetros o modelo que reescreve"}
+                className="inline-flex items-center gap-1.5 rounded-[8px] bg-raised px-2.5 py-1 text-muted hover:text-fg disabled:opacity-40"
               >
                 <Refresh className={`size-3.5 ${melhorando ? "animate-spin" : ""}`} />
                 Melhorar prompt
               </button>
-              <DireitaPrompt>
-              <div className="min-w-0" title="Modelo que reescreve o prompt (não é o que gera a imagem)">
-                <ModelPicker
-                  provider={llm.provider}
-                  model={llm.model}
-                  onChange={(provider, model) => setLlm({ provider, model })}
-                />
+              <button
+                onClick={() => {
+                  if (negAberto && o.negative) set("negative", "");
+                  setNegAberto((v) => !v);
+                }}
+                title={o.negative ? "Tirar o negativo" : "O que evitar na imagem"}
+                className={`rounded-[8px] px-1.5 py-1 ${negAberto || o.negative ? "text-accent-text" : "text-faint hover:text-fg"}`}
+              >
+                {negAberto || o.negative ? "− Negativo" : "+ Negativo"}
+              </button>
+              <button onClick={() => setAmpliarPc(true)} title="Ampliar a resolução de uma imagem do PC (ESRGAN ou Lanczos)"
+                      className="rounded-[8px] px-1.5 py-1 text-faint hover:text-fg">
+                Ampliar do PC
+              </button>
+              <div className="ml-auto flex min-w-0 items-center gap-3">
+                <span className="truncate font-mono text-[11.5px] text-muted" title="Como as variações se dividem entre os modelos">
+                  {models.length > 1
+                    ? `${count} = ${[...divisao].map(([m, n]) => `${n} ${st.image_models.find((x) => x.path === m)?.name ?? m.split(/[\\/]/).pop()}`).join(" + ")}`
+                    : `${count} × ${o.width}×${o.height}`}
+                </span>
+                <button
+                  onClick={() => gerar()}
+                  disabled={!prompt.trim() || !models.length || semRuntime}
+                  title={!models.length ? "Escolha um modelo em Parâmetros" : st.image_busy || ocupado ? "Entra na fila: gera quando o lote atual terminar" : "Gerar (Enter)"}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-[10px] bg-accent px-3.5 py-2 text-[13px] font-semibold text-accent-fg hover:brightness-110 disabled:bg-raised disabled:text-faint disabled:hover:brightness-100"
+                >
+                  Gerar {count}
+                  <span className="font-mono text-[10.5px] font-medium opacity-65">Enter</span>
+                </button>
               </div>
-              <BotaoEnviar
-                onEnviar={() => gerar()}
-                desabilitado={!prompt.trim() || !models.length || semRuntime}
-                titulo={st.image_busy || ocupado ? "Entra na fila: gera quando o lote atual terminar" : "Gerar"}
-              />
-              </DireitaPrompt>
-            </RodapePrompt>
-          </CaixaPrompt>
+            </div>
+          </div>
           <p className="mt-1.5 text-center text-[11px] text-faint">
             O sd.cpp gera uma imagem por vez e libera a memória no fim — um lote é uma fila.
           </p>
@@ -808,6 +846,10 @@ export default function ImagensView(props: {
               divisao={divisao}
               seedMode={seedMode}
               onSeedMode={setSeedMode}
+              count={count}
+              onCount={setCount}
+              llm={llm}
+              onLlm={setLlm}
               onError={mostrarErro}
               onFechar={() => setAbrirAjustes(false)}
             />
@@ -829,6 +871,10 @@ function Ajustes(props: {
   divisao: Map<string, number>;
   seedMode: SeedMode;
   onSeedMode: (s: SeedMode) => void;
+  count: number;
+  onCount: (n: number) => void;
+  llm: { provider: string; model: string };
+  onLlm: (l: { provider: string; model: string }) => void;
   onError: (e: string) => void;
   onFechar: () => void;
 }) {
@@ -862,128 +908,196 @@ function Ajustes(props: {
     }
   }
 
+  const proporcao = PROPORCOES.find((p) => o.width === p.width && o.height === p.height);
   return (
-    <aside className="flex w-[292px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side p-4 text-xs">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Ajustes da geração</span>
-        <button onClick={props.onFechar} title="Fechar os ajustes" className="ml-auto rounded-[7px] p-1 text-muted hover:bg-raised hover:text-fg">
+    <aside className="flex w-[292px] shrink-0 flex-col gap-[18px] overflow-y-auto border-l border-line bg-side p-4 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="text-[13px] font-semibold text-fg">Parâmetros</span>
+        <button onClick={props.onFechar} title="Esconder os parâmetros" className="ml-auto rounded-[7px] p-1 text-faint hover:bg-raised hover:text-fg">
           <X className="size-3.5" />
         </button>
       </div>
 
-      <div className="flex flex-col gap-4">
-        <div className="flex flex-col gap-2.5">
-          <Field label="Modelos" hint="Marque mais de um para dividir as variações entre eles.">
-            <div className="flex max-h-40 flex-col gap-1 overflow-y-auto rounded-lg border border-line p-1.5">
-              {!st.image_models.length && <span className="text-faint">Nenhum modelo de imagem nas pastas.</span>}
-              {st.image_models.map((m) => {
-                const ativo = props.models.includes(m.path);
-                return (
-                  <label key={m.path} className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 hover:bg-raised">
-                    <input type="checkbox" checked={ativo} onChange={() => alternar(m.path)} className="accent-[var(--accent)]" />
-                    <span className={`min-w-0 flex-1 truncate ${ativo ? "text-fg" : "text-muted"}`} title={m.path}>
-                      {m.name}
-                    </span>
-                    {ativo && <span className="shrink-0 font-mono text-accent-text">{props.divisao.get(m.path) ?? 0}×</span>}
-                  </label>
-                );
-              })}
-            </div>
-          </Field>
+      <Secao titulo="Modelos" dica="divide as variações">
+        {!st.image_models.length && <span className="text-faint">Nenhum modelo de imagem nas pastas.</span>}
+        {st.image_models.map((m) => {
+          const ativo = props.models.includes(m.path);
+          const pr = m.params;
+          return (
+            <label key={m.path} title={m.path}
+                   className={`flex cursor-pointer items-center gap-2.5 rounded-[9px] border px-2.5 py-[7px] ${ativo ? "border-line-strong bg-surface" : "border-line hover:bg-surface"}`}>
+              <input type="checkbox" checked={ativo} onChange={() => alternar(m.path)} className="sr-only" />
+              <span className={`grid size-3.5 shrink-0 place-items-center rounded-[4px] border-[1.5px] ${ativo ? "border-accent bg-accent text-accent-fg" : "border-line-strong"}`}>
+                {ativo && <Check className="size-2.5" />}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className={`truncate text-[12.5px] ${ativo ? "text-fg" : "text-muted"}`}>{m.name}</span>
+                {pr && (
+                  <span className="truncate text-[10.5px] text-faint">
+                    {m.req?.edita ? "edita · " : ""}{pr.steps} passos · CFG {String(pr.cfg).replace(".", ",")}
+                  </span>
+                )}
+              </span>
+              {ativo && <span className="shrink-0 font-mono text-xs font-medium text-accent-text">{props.divisao.get(m.path) ?? 0}×</span>}
+            </label>
+          );
+        })}
+      </Secao>
 
-          <Field label="Negativo" hint="O que evitar na imagem.">
-            <input className={input} value={o.negative} onChange={(e) => set("negative", e.target.value)} />
-          </Field>
+      <Secao titulo="Variações">
+        <Stepper valor={props.count} min={1} max={50} onValor={props.onCount} />
+      </Secao>
 
-          <Field label="Proporção">
-            <div className="flex flex-wrap gap-1">
-              {PROPORCOES.map((p) => {
-                const ativo = o.width === p.width && o.height === p.height;
-                return (
-                  <button
-                    key={p.label}
-                    onClick={() => {
-                      set("width", p.width);
-                      set("height", p.height);
-                    }}
-                    className={`rounded-[9px] px-2.5 py-0.5 ${ativo ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}
-                  >
-                    {p.label}
-                  </button>
-                );
-              })}
-            </div>
-          </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Num label="Largura" value={o.width} onChange={(v) => set("width", v)} step={64} />
-            <Num label="Altura" value={o.height} onChange={(v) => set("height", v)} step={64} />
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2.5">
-          <div className="grid grid-cols-2 gap-2">
-            <Num label="Passos" value={o.steps} onChange={(v) => set("steps", v)} />
-            <Num label="CFG" value={o.cfg} onChange={(v) => set("cfg", v)} step={0.5} />
-          </div>
-          <Field label="Amostrador">
-            <select className={input} value={o.sampler} onChange={(e) => set("sampler", e.target.value)}>
-              {SAMPLERS.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Sementes" hint={SEEDS.find((s) => s.id === props.seedMode)?.hint}>
-            <div className="flex gap-1">
-              {SEEDS.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => props.onSeedMode(s.id)}
-                  className={`rounded-[9px] px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </Field>
-          {props.seedMode !== "aleatoria" && (
-            <Num label="Semente base" value={o.seed} onChange={(v) => set("seed", v)} hint="0 = sorteia uma e anota" />
-          )}
-          <Field label="Salvar imagens em">
-            <div className="flex items-center gap-2">
-              <input
-                className={input}
-                value={o.out_dir || st.image_dir}
-                onChange={(e) => set("out_dir", e.target.value)}
-                spellCheck={false}
-              />
-              <button
-                className={btn}
-                title="Escolher pasta"
-                onClick={async () => {
-                  const escolhida = window.forja ? await window.forja.pickFolder(o.out_dir || st.image_dir) : "";
-                  if (escolhida) set("out_dir", escolhida);
-                }}
-              >
-                <FolderOpen className="size-3.5" />
-              </button>
-            </div>
-          </Field>
-          <Num
-            label="Apagar descartadas depois de (dias)"
-            value={o.descarte_dias}
-            onChange={salvarPrazo}
-            hint="0 = guardar para sempre."
-          />
-          <div className="flex items-center gap-2">
-            <button className={btn} onClick={esvaziar}>
-              <Trash className="mr-1 inline size-3.5" />
-              Esvaziar descartadas agora
+      <Secao titulo="Proporção">
+        <div className="grid grid-cols-4 gap-1.5 font-mono text-[10.5px]">
+          {PROPORCOES.map((p) => (
+            <button key={p.label} onClick={() => { set("width", p.width); set("height", p.height); }}
+                    className={`rounded-[8px] border py-1.5 ${proporcao === p ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
+              {p.label}
             </button>
-            {limpando && <span className="text-faint">{limpando}</span>}
-          </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Caixa rotulo="Largura"><input type="number" step={64} value={o.width} onChange={(e) => set("width", Number(e.target.value))} className={numeroCaixa} /></Caixa>
+          <Caixa rotulo="Altura"><input type="number" step={64} value={o.height} onChange={(e) => set("height", Number(e.target.value))} className={numeroCaixa} /></Caixa>
+        </div>
+      </Secao>
+
+      <Secao titulo="Sementes">
+        <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
+          {SEEDS.map((sd) => (
+            <button key={sd.id} onClick={() => props.onSeedMode(sd.id)}
+                    className={`flex-1 rounded-[6px] py-1 ${props.seedMode === sd.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+              {sd.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[11px] leading-snug text-faint">{SEEDS.find((sd) => sd.id === props.seedMode)?.hint}</span>
+      </Secao>
+
+      <div className="grid grid-cols-2 gap-2">
+        <Caixa rotulo="Passos"><input type="number" value={o.steps} onChange={(e) => set("steps", Number(e.target.value))} className={numeroCaixa} /></Caixa>
+        <Caixa rotulo="CFG"><input type="number" step={0.5} value={o.cfg} onChange={(e) => set("cfg", Number(e.target.value))} className={numeroCaixa} /></Caixa>
+        <Caixa rotulo="Amostrador">
+          <select value={o.sampler} onChange={(e) => set("sampler", e.target.value)} className={`${numeroCaixa} -ml-1 cursor-pointer`}>
+            {SAMPLERS.map((sm) => <option key={sm}>{sm}</option>)}
+          </select>
+        </Caixa>
+        <Caixa rotulo={props.seedMode === "aleatoria" ? "Semente (sorteada)" : "Semente base"}>
+          <input type="number" value={o.seed} disabled={props.seedMode === "aleatoria"} title="0 = sorteia uma e anota"
+                 onChange={(e) => set("seed", Number(e.target.value))} className={`${numeroCaixa} disabled:text-faint`} />
+        </Caixa>
+      </div>
+
+      <Secao titulo="Melhorar prompt">
+        <div className="min-w-0" title="Modelo que reescreve o prompt (não é o que gera a imagem)">
+          <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
+        </div>
+        <span className="text-[11px] leading-snug text-faint">Um LLM rápido basta; não é o modelo que gera a imagem.</span>
+      </Secao>
+
+      <div className="mt-auto flex flex-col gap-2 border-t border-line pt-3 text-[11.5px] text-muted">
+        <div className="flex items-center gap-1.5">
+          <span className="shrink-0">Salvar em</span>
+          <input value={o.out_dir || st.image_dir} onChange={(e) => set("out_dir", e.target.value)} spellCheck={false}
+                 title={o.out_dir || st.image_dir}
+                 className="min-w-0 flex-1 truncate bg-transparent font-mono text-fg-2 outline-none focus:text-fg" />
+          <button title="Escolher pasta" className="shrink-0 rounded-[6px] p-1 text-faint hover:bg-raised hover:text-fg"
+                  onClick={async () => {
+                    const escolhida = window.forja ? await window.forja.pickFolder(o.out_dir || st.image_dir) : "";
+                    if (escolhida) set("out_dir", escolhida);
+                  }}>
+            <FolderOpen className="size-3.5" />
+          </button>
+        </div>
+        <label className="flex items-center gap-1.5" title="0 = guardar para sempre">
+          Descartadas somem em
+          <input type="number" min={0} value={o.descarte_dias} onChange={(e) => salvarPrazo(Number(e.target.value))}
+                 className={`${numeroPilula} font-mono text-fg-2`} style={larguraNumero(o.descarte_dias)} />
+          {o.descarte_dias === 1 ? "dia" : "dias"}
+        </label>
+        <div className="flex items-center gap-2">
+          <button onClick={esvaziar} className="inline-flex items-center gap-1 text-faint hover:text-err">
+            <Trash className="size-3" /> Esvaziar descartadas agora
+          </button>
+          {limpando && <span className="text-faint">{limpando}</span>}
         </div>
       </div>
     </aside>
+  );
+}
+
+/** Uma seção do painel Parâmetros: rótulo mono em caixa-alta e o conteúdo embaixo. */
+export function Secao(props: { titulo: string; dica?: string; extra?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline gap-2">
+        <span className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">{props.titulo}</span>
+        {props.dica && <span className="ml-auto text-[11px] text-faint">{props.dica}</span>}
+        {props.extra && <span className="ml-auto">{props.extra}</span>}
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
+/** Campo numérico em caixa (rótulo pequeno em cima, valor mono embaixo), a grade do design. */
+export function Caixa(props: { rotulo: string; children: React.ReactNode }) {
+  return (
+    <label className="flex min-w-0 flex-col gap-0.5 rounded-[8px] border border-line bg-surface px-2.5 py-1.5 focus-within:border-focus">
+      <span className="text-[10.5px] text-faint">{props.rotulo}</span>
+      {props.children}
+    </label>
+  );
+}
+export const numeroCaixa =
+  "w-full min-w-0 bg-transparent font-mono text-[12.5px] font-medium text-fg outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none";
+
+/** − valor + (Variações). */
+export function Stepper(props: { valor: number; min: number; max: number; onValor: (n: number) => void }) {
+  const muda = (n: number) => props.onValor(Math.max(props.min, Math.min(props.max, n || props.min)));
+  return (
+    <div className="flex items-center rounded-[8px] border border-line bg-surface">
+      <button onClick={() => muda(props.valor - 1)} disabled={props.valor <= props.min} aria-label="Menos"
+              className="w-8 py-1 text-muted hover:text-fg disabled:opacity-30">−</button>
+      <input type="number" value={props.valor} onChange={(e) => muda(Number(e.target.value))}
+             className={`${numeroCaixa} flex-1 py-1 text-center text-[13px]`} />
+      <button onClick={() => muda(props.valor + 1)} disabled={props.valor >= props.max} aria-label="Mais"
+              className="w-8 py-1 text-muted hover:text-fg disabled:opacity-30">+</button>
+    </div>
+  );
+}
+
+/** Faixa do topo da galeria (Imagem e Vídeo): contagem, estado da GPU no meio e o botão do painel Parâmetros. */
+export function BarraTopo(props: {
+  contagem: number;
+  unidade: [string, string];
+  status: { cor: string; texto: string; meta: string } | null;
+  parametros: boolean;
+  onParametros: () => void;
+  esquerda?: React.ReactNode;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-2.5 border-b border-line px-4 py-2">
+      {props.esquerda ?? (
+        <span className="rounded-[5px] border border-line px-1.5 py-px font-mono text-[11px] text-faint">
+          {props.contagem} {props.contagem === 1 ? props.unidade[0] : props.unidade[1]}
+        </span>
+      )}
+      <div className="flex min-w-0 flex-1 justify-center">
+        {props.status && (
+          <span className="flex min-w-0 items-center gap-2 rounded-full border border-line bg-surface px-3 py-1 text-xs text-muted">
+            <span className={`size-1.5 shrink-0 rounded-full ${props.status.cor}`} />
+            <span className="truncate">{props.status.texto}</span>
+            {props.status.meta && <span className="shrink-0 font-mono text-faint">{props.status.meta}</span>}
+          </span>
+        )}
+      </div>
+      <button onClick={props.onParametros} title={props.parametros ? "Esconder os parâmetros" : "Mostrar os parâmetros"} aria-pressed={props.parametros}
+              className={`grid size-[30px] place-items-center rounded-[7px] ${props.parametros ? "bg-raised text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}>
+        <PanelRight />
+      </button>
+    </div>
   );
 }
 
@@ -1011,6 +1125,8 @@ function Lote(props: {
   onMudou: () => void;
   onReaproveitar: () => void;
   onSemente: (s: number) => void;
+  numero: number;   // "Lote N" no cabeçalho
+  ultimo: boolean;  // o mais recente leva o destaque
 }) {
   const meta = props.resposta.meta as LoteMeta;
   const imagens = meta.images;
@@ -1076,7 +1192,7 @@ function Lote(props: {
   }
 
   return (
-    <section className="my-8">
+    <section className="mb-8">
       {ampliando && (
         <Modal label="Ampliar imagem" onClose={() => setAmpliando(null)} className="w-full max-w-sm rounded-xl border border-line bg-surface p-4">
           <p className="mb-3 text-sm text-fg">Ampliar imagem</p>
@@ -1094,39 +1210,50 @@ function Lote(props: {
           />
         </Modal>
       )}
-      <div className="mb-2 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <p className="min-w-0 flex-1 text-[15px] text-fg">{props.pedido.content}</p>
-        <span className="text-xs text-faint">
-          {viva ? `gerando ${prontas + 1} de ${imagens.length}…`
-            : props.resposta.status === "interrompido" ? `interrompido: ${imagens.length - faltam} de ${imagens.length} prontas`
-            : deSlots ? `${imagens.length} imagens do site` : `${imagens.length} variações`}
+      <div className="mb-2.5 flex items-center gap-2.5">
+        <span className={`shrink-0 rounded-[5px] px-[7px] py-0.5 font-mono text-[11px] font-medium ${props.ultimo ? "bg-accent text-accent-fg" : "bg-raised text-muted"}`}>
+          Lote {props.numero}
         </span>
-      </div>
-      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
-        {meta.opts.width && <Chip>{`${meta.opts.width}×${meta.opts.height}`}</Chip>}
-        {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos`}</Chip>}
-        {meta.opts.cfg !== undefined && <Chip>{`CFG ${meta.opts.cfg}`}</Chip>}
-        {meta.opts.sampler && <Chip>{meta.opts.sampler}</Chip>}
-        <button
-          onClick={() => props.onSemente(imagens[0].seed)}
-          title={`Sementes usadas: ${imagens.map((i) => i.seed).join(", ")}\nClique para usar ${imagens[0].seed} no próximo lote`}
-          className="rounded-full bg-raised px-2 py-0.5 hover:text-fg"
-        >
-          {rotuloSementes(imagens.map((i) => i.seed), meta.seed_mode)}
-        </button>
-        {[...new Set(imagens.map((i) => i.model_name))].map((n) => (
-          <Chip key={n}>{n}</Chip>
-        ))}
-        {meta.opts.ampliacao && <Chip>{`ampliada ${meta.opts.ampliacao.fator}×`}</Chip>}
-        {meta.opts.ampliacao?.forca != null && ( // redesenho: a força usada; o prompt no hover (pode ser longo)
-          <span className="rounded-full bg-raised px-2 py-0.5" title={`Prompt do redesenho: ${meta.opts.ampliacao.prompt || "(vazio)"}`}>
-            {`força ${meta.opts.ampliacao.forca.toFixed(2).replace(".", ",")}`}
-          </span>
+        <p className="min-w-0 flex-1 truncate text-[13px] text-fg-2" title={props.pedido.content}>{props.pedido.content}</p>
+        <span className="shrink-0 font-mono text-[11px] text-faint">
+          {viva ? `gerando ${prontas + 1} de ${imagens.length} · `
+            : props.resposta.status === "interrompido" ? `interrompido: ${imagens.length - faltam} de ${imagens.length} · `
+            : deSlots ? `${imagens.length} do site · ` : ""}
+          {[meta.opts.width && `${meta.opts.width}×${meta.opts.height}`, meta.opts.steps !== undefined && `${meta.opts.steps} passos`,
+            meta.opts.cfg !== undefined && `CFG ${String(meta.opts.cfg).replace(".", ",")}`, meta.opts.sampler].filter(Boolean).join(" · ")}
+          {" · "}
+          <button
+            onClick={() => props.onSemente(imagens[0].seed)}
+            title={`${rotuloSementes(imagens.map((i) => i.seed), meta.seed_mode)}\nClique para usar ${imagens[0].seed} no próximo lote`}
+            className="hover:text-fg"
+          >
+            {imagens[0].seed}{imagens.length > 1 ? "+" : ""}
+          </button>
+        </span>
+        {viva ? (
+          <button onClick={cancelar} className="shrink-0 rounded-[7px] border border-line px-2 py-0.5 text-xs text-muted hover:bg-raised hover:text-fg">
+            Cancelar
+          </button>
+        ) : !deSlots && (
+          <button onClick={props.onReaproveitar} title="Traz prompt e ajustes deste lote para o campo"
+                  className="shrink-0 rounded-[7px] border border-line px-2 py-0.5 text-xs text-muted hover:bg-raised hover:text-fg">
+            Reaproveitar
+          </button>
         )}
-        {!!(props.pedido.meta as PedidoMeta | null)?.refs?.length && (
-          <Chip>edição de {(props.pedido.meta as PedidoMeta).refs!.length} imagem(ns)</Chip>
-        )}
       </div>
+      {(meta.opts.ampliacao || !!(props.pedido.meta as PedidoMeta | null)?.refs?.length) && (
+        <div className="-mt-1 mb-2.5 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
+          {meta.opts.ampliacao && <Chip>{`ampliada ${meta.opts.ampliacao.fator}×`}</Chip>}
+          {meta.opts.ampliacao?.forca != null && ( // redesenho: a força usada; o prompt no hover (pode ser longo)
+            <span className="rounded-[5px] bg-raised px-2 py-0.5 font-mono" title={`Prompt do redesenho: ${meta.opts.ampliacao.prompt || "(vazio)"}`}>
+              {`força ${meta.opts.ampliacao.forca.toFixed(2).replace(".", ",")}`}
+            </span>
+          )}
+          {!!(props.pedido.meta as PedidoMeta | null)?.refs?.length && (
+            <Chip>edição de {(props.pedido.meta as PedidoMeta).refs!.length} imagem(ns)</Chip>
+          )}
+        </div>
+      )}
 
       <Mosaico proporcoes={imagens.map((img) => proporcaoDe(deSlots ? props.noSite(img) : img, meta.opts) ?? 1)}>
         {imagens.map((img) => {
@@ -1171,12 +1298,7 @@ function Lote(props: {
       </Mosaico>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
-        {viva ? (
-          <button className={btn} onClick={cancelar}>
-            <Square className="mr-1 inline size-3" />
-            Cancelar lote
-          </button>
-        ) : (
+        {!viva && (
           aprovaveis.length > 0 && !deSlots && (
             <div className="sticky bottom-3 z-10 flex w-full flex-wrap items-center gap-2 rounded-[14px] border border-line-strong bg-surface px-3.5 py-2.5 shadow-float">
               <span className="text-[13px] font-medium text-fg">{sel.size} marcada{sel.size === 1 ? "" : "s"}</span>
@@ -1211,12 +1333,6 @@ function Lote(props: {
             Continuar ({faltam})
           </button>
         )}
-        {!deSlots && (
-          <button className={btn} onClick={props.onReaproveitar} title="Traz prompt e ajustes deste lote para o campo">
-            <Refresh className="mr-1 inline size-3.5" />
-            Reaproveitar
-          </button>
-        )}
         {decididas > 0 && (
           <span className="text-faint">
             {imagens.filter((i) => i.status === "mantida").length} mantida(s) ·{" "}
@@ -1247,35 +1363,32 @@ export const velocidade = (s: number, unidade = "passo") =>
 export const duracao = (s: number) =>
   s < 60 ? `~${Math.max(1, Math.round(s))} s` : `~${Math.floor(s / 60)} min${s % 60 >= 30 && s < 600 ? " 30 s" : ""}`;
 
-export function Liquido({ fracao, sPasso, restante }: { fracao: number; sPasso?: number; restante?: number }) {
+export function Liquido({ fracao, sPasso, restante, fase }: { fracao: number; sPasso?: number; restante?: number; fase?: string }) {
   const pct = Math.round(Math.min(1, Math.max(0, fracao)) * 100);
   return (
     <>
       <div
-        // Cor sólida por dentro e a transparência no grupo: crista e corpo se sobrepõem 1 px, e com
-        // cada um semitransparente a sobreposição aparecia como uma linha mais escura.
-        className="absolute inset-x-0 bottom-0 bg-sky-400 opacity-25 transition-[height] duration-1000 ease-out"
-        style={{ height: `${Math.max(pct, 4)}%` }}
+        className="absolute inset-x-0 bottom-0 border-t-[1.5px] border-accent/75 bg-gradient-to-t from-accent/25 to-accent/5 transition-[height] duration-1000 ease-out"
+        style={{ height: `${Math.max(pct, 3)}%` }}
         role="progressbar"
         aria-valuenow={pct}
         aria-valuemin={0}
         aria-valuemax={100}
-      >
-        <svg viewBox="0 0 200 10" preserveAspectRatio="none" className="onda absolute -top-[9px] left-0 h-2.5 w-[200%]" aria-hidden>
-          <path d="M0 5 Q 25 0 50 5 T 100 5 T 150 5 T 200 5 V 10 H 0 Z" className="fill-sky-400" />
-        </svg>
-      </div>
-      <div className="relative text-center tabular-nums">
-        <span className="block text-sm font-medium text-fg">{pct}%</span>
-        {(!!sPasso || !!restante) && (
-          <span className="block text-[11px] text-muted">
-            {sPasso ? `${velocidade(sPasso)} · ` : ""}{duracao(restante ?? 0)} restantes
+      />
+      <div className="relative flex flex-col items-center gap-0.5 text-center tabular-nums">
+        <span className="font-mono text-lg font-medium text-accent-text">{pct}%</span>
+        {(!!sPasso || !!restante || !!fase) && (
+          <span className="font-mono text-[10.5px] text-fg-2">
+            {[fase, sPasso ? velocidade(sPasso) : "", restante ? `${duracao(restante)} restantes` : ""].filter(Boolean).join(" · ")}
           </span>
         )}
       </div>
     </>
   );
 }
+
+/** Fundo listrado (o placeholder do design): imagem que ainda não começou ou sem a 1ª amostra. */
+export const listras = "bg-[repeating-linear-gradient(135deg,var(--color-raised)_0_7px,var(--color-surface)_7px_14px)]";
 
 /** Imagem de fundo do card que troca só quando a próxima já carregou: o sd-cli regrava a prévia a cada
  *  passo, e pegar o arquivo no meio da gravação mostraria uma imagem quebrada. */
@@ -1311,7 +1424,7 @@ export function Chip({ children }: { children: React.ReactNode }) {
 }
 
 /** A bolinha (24 px, onde fica a de marcar) com a % dentro; o anel contorna por fora. */
-export function AnelProgresso({ pct }: { pct: number }) {
+export function AnelProgresso({ pct, lado = "dir" }: { pct: number; lado?: "esq" | "dir" }) {
   return (
     <svg
       viewBox="0 0 30 30"
@@ -1319,7 +1432,7 @@ export function AnelProgresso({ pct }: { pct: number }) {
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
-      className="absolute left-[5px] top-[5px] size-[30px]"
+      className={`absolute top-[5px] size-[30px] ${lado === "esq" ? "left-[5px]" : "right-[5px]"}`}
     >
       <circle cx="15" cy="15" r="12" className="fill-black/60" />
       <circle cx="15" cy="15" r="13.75" fill="none" strokeWidth="2.5" className="stroke-white/20" />
@@ -1363,9 +1476,9 @@ function Cartao(props: {
   return (
     <Pilha n={props.pilha ?? 1} largo={(props.proporcao ?? 1) > 1.3 && !!props.semMarcar}>
     <figure
-      className={`group relative overflow-hidden rounded-xl border ${
+      className={`group relative overflow-hidden rounded-[10px] border ${
         props.marcada ? "border-accent ring-[3px] ring-accent/15" : "border-line"
-      } bg-raised`}
+      } ${temArquivo ? "bg-raised" : listras}`}
     >
       {temArquivo ? (
         <img
@@ -1373,7 +1486,7 @@ function Cartao(props: {
           alt={`semente ${img.seed}`}
           onClick={props.onZoom}
           style={ar}
-          className={`w-full cursor-zoom-in object-cover ${
+          className={`block w-full cursor-zoom-in object-cover ${
             img.status === "descartada" ? "opacity-40 grayscale" : ""
           }`}
         />
@@ -1387,12 +1500,16 @@ function Cartao(props: {
             />
           )}
           {img.status === "erro" ? (
-            <span className="px-3 text-center text-[11px] text-red-300" title={img.error}>
+            <span className="relative px-3 text-center text-[11px] text-err" title={img.error}>
               {img.error.split("\n")[0].slice(0, 90)}
             </span>
           ) : img.status === "gerando" && !comPrevia ? (
-            <Liquido fracao={img.progress ?? 0} sPasso={img.s_passo} restante={img.restante} />
-          ) : null}
+            <Liquido fracao={img.progress ?? 0} sPasso={img.s_passo} restante={img.restante} fase={img.fase} />
+          ) : img.status === "gerando" ? null : (
+            <span className={`relative text-[11.5px] ${CORES[img.status]}`}>
+              {img.status === "pendente" ? "na fila" : img.fase ?? img.status}
+            </span>
+          )}
         </div>
       )}
 
@@ -1401,56 +1518,58 @@ function Cartao(props: {
         <button
           onClick={props.onMarcar}
           title={props.marcada ? "Desmarcar" : "Marcar para manter"}
-          className={`absolute left-2 top-2 grid size-6 place-items-center rounded-full border ${
-            props.marcada ? "border-accent bg-accent text-accent-fg" : "border-white/30 bg-black/55 text-transparent hover:text-white"
+          className={`absolute right-2 top-2 grid size-5 place-items-center rounded-full border-[1.5px] ${
+            props.marcada ? "border-accent bg-accent text-accent-fg" : "border-white/35 bg-black/25 text-transparent hover:text-white"
           }`}
         >
-          <Check className="size-3.5" />
+          <Check className="size-3" />
         </button>
       )}
-
-      <figcaption className="flex items-center gap-1.5 px-2 py-1.5 font-mono text-[11px]">
-        <span className={`min-w-0 flex-1 truncate ${CORES[img.status]}`} title={`${img.model_name} · ${img.path}`}>
-          {img.nome ?? (img.model_name || "—")}
+      {props.extra && (
+        <span
+          title={props.extra === "fora do código" ? "Nenhum arquivo do projeto aponta mais para esta imagem" : undefined}
+          className={`absolute left-2 top-2 rounded-[5px] bg-black/60 px-1.5 py-px font-mono text-[10.5px] ${
+            props.extra.startsWith("gerando") ? "animate-pulse text-accent-text"
+            : props.extra === "fora do código" ? "text-warn" : "text-fg-2"}`}
+        >
+          {props.extra}
         </span>
-        {props.extra && (
-          <span
-            title={props.extra === "fora do código" ? "Nenhum arquivo do projeto aponta mais para esta imagem" : undefined}
-            className={`shrink-0 ${props.extra.startsWith("gerando") ? "animate-pulse text-sky-300"
-              : props.extra === "fora do código" ? "text-amber-300" : "text-faint"}`}
-          >
-            {props.extra}
+      )}
+
+      {/* Rodapé sobre a imagem: modelo · semente; no hover, as ações */}
+      <figcaption className={`absolute inset-x-0 bottom-0 flex items-end gap-1.5 px-2 pt-6 pb-1.5 font-mono text-[10.5px] ${
+        temArquivo ? "bg-gradient-to-t from-black/70 to-transparent text-white/75" : "text-faint"}`}>
+        <button
+          onClick={temArquivo ? props.onSemente : undefined}
+          title={temArquivo ? `${img.model_name} · ${img.path}\nClique para usar a semente ${img.seed} no próximo lote` : `${img.model_name} · ${img.path}`}
+          className={`flex min-w-0 flex-1 text-left ${temArquivo ? "hover:text-white" : "cursor-default"}`}
+        >
+          <span className="truncate">{img.nome ?? (img.model_name || "—")}</span>
+          <span className="shrink-0">&nbsp;· {img.seed}</span>
+        </button>
+        {comPrevia && (
+          // a % está na bolinha; aqui a velocidade e quanto falta (antes do 1º passo, carregando: "gerando")
+          <span className="shrink-0 tabular-nums text-accent-text">
+            {img.s_passo ? `${velocidade(img.s_passo)} · ${duracao(img.restante ?? 0)}` : "gerando"}
           </span>
         )}
         {temArquivo && (
-          <>
-            <button onClick={props.onSemente} title="Usar esta semente no próximo lote" className="text-faint hover:text-fg">
-              <Search className="mr-0.5 inline size-3" />
-              {img.seed}
-            </button>
+          <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 [&>button]:rounded-[5px] [&>button]:p-1 [&>button:hover]:bg-white/15 [&>button:hover]:text-white">
             {props.onRegerar && (
-              <button onClick={props.onRegerar} title="Regerar: novas variações com o mesmo prompt, para escolher qual fica no site" className="text-faint hover:text-fg">
+              <button onClick={props.onRegerar} title="Regerar: novas variações com o mesmo prompt, para escolher qual fica no site">
                 <Refresh className="size-3" />
               </button>
             )}
-            <button onClick={props.onEditar} title="Editar esta imagem no próximo lote" className="text-faint hover:text-fg">
+            <button onClick={props.onEditar} title="Editar esta imagem no próximo lote">
               <Edit className="size-3" />
             </button>
-            <button onClick={props.onAmpliar} title="Ampliar a resolução (ESRGAN ou Lanczos)" className="text-faint hover:text-fg">
+            <button onClick={props.onAmpliar} title="Ampliar a resolução (ESRGAN ou Lanczos)">
               <TelaCheia className="size-3" />
             </button>
-            <button onClick={props.onPasta} title="Mostrar na pasta" className="text-faint hover:text-fg">
+            <button onClick={props.onPasta} title="Mostrar na pasta">
               <FolderOpen className="size-3" />
             </button>
-          </>
-        )}
-        {comPrevia ? (
-          // a % está na bolinha; aqui a velocidade e quanto falta (antes do 1º passo, carregando: "gerando")
-          <span className="shrink-0 tabular-nums text-sky-300">
-            {img.s_passo ? `${velocidade(img.s_passo)} · ${duracao(img.restante ?? 0)}` : "gerando"}
           </span>
-        ) : (
-          !temArquivo && <span className={CORES[img.status]}>{img.fase ?? img.status}</span>
         )}
       </figcaption>
     </figure>
