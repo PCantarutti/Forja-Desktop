@@ -109,7 +109,7 @@ export default function LocalPanel(props: {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`rounded-[9px] px-2.5 py-0.5 ${tab === t ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+            className={`rounded-[7px] px-2.5 py-1 ${tab === t ? "bg-raised font-medium text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}
           >
             {t}
           </button>

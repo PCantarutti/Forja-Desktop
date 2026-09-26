@@ -478,6 +478,14 @@ export default function App() {
   // Atalhos do shell: Ctrl 1–7 troca de seção, Ctrl , abre Configurações, Ctrl K vai para a busca.
   const atalhos = useRef<(e: KeyboardEvent) => void>(() => {});
   atalhos.current = (e) => {
+    // Esc sem diálogo aberto e fora de campo de texto: fecha o último tile (o Esc do composer limpa o texto).
+    if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[role="dialog"]')) {
+      const alvo = e.target as HTMLElement | null;
+      if (alvo?.closest("input, textarea, select, [contenteditable=true]")) return;
+      const ultimo = soltos(gradeTela).at(-1);
+      if (ultimo) setRight((r) => fecharTile(r, ultimo));
+      return;
+    }
     if (!e.ctrlKey || e.altKey || e.shiftKey) return;
     const n = Number(e.key);
     if (n >= 1 && n <= SECOES.length) changeSection(SECOES[n - 1].id);

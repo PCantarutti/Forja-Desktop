@@ -1276,7 +1276,7 @@ function Tomada(props: {
         )}
         <Chip>{`${w}×${h}`}</Chip>
         <Chip>{`${fmtS(segundosDe(frames, fps))} · ${frames} q · ${fps} fps`}</Chip>
-        {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos · CFG ${meta.opts.cfg}`}</Chip>}
+        {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos${meta.opts.cfg != null ? ` · CFG ${meta.opts.cfg}` : ""}`}</Chip>}
         <button
           onClick={() => props.onReaproveitar(itens[0].seed)}
           title={`Sementes: ${itens.map((i) => i.seed).join(", ")}\nClique para refazer com ${itens[0].seed}`}
@@ -1328,7 +1328,13 @@ function Tomada(props: {
           </button>
         ) : (
           aprovaveis.length > 0 && (
-            <>
+            <div className="sticky bottom-3 z-10 flex w-full flex-wrap items-center gap-2 rounded-[14px] border border-line-strong bg-surface px-3.5 py-2.5 shadow-float">
+              <span className="text-[13px] font-medium text-fg">{sel.size} marcad{sel.size === 1 ? "a" : "as"}</span>
+              <span className="text-faint">as outras vão para <span className="font-mono">descartadas/</span></span>
+              <span className="flex-1" />
+              {aprovaveis.length > 1 && (
+                <button className={btn} onClick={() => setSel(new Set(aprovaveis.map((i) => i.path)))}>Marcar todos</button>
+              )}
               <button
                 // sem nada marcado a ação é descartar tudo: não pode ser o botão em destaque
                 className={sel.size ? btnPrimary : btn}
@@ -1345,10 +1351,7 @@ function Tomada(props: {
                   ? `Manter ${sel.size} · descartar ${aprovaveis.length - sel.size}`
                   : aprovaveis.length === 1 ? "Descartar" : `Descartar todas (${aprovaveis.length})`}
               </button>
-              {aprovaveis.length > 1 && (
-                <button className={btn} onClick={() => setSel(new Set(aprovaveis.map((i) => i.path)))}>Marcar todos</button>
-              )}
-            </>
+            </div>
           )
         )}
         {!viva && faltam > 0 && (
@@ -1464,7 +1467,7 @@ function CartaoVideo(props: {
             {fmtS(props.segundos)}
           </span>
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-white/10 opacity-0 transition-opacity group-hover:opacity-100">
-            <div className="h-full bg-white/80" style={{ width: `${pos * 100}%` }} />
+            <div className="h-full bg-accent" style={{ width: `${pos * 100}%` }} />
           </div>
         </div>
       ) : (
@@ -1511,7 +1514,7 @@ function CartaoVideo(props: {
           aria-label="Manter esta tomada"
           aria-pressed={props.marcado}
           className={`absolute left-2 top-2 grid size-6 place-items-center rounded-full border outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70 ${
-            props.marcado ? "border-emerald-400 bg-emerald-500 text-accent-fg" : "border-white/25 bg-black/60 text-white/45 hover:text-white"
+            props.marcado ? "border-accent bg-accent text-accent-fg" : "border-white/25 bg-black/60 text-white/45 hover:text-white"
           }`}
         >
           <Check className="size-3.5" />
@@ -1703,7 +1706,7 @@ function Foco(props: {
             <Chip>{`${w}×${h}`}</Chip>
             <Chip>{`${frames} q · ${fps} fps`}</Chip>
             <Chip>{`semente ${atual.seed}`}</Chip>
-            {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos · CFG ${meta.opts.cfg}`}</Chip>}
+            {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos${meta.opts.cfg != null ? ` · CFG ${meta.opts.cfg}` : ""}`}</Chip>}
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
