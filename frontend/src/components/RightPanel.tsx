@@ -306,8 +306,9 @@ export default function Tiles(props: {
     );
   };
 
+  // overflow-clip: o tile deslizando (entrar/sair) passa da borda; sem isso a página ganha rolagem por um instante
   return (
-    <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 p-2 pt-0">
+    <div ref={area} className="relative flex min-h-0 min-w-0 flex-1 overflow-clip p-2 pt-0">
       {!semPrincipal && (
         <main className={`${card} flex min-w-0 flex-1 flex-col overflow-hidden`} style={{ minWidth: MAIN_MIN }}>
           {props.children}
