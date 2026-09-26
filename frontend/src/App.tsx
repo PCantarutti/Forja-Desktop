@@ -2170,19 +2170,6 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      {/* Mostrar/esconder a lista: um botão só, fixo à direita do logo e na altura dele. Com a lista
-          aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. */}
-      <button
-        onClick={() => setSidebarHidden((v) => !v)}
-        title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
-        aria-pressed={!sidebarHidden}
-        onPointerEnter={() => sidebarHidden && espiar(true)}
-        onPointerLeave={() => sidebarHidden && espiar(false)}
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        className="fixed top-[12px] left-[68px] z-30 grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg"
-      >
-        <PanelLeft />
-      </button>
       <SectionRail
         value={section}
         onChange={changeSection}
@@ -2415,6 +2402,20 @@ export default function App() {
         </Tiles>
       </div>
       <LocalLoading />
+      {/* Mostrar/esconder a lista: um botão só, fixo à direita do logo e na altura dele. Com a lista
+          aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. Fica por último
+          no DOM: no Electron a região de arrastar que vem depois engole o no-drag de quem veio antes. */}
+      <button
+        onClick={() => setSidebarHidden((v) => !v)}
+        title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
+        aria-pressed={!sidebarHidden}
+        onPointerEnter={() => sidebarHidden && espiar(true)}
+        onPointerLeave={() => sidebarHidden && espiar(false)}
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        className="fixed top-[12px] left-[68px] z-30 grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg"
+      >
+        <PanelLeft />
+      </button>
     </div>
   );
 }
