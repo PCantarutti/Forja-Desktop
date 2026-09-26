@@ -127,3 +127,27 @@ def test_rede_local_exige_token_em_toda_rota(isolado):
             assert (await c.get("/api/config", headers={"X-Forja-Token": tok})).status_code == 200
             assert (await c.get(f"/api/config?t={tok}")).status_code == 200  # <Image>/vídeo mandam na URL
     asyncio.run(roda())
+
+
+def test_no_maestro_so_avisa_fim_e_aprovacao(monkeypatch):
+    """Pedido do usuário: do Maestro, só o fim da execução dele e aprovação (dele ou de Worker)."""
+    import asyncio
+    from app import mobile
+    enviados = []
+
+    async def envia(msgs):
+        enviados.extend(msgs)
+
+    monkeypatch.setattr(mobile, "devices", lambda: ["ExponentPushToken[x]"])
+    monkeypatch.setattr(mobile, "_enviar", envia)
+
+    async def cena():
+        for ev in ({"type": "tool_result", "message": {}}, {"type": "alerta", "text": "em loop"},
+                   {"type": "approval_request", "call": {"id": "c1", "name": "run_command"}, "parent": "rt1"},
+                   {"type": "approval_request", "call": {"id": "c2", "name": "write_file"}},
+                   {"type": "done"}):
+            mobile.notify(ev, 1, "r1", maestro=True)
+        await asyncio.sleep(0.05)
+
+    asyncio.run(cena())
+    assert [m["data"]["titulo"] for m in enviados] == ["Worker pede aprovação", "Aprovação pendente", "Maestro terminou"]

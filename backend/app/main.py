@@ -442,8 +442,9 @@ async def get_activity():
     except Exception as e:  # nunca derruba o /api/activity, que é o pulso das telas
         print(f"Forja: board automático: {e}", flush=True)
     # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
+    from . import autonomo  # trabalho autônomo por conversa: ligado num aparelho, o outro acompanha
     return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
-            "lista": f"{n}-{maior}-{ultima}", "board": quadro}
+            "lista": f"{n}-{maior}-{ultima}", "board": quadro, "autonomo": autonomo.ligadas()}
 
 
 # ------------------------------------------------------------------ board de issues (E15)

@@ -392,11 +392,16 @@ def avisa(titulo: str, texto: str, conv_id: int | None = None) -> None:
         print(f"Forja: push para o celular falhou: {e}", flush=True)
 
 
-def notify(ev: dict, conv_id: int, run_id: str) -> None:
-    """Chamado a cada evento publicado; só age nos de AVISA e com aparelho registrado."""
+def notify(ev: dict, conv_id: int, run_id: str, maestro: bool = False) -> None:
+    """Chamado a cada evento publicado; só age nos de AVISA e com aparelho registrado. No Maestro são só estes:
+    o fim da execução dele e o que espera você (aprovação dele ou de um Worker, plano, pergunta)."""
     if ev.get("type") not in AVISA or not (alvos := devices()):
         return
     msg = _mensagem(ev, conv_id, run_id)
+    if maestro and ev["type"] == "done":
+        msg["data"]["titulo"] = "Maestro terminou"
+    elif maestro and ev.get("parent"):
+        msg["data"]["titulo"] = "Worker pede aprovação"
     task = asyncio.get_running_loop().create_task(_enviar([{**msg, "to": t} for t in alvos]))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)

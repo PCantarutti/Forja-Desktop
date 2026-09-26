@@ -243,7 +243,8 @@ class Run:
         async with self._changed:
             self.events.append(ev)
             self._changed.notify_all()
-        mobile.notify(ev, self.conv_id, self.id)  # push para o celular pareado (aprovação, fim do turno)
+        # push para o celular pareado (aprovação, fim do turno)
+        mobile.notify(ev, self.conv_id, self.id, maestro=(self.sent or {}).get("mode") == "maestro")
 
     async def subscribe(self, cursor: int = 0) -> AsyncIterator[dict]:
         while True:
@@ -1797,7 +1798,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 for ev in (_alerta(run, conv_id, f"Recuperação de loop: {motivo_loop}. {o_que}.")
                            if maestro_mode else [_event(conv_id, "warning", f"Recuperação de loop: {motivo_loop}. {o_que}.")]):
                     yield ev
-                if nivel >= autonomo.opcoes()["notificar_nivel"]:
+                # No Maestro, o celular só avisa quando ele termina ou alguém precisa aprovar (o fim cobre a parada)
+                if nivel >= autonomo.opcoes()["notificar_nivel"] and not maestro_mode:
                     autonomo.avisa_celular({3: "Forja resumiu um loop", 4: "Forja recuou ao último ponto bom"}.get(
                         nivel, "Forja interveio num loop"), motivo_loop[:160], conv_id)
         if aviso_loop:  # depois dos resultados: no meio deles quebraria a sequência de tool calls
@@ -1829,7 +1831,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     if run.auto.ligado and not run.auto.estacionou and not run.cancel.is_set():
         texto = _relatorio(conv_id, run, maestro_mode, inicio_run)
         yield _event(conv_id, "info", texto)
-        autonomo.avisa_celular("Forja terminou o trabalho autônomo", texto.splitlines()[1][:160], conv_id)
+        if not maestro_mode:  # no Maestro o push do fim do turno já avisa
+            autonomo.avisa_celular("Forja terminou o trabalho autônomo", texto.splitlines()[1][:160], conv_id)
     if run.cancel.is_set():
         yield _event(conv_id, "info", "Geração interrompida pelo usuário.")
     if run.tasks:  # estado final da lista de tarefas fica no histórico
@@ -1914,7 +1917,8 @@ async def _estaciona(conv_id: int, run: Run, motivo: str, maestro_mode: bool, de
     texto = _relatorio(conv_id, run, maestro_mode, desde)
     yield _event(conv_id, "warning", f"Trabalho estacionado: {motivo}.{nota}")
     yield _event(conv_id, "info", texto)
-    autonomo.avisa_celular("Forja estacionou", motivo[:160], conv_id)
+    if not maestro_mode:  # no Maestro o push do fim do turno já avisa
+        autonomo.avisa_celular("Forja estacionou", motivo[:160], conv_id)
 
 
 async def _garante_modelo(conv_id: int, spec: dict, run: Run) -> AsyncIterator[dict]:

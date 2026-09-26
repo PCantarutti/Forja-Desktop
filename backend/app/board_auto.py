@@ -140,13 +140,16 @@ def _finaliza(projeto: str, card: dict, resultado: str) -> None:
                 i.commit = commit
             board._evento(i, f"execução automática: {'commit ' + commit if commit else resultado}")
             s.commit()
+    maestro = board.modo_sugerido(card) == "maestro"  # card no Maestro: o push do fim da execução dele já avisa
     if resultado == "passou":
         _grava(projeto, em_curso=None)
-        _avisa("Card pronto para revisão", f"#{card['id']} {card['titulo'][:120]}", card["conversa_id"])
+        if not maestro:
+            _avisa("Card pronto para revisão", f"#{card['id']} {card['titulo'][:120]}", card["conversa_id"])
     else:
         _grava(projeto, em_curso=None, parado=f"card #{card['id']}: {resultado}")
-        _avisa("Execução do backlog parou", f"#{card['id']} {card['titulo'][:100]}: {resultado}"[:180],
-               card["conversa_id"])
+        if not maestro:
+            _avisa("Execução do backlog parou", f"#{card['id']} {card['titulo'][:100]}: {resultado}"[:180],
+                   card["conversa_id"])
 
 
 async def tique() -> None:

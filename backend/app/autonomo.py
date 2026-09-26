@@ -48,6 +48,10 @@ def ligado(conv_id: int) -> bool:
     return bool(_conversas().get(str(conv_id)))
 
 
+def ligadas() -> list[int]:
+    return sorted(int(k) for k, v in _conversas().items() if v)
+
+
 def define(conv_id: int, valor: bool) -> None:
     atual = _conversas()
     if valor:

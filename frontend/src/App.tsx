@@ -516,6 +516,10 @@ export default function App() {
     setAutonomo(false);
     if (currentId !== null) api.get<{ ligado: boolean }>(`/conversations/${currentId}/autonomo`).then((r) => setAutonomo(r.ligado)).catch(() => {});
   }, [currentId]);
+  // Ao vivo: ligado ou desligado no celular (ou em outra janela), o menu acompanha pelo /activity.
+  useEffect(() => {
+    if (currentId !== null && activity.autonomo) setAutonomo(activity.autonomo.includes(currentId));
+  }, [activity.autonomo?.join(","), currentId]);
   const mudaAutonomo = (v: boolean) => {
     if (currentId === null) return;
     setAutonomo(v);

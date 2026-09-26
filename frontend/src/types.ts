@@ -33,6 +33,7 @@ export type Activity = {
   local_alias?: string;  // qual: o seletor com "IA local" segue o que está carregado
   lista?: string;  // carimbo das conversas: mudou (outro aparelho), a barra lateral recarrega
   board?: string;  // carimbo do board de issues: card mudou ou varredura começou/terminou
+  autonomo?: number[];  // conversas com trabalho autônomo ligado (PC e celular acompanham)
 };
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video";

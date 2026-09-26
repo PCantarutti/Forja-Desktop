@@ -76,11 +76,16 @@ def test_nivel5_grava_nota_manda_push_e_relatorio(maestro_conv, monkeypatch, tmp
     run.auto.niveis.update({2: 3, 4: 1})
 
     async def cena():
-        return [ev async for ev in agent._estaciona(conv, run, "nada funcionou", True, None or __import__("datetime").datetime(2000, 1, 1))]
+        return [ev async for ev in agent._estaciona(conv, run, "nada funcionou", maestro,
+                                                     __import__("datetime").datetime(2000, 1, 1))]
 
+    maestro = True
+    asyncio.run(cena())
+    assert avisos == []  # no Maestro o push do fim da execução já avisa: estacionar não manda outro
+    maestro = False
     evs = asyncio.run(cena())
     textos = " ".join(e["message"]["content"] for e in evs if e.get("type") == "event")
-    assert notas and "nada funcionou" in notas[0][5]
+    assert notas and "nada funcionou" in notas[-1][5]
     assert avisos and avisos[0][0] == "Forja estacionou"
     assert "3 intervenção(ões)" in textos and "1 recuo(s)" in textos and "SESSION-009.md" in textos
 
