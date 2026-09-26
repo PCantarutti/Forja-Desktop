@@ -6,7 +6,7 @@ import { Markdown } from "./MessageView";
 import { Check, Copy, Download, Search, X } from "./icons";
 import SelosModo from "./SelosModo";
 
-const chip = "rounded-md bg-raised px-1.5 py-0.5 text-[11px] text-muted";
+const chip = "rounded-[5px] bg-raised px-1.5 py-0.5 font-mono text-[11px] text-muted";
 
 const ORDENS = [
   ["relevancia", "Relevância"],
@@ -19,23 +19,29 @@ const FOLGA = 1.2 * 2 ** 30; // contexto e buffers de cálculo que sobem junto c
 
 /** Se o arquivo cabe na VRAM, se cabe só com parte na RAM, ou se não cabe de jeito nenhum. */
 function cabe(bytes: number, hw?: Hardware) {
-  if (!bytes || !hw?.ram) return { cor: "text-faint", dica: "" };
+  if (!bytes || !hw?.ram) return { cor: "text-faint", dica: "", tom: "", rotulo: "" };
   const vram = hw.vram;
   const gb = (n: number) => `${(n / 2 ** 30).toFixed(1)} GB`;
   if (vram && bytes + FOLGA <= vram)
     return {
-      cor: "text-emerald-400",
+      cor: "text-ok",
+      tom: "border-ok/40 bg-ok/[.06]",
+      rotulo: "cabe na GPU",
       dica: `Cabe inteiro na GPU: ${gb(bytes)} de ${gb(vram)} de VRAM, com folga para o contexto. É o caso mais rápido.`,
     };
   if (bytes + FOLGA <= hw.ram + vram)
     return {
-      cor: "text-amber-300",
+      cor: "text-warn",
+      tom: "border-warn/40 bg-warn/[.06]",
+      rotulo: vram ? "parte na RAM" : "só na CPU",
       dica: vram
         ? `Não cabe todo na VRAM (${gb(vram)}): parte das camadas fica na RAM (${gb(hw.ram)}). Carrega, mas gera mais devagar — ajuste "Camadas na GPU".`
         : `Sem GPU detectada: roda na CPU com ${gb(hw.ram)} de RAM. Devagar.`,
     };
   return {
-    cor: "text-red-400",
+    cor: "text-err",
+    tom: "border-err/40 bg-err/[.07]",
+    rotulo: "não carrega",
     dica: `Maior que a memória total da máquina (${gb(vram)} de VRAM + ${gb(hw.ram)} de RAM). Não vai carregar.`,
   };
 }
@@ -130,7 +136,7 @@ export default function ModelSearch(props: {
     <Modal
       onClose={props.onClose}
       label="Procurar modelos no Hugging Face"
-      className="flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-line bg-bg text-xs"
+      className="flex h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-[18px] border border-line-strong bg-bg text-xs"
     >
         <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
           <Search className="size-4 shrink-0 text-muted" />
@@ -144,7 +150,7 @@ export default function ModelSearch(props: {
             onKeyDown={(e) => e.key === "Enter" && buscar()}
             spellCheck={false}
           />
-          <div className="flex shrink-0 gap-0.5 rounded-full border border-line p-0.5">
+          <div className="flex shrink-0 gap-0.5 rounded-[9px] border border-line bg-surface p-0.5">
             {(["text", "image", "video", "ampliar"] as const).map((k) => (
               <button
                 key={k}
@@ -153,7 +159,7 @@ export default function ModelSearch(props: {
                   setLista(null);
                   setSel("");
                 }}
-                className={`rounded-full px-2 py-0.5 ${props.kind === k ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                className={`rounded-[7px] px-2.5 py-1 ${props.kind === k ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
               >
                 {k === "text" ? "chat" : k === "image" ? "imagem" : k === "video" ? "vídeo" : "ampliação"}
               </button>
@@ -181,7 +187,11 @@ export default function ModelSearch(props: {
               {props.hardware.gpus[0]?.name ?? "sem GPU"} · VRAM {(props.hardware.vram / 2 ** 30).toFixed(1)} GB · RAM{" "}
               {(props.hardware.ram / 2 ** 30).toFixed(1)} GB
             </span>
-            <span className="ml-auto">as cores no tamanho dizem se o arquivo cabe</span>
+            <span className="ml-auto flex items-center gap-3">
+              <span className="inline-flex items-center gap-1"><span className="size-1.5 rounded-full bg-ok" />cabe na GPU</span>
+              <span className="inline-flex items-center gap-1"><span className="size-1.5 rounded-full bg-warn" />parte na RAM</span>
+              <span className="inline-flex items-center gap-1"><span className="size-1.5 rounded-full bg-err" />não carrega</span>
+            </span>
           </div>
         ) : null}
 
@@ -209,7 +219,7 @@ export default function ModelSearch(props: {
                   {m.modos && <SelosModo modos={m.modos} />}
                 </span>
                 <span className="truncate text-faint">{m.variante_nome ? `${m.variante_nome} · ${m.author}` : m.author}</span>
-                <span className="flex items-center gap-2 text-faint">
+                <span className="flex items-center gap-2 font-mono text-[11px] text-faint">
                   <span>{milhares(m.downloads)} ↓</span>
                   <span>{milhares(m.likes)} ★</span>
                   <span className="ml-auto">{quando(m.updated)}</span>
@@ -245,7 +255,7 @@ export default function ModelSearch(props: {
                   {repo.arch && <span className={chip}>ARCH {repo.arch}</span>}
                   {repo.ctx_train > 0 && props.kind === "text" && <span className={chip}>CTX {milhares(repo.ctx_train)}</span>}
                   {repo.license && <span className={chip}>{repo.license}</span>}
-                  <span className="rounded-md bg-sky-900/50 px-1.5 py-0.5 text-[11px] text-sky-300">
+                  <span className="rounded-[5px] bg-accent-soft px-1.5 py-0.5 font-mono text-[11px] text-accent-text">
                     {props.kind === "text" ? "GGUF" : props.kind === "image" ? "imagem" : props.kind === "video" ? "vídeo" : "ampliação"}
                   </span>
                 </div>
@@ -265,7 +275,7 @@ export default function ModelSearch(props: {
                         <span
                           key={k}
                           className={`flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] ${
-                            tem ? "bg-emerald-900/40 text-emerald-300" : "bg-raised text-faint line-through"
+                            tem ? "bg-ok/15 text-ok" : "bg-raised text-faint line-through"
                           }`}
                         >
                           {tem && <Check className="size-3" />}
@@ -288,7 +298,7 @@ export default function ModelSearch(props: {
                   <div className="mt-1.5 flex flex-col gap-1">
                     {!repo.files.length && <p className="text-faint">Nenhum arquivo compatível neste repositório.</p>}
                     {repo.files.map((f) => (
-                      <div key={f.path} className="flex items-center gap-2 rounded-lg border border-line px-2 py-1.5">
+                      <div key={f.path} className={`flex items-center gap-2 rounded-[9px] border px-2.5 py-1.5 ${cabe(f.size, props.hardware).tom || "border-line"}`}>
                         {f.quant && <span className={`${chip} shrink-0`}>{f.quant}</span>}
                         {f.tipo && (
                           <span className={`${chip} shrink-0`} title={f.tipo === "seedvr2" ? "Difusão: mais detalhe, minutos por imagem (precisa do ComfyUI)"
@@ -306,8 +316,9 @@ export default function ModelSearch(props: {
                           {f.path.split("/").pop()}
                           {f.shards > 1 ? ` · ${f.shards} partes` : ""}
                         </span>
-                        <span className={`shrink-0 ${cabe(f.size, props.hardware).cor}`} title={cabe(f.size, props.hardware).dica}>
-                          {tamanho(f.size)}
+                        <span className={`flex shrink-0 items-center gap-1.5 ${cabe(f.size, props.hardware).cor}`} title={cabe(f.size, props.hardware).dica}>
+                          {cabe(f.size, props.hardware).rotulo && <span className="text-[11px]">{cabe(f.size, props.hardware).rotulo}</span>}
+                          <span className="font-mono">{tamanho(f.size)}</span>
                         </span>
                         <button
                           className="shrink-0 rounded-[9px] bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40"
