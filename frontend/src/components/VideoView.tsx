@@ -1015,7 +1015,6 @@ function AjustesVideo(props: {
 }) {
   const { o, set, st } = props;
   const [listaAberta, setListaAberta] = useState(false);
-  const [avancado, setAvancado] = useState(false);
   const ativa = (path: string) => (o.loras ?? []).find((l) => l.path.toLowerCase() === path.toLowerCase());
   const alternar = (path: string) =>
     set("loras", ativa(path) ? (o.loras ?? []).filter((l) => l.path.toLowerCase() !== path.toLowerCase()) : [...(o.loras ?? []), { path, peso: 1 }]);
@@ -1242,11 +1241,7 @@ function AjustesVideo(props: {
         </div>
 
         <div className="flex flex-col gap-2.5 border-t border-line pt-3.5">
-          <button onClick={() => setAvancado((v) => !v)} className="flex items-center" aria-expanded={avancado}>
-            <span className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Avançado</span>
-            <ChevronDown className={`ml-auto size-3.5 text-faint transition-transform ${avancado ? "rotate-180" : ""}`} />
-          </button>
-          {avancado && (
+          <span className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Avançado</span>
             <>
               <div className="grid grid-cols-2 gap-2">
                 <Caixa rotulo="Passos"><input type="number" value={o.steps} onChange={(e) => set("steps", Number(e.target.value))} className={numeroCaixa} /></Caixa>
@@ -1315,7 +1310,6 @@ function AjustesVideo(props: {
                 <a href={atual.req.doc} target="_blank" rel="noreferrer" className="text-[11px] text-faint underline hover:text-muted">guia do sd.cpp para este modelo</a>
               )}
             </>
-          )}
         </div>
       </div>
     </aside>
