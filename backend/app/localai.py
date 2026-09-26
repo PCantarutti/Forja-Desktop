@@ -1579,6 +1579,12 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
     for key, flag in (("kv_unified", "--kv-unified"), ("no_kv_offload", "--no-kv-offload")):
         if p.get(key) and ok(flag):
             a.append(flag)
+    if (p.get("kv_unified") and int(p.get("parallel") or 0) != 1 and ok("--cache-ram")
+            and "--cache-ram" not in (p.get("extra_args") or {})):
+        # KV unificado + o cache de prompt em RAM (ligado por padrão): um slot começar a trabalhar zerava o
+        # cache dos outros — o Maestro reprocessava ~23k tokens a cada volta de Worker (bench 2026-09-26).
+        # Sem o cache em RAM cada slot guarda o seu; a troca de conversa no mesmo slot fica com o kvcache.
+        a += ["--cache-ram", "0"]
     a += _load_mode(bool(p.get("mlock")), bool(p.get("mmap", True)), known)
     for key, flag in (("rope_freq_base", "--rope-freq-base"), ("rope_freq_scale", "--rope-freq-scale")):
         if float(p.get(key) or 0) and ok(flag):

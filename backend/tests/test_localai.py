@@ -1161,3 +1161,12 @@ def test_parametros_novos_validados():
     with pytest.raises(ToolError):
         localai._clean_params({"extra_args": {"cache-reuse": "1"}})
     assert localai._clean_params({"extra_args": {"--cache-reuse": 256}}) == {"extra_args": {"--cache-reuse": "256"}}
+
+
+def test_kv_unificado_com_varios_slots_desliga_o_cache_em_ram():
+    """KV unificado + --cache-ram (padrão): um slot trabalhar zerava o cache dos outros (bench 2026-09-26)."""
+    p = {**localai.DEFAULT_PARAMS, "parallel": 3, "kv_unified": True}
+    a = localai.argv(Path("llama-server.exe"), "m.gguf", p)
+    assert a[a.index("--cache-ram") + 1] == "0"
+    for outro in ({**p, "parallel": 1}, {**p, "kv_unified": False}, {**p, "extra_args": {"--cache-ram": "2048"}}):
+        assert "--cache-ram 0" not in " ".join(localai.argv(Path("llama-server.exe"), "m.gguf", outro))
