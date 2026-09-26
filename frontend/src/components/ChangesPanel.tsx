@@ -175,7 +175,7 @@ export default function ChangesPanel(props: {
 
       <section className="rounded-xl border border-line bg-surface">
         <div className="flex items-center gap-2 px-3.5 py-2.5">
-          <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">Alterações do agente</h3>
+          <h3 className="text-[10.5px] font-medium tracking-[.08em] text-faint font-mono uppercase">Alterações do agente</h3>
           <span className="text-faint">{files.length} arquivo{files.length === 1 ? "" : "s"}</span>
           <button onClick={load} className="ml-auto text-muted hover:text-fg">atualizar</button>
         </div>
@@ -234,7 +234,7 @@ export default function ChangesPanel(props: {
 
       <section className="rounded-xl border border-line bg-surface">
         <div className="flex items-center gap-2 px-3.5 py-2.5">
-          <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">Git</h3>
+          <h3 className="text-[10.5px] font-medium tracking-[.08em] text-faint font-mono uppercase">Git</h3>
           {git?.repo && (
             <span className="truncate font-mono text-fg" title={git.remote}>
               {git.branch || "(sem branch)"}

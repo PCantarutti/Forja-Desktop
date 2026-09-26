@@ -122,7 +122,7 @@ export default function ModeloCarregado() {
           )}
 
           <div className="space-y-3">
-            <div className="text-[11px] tracking-wider text-faint uppercase">Memória da máquina</div>
+            <div className="text-[10.5px] tracking-[.08em] text-faint font-mono uppercase">Memória da máquina</div>
             {uso.gpus.map((x) => <Memoria key={x.nome} rotulo={x.nome} usado={x.usado} total={x.total} />)}
             <Memoria rotulo="RAM" usado={uso.ram.usado} total={uso.ram.total} />
             {uso.gerando_imagem && <div className="text-xs text-sky-300">Gerando imagem ou vídeo agora: a GPU está com o sd.cpp.</div>}

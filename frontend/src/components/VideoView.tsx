@@ -1730,7 +1730,7 @@ function Foco(props: {
             </button>
           </div>
 
-          <p className="mb-1 mt-5 px-1 text-[11px] uppercase tracking-wider text-faint">Continuar a partir daqui</p>
+          <p className="mb-1 mt-5 px-1 text-[10.5px] font-mono uppercase tracking-[.08em] text-faint">Continuar a partir daqui</p>
           <button className={acao} onClick={async () => props.onUsarQuadro((await player.current?.capturar()) ?? null, "inicio")}>
             <Camera className="size-3.5" /> Usar este quadro como início
           </button>
@@ -1741,7 +1741,7 @@ function Foco(props: {
             <Refresh className="size-3.5" /> Refazer com esta semente
           </button>
 
-          <p className="mb-1 mt-4 px-1 text-[11px] uppercase tracking-wider text-faint">Ampliar</p>
+          <p className="mb-1 mt-4 px-1 text-[10.5px] font-mono uppercase tracking-[.08em] text-faint">Ampliar</p>
           {ampliar ? (
             <PainelAmpliar
               w={w}
@@ -1760,7 +1760,7 @@ function Foco(props: {
             </button>
           )}
 
-          <p className="mb-1 mt-4 px-1 text-[11px] uppercase tracking-wider text-faint">Arquivo</p>
+          <p className="mb-1 mt-4 px-1 text-[10.5px] font-mono uppercase tracking-[.08em] text-faint">Arquivo</p>
           <button className={acao} onClick={salvarQuadro}>
             <Download className="size-3.5" /> Salvar este quadro (PNG)
           </button>

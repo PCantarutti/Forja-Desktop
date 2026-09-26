@@ -75,7 +75,7 @@ export default function FolderPicker(props: {
         <div className="flex min-h-0 flex-1">
           <nav className="w-52 shrink-0 space-y-4 overflow-y-auto border-r border-line bg-side p-3 text-sm">
             <section>
-              <h3 className="mb-1 px-2 text-[11px] tracking-wider text-faint uppercase">Discos</h3>
+              <h3 className="mb-1 px-2 text-[10.5px] tracking-[.08em] text-faint font-mono uppercase">Discos</h3>
               {roots?.drives.map((d) => (
                 <button key={d.path} onClick={() => open(d.path)} className="w-full rounded-lg px-2 py-1.5 text-left text-muted hover:bg-surface hover:text-fg">
                   {d.name}
@@ -85,7 +85,7 @@ export default function FolderPicker(props: {
             </section>
             {!!roots?.recent.length && (
               <section>
-                <h3 className="mb-1 px-2 text-[11px] tracking-wider text-faint uppercase">Recentes</h3>
+                <h3 className="mb-1 px-2 text-[10.5px] tracking-[.08em] text-faint font-mono uppercase">Recentes</h3>
                 {roots.recent.map((r) => (
                   <button
                     key={r}
@@ -99,7 +99,7 @@ export default function FolderPicker(props: {
               </section>
             )}
             <section>
-              <h3 className="mb-1 px-2 text-[11px] tracking-wider text-faint uppercase">Padrão</h3>
+              <h3 className="mb-1 px-2 text-[10.5px] tracking-[.08em] text-faint font-mono uppercase">Padrão</h3>
               <button
                 onClick={() => props.onPick(roots?.default ?? null)} // caminho explícito: conversa nova sem pasta é barrada no envio
                 title={roots?.default}

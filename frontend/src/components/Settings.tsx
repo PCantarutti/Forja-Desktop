@@ -1646,7 +1646,7 @@ function Tools({ tools, disabled, onToggle }: { tools: ToolInfo[]; disabled: str
       {[...groups].map(([group, list]) => (
         <section key={group}>
           <div className="mb-2 flex items-center justify-between">
-            <h3 className="text-[11px] font-medium tracking-wider text-faint uppercase">{group}</h3>
+            <h3 className="text-[10.5px] font-medium tracking-[.08em] text-faint font-mono uppercase">{group}</h3>
             <button className="text-xs text-muted hover:text-fg" onClick={() => onToggle([...off].filter((n) => !list.some((t) => t.name === n)))}>
               ligar todas
             </button>
