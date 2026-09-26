@@ -21,7 +21,7 @@ export default function ContextRing(props: {
   abaixo?: boolean;   // abre para baixo e alinhado à direita (anel no topo de uma coluna)
   // Divisão do prompt por tipo (estimativa) e números da conversa, como no painel do DeepSeek Harness.
   partes?: { sistema: number; ferramentas: number; mensagens: number } | null;
-  sessao?: { turnos: number; passos: number; tokens: number; cache: number | null };
+  sessao?: { turnos: number; passos: number; tokens: number; cache: number | null; ttft?: number | null };
 }) {
   const [open, setOpen] = useState(false);
   // Só consulta a cota com o popover aberto. Mostra TODO provedor de nuvem configurado, mesmo
@@ -126,6 +126,12 @@ export default function ContextRing(props: {
                 <span>Acerto de cache</span>
                 <span className="text-fg">{props.sessao.cache == null ? "—" : `${Math.round(props.sessao.cache * 100)}%`}</span>
               </div>
+              {props.sessao.ttft != null && (
+                <div className="flex items-center justify-between" title="Da mensagem enviada até o primeiro token da resposta, no último turno (processar o prompt, mais fila e rede do provedor)">
+                  <span>Tempo até o 1º token</span>
+                  <span className="text-fg">{props.sessao.ttft < 10 ? props.sessao.ttft.toFixed(2).replace(".", ",") : Math.round(props.sessao.ttft)} s</span>
+                </div>
+              )}
             </div>
           )}
           {props.out != null && (

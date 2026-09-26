@@ -556,6 +556,28 @@ export function resultadosDe(messages: Message[]): Map<string, Message> {
   return m;
 }
 
+/** Processamento do prompt deste envio: a 1ª chamada ao modelo depois da mensagem `i` do usuário. */
+export function processamentoDoPrompt(messages: Message[], i: number): NonNullable<Stats["prompt_proc"]> | null {
+  for (let j = i + 1; j < messages.length && messages[j].role !== "user"; j++) {
+    const s = messages[j].role === "assistant" ? (messages[j].meta?.stats as Stats | undefined) : undefined;
+    if (s) return s.prompt_proc ?? null;
+  }
+  return null;
+}
+
+/** Linha embaixo da mensagem enviada: quantos tokens do prompt o modelo processou, em quanto tempo e a que
+ *  velocidade (o que veio do cache não conta: não foi processado de novo). */
+export function PromptRow({ p }: { p: NonNullable<Stats["prompt_proc"]> }) {
+  const titulo = p.aproximado ? "Aproximado: tempo até o 1º token, com fila e rede do provedor" : "Medido pelo servidor (llama.cpp)";
+  return (
+    <div className="mt-1.5 flex items-center gap-x-4 font-mono text-[11.5px] text-faint [&_svg]:size-[13px]" title={titulo}>
+      <span className="inline-flex items-center gap-1.5"><Tokens className="size-3.5" /> {p.aproximado ? "~" : ""}{p.tokens.toLocaleString("pt-BR")} tokens</span>
+      <span className="inline-flex items-center gap-1.5"><Clock className="size-3.5" /> {p.seconds < 60 ? `${p.seconds.toFixed(1).replace(".", ",")} s` : `${Math.floor(p.seconds / 60)}m${Math.round(p.seconds % 60)}s`}</span>
+      {p.tps != null && <span className="inline-flex items-center gap-1.5"><Gauge className="size-3.5" /> {p.tps.toFixed(2).replace(".", ",")} tokens/s</span>}
+    </div>
+  );
+}
+
 export function StatsRow({ s, live, instances, instancesLabel, onInstances, phase }: { s: TurnStats; live?: boolean; instances?: number; instancesLabel?: string; onInstances?: () => void; phase?: string }) {
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11.5px] text-faint [&_svg]:size-[13px]">

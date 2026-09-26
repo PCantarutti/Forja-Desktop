@@ -1187,10 +1187,27 @@ def _stats(messages, tools, content, reasoning, done, t0, t_first, ctx_max, mode
     est_out = (len(content) + len(reasoning)) // 4
     out = done.get("completion_tokens") or est_out
     gen = end - (t_first or end)
+    ttft = round(t_first - t0, 2) if t_first else None
     return {"model": model, "prompt_tokens": done.get("prompt_tokens") or est_prompt, "tokens": out,
             "estimated": not done.get("completion_tokens"), "seconds": round(end - t0, 2),
             "tps": round(out / gen, 2) if gen > 0.05 else None, "ctx_max": ctx_max,
-            "cached": done.get("cached_tokens")}
+            "cached": done.get("cached_tokens"), "ttft": ttft, "prompt_proc": _processamento(done, ttft)}
+
+
+def _processamento(done: dict, ttft: float | None) -> dict | None:
+    """Quanto do prompt foi processado agora, em quanto tempo e a que velocidade. llama.cpp: os timings do
+    servidor (exatos). Outros: o prompt menos o que veio do cache, no tempo até o 1º token (aproximado:
+    inclui a rede e a fila do provedor)."""
+    tm = done.get("timings") or {}
+    if tm.get("prompt_n") is not None and tm.get("prompt_ms"):
+        seg = float(tm["prompt_ms"]) / 1000
+        n = int(tm["prompt_n"])
+        return {"tokens": n, "seconds": round(seg, 2),
+                "tps": round(float(tm.get("prompt_per_second") or (n / seg if seg else 0)), 2), "aproximado": False}
+    if done.get("prompt_tokens") and ttft:
+        n = max(0, int(done["prompt_tokens"]) - int(done.get("cached_tokens") or 0))
+        return {"tokens": n, "seconds": ttft, "tps": round(n / ttft, 2) if ttft > 0 else None, "aproximado": True}
+    return None
 
 
 def _save_partial(conv_id: int, content: str, reasoning: str) -> None:

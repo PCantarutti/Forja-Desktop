@@ -29,3 +29,12 @@ def test_registra_grava_e_resumo_agrega():
 def test_metrica_nunca_derruba_quem_chama(monkeypatch):
     monkeypatch.setattr(db, "session", lambda: (_ for _ in ()).throw(RuntimeError("banco fora")))
     metricas.registra("ferramenta", nome="x", status="ok")  # não levanta
+
+
+def test_processamento_do_prompt_medido_e_aproximado():
+    from app import agent
+    medido = agent._processamento({"timings": {"prompt_n": 8392, "prompt_ms": 2728.0, "prompt_per_second": 3076.25}}, 3.1)
+    assert medido == {"tokens": 8392, "seconds": 2.73, "tps": 3076.25, "aproximado": False}
+    aprox = agent._processamento({"prompt_tokens": 12000, "cached_tokens": 10000}, 2.0)
+    assert aprox == {"tokens": 2000, "seconds": 2.0, "tps": 1000.0, "aproximado": True}
+    assert agent._processamento({}, None) is None

@@ -183,6 +183,9 @@ export type Stats = {
   tps: number | null;
   ctx_max: number | null;
   cached?: number | null;  // tokens do prompt que vieram do cache do servidor (llama.cpp: cache_n)
+  ttft?: number | null;  // segundos até o 1º token (processar o prompt + fila/rede)
+  // Processamento do prompt desta chamada: tokens processados agora, em quanto tempo e a que velocidade
+  prompt_proc?: { tokens: number; seconds: number; tps: number | null; aproximado: boolean } | null;
   partes?: { sistema: number; ferramentas: number; mensagens: number };  // estimativa por tipo
 };
 

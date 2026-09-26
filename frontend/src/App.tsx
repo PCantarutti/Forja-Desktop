@@ -54,6 +54,8 @@ import {
   QuestionCard,
   askQuestions,
   StatsRow,
+  PromptRow,
+  processamentoDoPrompt,
   SubagentSteps,
   Thinking,
   ToolDraft,
@@ -1429,7 +1431,11 @@ export default function App() {
     // Painel de sessão como o do dsh: turnos, passos, tokens somados e acerto de cache do servidor.
     const comCache = all.filter((s) => s.cached != null);
     const promptComCache = comCache.reduce((n, s) => n + s.prompt_tokens, 0);
+    // Tempo até o 1º token do último turno: a 1ª chamada ao modelo depois da última mensagem do usuário.
+    const ultimoUser = messages.map((m) => m.role).lastIndexOf("user");
+    const primeira = messages.slice(ultimoUser + 1).find((m) => m.role === "assistant" && m.meta?.stats)?.meta?.stats as Stats | undefined;
     const sessao = {
+      ttft: primeira?.ttft ?? null,
       turnos: messages.filter((m) => m.role === "user").length,
       passos: all.length,
       tokens: all.reduce((n, s) => n + s.prompt_tokens + s.tokens, 0),
@@ -1609,6 +1615,10 @@ export default function App() {
                           <div className="max-w-[85%] rounded-[22px] bg-raised px-[18px] py-2.5 text-[14.5px] leading-[1.65] whitespace-pre-wrap">{m.content}</div>
                         )}
                         <Attachments list={m.meta?.attachments ?? []} />
+                        {(() => {
+                          const pp = processamentoDoPrompt(msgs, i);
+                          return pp && pp.tokens > 0 ? <PromptRow p={pp} /> : null;
+                        })()}
                         {!so && <div className="mt-1 flex opacity-0 transition group-hover:opacity-100">
                           <CopyButton text={m.content} />
                           <button
