@@ -61,8 +61,8 @@ def prepara_dados(dados: Path, modelos: dict[str, Path], extra: dict) -> None:
         "guardrail": "relaxado", "autoload": False}, indent=2), encoding="utf-8")
 
 
-def prepara_projeto(destino: Path) -> None:
-    shutil.copytree(BENCH / "projeto", destino)
+def prepara_projeto(destino: Path, nome: str = "projeto") -> None:
+    shutil.copytree(BENCH / nome, destino)
     for cmd in (["git", "init", "-q"], ["git", "config", "user.name", "Forja Bench"],
                 ["git", "config", "user.email", "bench@forja.local"], ["git", "add", "-A"],
                 ["git", "commit", "-qm", "inicio do bench"]):
@@ -138,7 +138,15 @@ def resumo_metricas(arq: Path, desde: float = 0) -> dict:
     perdido = [{"prompt_processado": (e.get("timings") or {}).get("prompt_n"),
                 "prompt_do_cache": (e.get("timings") or {}).get("cache_n"),
                 "prompt_ms": round((e.get("timings") or {}).get("prompt_ms") or 0)} for e in depois]
-    return {"por_papel": por_papel, "trocas_de_modelo": len(trocas),
+    # Tempo com dois ou mais Workers gerando ao mesmo tempo (tarefas diferentes): é o paralelismo de fato.
+    iv = sorted((e["t"] - float(e.get("segundos") or 0), e["t"]) for e in llm if e["papel"] == "worker")
+    marcas = sorted([(a, 1) for a, _ in iv] + [(b, -1) for _, b in iv])
+    juntos, ativos, desde = 0.0, 0, 0.0
+    for t, d in marcas:
+        if ativos >= 2:
+            juntos += t - desde
+        ativos, desde = ativos + d, t
+    return {"por_papel": por_papel, "trocas_de_modelo": len(trocas), "segundos_workers_juntos": round(juntos, 1),
             "segundos_em_troca": round(sum(e["segundos"] for e in trocas), 1),
             "trocas": [{"de": e["de"], "para": e["para"], "segundos": e["segundos"]} for e in trocas],
             "cache_perdido_do_maestro": {
@@ -176,6 +184,9 @@ def main() -> None:
     ap.add_argument("--effort", default="medio")
     ap.add_argument("--workers", type=int, default=1, help="Workers em paralelo (E7): abre N+1 slots e usa o perfil Balanced")
     ap.add_argument("--sandbox", action="store_true", help="comandos no sandbox isolado (E12), modo 'sempre'")
+    ap.add_argument("--projeto", default="projeto", help="pasta de partida em backend/tests/bench (ex.: projeto_pronto)")
+    ap.add_argument("--pedido", default="pedido.md", help="arquivo do pedido em backend/tests/bench")
+    ap.add_argument("--perfil", default="", help="perfil de hardware forçado (performance, balanced, low_vram)")
     ap.add_argument("--sem-mmap", action="store_true", help="carrega os modelos com mmap desligado (tudo copiado para a RAM/VRAM)")
     ap.add_argument("--instancia", default="", help="URL da API de uma instância aberta (ex.: http://127.0.0.1:8799)")
     ap.add_argument("--token", default="", help="x-forja-token da instância")
@@ -185,10 +196,10 @@ def main() -> None:
 
     modelos = {"maestro": acha_gguf(a.maestro), "worker": acha_gguf(a.worker)}
     extra = {"cache_type_k": a.kv, "cache_type_v": a.kv} if a.kv else {}
-    if a.workers > 1:
-        extra["parallel"] = a.workers + 1  # o slot 0 é do Maestro
-    if a.sem_mmap:
-        extra["mmap"] = False
+    if a.workers > 1 or a.projeto != "projeto":
+        extra["parallel"] = a.workers + 1  # o slot 0 é do Maestro; cada Worker no seu
+    if a.sem_mmap or a.instancia:
+        extra["mmap"] = not a.sem_mmap  # na instância o salvo pode ter ficado de outro bench: vai explícito
     dados = RAIZ.parent / ".devbench" / f"{a.rotulo}-{datetime.now():%Y%m%d-%H%M%S}"
     if a.instancia:
         dados.mkdir(parents=True)
@@ -205,7 +216,7 @@ def main() -> None:
         proc = sobe_backend(dados, token, metricas)
         api = httpx.Client(base_url=f"http://127.0.0.1:{PORTA_API}/api", headers={"x-forja-token": token}, timeout=120)
     projeto = dados / "ws" / "bench-tarefas"
-    prepara_projeto(projeto)
+    prepara_projeto(projeto, a.projeto)
     alias = {p: m.stem for p, m in modelos.items()}
     inicio = time.time()
     resultado: dict = {"rotulo": a.rotulo, "quando": datetime.now().isoformat(timespec="seconds"),
@@ -217,12 +228,12 @@ def main() -> None:
                                        "subagents": {"rapido": worker, "capaz": worker, "nuvem": worker},
                                        "max_workers": a.workers, "maestro_browser": False, "model_lifecycle": "persistent",
                                        "sandbox_isolado": "sempre" if a.sandbox else "desligado",
-                                       **({"perfil_hardware": "balanced"} if a.workers > 1 else {})})
+                                       **({"perfil_hardware": a.perfil or "balanced"} if a.workers > 1 or a.perfil else {})})
         r.raise_for_status()
         conv = api.post("/conversations", json={"kind": "maestro", "workspace": str(projeto)}).json()["id"]
         api.patch(f"/conversations/{conv}", json={"title": f"Bench: {a.rotulo}"})
         print(f"conversa {conv}", flush=True)
-        pedido = (BENCH / "pedido.md").read_text(encoding="utf-8")
+        pedido = (BENCH / a.pedido).read_text(encoding="utf-8")
         with api.stream("POST", f"/conversations/{conv}/run", json={
                 "content": pedido, "provider": "local", "model": alias["maestro"], "permission": "bypass",
                 "effort": a.effort}) as st:
