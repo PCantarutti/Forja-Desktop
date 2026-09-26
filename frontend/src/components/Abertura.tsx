@@ -5,6 +5,7 @@ import { PECAS } from "./aberturaPecas";
 // sobe devagar, segura e desce de uma vez; no impacto a cena treme, a bigorna afunda, sai clarão + onda
 // de choque e as faíscas explodem; o círculo fecha no sentido horário. Mesmo roteiro, dirigido pelo relógio.
 // Fica no viewBox do logo (o mesmo do LogoMark) com overflow visível: o martelo erguido passa do topo.
+const VEL = 1.25;  // 25% mais rápida que a do app mobile
 const DUR = 2.6, T0 = 1.44, PIV = [318, 213] as const, IMP = [652, 496] as const;
 
 const clamp = (x: number) => Math.max(0, Math.min(1, x));
@@ -34,7 +35,7 @@ export default function Abertura({ className, onFim }: { className?: string; onF
     let raf = 0;
     const t0 = performance.now();
     const passo = () => {
-      const s = (performance.now() - t0) / 1000;
+      const s = ((performance.now() - t0) / 1000) * VEL;
       setT(Math.min(s, DUR));
       if (s < DUR) raf = requestAnimationFrame(passo);
       else fim.current();

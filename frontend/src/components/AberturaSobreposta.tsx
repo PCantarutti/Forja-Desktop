@@ -32,20 +32,20 @@ export default function AberturaSobreposta({ voo, onFim }: { voo: Voo; onFim: ()
       voo.clone.querySelector<HTMLElement>("[data-logo]")?.style.setProperty("visibility", "hidden");
       voo.clone.style.margin = "0";
       t.replaceChildren(voo.clone);
-      t.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, easing: "ease-out", fill: "forwards" });
+      t.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 208, easing: "ease-out", fill: "forwards" });
     }
     // a logo desce ao centro da área e cresce um pouco
     const { logo: l, area: a } = voo;
     const dx = a.left + a.width / 2 - (l.left + l.width / 2), dy = a.top + a.height / 2 - (l.top + l.height / 2);
     logo.current?.animate([{ transform: "none" }, { transform: `translate(${dx}px, ${dy}px) scale(1.3)` }],
-      { duration: 520, easing: "cubic-bezier(.2, 0, 0, 1)", fill: "forwards" });
+      { duration: 416, easing: "cubic-bezier(.2, 0, 0, 1)", fill: "forwards" });
   }, [voo]);
 
   const acabou = () => {
     setTocando(false);
     const el = logo.current;
     if (!el) return onFim();
-    el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, easing: "ease-in", fill: "forwards" }).finished.then(onFim, onFim);
+    el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 240, easing: "ease-in", fill: "forwards" }).finished.then(onFim, onFim);
   };
 
   return (
