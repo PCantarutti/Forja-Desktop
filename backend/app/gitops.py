@@ -224,6 +224,10 @@ def worktree_tarefa(root: Path, code: str) -> Path:
     return wt
 
 
+# Gerado ao rodar o projeto, não trabalho do Worker: sem .gitignore no projeto, dois Workers rodando pytest
+# criavam o mesmo .pyc nos dois lados e o merge acusava conflito.
+GERADOS = ("**/__pycache__/**", "**/*.pyc", "**/.pytest_cache/**", "**/.mypy_cache/**", "**/.ruff_cache/**")
+
 _TRAZIDO: dict[str, dict[str, tuple[bytes | None, bytes | None]]] = {}  # worktree -> {arquivo: (antes, trazido)}
 
 
@@ -246,7 +250,7 @@ def traz_do_worktree(root: Path, wt: Path, da_forja: set[str] | frozenset = froz
     principal (que pode já ter o que outra tarefa em paralelo trouxe), "deles" = o worktree. Devolve
     (arquivos, conflito); com conflito nada é escrito. `da_forja`: arquivos sem commit que vieram de outra
     tarefa do Forja; sem commit por qualquer outro motivo (o usuário) recusa em vez de misturar."""
-    _ok(wt, "git add -A", 60)
+    _ok(wt, "git add -A -- . " + " ".join(native.quote(f":(exclude,glob){g}") for g in GERADOS), 60)
     if _run(wt, "git diff --cached --quiet", 30)[0] == 0:
         return [], ""
     _ok(wt, f"git {_ID} commit -q -m tarefa", 120)

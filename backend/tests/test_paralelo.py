@@ -156,3 +156,16 @@ def test_trava_por_arquivo_serializa_escritas(tmp_path, monkeypatch):
 
     asyncio.run(cena())
     assert ordem[0][0] == "entra" and ordem[1][0] == "sai"   # a segunda só entra depois de a primeira sair
+
+
+def test_arquivo_gerado_ao_rodar_nao_vira_conflito(repo):
+    """Dois Workers rodando pytest criam o mesmo .pyc nos dois lados: é lixo, não conflito."""
+    root, _ = repo
+    wt = gitops.worktree_tarefa(root, "TASK-009")
+    for lado in (root, wt):
+        (lado / "pkg" / "__pycache__").mkdir(parents=True)
+        (lado / "pkg" / "__pycache__" / "m.cpython-313.pyc").write_bytes(lado.name.encode())
+    (wt / "test_novo.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    arquivos, conflito = gitops.traz_do_worktree(root, wt)
+    gitops.remove_worktree_tarefa(root, "TASK-009")
+    assert conflito == "" and arquivos == ["test_novo.py"]
