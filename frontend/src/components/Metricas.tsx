@@ -15,6 +15,14 @@ type Resumo = {
   varredura_ia: Record<string, { aceitos: number; rejeitados: number }>;
 };
 
+// Os nomes internos da política de execução, em português de tela.
+const PAPEL: Record<string, string> = { principal: "conversa", worker: "Worker", explorador: "explorador", revisor: "revisão",
+  visual: "revisão visual", lateral: "título e resumo", compactar: "compactação", juiz: "juiz do raciocínio", varredura: "varredura do board" };
+const CAMINHO: Record<string, string> = { externo: "no provedor", "mesmo-slot": "no modelo carregado", "outro-slot": "em paralelo, no mesmo modelo",
+  "mesmo-slot-sequencial": "em fila, no mesmo modelo", "modelo-do-principal": "no modelo da conversa (o pedido não estava carregado)",
+  "trocar-modelo": "trocando de modelo", nuvem: "na nuvem", pular: "pulada (sem modelo que caiba)" };
+const rota = (k: string) => { const [p, c] = k.split(" → "); return `${PAPEL[p] ?? p}: ${CAMINHO[c] ?? c}`; };
+
 const pct = (v: number | null | undefined) => (v == null ? "—" : `${String(v).replace(".", ",")}%`);
 const num = (v: number) => v.toLocaleString("pt-BR");
 
@@ -77,21 +85,21 @@ export default function Metricas({ onError }: { onError: (e: string) => void }) 
       </section>
 
       <section className="grid grid-cols-2 gap-2.5 md:grid-cols-3">
-        <Cartao titulo="Cache do principal" valor={pct(r.cache.hit_pct)} nota={`${num(r.cache.respostas)} respostas medidas (IA local)`} />
+        <Cartao titulo="Cache da conversa" valor={pct(r.cache.hit_pct)} nota={`${num(r.cache.respostas)} respostas medidas (IA local)`} />
         <Cartao titulo="Tokens reprocessados" valor={num(r.cache.reprocessados)} />
-        <Cartao titulo="Cache derrubado por auxiliar" valor={String(r.cache.derrubado_por_auxiliar)}
-                nota={r.cache.auxiliares.length ? r.cache.auxiliares.map(([p, n]) => `${p} ×${n}`).join(", ") : "nenhuma chamada auxiliar derrubou"} />
+        <Cartao titulo="Cache perdido por outra chamada" valor={String(r.cache.derrubado_por_auxiliar)}
+                nota={r.cache.auxiliares.length ? r.cache.auxiliares.map(([p, n]) => `${PAPEL[p] ?? p} ×${n}`).join(", ") : "nenhuma outra chamada derrubou"} />
       </section>
       {r.cache.derrubado_por_auxiliar > 0 && (
         <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-100">
-          Uma chamada auxiliar rodou antes de uma resposta que reprocessou mais de 2 mil tokens: o cache do principal
-          caiu. Com um slot só (-np 1), aumentar os slots do servidor evita isso.
+          Uma chamada paralela (título, revisão, varredura...) usou o modelo antes de uma resposta que reprocessou mais de 2 mil
+          tokens: o cache da conversa caiu. Com o servidor num slot só (previsões simultâneas = 1), mais slots evitam isso.
         </p>
       )}
 
       <div className="grid gap-5 md:grid-cols-2">
-        <Lista titulo="Caminhos da como_rodar" vazio="Nenhuma decisão registrada no período."
-               itens={r.rotas.map(([k, v]) => [k, String(v)])} />
+        <Lista titulo="Onde as chamadas rodaram" vazio="Nenhuma decisão registrada no período."
+               itens={r.rotas.map(([k, v]) => [rota(k), String(v)])} />
         <Lista titulo="Ferramentas que mais falham" vazio="Nenhuma falha no período."
                itens={r.ferramentas_falham.map((f) => [f.nome, `${f.falhas}/${f.total} (${pct(f.pct)})`])} />
       </div>

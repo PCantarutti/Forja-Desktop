@@ -52,7 +52,7 @@ def suportado(path: str, params: dict) -> tuple[bool, str]:
     tipo = tipo_de_cache(path)
     if tipo == "hibrido":
         return False, ("modelo híbrido (camadas recorrentes): o llama.cpp não restaura o estado recorrente de um "
-                       "slot salvo, então restaurar custaria o mesmo que reprocessar (medido na E0)")
+                       "slot salvo, então restaurar custaria o mesmo que reprocessar")
     if tipo == "swa" and not params.get("swa_full"):
         return False, ("modelo com janela deslizante: só restaura com 'Guardar a janela inteira' (--swa-full) "
                        "ligado, que usa mais VRAM para o cache")

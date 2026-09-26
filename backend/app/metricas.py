@@ -46,7 +46,9 @@ def _logger() -> logging.Logger | None:
 
 
 def registra(tipo: str, **dados) -> None:
-    if tipo == "rota" and dados.get("papel") not in ("principal",):
+    # Só conta o que pode ter ocupado o slot da conversa; o juiz só roda com slot livre (senão é pulado).
+    if tipo == "rota" and dados.get("papel") not in ("principal", "juiz") and dados.get("caminho") in (
+            "mesmo-slot-sequencial", "trocar-modelo", "modelo-do-principal"):
         _AUX.update(papel=dados.get("papel"), caminho=dados.get("caminho"))
     if tipo == "llm" and dados.get("papel") in PRINCIPAIS:
         tm = dados.get("timings") or {}

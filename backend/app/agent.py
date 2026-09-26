@@ -1779,7 +1779,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             nivel = placar.escala() if autonomo.opcoes()["recuperacao"] else 2
             if nivel == 3:
                 forcar_compactar = True
-                aviso_loop += (" O histórico deste loop foi resumido (nível 3, contexto limpo): siga a partir do resumo "
+                aviso_loop += (" O histórico deste loop foi resumido: siga a partir do resumo "
                                "sem repetir o que já não funcionou.")
             elif nivel == 4:
                 texto4, nivel = _recuo(conv_id, run, placar, motivo_loop, maestro_mode)
@@ -1792,13 +1792,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                 stop, aviso_loop = True, ""
             else:
                 o_que = {2: "O modelo recebeu uma intervenção e a chamada que girava foi bloqueada",
-                         3: "O histórico do loop foi resumido (nível 3)",
-                         4: "Recuo ao último ponto bom (nível 4)"}[nivel]
+                         3: "O histórico do loop foi resumido",
+                         4: "Os arquivos voltaram ao último ponto bom"}[nivel]
                 for ev in (_alerta(run, conv_id, f"Recuperação de loop: {motivo_loop}. {o_que}.")
                            if maestro_mode else [_event(conv_id, "warning", f"Recuperação de loop: {motivo_loop}. {o_que}.")]):
                     yield ev
                 if nivel >= autonomo.opcoes()["notificar_nivel"]:
-                    autonomo.avisa_celular(f"Forja: recuperação nível {nivel}", motivo_loop[:160], conv_id)
+                    autonomo.avisa_celular({3: "Forja resumiu um loop", 4: "Forja recuou ao último ponto bom"}.get(
+                        nivel, "Forja interveio num loop"), motivo_loop[:160], conv_id)
         if aviso_loop:  # depois dos resultados: no meio deles quebraria a sequência de tool calls
             yield _event(conv_id, "nudge", aviso_loop, to_model=True)
         # Muitas leituras seguidas sem escrever nada: a janela enche de arquivo lido. Uma dica por turno,
@@ -1876,7 +1877,7 @@ def _recuo(conv_id: int, run: Run, placar, motivo: str, maestro_mode: bool) -> t
         taskdb.set_status(code, "needs_human", conv_id, f"Recuperação de loop: {motivo}"[:500])
         if not (prox := taskdb.proxima_pronta(conv_id)):
             return "", 5
-        return (f"Recuo (nível 4): {code} travou ({motivo}) e virou needs_human, com o diagnóstico. NÃO insista nela: "
+        return (f"Recuo: {code} travou ({motivo}) e virou needs_human, com o diagnóstico. NÃO insista nela: "
                 f"siga com a próxima independente, run_task sem code (a próxima pronta é {prox})."), 4
     root = workspace.root()
 
@@ -1897,7 +1898,7 @@ def _recuo(conv_id: int, run: Run, placar, motivo: str, maestro_mode: bool) -> t
     voltaram = placar.recua(root, original)
     if not voltaram:
         return "", 5
-    return (f"Recuo (nível 4): {', '.join(voltaram[:8])} voltaram ao último ponto bom ({ponto}). Tente UMA vez com uma "
+    return (f"Recuo: {', '.join(voltaram[:8])} voltaram ao último ponto bom ({ponto}). Tente UMA vez com uma "
             "abordagem diferente; se travar de novo, o trabalho estaciona."), 4
 
 

@@ -26,7 +26,6 @@ VALORES = {
                  "um_modelo_so": True, "max_workers": 1, "sessoes_paralelo": 1},
 }
 GOVERNADOS = ("cache_disco_gb", "descarregar_ocioso_min")  # configurações que o perfil preenche quando não mexidas
-BENCH_MESMO_MODELO = round(112.7 / 55.6, 1)  # E0: ~2× mais rápido com um modelo só para Maestro e Worker
 
 _INTEGRADA = re.compile(r"(Radeon\(TM\) Graphics|Radeon Graphics|UHD Graphics|Iris|Intel\(R\) Graphics)\s*$", re.I)
 _VIGENTE: dict = {}   # {"perfil", "motivo"}: reavaliado ao carregar/trocar o modelo ou mudar uma GPU

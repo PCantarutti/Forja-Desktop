@@ -780,7 +780,7 @@ async def perfil_hardware():
     return {**v, "rotulo": perfis.rotulo(), "valores": perfis.valores(), "nomes": perfis.NOMES,
             "alterados": sorted(set(perfis.GOVERNADOS) & settings.alterados()),
             "workers": modelctl.workers_possiveis(int(getattr(config, "MAX_WORKERS", 1))),
-        "recomendados": rec, "ganho_um_modelo": perfis.BENCH_MESMO_MODELO}
+        "recomendados": rec}
 
 
 class AutonomoBody(BaseModel):

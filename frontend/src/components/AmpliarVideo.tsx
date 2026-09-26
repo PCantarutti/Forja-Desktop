@@ -191,7 +191,7 @@ export function PainelAmpliar(props: {
       {tipo === "seedvr2" && !semComfy && (
         <p className="text-faint">
           {props.imagem ? "Difusão: reconstrói textura e detalhe, mas usa ~7 GB de VRAM e leva de 1 a alguns minutos (a 1ª vez, mais)."
-            : `Difusão: reconstrói textura e detalhe quadro a quadro${props.quadros ? ` (${props.quadros} quadros)` : ""}. O mais pesado: ~7 GB de VRAM e alguns segundos por quadro (na Arc B580, ~3 s em 640×360).`}
+            : `Difusão: reconstrói textura e detalhe quadro a quadro${props.quadros ? ` (${props.quadros} quadros)` : ""}. O mais pesado: ~7 GB de VRAM e alguns segundos por quadro.`}
         </p>
       )}
       {redesenha && !semComfy && (

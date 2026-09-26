@@ -208,6 +208,6 @@ def test_loop_sem_saida_sobe_a_escada_e_estaciona_sem_silencio(monkeypatch, tmp_
 
     eventos = _roda(monkeypatch, tmp_path, fake)
     textos = [e["message"]["content"] for e in eventos if e.get("type") == "event"]
-    assert any("nível 3" in t for t in textos)
+    assert any("histórico do loop foi resumido" in t for t in textos)
     assert any("Trabalho estacionado" in t for t in textos) and "Forja estacionou" in avisos
     assert n["c"] < 150   # parou pela escada, não pelo fim do roteiro

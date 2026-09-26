@@ -174,7 +174,7 @@ function Autonomo({ v, onChange }: { v: NonNullable<AppSettings["autonomo"]>; on
       <div className="space-y-2 text-sm">
         <label className="flex items-center gap-2 text-fg-2">
           <input type="checkbox" checked={o.recuperacao} onChange={(e) => muda({ recuperacao: e.target.checked })} />
-          Recuperação automática de loop (níveis 3 a 5)
+          Recuperação automática de loop (resumir o loop, recuar ao último ponto bom e, se nada der certo, parar com relatório)
         </label>
         <div className="flex flex-wrap items-center gap-2 text-muted">
           Orçamento:
@@ -191,9 +191,9 @@ function Autonomo({ v, onChange }: { v: NonNullable<AppSettings["autonomo"]>; on
           </select>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-muted">
-          Avisar no celular a partir do nível
+          Avisar no celular a partir de
           <select className={`${input} w-auto`} value={o.notificar_nivel} onChange={(e) => muda({ notificar_nivel: Number(e.target.value) })}>
-            {[2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+            {([[2, "intervenção"], [3, "resumo do loop"], [4, "recuo"], [5, "parada"]] as const).map(([n, nome]) => <option key={n} value={n}>{nome}</option>)}
           </select>
           (e sempre no fim)
         </div>
@@ -2467,7 +2467,7 @@ function CacheDisco({ onError }: { onError: (e: string) => void }) {
 
 type Perfil = { perfil: string; motivo: string; auto: boolean; rotulo: string; nomes: Record<string, string>;
   valores: { kv: string; cache_disco_gb: number; descarregar_ocioso_min: number; fator_tetos: number; um_modelo_so: boolean };
-  alterados: string[]; recomendados: { nome: string; path: string; gb: number }[]; ganho_um_modelo: number };
+  alterados: string[]; recomendados: { nome: string; path: string; gb: number }[];  };
 
 /** E4: perfil de hardware — o Forja escolhe sozinho pelo que cabe na máquina; o que o usuário mudou à mão vale
  * por cima (marcado "alterado", com "voltar ao perfil"). */
@@ -2508,8 +2508,8 @@ function PerfilHardware({ onError }: { onError: (e: string) => void }) {
         )}
         {p.recomendados.length > 0 && (
           <div className="rounded-lg border border-line p-2.5 text-xs text-muted">
-            Se o modelo principal não cabe inteiro na GPU, estes, já baixados, cabem e ficam bem mais rápidos
-            (na E0, um modelo de 9B inteiro na GPU gerou ~2× mais tokens por segundo):
+            Se o modelo principal não cabe inteiro na GPU, estes, já baixados, cabem e costumam gerar bem mais rápido
+            (nada roda na CPU):
             <ul className="mt-1 space-y-1">
               {p.recomendados.map((r) => (
                 <li key={r.path} className="flex items-center justify-between gap-2">
@@ -2554,18 +2554,18 @@ function AvisoWorkers({ n }: { n: number }) {
   );
 }
 
-/** E4: no Low VRAM, Maestro e Workers em modelos diferentes custam caro (E0: ~2× mais lento). Avisa e oferece
+/** E4: no Low VRAM, Maestro e Workers em modelos diferentes custam caro (cada troca recarrega e reprocessa). Avisa e oferece
  * aplicar o modelo da Maestro nos Workers — nunca troca sozinho. */
 function UmModeloSo({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
-  const [p, setP] = useState<{ perfil: string; ganho_um_modelo: number } | null>(null);
+  const [p, setP] = useState<{ perfil: string } | null>(null);
   useEffect(() => { api.get<any>("/perfil").then(setP).catch(() => {}); }, []);
   const m = s.maestro_model;
   const diferentes = !!m?.model && (["rapido", "capaz"] as const).some((k) => s.subagents[k]?.model && s.subagents[k].model !== m.model);
   if (!p || p.perfil !== "low_vram" || !diferentes) return null;
   return (
     <div className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-100">
-      Neste PC (Low VRAM), usar o mesmo modelo para a Maestro e os Workers foi ~{String(p.ganho_um_modelo).replace(".", ",")}×
-      mais rápido no bench: trocar de modelo a cada tarefa faz a Maestro reprocessar o contexto inteiro na volta.
+      Com o perfil Low VRAM, usar o mesmo modelo para a Maestro e os Workers costuma ser bem mais rápido: trocar de
+      modelo a cada tarefa faz carregar o outro modelo e a Maestro reprocessar o contexto inteiro na volta.
       <button className={`${btn} ml-2`}
               onClick={() => set("subagents", { ...s.subagents, rapido: { ...m }, capaz: { ...m } })}>
         Usar {m.model} nos Workers
