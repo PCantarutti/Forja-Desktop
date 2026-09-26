@@ -72,17 +72,34 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Aplicativo", "Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular"] as const;
+const BASE_TABS = ["Aplicativo", "Tema", "Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular"] as const;
 type Tab = (typeof BASE_TABS)[number];
-// Navegação agrupada do redesign. "Aplicativo" sempre existe (tema e fonte); janela, bandeja e início
-// com o Windows só aparecem dentro do Electron.
+// Navegação agrupada do redesign. "Tema" (cores e fonte) vale no desktop e na web; janela, bandeja e
+// início com o Windows (em "Aplicativo") só aparecem dentro do Electron.
 const GRUPOS: { titulo: string; tabs: Tab[] }[] = [
-  { titulo: "App", tabs: ["Aplicativo", "Geral", "Pastas"] },
+  { titulo: "App", tabs: ["Aplicativo", "Tema", "Geral", "Pastas"] },
   { titulo: "Máquina", tabs: ["Runtime", "Hardware"] },
   { titulo: "Modelos", tabs: ["Provedores", "Subagentes", "Maestro"] },
   { titulo: "Agente", tabs: ["Ferramentas", "Skills", "Permissões", "MCP", "Memória"] },
   { titulo: "Integrações", tabs: ["Celular"] },
 ];
+
+// O subtítulo ao lado do nome da aba, no cabeçalho (como no design).
+const SUBTITULO: Partial<Record<Tab, string>> = {
+  Aplicativo: "Janela, bandeja, inicialização e atualização",
+  Tema: "Cores, destaque e fonte",
+  Geral: "Prompt, limites e navegador",
+  Pastas: "Onde as coisas ficam",
+  Runtime: "llama.cpp e stable-diffusion.cpp",
+  Hardware: "O que o motor atual enxerga",
+  Provedores: "Onde os modelos rodam",
+  Subagentes: "delegate_task: o agente escolhe o nível",
+  Maestro: "Planeja, despacha e valida",
+  Ferramentas: "O que está desligado não vai no tools nem no prompt",
+  Skills: "Comandos / seus, do projeto e do Forja",
+  MCP: "mcp.json na pasta de dados",
+  Celular: "App Forja Mobile",
+};
 
 const input = "w-full rounded-[9px] border border-line bg-surface px-3 py-1.5 text-[13px] text-fg focus:border-focus focus:outline-none";
 const btn = "rounded-[9px] border border-line px-3 py-1.5 text-[12.5px] text-fg hover:bg-raised";
@@ -234,7 +251,8 @@ export default function Settings(props: {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="flex items-center gap-3 border-b border-line px-6 py-3.5">
-            <h2 className="flex-1 text-[17px] font-semibold text-fg">{tab}</h2>
+            <h2 className="text-[17px] font-semibold text-fg">{tab}</h2>
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-faint">{SUBTITULO[tab]}</span>
             {error && <span className="truncate text-sm text-err">{error}</span>}
             {descartar && (
               <span className="inline-flex items-center gap-1.5 text-xs">
@@ -252,6 +270,8 @@ export default function Settings(props: {
           <div className="flex-1 overflow-y-auto px-6 py-2">
             {tab === "Aplicativo" ? (
               <AppTab />
+            ) : tab === "Tema" ? (
+              <div className="max-w-3xl"><Aparencia /></div>
             ) : tab === "Skills" ? (
               <SkillsTab onError={setError} />
             ) : tab === "Pastas" ? (
@@ -364,7 +384,7 @@ export default function Settings(props: {
             <button onClick={props.onClose} className={btn}>
               {Object.keys(dirty).length ? "Cancelar" : "Fechar"}
             </button>
-            {!["MCP", "Memória", "Aplicativo", "Pastas", "Runtime", "Hardware", "Skills"].includes(tab) && (
+            {!["MCP", "Memória", "Aplicativo", "Tema", "Pastas", "Runtime", "Hardware", "Skills"].includes(tab) && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
                 Salvar
               </button>
@@ -431,6 +451,33 @@ function CelularTab(props: { onError: (e: string) => void }) {
 }
 
 // ------------------------------------------------------------------ aplicativo (Electron)
+
+/** Interruptor do design (34×20): ligado na cor de destaque. */
+function Interruptor({ ligado, onChange, disabled, rotulo }: { ligado: boolean; onChange: (v: boolean) => void; disabled?: boolean; rotulo?: string }) {
+  return (
+    <button type="button" role="switch" aria-checked={ligado} disabled={disabled} onClick={() => onChange(!ligado)}
+            className={`inline-flex items-center gap-2.5 text-[13px] text-fg-2 ${disabled ? "cursor-default opacity-45" : ""}`}>
+      <span className={`relative h-5 w-[34px] shrink-0 rounded-full transition-colors ${ligado ? "bg-accent" : "bg-line-strong"}`}>
+        <span className={`absolute top-[3px] size-3.5 rounded-full bg-fg transition-[left] ${ligado ? "left-[17px]" : "left-[3px]"}`} />
+      </span>
+      {rotulo ?? (ligado ? "Ligado" : "Desligado")}
+    </button>
+  );
+}
+
+/** Seletor segmentado do design: uma opção ativa, fundo mais claro. */
+function Segmentado<T extends string | boolean>({ opcoes, valor, onChange }: { opcoes: { v: T; label: string }[]; valor: T; onChange: (v: T) => void }) {
+  return (
+    <div className="inline-flex rounded-[9px] border border-line bg-surface p-0.5 text-[12.5px]">
+      {opcoes.map((o) => (
+        <button key={String(o.v)} type="button" onClick={() => onChange(o.v)}
+                className={`rounded-[7px] px-3 py-[5px] ${valor === o.v ? "bg-line text-fg" : "text-muted hover:text-fg"}`}>
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function Toggle({ checked, onChange, label, hint, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; hint?: string; disabled?: boolean }) {
   return (
@@ -864,7 +911,7 @@ const ATUALIZACAO: Record<UpdateState["state"], string> = {
  * Atualização pelo GitHub Releases. Nada baixa nem instala sem clique: o instalador é grande, e
  * quem decide gastar a internet é quem está pagando por ela.
  */
-function Atualizacao() {
+function Atualizacao({ versao, dev }: { versao: string; dev: boolean }) {
   const bridge = window.forja?.update;
   const [u, setU] = useState<UpdateState | null>(null);
 
@@ -876,40 +923,32 @@ function Atualizacao() {
     return () => clearInterval(t);
   }, [bridge]);
 
-  if (!bridge || !u) return null;
-  const ocupado = u.state === "checking" || u.state === "downloading";
-
+  const ocupado = !!u && (u.state === "checking" || u.state === "downloading");
+  const nova = !!u && (u.state === "available" || u.state === "ready");
+  const ponto = !u ? "bg-faint" : u.error ? "bg-err" : nova ? "bg-accent" : "bg-ok";
+  const estado = !u
+    ? dev ? "desenvolvimento" : ""
+    : `${ATUALIZACAO[u.state]}${u.version && nova ? ` Versão ${u.version}.` : ""}${u.state === "downloading" ? ` ${u.percent}%` : ""}`;
   return (
-    <div className="space-y-2">
-      <div className="text-sm text-fg">Atualização</div>
-      <div className="space-y-2 rounded-xl border border-line bg-surface p-3">
-        <div className="text-xs text-muted">
-          {ATUALIZACAO[u.state]}
-          {u.version && (u.state === "available" || u.state === "ready") ? ` Versão ${u.version}.` : ""}
-          {u.state === "downloading" ? ` ${u.percent}%` : ""}
-        </div>
-        {u.error && <div className="text-xs text-red-300">{u.error}</div>}
-        {/* O que muda na versão nova, como foi escrito no release-notes.md e guardado no latest.yml. */}
-        {u.notes && (u.state === "available" || u.state === "ready") && (
-          <div className="whitespace-pre-wrap rounded-lg border border-line bg-raised p-2 text-xs text-muted">{u.notes.trim()}</div>
+    <Field div label="Versão" hint="O app pergunta ao GitHub na abertura; nada baixa sem você clicar.">
+      <div className="flex items-center gap-2.5 rounded-[10px] border border-line bg-surface px-3 py-2.5">
+        <span className={`size-[7px] shrink-0 rounded-full ${ponto}`} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="text-[13px] text-fg">Forja {versao}{dev ? " (desenvolvimento)" : ""}</span>
+          {estado && <span className="truncate font-mono text-[11.5px] text-faint" title={estado}>{estado}</span>}
+        </span>
+        {bridge && u && (
+          u.state === "available" ? <button className={btnPrimary} onClick={() => bridge.download().then(setU)}>Baixar</button>
+          : u.state === "ready" ? <button className={btnPrimary} onClick={() => bridge.install()}>Reiniciar e instalar</button>
+          : <button className={btn} disabled={ocupado} onClick={() => bridge.check().then(setU)}>Procurar atualizações</button>
         )}
-        <div className="flex flex-wrap gap-2">
-          <button className={btn} disabled={ocupado} onClick={() => bridge.check().then(setU)}>
-            Procurar atualizações
-          </button>
-          {u.state === "available" && (
-            <button className={btnPrimary} onClick={() => bridge.download().then(setU)}>
-              Baixar
-            </button>
-          )}
-          {u.state === "ready" && (
-            <button className={btnPrimary} onClick={() => bridge.install()}>
-              Reiniciar e instalar
-            </button>
-          )}
-        </div>
       </div>
-    </div>
+      {u?.error && <div className="mt-1.5 text-xs text-err">{u.error}</div>}
+      {/* O que muda na versão nova, como foi escrito no release-notes.md e guardado no latest.yml. */}
+      {u?.notes && nova && (
+        <div className="mt-1.5 whitespace-pre-wrap rounded-[10px] border border-line bg-surface p-2.5 text-xs text-muted">{u.notes.trim()}</div>
+      )}
+    </Field>
   );
 }
 
@@ -946,10 +985,6 @@ function Aparencia() {
           {a.destaque && <button type="button" className={btn} onClick={() => muda({ destaque: null })}>Usar a do tema</button>}
         </div>
       </Field>
-      <Field label="Iniciais" hint="O círculo no pé do trilho de seções. Até 3 letras.">
-        <input className={`${input} w-24 font-mono uppercase`} maxLength={3} value={a.iniciais}
-               onChange={(e) => muda({ iniciais: e.target.value.toUpperCase() })} />
-      </Field>
       <Field div label="Fonte" hint="Interface e código (números, caminhos, sementes).">
         <div className="grid gap-2">
           {FONTES.map((f) => (
@@ -965,9 +1000,24 @@ function Aparencia() {
   );
 }
 
+/** As iniciais do círculo no pé do trilho (ficam no localStorage, junto da aparência). */
+function Iniciais() {
+  const [a, setA] = useState(lerAparencia);
+  return (
+    <Field label="Iniciais" hint="O círculo no pé do trilho de seções. Até 3 letras.">
+      <input className={`${input} w-24! font-mono uppercase`} maxLength={3} value={a.iniciais}
+             onChange={(e) => {
+               const n = { ...a, iniciais: e.target.value.toUpperCase() };
+               setA(n);
+               salvarAparencia(n);
+             }} />
+    </Field>
+  );
+}
+
 function AppTab() {
   const bridge = window.forja?.desktop;
-  if (!bridge) return <div className="max-w-3xl"><Aparencia /></div>;
+  if (!bridge) return <div className="max-w-3xl"><Iniciais /></div>;
   return <AppTabDesktop bridge={bridge} />;
 }
 
@@ -978,134 +1028,62 @@ function AppTabDesktop({ bridge }: { bridge: NonNullable<NonNullable<typeof wind
     bridge.get().then(setD);
   }, [bridge]);
 
-  if (!d) return <div className="text-muted">Carregando…</div>;
+  if (!d) return <div className="py-3 text-muted">Carregando…</div>;
   const patch = (p: Parameters<typeof bridge.set>[0]) => bridge.set(p).then(setD);
+  const zoom = (z: "in" | "out" | "reset") => bridge.zoom(z).then((zoom) => setD({ ...d, zoom }));
+  const passo = "grid size-8 place-items-center text-muted hover:bg-raised hover:text-fg";
 
   return (
     <div className="max-w-3xl">
-      <Aparencia />
       <Field div label="Zoom da interface" hint="O mesmo que Ctrl + (+), Ctrl + (−) e Ctrl + 0 na janela, ou Ctrl + roda do mouse.">
         <div className="flex items-center gap-2">
-          <button className={btn} onClick={() => bridge.zoom("out").then((zoom) => setD({ ...d, zoom }))} title="Diminuir (Ctrl -)">
-            −
-          </button>
-          <span className="w-16 text-center font-mono text-sm text-fg">{Math.round(d.zoom * 100)}%</span>
-          <button className={btn} onClick={() => bridge.zoom("in").then((zoom) => setD({ ...d, zoom }))} title="Aumentar (Ctrl +)">
-            +
-          </button>
-          <button className={btn} onClick={() => bridge.zoom("reset").then((zoom) => setD({ ...d, zoom }))} title="Voltar para 100% (Ctrl 0)">
-            100%
-          </button>
+          <div className="inline-flex items-center overflow-hidden rounded-[9px] border border-line bg-surface">
+            <button className={passo} onClick={() => zoom("out")} title="Diminuir (Ctrl -)">−</button>
+            <span className="w-16 border-x border-line text-center font-mono text-[13px] leading-8 text-fg">{Math.round(d.zoom * 100)}%</span>
+            <button className={passo} onClick={() => zoom("in")} title="Aumentar (Ctrl +)">+</button>
+          </div>
+          {Math.round(d.zoom * 100) !== 100 && (
+            <button className="text-[12.5px] text-muted hover:text-fg" onClick={() => zoom("reset")} title="Voltar para 100% (Ctrl 0)">voltar a 100%</button>
+          )}
         </div>
       </Field>
 
-      <div className="space-y-2">
-        <div className="text-sm text-fg">Ao fechar a janela</div>
-        <div className="text-xs text-muted">O agente continua rodando enquanto o Forja estiver na bandeja.</div>
-        <div className="mt-1.5 grid gap-2">
-          {[
-            { v: false, label: "Fechar o Forja", hint: "O X encerra o app e o backend. Nada fica rodando." },
-            { v: true, label: "Minimizar para a bandeja", hint: "O X esconde a janela; o ícone ao lado do relógio reabre ou sai." },
-          ].map((o) => (
-            <label
-              key={String(o.v)}
-              className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 ${d.closeToTray === o.v ? "border-accent-line bg-accent-soft" : "border-line bg-surface hover:border-focus"}`}
-            >
-              <input type="radio" name="close" className="mt-0.5 size-4 accent-[var(--accent)]" checked={d.closeToTray === o.v} onChange={() => patch({ closeToTray: o.v })} />
-              <span className="min-w-0">
-                <span className="block text-sm text-fg">{o.label}</span>
-                <span className="mt-0.5 block text-xs text-muted">{o.hint}</span>
-              </span>
-            </label>
+      <Field div label="O X da janela" hint="Fechar de verdade ou minimizar para a bandeja. Na bandeja o agente continua rodando.">
+        <Segmentado opcoes={[{ v: false, label: "Fechar" }, { v: true, label: "Minimizar para a bandeja" }]}
+                    valor={d.closeToTray} onChange={(v) => patch({ closeToTray: v })} />
+      </Field>
+
+      <Field div label="Abrir junto com o Windows"
+             hint={d.packaged ? "E, se quiser, já direto na bandeja (precisa do X minimizar para a bandeja)." : "Só vale no app instalado; em desenvolvimento não mexe no registro."}>
+        <div className="flex flex-col items-start gap-2.5">
+          <Interruptor ligado={d.startWithWindows} disabled={!d.packaged} onChange={(v) => patch({ startWithWindows: v })} />
+          <Interruptor ligado={d.startMinimized} disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
+                       rotulo="Iniciar direto na bandeja, sem abrir a janela" onChange={(v) => patch({ startMinimized: v })} />
+        </div>
+      </Field>
+
+      <Field div label="Manter o PC acordado para o celular"
+             hint="Com o Forja aberto o Windows não entra em suspensão (a tela ainda apaga); desligado, só segura o sono enquanto um turno roda.">
+        <Interruptor ligado={d.manterAcordado} onChange={(v) => patch({ manterAcordado: v })} />
+      </Field>
+
+      <Iniciais />
+
+      <Atualizacao versao={d.version} dev={!d.packaged} />
+
+      <Field div label="Atalhos"
+             hint="O forja.db guarda conversas, provedores, chaves e configurações; cada conversa também é espelhada em Markdown (só leitura). Desinstalar não apaga nada disso.">
+        <div className="flex flex-wrap gap-1.5">
+          {([
+            ["data", "Pasta de dados", d.paths.data],
+            ["db", "Banco (forja.db)", d.paths.db],
+            ["md", "Conversas em Markdown", d.paths.md],
+            ["log", "Log", d.paths.log],
+          ] as const).map(([k, rotulo, caminho]) => (
+            <button key={k} className={btn} title={caminho} onClick={() => bridge.open(k)}>{rotulo}</button>
           ))}
         </div>
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-sm text-fg">Inicialização</div>
-        <div className="grid gap-2">
-          <Toggle
-            label="Abrir o Forja junto com o Windows"
-            hint={d.packaged ? undefined : "Só vale no app instalado; em desenvolvimento não mexe no registro."}
-            checked={d.startWithWindows}
-            disabled={!d.packaged}
-            onChange={(v) => patch({ startWithWindows: v })}
-          />
-          <Toggle
-            label="Iniciar direto na bandeja, sem abrir a janela"
-            hint="Precisa de abrir com o Windows e de fechar-para-bandeja ligados."
-            checked={d.startMinimized}
-            disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
-            onChange={(v) => patch({ startMinimized: v })}
-          />
-          <Toggle
-            label="Manter o PC acordado para o celular"
-            hint="Com o Forja aberto o Windows não entra em suspensão (a tela ainda apaga e pode ficar bloqueada), então o celular manda pedidos a qualquer hora. Desligado, ele só segura o sono enquanto um turno roda."
-            checked={d.manterAcordado}
-            onChange={(v) => patch({ manterAcordado: v })}
-          />
-        </div>
-      </div>
-
-      <Atualizacao />
-
-      <div className="space-y-2">
-        <div className="text-sm text-fg">Sobre</div>
-        <div className="space-y-2 rounded-xl border border-line bg-surface p-3 text-xs">
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Versão</span>
-            <span className="font-mono text-fg">
-              {d.version}
-              {d.packaged ? "" : " (desenvolvimento)"}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Dados</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.data}>
-              {d.paths.data}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Conversas</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.db}>
-              {d.paths.db}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Markdown</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.md}>
-              {d.paths.md}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <span className="w-24 shrink-0 text-muted">Log</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-fg" title={d.paths.log}>
-              {d.paths.log}
-            </span>
-          </div>
-          <div className="flex gap-2 pt-1">
-            <button className={btn} onClick={() => bridge.open("data")}>
-              Abrir a pasta de dados
-            </button>
-            <button className={btn} onClick={() => bridge.open("md")}>
-              Abrir as conversas em Markdown
-            </button>
-            <button className={btn} onClick={() => bridge.open("db")}>
-              Mostrar o banco
-            </button>
-            <button className={btn} onClick={() => bridge.open("log")}>
-              Mostrar o log
-            </button>
-          </div>
-        </div>
-        <p className="text-xs text-muted">
-          O banco <span className="font-mono">forja.db</span> guarda as conversas, provedores, chaves e configurações. Em
-          paralelo, cada conversa é espelhada em Markdown em <span className="font-mono">conversas\forja-code</span> (agente) e{" "}
-          <span className="font-mono">conversas\forja-chat</span> — arquivos soltos, prontos para copiar para outro PC, um backup
-          ou o git. O espelho é só de leitura: editar o .md não muda a conversa, e apagar a conversa no Forja apaga o .md junto.
-          Desinstalar o Forja não apaga nada disso.
-        </p>
-      </div>
+      </Field>
     </div>
   );
 }
