@@ -124,10 +124,8 @@ export function ModeEffortMenu(props: {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
       const n = Number(e.key);
-      if (temModo && n >= 1 && n <= modos.length) {
-        props.onPermission!(modos[n - 1].id);
-        setOpen(false);
-      }
+      // Com as duas colunas o menu fica aberto: dá para acertar modo e esforço de uma vez.
+      if (temModo && n >= 1 && n <= modos.length) props.onPermission!(modos[n - 1].id);
     };
     document.addEventListener("mousedown", close);
     document.addEventListener("keydown", key);
@@ -161,7 +159,7 @@ export function ModeEffortMenu(props: {
               <div className="min-w-0 flex-1">
                 <div className={rotulo}>Modo</div>
                 {modos.map((m, i) => (
-                  <button key={m.id} onClick={() => { props.onPermission!(m.id); setOpen(false); }} className={item(m.id === props.permission)}>
+                  <button key={m.id} onClick={() => props.onPermission!(m.id)} className={item(m.id === props.permission)}>
                     <span className={`mt-[5px] size-1.5 shrink-0 rounded-full ${COR_MODO[m.id]}`} />
                     <span className="min-w-0 flex-1">
                       <span className="block text-[13px]">{m.label}</span>
@@ -177,7 +175,7 @@ export function ModeEffortMenu(props: {
               {esforcos.map((e) => {
                 const on = e.id === effort;
                 return (
-                  <button key={e.id} onClick={() => props.onEffort(e.id)} className={`${item(on)} items-center`}>
+                  <button key={e.id} onClick={() => { props.onEffort(e.id); if (!temModo) setOpen(false); }} className={`${item(on)} items-center`}>
                     <span className="flex h-[15px] shrink-0 items-end gap-[2px]" aria-hidden>
                       {[6, 9, 12, 15].map((h, k) => (
                         <span key={h} style={{ height: h }}

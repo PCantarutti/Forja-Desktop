@@ -17,6 +17,7 @@
   --ease: cubic-bezier(.2, 0, 0, 1);
 }
 :root[data-font="sistema"] { --font-ui: "Segoe UI", system-ui, sans-serif; --font-code: "Cascadia Code", Consolas, ui-monospace, monospace; }
+:root[data-font="plex"] { --font-ui: "IBM Plex Sans Variable", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; --font-code: "IBM Plex Mono", Consolas, ui-monospace, monospace; }
 
 @theme {
   --font-sans: var(--font-ui);
