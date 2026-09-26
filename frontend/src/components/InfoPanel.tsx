@@ -62,7 +62,16 @@ function Tools({ list, info }: { list: { name: string; mutating: boolean; blocke
     const server = t.name.split("__")[1];
     groups.set(server, [...(groups.get(server) ?? []), t]);
   }
+  // Legenda só com os tipos que aparecem nesta lista.
+  const tem = {
+    leitura: builtin.some((t) => !t.blocked && !t.always_ask && !t.mutating),
+    escrita: builtin.some((t) => !t.blocked && !t.always_ask && t.mutating),
+    pergunta: full.some((t) => !t.blocked && t.always_ask),
+    mcp: groups.size > 0,
+    bloqueada: full.some((t) => t.blocked),
+  };
   return (
+    <>
     <div className={`flex flex-wrap gap-1 text-[10.5px] ${MONO}`}>
       {builtin.map((t) => <Chip key={t.name} t={t} />)}
       {[...groups].map(([server, tools]) => (
@@ -74,6 +83,14 @@ function Tools({ list, info }: { list: { name: string; mutating: boolean; blocke
         </span>
       ))}
     </div>
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-faint">
+      {tem.leitura && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-fg-2" /> leitura: só consulta</span>}
+      {tem.escrita && <span className="inline-flex items-center gap-1.5"><span className="size-1 rounded-full bg-fg-2 opacity-60" /> escrita: altera arquivos ou o sistema</span>}
+      {tem.pergunta && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-warn" /> sempre pede sua aprovação</span>}
+      {tem.mcp && <span className="inline-flex items-center gap-1.5"><span className="size-2 rounded-[2px] bg-agent" /> de servidor MCP (clique para abrir)</span>}
+      {tem.bloqueada && <span className="inline-flex items-center gap-1.5"><span className="line-through">abc</span> bloqueada: o modelo não tem a capacidade</span>}
+    </div>
+    </>
   );
 }
 
