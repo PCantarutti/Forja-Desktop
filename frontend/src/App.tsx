@@ -481,7 +481,7 @@ export default function App() {
     // Esc sem diálogo aberto e fora de campo de texto: fecha o último tile (o Esc do composer limpa o texto).
     if (e.key === "Escape" && !e.defaultPrevented && !document.querySelector('[role="dialog"]')) {
       const alvo = e.target as HTMLElement | null;
-      if (alvo?.closest("input, textarea, select, [contenteditable=true]")) return;
+      if (alvo?.closest?.("input, textarea, select, [contenteditable=true]")) return;
       const ultimo = soltos(gradeTela).at(-1);
       if (ultimo) setRight((r) => fecharTile(r, ultimo));
       return;
