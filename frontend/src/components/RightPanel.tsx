@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, Clipboard, Cpu, Expandir, GitBranch, Globe, Info, Recolher, Terminal, X } from "./icons";
-import { MAX_TILES, fechar, mover, type Grade, type Lado } from "./tiles";
+import { MAX_TILES, abertos, fechar, mover, type Grade, type Lado } from "./tiles";
 
 export type RightTab = "info" | "browser" | "servers" | "plans" | "changes" | "terminal" | "local";
 
@@ -137,6 +137,43 @@ export default function Tiles(props: {
   const area = useRef<HTMLDivElement>(null);
   const [arrastando, setArrastando] = useState(false);
   const [indicador, setIndicador] = useState<{ caixa: Caixa; centro: boolean } | null>(null);
+
+  // Abrir/fechar anima pela posição onde o tile cai: coluna nova desliza do lado; empilhado numa coluna
+  // que já existe, de baixo. (A ordem não importa: na Maestro o primeiro já cai embaixo do Worker.)
+  type Dir = "lado" | "baixo";
+  const entrada = useRef(new Map<string, Dir>());
+  const vistos = useRef<Set<string> | null>(null);
+  if (vistos.current === null) vistos.current = new Set(abertos(props.grade));  // os do começo não animam
+  {
+    const agora = new Set(abertos(props.grade));
+    for (const c of props.grade.colunas)
+      for (const t of c.tabs)
+        if (!vistos.current.has(t)) entrada.current.set(t, c.tabs.some((x) => vistos.current!.has(x)) ? "baixo" : "lado");
+    vistos.current = agora;
+  }
+  useEffect(() => {
+    if (!entrada.current.size) return;
+    const ks = [...entrada.current.keys()];
+    setTimeout(() => ks.forEach((k) => entrada.current.delete(k)), 400);  // arrastar depois não repete a entrada
+  });
+  // Fechar: a grade anterior fica na tela enquanto o tile sai (vale para o X e para os ícones do topo).
+  const [saindo, setSaindo] = useState<{ grade: Grade<string>; tabs: Map<string, Dir> } | null>(null);
+  const anterior = useRef(props.grade);
+  useEffect(() => {
+    const prev = anterior.current;
+    anterior.current = props.grade;
+    const agora = new Set(abertos(props.grade));
+    const foram = new Map<string, Dir>();
+    for (const c of prev.colunas) for (const t of c.tabs) if (!agora.has(t)) foram.set(t, c.tabs.length === 1 ? "lado" : "baixo");
+    if (!foram.size) return;
+    setSaindo({ grade: prev, tabs: foram });
+    const id = setTimeout(() => setSaindo(null), 140);
+    return () => {
+      clearTimeout(id);
+      setSaindo(null);
+    };
+  }, [props.grade]);
+  const gv = saindo?.grade ?? g;  // a que aparece: a anterior enquanto um tile sai
 
   if (props.soPrincipal) return <div className="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>;
 
@@ -276,9 +313,9 @@ export default function Tiles(props: {
           {props.children}
         </main>
       )}
-      {g.colunas.map((c, ci) => {
+      {gv.colunas.map((c, ci) => {
         const fechada = c.tabs.every(rec);  // coluna toda recolhida: vira uma faixa fina em pé
-        const vizinhaFechada = ci > 0 && g.colunas[ci - 1].tabs.every(rec);
+        const vizinhaFechada = ci > 0 && gv.colunas[ci - 1].tabs.every(rec);
         return [
           ...(semPrincipal && ci === 0 ? [] : [fechada || (semPrincipal && vizinhaFechada)
             ? <div key={`d${ci}`} className="w-2 shrink-0" />
@@ -290,12 +327,14 @@ export default function Tiles(props: {
             {c.tabs.flatMap((t, i) => {
               const r = info(t);
               const seu = props.proprio?.(t);
+              const sai = saindo?.tabs.get(t), entra = entrada.current.get(t);
+              const anim = sai ? `tile-sai-${sai}` : entra ? `tile-entra-${entra}` : "";
               return [
                 ...(i === 0 ? [] : [rec(t) || rec(c.tabs[i - 1])
                   ? <div key={`h${i}`} className="h-2 shrink-0" />
                   : <Divisor key={`h${i}`} eixo="y" onArrasto={(e) => altura(ci, i - 1, e)} onFim={fim} />]),
                 <section key={t} data-tile={t}
-                         className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${tileCard} overflow-hidden`} flex min-h-0 flex-col`}
+                         className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${tileCard} overflow-hidden`} flex min-h-0 flex-col ${anim}`}
                          style={fechada ? { flex: "1 1 0" } : rec(t) ? { flex: "0 0 auto" } : { flex: `${c.alturas[i]} 1 0`, minHeight: 120 }}>
                   {rec(t) ? barra(t, fechada) : seu ? props.painel(t, { alca: alca(t), acao: botaoRecolher(t) }) : (
                     <>

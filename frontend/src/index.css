@@ -360,5 +360,16 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 .lista-fecha { overflow: hidden; animation: lista-fecha .18s cubic-bezier(.4, 0, 1, 1) forwards; }
 @media (prefers-reduced-motion: reduce) { .lista-fecha { animation-duration: 1ms; } }
 
+/* Tiles abrindo/fechando: coluna nova pelo lado, empilhado por baixo (RightPanel.tsx). */
+@keyframes tile-entra-lado { from { transform: translateX(28px); opacity: 0; } }
+@keyframes tile-entra-baixo { from { transform: translateY(28px); opacity: 0; } }
+@keyframes tile-sai-lado { to { transform: translateX(28px); opacity: 0; } }
+@keyframes tile-sai-baixo { to { transform: translateY(28px); opacity: 0; } }
+.tile-entra-lado { animation: tile-entra-lado .16s cubic-bezier(.2, 0, 0, 1); }
+.tile-entra-baixo { animation: tile-entra-baixo .16s cubic-bezier(.2, 0, 0, 1); }
+.tile-sai-lado { animation: tile-sai-lado .14s cubic-bezier(.4, 0, 1, 1) forwards; }
+.tile-sai-baixo { animation: tile-sai-baixo .14s cubic-bezier(.4, 0, 1, 1) forwards; }
+@media (prefers-reduced-motion: reduce) { .tile-entra-lado, .tile-entra-baixo, .tile-sai-lado, .tile-sai-baixo { animation: none; } }
+
 /* Scrollbar discreta */
 * { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
