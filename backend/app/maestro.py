@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 from typing import AsyncIterator, Callable
@@ -227,6 +228,22 @@ def evitar_niveis(task, root) -> dict[str, str]:
     return evitar
 
 
+_TRAZIDOS: dict[str, set[str]] = {}  # E7: arquivos que tarefas trouxeram do worktree e ainda esperam o commit
+_TRAZ_LOCK = threading.Lock()
+
+
+def _traz(root: Path, wt: Path) -> tuple[list[str], str]:
+    """Um de cada vez: o 2º Worker que termina precisa ver o que o 1º acabou de trazer."""
+    with _TRAZ_LOCK:
+        trazidos, conflito = gitops.traz_do_worktree(root, wt, frozenset(_TRAZIDOS.get(str(root), ())))
+        _TRAZIDOS.setdefault(str(root), set()).update(trazidos)
+        return trazidos, conflito
+
+
+def paralelo() -> bool:
+    return int(getattr(config, "MAX_WORKERS", 1)) > 1
+
+
 LOTE_MAX = 3  # E3 opção A: tarefas seguidas no modelo do Worker antes de devolver a vez à Maestro
 
 
@@ -235,7 +252,7 @@ def _vale_lote(out: dict, req) -> bool:
     contexto dela dominaram o relógio): Worker num modelo local diferente do dela, e a tarefa entregue."""
     spec, meta = (out.get("meta") or {}).get("worker_spec"), out.get("meta") or {}
     maestro = {"provider": req.provider, "model": req.model}
-    return (out.get("status") == "ok" and (meta.get("task_result") or {}).get("status") in ("completed", "unverified")
+    return (not paralelo() and out.get("status") == "ok" and (meta.get("task_result") or {}).get("status") in ("completed", "unverified")
             and modelctl.gerenciavel(spec) and modelctl.gerenciavel(maestro) and spec["model"] != req.model)
 
 
@@ -406,97 +423,125 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
         # escrever por cima. O evento diz o motivo, senão a tarefa parece travada no cockpit.
         yield {"type": "task_update", "code": task.code, "status": "queued", "attempt": attempt_n,
                "waiting_for": ocupados}
+    # E7: em paralelo, cada Worker num worktree próprio (último commit): o verify roda lá, longe do que outro
+    # Worker está escrevendo, e o resultado entra na pasta principal no fim. Sem git, sem conseguir criar, ou
+    # depois de um conflito ao trazer (a nova tentativa vai sem worktree), fica o lock por arquivo.
+    wt = None
+    sem_wt = "trazer a tarefa para a pasta principal" in (erro_anterior or "")
+    if paralelo() and not sem_wt and await asyncio.to_thread(gitops.is_repo, root):
+        try:
+            wt = await asyncio.to_thread(gitops.worktree_tarefa, root, task.code)
+        except ToolError as e:
+            yield {"type": "event", "message": {"id": None, "role": "event", "meta": {"kind": "warning"},
+                   "content": f"{task.code}: sem worktree ({str(e)[:200]}); roda na pasta principal com trava."}}
+    raiz = wt or root
+    token_raiz = workspace.CURRENT.set(raiz)
     try:
-        async with _travas(conv_id, arquivos):
-            taskdb.set_status(task.code, "implementing", conv_id)
-            yield {"type": "task_update", "code": task.code, "status": "implementing",
-                   "attempt": attempt_n}
-            async for ev in subagents.run(conv_id, sub_call, req, run_obj, sub_out, run_call,
-                                          structured=True,
-                                          ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
-                yield ev
-    except Exception as e:  # nunca deixar a tentativa aberta no banco
-        taskdb.finish_attempt(attempt_id, "error", error=f"{e.__class__.__name__}: {e}",
-                              seconds=time.monotonic() - t0)
-        taskdb.set_status(task.code, "failed", conv_id, str(e)[:500])
-        erro(f"O Worker falhou: {e.__class__.__name__}: {e}")
-        return
+        try:
+            async with _travas(conv_id, [] if wt else arquivos):  # E7: no worktree ninguém divide o arquivo
+                taskdb.set_status(task.code, "implementing", conv_id)
+                yield {"type": "task_update", "code": task.code, "status": "implementing",
+                       "attempt": attempt_n}
+                async for ev in subagents.run(conv_id, sub_call, req, run_obj, sub_out, run_call,
+                                              structured=True,
+                                              ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
+                    yield ev
+        except Exception as e:  # nunca deixar a tentativa aberta no banco
+            taskdb.finish_attempt(attempt_id, "error", error=f"{e.__class__.__name__}: {e}",
+                                  seconds=time.monotonic() - t0)
+            taskdb.set_status(task.code, "failed", conv_id, str(e)[:500])
+            erro(f"O Worker falhou: {e.__class__.__name__}: {e}")
+            return
 
-    if run_obj.cancel.is_set():
-        # O que o Worker fez até a interrupção fica registrado. Sem isto, parar uma tarefa lenta
-        # apagava justamente o rastro que explicaria a lentidão: modelo, passos, tokens e tempo.
-        parcial = None
-        if sub_out.get("meta"):
-            parcial = collect_result(taskdb.get(task.code, conv_id), attempt_n, sub_out, root)
-            parcial["status"] = "cancelled"
-        taskdb.finish_attempt(attempt_id, "cancelled", parcial, error="Interrompido pelo usuário.",
-                              seconds=time.monotonic() - t0, tokens=(parcial or {}).get("tokens") or 0)
-        taskdb.set_status(task.code, "cancelled", conv_id, "Interrompido pelo usuário.")
-        meta["sub"] = (sub_out.get("meta") or {}).get("sub")
-        if parcial:
-            meta["task_result"] = parcial
-        out.update(status="cancelada", text=f"{task.code}: interrompida pelo usuário.", meta=meta)
-        return
+        if run_obj.cancel.is_set():
+            # O que o Worker fez até a interrupção fica registrado. Sem isto, parar uma tarefa lenta
+            # apagava justamente o rastro que explicaria a lentidão: modelo, passos, tokens e tempo.
+            parcial = None
+            if sub_out.get("meta"):
+                parcial = collect_result(taskdb.get(task.code, conv_id), attempt_n, sub_out, raiz)
+                parcial["status"] = "cancelled"
+            taskdb.finish_attempt(attempt_id, "cancelled", parcial, error="Interrompido pelo usuário.",
+                                  seconds=time.monotonic() - t0, tokens=(parcial or {}).get("tokens") or 0)
+            taskdb.set_status(task.code, "cancelled", conv_id, "Interrompido pelo usuário.")
+            meta["sub"] = (sub_out.get("meta") or {}).get("sub")
+            if parcial:
+                meta["task_result"] = parcial
+            out.update(status="cancelada", text=f"{task.code}: interrompida pelo usuário.", meta=meta)
+            return
 
-    taskdb.set_status(task.code, "testing", conv_id)
-    task = taskdb.get(task.code, conv_id)  # recarrega: o status mudou desde o get inicial
-    resultado = collect_result(task, attempt_n, sub_out, root)
-    resultado["route"] = f"{subagents.nome_do_nivel(nivel)} — {motivo_rota}"
-    if externas:
-        resultado["external_changes"] = externas
-    if resultado["status"] == "completed" and not run_obj.cancel.is_set():
-        # A tarefa passou no próprio verify; agora as anteriores não podem ter quebrado.
-        falhas, parcial = await asyncio.to_thread(regressao, conv_id, task, root)
-        if falhas:
-            resultado["status"] = "failed"
-            resultado["regression"] = falhas
-        if parcial:
-            resultado["regression_partial"] = True
-    modo_rev = critico.modo(root)
-    if resultado["status"] == "completed" and modo_rev != "off" and not run_obj.cancel.is_set():
-        # E8: o teste prova que funciona; os critérios provam que é o que foi pedido. Antes do update_task
-        # (que vira commit), com o modelo da Maestro. No modo 'bloqueia', um critério não atendido volta
-        # ao Worker uma vez; persistindo, a tentativa falha.
-        for volta in range(2):
-            yield {"type": "task_update", "code": task.code, "status": "reviewing", "attempt": attempt_n}
-            alvos = {c["path"] for c in resultado["changes"] if c.get("path")}
-            rev = await critico.revisar(root, contrato, alvos, {"provider": req.provider, "model": req.model})
-            resultado["criteria"], resultado["criteria_model"] = rev["criterios"], rev["modelo"]
-            if rev["motivo"]:
-                resultado["criteria_note"] = rev["motivo"]
-            if not critico.falhas(rev["criterios"]) or modo_rev != "bloqueia" or run_obj.cancel.is_set():
-                break
-            if volta:
-                resultado["status"], resultado["criteria_blocked"] = "failed", True
-                break
-            for st in ("queued", "implementing"):
-                taskdb.set_status(task.code, st, conv_id)
-            yield {"type": "task_update", "code": task.code, "status": "implementing", "attempt": attempt_n}
-            volta_call = {**sub_call, "arguments": {**sub_call["arguments"],
-                                                    "task": brief + "\n\n" + critico.para_o_worker(rev["criterios"])}}
-            volta_out: dict = {}
-            try:
-                async with _travas(conv_id, arquivos):
-                    async for ev in subagents.run(conv_id, volta_call, req, run_obj, volta_out, run_call,
-                                                  structured=True,
-                                                  ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
-                        yield ev
-            except Exception as e:
-                volta_out = {"status": "erro", "text": f"{e.__class__.__name__}: {e}"}
-            taskdb.set_status(task.code, "testing", conv_id)
-            antes = {c["path"]: c for c in resultado["changes"]}
-            novo = collect_result(task, attempt_n, volta_out, root)
-            novo["changes"] = list({**antes, **{c["path"]: c for c in novo["changes"]}}.values())
-            resultado = {**resultado, **{k: v for k, v in novo.items() if v is not None}}
-            if resultado["status"] != "completed":
-                break
-    if resultado["status"] in ("failed", "error"):
-        # Tentativa que falhou não deixa sujeira: a próxima começa do estado de antes dela, e o que foi
-        # descartado vai no briefing (last_error) para o Worker não repetir às cegas.
-        descartado = checkpoints.diff_attempt(attempt_id, MAX_DESCARTE)
-        if revertidos := checkpoints.restore_attempt(attempt_id):
-            resultado["rollback"] = {"files": [_relativo(root, f) for f in revertidos], "diff": descartado}
-    registra_estado(attempt_id, root)
+        taskdb.set_status(task.code, "testing", conv_id)
+        task = taskdb.get(task.code, conv_id)  # recarrega: o status mudou desde o get inicial
+        resultado = collect_result(task, attempt_n, sub_out, raiz)
+        resultado["route"] = f"{subagents.nome_do_nivel(nivel)} — {motivo_rota}"
+        if externas:
+            resultado["external_changes"] = externas
+        modo_rev = critico.modo(root)
+        if resultado["status"] == "completed" and modo_rev != "off" and not run_obj.cancel.is_set():
+            # E8: o teste prova que funciona; os critérios provam que é o que foi pedido. Antes do update_task
+            # (que vira commit), com o modelo da Maestro. No modo 'bloqueia', um critério não atendido volta
+            # ao Worker uma vez; persistindo, a tentativa falha.
+            for volta in range(2):
+                yield {"type": "task_update", "code": task.code, "status": "reviewing", "attempt": attempt_n}
+                alvos = {c["path"] for c in resultado["changes"] if c.get("path")}
+                rev = await critico.revisar(raiz, contrato, alvos, {"provider": req.provider, "model": req.model})
+                resultado["criteria"], resultado["criteria_model"] = rev["criterios"], rev["modelo"]
+                if rev["motivo"]:
+                    resultado["criteria_note"] = rev["motivo"]
+                if not critico.falhas(rev["criterios"]) or modo_rev != "bloqueia" or run_obj.cancel.is_set():
+                    break
+                if volta:
+                    resultado["status"], resultado["criteria_blocked"] = "failed", True
+                    break
+                for st in ("queued", "implementing"):
+                    taskdb.set_status(task.code, st, conv_id)
+                yield {"type": "task_update", "code": task.code, "status": "implementing", "attempt": attempt_n}
+                volta_call = {**sub_call, "arguments": {**sub_call["arguments"],
+                                                        "task": brief + "\n\n" + critico.para_o_worker(rev["criterios"])}}
+                volta_out: dict = {}
+                try:
+                    async with _travas(conv_id, [] if wt else arquivos):  # E7: no worktree ninguém divide o arquivo
+                        async for ev in subagents.run(conv_id, volta_call, req, run_obj, volta_out, run_call,
+                                                      structured=True,
+                                                      ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
+                            yield ev
+                except Exception as e:
+                    volta_out = {"status": "erro", "text": f"{e.__class__.__name__}: {e}"}
+                taskdb.set_status(task.code, "testing", conv_id)
+                antes = {c["path"]: c for c in resultado["changes"]}
+                novo = collect_result(task, attempt_n, volta_out, raiz)
+                novo["changes"] = list({**antes, **{c["path"]: c for c in novo["changes"]}}.values())
+                resultado = {**resultado, **{k: v for k, v in novo.items() if v is not None}}
+                if resultado["status"] != "completed":
+                    break
+        trazidos: list[str] = []
+        if wt is not None and resultado["status"] in SUCESSO and not run_obj.cancel.is_set():
+            trazidos, conflito = await asyncio.to_thread(_traz, root, wt)
+            if conflito:  # a próxima tentativa roda sem worktree (ver `sem_wt` acima)
+                resultado["status"], resultado["merge_conflict"] = "failed", conflito
+                resultado["errors"] = [*(resultado.get("errors") or []), "merge: " + conflito[:1500]]
+        if resultado["status"] == "completed" and not run_obj.cancel.is_set():
+            # A tarefa passou no próprio verify; agora as anteriores não podem ter quebrado.
+            falhas, parcial = await asyncio.to_thread(regressao, conv_id, task, root)
+            if falhas:
+                resultado["status"] = "failed"
+                resultado["regression"] = falhas
+            if parcial:
+                resultado["regression_partial"] = True
+        if resultado["status"] in ("failed", "error"):
+            # Tentativa que falhou não deixa sujeira: a próxima começa do estado de antes dela, e o que foi
+            # descartado vai no briefing (last_error) para o Worker não repetir às cegas.
+            descartado = checkpoints.diff_attempt(attempt_id, MAX_DESCARTE)
+            revertidos = checkpoints.restore_attempt(attempt_id)
+            if trazidos:  # E7: o que já tinha entrado na pasta principal sai também
+                await asyncio.to_thread(gitops.desfaz_trazidos, root, wt)
+                _TRAZIDOS.get(str(root), set()).difference_update(trazidos)
+            if revertidos:
+                resultado["rollback"] = {"files": [_relativo(raiz, f) for f in revertidos], "diff": descartado}
+        registra_estado(attempt_id, root, raiz)
+    finally:
+        workspace.CURRENT.reset(token_raiz)
+        if wt is not None:
+            await asyncio.to_thread(gitops.remove_worktree_tarefa, root, task.code)
 
     # Etapa de revisão explícita: só quando NADA provou o resultado. Com o comando de verificação
     # passando, o parecer de um modelo menor que o autor rende falso-positivo, não bug — a mesma
@@ -546,14 +591,16 @@ def _sha(p: Path) -> str | None:
         return None  # apagado (ou nunca existiu)
 
 
-def registra_estado(attempt_id: int, root: Path) -> None:
-    """Como a tentativa deixou os arquivos que ela escreveu (base da detecção de mudança externa)."""
+def registra_estado(attempt_id: int, root: Path, base: Path | None = None) -> None:
+    """Como a tentativa deixou os arquivos que ela escreveu (base da detecção de mudança externa). `base` é
+    onde o Worker escreveu (o worktree, E7); o estado é o do arquivo na pasta principal."""
     estado = {}
     for p in checkpoints.arquivos_da_tentativa(attempt_id):
         try:
-            estado[p.relative_to(root).as_posix()] = _sha(p)
+            rel = p.relative_to(base or root).as_posix()
         except ValueError:
             continue
+        estado[rel] = _sha(root / rel)
     if estado:
         with db.session() as s:
             if att := s.get(db.Attempt, attempt_id):

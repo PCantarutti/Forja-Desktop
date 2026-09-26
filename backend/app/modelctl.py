@@ -347,6 +347,28 @@ def _local_carregado() -> dict | None:
     return {"provider": config.LOCAL_PROVIDER["id"], "model": st["alias"]} if st.get("running") and st.get("alias") else None
 
 
+def workers_possiveis(pedidos: int) -> dict:
+    """E7: quantos Workers rodam juntos sem tirar o cache do Maestro. O slot 0 é dele; no modelo local, cada
+    Worker precisa de outro slot, e a janela por slot não pode ficar abaixo do mínimo do Worker. O teto do
+    perfil de hardware (Low VRAM: 1) vale por cima. Nunca menos que 1."""
+    from . import perfis
+    n, motivos = max(1, int(pedidos or 1)), []
+    teto = int(perfis.valores().get("max_workers") or 1)
+    if n > teto:
+        n = teto
+        motivos.append(f"perfil {perfis.rotulo()}: até {teto}")
+    janela = None
+    if localai is not None and (st := localai.status()).get("running"):
+        slots = slots_do_servidor()
+        if n > max(1, slots - 1):
+            n = max(1, slots - 1)
+            motivos.append(f"o servidor tem {slots} slot(s) e o slot {SLOT_PRINCIPAL} é do Maestro")
+        prm = st.get("params") or {}
+        janela = localai.ctx_por_requisicao(st.get("ctx") or prm.get("ctx"), {**prm, "parallel": slots})
+    return {"pedidos": max(1, int(pedidos or 1)), "possiveis": n, "motivo": "; ".join(motivos),
+            "janela_por_slot": janela, "min_ctx": config.WORKER_MIN_CTX}
+
+
 def custo_da_volta() -> str:
     """Quanto custa voltar ao modelo carregado depois de uma troca: com cache em disco que restaura, só
     carregar + restaurar; senão, carregar + reprocessar o contexto inteiro (o que dominou a E0)."""

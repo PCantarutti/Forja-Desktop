@@ -1393,6 +1393,7 @@ function MaestroTab({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
             </label>
           )}
         </div>
+        {paralelo && <AvisoWorkers n={s.max_workers} />}
       </Field>
       <Field label="Revisão de código"
              hint="Depois de o teste da tarefa passar, o modelo da Maestro confere cada critério de aceite contra o diff, antes do commit. Avisa: aponta o que não foi atendido e a Maestro decide. Bloqueia: devolve ao Worker uma vez e, persistindo, a tentativa falha. O FORJA.md do projeto pode mudar com a linha 'revisao: bloqueia'.">
@@ -2480,6 +2481,31 @@ function PerfilHardware({ onError }: { onError: (e: string) => void }) {
         )}
       </div>
     </Field>
+  );
+}
+
+/** E7: quantos Workers cabem de fato (slot 0 é do Maestro; teto do perfil) e se a janela por slot do llama-server
+ * fica abaixo do mínimo do Worker. */
+function AvisoWorkers({ n }: { n: number }) {
+  const [w, setW] = useState<{ possiveis: number; motivo: string; janela_por_slot: number | null; min_ctx: number } | null>(null);
+  useEffect(() => {
+    const t = setTimeout(() => api.get<any>(`/perfil/workers?n=${n}`).then(setW).catch(() => {}), 300);
+    return () => clearTimeout(t);
+  }, [n]);
+  if (!w) return null;
+  const curta = w.janela_por_slot != null && w.janela_por_slot > 0 && w.janela_por_slot < w.min_ctx;
+  if (w.possiveis >= n && !curta) return null;
+  const k = (x: number) => `${Math.round(x / 1024)}k`;
+  return (
+    <div className="mt-2 space-y-1 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-xs text-amber-100">
+      {w.possiveis < n && <p>Agora rodam {w.possiveis} de {n} Workers juntos: {w.motivo}. O cache do Maestro não sai para caber mais.</p>}
+      {curta && (
+        <p>
+          Cada slot do llama-server enxerga {k(w.janela_por_slot!)} de contexto, abaixo dos {k(w.min_ctx)} que o Worker precisa. Ligue
+          "Cache KV unificado" no modelo (IA local › avançado) ou use menos Workers.
+        </p>
+      )}
+    </div>
   );
 }
 

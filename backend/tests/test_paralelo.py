@@ -1,92 +1,158 @@
-"""Ferramentas que o modelo pede juntas rodam juntas; o histórico continua na ordem em que ele pediu."""
+"""E7: Workers em paralelo, cada um no seu worktree, com o merge limpo ou o conflito detectado."""
 import asyncio
-import time
+import subprocess
 
-from app import agent, config, db, llm, subagents
-from app.tools import REGISTRY, Tool, register
+import pytest
 
+from app import agent, config, db, gitops, llm, localai, maestro, modelctl, perfis, settings, taskdb, workspace
 
-def _call(i: int, name: str = "read_file", **args) -> dict:
-    return {"id": f"c{i}", "name": name, "arguments": args or {"path": f"a{i}.txt"}}
-
-
-def test_batches_groups_reads_and_isolates_the_rest():
-    calls = [_call(1), _call(2), _call(3, "write_file", path="x", content="y"), _call(4), _call(5, "run_command")]
-    nomes = [[c["name"] for c in lote] for lote in agent.batches(calls)]
-    assert nomes == [["read_file", "read_file"], ["write_file"], ["read_file"], ["run_command"]]
-    assert agent.batches([]) == []
+BASE = "".join(f"linha {i}\n" for i in range(1, 11))
 
 
-def test_ask_user_and_plan_never_run_in_parallel():
-    calls = [_call(1, "ask_user", questions=[]), _call(2, "exit_plan_mode", plan="x")]
-    assert agent.batches(calls) == [[calls[0]], [calls[1]]]
+def _git(root, *args):
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, check=True,
+                   capture_output=True)
 
 
-def test_local_subagents_queue_while_remote_ones_share_two_slots(monkeypatch):
-    """Duas delegações no mesmo modelo local brigariam pela GPU: ali a vaga é uma só."""
-    monkeypatch.setattr(config, "PROVIDERS", {"local": {"type": "llamacpp"}, "nuvem": {"type": "openai"}})
-    monkeypatch.setattr(subagents, "slot",
-                        lambda lvl: {"provider": "local" if lvl == "rapido" else "nuvem", "model": "m"})
-    agent._SEMS.clear()
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "calc.txt").write_text(BASE, encoding="utf-8", newline="\n")
+    _git(root, "init", "-q")
+    _git(root, "config", "core.autocrlf", "false")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "base")
+    monkeypatch.setattr(config, "WORKSPACE_ROOT", root)
+    token = workspace.CURRENT.set(root)
 
-    async def scenario():
-        local = agent._limite(_call(1, "delegate_task", level="rapido"))
-        remoto = agent._limite(_call(2, "delegate_task", level="capaz"))
-        leitura = agent._limite(_call(3))
-        return local._value, remoto._value, leitura._value
-
-    assert asyncio.run(scenario()) == (1, agent.PARALLEL_SUBAGENTS, agent.PARALLEL_READS)
-    agent._SEMS.clear()
-
-
-def test_three_reads_run_at_once_and_are_saved_in_call_order(monkeypatch):
-    lentas = []
-
-    def devagar(root, args):
-        lentas.append(args["path"])
-        time.sleep(0.3)  # a ferramenta roda em thread (execute usa to_thread), então o sleep é bloqueante mesmo
-        return f"conteudo de {args['path']}"
-
-    # ferramenta própria: trocar a read_file no REGISTRY vazaria para os outros testes
-    register(Tool("ler_devagar", "lê", {"type": "object", "properties": {"path": {"type": "string"}}, "required": []},
-                  devagar))
-    monkeypatch.setattr(agent, "PARALLEL_OK", agent.PARALLEL_OK | {"ler_devagar"})
-    step = {"n": 0}
-
-    async def fake_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
-        step["n"] += 1
-        if step["n"] == 1:
-            yield "done", {"tool_calls": [_call(1, "ler_devagar"), _call(2, "ler_devagar"),
-                                          _call(3, "ler_devagar")]}
-        else:
-            yield "content", "Li tudo."
-            yield "done", {"tool_calls": []}
-
-    async def none(*a):
+    async def nada(*a):
         return None
 
-    monkeypatch.setattr(llm, "chat_stream", fake_stream)
-    monkeypatch.setattr(llm, "context_limit", none)
-    monkeypatch.setattr(llm, "capabilities", none)
-
-    async def scenario():
-        with db.session() as s:
-            c = db.Conversation(kind="agent")
-            s.add(c)
-            s.commit()
-            conv = c.id
-        run = agent.Run(conv)
-        req = agent.RunRequest(content="leia os três", provider="lmstudio", model="m", mode="agent",
-                               permission="bypass")
-        t0 = time.monotonic()
-        async for _ in agent.run_agent(conv, req, run):
-            pass
-        return time.monotonic() - t0, conv
-
-    demorou, conv = asyncio.run(scenario())
-    assert len(lentas) == 3
-    assert demorou < 0.75, f"as três leituras não rodaram juntas ({demorou:.2f}s para 3x0,3s)"
+    monkeypatch.setattr(llm, "capabilities", nada)
+    settings.reset()
+    config.SUBAGENTS = {"capaz": {"provider": "lmstudio", "model": "coder"},
+                        "rapido": {"provider": "", "model": ""}, "nuvem": {"provider": "", "model": ""}}
+    monkeypatch.setattr(config, "MAX_WORKERS", 2)
+    monkeypatch.setattr(config, "REVISAO", "off")
     with db.session() as s:
-        msgs = [m for m in s.get(db.Conversation, conv).messages if m.role == "tool"]
-    assert [m.tool_call_id for m in msgs] == ["c1", "c2", "c3"]  # ordem do pedido, não da chegada
-    REGISTRY.pop("ler_devagar", None)
+        c = db.Conversation(title="Maestro", kind="maestro")
+        s.add(c)
+        s.commit()
+        conv = c.id
+    tconv = taskdb.CONV.set(conv)
+    yield root, conv
+    taskdb.CONV.reset(tconv)
+    workspace.CURRENT.reset(token)
+
+
+def _worker_por_tarefa(monkeypatch, conteudo: dict):
+    """Cada Worker escreve calc.txt com o conteúdo da sua tarefa (achada pelo título no briefing)."""
+    feitos = set()
+
+    async def fala(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        brief = messages[1]["content"]
+        titulo = next(t for t in conteudo if t in brief)
+        await asyncio.sleep(0.05)  # os dois Workers ficam no ar ao mesmo tempo
+        if titulo not in feitos:
+            feitos.add(titulo)
+            yield "done", {"tool_calls": [{"id": f"w-{titulo}", "name": "write_file",
+                                           "arguments": {"path": "calc.txt", "content": conteudo[titulo]}}],
+                           "completion_tokens": 5}
+        else:
+            yield "content", "feito"
+            yield "done", {"tool_calls": [], "completion_tokens": 5}
+
+    monkeypatch.setattr(llm, "chat_stream", fala)
+
+
+def _paralelo(root, conv, conteudo):
+    taskdb.create_feature(conv, "F", "", [{"title": t, "contract": {"goal": t, "verify_command": "echo ok",
+                                                                    "relevant_files": ["calc.txt"]}}
+                                          for t in conteudo])
+    run_obj = agent.Run(conv)
+    run_obj.permission = "auto"
+    req = agent.RunRequest(content="x", provider="lmstudio", model="m", mode="maestro", permission="auto")
+    vistos_em = []
+
+    async def run_call(_c, call, _r, _ru, _caps, out, parent=None):
+        onde = workspace.root()
+        vistos_em.append((call["name"], onde))
+        if call["name"] == "write_file":
+            (onde / call["arguments"]["path"]).write_text(call["arguments"]["content"], encoding="utf-8", newline="\n")
+            out.update(status="ok", text="gravado", meta={"arguments": call["arguments"]})
+        else:
+            out.update(status="ok", text="exit code: 0", meta={"arguments": call["arguments"]})
+        return
+        yield  # pragma: no cover
+
+    outs = [{}, {}]
+
+    async def cena():
+        async def uma(i, code):
+            async for _ in maestro.run_task(conv, {"id": f"rt{i}", "name": "run_task", "arguments": {"code": code}},
+                                            req, run_obj, outs[i], run_call):
+                pass
+        await asyncio.gather(uma(0, "TASK-001"), uma(1, "TASK-002"))
+
+    asyncio.run(cena())
+    return outs, vistos_em
+
+
+def test_dois_workers_no_mesmo_arquivo_em_linhas_diferentes_juntam_limpo(repo, monkeypatch):
+    root, conv = repo
+    a = BASE.replace("linha 1\n", "linha 1 (A)\n")
+    b = BASE.replace("linha 9\n", "linha 9 (B)\n")
+    _worker_por_tarefa(monkeypatch, {"Primeira": a, "Segunda": b})
+    outs, vistos = _paralelo(root, conv, {"Primeira": a, "Segunda": b})
+    assert [o["meta"]["task_result"]["status"] for o in outs] == ["completed", "completed"]
+    texto = (root / "calc.txt").read_text(encoding="utf-8")
+    assert "linha 1 (A)" in texto and "linha 9 (B)" in texto          # as duas entraram na pasta principal
+    escritas = {str(onde) for nome, onde in vistos if nome == "write_file"}
+    assert len(escritas) == 2 and all(".forja" in e for e in escritas)  # cada Worker no seu worktree
+    assert not (root / gitops.WT_DIR / "TASK-001").exists()            # worktree removido no fim
+
+
+def test_mesma_linha_detecta_o_conflito_e_nao_suja_a_pasta(repo, monkeypatch):
+    root, conv = repo
+    a = BASE.replace("linha 1\n", "linha 1 (A)\n")
+    b = BASE.replace("linha 1\n", "linha 1 (B)\n")
+    _worker_por_tarefa(monkeypatch, {"Primeira": a, "Segunda": b})
+    outs, _ = _paralelo(root, conv, {"Primeira": a, "Segunda": b})
+    status = sorted(o["meta"]["task_result"]["status"] for o in outs)
+    assert status == ["completed", "failed"]
+    falhou = next(o for o in outs if o["meta"]["task_result"]["status"] == "failed")["meta"]["task_result"]
+    assert "conflito" in falhou["merge_conflict"]
+    texto = (root / "calc.txt").read_text(encoding="utf-8")
+    assert "<<<<<<<" not in texto and texto.count("linha 1 (") == 1   # só a vencedora, sem marcador
+
+
+def test_workers_possiveis_nunca_tira_o_slot_do_maestro(monkeypatch):
+    monkeypatch.setattr(config, "PERFIL_HARDWARE", "performance")
+    perfis.reavaliar()
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "ctx": 32768, "params": {"parallel": 2}})
+    w = modelctl.workers_possiveis(3)
+    assert w["possiveis"] == 1 and "slot" in w["motivo"] and w["janela_por_slot"] == 16384
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "ctx": 65536,
+                                                    "params": {"parallel": 4, "kv_unified": True}})
+    assert modelctl.workers_possiveis(3)["possiveis"] == 3
+    monkeypatch.setattr(config, "PERFIL_HARDWARE", "low_vram")
+    perfis.reavaliar()
+    assert modelctl.workers_possiveis(3)["possiveis"] == 1                # Low VRAM: sequencial
+
+
+def test_trava_por_arquivo_serializa_escritas(tmp_path, monkeypatch):
+    workspace.CURRENT.set(tmp_path)
+    ordem = []
+
+    async def escreve(i):
+        async with agent._trava_arquivo("write_file", {"path": "a.txt"}):
+            ordem.append(("entra", i))
+            await asyncio.sleep(0.02)
+            ordem.append(("sai", i))
+
+    async def cena():
+        await asyncio.gather(escreve(1), escreve(2))
+
+    asyncio.run(cena())
+    assert ordem[0][0] == "entra" and ordem[1][0] == "sai"   # a segunda só entra depois de a primeira sair

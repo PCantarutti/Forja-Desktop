@@ -645,11 +645,21 @@ def test_run_task_so_paraleliza_fora_do_modo_sequencial(monkeypatch):
 
 def test_limite_de_workers_acompanha_a_configuracao(monkeypatch):
     """O semáforo fica em cache: sem o limite na chave, mudar MAX_WORKERS não teria efeito."""
-    monkeypatch.setattr(config, "MAX_WORKERS", 2)
-    a = agent._limite(_rt("TASK-001"))
-    monkeypatch.setattr(config, "MAX_WORKERS", 4)
-    b = agent._limite(_rt("TASK-001"))
-    assert a is not b and b._value == 4
+    from app import localai, perfis
+    monkeypatch.setattr(config, "PERFIL_HARDWARE", "performance")
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    perfis.reavaliar()
+    try:
+        monkeypatch.setattr(config, "MAX_WORKERS", 2)
+        a = agent._limite(_rt("TASK-001"))
+        monkeypatch.setattr(config, "MAX_WORKERS", 3)
+        b = agent._limite(_rt("TASK-001"))
+        assert a is not b and b._value == 3
+        monkeypatch.setattr(config, "MAX_WORKERS", 8)
+        assert agent._limite(_rt("TASK-001"))._value == 3   # E7: teto do perfil (Performance: 3)
+    finally:
+        monkeypatch.undo()
+        perfis.reavaliar()
 
 
 def test_arquivos_disjuntos_correm_juntos():

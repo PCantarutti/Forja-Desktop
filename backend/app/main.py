@@ -763,7 +763,14 @@ async def perfil_hardware():
     rec = await asyncio.to_thread(perfis.recomendados) if v["perfil"] == "low_vram" else []
     return {**v, "rotulo": perfis.rotulo(), "valores": perfis.valores(), "nomes": perfis.NOMES,
             "alterados": sorted(set(perfis.GOVERNADOS) & settings.alterados()),
-            "recomendados": rec, "ganho_um_modelo": perfis.BENCH_MESMO_MODELO}
+            "workers": modelctl.workers_possiveis(int(getattr(config, "MAX_WORKERS", 1))),
+        "recomendados": rec, "ganho_um_modelo": perfis.BENCH_MESMO_MODELO}
+
+
+@app.get("/api/perfil/workers")
+def perfil_workers(n: int = 1):
+    """E7: quantos de `n` Workers rodam juntos agora (slots do servidor, perfil) e a janela de cada slot."""
+    return modelctl.workers_possiveis(n)
 
 
 @app.post("/api/perfil/voltar")

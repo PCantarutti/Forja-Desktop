@@ -1013,20 +1013,34 @@ app trata o login dos funcionários?":
 não há isolamento.
 **Depende de:** E2 (commits e o merge dependem do git por tarefa) e E4 (política de execução).
 
-- [ ] **Um worktree por Worker em paralelo.** Criar com `git worktree add .forja/wt/<tarefa>` a partir do
+- [x] **Um worktree por Worker em paralelo.** Criar com `git worktree add .forja/wt/<tarefa>` a partir do
       último commit. O Worker trabalha lá, e ao concluir o código faz o merge (ou rebase) na árvore
       principal e roda a regressão (E2).
   - Conflito de merge: a tarefa volta para `failed` com o conflito no `last_error`, e a próxima tentativa
     é sequencial.
-- [ ] **Lock nos `write_file`/`edit_file`** e não só no contrato (`maestro.py:33-51`), para o caso sem
+- [x] **Lock nos `write_file`/`edit_file`** e não só no contrato (`maestro.py:33-51`), para o caso sem
       worktree, que fica como fallback.
-- [ ] **O `verify` roda no worktree da própria tarefa**, nunca na árvore que outro Worker está escrevendo.
-- [ ] **Quantos Workers e em qual modelo: `como_rodar("worker", …)` da E4**, com o teto de VRAM e de
+- [x] **O `verify` roda no worktree da própria tarefa**, nunca na árvore que outro Worker está escrevendo.
+- [x] **Quantos Workers e em qual modelo: `como_rodar("worker", …)` da E4**, com o teto de VRAM e de
       folga no pool. Nenhum Worker usa o slot do Maestro. Se o pool não comporta N Workers mais o
       Maestro, o número de Workers cai (até 1) em vez de o cache do Maestro sair.
-- [ ] **Slots do llama.cpp.** Avisar na UI quando a janela por slot (`ctx_por_requisicao`) ficar abaixo
+- [x] **Slots do llama.cpp.** Avisar na UI quando a janela por slot (`ctx_por_requisicao`) ficar abaixo
       do mínimo do Worker (16k, `config.py:143`) com N workers. Sugerir `--kv-unified` ou menos workers.
-- [ ] Testes: 2 Workers em tarefas que tocam o mesmo arquivo, com o merge limpo ou o conflito detectado.
+- [x] Testes: 2 Workers em tarefas que tocam o mesmo arquivo, com o merge limpo ou o conflito detectado.
+
+**Feito (2026-09-26):** em paralelo (`max_workers` > 1, repo git), cada tentativa roda num worktree
+`.forja/wt/<tarefa>` (branch `forja-wt/<tarefa>`, fora do `git status` pelo `.git/info/exclude`). O Worker, o
+verify e a revisão da E8 enxergam só o worktree; no fim, `gitops.traz_do_worktree` faz merge de 3 vias por
+arquivo para a pasta principal, sem commit (o commit segue no `update_task`, E2), um de cada vez. Arquivo sem
+commit do usuário recusa; conflito falha a tentativa e a próxima vai sem worktree. Regressão falhando depois
+de trazer desfaz só o que a tarefa trouxe. Sem worktree, `_trava_arquivo` serializa qualquer escrita no mesmo
+arquivo. `modelctl.workers_possiveis`: teto do perfil (Low VRAM 1, Balanced 2, Performance 3) e slots do
+servidor menos o do Maestro; aviso na aba Maestro (Workers a menos, janela por slot abaixo de 16k).
+Validado no Forja real (gpt-oss:120b, 2 Workers): as duas tarefas no mesmo `util.py` rodaram juntas em
+worktrees; a 2ª deu conflito ao trazer (num arquivo de 2 linhas as mudanças são vizinhas para o git), e a nova
+tentativa sem worktree passou. **Ficou:** o commit por tarefa (E2) leva o arquivo inteiro, então com duas
+tarefas no mesmo arquivo o commit da 1ª pode carregar as linhas da 2ª; e o bench da E0 com 2–3 Workers
+(precisa de GPU livre por horas).
 
 **Pronto quando:** o bench da E0 com 2–3 Workers termina com a suíte verde e menos tempo que o
 sequencial.

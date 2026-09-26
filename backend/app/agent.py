@@ -1962,6 +1962,26 @@ def batches(calls: list[dict]) -> list[list[dict]]:
     return out
 
 
+_TRAVAS_ARQUIVO: dict[str, asyncio.Lock] = {}
+
+
+@contextlib.asynccontextmanager
+async def _trava_arquivo(name: str, args: dict):
+    """Uma escrita por arquivo de cada vez. O lock do contrato (maestro._travas) só cobre os arquivos que a
+    tarefa declarou; este vale para qualquer escrita, inclusive fora do contrato."""
+    chave = None
+    if name in checkpoints.TRACKED:
+        try:
+            chave = str(resolve_path(workspace.root(), args.get("path"))).lower()
+        except (ToolError, OSError, TypeError):
+            chave = None
+    if chave is None:
+        yield
+        return
+    async with _TRAVAS_ARQUIVO.setdefault(chave, asyncio.Lock()):
+        yield
+
+
 _SEMS: dict[str, asyncio.Semaphore] = {}
 
 
@@ -1978,7 +1998,7 @@ def _limite(call: dict) -> asyncio.Semaphore:
     Tarefa do Maestro: até MAX_WORKERS. A chave leva o limite porque o semáforo fica em cache e o
     usuário pode mudar o número no meio da sessão."""
     if call["name"] == "run_task":
-        n = max(1, int(getattr(config, "MAX_WORKERS", 1)))
+        n = modelctl.workers_possiveis(int(getattr(config, "MAX_WORKERS", 1)))["possiveis"]  # E7
         return _sem(f"workers:{n}", n)
     if call["name"] != "delegate_task":
         return _sem("read", PARALLEL_READS)
@@ -2216,7 +2236,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         try:
             # ponytail: handler síncrono roda em thread e o wait_for só solta o turno — a thread
             # termina sozinha depois; cancelar de verdade exigiria cada ferramenta checar um flag.
-            res = await (asyncio.wait_for(execute(name, args), limite) if limite else execute(name, args))
+            async with _trava_arquivo(name, args):  # E7: dois Workers sem worktree não escrevem o mesmo arquivo juntos
+                res = await (asyncio.wait_for(execute(name, args), limite) if limite else execute(name, args))
         except asyncio.TimeoutError:
             result("erro", f"{name} passou de {limite:.0f}s e foi interrompida. Tente um alvo menor, divida o "
                            "trabalho ou use outra abordagem; não repita a mesma chamada.")
