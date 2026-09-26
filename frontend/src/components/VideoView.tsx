@@ -1036,11 +1036,15 @@ function AjustesVideo(props: {
   const gbModelo = atual ? atual.size / 2 ** 30 : 0;
   const gbGpu = st.gpu_video?.gb ?? 0;
   const fracao = gbGpu ? Math.min(1, gbModelo / gbGpu) : 0;
-  const forma = (pr: string) => {
-    const [a, b] = pr.split(":").map(Number);
-    const k = 20 / Math.max(a, b);
-    return <span className="block rounded-[3px] border-[1.5px] border-current" style={{ width: a * k * 1.3, height: b * k * 1.3 * (a > b ? 0.9 : 1) }} />;
+  // Medidas do protótipo (PVideo): cada desenho tem o tamanho exato, não uma conta pela razão.
+  const FORMA: Record<Proporcao, { w: number; h: number }> = {
+    "16:9": { w: 26, h: 15 }, "9:16": { w: 12, h: 20 }, "1:1": { w: 17, h: 17 }, "4:3": { w: 22, h: 16 },
   };
+  const forma = (pr: Proporcao) => (
+    <span className="flex h-5 items-center justify-center">
+      <span className="block rounded-[3px] border-[1.5px] border-current" style={{ width: FORMA[pr].w, height: FORMA[pr].h }} />
+    </span>
+  );
 
   return (
     <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side text-xs">
@@ -1107,7 +1111,7 @@ function AjustesVideo(props: {
           <div className="grid grid-cols-4 gap-1.5">
             {PROPORCOES.map((pr) => (
               <button key={pr} onClick={() => aplicaTam(props.qual ?? qualidades[0], pr)}
-                      className={`flex h-[52px] flex-col items-center justify-end gap-1.5 rounded-[9px] border pb-1.5 ${props.prop === pr ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
+                      className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${props.prop === pr ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
                 {forma(pr)}
                 <span className="font-mono text-[10.5px]">{pr}</span>
               </button>
