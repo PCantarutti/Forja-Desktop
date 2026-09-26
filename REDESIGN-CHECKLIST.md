@@ -20,7 +20,14 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [x] Vídeo: inspetor 300px, marcação com anel accent
 - [x] Vídeo: inspetor em seções, barra de decisão flutuante, scrub accent, marcação accent
 - [x] Vídeo: FORMATO com desenho da proporção (menu de Proporção)
-- [ ] Vídeo: DURAÇÃO em slider com marca do limite de treino (hoje: segmentos + campo livre + dica do limite)
+- [x] Vídeo: DURAÇÃO em slider com a marca do limite de treino
+- [x] Imagem e Vídeo no desenho do protótipo: painel **Parâmetros** fixo à direita (liga/desliga no topo, lembra), composer novo
+      (miniaturas/quadros + texto; Melhorar · + Negativo · Ampliar do PC · estimativa · Gerar N Enter), barra do topo com
+      contagem/filtros e estado da GPU, cabeçalho de lote (Lote N / letra, meta mono, ação), cards com sobreposição
+      (modelo · semente, check no canto, "na fila", listras no placeholder, líquido do design), hover do vídeo com
+      Continuar → / Manter K / Descartar D (aceita também M/X, como o player)
+- [ ] Vídeo: "Comparar 2" (A/B entre tomadas) do protótipo — funcionalidade nova, não existe hoje
+- [ ] Imagem: variações 2b (triagem por teclado) e 2c (matriz modelo × semente) da referência
 - [x] Comparar: voto com estrela ("Votar" / "Melhor resposta"), Refazer, rótulos mono (card PROMPT e Analisar já existiam)
 - [x] Pesquisa: RESUMO com borda accent, plano recolhível e FONTES com rótulo mono
 - [x] Pesquisa: coluna Fontes 300px à direita (≥ xl)
@@ -30,12 +37,13 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [x] Imagens: galeria em mosaico pela proporção real (`mosaico.ts`, com teste)
 - [x] Modais: scrim e sombra do design; rótulos caixa-alta em mono em todas as telas
 - [x] IA local: barra segmentada de uso de memória e parâmetro alterado em accent — **não vista na tela**: a estimativa só aparece com o llama.cpp instalado
-- [ ] IA local: busca do Hugging Face com opções de download coloridas (verde cabe na GPU, âmbar parte na RAM, vermelho não carrega)
-- [ ] Cartões de estado (VRAM, atualização, ask_user, compactação, reconexão) no desenho da referência 9f
+- [x] IA local: busca do Hugging Face com opções de download coloridas (verde cabe na GPU, âmbar parte na RAM, vermelho não carrega) e legenda
+- [x] Cartões de estado 9f (`CartaoEstado.tsx`): VRAM ocupada, pergunta do agente, objetivo, contexto compactado, reconexão, ignorar permissões
+- [ ] 9f restantes: atualização como cartão (hoje é modal), desfazer arquivos e apagar conversa no mesmo desenho
 - [x] Esc fecha o último tile (fora de campo de texto e sem diálogo)
 - [x] TasksBar recolhível no topo do composer, com barrinha de progresso
 - [x] Portado para o forja-web: branch `feat/redesign` (worktree `forja-web/.claude/worktrees/redesign`), sem Vídeo/IA local/Board que o web não tem
-- [ ] forja-web: validar com o Docker de pé (localhost:7001) — só vi o visual com Vite, sem dados
+- [ ] forja-web: validar com o Docker de pé (localhost:7001) — só vi o visual com Vite, sem dados; a Imagem do web (runner/nuvem) foi adaptada à mão e **não foi vista na tela**
 - [ ] O que for feito daqui em diante no desktop: portar com `git merge-file` (base = desktop `c8e802a`)
 
 ## Dados de teste
