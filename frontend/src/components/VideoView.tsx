@@ -1690,12 +1690,18 @@ function Foco(props: {
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest("input, textarea, select")) return;
-      if (e.key === "Escape" && !document.fullscreenElement) props.onFechar();
-      else if (e.key === "ArrowUp" && pos > 0) (e.preventDefault(), props.onIndice(prontos[pos - 1].i));
-      else if (e.key === "ArrowDown" && pos < prontos.length - 1) (e.preventDefault(), props.onIndice(prontos[pos + 1].i));
-      // triagem sem mouse: decide e já passa para a próxima tomada
-      else if (e.key === "m" || e.key === "M") (e.preventDefault(), decidirRef.current(true, true));
-      else if (e.key === "x" || e.key === "X") (e.preventDefault(), decidirRef.current(false, true));
+      if (e.key === "Escape" && !document.fullscreenElement) return props.onFechar();
+      const acao =
+        e.key === "ArrowUp" && pos > 0 ? () => props.onIndice(prontos[pos - 1].i)
+        : e.key === "ArrowDown" && pos < prontos.length - 1 ? () => props.onIndice(prontos[pos + 1].i)
+        // triagem sem mouse: decide e já passa para a próxima tomada
+        : e.key === "m" || e.key === "M" ? () => decidirRef.current(true, true)
+        : e.key === "x" || e.key === "X" ? () => decidirRef.current(false, true)
+        : null;
+      if (acao) {
+        e.preventDefault();
+        acao();
+      }
     };
     window.addEventListener("keydown", k);
     return () => window.removeEventListener("keydown", k);

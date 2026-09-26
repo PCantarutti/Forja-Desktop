@@ -29,9 +29,10 @@ export default function AberturaSobreposta({ voo, onFim }: { voo: Voo; onFim: ()
     // a cópia da saudação, sem a logo (a que voa é outra), some em fade
     const t = texto.current;
     if (t) {
-      voo.clone.querySelector<HTMLElement>("[data-logo]")?.style.setProperty("visibility", "hidden");
-      voo.clone.style.margin = "0";
-      t.replaceChildren(voo.clone);
+      const copia = voo.clone.cloneNode(true) as HTMLElement;
+      copia.querySelector<HTMLElement>("[data-logo]")?.style.setProperty("visibility", "hidden");
+      copia.style.margin = "0";
+      t.replaceChildren(copia);
       t.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 208, easing: "ease-out", fill: "forwards" });
     }
     // a logo desce ao centro da área e cresce um pouco
