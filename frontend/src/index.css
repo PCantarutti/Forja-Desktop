@@ -355,5 +355,10 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 .bandeja-sai { animation: bandeja-sai .14s cubic-bezier(.2, 0, 0, 1) forwards; }
 @media (prefers-reduced-motion: reduce) { .bandeja-entra, .bandeja-sai { animation: none; } }
 
+/* Lista de conversas fechando: a largura (236px, a do Sidebar) recolhe até 0 e o conteúdo acompanha. */
+@keyframes lista-fecha { from { width: 236px; } to { width: 0; opacity: 0; } }
+.lista-fecha { overflow: hidden; animation: lista-fecha .18s cubic-bezier(.4, 0, 1, 1) forwards; }
+@media (prefers-reduced-motion: reduce) { .lista-fecha { animation-duration: 1ms; } }
+
 /* Scrollbar discreta */
 * { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }

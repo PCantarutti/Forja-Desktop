@@ -2113,6 +2113,17 @@ export default function App() {
   );
 
   // Espiar a lista com ela fechada: "dentro" (aparecendo), "saindo" (animação de saída) ou "fora".
+  // Fechar a lista anima (recolhe a largura) e só então esconde; abrir é na hora.
+  const [fechandoLista, setFechandoLista] = useState(false);
+  const alternaLista = () => {
+    if (sidebarHidden) return setSidebarHidden(false);
+    if (fechandoLista) return;
+    setFechandoLista(true);
+    setTimeout(() => {
+      setSidebarHidden(true);
+      setFechandoLista(false);
+    }, 180);
+  };
   const [espiando, setEspiando] = useState<"fora" | "dentro" | "saindo">("fora");
   const fechaEspiada = useRef<ReturnType<typeof setTimeout> | null>(null);
   const espiar = (entra: boolean) => {
@@ -2199,7 +2210,7 @@ export default function App() {
           </button>
         }
       />
-      {!sidebarHidden && lista}
+      {!sidebarHidden && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : ""}`}>{lista}</div>}
       {sidebarHidden && espiando !== "fora" && (
         // A lista por cima do conteúdo, sem empurrar: aparece no hover do botão e fica enquanto o mouse
         // estiver no botão ou nela.
@@ -2422,7 +2433,7 @@ export default function App() {
           aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. Fica por último
           no DOM: no Electron a região de arrastar que vem depois engole o no-drag de quem veio antes. */}
       <button
-        onClick={() => setSidebarHidden((v) => !v)}
+        onClick={alternaLista}
         title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
         aria-pressed={!sidebarHidden}
         onPointerEnter={() => sidebarHidden && espiar(true)}
