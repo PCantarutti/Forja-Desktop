@@ -3,7 +3,7 @@ import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { createPortal } from "react-dom";
 import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
-import { ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trocar, X } from "./icons";
+import { ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trash, Trocar, X } from "./icons";
 import { campoPrompt } from "./Composer";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
 import { PROPORCOES, RAZAO, estimarTempo, outroLado, proporcaoPerto, quadrosDe, razaoSimples, tamanhoNaRazao, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
@@ -746,6 +746,7 @@ export default function VideoView(props: {
           qual={qual}
           onAbrirBaixar={props.onAbrirBaixar}
           onSalvarPadrao={salvarPadrao}
+          onError={mostrarErro}
           salvo={salvoPadrao}
           acelerador={acelerador && acelerador.arquivos.length > 0 ? (() => {
             const faltaGb = acelerador.arquivos.filter((a) => !a.presente).reduce((t, a) => t + a.gb, 0);
@@ -1012,6 +1013,7 @@ function AjustesVideo(props: {
   onSalvarPadrao: () => void;
   salvo: boolean;
   acelerador: Acel | null;
+  onError: (e: string) => void;
 }) {
   const { o, set, st } = props;
   const [listaAberta, setListaAberta] = useState(false);
@@ -1171,7 +1173,7 @@ function AjustesVideo(props: {
               </div>
             </div>
           )}
-          <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
+          <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" title={dicaQualidade(st.gpu_video, atual, props.tamanhos)}>
             {qualidades.map((q) => {
               const treinou = !atual?.req?.resolucoes || q in atual.req.resolucoes;
               return (
@@ -1187,7 +1189,6 @@ function AjustesVideo(props: {
                                 razao={livreAtivo ? razaoLivre[0] / razaoLivre[1] : props.prop ? RAZAO[props.prop] : null}
                                 rotulo={livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : props.prop ?? ""}
                                 onAplicar={(w, h) => { set("width", w); set("height", h); }} />
-          <p className="text-[11px] leading-snug text-faint">{dicaQualidade(st.gpu_video, atual, props.tamanhos)}</p>
         </Secao>
 
         <Secao titulo="Duração" extra={<span className="font-mono text-[13px] font-medium text-fg">{fmtS(segundosDe(o.frames, fps))}</span>}>
@@ -1267,13 +1268,12 @@ function AjustesVideo(props: {
               </div>
               <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
                 {SEEDS.map((sd) => (
-                  <button key={sd.id} onClick={() => props.onSeedMode(sd.id)}
+                  <button key={sd.id} onClick={() => props.onSeedMode(sd.id)} title={sd.hint}
                           className={`flex-1 rounded-[6px] py-1 ${props.seedMode === sd.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
                     {sd.label}
                   </button>
                 ))}
               </div>
-              <span className="text-[11px] leading-snug text-faint">{SEEDS.find((sd) => sd.id === props.seedMode)?.hint}</span>
 
               <Secao titulo="LoRAs">
                 {props.compativeis.length ? (
@@ -1303,16 +1303,66 @@ function AjustesVideo(props: {
               </Secao>
 
               <Secao titulo="Melhorar prompt">
-                <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
-                <span className="text-[11px] leading-snug text-faint">O que reescreve o prompt: um LLM rápido basta. Não é o que gera o vídeo.</span>
+                <div className="flex justify-center [&>div]:ml-0" title="O que reescreve o prompt: um LLM rápido basta. Não é o que gera o vídeo.">
+                  <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
+                </div>
               </Secao>
               {atual?.req?.doc && (
                 <a href={atual.req.doc} target="_blank" rel="noreferrer" className="text-[11px] text-faint underline hover:text-muted">guia do sd.cpp para este modelo</a>
               )}
             </>
         </div>
+        <RodapeVideo st={st} onError={props.onError} />
       </div>
     </aside>
+  );
+}
+
+/** Rodapé dos Parâmetros do Vídeo: onde os vídeos ficam e o prazo das descartadas. As descartadas de
+ *  vídeo moram na mesma descartadas/ das imagens e seguem o mesmo prazo (config da imagem). */
+function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
+  const { st } = props;
+  const [dias, setDias] = useState(st.image.descarte_dias ?? 0);
+  const [limpando, setLimpando] = useState("");
+  async function prazo(d: number) {
+    setDias(d);
+    try {
+      await api.put("/local/image/defaults", { ...st.image, descarte_dias: d });
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  async function esvaziar() {
+    try {
+      const r = await api.post<{ apagados: number }>("/imagens/descartadas/limpar");
+      setLimpando(`${r.apagados} arquivo(s) apagado(s).`);
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  return (
+    <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3 text-[11.5px] text-muted">
+      <div className="flex items-center gap-1.5">
+        <span className="shrink-0">Salvar em</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-fg-2" title={st.video_dir}>{st.video_dir}</span>
+        <button title="Abrir a pasta dos vídeos" className="shrink-0 rounded-[6px] p-1 text-faint hover:bg-raised hover:text-fg"
+                onClick={() => api.post("/open", { path: st.video_dir, mode: "open" }).catch((e: any) => props.onError(e.message))}>
+          <FolderOpen className="size-3.5" />
+        </button>
+      </div>
+      <label className="flex items-center gap-1.5" title="0 = guardar para sempre. Vale para imagens e vídeos descartados.">
+        Descartadas somem em
+        <input type="number" min={0} value={dias} onChange={(e) => prazo(Number(e.target.value))}
+               className="bg-transparent text-right font-mono text-fg-2 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none" style={{ width: `${String(dias).length + 0.6}ch` }} />
+        {dias === 1 ? "dia" : "dias"}
+      </label>
+      <div className="flex items-center gap-2">
+        <button onClick={esvaziar} className="inline-flex items-center gap-1 text-faint hover:text-err">
+          <Trash className="size-3" /> Esvaziar descartadas agora
+        </button>
+        {limpando && <span className="text-faint">{limpando}</span>}
+      </div>
+    </div>
   );
 }
 

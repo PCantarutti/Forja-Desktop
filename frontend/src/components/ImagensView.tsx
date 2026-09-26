@@ -957,13 +957,12 @@ function Ajustes(props: {
       <Secao titulo="Sementes">
         <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
           {SEEDS.map((sd) => (
-            <button key={sd.id} onClick={() => props.onSeedMode(sd.id)}
+            <button key={sd.id} onClick={() => props.onSeedMode(sd.id)} title={sd.hint}
                     className={`flex-1 rounded-[6px] py-1 ${props.seedMode === sd.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
               {sd.label}
             </button>
           ))}
         </div>
-        <span className="text-[11px] leading-snug text-faint">{SEEDS.find((sd) => sd.id === props.seedMode)?.hint}</span>
       </Secao>
 
       <div className="grid grid-cols-2 gap-2">
@@ -981,10 +980,9 @@ function Ajustes(props: {
       </div>
 
       <Secao titulo="Melhorar prompt">
-        <div className="min-w-0" title="Modelo que reescreve o prompt (não é o que gera a imagem)">
+        <div className="flex justify-center [&>div]:ml-0" title="O que reescreve o prompt: um LLM rápido basta. Não é o que gera a imagem.">
           <ModelPicker provider={props.llm.provider} model={props.llm.model} onChange={(provider, model) => props.onLlm({ provider, model })} />
         </div>
-        <span className="text-[11px] leading-snug text-faint">Um LLM rápido basta; não é o modelo que gera a imagem.</span>
       </Secao>
 
       <div className="mt-auto flex flex-col gap-2 border-t border-line pt-3 text-[11.5px] text-muted">
