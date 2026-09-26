@@ -16,6 +16,7 @@ import re
 import zlib
 from collections import Counter
 from pathlib import Path
+from typing import Callable
 
 LEMBRA_SEM_PROGRESSO = 4
 INTERVEM_SEM_PROGRESSO = 8
@@ -70,16 +71,21 @@ class Placar:
         self.escreveu = False
         self.testou = False                          # run_command ok desde a última escrita
         self.teto_menor = False                      # próximo turno pensa com teto menor
+        self.teto_maior = False                      # juiz disse "progredindo": o próximo pensa com 2× (E16-B)
         self.ultimo = ""                              # último resultado (para a mensagem do nível 2)
         self.mudados: list[str] = []
+        self.escada = 0                               # E16-B: intervenções seguidas sem progresso forte
+        self.forte = False                            # arquivo mudou de verdade ou comando que falhava passou
+        self.ponto_bom: dict[str, bytes | None | bool] = {}  # conteúdo dos arquivos quando um comando passou
+        self.ponto_bom_cmd = ""
 
     # ------------------------------------------------------------ entrada
 
     def usuario(self) -> None:
         """Mensagem do usuário conta como progresso e zera o que era sinal de giro."""
-        hist = self.arquivos
+        hist, bom, cmd = self.arquivos, self.ponto_bom, self.ponto_bom_cmd
         self.__init__()
-        self.arquivos = hist
+        self.arquivos, self.ponto_bom, self.ponto_bom_cmd = hist, bom, cmd
 
     def bloqueada(self, nome: str, args: dict) -> str | None:
         if self.bloqueios.get(chave(nome, args), 0) > 0:
@@ -124,11 +130,16 @@ class Placar:
             self.escreveu, self.testou = True, False
             if caminho not in self.mudados:
                 self.mudados.append(caminho)
+            self.forte |= novo
             return novo
         if nome == "run_command":
+            if self.escreveu and root is not None:  # E16-B: o ponto bom para onde o nível 4 recua
+                self.ponto_bom = {c: _le(root / c) for c in self.mudados}
+                self.ponto_bom_cmd = str(args.get("command"))[:200]
             self.testou = True
             if str(args.get("command")) in self.cmd_falhou:  # falhava e passou
                 self.cmd_falhou.discard(str(args.get("command")))
+                self.forte = True
                 return True
         h = _h(nome + normaliza(texto))
         novo = h not in self.resultados
@@ -138,6 +149,8 @@ class Placar:
     def passo(self, progrediu: bool) -> None:
         """Fim de um passo (uma resposta do modelo com as chamadas dela)."""
         self.bloqueios = {k: n - 1 for k, n in self.bloqueios.items() if n > 1}
+        if self.forte:  # só progresso de verdade desce a escada (resultado novo qualquer não basta)
+            self.escada, self.forte = 0, False
         if progrediu:
             self.sem_progresso, self.lembrou = 0, False
         else:
@@ -180,6 +193,33 @@ class Placar:
             return 1, f"{self.sem_progresso} passos seguidos sem nada novo", None
         return 0, "", None
 
+    def escala(self) -> int:
+        """E16-B: mais uma intervenção sem progresso forte desde a anterior. 2 = intervenção, 3 = contexto
+        limpo, 4 = recuo, 5 = estacionar."""
+        self.escada += 1
+        return min(5, self.escada + 1)
+
+    def recua(self, root: Path, original: "Callable[[str], bytes | None | bool]") -> list[str]:
+        """Nível 4 no modo agente: os arquivos mudados voltam ao último ponto bom (quando um comando passou);
+        sem ponto bom, ao que eram antes do turno (`original(caminho)`: bytes, None = não existia, False = não
+        se sabe). Devolve os caminhos que voltaram."""
+        voltaram = []
+        for c in list(self.mudados):
+            antes = self.ponto_bom[c] if c in self.ponto_bom else original(c)
+            if antes is False:
+                continue
+            alvo = root / c
+            try:
+                if antes is None:
+                    alvo.unlink(missing_ok=True)
+                else:
+                    alvo.write_bytes(antes)
+            except OSError:
+                continue
+            voltaram.append(c)
+        self.arquivos, self.escreveu = {}, bool(self.ponto_bom)
+        return voltaram
+
     def intervencao(self, motivo: str, alvo: str | None) -> str:
         """Mensagem do nível 2. Bloqueia `alvo` e marca o próximo turno para pensar menos."""
         if alvo:
@@ -194,6 +234,16 @@ class Placar:
         return (f"Você está em loop: {motivo}. Último resultado: {self.ultimo.strip()[:300] or '(vazio)'}. "
                 f"Estado: {estado}.{bloq} Escreva em 3 linhas o que está errado e escolha uma abordagem "
                 "DIFERENTE da que vinha tentando.")
+
+
+def _le(p: Path) -> bytes | None | bool:
+    """Conteúdo para o recuo: None = não existe (recuar apaga); False = grande demais ou ilegível (não mexe)."""
+    if not p.exists():
+        return None
+    try:
+        return p.read_bytes() if p.stat().st_size <= 512_000 else False
+    except OSError:
+        return False
 
 
 LEMBRETE = ("Os últimos passos não produziram nada novo (mesmos resultados, nenhum arquivo mudou de verdade). "
@@ -227,6 +277,17 @@ def degenerado(raciocinio: str) -> str:
     if (h := len(HESITA.findall(j))) / (len(j) / 4) * 1000 > HESITA_POR_MIL:
         return f"hesitação em série ({h} \"wait/espera/na verdade\" em ~{len(j) // 4} tokens)"
     return ""
+
+
+def suspeito(raciocinio: str) -> bool:
+    """Meio caminho do `degenerado` (compressão abaixo de 0,4 ou metade do limite de hesitação): sozinho não
+    aborta nada; é a concordância que o juiz sem confiança (gramática) exige para abortar."""
+    j = (raciocinio or "")[-JANELA:]
+    if len(j) < MIN_ANALISE:
+        return False
+    b = j.encode("utf-8", "replace")
+    return (len(zlib.compress(b)) / len(b) < 0.4
+            or len(HESITA.findall(j)) / (len(j) / 4) * 1000 > HESITA_POR_MIL / 2)
 
 
 # ------------------------------------------------------------ mediana por modelo

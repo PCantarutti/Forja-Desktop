@@ -110,6 +110,8 @@ export function ModeEffortMenu(props: {
   onEffort: (v: Effort) => void;
   running?: boolean;
   semExtremo?: boolean;
+  autonomo?: boolean;                    // E16-C: trabalho autônomo nesta conversa (só com ferramentas)
+  onAutonomo?: (v: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLDivElement>(null);
@@ -149,6 +151,7 @@ export function ModeEffortMenu(props: {
           open ? "bg-line ring-1 ring-accent-line" : "bg-raised"}`}
       >
         {modo && <span className={`size-1.5 shrink-0 rounded-full ${COR_MODO[modo.id]}`} />}
+        {props.autonomo && <span className="shrink-0 font-mono text-[10.5px] text-accent" title="Trabalho autônomo ligado nesta conversa">auto</span>}
         <span className={`truncate ${modo?.id === "bypass" ? "text-err" : ""}`}>
           {modo ? `${modo.label} · ${esf.label}` : `Esforço ${esf.label.toLowerCase()}`}
         </span>
@@ -191,6 +194,19 @@ export function ModeEffortMenu(props: {
               })}
             </div>
           </div>
+          {props.onAutonomo && (
+            <label className="flex cursor-pointer items-start gap-2.5 border-t border-line px-4 py-2.5 text-[12.5px] text-fg-2 hover:bg-raised/60">
+              <input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={!!props.autonomo}
+                     onChange={(e) => props.onAutonomo!(e.target.checked)} />
+              <span>
+                <span className="block text-fg">Trabalho autônomo nesta conversa</span>
+                <span className="block text-[11.5px] leading-snug text-faint">
+                  Segue sozinho até o orçamento, anota as perguntas, se recupera de loop e, se travar, estaciona com
+                  relatório e aviso no celular.
+                </span>
+              </span>
+            </label>
+          )}
           <div className="border-t border-line px-4 py-2 text-[11.5px] text-muted">{esf.label}: {esf.hint.charAt(0).toLowerCase() + esf.hint.slice(1)}.</div>
         </div>
       )}

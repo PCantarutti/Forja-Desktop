@@ -15,11 +15,11 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import AsyncIterator
 
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
-from . import catalogo, kvcache, maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
+from . import autonomo, juiz, catalogo, kvcache, maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
 from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
@@ -194,6 +194,7 @@ class Run:
         self.cancel = asyncio.Event()
         self.alertas = 0                 # avisos de "pode estar travado" (viram notificação na interface)
         self.tentativas: dict[str, int] = {}  # id da chamada run_task -> tentativa (checkpoint por tarefa)
+        self.auto = autonomo.Sessao(conv_id)  # E16-C: trabalho autônomo e o placar do relatório
         self.rodando = asyncio.Event()   # limpo = pausado (Pausar/Continuar); o Parar é o cancel
         self.rodando.set()
         self.pending: dict[str, asyncio.Future] = {}
@@ -1353,6 +1354,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     rota_principal = modelctl.como_rodar("principal", {"provider": req.provider, "model": req.model})
     loop = LoopDetector()
     placar = progresso.Placar()  # E16: progresso por passo, ciclos, erro repetido, alucinação
+    run.auto = autonomo.Sessao(conv_id, ligado=agent and autonomo.ligado(conv_id))
+    passos_base = max_iterations
+    inicio_run = datetime.now(timezone.utc).replace(tzinfo=None)
     nudges = iterations = retries = 0
     ultimo_real = 0  # prompt + resposta da última volta, medidos pelo servidor (E4)
     forcar_compactar = estourou = False
@@ -1388,11 +1392,27 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             if run.cancel.is_set():
                 break
             yield {"type": "status", "text": ""}
-        if iterations >= max_iterations:
-            yield _event(conv_id, "warning", f"Limite de {max_iterations} iterações (esforço {req.effort}) "
-                                             "atingido. O agente parou.")
+        if run.auto.ligado and (fim := run.auto.estourou()):
+            async for ev in _estaciona(conv_id, run, fim, maestro_mode, inicio_run):
+                yield ev
             break
+        if iterations >= max_iterations:
+            # E16-C: no trabalho autônomo o limite é checkpoint: com progresso recente segue até o orçamento
+            if run.auto.ligado and placar.sem_progresso < progresso.LEMBRA_SEM_PROGRESSO:
+                max_iterations += passos_base
+                yield _event(conv_id, "info", f"Checkpoint de {iterations} passos com progresso recente: seguindo "
+                                              "(trabalho autônomo).")
+            elif run.auto.ligado:
+                async for ev in _estaciona(conv_id, run, f"{iterations} passos sem progresso recente", maestro_mode,
+                                           inicio_run):
+                    yield ev
+                break
+            else:
+                yield _event(conv_id, "warning", f"Limite de {max_iterations} iterações (esforço {req.effort}) "
+                                                 "atingido. O agente parou.")
+                break
         iterations += 1
+        run.auto.passos += 1
         if maestro_mode:  # um run_task pode ter trocado o modelo no ar desde a última rodada
             parou = False
             async for ev in _garante_modelo(conv_id, maestro_spec, run):
@@ -1454,7 +1474,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         degenerou = ""
         checado = 0
         # Depois de uma intervenção o próximo turno pensa com metade do teto: é para agir, não repensar.
-        mult, placar.teto_menor = (0.5 if placar.teto_menor else 1.0), False
+        mult = 0.5 if placar.teto_menor else 2.0 if placar.teto_maior else 1.0  # juiz "progredindo" (E16-B): 2×
+        placar.teto_menor = placar.teto_maior = False
+        juiz_tarefa, juiz_feito = None, False
         if rota_principal.slot is not None:  # E4: guarda o cache de quem estava no slot e traz o desta conversa
             if feito := await asyncio.to_thread(kvcache.assume, conv_id, rota_principal.slot):
                 yield _event(conv_id, "info", f"Cache do prompt em disco: {feito}.")
@@ -1478,6 +1500,21 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                         checado = len(reasoning)
                         if degenerou := progresso.degenerado(reasoning):
                             break
+                        # E16-B: sem degeneração visível mas pensando demais para este modelo: o juiz decide,
+                        # num slot livre, sem pausar a geração.
+                        if (juiz_tarefa is None and not juiz_feito and llm.spec(req.provider)["type"] == "llamacpp"
+                                and progresso.pensa_demais(req.model, len(reasoning) // 4)):
+                            juiz_tarefa = asyncio.create_task(juiz.julga(req.content or "", reasoning,
+                                                                         {"provider": req.provider, "model": req.model}))
+                    if juiz_tarefa is not None and juiz_tarefa.done():
+                        acao = juiz.decide(juiz_tarefa.result(), progresso.suspeito(reasoning))
+                        veredito = juiz_tarefa.result() or {}
+                        juiz_tarefa, juiz_feito = None, True
+                        if acao == "abortar":
+                            degenerou = f"juiz: {veredito.get('veredito')} {veredito.get('confianca') or ''}".strip()
+                            break
+                        if acao == "estender":
+                            placar.teto_maior = True
                 elif kind == "tool_args":
                     yield {"type": "tool_token", "name": val["name"], "text": val["text"]}
                 elif kind == "done":
@@ -1513,11 +1550,14 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             raise
         finally:
             await fluxo.aclose()  # o break do filtro também tem de derrubar a conexão com o provedor
+            if juiz_tarefa is not None and not juiz_tarefa.done():
+                juiz_tarefa.cancel()
 
         if run.cancel.is_set():
             _save_partial(conv_id, content, reasoning)
             break
         if degenerou:
+            metricas.registra("filtro_raciocinio", conv=conv_id, model=req.model, motivo=degenerou[:120])
             # O raciocínio degenerado não volta ao histórico: reenviado, ele reforçaria o próprio giro.
             yield _event(conv_id, "warning", f"Raciocínio degenerado ({degenerou}): a geração foi abortada e o "
                                              "modelo recebeu uma intervenção.")
@@ -1730,11 +1770,30 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             elif nivel == 1:
                 aviso_loop = progresso.LEMBRETE
         if motivo_loop and not stop:
-            for ev in (_alerta(run, conv_id, f"Recuperação de loop: {motivo_loop}. O modelo recebeu uma intervenção.")
-                       if maestro_mode else
-                       [_event(conv_id, "warning", f"Recuperação de loop: {motivo_loop}. O modelo recebeu uma "
-                                                   "intervenção e a chamada que girava foi bloqueada.")]):
-                yield ev
+            # E16-B: intervenção de novo sem progresso forte desde a anterior sobe um degrau
+            nivel = placar.escala() if autonomo.opcoes()["recuperacao"] else 2
+            if nivel == 3:
+                forcar_compactar = True
+                aviso_loop += (" O histórico deste loop foi resumido (nível 3, contexto limpo): siga a partir do resumo "
+                               "sem repetir o que já não funcionou.")
+            elif nivel == 4:
+                texto4, nivel = _recuo(conv_id, run, placar, motivo_loop, maestro_mode)
+                aviso_loop = texto4 or aviso_loop
+            run.auto.niveis[nivel] += 1
+            metricas.registra("recuperacao", conv=conv_id, nivel=nivel, motivo=motivo_loop[:200])
+            if nivel == 5:
+                async for ev in _estaciona(conv_id, run, motivo_loop, maestro_mode, inicio_run):
+                    yield ev
+                stop, aviso_loop = True, ""
+            else:
+                o_que = {2: "O modelo recebeu uma intervenção e a chamada que girava foi bloqueada",
+                         3: "O histórico do loop foi resumido (nível 3)",
+                         4: "Recuo ao último ponto bom (nível 4)"}[nivel]
+                for ev in (_alerta(run, conv_id, f"Recuperação de loop: {motivo_loop}. {o_que}.")
+                           if maestro_mode else [_event(conv_id, "warning", f"Recuperação de loop: {motivo_loop}. {o_que}.")]):
+                    yield ev
+                if nivel >= autonomo.opcoes()["notificar_nivel"]:
+                    autonomo.avisa_celular(f"Forja: recuperação nível {nivel}", motivo_loop[:160], conv_id)
         if aviso_loop:  # depois dos resultados: no meio deles quebraria a sequência de tool calls
             yield _event(conv_id, "nudge", aviso_loop, to_model=True)
         # Muitas leituras seguidas sem escrever nada: a janela enche de arquivo lido. Uma dica por turno,
@@ -1761,6 +1820,10 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
     for f in run.filhos.values():  # o turno acabou (parado, limite, erro): filho órfão não teria a quem avisar
         f["task"].cancel()
+    if run.auto.ligado and not run.auto.estacionou and not run.cancel.is_set():
+        texto = _relatorio(conv_id, run, maestro_mode, inicio_run)
+        yield _event(conv_id, "info", texto)
+        autonomo.avisa_celular("Forja terminou o trabalho autônomo", texto.splitlines()[1][:160], conv_id)
     if run.cancel.is_set():
         yield _event(conv_id, "info", "Geração interrompida pelo usuário.")
     if run.tasks:  # estado final da lista de tarefas fica no histórico
@@ -1774,6 +1837,78 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if ev := await retitle(conv_id, provisorio, req):
             yield ev
     yield {"type": "done"}
+
+
+def _tarefas_da_run(conv_id: int, desde) -> tuple[list[str], list[str]]:
+    """(concluídas desde `desde`, as que precisam do usuário) nas tarefas do Maestro desta conversa."""
+    with db.session() as s:
+        ts = s.query(db.Task).filter(db.Task.conversation_id == conv_id).all()
+        feitas = [t.code for t in ts if t.status == "completed" and t.updated_at and t.updated_at >= desde]
+        pendentes = [f"{t.code} ({(t.blocked_reason or '')[:80]})" for t in ts if t.status == "needs_human"]
+    return feitas, pendentes
+
+
+def _relatorio(conv_id: int, run: Run, maestro_mode: bool, desde) -> str:
+    if maestro_mode:
+        feitas, pendentes = _tarefas_da_run(conv_id, desde)
+    else:
+        feitas = [str(t.get("content") or t.get("title") or "")[:60] for t in run.tasks if t.get("status") == "done"]
+        pendentes = []
+    return run.auto.relatorio(feitas, pendentes)
+
+
+def _recuo(conv_id: int, run: Run, placar, motivo: str, maestro_mode: bool) -> tuple[str, int]:
+    """Nível 4 (E16-B). Maestro: a tarefa que travou vira needs_human e ela segue para a próxima independente.
+    Agente: os arquivos voltam ao último ponto bom e ele tenta uma vez de outro jeito. Sem saída, nível 5."""
+    if maestro_mode:
+        with db.session() as s:
+            t = (s.query(db.Task).filter(db.Task.conversation_id == conv_id,
+                                         db.Task.status.notin_(("completed", "needs_human", "cancelled", "pending")))
+                 .order_by(db.Task.updated_at.desc()).first())
+            code = t.code if t else None
+        if not code:
+            return "", 5
+        taskdb.set_status(code, "needs_human", conv_id, f"Recuperação de loop: {motivo}"[:500])
+        if not (prox := taskdb.proxima_pronta(conv_id)):
+            return "", 5
+        return (f"Recuo (nível 4): {code} travou ({motivo}) e virou needs_human, com o diagnóstico. NÃO insista nela: "
+                f"siga com a próxima independente, run_task sem code (a próxima pronta é {prox})."), 4
+    root = workspace.root()
+
+    def original(caminho: str):
+        try:
+            alvo = str(resolve_path(root, caminho))
+        except ToolError:
+            return False
+        with db.session() as s:
+            ck = (s.query(db.Checkpoint).filter(db.Checkpoint.conversation_id == conv_id,
+                                                db.Checkpoint.turn_id == run.turn_id, db.Checkpoint.path == alvo)
+                  .order_by(db.Checkpoint.id).first())
+            if ck is None:
+                return False
+            return ck.content if ck.existed else None
+
+    ponto = f"quando `{placar.ponto_bom_cmd}` passou" if placar.ponto_bom else "antes deste turno"
+    voltaram = placar.recua(root, original)
+    if not voltaram:
+        return "", 5
+    return (f"Recuo (nível 4): {', '.join(voltaram[:8])} voltaram ao último ponto bom ({ponto}). Tente UMA vez com uma "
+            "abordagem diferente; se travar de novo, o trabalho estaciona."), 4
+
+
+async def _estaciona(conv_id: int, run: Run, motivo: str, maestro_mode: bool, desde) -> AsyncIterator[dict]:
+    """Nível 5 (E16-B): nada funcionou. Nota de sessão, relatório na conversa e push; nunca em silêncio."""
+    run.auto.estacionou = motivo
+    try:
+        nome = projstate.write(workspace.root(), conv_id, "Trabalho estacionado pela recuperação de loop",
+                               f"Parou em: {motivo}", [], [motivo], "Ler o relatório e responder na conversa")
+        nota = f" Nota em {projstate.SESSOES}/{nome}."
+    except Exception:  # nota é bônus: estacionar não pode falhar por ela
+        nota = ""
+    texto = _relatorio(conv_id, run, maestro_mode, desde)
+    yield _event(conv_id, "warning", f"Trabalho estacionado: {motivo}.{nota}")
+    yield _event(conv_id, "info", texto)
+    autonomo.avisa_celular("Forja estacionou", motivo[:160], conv_id)
 
 
 async def _garante_modelo(conv_id: int, spec: dict, run: Run) -> AsyncIterator[dict]:
@@ -2463,6 +2598,18 @@ async def _ask(call: dict, run: Run, out: dict, meta: dict) -> AsyncIterator[dic
                    text="Envie as perguntas em 'questions', cada uma com 'question' e 'options'.")
         return
     meta["questions"] = qs
+    if run.auto.ligado:  # E16-C: ninguém olhando; não fica parado esperando
+        run.auto.perguntas += [q["question"] for q in qs]
+        if autonomo.opcoes()["ask_user"] == "recomendada":
+            escolhas = [next((o["label"] for o in q["options"] if "recomend" in o["label"].lower()),
+                             q["options"][0]["label"] if q["options"] else "") for q in qs]
+            meta["answers"] = escolhas
+            out.update(status="ok", meta=meta, text="Trabalho autônomo, ninguém olhando: escolhida a opção recomendada "
+                       "(fica no relatório).\n" + "\n".join(f"- {q['question']}: {a}" for q, a in zip(qs, escolhas)))
+        else:
+            out.update(status="ok", meta=meta, text="Trabalho autônomo, ninguém olhando: a pergunta foi anotada para o "
+                       "relatório. Não espere resposta: siga com o que não depende dela, pela opção mais segura.")
+        return
     fut = asyncio.get_running_loop().create_future()
     run.pending[call["id"]] = fut
     yield {"type": "question_request", "call": call, "questions": qs,

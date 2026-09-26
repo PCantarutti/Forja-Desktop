@@ -1963,20 +1963,20 @@ Diferenças em relação ao plano:
   - raciocínio longo e variado **não** aborta.
 
 ### Parte B: níveis 3–5 e o juiz do raciocínio
-- [ ] **Nível 3, contexto limpo:** se o loop continua depois do nível 2, o próprio histórico do loop
+- [x] **Nível 3, contexto limpo:** se o loop continua depois do nível 2, o próprio histórico do loop
       está reforçando o erro. Resumir a parte repetida em poucas linhas, com a compactação dentro do
       turno da E4, e seguir a partir do resumo. Opcional: fazer essa etapa no slot `capaz`, via
       `como_rodar`, que no Low VRAM usa o mesmo modelo, sem troca.
-- [ ] **Nível 4, recuo:** voltar os arquivos ao último ponto bom (commit da E2).
+- [x] **Nível 4, recuo:** voltar os arquivos ao último ponto bom (commit da E2).
   - No **Maestro:** a tarefa vira `needs_human`, com o diagnóstico, e ele **segue para a próxima tarefa
     independente**. Uma tarefa travada não derruba a noite.
   - No **modo agente:** volta ao último ponto bom e tenta uma vez com outra abordagem, antes do nível 5.
-- [ ] **Nível 5, estacionar:** nada funcionou, ou tudo o que resta depende do que travou. Gravar
+- [x] **Nível 5, estacionar:** nada funcionou, ou tudo o que resta depende do que travou. Gravar
       `session_note` (onde parou, o que tentou, o que precisa do usuário), parar de forma organizada e
       mandar **push para o celular** (`mobile.py`) com o resumo.
-- [ ] **O Maestro passa a usar a mesma escada.** Os alertas de hoje ("pode estar em loop: confira",
+- [x] **O Maestro passa a usar a mesma escada.** Os alertas de hoje ("pode estar em loop: confira",
       `agent.py:1481` e `1561`) viram os níveis 1–2, e os níveis 3–5 substituem o girar até 500.
-- [ ] **Juiz do raciocínio (LLM), só quando o filtro da parte A fica em dúvida:** raciocínio acima de
+- [x] **Juiz do raciocínio (LLM), só quando o filtro da parte A fica em dúvida:** raciocínio acima de
       3× a mediana do modelo, sem degeneração visível.
   - Recebe: o pedido, o começo do raciocínio, um trecho do meio e os últimos ~2k caracteres.
   - Classifica em `progredindo`, `girando` ou `alucinando` (fatos inventados sobre o código, arquivos
@@ -2000,7 +2000,7 @@ Diferenças em relação ao plano:
     passa a ser adaptativo.
   - `girando`/`alucinando` → aborta e vai para o nível 2.
   - Um falso positivo só custa um lembrete e um turno mais curto, então é aceitável.
-- [ ] Testes:
+- [x] Testes:
   - nível 4 no Maestro segue para a próxima tarefa independente;
   - nível 5 grava `session_note` e manda o push;
   - o juiz `progredindo` estende o teto;
@@ -2009,24 +2009,45 @@ Diferenças em relação ao plano:
   - backend sem logprobs cai para gramática e exige o filtro.
 
 ### Parte C: modo autônomo (noite toda)
-- [ ] **O limite de passos vira checkpoint, não parede.** No modo autônomo, ao chegar em
+- [x] **O limite de passos vira checkpoint, não parede.** No modo autônomo, ao chegar em
       `MAX_ITERATIONS`, olhar o placar: com progresso recente, continuar sozinho até o orçamento; sem
       progresso, entrar na escada.
-- [ ] **Configuração "Trabalho autônomo"**, por conversa e global:
+- [x] **Configuração "Trabalho autônomo"**, por conversa e global:
   - **recuperação automática** ligada/desligada. Desligada, fica como hoje;
   - **orçamento:** teto de horas, passos ou tokens. No teto, estaciona com relatório (nível 5);
   - **`ask_user` sem ninguém olhando:** escolhe a opção recomendada e registra a escolha, ou anota a
     pergunta e segue com outra tarefa. Padrão: anotar e seguir;
   - **notificar a partir do nível:** padrão nível ≥ 4, e sempre no fim, com o relatório "feito / travou
     / por quê".
-- [ ] **Relatório da manhã:** ao terminar ou estacionar, uma mensagem final na conversa (e no push) com:
+- [x] **Relatório da manhã:** ao terminar ou estacionar, uma mensagem final na conversa (e no push) com:
       tarefas feitas, níveis acionados ("3 intervenções, 1 recuo, 0 estacionamentos"), o que precisa do
       usuário e o tempo gasto.
-- [ ] **Métricas (E10):** cada nível acionado, cada veredito do juiz e cada abort do filtro viram evento.
+- [x] **Métricas (E10):** cada nível acionado, cada veredito do juiz e cada abort do filtro viram evento.
       Serve para calibrar os limites (8 passos, razão 0,25, 3× a mediana).
-- [ ] Validar no app real: deixar o bench da E0 rodando em modo autônomo com um modelo pequeno e um
+- [x] Validar no app real: deixar o bench da E0 rodando em modo autônomo com um modelo pequeno e um
       pedido que força loop (ex.: teste impossível de passar). Tem de estacionar com relatório e push,
       sem ficar parado em silêncio nem girar até o fim do orçamento.
+
+**Feito (2026-09-26), partes B e C:**
+- A escada vive no `Placar` (`escala`): cada intervenção sem progresso **forte** desde a anterior (arquivo
+  mudou de verdade, ou comando que falhava passou; resultado novo qualquer não basta) sobe um degrau.
+  Nível 3 força a compactação dentro do turno; nível 4 no agente recua os arquivos ao último ponto bom
+  (o conteúdo de quando um comando passou; sem ponto bom, o checkpoint de antes do turno) e, no Maestro,
+  marca a tarefa `needs_human` e manda seguir para a próxima pronta; sem saída, nível 5: nota em
+  `.forja/sessions/`, relatório na conversa e push. Vale para o Maestro também (ele não gira mais até 500).
+- Juiz em `app/juiz.py`: letra A/B/C com `logprobs` num slot livre (`como_rodar("juiz")`), em paralelo à
+  geração; sem logprobs, gramática, e aí só aborta com `progresso.suspeito` concordando. **Diferença:** o
+  llama-server fixa o teto de raciocínio no começo da requisição, então "progredindo" dobra o teto do
+  **próximo** passo, não do atual.
+- Trabalho autônomo em `app/autonomo.py`: opções globais (Configurações › Geral) e interruptor por
+  conversa no menu Modo; limite de passos vira checkpoint com progresso recente; orçamento de horas/passos;
+  `ask_user` anota (ou escolhe a recomendada) e segue; relatório no fim com push. Eventos
+  `recuperacao`, `juiz` e `filtro_raciocinio` no JSONL de métricas (a tabela é da E10).
+- Validado no Forja real com um servidor falso em ciclo `list_dir → read_file`, conversa com trabalho
+  autônomo: intervenção, histórico resumido (nível 3), nível 4 sem nada para recuar, estacionou com nota e
+  relatório em 13 passos, e o push saiu sem erro (o celular estava fora do adb, a chegada não foi
+  conferida). **Ficou:** o bench da E0 inteiro em modo autônomo com modelo pequeno (horas de GPU), e o
+  interruptor por conversa no app do celular.
 
 ### Parte D (experimento): comparar juízes
 

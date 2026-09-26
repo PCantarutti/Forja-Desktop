@@ -55,6 +55,7 @@ export type AppSettings = {
   max_workers: number;
   model_lifecycle: string;
   revisao?: "off" | "avisa" | "bloqueia";
+  autonomo?: { recuperacao?: boolean; horas?: number; passos?: number; ask_user?: "anota" | "recomendada"; notificar_nivel?: number };
   maestro_model: { provider: string; model: string };
   maestro_browser: boolean;
   auto_review: boolean;
@@ -157,6 +158,44 @@ function TutorialDocker() {
         </p>
       </div>
     </details>
+  );
+}
+
+/** E16-C: trabalho autônomo. Liga-se por conversa (menu Modo); aqui ficam o orçamento e o comportamento. */
+function Autonomo({ v, onChange }: { v: NonNullable<AppSettings["autonomo"]>; onChange: (v: NonNullable<AppSettings["autonomo"]>) => void }) {
+  const o = { recuperacao: true, horas: 8, passos: 2000, ask_user: "anota" as const, notificar_nivel: 4, ...v };
+  const muda = (patch: Partial<typeof o>) => onChange({ ...o, ...patch });
+  return (
+    <Field label="Trabalho autônomo"
+           hint="Liga por conversa, no menu Modo do campo de mensagem. A recuperação de loop (resumir o loop, recuar ao último ponto bom, estacionar com relatório) vale em toda conversa com ela ligada.">
+      <div className="space-y-2 text-sm">
+        <label className="flex items-center gap-2 text-fg-2">
+          <input type="checkbox" checked={o.recuperacao} onChange={(e) => muda({ recuperacao: e.target.checked })} />
+          Recuperação automática de loop (níveis 3 a 5)
+        </label>
+        <div className="flex flex-wrap items-center gap-2 text-muted">
+          Orçamento:
+          <input type="number" min={0.1} step={0.5} className={`${input} w-20`} value={o.horas}
+                 onChange={(e) => muda({ horas: Number(e.target.value) || 8 })} /> h ou
+          <input type="number" min={10} step={100} className={`${input} w-24`} value={o.passos}
+                 onChange={(e) => muda({ passos: Number(e.target.value) || 2000 })} /> passos
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-muted">
+          Pergunta sem ninguém olhando:
+          <select className={`${input} w-auto`} value={o.ask_user} onChange={(e) => muda({ ask_user: e.target.value as "anota" | "recomendada" })}>
+            <option value="anota">anotar e seguir</option>
+            <option value="recomendada">escolher a recomendada</option>
+          </select>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-muted">
+          Avisar no celular a partir do nível
+          <select className={`${input} w-auto`} value={o.notificar_nivel} onChange={(e) => muda({ notificar_nivel: Number(e.target.value) })}>
+            {[2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          (e sempre no fim)
+        </div>
+      </div>
+    </Field>
   );
 }
 
@@ -300,9 +339,10 @@ export default function Settings(props: {
                 <Field label="num_ctx (Ollama)" hint="Janela enviada ao Ollama. No LM Studio, a janela é a do modelo carregado.">
                   <Num value={s.num_ctx} onChange={(v) => set("num_ctx", v)} />
                 </Field>
-                <Field label="Máximo de iterações por mensagem" hint="Quantos passos o agente pode dar antes de parar sozinho.">
+                <Field label="Máximo de iterações por mensagem" hint="Quantos passos o agente pode dar antes de parar sozinho. No trabalho autônomo vira checkpoint: com progresso recente, segue.">
                   <Num value={s.max_iterations} onChange={(v) => set("max_iterations", v)} />
                 </Field>
+                <Autonomo v={s.autonomo ?? {}} onChange={(v) => set("autonomo", v)} />
                 <Field label="Compactar contexto em" hint="Fração da janela (0.3 a 0.95) que dispara o resumo automático.">
                   <input
                     type="number"

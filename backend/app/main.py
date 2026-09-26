@@ -767,6 +767,24 @@ async def perfil_hardware():
         "recomendados": rec, "ganho_um_modelo": perfis.BENCH_MESMO_MODELO}
 
 
+class AutonomoBody(BaseModel):
+    ligado: bool
+
+
+@app.get("/api/conversations/{conv_id}/autonomo")
+def conversa_autonomo(conv_id: int):
+    """E16-C: trabalho autônomo nesta conversa, mais as opções globais."""
+    from . import autonomo
+    return {"ligado": autonomo.ligado(conv_id), "opcoes": autonomo.opcoes()}
+
+
+@app.put("/api/conversations/{conv_id}/autonomo")
+def conversa_autonomo_define(conv_id: int, body: AutonomoBody):
+    from . import autonomo
+    autonomo.define(conv_id, body.ligado)
+    return {"ligado": autonomo.ligado(conv_id), "opcoes": autonomo.opcoes()}
+
+
 @app.get("/api/perfil/workers")
 def perfil_workers(n: int = 1):
     """E7: quantos de `n` Workers rodam juntos agora (slots do servidor, perfil) e a janela de cada slot."""

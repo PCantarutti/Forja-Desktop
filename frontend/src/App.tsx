@@ -510,6 +510,17 @@ export default function App() {
 
   // Miniaturas/anexos são servidos da pasta da conversa aberta.
   useEffect(() => setFileConv(currentId), [currentId]);
+  // E16-C: trabalho autônomo por conversa (o menu Modo mostra; o backend guarda)
+  const [autonomo, setAutonomo] = useState(false);
+  useEffect(() => {
+    setAutonomo(false);
+    if (currentId !== null) api.get<{ ligado: boolean }>(`/conversations/${currentId}/autonomo`).then((r) => setAutonomo(r.ligado)).catch(() => {});
+  }, [currentId]);
+  const mudaAutonomo = (v: boolean) => {
+    if (currentId === null) return;
+    setAutonomo(v);
+    api.put<{ ligado: boolean }>(`/conversations/${currentId}/autonomo`, { ligado: v }).then((r) => setAutonomo(r.ligado)).catch(() => setAutonomo(!v));
+  };
 
   // Ao trocar de conversa, restaura o estado da coluna direita dela. Rascunho (sem conversa) = recolhida.
   // Conversa recém-criada a partir do rascunho herda o estado atual (ex.: agente abriu o navegador no 1º turno).
@@ -2075,6 +2086,8 @@ export default function App() {
             onEffort={(effort) => update({ effort })}
             running={running}
             semExtremo={section === "maestro"}
+            autonomo={agentica && currentId !== null ? autonomo : undefined}
+            onAutonomo={agentica && currentId !== null ? mudaAutonomo : undefined}
           />
           <ContextRing
             used={summary.used}

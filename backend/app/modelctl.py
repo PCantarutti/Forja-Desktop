@@ -301,7 +301,7 @@ async def after_task(spec: dict | None, maestro: dict | None = None) -> AsyncIte
 # e a E0 mediu o custo: numa máquina de 12 GB a troca Maestro <-> Worker gastou 39% do relógio (carga mais o
 # Maestro reprocessando o contexto inteiro a cada volta, porque os híbridos não restauram do disco).
 
-PAPEIS = ("principal", "worker", "explorador", "revisor", "visual", "lateral", "compactar", "embeddings")
+PAPEIS = ("principal", "worker", "explorador", "revisor", "visual", "lateral", "compactar", "embeddings", "juiz")
 SLOT_PRINCIPAL = 0      # o principal (agente/Maestro) fica sempre no slot 0, com cache_prompt
 SLOT_AUXILIAR = 1       # auxiliar vai para o 1 quando o servidor tem mais de um slot
 _SLOTS: dict[int, int] = {}  # pid do llama-server -> nº de slots (pergunta ao servidor uma vez)
