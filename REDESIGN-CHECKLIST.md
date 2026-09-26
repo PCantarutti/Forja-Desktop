@@ -16,16 +16,21 @@ Handoff: `C:\Projetos\Forja\design_handoff_forja_redesign`. Branch `feat/redesig
 - [x] Iniciais configuráveis no pé do trilho (Configurações › Aplicativo), clique abre Configurações
 
 ## Falta (front)
-- [ ] Imagens: inspetor 292px, barra de decisão flutuante, marcação com anel accent
-- [ ] Vídeo: inspetor 300px (MODELO/FORMATO/DURAÇÃO/VARIAÇÕES/ACELERAR), hover com scrub
-- [ ] Comparar: card PROMPT no topo, voto com estrela, Analisar com IA abaixo das colunas
-- [ ] Pesquisa: card da pergunta com plano recolhível, RESUMO com borda accent, coluna Fontes 300px
-- [ ] Maestro: marcas da árvore ✓ ⟳ ◆ ? ○ e legenda, tiles Tarefa e Modelo · VRAM
-- [ ] Trajetória: linha do tempo em 3 faixas
+- [x] Imagens: inspetor 292px, barra de decisão flutuante, marcação com anel accent
+- [x] Vídeo: inspetor 300px, marcação com anel accent
+- [ ] Vídeo: seções do inspetor como no design (FORMATO com desenho, DURAÇÃO em slider, ACELERAR em toggle), hover com scrub accent
+- [x] Comparar: voto com estrela ("Votar" / "Melhor resposta"), Refazer, rótulos mono (card PROMPT e Analisar já existiam)
+- [x] Pesquisa: RESUMO com borda accent, plano recolhível e FONTES com rótulo mono
+- [ ] Pesquisa: coluna Fontes 300px à direita
+- [x] Maestro: marcas ✓ ⟳ ◆ ? ○ com as cores de estado
+- [ ] Maestro: legenda no rodapé da árvore
+- [x] Trajetória: 3 faixas, delegação violeta, toggles no estilo novo
 - [ ] IA local e modais (seletor de modelo, player, máscara, ampliar, cartões de estado)
 - [ ] Esc fecha o último tile
 - [ ] TasksBar recolhível no topo do composer (hoje é card na conversa)
-- [ ] Portar tudo para o forja-web (merge por arquivo; App.tsx/InfoPanel/types são escritos à mão — ver SYNC.md)
+- [x] Portado para o forja-web: branch `feat/redesign` (worktree `forja-web/.claude/worktrees/redesign`), sem Vídeo/IA local/Board que o web não tem
+- [ ] forja-web: validar com o Docker de pé (localhost:7001) — só vi o visual com Vite, sem dados
+- [ ] O que for feito daqui em diante no desktop: portar com `git merge-file` (base = desktop `c8e802a`)
 
 ## Backend (depois)
 - [ ] Persistir `tema`, `corDestaque`, `fonte` no `/settings` (hoje em `localStorage` `forja.aparencia`) — e o celular ler daí
