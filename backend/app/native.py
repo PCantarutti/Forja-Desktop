@@ -139,10 +139,12 @@ def open_path(path: str, mode: str, line: int | None = None) -> str:
             # pasta padrão (Documentos) — que é exatamente o que acontecia com pasta com espaço.
             # String (não lista) e sem shell: no Windows o Popen manda a linha direto para o
             # CreateProcess, sem o list2cmdline no meio e sem interpretador nenhum.
+            # Pasta abre por dentro; /select, abriria a pasta de cima com ela marcada (o botão de pasta do
+            # Maestro e da conversa levava um nível acima). Arquivo continua marcado na pasta dele.
             alvo = os.path.normpath(path).replace(chr(34), "")
-            subprocess.Popen('explorer /select,' + chr(34) + alvo + chr(34))
+            subprocess.Popen('explorer ' + ("" if os.path.isdir(alvo) else '/select,') + chr(34) + alvo + chr(34))
         elif SYSTEM == "Darwin":
-            subprocess.Popen(["open", "-R", path])
+            subprocess.Popen(["open", path] if os.path.isdir(path) else ["open", "-R", path])
         else:
             subprocess.Popen(["xdg-open", path if os.path.isdir(path) else os.path.dirname(path)])
         return "revelado"

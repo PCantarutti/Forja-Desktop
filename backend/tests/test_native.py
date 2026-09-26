@@ -127,3 +127,14 @@ def test_documento_abre_no_programa_do_sistema_e_codigo_no_editor(tmp_path, monk
 
     assert native.open_path(str(arquivo), "editor") == ("padrão" if espera_sistema else "code")
     assert bool(chamou_startfile) is espera_sistema
+
+
+@pytest.mark.skipif(not WIN, reason="o caminho do Explorer é do Windows")
+def test_revelar_pasta_abre_dentro_dela(tmp_path, monkeypatch):
+    """/select, numa pasta abria a de cima com ela marcada: o botão de pasta levava um nível acima."""
+    alvo = tmp_path / "bench tarefas"
+    alvo.mkdir()
+    vistos = []
+    monkeypatch.setattr(native.subprocess, "Popen", lambda cmd, **kw: vistos.append(cmd))
+    native.open_path(str(alvo), "reveal")
+    assert vistos == ['explorer "' + str(alvo) + '"']
