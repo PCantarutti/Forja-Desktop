@@ -637,6 +637,7 @@ export default function VideoView(props: {
                   {() => (
                     <div className="w-60 space-y-2 p-1">
                       <Segmento
+                        formas
                         rotulo="Proporção"
                         opcoes={PROPORCOES}
                         valor={prop}
@@ -826,17 +827,25 @@ function Menu(props: { rotulo: React.ReactNode; titulo?: string; children: (fech
   );
 }
 
-function Segmento<T extends string>(props: { rotulo: string; opcoes: T[]; valor: T | null; onValor: (v: T) => void }) {
+function Segmento<T extends string>(props: { rotulo: string; opcoes: T[]; valor: T | null; onValor: (v: T) => void; formas?: boolean }) {
+  // formas: "16:9" ganha o desenho da proporção em cima do rótulo, como no design
+  const forma = (op: string) => {
+    const [a, b] = op.split(":").map(Number);
+    if (!a || !b) return null;
+    const k = 14 / Math.max(a, b);
+    return <span className="mx-auto mb-1 block rounded-[2px] border border-current" style={{ width: a * k, height: b * k }} />;
+  };
   return (
     <div>
-      <p className="mb-1 px-1 text-[11px] text-faint">{props.rotulo}</p>
-      <div className="flex rounded-full border border-line p-0.5">
+      <p className="mb-1 px-1 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">{props.rotulo}</p>
+      <div className="flex gap-1 rounded-[9px] border border-line p-0.5">
         {props.opcoes.map((op) => (
           <button
             key={op}
             onClick={() => props.onValor(op)}
-            className={`flex-1 rounded-full px-2 py-1 ${props.valor === op ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+            className={`flex-1 rounded-[7px] px-2 py-1 ${props.formas ? "font-mono text-[11px]" : ""} ${props.valor === op ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}
           >
+            {props.formas && forma(op)}
             {op}
           </button>
         ))}
