@@ -27,9 +27,15 @@ const TRUQUES: Truque[] = [
 ];
 const CLASSE_DURA: Record<string, number> = { "livre-gira": 1400, "livre-pulo": 1000, "livre-onda": 1300, "livre-achata": 1000, "livre-pisca": 1100 };
 
-/** Sorteia um truque a cada 4–9 s, nunca o mesmo duas vezes seguidas. Virou figura, fica figura: os
- *  truques seguintes só fazem graça em cima dela. Volta ao retângulo quando `quieto` liga (mouse em cima,
- *  selecionado), quando o componente sai da tela ou quando a janela fica escondida. */
+// Ritmo das distrações: raras de propósito. Um truque a cada 300–500 s (sorteado de novo a cada vez);
+// a troca de forma pode sair em qualquer sorteio, mas tem prazo: se até 900–1200 s não saiu, sai.
+const INTERVALO_S: [number, number] = [300, 500];
+const PRAZO_FIGURA_S: [number, number] = [900, 1200];
+const entre = ([a, b]: [number, number]) => (a + Math.random() * (b - a)) * 1000;
+
+/** Virou figura, fica figura: os truques seguintes só fazem graça em cima dela. Volta ao retângulo
+ *  quando `quieto` liga (mouse em cima, selecionado), quando o componente sai da tela ou quando a janela
+ *  fica escondida — e aí os dois relógios recomeçam. */
 function useTruque(quieto: boolean): { figura: string; classe: string } {
   const [estado, setEstado] = useState({ figura: "", classe: "" });
   const [sumiu, setSumiu] = useState(0); // janela escondida: recomeça do retângulo
@@ -44,19 +50,22 @@ function useTruque(quieto: boolean): { figura: string; classe: string } {
     let vivo = true, ultimo = -1, figura = "";
     const timers: ReturnType<typeof setTimeout>[] = [];
     const depois = (ms: number, f: () => void) => timers.push(setTimeout(() => vivo && f(), ms));
+    const virar = (t: Truque) => {
+      figura = t.figura!;
+      setEstado({ figura, classe: "" });
+      if (t.classe) {
+        depois(650, () => setEstado({ figura, classe: t.classe! }));
+        depois(650 + CLASSE_DURA[t.classe], () => setEstado({ figura, classe: "" }));
+      }
+    };
     const proximo = () =>
-      depois(4000 + Math.random() * 5000, () => {
+      depois(entre(INTERVALO_S), () => {
         // já é figura: só os truques de classe (a graça em cima da figura)
         const opcoes = TRUQUES.map((t, i) => [t, i] as const).filter(([t, i]) => i !== ultimo && (!figura || !t.figura));
         const [t, i] = opcoes[Math.floor(Math.random() * opcoes.length)];
         ultimo = i;
         if (t.figura) {
-          figura = t.figura;
-          setEstado({ figura, classe: "" });
-          if (t.classe) {
-            depois(650, () => setEstado({ figura, classe: t.classe! }));
-            depois(650 + CLASSE_DURA[t.classe], () => setEstado({ figura, classe: "" }));
-          }
+          virar(t);
           depois(t.dura, proximo);
         } else {
           setEstado({ figura, classe: t.classe! });
@@ -64,6 +73,12 @@ function useTruque(quieto: boolean): { figura: string; classe: string } {
           depois(t.dura + 100, proximo);
         }
       });
+    // o prazo da figura: se o sorteio não trouxe nenhuma até aqui, vem uma agora
+    depois(entre(PRAZO_FIGURA_S), () => {
+      if (figura) return;
+      const figuras = TRUQUES.filter((t) => t.figura);
+      virar(figuras[Math.floor(Math.random() * figuras.length)]);
+    });
     proximo();
     return () => {
       vivo = false;
