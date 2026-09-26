@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -199,6 +200,32 @@ def uso() -> dict:
     arqs = list(pasta().glob("*.bin"))
     return {"bytes": sum(a.stat().st_size for a in arqs), "conversas": len({a.stem.split("-", 1)[-1] for a in arqs}),
             "limite": limite_bytes(), "ligado": ligado()}
+
+
+CAMPOS = ("ctx", "cache_type_k", "cache_type_v", "kv_unified", "swa_full")  # mudar um deles invalida o cache
+
+
+def _do_modelo(path: str) -> list[Path]:
+    alvo, out = os.path.normcase(os.path.normpath(str(path))), []
+    for j in pasta().glob("*.json"):
+        try:
+            if os.path.normcase(os.path.normpath(json.loads(j.read_text("utf-8")).get("gguf") or "")) == alvo:
+                out += [j, j.with_suffix(".bin")]
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def bytes_do_modelo(path: str) -> int:
+    return sum(a.stat().st_size for a in _do_modelo(path) if a.suffix == ".bin" and a.exists())
+
+
+def apagar_modelo(path: str) -> int:
+    """Parâmetro que muda o KV (CAMPOS) ou GGUF trocado: o cache salvo daquele modelo não restaura mais."""
+    n = bytes_do_modelo(path)
+    for a in _do_modelo(path):
+        a.unlink(missing_ok=True)
+    return n
 
 
 def poda() -> None:

@@ -518,8 +518,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     if rota.caminho == "mesmo-slot-sequencial":  # E4: vai ocupar o slot do principal; o cache dele vai p/ disco
         from . import kvcache
         await asyncio.to_thread(kvcache.cede, rota.slot)
-    if rota.caminho == "nuvem" and rota.spec:
-        spec = dict(rota.spec)
+    if rota.caminho in ("nuvem", "modelo-do-principal") and rota.spec:
+        spec = dict(rota.spec)  # E4/E11: pedido fora da VRAM usa o carregado, nunca troca de modelo
     provider, model = spec["provider"], spec["model"]
     via, auto, caps, tools, schemas, system = await _setup(spec, run_obj, sub_effort, persona, structured)
     brief = [task]

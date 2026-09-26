@@ -555,6 +555,7 @@ export type Hardware = {
 };
 
 export type LocalState = {
+  aviso_padroes?: boolean;  // E4: padrões de cache novos, avisar uma vez
   runtimes: { llama: RuntimeInfo; sd: RuntimeInfo; ffmpeg: RuntimeInfo; comfy: RuntimeInfo };
   models: LocalModel[];
   server: {

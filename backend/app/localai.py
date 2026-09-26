@@ -187,7 +187,7 @@ def _blank() -> dict:
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
             "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
             "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0,
-            "slots_liberados": [], "video_dir": ""}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
+            "slots_liberados": [], "video_dir": "", "padroes_e4_visto": False}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
 
 
 def read_config() -> dict:
@@ -287,6 +287,20 @@ def defaults_for(path: str = "") -> dict:
         d["ctx"] = min(info["ctx_train"] or d["ctx"], 32768)         # a janela cheia costuma não caber
         d["n_expert"] = info["n_expert_used"] or 0
     return d
+
+
+def aviso_padroes_e4(cfg: dict | None = None) -> bool:
+    """Quem já tinha modelos configurados antes da E4 vê uma vez que os padrões de cache mudaram (os modelos
+    que estavam no padrão antigo acompanham sozinhos: só o que o usuário mudou fica gravado)."""
+    cfg = cfg or read_config()
+    return not cfg.get("padroes_e4_visto") and bool(cfg.get("models"))
+
+
+def visto_padroes_e4(desfazer: bool = False) -> dict:
+    if desfazer:
+        set_defaults({"cache_type_k": "f16", "cache_type_v": "f16", "kv_unified": False})
+    _patch("padroes_e4_visto", True)
+    return {"defaults": defaults_for("")}
 
 
 def ctx_por_requisicao(ctx, params: dict | None) -> int:
@@ -2520,6 +2534,7 @@ def state() -> dict:
             "hardware": hardware(), "guardrail": guardrail(), "autoload": autoload(),
             "hf_token": bool(hf_token()),
             "jobs": downloads.list_jobs(), "defaults": defaults_for(""), "last": cfg["last"],
+            "aviso_padroes": aviso_padroes_e4(cfg),
             "image": cfg["image"], "image_models": imagens, "port": config.LOCAL_PORT,
             "video": {**DEFAULT_IMAGE, **(cfg.get("video") or {})}, "video_models": videos,
             "gpu_video": gpu_video(), "tempos_video": list((cfg.get("tempos") or {}).values()),

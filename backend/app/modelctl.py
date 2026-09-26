@@ -347,6 +347,18 @@ def _local_carregado() -> dict | None:
     return {"provider": config.LOCAL_PROVIDER["id"], "model": st["alias"]} if st.get("running") and st.get("alias") else None
 
 
+def custo_da_volta() -> str:
+    """Quanto custa voltar ao modelo carregado depois de uma troca: com cache em disco que restaura, só
+    carregar + restaurar; senão, carregar + reprocessar o contexto inteiro (o que dominou a E0)."""
+    if localai is None or not (st := localai.status()).get("running") or not st.get("path"):
+        return "nada carregado"
+    from . import kvcache
+    ok, porque = kvcache.suportado(st["path"], st.get("params") or {})
+    if kvcache.ligado() and ok:
+        return "a volta custa carregar + restaurar o cache do disco"
+    return f"a volta custa carregar + reprocessar o contexto ({porque or 'cache em disco desligado'})"
+
+
 def _nuvem(papel: str) -> dict | None:
     """O slot "nuvem" dos subagentes, se o usuário liberou este papel para a nuvem."""
     if not (getattr(config, "NUVEM_POR_PAPEL", {}) or {}).get(papel):
@@ -383,8 +395,7 @@ def _decide(papel: str, pedido: dict | None) -> Rota:
                     "mesmo modelo com um slot só (-np 1): espera o principal e divide o cache com ele")
     # Daqui em diante o pedido é outro modelo local (ou nenhum): a regra é não trocar.
     if papel == "worker" and pedido:
-        return Rota("trocar-modelo", pedido, None, "o Worker pode trocar de modelo (a E0 mediu: troca "
-                                                    "+ reprocessar o Maestro custam minutos por tarefa)")
+        return Rota("trocar-modelo", pedido, None, f"o Worker pode trocar de modelo, em lote; {custo_da_volta()}")
     if nuvem := _nuvem(papel):
         return Rota("nuvem", nuvem, None, "este papel está liberado para a nuvem nas configurações")
     if pedido and not carregado:

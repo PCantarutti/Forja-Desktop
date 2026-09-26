@@ -272,9 +272,10 @@ trocas de modelo.
 e sem a política de execução isso aumenta o cache perdido do Maestro. Com E2 pronta, o loop interno
 também pode usar o rollback.
 
-- [ ] **O Worker passa pela política de execução (E4).** Hoje ele roda no mesmo llama-server enquanto o
+- [x] **O Worker passa pela política de execução (E4).** Hoje ele roda no mesmo llama-server enquanto o
       Maestro espera e, com `-np 1`, expulsa o cache do Maestro em **toda** tarefa. O Worker usa um slot
       diferente do principal, ou espera, conforme a política.
+  *(2026-09-26: feito na E4 bloco 1 — `como_rodar("worker")`, slot fixo do principal nunca usado.)*
 
 - [x] **Loop de correção dentro do Worker.** Se o `verify` falhar e sobrarem passos (dos 15 de
       `config.py:113`), devolver a saída do teste ao Worker como mensagem ("o verify falhou: …, corrija")
@@ -292,7 +293,7 @@ também pode usar o rollback.
 - [x] **Escalonador determinístico.** Uma função `proxima_pronta()` escolhe a próxima tarefa pendente com
       as dependências feitas, por `priority` e depois pela ordem do plano. A Maestro pode chamar
       `run_task` sem `code`, e o código escolhe. Assim a ordem deixa de depender do modelo pequeno.
-- [ ] **Custo de troca de modelo** (a solução depende do número medido na E0). O Worker é a única
+- [x] **Custo de troca de modelo** (a solução depende do número medido na E0). O Worker é a única
       chamada auxiliar que pode trocar de modelo, porque executa a entrega de verdade, e mesmo assim só
       pela política da E4:
   - Opção A: quando Maestro e Worker são modelos diferentes, rodar **várias tarefas prontas seguidas**
@@ -304,6 +305,7 @@ também pode usar o rollback.
     troca passa a custar só o tempo de carregar mais o de restaurar, sem reprocessar. Combina com a
     opção A.
   - Decidir depois de ver o baseline.
+  *(2026-09-26: A + B + C. A: `maestro.run_task` roda até 3 prontas seguidas quando o Worker está noutro modelo local (`LOTE_MAX`), validado por teste; B: aviso "um modelo só" da E4; C: `ensure`/`unload` salvam o cache e a próxima mensagem restaura — só nos modelos comuns/SWA com janela inteira; nos híbridos a volta ainda reprocessa.)*
 - [x] Limite de tamanho de tarefa no `plan_feature`: avisar quando o contrato declarar mais de ~5
       arquivos ou quando o `goal` tiver mais de uma ação ("e também…"), sugerindo dividir.
 - [x] Testes:
@@ -519,13 +521,15 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
   - `ctx_checkpoints`: manter o que já existe. Importa para modelos com janela deslizante (SWA) e
     híbridos.
   - Cache em disco **ligado**, com limite de 4 GB (ver a configuração abaixo).
-- [ ] **Migração dos modelos já configurados.** Ao atualizar, aplicar os padrões novos só nos
+- [x] **Migração dos modelos já configurados.** Ao atualizar, aplicar os padrões novos só nos
       parâmetros que ainda estão com o valor padrão antigo. Tudo o que o usuário mudou à mão fica como
       está. Mostrar uma vez: "padrões de cache atualizados para este modelo (KV q8_0, cache em disco)",
       com um "desfazer".
-- [ ] **Aviso ao mudar um parâmetro que invalida o cache** (`ctx`, `cache_type_k/v`, `kv_unified`,
+  *(2026-09-26: a migração é natural — só o que o usuário mudou fica gravado; aviso único na aba Modelos da IA local com "Entendi"/"Desfazer", `POST /api/local/padroes`.)*
+- [x] **Aviso ao mudar um parâmetro que invalida o cache** (`ctx`, `cache_type_k/v`, `kv_unified`,
       troca do GGUF): "isto descarta os N MB de cache salvo deste modelo". A regra prática, na própria
       tela: escolher os parâmetros uma vez por modelo e não mexer mais.
+  *(2026-09-26: aviso com os MB na aba Modelos; salvar um desses campos apaga o cache daquele modelo, `kvcache.apagar_modelo`.)*
 - [x] **Os padrões acima só mudam depois das validações V1–V4 da E0.** O que cada resultado decide:
   - V1 falhou: cache em disco desligado quando o KV é unificado;
   - V2 falhou: cache em disco opcional, e não padrão;
@@ -587,10 +591,11 @@ depois, mas o Forja não liga isso (`localai.py:1448` só passa `-np`).
     - N = 0 nunca descarrega.
 - [x] **Privacidade:** o arquivo guarda a conversa codificada (código, prompts). Fica só em
       `FORJA_DATA`, nunca vai para o mirror ou o mobile, e sai junto no "limpar dados".
-- [ ] **Política de execução:** a `como_rodar` passa a saber se existe cache em disco válido para
+- [x] **Política de execução:** a `como_rodar` passa a saber se existe cache em disco válido para
       aquele papel e modelo, e o custo estimado de trocar de modelo cai de "carregar + reprocessar"
       para "carregar + restaurar". Mesmo assim, a regra "chamada auxiliar não troca de modelo" continua
       valendo, porque carregar o modelo ainda custa.
+  *(2026-09-26: `modelctl.custo_da_volta()` entra no motivo da rota do Worker.)*
 - [x] Testes (servidor falso, como o `lsp_falso.py`):
   - save antes do unload e restore depois do reload;
   - chave diferente descarta sem restaurar;
@@ -776,11 +781,12 @@ O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro
   - Por dentro chama o mecanismo do `delegate_task` com a persona `explorador`.
   - O padrão é **um por vez, com o Maestro esperando o relatório**. O Maestro depende do resultado para
     seguir, então "segundo plano" não ganha nada. O ganho é isolar o contexto, não a velocidade.
-- [ ] **Onde roda: `como_rodar("explorador", …)` da E4.** Na prática:
+- [x] **Onde roda: `como_rodar("explorador", …)` da E4.** Na prática:
   - mesmo modelo: sequencial em outro slot;
   - 2º modelo só se couber na VRAM junto com o Maestro;
   - se não couber, o modelo do Maestro, **nunca uma troca de modelo**;
   - nuvem só com o interruptor de exploração ligado.
+  *(2026-09-26: além da rota, o explorador agora usa de fato o modelo carregado quando o pedido não está na VRAM — antes só a nuvem trocava o spec.)*
 
   O explorador não implementa nenhuma regra própria de slot ou VRAM.
 - [x] **No modo agente:** criar `delegate_task(agent='explorador')`, ou um `level='explorar'`. Ajustar a
@@ -801,7 +807,8 @@ O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro
       (por exemplo, mais de 6 `read_file`/`grep`) ou a janela passar de ~50% com resultados de leitura,
       o código injeta uma dica curta: "use explore/delegate para varrer e fique só com a conclusão". É
       uma dica, não um bloqueio.
-- [ ] **Métrica:** evento do tipo `exploracao` na tabela da E10, separado das tasks.
+- [x] **Métrica:** evento do tipo `exploracao` na tabela da E10, separado das tasks.
+  *(2026-09-26: `metricas.registra("exploracao")` no JSONL; a tabela é da E10.)*
 - [x] Testes:
   - a persona não recebe ferramenta de escrita, nem se o modelo pedir;
   - o explorador passa por `como_rodar` (os cenários de VRAM e slot são testados na E4);

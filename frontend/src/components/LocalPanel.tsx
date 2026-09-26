@@ -476,6 +476,8 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   const [busy, setBusy] = useState("");
   const [log, setLog] = useState("");
   const [logAberto, setLogAberto] = useState(false);
+  const [cacheSalvo, setCacheSalvo] = useState(0);        // E4: MB do cache em disco deste modelo
+  const inicial = useRef<LlamaParams | null>(null);         // parâmetros ao abrir o modelo (o que o cache usa)
   // Acompanha a geração ao vivo e já abre na última linha, que é o que interessa num log.
   // Rolar para cima solta; voltar ao fim cola de novo — mesmo comportamento do chat.
   const { ref: caixaDoLog, fim: fimDoLog, onScroll: seguirLog, colar: colarLog } = useStickyBottom<HTMLPreElement>([log]);
@@ -505,7 +507,11 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       const v = await api.post<ModelView>("/local/model", { path, params: params || {} });
       if (meu !== pedido.current) return; // chegou fora de ordem: vale sempre a última consulta
       setView(v);
-      if (!params) setForm(v.params);
+      if (!params) {
+        setForm(v.params);
+        inicial.current = v.params;
+        api.get<{ do_modelo: number }>(`/local/kvcache?path=${encodeURIComponent(path)}`).then((k) => setCacheSalvo(k.do_modelo)).catch(() => {});
+      }
     } catch (e: any) {
       props.onError(e.message);
     }
@@ -529,6 +535,8 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   const set = <K extends keyof LlamaParams>(k: K, v: LlamaParams[K]) => setForm((f) => f && { ...f, [k]: v });
   const reset = (k: keyof LlamaParams) => view && setForm((f) => (f ? ({ ...f, [k]: view.defaults[k] } as LlamaParams) : f));
   const mudou = (k: keyof LlamaParams) => !!view && !!form && form[k] !== view.defaults[k];
+  const CAMPOS_DO_CACHE: (keyof LlamaParams)[] = ["ctx", "cache_type_k", "cache_type_v", "kv_unified", "swa_full"];
+  const invalidaCache = cacheSalvo > 0 && !!form && !!inicial.current && CAMPOS_DO_CACHE.some((k) => form[k] !== inicial.current![k]);
 
   async function apagar(m: LocalModel) {
     // Apaga de verdade, sem lixeira: modelo tem dezenas de GB e quem apaga quer o espaço de volta.
@@ -563,8 +571,22 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   const info = view?.info;
   const est = view?.estimate;
 
+  const padroes = (desfazer: boolean) => api.post("/local/padroes", { desfazer }).then(props.onDone).catch((e) => props.onError(e.message));
+
   return (
     <>
+      {st.aviso_padroes && (
+        <section className={`${card} border-accent/40`}>
+          <p className="text-muted">
+            Padrões de cache atualizados para os modelos que estavam no padrão: KV <span className="text-fg">q8_0</span> unificado
+            (metade da VRAM do cache) e cache do prompt em disco. O que você tinha mudado à mão em cada modelo continua igual.
+          </p>
+          <div className="mt-2 flex gap-2">
+            <button className={btn} onClick={() => padroes(false)}>Entendi</button>
+            <button className={btn} onClick={() => padroes(true)}>Desfazer</button>
+          </div>
+        </section>
+      )}
       {st.server.running && (
         <section className={`${card} border-emerald-800/60`}>
           <div className="flex items-center gap-2">
@@ -821,6 +843,13 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
             {busy && <span className="text-muted">{busy}</span>}
             {st.image_busy && <span className="text-amber-300">gerando imagem — a VRAM está ocupada</span>}
           </div>
+          {invalidaCache && (
+            <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-amber-200/90">
+              Isto descarta os {Math.max(1, Math.round(cacheSalvo / 2 ** 20)).toLocaleString("pt-BR")} MB de cache salvo deste modelo
+              (contexto, tipo do KV, KV unificado e janela inteira mudam o cache). Escolha esses parâmetros uma vez por
+              modelo e não mexa mais.
+            </p>
+          )}
         </section>
       )}
     </>

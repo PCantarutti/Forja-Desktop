@@ -774,14 +774,26 @@ def perfil_voltar():
 
 
 @app.get("/api/local/kvcache")
-def local_kvcache():
+def local_kvcache(path: str = ""):
     """E4: cache do prompt em disco — uso, limite e se o modelo carregado consegue restaurar (e por que não);
     mais o último modelo descarregado por ociosidade."""
     st = localai.status()
     ok, motivo = kvcache.suportado(st["path"], st.get("params") or {}) if st.get("running") else (None, "")
     return {**kvcache.uso(), "modelo": st.get("alias") or "", "suportado": ok, "motivo": motivo,
             "tipo": kvcache.tipo_de_cache(st["path"]) if st.get("running") else "",
-            "ocioso": modelctl.OCIOSO if not st.get("running") else {}}
+            "ocioso": modelctl.OCIOSO if not st.get("running") else {},
+            "do_modelo": kvcache.bytes_do_modelo(path) if path else 0}
+
+
+class PadroesBody(BaseModel):
+    desfazer: bool = False
+
+
+@app.post("/api/local/padroes")
+def local_padroes(body: PadroesBody):
+    """E4: aviso único dos padrões de cache novos (KV q8_0 unificado). "Desfazer" volta o padrão de todos os
+    modelos ao de antes; o que o usuário mudou à mão em cada modelo nunca foi tocado."""
+    return localai.visto_padroes_e4(body.desfazer)
 
 
 @app.post("/api/local/kvcache/limpar")
@@ -819,7 +831,11 @@ async def local_unload():
 @app.put("/api/local/params")
 async def local_params(body: LoadBody):
     try:
-        return await asyncio.to_thread(localai.save_params, body.path, body.params)
+        antes = localai.params(body.path)
+        novo = await asyncio.to_thread(localai.save_params, body.path, body.params)
+        if any(antes.get(k) != novo.get(k) for k in kvcache.CAMPOS):
+            kvcache.apagar_modelo(body.path)  # E4: o cache salvo com os parâmetros velhos não restaura
+        return novo
     except ToolError as e:
         raise HTTPException(400, str(e))
 

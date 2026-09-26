@@ -205,3 +205,34 @@ def test_resultado_aprovado_nao_leva_erros_intermediarios_do_worker():
     base = {"task_code": "TASK-001", "attempt": 1, "changes": [], "errors": ["run_command: exit code: 1 FAILURES"]}
     assert "errors" not in maestro._enxuto({**base, "status": "completed"})
     assert maestro._enxuto({**base, "status": "failed"})["errors"] == ["run_command: exit code: 1 FAILURES"]
+
+
+def _tres_tarefas(conv_id):
+    taskdb.create_feature(conv_id, "F", "", [{"title": t, "contract": {"goal": t, "verify_command": "pytest -q"}}
+                                             for t in ("A", "B", "C")])
+
+
+def test_worker_em_outro_modelo_local_roda_as_prontas_em_lote(conv, pasta, monkeypatch):
+    """E3 opção A: cada volta à Maestro custava carregar o modelo dela e reprocessar o contexto (E0)."""
+    from app import modelctl
+    _tres_tarefas(conv)
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: bool(spec and spec.get("model")))
+    monkeypatch.setattr(modelctl, "carregado", lambda spec: True)
+    _worker(monkeypatch, [None, None, None])
+    out = _despacha(conv, pasta, "", [True, True, True])
+    assert "TASK-001" in out["text"] and "TASK-002" in out["text"] and "TASK-003" in out["text"]
+    assert len(out["meta"]["lote"]) == 2 and "Lote: 3 tarefas" in out["text"]
+
+
+def test_mesmo_modelo_ou_falha_nao_faz_lote(conv, pasta, monkeypatch):
+    from app import modelctl
+    _tres_tarefas(conv)
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: bool(spec and spec.get("model")))
+    monkeypatch.setattr(modelctl, "carregado", lambda spec: True)
+    _worker(monkeypatch, [None])
+    out = _despacha(conv, pasta, "", [False, False, False, False])     # verify falhou: volta à Maestro
+    assert "lote" not in out["meta"]
+    config.SUBAGENTS["capaz"]["model"] = "m"                            # Worker no modelo da Maestro
+    _worker(monkeypatch, [None])
+    out = _despacha(conv, pasta, "TASK-002", [True])
+    assert "lote" not in out["meta"]

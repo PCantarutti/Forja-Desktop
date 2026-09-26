@@ -227,7 +227,40 @@ def evitar_niveis(task, root) -> dict[str, str]:
     return evitar
 
 
+LOTE_MAX = 3  # E3 opção A: tarefas seguidas no modelo do Worker antes de devolver a vez à Maestro
+
+
+def _vale_lote(out: dict, req) -> bool:
+    """Seguir no Worker só quando voltar à Maestro custa uma troca de modelo (E0: carregar + reprocessar o
+    contexto dela dominaram o relógio): Worker num modelo local diferente do dela, e a tarefa entregue."""
+    spec, meta = (out.get("meta") or {}).get("worker_spec"), out.get("meta") or {}
+    maestro = {"provider": req.provider, "model": req.model}
+    return (out.get("status") == "ok" and (meta.get("task_result") or {}).get("status") in ("completed", "unverified")
+            and modelctl.gerenciavel(spec) and modelctl.gerenciavel(maestro) and spec["model"] != req.model)
+
+
 async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
+                   run_call: Callable) -> AsyncIterator[dict]:
+    """Uma tarefa; com Worker e Maestro em modelos locais diferentes, as próximas prontas vão em lote (até
+    LOTE_MAX), para trocar de modelo duas vezes por lote e não por tarefa."""
+    async for ev in _run_uma(conv_id, call, req, run_obj, out, run_call):
+        yield ev
+    feitos = [out.copy()]
+    while len(feitos) < LOTE_MAX and _vale_lote(feitos[-1], req) and not run_obj.cancel.is_set():
+        if not (prox := taskdb.proxima_pronta(conv_id)):
+            break
+        o: dict = {}
+        async for ev in _run_uma(conv_id, {**call, "arguments": {"code": prox}}, req, run_obj, o, run_call):
+            yield ev
+        feitos.append(o)
+    if len(feitos) > 1:
+        blocos = [f"### {(f.get('meta') or {}).get('task') or '?'}\n{f.get('text')}" for f in feitos]
+        out.update(text=("\n\n".join(blocos) + f"\n\n(Lote: {len(feitos)} tarefas seguidas no modelo "
+                         "do Worker, sem trocar de modelo entre elas. Feche cada uma com update_task.)"),
+                   meta={**(out.get("meta") or {}), "lote": [f.get("meta") for f in feitos[1:]]})
+
+
+async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
                    run_call: Callable) -> AsyncIterator[dict]:
     args = call["arguments"]
     code = str(args.get("code") or "").strip().upper()
@@ -461,6 +494,7 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
         yield ev
 
     meta["task"] = task.code
+    meta["worker_spec"] = spec
     meta["task_result"] = resultado
     meta["sub"] = (sub_out.get("meta") or {}).get("sub")
     out.update(status="ok", text=_para_o_maestro(resultado), meta=meta)

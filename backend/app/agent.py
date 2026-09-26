@@ -2081,6 +2081,7 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         except ToolError as e:
             result("erro", str(e))
             return
+        t0 = time.monotonic()
         async for ev in subagents.run(conv_id, sub, req, run, out, _run_call):
             yield ev
         relatorio = re.sub(r"^\[Relatório do subagente[^\]]*\]\n", "", out.get("text") or "")
@@ -2093,6 +2094,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
             relatorio = relatorio[:subagents.MAX_RELATORIO_EXPLORACAO]
             eid = exploracoes.grava(workspace.root(), str(args.get("question") or ""),
                                     subagents._files(args.get("paths")), relatorio)
+            metricas.registra("exploracao", conv=conv_id, id=eid, segundos=round(time.monotonic() - t0, 1),
+                              chars=len(relatorio))  # E11: separado das tasks (a E10 agrega)
             out["text"] = (f"{relatorio}\n\n(Guardado como {eid} em {exploracoes.PASTA}/: sobrevive à "
                            f"compactação; passe no contrato com explorations=['{eid}'].)")
         return

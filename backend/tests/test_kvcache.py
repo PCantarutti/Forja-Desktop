@@ -150,3 +150,30 @@ def test_recarrega_sob_demanda_so_sem_nada_carregado(monkeypatch):
     assert modelctl.recarregar_sob_demanda(spec)
     monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "outro"})
     assert not modelctl.recarregar_sob_demanda(spec)       # outro carregado: escolha do usuário, não troca
+
+
+def test_mudar_parametro_do_cache_descarta_o_salvo_daquele_modelo(servidor, monkeypatch, tmp_path):
+    estado, _ = servidor
+    kvcache.pasta().mkdir(parents=True, exist_ok=True)
+    kvcache.salvar(1, 0)
+    assert kvcache.bytes_do_modelo(estado["path"]) == 100
+    assert kvcache.bytes_do_modelo(str(tmp_path / "outro.gguf")) == 0
+    from fastapi.testclient import TestClient
+    from app import main
+    monkeypatch.setattr(localai, "params", lambda p: {"ctx": 8192, "mlock": False})
+    monkeypatch.setattr(localai, "save_params", lambda p, prm: {"ctx": 8192, **prm})
+    c = TestClient(main.app)
+    c.put("/api/local/params", json={"path": estado["path"], "params": {"mlock": True}})
+    assert kvcache.bytes_do_modelo(estado["path"]) == 100          # mlock não mexe no KV
+    c.put("/api/local/params", json={"path": estado["path"], "params": {"ctx": 16384}})
+    assert kvcache.bytes_do_modelo(estado["path"]) == 0            # ctx muda o KV: não restauraria mais
+
+
+def test_aviso_dos_padroes_novos_aparece_uma_vez_e_desfazer_volta_o_f16(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "LOCAL_CONFIG", tmp_path / "local.json")
+    assert not localai.aviso_padroes_e4()                           # instalação nova: nada a avisar
+    localai.save_params(str(tmp_path / "m.gguf"), {"mlock": True})
+    assert localai.aviso_padroes_e4()
+    localai.visto_padroes_e4(desfazer=True)
+    assert not localai.aviso_padroes_e4()
+    assert localai.read_config()["defaults"] == {"cache_type_k": "f16", "cache_type_v": "f16", "kv_unified": False}
