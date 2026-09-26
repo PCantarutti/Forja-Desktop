@@ -581,13 +581,14 @@ def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: boo
     from . import ampliar as amp, comfy
     if int(fator) not in (2, 4):
         raise ToolError("Amplie em 2× ou 4×.")
-    tipo = (amp.tipo_local(modelo) or ("redesenhar" if amp.tipo_checkpoint(modelo) else "")) if modelo else ""
+    tipo = (amp.tipo_local(modelo) or ("redesenhar" if amp.tipo_checkpoint(modelo) or amp.modelo_de_imagem(modelo) else "")) \
+        if modelo else ""
     if tipo in ("seedvr2", "spandrel", "redesenhar"):  # pelo ComfyUI
         if video and tipo == "redesenhar":  # redesenharia cada quadro de um jeito: o vídeo tremeria
             raise ToolError("O redesenho amplia só imagem: para vídeo, use o SeedVR2, um ESRGAN/DAT ou o Lanczos.")
         if video:
             amp._ffmpeg()  # separa e junta os quadros
-        if not comfy.python():
+        if not comfy.python() and (tipo != "redesenhar" or amp.tipo_checkpoint(modelo)):  # o redesenho do sd-cli não precisa
             raise ToolError("Falta o ComfyUI (motor do SeedVR2 e dos DAT/HAT/SwinIR): baixe na lista de ampliação, "
                             "em Baixar o que falta.")
         if tipo in ("seedvr2", "redesenhar") and not localai.image_busy():
@@ -644,9 +645,10 @@ def prompt_da_imagem(conteudo: str, meta: dict | None) -> str:
 
 
 def _redesenho(modelo: str, prompt: str, forca: float | None) -> dict:
-    """Redesenhar (checkpoint de imagem): o prompt e a força vão junto da ampliação (Continuar refaz igual)."""
+    """Redesenhar (modelo de imagem, pelo ComfyUI ou pelo sd-cli): o prompt e a força vão junto da ampliação (Continuar
+    refaz igual)."""
     from . import ampliar as amp
-    if not (modelo and amp.tipo_checkpoint(modelo)):
+    if not (modelo and (amp.tipo_checkpoint(modelo) or amp.modelo_de_imagem(modelo))):
         return {}
     f = amp.FORCA_PADRAO if forca is None else float(forca)
     if not 0.05 <= f <= 0.9:

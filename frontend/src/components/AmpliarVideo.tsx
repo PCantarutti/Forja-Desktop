@@ -11,7 +11,7 @@ import { btn, btnPrimary } from "./LocalPanel";
 type Tipo = "esrgan" | "seedvr2" | "spandrel" | "redesenhar";
 export type CatalogoAmpliacao = {
   modelos: { nome: string; resumo: string; mb: number; presente: string; tipo: Tipo }[];
-  no_disco: { path: string; name: string; tipo: Tipo }[];
+  no_disco: { path: string; name: string; tipo: Tipo; motor?: "comfy" | "sd" }[]; // motor: do redesenho
   ffmpeg: string;
   comfy: { instalado: string; gpu: string; mb: number; versao: string };
   erro: string;
@@ -130,7 +130,8 @@ export function PainelAmpliar(props: {
   const tipo = metodos.find((m) => m.path === escolhido)?.tipo;
   const pesado = tipo === "seedvr2" || tipo === "redesenhar";
   const redesenha = tipo === "redesenhar";
-  const semComfy = !!tipo && tipo !== "esrgan" && !cat?.comfy.instalado;
+  const motor = metodos.find((m) => m.path === escolhido)?.motor;
+  const semComfy = !!tipo && tipo !== "esrgan" && motor !== "sd" && !cat?.comfy.instalado; // redesenho pelo sd-cli não precisa
 
   async function ampliar(confirm = false) {
     setEnviando(true);
@@ -208,7 +209,11 @@ export function PainelAmpliar(props: {
             <input type="range" min={0.2} max={0.7} step={0.05} value={forca} onChange={(e) => setForca(Number(e.target.value))} />
             <span className="flex text-[11px] text-faint"><span className="flex-1">fiel, só limpa</span><span>reimagina a textura</span></span>
           </label>
-          <p className="text-faint">O modelo redesenha a imagem por blocos: mais detalhe, mas muda a imagem (rostos podem sair diferentes). ~7 GB de VRAM, minutos.</p>
+          <p className="text-faint">
+            {motor === "sd"
+              ? "O próprio modelo de imagem refaz a imagem inteira no tamanho novo (pelo sd-cli, com os ajustes dele): mais detalhe, mas muda a imagem. Modelos grandes como o Qwen levam minutos."
+              : "O modelo redesenha a imagem por blocos: mais detalhe, mas muda a imagem (rostos podem sair diferentes). ~7 GB de VRAM, minutos."}
+          </p>
         </>
       )}
       {semComfy && <p className="text-amber-400">{tipo === "seedvr2" ? "O SeedVR2" : redesenha ? "O redesenho" : "Este modelo"} roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}

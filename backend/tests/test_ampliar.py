@@ -397,7 +397,7 @@ def test_redesenhar_com_checkpoint_de_imagem(isolado, monkeypatch):
                      ["model.diffusion_model.input_blocks.0.0.weight", "first_stage_model.decoder.conv_in.weight",
                       "conditioner.embedders.1.model.ln_final.weight"])
     assert ampliar.tipo_checkpoint(ck) == "sdxl" and not ampliar.tipo_local(ck)
-    assert {"path": ck, "name": "juggernautXL", "tipo": "redesenhar"} in ampliar.catalogo()["no_disco"]
+    assert {"path": ck, "name": "juggernautXL", "tipo": "redesenhar", "motor": "comfy"} in ampliar.catalogo()["no_disco"]
     with pytest.raises(lotes.ToolError, match="só imagem"):
         lotes._validar_ampliacao(2, ck, video=True)
     monkeypatch.setattr(comfy, "python", lambda: Path(sys.executable))
@@ -485,3 +485,33 @@ def test_video_pelo_comfyui_quadro_a_quadro_com_previa(isolado, monkeypatch):
     assert chamadas == [("seedvr2", True, ["00001.png", "00002.png", "00003.png"])]
     assert feito == [(1, 3), (2, 3), (3, 3)] and Image.open(previa).getpixel((0, 0))[0] == 2  # o último quadro
     assert "-framerate" in comandos[-1] and comandos[-1][comandos[-1].index("-i") + 1].endswith("%05d.png")
+
+
+def test_redesenhar_pelo_sd_cli_com_qualquer_modelo_de_imagem(isolado, monkeypatch):
+    """Modelo de imagem que o ComfyUI não abre (Qwen-Image em GGUF, Flux em peças): Lanczos até o tamanho final (múltiplo
+    de 16) e o sd-cli refaz por cima com -i e --strength; a saída volta ao tamanho exato pedido."""
+    from PIL import Image
+    from app import imagegen
+    qwen = str(isolado / "modelos" / "qwen-image-2.1.gguf")
+    monkeypatch.setattr(ampliar, "modelo_de_imagem", lambda p: p == qwen)
+    src = isolado / "a.png"
+    Image.new("RGB", (100, 60)).save(src)
+    chamadas = []
+
+    def gera(prompt, out, opts, job_id="", refs=(), progresso=None, *a):
+        chamadas.append((prompt, opts, Image.open(opts["_init"]).size))
+        progresso(2, 4, 1.0)
+        Image.new("RGB", (opts["width"], opts["height"])).save(out)
+        return out
+    monkeypatch.setattr(imagegen, "generate", gera)
+    fases = []
+    saida = isolado / "a-2x.png"
+    assert ampliar.ampliar_imagem(str(src), saida, 2, qwen, progresso=lambda f, x: fases.append((f, x)),
+                                  prompt="a cup", forca=0.5) == {"w": 200, "h": 120}
+    prompt, opts, tam_inicio = chamadas[0]
+    assert (prompt, opts["model"], opts["_strength"], opts["width"], opts["height"], tam_inicio) == ("a cup", qwen, 0.5, 208, 128, (208, 128))
+    assert Image.open(saida).size == (200, 120) and fases == [("redesenhando", None), (None, 0.5)]
+    assert lotes._redesenho(qwen, "x", None)["forca"] == ampliar.FORCA_PADRAO
+    localai.set_image({"model": "C:/m/sd15.safetensors"})
+    a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts({"_init": "C:/i.png", "_strength": 0.5}))
+    assert a[a.index("-i") + 1] == "C:/i.png" and a[a.index("--strength") + 1] == "0.5"

@@ -210,6 +210,12 @@ def tipo_checkpoint(path: str) -> str:
     return "sd15" if any(n.startswith("cond_stage_model.") for n in nomes) else ""
 
 
+def modelo_de_imagem(path: str) -> bool:
+    """Um modelo que o sd-cli gera imagem: a mesma lista da aba Imagens (sem vídeo, sem o VAE/codificador que já é
+    peça de outro modelo). Redesenha pelo sd-cli quando o ComfyUI não abre (GGUF, Qwen-Image, Flux em peças)."""
+    return localai.kind_of(Path(path)) == "image" and localai._chave(path) not in localai.acompanhantes(localai.read_config())
+
+
 def eh_spandrel(path: str) -> bool:
     return tipo_local(path) == "spandrel"
 
@@ -253,10 +259,13 @@ def catalogo() -> dict:
     modelos = [{"nome": c["nome"], "resumo": c["resumo"], "tipo": c["tipo"],
                 "mb": c.get("mb") or (assets.get(c["nome"]) or {}).get("mb", 0), "presente": no_disco.get(c["nome"].lower(), "")}
                for c in CATALOGO]
-    # Redesenhar: os checkpoints de imagem (SD 1.5/SDXL) que já estão nas pastas, sem baixar nada novo
-    for m in localai.scan((".safetensors",)):
-        if tipo_checkpoint(m["path"]):
-            achados.append({"path": m["path"], "name": m["name"], "tipo": "redesenhar"})
+    # Redesenhar: os modelos de imagem que já estão nas pastas, sem baixar nada novo. SD 1.5/SDXL de arquivo único
+    # vão pelo ComfyUI (por blocos); o resto (Qwen-Image, Flux, GGUF), pelo sd-cli (ampliar_imagem decide)
+    comp = localai.acompanhantes(localai.read_config())
+    for m in localai.scan(localai.WEIGHTS):
+        if m["kind"] == "image" and localai._chave(m["path"]) not in comp:
+            achados.append({"path": m["path"], "name": m["name"], "tipo": "redesenhar",
+                            "motor": "comfy" if tipo_checkpoint(m["path"]) else "sd"})
     ff = localai.find_exe("ffmpeg")
     return {"modelos": modelos, "erro": erro, "ffmpeg": str(ff) if ff else "", "no_disco": achados, "comfy": comfy.estado()}
 
@@ -489,6 +498,36 @@ def eh_imagem(path: str) -> bool:
     return Path(path).suffix.lower() in EXT_IMAGEM
 
 
+def _redesenhar_sd(entrada: str, saida: Path, fator: int, modelo: str, prompt: str, forca: float, job_id: str,
+                   progresso=None) -> dict:
+    """Redesenho pelo sd-cli, com qualquer modelo de imagem dele (o Qwen-Image 2.1 amplia muito bem): Lanczos até o
+    tamanho final e o modelo refaz por cima (imagem-para-imagem, `forca` = --strength), com os ajustes salvos dele.
+    De uma vez, sem blocos: cada bloco recarregaria o modelo. O VAE vai em blocos (a imagem é grande)."""
+    from PIL import Image
+    with Image.open(entrada) as im:
+        alvo = (im.width * int(fator), im.height * int(fator))
+        W, H = (alvo[0] + 15) // 16 * 16, (alvo[1] + 15) // 16 * 16  # múltiplo de 16 (Qwen-Image, Flux)
+        base = im.convert("RGB").resize((W, H), Image.LANCZOS)
+    inicio = native.pasta_ascii() / f"redesenho-{os.getpid()}-{time.monotonic_ns()}.png"
+    base.save(inicio)
+    if progresso:
+        progresso("redesenhando", None)
+
+    def passo(feito: int, total: int, _s: float) -> None:
+        if progresso and total:
+            progresso(None, feito / total)
+    try:
+        imagegen.generate(prompt or "high quality, detailed, sharp", Path(saida),
+                          {"model": modelo, "width": W, "height": H, "seed": 42, "vae_tiling": True,
+                           "_init": str(inicio), "_strength": forca}, job_id, (), passo)
+    finally:
+        inicio.unlink(missing_ok=True)
+    if (W, H) != alvo:
+        with Image.open(saida) as im:
+            im.crop((0, 0, *alvo)).save(saida)
+    return {"w": alvo[0], "h": alvo[1]}
+
+
 def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_id: str = "", progresso=None,
                    prompt: str = "", forca: float = FORCA_PADRAO) -> dict:
     """Amplia uma imagem em `fator` e grava `saida` (.png). `modelo` vazio = Lanczos (Pillow), sem IA e sem ffmpeg;
@@ -504,6 +543,8 @@ def ampliar_imagem(entrada: str, saida: Path, fator: int, modelo: str = "", job_
         from . import comfy
         return comfy.ampliar(entrada, saida, fator, modelo, job_id, progresso, "redesenhar",
                              prompt=prompt, forca=forca, bloco=1024 if ck == "sdxl" else 768)
+    if modelo and modelo_de_imagem(modelo):
+        return _redesenhar_sd(entrada, saida, fator, modelo, prompt, forca, job_id, progresso)
     with Image.open(entrada) as im:
         alvo = (im.width * int(fator), im.height * int(fator))
         if not modelo:

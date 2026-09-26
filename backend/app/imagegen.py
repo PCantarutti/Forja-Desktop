@@ -198,6 +198,8 @@ def argv(exe: Path, prompt: str, out: Path, o: dict, refs: list[str] | tuple = (
             a += ["--vae-tile-size", f"{t}x{t}", "--temporal-tiling"]
     if o.get("hires") and not video:
         a += hires(o)
+    if o.get("_init") and not video:  # redesenho (ampliar.py): a imagem de partida e quanto o modelo pode mudar
+        a += ["-i", str(o["_init"]), "--strength", f"{float(o.get('_strength') or 0.4):g}"]
     if o.get("te_cpu") in ("sempre", "editar" if refs else "gerar"):
         # Só "te=cpu" jogava o resto no dispositivo 0 — num Ryzen, a GPU integrada, e a Arc ficava parada.
         a += ["--backend", f"{_gpu(str(exe))},te=cpu"]
