@@ -374,7 +374,7 @@ function Dica({ texto }: { texto: string }) {
 function Rotulo(props: { label: string; chave?: string; mudado?: boolean; onReset?: () => void }) {
   return (
     <span className="flex items-center gap-1.5">
-      <span className={props.mudado ? "text-sky-400" : "text-muted"}>{props.label}</span>
+      <span className={props.mudado ? "font-medium text-accent-text" : "text-muted"}>{props.label}</span>
       <Dica texto={props.chave ? AJUDA[props.chave] : ""} />
       {props.mudado && props.onReset && (
         <button onClick={props.onReset} title="Voltar ao padrão" className="text-faint hover:text-fg">
@@ -685,12 +685,40 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               </div>
               <div className="mt-1.5 flex gap-2">
                 <span className="rounded-lg bg-surface px-2 py-1 text-muted">
-                  GPU <span className="ml-1 font-medium text-fg">{gb(est.gpu)}</span>
+                  GPU <span className="ml-1 font-mono font-medium text-fg">{gb(est.gpu)}</span>
                 </span>
                 <span className="rounded-lg bg-surface px-2 py-1 text-muted">
-                  Total <span className="ml-1 font-medium text-fg">{gb(est.total)}</span>
+                  Total <span className="ml-1 font-mono font-medium text-fg">{gb(est.total)}</span>
                 </span>
               </div>
+              {(() => {
+                // Barra segmentada: o que vai para a GPU (pesos, cache KV, buffers) e o que fica na RAM.
+                const buffers = Math.max(0, est.gpu - est.weights_gpu - est.kv_gpu);
+                const kvRam = Math.max(0, est.kv - est.kv_gpu);
+                const partes = [
+                  { v: est.weights_gpu, cor: "bg-accent", rotulo: "pesos na GPU" },
+                  { v: est.kv_gpu, cor: "bg-agent", rotulo: "cache KV na GPU" },
+                  { v: buffers, cor: "bg-info", rotulo: "buffers" },
+                  { v: est.weights_cpu + kvRam, cor: "bg-warn/70", rotulo: "na RAM" },
+                ].filter((p) => p.v > 0);
+                const total = partes.reduce((a, p) => a + p.v, 0) || 1;
+                return (
+                  <>
+                    <div className="mt-2 flex h-2 gap-px overflow-hidden rounded-full bg-line">
+                      {partes.map((p) => (
+                        <span key={p.rotulo} className={p.cor} style={{ width: `${(p.v / total) * 100}%` }} title={`${p.rotulo}: ${gb(p.v)}`} />
+                      ))}
+                    </div>
+                    <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-faint">
+                      {partes.map((p) => (
+                        <span key={p.rotulo} className="inline-flex items-center gap-1">
+                          <span className={`size-1.5 rounded-full ${p.cor}`} /> {p.rotulo} <span className="font-mono">{gb(p.v)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
               <p className="mt-1.5 text-faint">
                 pesos {gb(est.weights_gpu)} na GPU + {gb(est.weights_cpu)} na RAM · cache KV {gb(est.kv)} ({gb(est.kv_gpu)}{" "}
                 na GPU) · {est.layers_gpu}/{est.n_layer} camadas na GPU
