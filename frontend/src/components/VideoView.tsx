@@ -424,6 +424,8 @@ export default function VideoView(props: {
         />
       )}
 
+      <div className="flex min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-5 py-6">
           {!lotes.length && (
@@ -479,22 +481,6 @@ export default function VideoView(props: {
                 <button className={btn} onClick={() => setPerguntando(false)}>Cancelar</button>
               </div>
             </div>
-          )}
-
-          {abrirAjustes && (
-            <AjustesVideo
-              st={st}
-              o={o}
-              set={set}
-              modelo={modelo}
-              onModelo={(p) => aplicarModelo(st.video_models.find((m) => m.path === p))}
-              seedMode={seedMode}
-              onSeedMode={setSeedMode}
-              compativeis={compativeis}
-              llm={llm}
-              onLlm={setLlm}
-              onFechar={() => setAbrirAjustes(false)}
-            />
           )}
 
           <div
@@ -787,6 +773,23 @@ export default function VideoView(props: {
             Um vídeo por vez, com a GPU só para ele — as variações entram numa fila.
           </p>
         </div>
+      </div>
+      </div>
+      {abrirAjustes && (
+        <AjustesVideo
+          st={st}
+          o={o}
+          set={set}
+          modelo={modelo}
+          onModelo={(p) => aplicarModelo(st.video_models.find((m) => m.path === p))}
+          seedMode={seedMode}
+          onSeedMode={setSeedMode}
+          compativeis={compativeis}
+          llm={llm}
+          onLlm={setLlm}
+          onFechar={() => setAbrirAjustes(false)}
+        />
+      )}
       </div>
     </>
   );
@@ -1099,9 +1102,9 @@ function AjustesVideo(props: {
   const atual = st.video_models.find((m) => m.path === props.modelo);
   const a14b = !!atual?.params?.high_noise_model || atual?.variante?.includes("a14b");
   return (
-    <div className="mb-2 rounded-xl border border-line bg-surface p-3.5 text-xs">
-      <div className="mb-2.5 flex items-center gap-2">
-        <span className="font-medium text-fg">Ajustes do vídeo</span>
+    <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side p-4 text-xs">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Ajustes do vídeo</span>
         {atual?.req?.doc && (
           <a href={atual.req.doc} target="_blank" rel="noreferrer" className="text-faint underline hover:text-muted">
             guia do sd.cpp
@@ -1111,7 +1114,7 @@ function AjustesVideo(props: {
           <X className="size-3.5" />
         </button>
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-2.5">
           <Field label="Modelo" hint="Os ajustes abaixo partem dos sugeridos para ele.">
             <select className={input} value={props.modelo} onChange={(e) => props.onModelo(e.target.value)}>
@@ -1192,7 +1195,7 @@ function AjustesVideo(props: {
                 <button
                   key={s.id}
                   onClick={() => props.onSeedMode(s.id)}
-                  className={`rounded-[9px] px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                  className={`rounded-[9px] px-2.5 py-0.5 ${props.seedMode === s.id ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}
                 >
                   {s.label}
                 </button>
@@ -1204,7 +1207,7 @@ function AjustesVideo(props: {
           )}
         </div>
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -1411,7 +1414,7 @@ function CartaoVideo(props: {
   return (
     <figure
       className={`group relative overflow-hidden rounded-xl border bg-raised transition-colors ${
-        props.marcado ? "border-emerald-500" : "border-line hover:border-focus"
+        props.marcado ? "border-accent ring-[3px] ring-accent/15" : "border-line hover:border-focus"
       }`}
     >
       {temArquivo ? (
