@@ -232,6 +232,9 @@
 [data-theme="carmim"] { --color-bg: #161314; --color-side: #100e0e; --color-code: #0f0d0d; --color-surface: #1e1a1b; --color-raised: #282224; --color-line: #30292b; --color-line-strong: #3e3437; --color-fg: #f1ecec; --color-fg-2: #cfc6c7; --color-muted: #aa9fa1; --color-faint: #7a6f71; --accent: #e8546a; --accent-fg: #1c0508; }
 
 html, body, #root { height: 100%; }
+/* Controles nativos (lista do <select>, calendário, barras) no tema escuro, não no claro do sistema. */
+:root { color-scheme: dark; }
+select option, select optgroup { background: var(--color-surface); color: var(--color-fg); }
 
 /* Card de imagem gerando: a crista do "líquido" corre de lado; quem pediu menos movimento vê só o nível. */
 @keyframes onda { from { transform: translateX(0); } to { transform: translateX(-50%); } }

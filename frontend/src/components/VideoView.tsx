@@ -6,7 +6,7 @@ import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, 
 import { ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trocar, X } from "./icons";
 import { campoPrompt } from "./Composer";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
-import { PROPORCOES, estimarTempo, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
+import { PROPORCOES, RAZAO, estimarTempo, outroLado, proporcaoPerto, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
 import { A_REFAZER, AnelProgresso, BarraTopo, Caixa, Chip, duracao, Fundo, Liquido, listras, numeroCaixa, rotuloSementes, Secao, SEEDS, Stepper, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
@@ -37,7 +37,8 @@ function tamanhoAtual(o: ImageOpts, tamanhos: Tamanhos): { prop: Proporcao | nul
   for (const q of Object.keys(tamanhos))
     for (const p of PROPORCOES)
       if (tamanhos[q][p][0] === o.width && tamanhos[q][p][1] === o.height) return { prop: p, qual: q };
-  return { prop: null, qual: null };
+  // tamanho livre: o botão da proporção continua aceso se ela for (quase) a mesma
+  return { prop: proporcaoPerto(o.width, o.height), qual: null };
 }
 
 /** Um quadro do vídeo em PNG, tirado num `<video>` fora da tela: arrastar um cartão para o slot de
@@ -785,40 +786,50 @@ function dicaQualidade(gpu: LocalState["gpu_video"], modelo: LocalModel | undefi
 }
 
 
-/** Tamanho livre: arredonda para o múltiplo que o modelo exige (vem da variante) só ao confirmar, para não
- *  brigar com quem ainda está digitando. */
-function TamanhoLivre(props: { w: number; h: number; passo: number; ativo: boolean; onAplicar: (w: number, h: number) => void }) {
+/** Tamanho livre. Com uma proporção escolhida (e travada), mexer num lado calcula o outro na hora; os dois
+ *  vão para o múltiplo do modelo ao confirmar (Enter ou sair do campo), para não brigar com quem digita. */
+function TamanhoPersonalizado(props: { w: number; h: number; passo: number; prop: Proporcao | null; onAplicar: (w: number, h: number) => void }) {
   const [w, setW] = useState(String(props.w));
   const [h, setH] = useState(String(props.h));
+  const [travada, setTravada] = useState(true);
   useEffect(() => {
     setW(String(props.w));
     setH(String(props.h));
   }, [props.w, props.h]);
-  const encaixa = (v: string) => Math.min(1920, Math.max(props.passo * 8, Math.round((Number(v) || 0) / props.passo) * props.passo));
-  const aplicar = () => props.onAplicar(encaixa(w), encaixa(h));
-  const campo = "w-16 rounded-md border border-line bg-raised px-1.5 py-1 text-right tabular-nums text-fg outline-none focus:border-focus";
+  const razao = travada && props.prop ? RAZAO[props.prop] : null;
+  const encaixa = (v: number) => Math.min(3840, Math.max(props.passo * 8, Math.round((v || 0) / props.passo) * props.passo));
+  const muda = (eixo: "w" | "h", v: string) => {
+    const n = v.replace(/\D/g, "");
+    if (eixo === "w") {
+      setW(n);
+      if (razao && Number(n)) setH(String(outroLado(Number(n), razao, "w", props.passo)));
+    } else {
+      setH(n);
+      if (razao && Number(n)) setW(String(outroLado(Number(n), razao, "h", props.passo)));
+    }
+  };
+  const aplicar = () => props.onAplicar(encaixa(Number(w)), encaixa(Number(h)));
   return (
-    <div>
-      <p className={`mb-1 px-1 text-[11px] ${props.ativo ? "text-fg" : "text-faint"}`}>Personalizada</p>
-      <div className="flex items-center gap-1.5 px-1">
-        {[
-          [w, setW, "Largura"],
-          [h, setH, "Altura"],
-        ].map(([valor, setValor, rotulo], i) => (
-          <label key={rotulo as string} className="contents">
-            {i === 1 && <span className="text-faint">×</span>}
-            <input
-              aria-label={rotulo as string}
-              inputMode="numeric"
-              value={valor as string}
-              onChange={(e) => (setValor as (v: string) => void)(e.target.value.replace(/\D/g, ""))}
-              onBlur={aplicar}
-              onKeyDown={(e) => e.key === "Enter" && aplicar()}
-              className={campo}
-            />
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] text-muted">Personalizada</span>
+        {props.prop && (
+          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-[11px] text-faint" title="Mexer num lado calcula o outro pela proporção">
+            <input type="checkbox" checked={travada} onChange={(e) => setTravada(e.target.checked)} className="accent-[var(--accent)]" />
+            travar em {props.prop}
           </label>
-        ))}
-        <span className="ml-1 text-[10px] leading-tight text-faint">múltiplos de {props.passo}</span>
+        )}
+      </div>
+      <div className="flex items-center gap-1.5">
+        <Caixa rotulo="Largura">
+          <input aria-label="Largura" inputMode="numeric" value={w} onChange={(e) => muda("w", e.target.value)}
+                 onBlur={aplicar} onKeyDown={(e) => e.key === "Enter" && aplicar()} className={numeroCaixa} />
+        </Caixa>
+        <span className="text-faint">×</span>
+        <Caixa rotulo="Altura">
+          <input aria-label="Altura" inputMode="numeric" value={h} onChange={(e) => muda("h", e.target.value)}
+                 onBlur={aplicar} onKeyDown={(e) => e.key === "Enter" && aplicar()} className={numeroCaixa} />
+        </Caixa>
       </div>
     </div>
   );
@@ -1093,7 +1104,7 @@ function AjustesVideo(props: {
         </Secao>
 
         <Secao titulo="Formato">
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-4 gap-1.5">
             {PROPORCOES.map((pr) => (
               <button key={pr} onClick={() => aplicaTam(props.qual ?? qualidades[0], pr)}
                       className={`flex h-[52px] flex-col items-center justify-end gap-1.5 rounded-[9px] border pb-1.5 ${props.prop === pr ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-muted hover:border-focus hover:text-fg"}`}>
@@ -1102,19 +1113,21 @@ function AjustesVideo(props: {
               </button>
             ))}
           </div>
-          {qualidades.length > 1 && (
-            <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
-              {qualidades.map((q) => (
+          <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs">
+            {qualidades.map((q) => {
+              const treinou = !atual?.req?.resolucoes || q in atual.req.resolucoes;
+              return (
                 <button key={q} onClick={() => aplicaTam(q, props.prop ?? "16:9")}
-                        className={`flex-1 rounded-[6px] py-1 ${props.qual === q ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+                        title={treinou ? `${props.tamanhos[q][props.prop ?? "16:9"].join(" × ")}` : `${props.tamanhos[q][props.prop ?? "16:9"].join(" × ")} — acima do que ${atual?.req?.nome ?? "o modelo"} treinou: pede bem mais memória e tempo, e pode perder coerência`}
+                        className={`flex-1 rounded-[6px] py-1 ${props.qual === q ? "bg-raised text-fg" : treinou ? "text-muted hover:text-fg" : "text-faint hover:text-muted"}`}>
                   {q}
                 </button>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
           <span className="font-mono text-[11px] text-faint">{o.width} × {o.height} · múltiplos de {atual?.req?.multiplo ?? 16}</span>
-          <TamanhoLivre w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16} ativo={!props.prop}
-                        onAplicar={(w, h) => { set("width", w); set("height", h); }} />
+          <TamanhoPersonalizado w={o.width} h={o.height} passo={atual?.req?.multiplo ?? 16} prop={props.prop}
+                                onAplicar={(w, h) => { set("width", w); set("height", h); }} />
           <p className="text-[11px] leading-snug text-faint">{dicaQualidade(st.gpu_video, atual, props.tamanhos)}</p>
         </Secao>
 

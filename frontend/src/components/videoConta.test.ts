@@ -2,14 +2,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { duracoesDe, estimarTempo, quadrosDe, tamanhosDe, type Tempo } from "./videoConta.ts";
+import { duracoesDe, estimarTempo, outroLado, proporcaoPerto, quadrosDe, tamanhosDe, type Tempo } from "./videoConta.ts";
 
 test("tamanhos saem da resolução de treino e do múltiplo da variante", () => {
   const ti2v = tamanhosDe({ multiplo: 32, resolucoes: { "480p": [832, 480], "720p": [1280, 704] } });
-  assert.deepEqual(ti2v["720p"], { "16:9": [1280, 704], "9:16": [704, 1280], "1:1": [960, 960] });
+  assert.deepEqual(ti2v["720p"], { "16:9": [1280, 704], "9:16": [704, 1280], "1:1": [960, 960], "4:3": [928, 704] });
   assert.ok(Object.values(ti2v).every((p) => Object.values(p).flat().every((v) => v % 32 === 0)));
-  const flf2v = tamanhosDe({ multiplo: 16, resolucoes: { "720p": [1280, 720] } });
-  assert.deepEqual(Object.keys(flf2v), ["720p"]); // só a qualidade que o modelo tem
+  // sempre as quatro qualidades, da menor para a maior; as que o modelo não treinou saem do lado menor
+  assert.deepEqual(Object.keys(ti2v), ["480p", "720p", "1080p", "4K"]);
+  assert.deepEqual(tamanhosDe({ multiplo: 16 })["4K"]["16:9"], [3840, 2160]);
+});
+
+test("proporção perto e o outro lado travado", () => {
+  assert.equal(proporcaoPerto(832, 480), "16:9"); // 1,733: a 2,5% de 16:9
+  assert.equal(proporcaoPerto(1000, 500), null);
+  assert.equal(outroLado(1920, 16 / 9, "w", 16), 1088); // 1080 não é múltiplo de 16: vai para 1088
+  assert.equal(outroLado(720, 16 / 9, "h", 16), 1280);
 });
 
 test("durações vão até o clipe mais longo do treino, no fps da variante", () => {
