@@ -1409,6 +1409,20 @@ sem baixar nada. **Não dá para construir por enquanto.**
 - **Decisão:** o Docker/WSL continua sendo o isolamento de verdade. O AppContainer volta quando alguém
   resolver o processo filho: testar primeiro com LPAC ou com um broker que crie os pipes fora.
 
+**Causa da trava achada em 2026-09-26** (mesmo protótipo, cópias do Python portátil e do `node.exe` numa pasta
+liberada):
+- Python abre filho com pipes normalmente no AppContainer (`subprocess.run(..., capture_output=True)`,
+  inclusive outro Python): 0,03 s.
+- Node abre filho com `stdio: "ignore"` ou `"inherit"` (0,1–0,4 s), mas **trava em todo filho com pipe**
+  (`execFileSync`), e nem o `timeout` do Node age.
+- Causa: o libuv cria os pipes (`\\?\pipe\uv\…`) com `lpSecurityAttributes = NULL`. O descritor padrão de
+  pipe nomeado dá acesso ao dono, ao SYSTEM e aos administradores, sem o SID do AppContainer; dentro do
+  container a checagem exige também esse SID, então nem o próprio processo abre a outra ponta, e o libuv
+  fica esperando. É o mesmo defeito relatado em sandboxes de outros agentes (ex.: `stablyai/orca#13539`).
+- Contorno só no libuv (ACE explícito para o SID/ALL APPLICATION PACKAGES no `CreateNamedPipeW`); LPAC não
+  ajuda, e um broker não alcança pipes que o Node cria sozinho. **Fica parado até o libuv mudar.** Um modo só
+  para projetos Python seria possível, mas não vale ter dois isolamentos: o Docker/WSL cobre os dois.
+
 **Integração com o resto do plano:**
 - **Perfis (E4):** os perfis ligam o sandbox automaticamente conforme o modo de permissão, e os limites
   do Job Object vêm do perfil.
