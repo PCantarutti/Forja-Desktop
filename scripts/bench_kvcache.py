@@ -37,6 +37,7 @@ M = {
     "comum": Path(r"D:\Modelos-IA\lmstudio\Qwen\Qwen2.5-Coder-1.5B-Instruct-GGUF\qwen2.5-coder-1.5b-instruct-q8_0.gguf"),
     "swa": Path(r"D:\Modelos-IA\lmstudio\unsloth\gemma-4-12b-it-GGUF\gemma-4-12b-it-Q4_K_M.gguf"),
     "hibrido": Path(r"D:\Modelos-IA\lmstudio\lmstudio-community\Qwen3.6-35B-A3B-GGUF\Qwen3.6-35B-A3B-Q4_K_M.gguf"),
+    "qwen38": Path(r"D:\Modelos-IA\lmstudio\unsloth\Qwen3.8-27B-GGUF\Qwen3.8-27B-UD-Q2_K_XL.gguf"),  # híbrido denso
 }
 USUARIO = json.loads((DADOS_USUARIO / "local.json").read_text(encoding="utf-8")).get("models", {})
 
@@ -176,13 +177,13 @@ def v1(modelo: str) -> dict:
     return out
 
 
-def v2(modelo: str) -> dict:
+def v2(modelo: str, tamanhos: tuple[int, ...] = (5_000, 10_000, 20_000)) -> dict:
     """Processar do zero x restaurar do disco, com 5k, 10k e 20k tokens."""
     out = {}
     with Servidor(modelo, 32768, ["--kv-unified", "-np", "1"]) as s:
         out["carga_s"] = s.carga_s
         extra = frase()
-        for n in (5_000, 10_000, 20_000):
+        for n in tamanhos:
             apaga()
             tk = tokens(n, semente=n)
             zero = completa(tk)
@@ -197,8 +198,8 @@ def v2(modelo: str) -> dict:
                            "razao": round(custo / zero["prompt_ms"], 3) if zero["prompt_ms"] else None,
                            "restaurou": volta.get("ok")}
             log("V2", modelo, n, out[str(n)])
-    r10 = out["10000"]["razao"]
-    out["passa"] = r10 is not None and r10 <= 0.30 and bool(out["10000"]["restaurou"])
+    ref = out.get("10000") or out[str(tamanhos[0])]
+    out["passa"] = ref["razao"] is not None and ref["razao"] <= 0.30 and bool(ref["restaurou"]) and bool(ref["cache_depois"])
     return out
 
 
@@ -343,6 +344,8 @@ def main() -> None:
                                 "ganho_do_comum": round(g_comum, 3),
                                 "passa": bool(ganho is not None and g_comum > 0 and ganho >= 0.5 * g_comum)}
         grava()
+    if "QWEN38" in etapas:  # pedido à parte: o Qwen3.8 (híbrido, cabe na VRAM) restaura do disco?
+        roda("qwen38_v2_5k", lambda: v2("qwen38", (5_000,)))  # 5k basta: restaurou ou não
     if "V5" in etapas:
         roda("V5", v5)
     if "V6" in etapas:

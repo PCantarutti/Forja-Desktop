@@ -34,6 +34,7 @@ DADOS_USUARIO = Path(os.environ.get("APPDATA", "")) / "Forja"
 PORTA_API, PORTA_LLAMA = 8801, 8078
 PASTA_MODELOS = r"D:\Modelos-IA\lmstudio"
 CTX = {"maestro": 65536, "worker": 32768}
+TRAVADO_MIN = 15
 
 
 def acha_gguf(nome: str) -> Path:
@@ -198,17 +199,29 @@ def main() -> None:
             next(st.iter_lines(), None)  # o turno roda desacoplado da conexão: só precisa ter começado
         prazo = inicio + a.timeout * 60
         estado = "terminou"
+        aprovacoes: list[dict] = []
         while True:
             time.sleep(15)
             vivo = api.get(f"/conversations/{conv}/live").json().get("run")
             if not vivo:
                 break
-            if time.time() > prazo:
+            # Comando destrutivo pede aprovação até em "Ignorar permissões": o bench faz o papel de quem aprova
+            # tudo, e conta. Na 1ª rodada (b) o Maestro ficou parado num Remove-Item esperando alguém.
+            for ap in vivo.get("approvals") or []:
+                call = ap.get("call") or {}
+                r = api.post(f"/runs/{vivo['run_id']}/approve", json={"call_id": call.get("id"), "approved": True})
+                aprovacoes.append({"ferramenta": call.get("name"), "argumentos": str(call.get("arguments"))[:200],
+                                   "respondida": r.status_code == 200})
+            # Cão de guarda: nenhuma chamada ao LLM terminou em TRAVADO_MIN minutos (resposta sem fim, ferramenta
+            # presa). Sem ele a etapa gastava o timeout inteiro numa tarefa e o bench não seguia sozinho.
+            ultima = max(metricas.stat().st_mtime if metricas.exists() else inicio, inicio)
+            travou = time.time() - ultima > TRAVADO_MIN * 60
+            if time.time() > prazo or travou:
                 api.post(f"/runs/{vivo['run_id']}/stop")
-                estado = "tempo esgotado"
+                estado = f"travou: {TRAVADO_MIN} min sem nenhuma chamada terminar" if travou else "tempo esgotado"
                 time.sleep(20)
                 break
-        resultado.update(estado=estado, relogio_s=round(time.time() - inicio, 1))
+        resultado.update(estado=estado, relogio_s=round(time.time() - inicio, 1), aprovacoes_pedidas=aprovacoes)
     finally:
         derruba(proc)
         time.sleep(3)
