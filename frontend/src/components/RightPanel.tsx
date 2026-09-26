@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Activity, Clipboard, Cpu, Expandir, GitBranch, Globe, Info, Recolher, Terminal, X } from "./icons";
 import { MAX_TILES, abertos, fechar, mover, type Grade, type Lado } from "./tiles";
 
@@ -159,7 +159,8 @@ export default function Tiles(props: {
   // Fechar: a grade anterior fica na tela enquanto o tile sai (vale para o X e para os ícones do topo).
   const [saindo, setSaindo] = useState<{ grade: Grade<string>; tabs: Map<string, Dir> } | null>(null);
   const anterior = useRef(props.grade);
-  useEffect(() => {
+  // layout effect: roda antes da pintura; com useEffect aparecia um quadro já sem o tile (a piscada)
+  useLayoutEffect(() => {
     const prev = anterior.current;
     anterior.current = props.grade;
     const agora = new Set(abertos(props.grade));
@@ -167,7 +168,7 @@ export default function Tiles(props: {
     for (const c of prev.colunas) for (const t of c.tabs) if (!agora.has(t)) foram.set(t, c.tabs.length === 1 ? "lado" : "baixo");
     if (!foram.size) return;
     setSaindo({ grade: prev, tabs: foram });
-    const id = setTimeout(() => setSaindo(null), 140);
+    const id = setTimeout(() => setSaindo(null), 180);
     return () => {
       clearTimeout(id);
       setSaindo(null);
@@ -317,11 +318,14 @@ export default function Tiles(props: {
       {gv.colunas.map((c, ci) => {
         const fechada = c.tabs.every(rec);  // coluna toda recolhida: vira uma faixa fina em pé
         const vizinhaFechada = ci > 0 && gv.colunas[ci - 1].tabs.every(rec);
+        // Coluna que nasce/some inteira com o tile: a largura dela anima, e o conteúdo ao lado acompanha.
+        const colAnim = c.tabs.every((t) => saindo?.tabs.get(t) === "lado") ? "col-sai"
+          : c.tabs.every((t) => entrada.current.get(t) === "lado") ? "col-entra" : "";
         return [
           ...(semPrincipal && ci === 0 ? [] : [fechada || (semPrincipal && vizinhaFechada)
             ? <div key={`d${ci}`} className="w-2 shrink-0" />
             : <Divisor key={`d${ci}`} eixo="x" onArrasto={(e) => largura(ci, e)} onFim={fim} />]),
-          <div key={`c${ci}`} data-coluna className="flex min-h-0 min-w-0 flex-col"
+          <div key={`c${ci}`} data-coluna className={`flex min-h-0 min-w-0 flex-col ${colAnim}`}
                style={fechada ? { flex: "0 0 2rem" }
                  : semPrincipal ? { flex: `${c.largura} 1 0px`, minWidth: COL_MIN }
                  : { flex: `0 1 ${c.largura}px`, minWidth: TILE_MIN }}>
@@ -336,7 +340,10 @@ export default function Tiles(props: {
                   : <Divisor key={`h${i}`} eixo="y" onArrasto={(e) => altura(ci, i - 1, e)} onFim={fim} />]),
                 <section key={t} data-tile={t}
                          className={`${seu && !rec(t) ? "[&>*]:min-h-0 [&>*]:flex-1" : `${tileCard} overflow-hidden`} flex min-h-0 flex-col ${anim}`}
-                         style={fechada ? { flex: "1 1 0" } : rec(t) ? { flex: "0 0 auto" } : { flex: `${c.alturas[i]} 1 0`, minHeight: 120 }}>
+                         style={{
+                           ...(fechada ? { flex: "1 1 0" } : rec(t) ? { flex: "0 0 auto" } : { flex: `${c.alturas[i]} 1 0`, minHeight: 120 }),
+                           ...(colAnim && !semPrincipal ? { minWidth: c.largura } : {}),
+                         }}>
                   {rec(t) ? barra(t, fechada) : seu ? props.painel(t, { alca: alca(t), acao: botaoRecolher(t) }) : (
                     <>
                       <div {...alca(t)} title="Segure e arraste para mudar este painel de lugar"
