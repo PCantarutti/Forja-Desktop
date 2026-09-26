@@ -604,13 +604,15 @@ function Arvore(props: {
           ))
         )}
       </div>
-      {!!b?.features.length && (
-        <div className="flex shrink-0 flex-wrap gap-x-3 gap-y-1 border-t border-line px-3 py-2 font-mono text-[10.5px] text-faint">
-          {(["completed", "implementing", "reviewing", "needs_human", "pending"] as TaskStatus[]).map((k) => (
-            <span key={k} className="inline-flex items-center gap-1"><span className={ESTADO[k].cor}>{ESTADO[k].marca}</span>{ESTADO[k].label}</span>
-          ))}
-        </div>
-      )}
+      {/* Legenda das marcas, sempre no rodapé (como no design). */}
+      <div className="flex shrink-0 flex-wrap gap-x-3 gap-y-2 border-t border-line px-3 py-2.5 font-mono text-[10.5px] text-faint">
+        {(["completed", "implementing", "reviewing", "needs_human", "pending"] as TaskStatus[]).map((k) => (
+          <span key={k} className="inline-flex items-center gap-1">
+            <span className={ESTADO[k].cor}>{ESTADO[k].marca}</span>
+            {k === "reviewing" ? "revisão" : ESTADO[k].label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
