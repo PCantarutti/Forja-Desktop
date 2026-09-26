@@ -50,7 +50,12 @@ def registra(tipo: str, **dados) -> None:
         _AUX.update(papel=dados.get("papel"), caminho=dados.get("caminho"))
     if tipo == "llm" and dados.get("papel") in PRINCIPAIS:
         tm = dados.get("timings") or {}
-        if isinstance(tm, dict) and tm.get("prompt_n") is not None:
+        if (not isinstance(tm, dict) or tm.get("prompt_n") is None) and dados.get("cached_tokens") is not None \
+                and dados.get("prompt_tokens") is not None:
+            # E13-B: fora do llama.cpp (vLLM e outros compatíveis que mandam prompt_tokens_details)
+            dados["cache_n"] = int(dados["cached_tokens"])
+            dados["reprocessados"] = max(0, int(dados["prompt_tokens"]) - dados["cache_n"])
+        elif isinstance(tm, dict) and tm.get("prompt_n") is not None:
             # prompt_n = processados agora; cache_n = reaproveitados. Muito processado depois de uma auxiliar
             # é o cache do principal que ela derrubou.
             dados["reprocessados"], dados["cache_n"] = int(tm.get("prompt_n") or 0), int(tm.get("cache_n") or 0)

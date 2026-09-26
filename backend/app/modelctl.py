@@ -408,6 +408,13 @@ def _decide(papel: str, pedido: dict | None) -> Rota:
             return Rota("mesmo-slot", pedido, SLOT_PRINCIPAL, "principal fica no slot fixo, com cache_prompt")
         return Rota("externo", pedido, None, "o provedor cuida do cache")
     if pedido and not gerenciavel(pedido):
+        # E13-B: Ollama/LM Studio local carregam o modelo pedido sozinhos, derrubando o que estava lá. Chamada
+        # auxiliar não troca de modelo: usa o carregado (o Worker pode trocar, como no llama.cpp).
+        from . import llm
+        if papel not in ("principal", "worker") and (atual := llm.carregado_externo(pedido["provider"])) \
+                and atual != pedido["model"]:
+            return Rota("modelo-do-principal", {"provider": pedido["provider"], "model": atual}, None,
+                        f"{pedido['model']} não está carregado no servidor e chamada auxiliar não troca de modelo")
         return Rota("externo", pedido, None, "provedor fora do Forja (nuvem, Ollama, LM Studio)")
     if pedido and carregado and pedido["model"] == carregado["model"]:
         n = slots_do_servidor()
@@ -451,6 +458,16 @@ def em_uso() -> bool:
     return bool(localai and (localai.image_busy() or localai._loading))
 
 
+def externo_ocioso() -> dict | None:
+    """E13-B: o modelo de um Ollama local sem uso há N minutos (a descarga do llama.cpp é a de baixo)."""
+    from . import llm
+    minutos = int(getattr(config, "DESCARREGAR_OCIOSO_MIN", 15))
+    u = llm.ULTIMO_EXTERNO
+    if minutos <= 0 or not u.get("model") or em_uso() or time.monotonic() - u["t"] < minutos * 60:
+        return None
+    return dict(u)
+
+
 def precisa_descarregar() -> bool:
     minutos = int(getattr(config, "DESCARREGAR_OCIOSO_MIN", 15))
     if minutos <= 0 or localai is None or not localai.status().get("running"):
@@ -464,6 +481,11 @@ async def vigia_ociosidade(intervalo: float = 60) -> None:
     conversas vai para o disco antes). A próxima mensagem carrega de novo (agent._garante_modelo)."""
     while True:
         await asyncio.sleep(intervalo)
+        if (u := externo_ocioso()) is not None:  # E13-B: Ollama local também sai da VRAM
+            from . import llm
+            if await asyncio.to_thread(llm.descarrega_externo, u["provider"], u["model"]):
+                metricas.registra("ociosidade", alias=u["model"], provedor=u["provider"])
+            llm.ULTIMO_EXTERNO.clear()
         try:
             if precisa_descarregar():
                 st = localai.status()

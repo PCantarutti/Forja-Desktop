@@ -1485,7 +1485,7 @@ da E4.
 
   Os valores "parcial" precisam ser confirmados na versão atual de cada servidor antes de entrar na
   tabela.
-- [ ] **A `como_rodar` e os perfis (E4) leem essa tabela.** (Fica para a E4: a tabela e o
+- [x] **A `como_rodar` e os perfis (E4) leem essa tabela.** (Fica para a E4: a tabela e o
       `llm.capacidade` já existem; falta quem os consulte.) Quando o backend não oferece a capacidade,
       o comportamento é o seguro: um modelo só, chamadas auxiliares em sequência, sem trocar de modelo
       e sem cache em disco. Nunca tentar uma operação que o backend não tem.
@@ -1503,17 +1503,32 @@ da E4.
       sequencial. (O da `como_rodar` fica para a E4.)
 
 ### Parte B: controle e métricas fora do llama.cpp (depois da E4)
-- [ ] **Cache perdido em qualquer backend** (E0/E10): Ollama por `prompt_eval_count` contra o tamanho do
+- [x] **Cache perdido em qualquer backend** (E0/E10): Ollama por `prompt_eval_count` contra o tamanho do
       prompt; vLLM e outros compatíveis por `usage.prompt_tokens_details.cached_tokens`, quando vier.
-- [ ] **Ollama e LM Studio com controle parcial:**
+- [x] **Ollama e LM Studio com controle parcial:**
   - a descarga por ociosidade (E4) usa `keep_alive: 0` no Ollama e o unload da API do LM Studio;
   - a troca de modelo do Worker (E3) também, quando a política permitir.
-- [ ] **vLLM e `transformers serve`:** documentar no README como apontar o tipo `openai` para cada um
+- [x] **vLLM e `transformers serve`:** documentar no README como apontar o tipo `openai` para cada um
       (URL, `--max-model-len`, se o tool calling precisa de flag). Sem tipo novo enquanto o genérico
       bastar.
-- [ ] **Testes de paridade:** uma conversa curta com duas ferramentas, rodada contra um servidor falso de
+- [x] **Testes de paridade:** uma conversa curta com duas ferramentas, rodada contra um servidor falso de
       cada tipo (streaming, tool call, erro de janela cheia). Toda mudança da E4 precisa passar nos
       quatro. Reaproveitar o `test_paridade.py`.
+
+**Feito (2026-09-26):**
+- Cache medido fora do llama.cpp: `metricas` usa `prompt_tokens`/`cached_tokens` quando não há `timings`
+  (vLLM e compatíveis com `prompt_tokens_details`). No Ollama nativo só há `prompt_eval_count` (sem o total do
+  prompt): fica sem a medida.
+- `llm.carregado_externo` (`/api/ps` no Ollama, `/api/v0/models` no LM Studio, cache de 10 s): a `como_rodar`
+  manda a chamada auxiliar para o modelo que já está carregado em vez de o servidor trocar; o Worker pode
+  trocar. Descarga por ociosidade no Ollama local com `keep_alive: 0`. **O LM Studio não tem descarga pela API
+  REST**: fica com o TTL de JIT dele.
+- README: vLLM (`--max-model-len`, parser de tool call, prefix caching) e `transformers serve` (janela
+  manual) pelo tipo compatível com OpenAI.
+- `tests/test_backends.py`: a mesma conversa (janela cheia → compacta → `list_dir` → `read_file` → resposta)
+  contra servidores falsos llamacpp, lmstudio, openai e ollama.
+- A linha "a `como_rodar` e os perfis leem a tabela" da parte A também está feita: a rota consulta o que o
+  servidor tem carregado e só o llama.cpp é `gerenciavel`.
 
 **Pronto quando:** trocar do llama.cpp embutido para Ollama, LM Studio ou vLLM não quebra nenhum fluxo,
 o Forja sabe a janela real em todos, e a tela diz o que cada backend não oferece.

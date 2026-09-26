@@ -344,6 +344,23 @@ Antes de cada chamada, o Forja estima o tamanho do prompt. Se passar de `COMPACT
 
 **LM Studio**: aba *Developer* → *Start Server* (porta 1234). A janela de contexto é a que você escolhe ao carregar o modelo. O painel lateral mostra o valor carregado.
 
+**vLLM**: suba com `vllm serve <modelo> --max-model-len 32768 --enable-auto-tool-choice --tool-call-parser <parser>`
+(o parser depende do modelo: `hermes` para Qwen, `llama3_json` para Llama 3.x, `mistral` para Mistral). Em
+Configurações › Provedores, **adicione um provedor do tipo compatível com OpenAI** com a URL
+`http://127.0.0.1:8000/v1`. O Forja lê a janela de `max_model_len` no `/v1/models`, e o cache reaproveitado de
+`usage.prompt_tokens_details.cached_tokens` (ligue `--enable-prefix-caching` para ele existir).
+
+**`transformers serve`** (Hugging Face): `transformers serve --port 8000` e o mesmo provedor compatível com OpenAI em
+`http://127.0.0.1:8000/v1`. Ele não informa a janela: preencha **Janela de contexto** no cadastro do provedor
+(obrigatório no tipo genérico; o Forja nunca supõe 32k). Tool calling depende do modelo e do template de chat; se o
+servidor recusar `tools`, o Forja passa sozinho para chamadas em texto.
+
+**O que o Forja controla em cada backend**: no llama.cpp embutido, tudo (slots, cache em disco, descarga, troca). No
+Ollama local, a descarga por ociosidade (`keep_alive: 0`) e a janela carregada (`/api/ps`); no LM Studio, a janela
+carregada (a descarga fica com o TTL do próprio LM Studio). Nos dois, chamada auxiliar (título, revisão, juiz,
+varredura) usa o modelo que já está carregado em vez de fazer o servidor trocar; só o Worker troca. vLLM e outros
+compatíveis: nada de carga, mas a janela e o cache medido.
+
 **Quais modelos aparecem no seletor**: em cada provedor, **Modelos no seletor…** lista todos os disponíveis. Marque os que quer ver no chat e salve. Sem nenhuma marcação, todos aparecem. As mensagens saem do seu PC quando o provedor é remoto: não use para código que não pode ir para terceiros.
 
 ### Modo de tool calling por modelo

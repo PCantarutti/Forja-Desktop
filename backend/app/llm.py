@@ -303,6 +303,53 @@ def _inference(provider: str, model: str, extra: dict) -> None:
 
 
 ULTIMO_USO: dict = {"t": time.monotonic()}  # última chamada ao LLM (descarga por ociosidade, E4)
+ULTIMO_EXTERNO: dict = {}  # E13-B: último modelo usado num Ollama/LM Studio local {provider, model, t}
+_CARREGADOS: dict[str, tuple[float, str | None]] = {}
+
+
+def servidor_local_externo(provider: str) -> bool:
+    """Ollama ou LM Studio rodando na máquina (não a nuvem): têm modelo carregado, que a gente não controla."""
+    try:
+        s = spec(provider)
+    except LLMError:
+        return False
+    return s["type"] in ("ollama", "lmstudio") and CLOUD_HOST not in s["url"]
+
+
+def carregado_externo(provider: str) -> str | None:
+    """Qual modelo está carregado agora num Ollama/LM Studio local (cache de 10 s). None = não se sabe."""
+    if not servidor_local_externo(provider):
+        return None
+    if (c := _CARREGADOS.get(provider)) and time.monotonic() - c[0] < 10:
+        return c[1]
+    nome = None
+    host = base_url(provider).removesuffix("/v1")
+    try:
+        if spec(provider)["type"] == "ollama":
+            ms = httpx.get(f"{host}/api/ps", timeout=2, headers=headers(provider)).json().get("models") or []
+            nome = (ms[0].get("name") or ms[0].get("model")) if ms else None
+        else:
+            ms = httpx.get(f"{host}/api/v0/models", timeout=2, headers=headers(provider)).json().get("data") or []
+            nome = next((m.get("id") for m in ms if m.get("state") == "loaded"), None)
+    except (httpx.HTTPError, ValueError, AttributeError, IndexError):
+        nome = None
+    _CARREGADOS[provider] = (time.monotonic(), nome)
+    return nome
+
+
+def descarrega_externo(provider: str, model: str) -> bool:
+    """Descarga por ociosidade fora do llama.cpp: no Ollama, keep_alive 0. O LM Studio não tem descarga pela
+    API REST (ele mesmo descarrega pelo TTL de JIT): nada a fazer lá."""
+    if not servidor_local_externo(provider) or spec(provider)["type"] != "ollama":
+        return False
+    host = base_url(provider).removesuffix("/v1")
+    try:
+        r = httpx.post(f"{host}/api/generate", json={"model": model, "keep_alive": 0}, timeout=10,
+                       headers=headers(provider))
+        _CARREGADOS.pop(provider, None)
+        return r.status_code < 400
+    except httpx.HTTPError:
+        return False
 NO_THINK = chr(10) + "/no_think"   # interruptor por texto do template do Qwen3
 
 
@@ -338,6 +385,8 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
                       budget_mult: float = 1.0, slot: int | None = None) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     ULTIMO_USO["t"] = time.monotonic()  # E4: a descarga por ociosidade conta a partir daqui
+    if servidor_local_externo(provider):
+        ULTIMO_EXTERNO.update(provider=provider, model=model, t=time.monotonic())
     messages = list(messages)
     extra: dict = {}
     if slot is not None and spec(provider)["type"] == "llamacpp":
