@@ -7,6 +7,7 @@ import { ArrowRight, ArrowUp, Check, Copy, Edit, FolderOpen, Image, Paperclip, R
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada, redondo } from "./Composer";
 import { btn, btnPrimary, campo, Field, input, Num, SAMPLERS } from "./LocalPanel";
 import { Lightbox } from "./MessageView";
+import { colunasPara, distribuir } from "./mosaico";
 import MascaraEditor, { type ModoPintura } from "./MascaraEditor";
 import { Modal } from "./Modal";
 import ModelPicker from "./ModelPicker";
@@ -55,6 +56,28 @@ const proporcaoDe = (img: LoteImagem, opts?: { width?: number; height?: number }
 };
 
 /** Fotos empilhadas por trás do card: o slot tem mais versões para escolher. */
+/** Galeria em mosaico: colunas independentes, cada cartão na coluna mais baixa (ver mosaico.ts). */
+function Mosaico({ proporcoes, children }: { proporcoes: number[]; children: React.ReactNode[] }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [n, setN] = useState(4);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setN(colunasPara(e.contentRect.width)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const chave = proporcoes.join();
+  const cols = useMemo(() => distribuir(proporcoes, n), [chave, n]);
+  return (
+    <div ref={ref} className="flex items-start gap-3">
+      {cols.map((c, i) => (
+        <div key={i} className="flex min-w-0 flex-1 flex-col gap-3">{c.map((k) => children[k])}</div>
+      ))}
+    </div>
+  );
+}
+
 function Pilha(props: { n: number; largo?: boolean; children: React.ReactNode }) {
   return (
     <div className={`relative ${props.largo ? "col-span-2" : ""}`}>
@@ -1105,7 +1128,7 @@ function Lote(props: {
         )}
       </div>
 
-      <div className="grid grid-cols-2 items-start gap-3 md:grid-cols-3 xl:grid-cols-4">
+      <Mosaico proporcoes={imagens.map((img) => proporcaoDe(deSlots ? props.noSite(img) : img, meta.opts) ?? 1)}>
         {imagens.map((img) => {
           const chave = img.destino ?? img.slot;
           const versoes = chave ? props.versoes(chave) : [];
@@ -1145,7 +1168,7 @@ function Lote(props: {
           />
           );
         })}
-      </div>
+      </Mosaico>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
         {viva ? (
