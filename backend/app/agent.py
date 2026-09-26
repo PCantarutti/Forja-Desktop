@@ -1039,7 +1039,10 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
         inteiros = set(ids[corte:])
     # E4: só a última versão da mensagem "contexto" vai ao modelo (as antigas repetiam AGENTS.md, FORJA.md e
     # memórias a cada mudança de modo/plano). Custa reprocessar uma vez, quando o contexto muda.
-    vigente = _ultimo_contexto(msgs) if contexto else None
+    # Provider local (`prefixo_estavel`): as antigas ficam onde estavam. Tirar a do começo do turno fazia o
+    # prompt divergir logo depois da 1ª mensagem, e modelo híbrido (Qwen3.6) não volta atrás no cache: o
+    # Maestro reprocessava ~23k tokens do zero sempre que um run_task mudava o convencoes.md.
+    vigente = _ultimo_contexto(msgs) if contexto and not prefixo_estavel else None
     # Imagens devolvidas por ferramentas (screenshot) entram como mensagem "user" com image_url logo
     # depois do bloco de resultados: é o único formato que OpenAI-compatível e Ollama aceitam.
     #

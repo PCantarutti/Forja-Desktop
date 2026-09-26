@@ -341,6 +341,8 @@ def texto_para_prompt(root: Path, arquivos: list[str] | None = None) -> str:
     t = t.replace(INICIO, "").replace(FIM, "")
     t = re.sub(r"(?m)^_Gerado pelo Forja.*$\n?", "", t)
     t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    if all(not l.strip() or l.lstrip().startswith("#") for l in t.splitlines()):
+        return ""  # só títulos: nada a dizer ao modelo (e não muda o contexto à toa)
     return t[:MAX_PROMPT] + ("\n(… mais em .forja/knowledge/convencoes.md)" if len(t) > MAX_PROMPT else "") if t else ""
 
 
