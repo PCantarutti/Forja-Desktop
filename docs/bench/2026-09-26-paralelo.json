@@ -1,0 +1,420 @@
+{
+  "paralelo-1-worker": {
+    "rotulo": "paralelo-1-worker",
+    "quando": "2026-09-26T17:42:48",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Qwen3.6-35B-A3B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\paralelo-1-worker-20260926-174247",
+    "workers": 1,
+    "sandbox": false,
+    "mmap": true,
+    "estado": "terminou",
+    "relogio_s": 2072.2,
+    "aprovacoes_pedidas": [],
+    "banco": {
+      "tarefas": 3,
+      "por_status": {
+        "completed": 3
+      },
+      "needs_human": 0,
+      "tentativas_total": 5,
+      "segundos_nos_workers": 1541.8,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 2,
+        "TASK-003": 2
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "Criar tests/test_modelo.py com testes do módulo modelo (Tarefa, PRIORIDADES).",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "Criar tests/test_armazem.py com testes do Armazem (CRUD, filtros, persistência).",
+          "status": "completed",
+          "attempt_count": 2
+        },
+        {
+          "code": "TASK-003",
+          "title": "Criar tests/test_cli.py com testes de cada subcomando da CLI.",
+          "status": "completed",
+          "attempt_count": 2
+        }
+      ],
+      "features": [
+        {
+          "title": "O pacote tarefas (em tarefas/: modelo.py, armazem.py, cli.py) já está implementa…",
+          "status": "done"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 13,
+          "segundos": 490.8,
+          "prompt_tokens": 291313,
+          "completion_tokens": 5115,
+          "prompt_processado": 65230,
+          "prompt_do_cache": 226083,
+          "taxa_cache": 0.776,
+          "prompt_ms": 310810,
+          "geracao_ms": 178164
+        },
+        "worker": {
+          "chamadas": 48,
+          "segundos": 1461.6,
+          "prompt_tokens": 775736,
+          "completion_tokens": 31254,
+          "prompt_processado": 96655,
+          "prompt_do_cache": 679081,
+          "taxa_cache": 0.875,
+          "prompt_ms": 455507,
+          "geracao_ms": 1002644
+        }
+      },
+      "trocas_de_modelo": 1,
+      "segundos_workers_juntos": 0.0,
+      "segundos_em_troca": 28.4,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 28.44
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 2,
+        "prompt_reprocessado_total": 47526,
+        "prompt_reprocessado_medio": 23763,
+        "ms_reprocessando_total": 200281,
+        "voltas": [
+          {
+            "prompt_processado": 22228,
+            "prompt_do_cache": 0,
+            "prompt_ms": 92466
+          },
+          {
+            "prompt_processado": 25298,
+            "prompt_do_cache": 0,
+            "prompt_ms": 107815
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 61,
+        "failed": 0,
+        "error": 0,
+        "resumo": "61 passed in 0.21s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 5,
+        "failed": 1,
+        "error": 0,
+        "resumo": "1 failed, 5 passed in 1.03s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 34.5,
+      "troca_de_modelo_min": 0.5,
+      "chamadas_ao_llm_min": 32.5,
+      "tarefas": 3,
+      "needs_human": 0,
+      "tentativas": 5,
+      "aceite": "5/6",
+      "suite_do_projeto_passa": true
+    },
+    "nota": "2 das 5 tentativas perdidas pela pasta pytest-current quebrada no Temp (PermissionError ao encerrar o pytest), ~10 min"
+  },
+  "paralelo-2-workers-bug-pyc": {
+    "rotulo": "paralelo-2-workers-bug-pyc",
+    "quando": "2026-09-26T18:17:25",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Qwen3.6-35B-A3B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\paralelo-2-workers-20260926-181725",
+    "workers": 2,
+    "sandbox": false,
+    "mmap": true,
+    "estado": "terminou",
+    "relogio_s": 2282.9,
+    "aprovacoes_pedidas": [
+      {
+        "ferramenta": "run_command",
+        "argumentos": "{'command': 'Remove-Item -Recurse -Force tarefas/__pycache__ -ErrorAction SilentlyContinue'}",
+        "respondida": true
+      }
+    ],
+    "banco": {
+      "tarefas": 3,
+      "por_status": {
+        "completed": 3
+      },
+      "needs_human": 0,
+      "tentativas_total": 6,
+      "segundos_nos_workers": 2310.6,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 2,
+        "TASK-003": 3
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "tests/test_modelo.py — testes do módulo modelo",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "tests/test_armazem.py — testes do armazém",
+          "status": "completed",
+          "attempt_count": 2
+        },
+        {
+          "code": "TASK-003",
+          "title": "tests/test_cli.py — testes da CLI",
+          "status": "completed",
+          "attempt_count": 3
+        }
+      ],
+      "features": [
+        {
+          "title": "Suíte de testes do pacote tarefas",
+          "status": "done"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 14,
+          "segundos": 594.5,
+          "prompt_tokens": 313810,
+          "completion_tokens": 5388,
+          "prompt_processado": 89275,
+          "prompt_do_cache": 224535,
+          "taxa_cache": 0.716,
+          "prompt_ms": 406124,
+          "geracao_ms": 186807
+        },
+        "worker": {
+          "chamadas": 43,
+          "segundos": 2126.1,
+          "prompt_tokens": 493768,
+          "completion_tokens": 37866,
+          "prompt_processado": 81427,
+          "prompt_do_cache": 412341,
+          "taxa_cache": 0.835,
+          "prompt_ms": 426555,
+          "geracao_ms": 1680681
+        }
+      },
+      "trocas_de_modelo": 1,
+      "segundos_workers_juntos": 550.9,
+      "segundos_em_troca": 19.6,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 19.55
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 3,
+        "prompt_reprocessado_total": 70406,
+        "prompt_reprocessado_medio": 23469,
+        "ms_reprocessando_total": 290429,
+        "voltas": [
+          {
+            "prompt_processado": 21590,
+            "prompt_do_cache": 0,
+            "prompt_ms": 89053
+          },
+          {
+            "prompt_processado": 23830,
+            "prompt_do_cache": 0,
+            "prompt_ms": 98126
+          },
+          {
+            "prompt_processado": 24986,
+            "prompt_do_cache": 0,
+            "prompt_ms": 103250
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 64,
+        "failed": 0,
+        "error": 0,
+        "resumo": "64 passed in 0.18s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 5,
+        "failed": 1,
+        "error": 0,
+        "resumo": "1 failed, 5 passed in 0.95s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 38.0,
+      "troca_de_modelo_min": 0.3,
+      "chamadas_ao_llm_min": 45.3,
+      "tarefas": 3,
+      "needs_human": 0,
+      "tentativas": 6,
+      "aceite": "5/6",
+      "suite_do_projeto_passa": true
+    },
+    "nota": "rodou antes do dfac72d: TASK-002/003 falharam com os testes passando por conflito de .pyc no merge do worktree (3 tentativas a mais); a pasta do pytest quebrada (pytest-current) já estava resolvida"
+  },
+  "paralelo-2-workers": {
+    "rotulo": "paralelo-2-workers",
+    "quando": "2026-09-26T18:57:52",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Qwen3.6-35B-A3B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\paralelo-2-workers-20260926-185752",
+    "workers": 2,
+    "sandbox": false,
+    "mmap": true,
+    "estado": "terminou",
+    "relogio_s": 1636.3,
+    "aprovacoes_pedidas": [],
+    "banco": {
+      "tarefas": 3,
+      "por_status": {
+        "completed": 3
+      },
+      "needs_human": 0,
+      "tentativas_total": 4,
+      "segundos_nos_workers": 1662.7,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 1,
+        "TASK-003": 2
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "test_modelo.py",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "test_armazem.py",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-003",
+          "title": "test_cli.py",
+          "status": "completed",
+          "attempt_count": 2
+        }
+      ],
+      "features": [
+        {
+          "title": "Suíte de testes do pacote tarefas",
+          "status": "validating"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 14,
+          "segundos": 450.3,
+          "prompt_tokens": 294707,
+          "completion_tokens": 4285,
+          "prompt_processado": 64150,
+          "prompt_do_cache": 230557,
+          "taxa_cache": 0.782,
+          "prompt_ms": 306091,
+          "geracao_ms": 142695
+        },
+        "worker": {
+          "chamadas": 37,
+          "segundos": 1536.0,
+          "prompt_tokens": 449017,
+          "completion_tokens": 22931,
+          "prompt_processado": 66168,
+          "prompt_do_cache": 382849,
+          "taxa_cache": 0.853,
+          "prompt_ms": 347140,
+          "geracao_ms": 1176580
+        }
+      },
+      "trocas_de_modelo": 1,
+      "segundos_workers_juntos": 421.7,
+      "segundos_em_troca": 20.3,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 20.27
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 2,
+        "prompt_reprocessado_total": 44491,
+        "prompt_reprocessado_medio": 22246,
+        "ms_reprocessando_total": 185506,
+        "voltas": [
+          {
+            "prompt_processado": 21616,
+            "prompt_do_cache": 0,
+            "prompt_ms": 90373
+          },
+          {
+            "prompt_processado": 22875,
+            "prompt_do_cache": 0,
+            "prompt_ms": 95133
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 78,
+        "failed": 0,
+        "error": 0,
+        "resumo": "78 passed in 0.32s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 5,
+        "failed": 1,
+        "error": 0,
+        "resumo": "1 failed, 5 passed in 1.11s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 27.3,
+      "troca_de_modelo_min": 0.3,
+      "chamadas_ao_llm_min": 33.1,
+      "tarefas": 3,
+      "needs_human": 0,
+      "tentativas": 4,
+      "aceite": "5/6",
+      "suite_do_projeto_passa": true
+    }
+  }
+}
