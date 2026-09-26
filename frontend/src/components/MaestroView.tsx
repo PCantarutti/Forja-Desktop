@@ -74,6 +74,8 @@ function emOrdemDeLeitura(tasks: MaestroTask[]): MaestroTask[] {
 }
 
 const card = "rounded-xl border border-line bg-panel";
+// Maestro e Worker leem conversa: o mesmo fundo do Agente e do Chat (o card principal é bg).
+const cardConversa = "rounded-xl border border-line bg-bg";
 const titulo = "px-3 py-2 font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint";
 
 const gb = (n?: number | null) => (n == null ? "—" : `${(n / 1024 ** 3).toFixed(1)} GB`);
@@ -623,7 +625,7 @@ function ColunaMaestro(props: {
   acao?: React.ReactNode;
 }) {
   return (
-    <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
+    <div className={`${cardConversa} flex min-h-0 flex-col overflow-hidden`}>
       <div {...props.alca} className={`${titulo} flex items-center`}>Maestro{props.acao}</div>
       {props.conversa}
       <div className="shrink-0">{props.composer}</div>
@@ -686,7 +688,7 @@ function ColunaWorker(props: {
     (w.mensagens ?? []).some((m) => (m.tool_calls ?? []).some((c) => props.approvals[c.id]));
 
   return (
-    <div className={`${card} flex min-h-0 flex-col overflow-hidden`}>
+    <div className={`${cardConversa} flex min-h-0 flex-col overflow-hidden`}>
       <div {...props.alca} className="flex shrink-0 items-center gap-1 px-3 py-1.5">
         <span className="text-[10.5px] font-medium font-mono uppercase tracking-[.08em] text-faint">
           {props.abas.filter((x) => x.tipo === "vivo" && x.w.status).length > 1 ? "Workers" : "Worker"}
