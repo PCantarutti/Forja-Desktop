@@ -18,7 +18,12 @@ export function Modal(props: {
   children: React.ReactNode;
 }) {
   const painel = useRef<HTMLDivElement>(null);
-  const { onClose, canClose } = props;
+  // Os callbacks mudam a cada render de quem abre o modal (funções inline). Se fossem dependência do
+  // efeito, qualquer re-render da tela de trás (o /api/activity a cada 4 s, a atualização a cada 1 s)
+  // refazia o efeito: devolvia o foco ao botão de origem e focava o painel, tirando o foco do campo em
+  // edição e fechando o dropdown aberto. Em ref, o efeito roda uma vez só, ao abrir.
+  const cb = useRef({ onClose: props.onClose, canClose: props.canClose });
+  cb.current = { onClose: props.onClose, canClose: props.canClose };
 
   useEffect(() => {
     const anterior = document.activeElement as HTMLElement | null;
@@ -26,6 +31,7 @@ export function Modal(props: {
 
     const naTecla = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        const { onClose, canClose } = cb.current;
         if (canClose && !canClose()) return;
         e.stopPropagation();
         onClose();
@@ -55,12 +61,12 @@ export function Modal(props: {
       window.removeEventListener("keydown", naTecla);
       anterior?.focus?.();
     };
-  }, [onClose, canClose]);
+  }, []);
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-scrim p-4"
-      onClick={() => (!canClose || canClose()) && onClose()}
+      onClick={() => (!cb.current.canClose || cb.current.canClose()) && cb.current.onClose()}
     >
       <div
         ref={painel}
