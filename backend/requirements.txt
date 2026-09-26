@@ -23,3 +23,8 @@ winrt-Windows.Storage.Streams==3.2.*; sys_platform == "win32"
 winrt-Windows.Foundation==3.2.*; sys_platform == "win32"
 winrt-Windows.Foundation.Collections==3.2.*; sys_platform == "win32"
 Pillow>=10.1  # placeholder e versão web dos slots de imagem (app/slots.py)
+# ast/imports (app/codigo.py): parser de TS/JS/TSX. Python usa o ast da stdlib.
+tree-sitter==0.26.*
+tree-sitter-python==0.25.*
+tree-sitter-javascript==0.25.*
+tree-sitter-typescript==0.23.*

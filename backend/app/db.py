@@ -181,6 +181,44 @@ class Attempt(Base):
     task: Mapped[Task] = relationship(back_populates="attempts")
 
 
+class Issue(Base):
+    """Card do board do projeto (E15). Por PROJETO (a raiz, pasta normalizada), não por conversa: o
+    backlog sobrevive às conversas e é o mesmo em todas as que abrem essa pasta."""
+    __tablename__ = "issues"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    projeto: Mapped[str] = mapped_column(String(1000), index=True)
+    titulo: Mapped[str] = mapped_column(String(300))
+    descricao: Mapped[str] = mapped_column(Text, default="")
+    tipo: Mapped[str] = mapped_column(String(20), default="bugfix")  # board.TIPOS
+    area: Mapped[str] = mapped_column(String(20), default="backend")  # board.AREAS
+    severidade: Mapped[int] = mapped_column(default=2)  # 1 alta … 3 baixa
+    status: Mapped[str] = mapped_column(String(20), default="novo", index=True)  # board.STATUS
+    evidencias: Mapped[list] = mapped_column(JSON, default=list)  # [{arquivo, linha, trecho} | {saida} | {imagem}]
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    verify_sugerido: Mapped[str] = mapped_column(Text, default="")
+    origem: Mapped[str] = mapped_column(String(30), default="manual")
+    # tipo + arquivo + trecho normalizado: a varredura não recria o que já existe nem o que foi rejeitado
+    impressao: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    motivo_rejeicao: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    sumiu: Mapped[bool] = mapped_column(default=False)  # a última varredura não achou mais: "resolvido?"
+    conversa_id: Mapped[int | None] = mapped_column(nullable=True)
+    feature_id: Mapped[int | None] = mapped_column(nullable=True)
+    commit_inicio: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    commit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    historico: Mapped[list] = mapped_column(JSON, default=list)  # [{quando, texto}]
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+    updated_at: Mapped[datetime] = mapped_column(default=_now)
+
+
+class BoardVinculo(Base):
+    """Pasta ligada ao board de outra (E15): /projeto/back e /projeto/front no board de /projeto. Conversa
+    aberta na pasta, ou em qualquer subpasta dela, usa o board de `projeto`."""
+    __tablename__ = "board_vinculos"
+    pasta: Mapped[str] = mapped_column(String(1000), primary_key=True)  # normalizada
+    projeto: Mapped[str] = mapped_column(String(1000), index=True)
+    created_at: Mapped[datetime] = mapped_column(default=_now)
+
+
 Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
 engine = create_engine(f"sqlite:///{config.DB_PATH}", connect_args={"check_same_thread": False})
 
@@ -243,6 +281,35 @@ def _migrate() -> None:
                 WHERE id NOT IN (SELECT DISTINCT conversation_id FROM messages WHERE role = 'tool')
                   AND id IN (SELECT DISTINCT conversation_id FROM messages
                              WHERE role = 'assistant' AND json_extract(meta, '$.via') = 'none')""")
+    _fts_mensagens()
+
+
+def _fts_mensagens() -> None:
+    """Índice FTS5 das falas (usuário e agente) para o session_search: ranking bm25 em vez de LIKE.
+    Tabela com conteúdo próprio (rowid = id da mensagem) e não external-content: assim os gatilhos
+    filtram por papel sem deixar entrada órfã, e saída de ferramenta não entra no índice."""
+    with engine.begin() as c:
+        existe = c.exec_driver_sql(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts'").first()
+        if existe:
+            return
+        try:
+            c.exec_driver_sql(
+                "CREATE VIRTUAL TABLE messages_fts USING fts5(content, tokenize='unicode61 remove_diacritics 2')")
+        except Exception:  # SQLite sem FTS5: o session_search segue no LIKE
+            return
+        falas = "('user', 'assistant')"
+        c.exec_driver_sql(f"""CREATE TRIGGER messages_fts_ai AFTER INSERT ON messages
+            WHEN new.role IN {falas} BEGIN
+              INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content); END""")
+        c.exec_driver_sql("""CREATE TRIGGER messages_fts_ad AFTER DELETE ON messages BEGIN
+              DELETE FROM messages_fts WHERE rowid = old.id; END""")
+        c.exec_driver_sql(f"""CREATE TRIGGER messages_fts_au AFTER UPDATE OF content ON messages
+            WHEN new.role IN {falas} BEGIN
+              DELETE FROM messages_fts WHERE rowid = old.id;
+              INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content); END""")
+        c.exec_driver_sql(f"INSERT INTO messages_fts(rowid, content) SELECT id, content FROM messages "
+                          f"WHERE role IN {falas}")
 
 
 _migrate()

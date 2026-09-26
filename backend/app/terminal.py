@@ -7,13 +7,14 @@ prompt por conta própria e faz polling da saída (`poll` espera até 20 s por n
 from __future__ import annotations
 
 import codecs
+import re
 import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
 
-from . import native
+from . import native, sandbox
 from .tools import ToolError
 
 POLL_WAIT = 20.0
@@ -23,9 +24,14 @@ MAX_BUFFER = 400_000
 class Term:
     """Shell do sistema lendo do stdin; um thread copia o stdout para o buffer."""
 
-    def __init__(self, cwd: Path):
-        self.proc = subprocess.Popen(native.term_argv(), cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=native.ambiente_dev(),
-                                     stderr=subprocess.STDOUT, **native.popen_kwargs())
+    def __init__(self, cwd: Path, plano: dict | None = None):
+        # `plano` (sandbox.plano_terminal): o terminal do agente pode ser bash num container; o do usuário
+        # é sempre o shell do Windows.
+        pl = plano or {"argv": native.term_argv(), "nome": "", "motor": "", "linux": not native.WINDOWS}
+        self.linux = pl["linux"]
+        self.proc = sandbox.popen(pl["argv"], cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, dev=True)
+        sandbox.marca_container(self.proc, pl["nome"], pl["motor"])
         self.buf = ""
         # Total já escrito desde o início, não o tamanho do buffer: é ele que vira o cursor do
         # cliente. Com `len(buf)` o cursor empacava em MAX_BUFFER assim que o buffer saturava e
@@ -34,7 +40,7 @@ class Term:
         self.lock = threading.Lock()  # dois POST de input não podem intercalar no stdin do shell
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.cond = threading.Condition()
-        if native.WINDOWS:  # saída em UTF-8 e sem barra de progresso quebrando o texto
+        if not self.linux:  # saída em UTF-8 e sem barra de progresso quebrando o texto
             self.write(native.PS_PREAMBLE + "$ProgressPreference='SilentlyContinue'")
         threading.Thread(target=self._reader, daemon=True).start()
 
@@ -82,6 +88,7 @@ class Term:
 
     def close(self) -> None:
         native.kill_tree(self.proc)
+        sandbox.fecha(self.proc)
 
 
 SESSIONS: dict[str, Term] = {}
@@ -136,6 +143,7 @@ MAX_AGENTE = 8
 OCIOSO = 2.0          # segundos sem saída nova = o comando provavelmente terminou (inferido)
 ESPERA_PADRAO, ESPERA_MAX = 30, 120
 MAX_SAIDA = 20_000
+MARCA = "__FORJA_FIM_"
 
 
 def _meus() -> dict[str, dict]:
@@ -160,19 +168,48 @@ def _texto_desde(t: "Term", desde: int) -> str:
     return texto
 
 
-def _espera(t: "Term", desde: int, segundos: float) -> str:
-    """Espera o shell ficar quieto (OCIOSO s sem saída nova), sair ou o tempo acabar."""
+def sentinela(nonce: str, linux: bool = not native.WINDOWS) -> str:
+    """Linha mandada depois do comando: imprime o exit code com um marcador único. Quando ela aparece,
+    o comando terminou de verdade — sem ela o fim era inferido por silêncio, que engana em build lento
+    e em comando que termina calado."""
+    if not linux:
+        # $? primeiro (a atribuição o reescreve); cmdlet que falhou não mexe no $LASTEXITCODE: vira 1.
+        return (f"$__ok=$?; $__ec=$LASTEXITCODE; Write-Output ('{MARCA}' + $(if ($__ok) {{0}} elseif ($__ec) "
+                f"{{$__ec}} else {{1}}) + '_{nonce}__')")
+    return f'echo "{MARCA}$?_{nonce}__"'
+
+
+def _marca(nonce: str) -> re.Pattern:
+    return re.compile(re.escape(MARCA) + r"(-?\d+)_" + re.escape(nonce) + r"__\n?")
+
+
+def _achou(t: "Term", desde: int, nonce: str | None) -> int | None:
+    """Exit code do sentinela `nonce` na saída desde `desde`, ou None."""
+    if not nonce:
+        return None
+    with t.cond:
+        comeco = t.written - len(t.buf)
+        texto = t.buf[max(0, desde - comeco):]
+    m = _marca(nonce).search(texto)
+    return int(m.group(1)) if m else None
+
+
+def _espera(t: "Term", desde: int, segundos: float, nonce: str | None = None) -> str:
+    """Espera o sentinela, o shell ficar quieto (OCIOSO s sem saída nova), sair ou o tempo acabar.
+    Com sentinela, o silêncio não encerra a espera: só ele, o shell morrer ou o tempo."""
     fim = time.monotonic() + max(0.0, segundos)
     visto, mudou = t.written, time.monotonic()
     while True:
         with t.cond:
             t.cond.wait(0.25)
         agora = time.monotonic()
+        if _achou(t, desde, nonce) is not None:
+            return "fim"
         if t.proc.poll() is not None:
             return "encerrado"
         if t.written != visto:
             visto, mudou = t.written, agora
-        elif agora - mudou >= OCIOSO:
+        elif agora - mudou >= OCIOSO and not nonce:
             return "ocioso"
         if agora >= fim:
             return "tempo"
@@ -193,34 +230,65 @@ def terminal_open(root: Path, args: dict) -> str:
     cwd = resolve_path(root, args.get("cwd"))
     _reap()
     tid = "t" + uuid.uuid4().hex[:6]
-    SESSIONS[tid] = Term(cwd)
+    pl = sandbox.plano_terminal(cwd, root)
+    SESSIONS[tid] = Term(cwd, pl)
     AGENTE[tid] = {"conv": CONV.get(), "name": str(args.get("name") or tid)[:40], "lido": SESSIONS[tid].written}
-    return f"Terminal '{tid}' aberto ({native.shell_name()}) em {cwd}. Mande comandos com terminal_send(id='{tid}')."
+    onde = ("bash no container do sandbox, sem rede" if pl["nome"] else native.shell_name())
+    return (f"{pl['aviso']}Terminal '{tid}' aberto ({onde}) em {cwd}. Mande comandos com "
+            f"terminal_send(id='{tid}').")
+
+
+def _sem_sentinela(texto: str, nonce: str | None) -> str:
+    return _marca(nonce).sub("", texto) if nonce else texto
+
+
+def _pendente_voltou(t: "Term", a: dict, desde: int) -> str:
+    """O sentinela de um comando anterior que não terminou a tempo apareceu agora: o shell voltou."""
+    if (codigo := _achou(t, desde, a.get("pendente"))) is None:
+        return ""
+    a.pop("pendente", None)
+    return f"[o comando anterior terminou: exit {codigo}]"
 
 
 def terminal_send(root: Path, args: dict) -> str:
     t, a = _sessao(args.get("id"))
     desde = t.written
     texto = str(args.get("command") or "")
+    nonce = None
     if args.get("submit") is False:
         with t.lock:  # sem Enter: caractere de controle ou entrada de REPL pela metade
             t.proc.stdin.write(texto.encode("utf-8"))
             t.proc.stdin.flush()
     else:
         t.write(texto)
-    estado = _espera(t, desde, min(float(args.get("wait") or ESPERA_PADRAO), ESPERA_MAX))
+        # Com um sentinela pendente o shell não está no prompt (comando longo, ou um REPL que engoliu a
+        # linha): mandar outro só entraria no REPL. Nesse caso, volta a inferência por silêncio.
+        if not a.get("pendente"):
+            nonce = uuid.uuid4().hex[:8]
+            t.write(sentinela(nonce, t.linux))
+    estado = _espera(t, desde, min(float(args.get("wait") or ESPERA_PADRAO), ESPERA_MAX), nonce)
     a["lido"] = t.written
-    return f"{_texto_desde(t, desde).rstrip() or '(sem saída)'}\n{_fim(estado, a)}"
+    saida = _sem_sentinela(_sem_sentinela(_texto_desde(t, desde), nonce), a.get("pendente"))
+    voltou = _pendente_voltou(t, a, desde)
+    if estado == "fim":
+        rodape = f"[comando terminou: exit {_achou(t, desde, nonce)}]"
+    else:
+        if nonce:
+            a["pendente"] = nonce
+        rodape = _fim(estado, a)
+    return "\n".join(x for x in (saida.rstrip() or "(sem saída)", voltou, rodape) if x)
 
 
 def terminal_read(root: Path, args: dict) -> str:
     t, a = _sessao(args.get("id"))
-    if (w := float(args.get("wait") or 0)) > 0 and t.written == a["lido"]:
-        _espera(t, a["lido"], min(w, ESPERA_MAX))
-    texto = _texto_desde(t, a["lido"])
+    desde = a["lido"]
+    if (w := float(args.get("wait") or 0)) > 0 and t.written == desde:
+        _espera(t, desde, min(w, ESPERA_MAX), a.get("pendente"))
+    texto = _sem_sentinela(_texto_desde(t, desde), a.get("pendente"))
+    voltou = _pendente_voltou(t, a, desde)
     a["lido"] = t.written
     vivo = "" if t.proc.poll() is None else "\n[o shell deste terminal encerrou]"
-    return (texto.rstrip() or "(nada novo desde a última leitura)") + vivo
+    return (texto.rstrip() or "(nada novo desde a última leitura)") + (f"\n{voltou}" if voltou else "") + vivo
 
 
 def terminal_close(root: Path, args: dict) -> str:
@@ -254,8 +322,9 @@ def _registra() -> None:
         terminal_open, timeout=None))
     register(Tool(
         "terminal_send",
-        "Escreve no terminal (com Enter, por padrão) e espera ele ficar quieto, sair ou o tempo acabar. "
-        "'Terminal quieto' é inferência: não prova que o comando terminou. submit=false manda sem Enter.",
+        "Escreve no terminal (com Enter, por padrão) e espera o comando terminar: a resposta traz o exit code. "
+        "Comando que passa do 'wait' continua rodando: terminal_read avisa quando ele terminar. Dentro de um REPL "
+        "o fim volta a ser inferido pelo silêncio. submit=false manda sem Enter.",
         _obj({**ident, "command": {"type": "string", "description": "Texto a enviar (comando ou entrada do REPL)"},
               "submit": {"type": "boolean", "description": "Enter depois do texto. Padrão: true"},
               "wait": {"type": "integer", "description": f"Espera até N segundos (padrão {ESPERA_PADRAO}, máx {ESPERA_MAX})"}},

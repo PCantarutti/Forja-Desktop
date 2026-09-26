@@ -11,7 +11,7 @@ import json
 import re
 from typing import Any
 
-from . import config, db
+from . import config, db, llm
 
 ENV_DEFAULTS: dict[str, Any] = {
     "providers": [copy.deepcopy(p) for p in config.PROVIDERS.values()],
@@ -48,6 +48,15 @@ ENV_DEFAULTS: dict[str, Any] = {
     "workers_do_maestro": False,
     "worker_especialidades": [dict(e) for e in config.ESPECIALIDADES_PADRAO],
     "workspace_padrao": "",  # pasta de uma conversa nova de Agente/Maestro; vazio = escolher a cada conversa
+    # Sandbox dos processos do agente (sandbox.py): -1 = automático, 0 = sem limite
+    "sandbox_memoria_mb": config.SANDBOX_MEMORIA_MB,
+    "sandbox_processos": config.SANDBOX_PROCESSOS,
+    "sandbox_cpu": config.SANDBOX_CPU,
+    "sandbox_isolado": config.SANDBOX_ISOLADO,
+    "mcp_servidor": config.MCP_SERVIDOR,
+    "mcp_permissao": config.MCP_PERMISSAO,
+    "sandbox_motor": config.SANDBOX_MOTOR,
+    "sandbox_wsl_distro": config.SANDBOX_WSL_DISTRO,
 }
 MAX_ESPECIALIDADES = 12
 
@@ -66,6 +75,9 @@ NUMBERS = {  # chave: (tipo, mínimo, máximo)
     # Teto baixo de propósito: cada Worker é uma inferência inteira, e no local só cabe um.
     "max_workers": (int, 1, 8),
     "subagent_max_iterations": (int, 1, 100),
+    "sandbox_memoria_mb": (int, -1, 262_144),  # -1 automático, 0 sem limite
+    "sandbox_processos": (int, 0, 10_000),
+    "sandbox_cpu": (int, 0, 100),
 }
 TYPES = ("ollama", "lmstudio", "openai", "llamacpp")
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
@@ -149,6 +161,14 @@ def apply(values: dict | None = None) -> dict:
     config.BROWSER_SCALE = int(values["browser_scale"])
     config.BROWSER_STREAM = values["browser_stream"]
     config.WORKSPACE_PADRAO = values["workspace_padrao"] or None
+    config.SANDBOX_MEMORIA_MB = int(values["sandbox_memoria_mb"])
+    config.SANDBOX_PROCESSOS = int(values["sandbox_processos"])
+    config.SANDBOX_CPU = int(values["sandbox_cpu"])
+    config.SANDBOX_ISOLADO = values["sandbox_isolado"]
+    config.MCP_SERVIDOR = bool(values["mcp_servidor"])
+    config.MCP_PERMISSAO = values["mcp_permissao"]
+    config.SANDBOX_MOTOR = values["sandbox_motor"]
+    config.SANDBOX_WSL_DISTRO = values["sandbox_wsl_distro"]
     return values
 
 
@@ -159,6 +179,7 @@ def public(values: dict | None = None) -> dict:
         key = p.pop("api_key", "") or ""
         p["has_api_key"] = bool(key)
         p["api_key_hint"] = f"…{key[-4:]}" if key else ""
+    values["capacidades"] = {t: llm.indisponiveis(t) for t in llm.CAPACIDADES}  # a tela de Provedores mostra
     return values
 
 
@@ -185,8 +206,18 @@ def _providers(new: list, old: list) -> list:
         key = p.get("api_key")
         if key is None:
             key = previous.get(pid, {}).get("api_key", "")
+        janela = p.get("context_window")
+        if janela in ("", None, 0):
+            janela = None
+        else:
+            try:
+                janela = int(janela)
+            except (TypeError, ValueError):
+                raise SettingsError(f"Janela de contexto de '{pid}' precisa ser um número de tokens.") from None
+            if not 1024 <= janela <= 4_194_304:
+                raise SettingsError(f"Janela de contexto de '{pid}' fora do intervalo 1024–4194304.")
         out.append({"id": pid, "name": str(p.get("name") or pid)[:60], "type": p["type"], "url": url,
-                    "api_key": str(key)})
+                    "api_key": str(key), **({"context_window": janela} if janela else {})})
     return out
 
 
@@ -235,7 +266,8 @@ def validate(patch: dict, current: dict) -> dict:
             if provider and provider not in {p["id"] for p in values["providers"]} | {"local"}:
                 raise SettingsError(f"Modelo da Maestro: provedor '{provider}' não existe.")
             values[key] = {"provider": provider, "model": model}
-        elif key in ("project_memory", "personal_memory", "maestro_browser", "workers_do_maestro", "auto_review"):
+        elif key in ("project_memory", "personal_memory", "maestro_browser", "workers_do_maestro", "auto_review",
+                     "mcp_servidor"):
             values[key] = bool(raw)
         elif key == "project_memory_file":
             name = str(raw).strip() or "FORJA.md"
@@ -246,6 +278,26 @@ def validate(patch: dict, current: dict) -> dict:
             from .modelctl import LIFECYCLES
             if raw not in LIFECYCLES:
                 raise SettingsError(f"model_lifecycle deve ser um de: {', '.join(LIFECYCLES)}.")
+            values[key] = raw
+        elif key == "sandbox_motor":
+            from .sandbox import MOTORES
+            if raw not in MOTORES:
+                raise SettingsError(f"sandbox_motor deve ser um de: {', '.join(MOTORES)}.")
+            values[key] = raw
+        elif key == "sandbox_wsl_distro":
+            nome = str(raw or "").strip()
+            if nome and not all(c.isalnum() or c in "-_." for c in nome):
+                raise SettingsError("sandbox_wsl_distro: só o nome da distro (ex.: Ubuntu).")
+            values[key] = nome
+        elif key == "mcp_permissao":
+            from .policy import MODES
+            if raw not in MODES or raw == "plan":
+                raise SettingsError(f"mcp_permissao deve ser um de: {', '.join(m for m in MODES if m != 'plan')}.")
+            values[key] = raw
+        elif key == "sandbox_isolado":
+            from .sandbox import MODOS_ISOLADO
+            if raw not in MODOS_ISOLADO:
+                raise SettingsError(f"sandbox_isolado deve ser um de: {', '.join(MODOS_ISOLADO)}.")
             values[key] = raw
         elif key == "browser_stream":
             if raw not in ("png", "jpeg"):

@@ -17,14 +17,22 @@ export type Provider = {
   api_key?: string; // só enviado; nunca volta do backend
   has_api_key?: boolean;
   api_key_hint?: string;
+  context_window?: number | null; // tokens; obrigatória no tipo openai quando o servidor não informa
 };
 
 export type AppSettings = {
   providers: Provider[];
+  capacidades?: Record<string, { nao: string[]; parcial: string[] }>; // só leitura, vem do backend
   num_ctx: number;
   max_iterations: number;
   max_file_bytes: number;
   shell_timeout_max: number;
+  sandbox_memoria_mb: number;
+  sandbox_processos: number;
+  sandbox_cpu: number;
+  sandbox_isolado: string;
+  sandbox_motor: string;
+  sandbox_wsl_distro: string;
   compact_at: number;
   searxng_url: string;
   disabled_tools: string[];
@@ -79,6 +87,45 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
       {hint && <span className="mt-0.5 block text-xs text-muted">{hint}</span>}
       <div className="mt-1.5">{children}</div>
     </label>
+  );
+}
+
+// Como instalar o Docker que o sandbox isolado usa. Dois caminhos: o Docker Desktop (mais simples, mas
+// precisa ficar aberto e come RAM) ou o Docker Engine dentro do WSL (sem janela, o WSL sobe sozinho).
+function TutorialDocker() {
+  const cmd = (texto: string) => (
+    <code className="mt-1 block whitespace-pre-wrap break-all rounded-lg bg-raised px-3 py-2 font-mono text-xs text-fg">{texto}</code>
+  );
+  return (
+    <details className="rounded-lg border border-line px-3 py-2 text-xs text-muted">
+      <summary className="cursor-pointer text-sm text-fg">Como instalar o Docker para o sandbox isolado</summary>
+      <div className="mt-3 space-y-4">
+        <div>
+          <p className="text-fg">Opção 1 — Docker Engine no WSL (recomendado: sem janela aberta, mais leve)</p>
+          <ol className="mt-1 list-decimal space-y-1.5 pl-5">
+            <li>Tenha o WSL 2 com uma distro Linux (ex.: Ubuntu). No PowerShell, se ainda não tiver:{cmd("wsl --install -d Ubuntu")}</li>
+            <li>Se o Docker Desktop estiver instalado, desligue a integração com essa distro em Settings › Resources › WSL integration, e apague os atalhos que ela deixou (dentro do Ubuntu):{cmd("sudo find /usr/bin /usr/local/bin /usr/local/lib/docker/cli-plugins -maxdepth 1 -lname '/mnt/wsl/docker-desktop/*' -print -delete")}</li>
+            <li>Instale e ligue o Docker Engine (dentro do Ubuntu):{cmd("sudo apt update && sudo apt install -y docker.io")}{cmd("sudo systemctl enable --now docker")}{cmd("sudo usermod -aG docker $USER")}</li>
+            <li>Para o Docker subir junto com o WSL, o systemd precisa estar ligado em /etc/wsl.conf (em [boot], systemd=true); depois rode no PowerShell:{cmd("wsl --shutdown")}</li>
+            <li>Confira (dentro do Ubuntu):{cmd("docker info --format '{{.ServerVersion}}'")}</li>
+            <li>Aqui no Forja: "Sandbox isolado: qual Docker" em Automático ou Docker Engine no WSL, e a distro (vazio = a padrão).</li>
+          </ol>
+        </div>
+        <div>
+          <p className="text-fg">Opção 2 — Docker Desktop</p>
+          <ol className="mt-1 list-decimal space-y-1.5 pl-5">
+            <li>Instale o Docker Desktop (docker.com/products/docker-desktop) com o motor WSL 2.</li>
+            <li>Deixe-o aberto enquanto o agente trabalha: o Forja não o abre sozinho. Em Settings › General dá para abrir junto com o Windows, e o Resource Saver reduz a RAM quando ocioso.</li>
+            <li>Confira no PowerShell:{cmd("docker info --format '{{.ServerVersion}}'")}</li>
+          </ol>
+        </div>
+        <p>
+          Na primeira vez, o Forja baixa a imagem do sandbox (node:22-bookworm ou python:3.12-bookworm, ~400 MB) em
+          segundo plano; até terminar, os comandos rodam no Windows. Comandos no container são mais lentos em
+          arquivos (a pasta do projeto é lida através do WSL), e o node_modules que um npm install criar lá é de Linux.
+        </p>
+      </div>
+    </details>
   );
 }
 
@@ -235,6 +282,33 @@ export default function Settings(props: {
                 </Field>
                 <Field label="Timeout máximo do run_command (s)">
                   <Num value={s.shell_timeout_max} onChange={(v) => set("shell_timeout_max", v)} />
+                </Field>
+                <Field label="Sandbox isolado (Docker)" hint="Roda os comandos do agente num container com só a pasta do projeto, sem root e sem rede fora da instalação de pacotes. Servidores de dev (serve_start) e o terminal do agente vão junto, com a porta publicada no localhost do Windows; o Forja continua no Windows. Precisa de um Docker rodando (o Forja não o abre), e ele consome RAM: em PC com pouca memória rodando IA local, deixe desligado.">
+                  <select className={input} value={s.sandbox_isolado} onChange={(e) => set("sandbox_isolado", e.target.value)}>
+                    <option value="desligado">Desligado</option>
+                    <option value="autonomo">Só nos modos autônomos (Automático, Ignorar permissões, Maestro)</option>
+                    <option value="sempre">Sempre</option>
+                  </select>
+                </Field>
+                <Field label="Sandbox isolado: qual Docker" hint="Automático usa o Docker Desktop se ele estiver aberto e, se não, o Docker Engine instalado dentro do WSL (sem Docker Desktop, e o WSL sobe sozinho quando o Forja chama).">
+                  <select className={input} value={s.sandbox_motor} onChange={(e) => set("sandbox_motor", e.target.value)}>
+                    <option value="auto">Automático</option>
+                    <option value="desktop">Docker Desktop</option>
+                    <option value="wsl">Docker Engine no WSL</option>
+                  </select>
+                </Field>
+                <Field label="Sandbox isolado: distro do WSL" hint="Onde o Docker Engine está instalado (ex.: Ubuntu). Vazio = a distro padrão do WSL.">
+                  <input className={input} value={s.sandbox_wsl_distro} onChange={(e) => set("sandbox_wsl_distro", e.target.value)} />
+                </Field>
+                <TutorialDocker />
+                <Field label="Sandbox: memória por comando (MB)" hint="Teto de memória da árvore de um comando do agente (run_command, servidores, terminal). -1 = automático (metade da RAM, até 4 GB); 0 = sem limite.">
+                  <Num value={s.sandbox_memoria_mb} onChange={(v) => set("sandbox_memoria_mb", v)} />
+                </Field>
+                <Field label="Sandbox: processos por comando" hint="Processos vivos ao mesmo tempo na árvore de um comando: barra fork bomb. 0 = sem limite.">
+                  <Num value={s.sandbox_processos} onChange={(v) => set("sandbox_processos", v)} />
+                </Field>
+                <Field label="Sandbox: CPU por comando (%)" hint="Teto de CPU de um comando, para o PC continuar usável num build pesado. 0 = sem limite.">
+                  <Num value={s.sandbox_cpu} onChange={(v) => set("sandbox_cpu", v)} />
                 </Field>
                 <Field label="URL do SearXNG" hint="Instância própria de busca. Vazio = DuckDuckGo, sem chave e sem conta.">
                   <input className={input} value={s.searxng_url} onChange={(e) => set("searxng_url", e.target.value)} />
@@ -968,6 +1042,17 @@ function ProviderUsage({ id }: { id: string }) {
   );
 }
 
+/** O que o Forja não controla neste tipo de servidor (tabela llm.CAPACIDADES do backend). */
+function Limites({ caps }: { caps?: { nao: string[]; parcial: string[] } }) {
+  if (!caps || (!caps.nao.length && !caps.parcial.length)) return null;
+  return (
+    <p className="text-xs text-muted">
+      {caps.nao.length > 0 && <>Neste tipo o Forja não consegue: {caps.nao.join(", ")}. </>}
+      {caps.parcial.length > 0 && <>Só em parte: {caps.parcial.join(", ")}.</>}
+    </p>
+  );
+}
+
 function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void }) {
   const change = (i: number, patch: Partial<Provider>) =>
     set("providers", s.providers.map((p, k) => (k === i ? { ...p, ...patch } : p)));
@@ -1013,6 +1098,21 @@ function Providers({ s, set }: { s: AppSettings; set: <K extends keyof AppSettin
             placeholder="https://host:porta/v1"
             onChange={(e) => change(i, { url: e.target.value })}
           />
+          {p.type === "openai" && (
+            <Field
+              label="Janela de contexto (tokens)"
+              hint="Vazio: o Forja pergunta ao servidor (vLLM, OpenRouter e llama-server informam). Se o servidor não informar, preencha aqui, ou o agente recusa rodar em vez de chutar 32k. No vLLM é o --max-model-len."
+            >
+              <input
+                type="number"
+                className={`${input} font-mono`}
+                value={p.context_window ?? ""}
+                placeholder="perguntar ao servidor"
+                onChange={(e) => change(i, { context_window: e.target.value ? Number(e.target.value) : null })}
+              />
+            </Field>
+          )}
+          <Limites caps={s.capacidades?.[p.type === "ollama" && p.url.includes("ollama.com") ? "ollama_nuvem" : p.type]} />
           <div className="flex items-center gap-2">
             <input
               type="password"
@@ -1585,6 +1685,153 @@ function Permissions({ s, save }: { s: AppSettings; save: (patch: Partial<AppSet
 
 // ------------------------------------------------------------------ mcp
 
+type McpServidor = { ligado: boolean; permissao: string; url: string; token: string; comando: string; json: unknown };
+
+/** E17: o Claude (Claude Code / Claude Desktop) planeja e escreve os cards; os Workers locais trabalham. */
+function ClaudeControla() {
+  const [c, setC] = useState<McpServidor | null>(null);
+  const [msg, setMsg] = useState("");
+  const [pasta, setPasta] = useState("");
+  const [verToken, setVerToken] = useState(false);
+  const carrega = () => api.get<McpServidor>("/mcp/servidor").then(setC).catch((e) => setMsg(e.message));
+  useEffect(() => { carrega(); }, []);
+  const muda = async (patch: Record<string, unknown>) => {
+    setMsg("");
+    try { await api.put("/settings", patch); await carrega(); } catch (e: any) { setMsg(e.message); }
+  };
+  const copia = (t: string, o: string) => navigator.clipboard.writeText(t).then(() => setMsg(`${o} copiado.`));
+  if (!c) return null;
+  return (
+    <section className="space-y-3 rounded-2xl border border-line bg-surface p-4">
+      <div className="flex items-start gap-3">
+        <button
+          role="switch"
+          aria-checked={c.ligado}
+          aria-label="Permitir que o Claude controle o Forja"
+          onClick={() => muda({ mcp_servidor: !c.ligado })}
+          className={`mt-0.5 h-5 w-10 shrink-0 rounded-full transition-colors ${c.ligado ? "bg-sky-500" : "bg-raised"}`}
+        >
+          <span className={`block size-4 rounded-full bg-white transition-transform ${c.ligado ? "translate-x-5" : "translate-x-0.5"}`} />
+        </button>
+        <span>
+          <span className="block text-sm font-medium text-fg">Permitir que o Claude controle o Forja</span>
+          <span className="block text-xs text-muted">
+            O Claude Code (ou o Claude Desktop) se conecta aqui por MCP: planeja, cria cards no board e despacha tarefas
+            para os Workers locais. Tudo o que ele faz aparece numa conversa "Claude · projeto" (tipo Maestro), no PC e no
+            celular, e o que você escreve nela chega a ele no resultado da próxima ferramenta.
+          </span>
+        </span>
+      </div>
+      <details className="rounded-xl border border-line bg-bg px-3 py-2 text-xs text-muted">
+        <summary className="cursor-pointer select-none text-sm text-fg">Como usar e para que serve</summary>
+        <div className="mt-2 space-y-3 leading-relaxed">
+          <p>
+            <span className="text-fg">Para que serve:</span> o Claude pensa e o Forja executa. Você pede a feature ao Claude Code
+            como sempre; ele lê o projeto, divide em tarefas com critério de pronto e manda cada uma para um{" "}
+            <span className="text-fg">Worker do Forja</span> (os modelos de Configurações › Subagentes, locais ou na nuvem). O
+            Worker escreve o código, o Forja roda o verify e faz o commit, e o Claude confere o resultado e fecha. Ele também
+            pode criar cards no board com arquivo e linha.
+          </p>
+          <ol className="list-decimal space-y-1.5 pl-5">
+            <li>Ligue <span className="text-fg">Permitir que o Claude controle o Forja</span> (acima).</li>
+            <li>
+              No terminal, <span className="text-fg">dentro da pasta do projeto</span>, rode uma vez o comando que aparece abaixo
+              (<span className="font-mono">claude mcp add …</span>). Para valer em todos os projetos, acrescente{" "}
+              <span className="font-mono">--scope user</span>. No Claude Desktop, cole o JSON em Configurações › Desenvolvedor.
+            </li>
+            <li>
+              Opcional: <span className="text-fg">Instalar no Claude Code</span>, mais abaixo, com a pasta do projeto. Aí o seu
+              pedido e as respostas dele também aparecem no Forja.
+            </li>
+            <li>
+              Abra o Claude Code no projeto e peça, por exemplo:{" "}
+              <span className="font-mono text-fg">"Use o Forja: planeje o filtro por data na lista de pedidos e deixe os Workers
+              implementarem."</span> Na primeira vez ele pede para usar as ferramentas do Forja: aceite.
+            </li>
+            <li>
+              Acompanhe em <span className="text-fg">Maestro › "Claude · nome do projeto"</span>, no PC ou no celular: tarefas,
+              Worker trabalhando, verify e commit. O que você escrever ali chega ao Claude na próxima ferramenta que ele chamar.
+            </li>
+          </ol>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg border border-line p-2.5">
+              <div className="mb-1 font-medium text-fg">Delegue aos Workers do Forja</div>
+              CRUD, tela que segue um padrão que já existe e bug com teste que prove.
+            </div>
+            <div className="rounded-lg border border-line p-2.5">
+              <div className="mb-1 font-medium text-fg">Deixe com o Claude</div>
+              Arquitetura, depuração difícil e decisões.
+            </div>
+          </div>
+          <p>
+            Assim o ciclo caro (ler arquivos, escrever, rodar teste, corrigir) roda nos Workers e gasta menos do seu plano do
+            Claude; em tarefa pequena ou vaga a economia some, porque planejar e revisar custa quase o mesmo que fazer direto.{" "}
+            <span className="text-fg">Aprovações:</span> escolha em "Ações do Claude"; no Manual, cada escrita do Worker pede o
+            seu ok aqui e no celular.
+          </p>
+        </div>
+      </details>
+      {c.ligado && (
+        <>
+          <Field label="Ações do Claude" hint="Como as ações dele que mexem no projeto são aprovadas. No Manual, a aprovação aparece no Forja e no celular, como qualquer outra.">
+            <select className={input} value={c.permissao} onChange={(e) => muda({ mcp_permissao: e.target.value })}>
+              <option value="manual">Manual: pergunta antes</option>
+              <option value="edits">Edições passam, o resto pergunta</option>
+              <option value="auto">Automático</option>
+              <option value="bypass">Ignorar permissões</option>
+            </select>
+          </Field>
+          <div className="space-y-1.5">
+            <div className="text-xs text-muted">No terminal do projeto, uma vez:</div>
+            <div className="flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-lg bg-bg px-3 py-2 font-mono text-xs text-fg" title={c.comando}>
+                {verToken ? c.comando : c.comando.replace(c.token, "•".repeat(12))}
+              </code>
+              <button className={btn} onClick={() => copia(c.comando, "Comando")}>Copiar</button>
+            </div>
+            <details className="text-xs text-muted">
+              <summary className="cursor-pointer select-none hover:text-fg">Claude Desktop ou mcp.json</summary>
+              <div className="mt-2 flex items-start gap-2">
+                <pre className="min-w-0 flex-1 overflow-x-auto rounded-lg bg-bg p-3 font-mono text-[11px] text-fg">
+                  {JSON.stringify(c.json, null, 2).replace(verToken ? "\u0000" : c.token, "•".repeat(12))}
+                </pre>
+                <button className={btn} onClick={() => copia(JSON.stringify(c.json, null, 2), "JSON")}>Copiar</button>
+              </div>
+            </details>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <button className="text-faint hover:text-fg" onClick={() => setVerToken((v) => !v)}>{verToken ? "Esconder" : "Mostrar"} o token</button>
+              <span className="text-faint">·</span>
+              <button className="text-faint hover:text-red-300"
+                onClick={async () => { setC(await api.post<McpServidor>("/mcp/servidor/token", {})); setMsg("Token novo: atualize o Claude com o comando acima."); }}>
+                Revogar e gerar outro token
+              </button>
+            </div>
+          </div>
+          <div className="space-y-1.5 border-t border-line pt-3">
+            <div className="text-sm text-fg">Conversa inteira no Forja (opcional)</div>
+            <div className="text-xs text-muted">
+              Instala hooks no Claude Code do projeto (<span className="font-mono">.claude/settings.local.json</span>, fora do
+              git): o seu pedido, a resposta final dele e as ferramentas que ele usar aparecem na conversa do Forja. O arquivo
+              não guarda o token.
+            </div>
+            <div className="flex items-center gap-2">
+              <input className={`${input} font-mono text-xs`} placeholder="C:/caminho/do/projeto" value={pasta} onChange={(e) => setPasta(e.target.value)} />
+              <button className={btn} disabled={!pasta.trim()} onClick={async () => {
+                setMsg("");
+                try {
+                  const r = await api.post<{ arquivo: string }>("/mcp/servidor/hooks", { pasta: pasta.trim() });
+                  setMsg(`Hooks gravados em ${r.arquivo}. Vale a partir da próxima sessão do Claude Code.`);
+                } catch (e: any) { setMsg(e.message); }
+              }}>Instalar no Claude Code</button>
+            </div>
+          </div>
+        </>
+      )}
+      {msg && <p className="text-xs text-muted">{msg}</p>}
+    </section>
+  );
+}
+
 function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void }) {
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
@@ -1613,6 +1860,8 @@ function Mcp({ mcp, onChanged }: { mcp: McpStatus | null; onChanged: () => void 
 
   return (
     <div className="max-w-2xl space-y-4">
+      <ClaudeControla />
+      <h3 className="pt-2 text-sm font-medium text-fg">Servidores que o Forja usa</h3>
       <p className="text-sm text-muted">
         Servidores MCP, no mesmo formato do Claude Desktop. Comandos (<span className="font-mono">command</span>) rodam na
         sua máquina, no seu PATH — precisam do <span className="font-mono">npx</span> (Node.js) ou do{" "}

@@ -6,6 +6,7 @@ bash no Linux/macOS) — ver native.py. Como no Claude Desktop, a proteção é 
 """
 from __future__ import annotations
 
+import collections
 import contextvars
 import re
 import subprocess
@@ -15,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import config, native
+from . import config, native, sandbox
 from .tools import Tool, ToolError, register, resolve_path
 
 MAX_OUTPUT = 20_000
@@ -28,6 +29,27 @@ OUTPUT_SINK: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.
 CONV: contextvars.ContextVar[str] = contextvars.ContextVar("forja_conv", default="")
 
 
+LOG_DIAS = 7  # log de comando/servidor mais velho que isto é apagado quando o backend sobe
+
+
+def limpa_logs(dias: int = LOG_DIAS) -> int:
+    """Apaga os logs antigos de %TEMP%\\forja-serve (e os de run_command que foram para o spill).
+    Antes nunca eram limpos: centenas de arquivos acumulando no TEMP. Arquivo em uso (servidor ainda
+    rodando) falha ao apagar no Windows e fica, que é o certo."""
+    from .tools import SPILL_DIR
+    corte = time.time() - dias * 86_400
+    apagados = 0
+    for pasta, padrao in ((LOG_DIR, "*.log"), (SPILL_DIR, "run-*.log")):
+        for p in pasta.glob(padrao) if pasta.is_dir() else []:
+            try:
+                if p.stat().st_mtime < corte:
+                    p.unlink()
+                    apagados += 1
+            except OSError:
+                pass
+    return apagados
+
+
 def _truncate(text: str) -> str:
     if len(text) <= MAX_OUTPUT:
         return text
@@ -35,13 +57,20 @@ def _truncate(text: str) -> str:
     return f"{text[:half]}\n\n... ({len(text) - MAX_OUTPUT} caracteres omitidos) ...\n\n{text[-half:]}"
 
 
-def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] | None) -> tuple[int, str, bool]:
+def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] | None,
+             root: Path | None = None) -> tuple[int, str, bool]:
     """Roda e devolve (exit code, saída, estourou o timeout). Lê linha a linha para a UI mostrar ao vivo."""
     chunks: list[str] = []
     timed_out = threading.Event()
     # `with`: no caminho do timeout o pipe ficava aberto, um descritor por comando estourado.
-    with subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, **native.popen_kwargs()) as p:
+    # Com `root`, o comando é do projeto e pode ir para o container (sandbox.plano); sem ele (git, hooks),
+    # roda sempre no Windows.
+    p, aviso = sandbox.popen_comando(command, cwd, root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL) if root else (
+        sandbox.popen(native.shell_argv(command), cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                      stdin=subprocess.DEVNULL), "")
+    chunks.append(aviso)
+    with p:
         def _kill():
             timed_out.set()
             native.kill_tree(p)
@@ -56,9 +85,18 @@ def _execute(command: str, cwd: Path, timeout: int, sink: Callable[[str], None] 
                 if sink:
                     sink(line)
             p.wait()
+            chunks.append(sandbox.aviso_saida(p))
         finally:
             timer.cancel()
+            sandbox.fecha(p)  # o que a árvore deixou para trás morre com o job
     return p.returncode, "".join(chunks), timed_out.is_set()
+
+
+def executa_do_projeto(root: Path, command: str, timeout: int = 60) -> tuple[int, str]:
+    """Como exec_in, mas é um comando do projeto (verify da regressão): vai para o container quando o
+    sandbox isolado estiver ativo."""
+    code, out, timed_out = _execute(command, root, timeout, None, root)
+    return (124, f"Timeout ({timeout}s)") if timed_out else (code, out)
 
 
 def exec_in(root: Path, command: str, timeout: int = 60) -> tuple[int, str]:
@@ -79,7 +117,8 @@ def background(root: Path, args: dict) -> str:
     return texto
 
 
-def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> tuple[int | None, str]:
+def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str,
+                    root: Path | None = None) -> tuple[int | None, str]:
     """Roda gravando num log. Terminou no prazo: (exit code, saída). Não terminou: (None, saída até
     aqui) e o processo SEGUE vivo, registrado como processo em segundo plano `nome`.
 
@@ -89,10 +128,27 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log = LOG_DIR / f"fg-{nome}-{time.time_ns()}.log"
     fh = open(log, "wb")
-    proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, **native.popen_kwargs())
-    lidos, resto, pedacos = 0, b"", []
+    proc, aviso_inicio = sandbox.popen_comando(command, cwd, root, stdout=fh, stderr=subprocess.STDOUT,
+                                               stdin=subprocess.DEVNULL)
+    lidos, resto = 0, b""
+    # Só cabeça e cauda na memória: antes a saída inteira ficava num list (um build verboso de GB ia
+    # junto) só para ser cortada em MAX_OUTPUT no fim. O completo continua no log, em disco.
+    cabeca: list[str] = []
+    cauda: collections.deque[str] = collections.deque()
+    tam = {"cabeca": 0, "cauda": 0, "total": 0}
+    metade = MAX_OUTPUT // 2
     limite = time.monotonic() + timeout
+
+    def guarda(linha: str) -> None:
+        tam["total"] += len(linha)
+        if tam["cabeca"] < metade:
+            cabeca.append(linha)
+            tam["cabeca"] += len(linha)
+            return
+        cauda.append(linha)
+        tam["cauda"] += len(linha)
+        while tam["cauda"] > metade and len(cauda) > 1:
+            tam["cauda"] -= len(cauda.popleft())
 
     def puxa() -> None:
         nonlocal lidos, resto
@@ -103,10 +159,22 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
         *linhas, resto = (resto + novo).split(b"\n")
         for raw in linhas:
             linha = native.decode(raw + b"\n")
-            pedacos.append(linha)
+            guarda(linha)
             if sink:
                 sink(linha)
 
+    def texto(completo: str = "") -> str:
+        omitidos = tam["total"] - tam["cabeca"] - tam["cauda"]
+        if omitidos <= 0:
+            return "".join(cabeca) + "".join(cauda)
+        onde = (f"; a saída completa está em {completo} — leia o meio com read_file (start_line/end_line) "
+                "ou procure nele com grep" if completo else "")
+        return f"{''.join(cabeca)}\n\n... ({omitidos} caracteres omitidos{onde}) ...\n\n{''.join(cauda)}"
+
+    if aviso_inicio:  # isolamento pedido e não deu (Docker parado, imagem baixando): o modelo precisa saber
+        guarda(aviso_inicio)
+        if sink:
+            sink(aviso_inicio)
     while proc.poll() is None and time.monotonic() < limite:
         time.sleep(0.2)
         puxa()
@@ -118,15 +186,26 @@ def _primeiro_plano(command: str, cwd: Path, timeout: int, sink, nome: str) -> t
             _SERVERS[nome] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
                               "started": time.time() - timeout, "conv": CONV.get(), "kind": "Processo"}
         _vigia(nome)
-        return None, "".join(pedacos)
+        return None, texto(str(log))
     fh.close()
     if resto:
-        pedacos.append(native.decode(resto))
+        guarda(native.decode(resto))
+    if aviso := sandbox.aviso_saida(proc):
+        guarda(aviso)
+    sandbox.fecha(proc)  # comando acabou: filho que ficou rodando (daemon, watcher) morre junto
+    completo = ""
     try:
-        log.unlink()
+        if tam["total"] > MAX_OUTPUT:
+            # Saída cortada: o log vira o arquivo completo que o modelo pode ler por partes (antes era
+            # apagado, e o meio de um log de build sumia para sempre).
+            from .tools import SPILL_DIR
+            SPILL_DIR.mkdir(parents=True, exist_ok=True)
+            completo = str(log.replace(SPILL_DIR / f"run-{nome}-{time.time_ns()}.log"))
+        else:
+            log.unlink()
     except OSError:
         pass
-    return proc.returncode, "".join(pedacos)
+    return proc.returncode, texto(completo)
 
 
 def run_command(root: Path, args: dict) -> str:
@@ -142,13 +221,13 @@ def run_command(root: Path, args: dict) -> str:
     cwd = resolve_path(root, args.get("cwd"))
     timeout = max(1, min(int(args.get("timeout") or 60), config.SHELL_TIMEOUT_MAX))
     nome = _safe_name(str(args.get("name") or "").strip() or command.split()[0])
-    code, out = _primeiro_plano(command, cwd, timeout, OUTPUT_SINK.get(), nome)
+    code, out = _primeiro_plano(command, cwd, timeout, OUTPUT_SINK.get(), nome, root)
     if code is None:
         return (f"[ainda rodando após {timeout}s; movido para o processo em segundo plano '{nome}']\n"
                 "O comando continua rodando. Você recebe um aviso quando ele terminar; enquanto isso siga com o "
                 f"que não depende dele. serve_status(name='{nome}') mostra o log, serve_stop encerra.\n"
-                f"Saída até aqui:\n{_truncate(out) or '(sem saída)'}")
-    body = f"exit code: {code}\n{_truncate(out) or '(sem saída)'}"
+                f"Saída até aqui:\n{out or '(sem saída)'}")
+    body = f"exit code: {code}\n{out or '(sem saída)'}"
     if code != 0:
         raise ToolError(body)
     return body
@@ -193,23 +272,31 @@ def _safe_name(name: str) -> str:
     return "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in (name or "").strip())[:40] or "server"
 
 
-def _start(name: str, command: str, cwd: Path) -> dict:
+def _start(name: str, command: str, cwd: Path, root: Path | None = None, porta: int | None = None,
+           servidor: bool = True) -> dict:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    # Com `root` (comando do agente) pode ir para o container do sandbox, com a porta publicada no Windows.
+    pl = sandbox.plano_servidor(command, cwd, root, porta, servidor)
     with _servers_lock:
         if name in _SERVERS:
             _drop(_SERVERS.pop(name))  # mesmo nome = reinicia
         log = LOG_DIR / f"{name}.log"
         fh = open(log, "wb")  # fechado em _drop: sem guardar o handle, vazava um descritor por servidor
-        proc = subprocess.Popen(native.shell_argv(command), cwd=cwd, stdout=fh, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, env=native.ambiente_dev(), **native.popen_kwargs())
+        if pl["aviso"]:
+            fh.write(pl["aviso"].encode("utf-8"))
+            fh.flush()
+        proc = sandbox.popen(pl["argv"], cwd, stdout=fh, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, dev=True)
+        sandbox.marca_container(proc, pl["nome"], pl["motor"])
         _SERVERS[name] = {"proc": proc, "log": str(log), "fh": fh, "command": command, "cwd": str(cwd),
-                          "started": time.time(), "conv": CONV.get()}
+                          "started": time.time(), "conv": CONV.get(),
+                          "porta": pl.get("porta"), "porta_host": pl.get("porta_host")}
     return _info(name)
 
 
 def _drop(s: dict) -> None:
     """Encerra o processo e fecha o arquivo de log dele."""
     native.kill_tree(s["proc"])
+    sandbox.fecha(s["proc"])
     try:
         s["fh"].close()
     except (OSError, KeyError):
@@ -221,7 +308,28 @@ def _info(name: str) -> dict:
     code = s["proc"].poll()
     return {"name": name, "pid": s["proc"].pid, "alive": code is None, "exit_code": code, "command": s["command"],
             "cwd": s["cwd"], "log": s["log"], "uptime": int(time.time() - s["started"]),
-            "conv": s.get("conv") or "", "url": (url_do_log(name) or url_da_porta(s["proc"].pid)) if code is None else ""}
+            "conv": s.get("conv") or "", "url": _url(name) if code is None else ""}
+
+
+def _url(name: str) -> str:
+    """Endereço do servidor no Windows. No sandbox é a porta publicada, que pode não ser a que o servidor
+    anuncia no log (a de dentro do container)."""
+    s = _SERVERS[name]
+    u = url_do_log(name)
+    if not s.get("porta_host"):
+        return u or url_da_porta(s["proc"].pid)
+    m = re.match(r"https?://[^/]+:(\d+)(.*)", u)
+    return f"http://localhost:{s['porta_host']}" + (m.group(2) if m and int(m.group(1)) == s["porta"] else "")
+
+
+def porta_errada(name: str) -> str:
+    """No sandbox só a porta prevista é publicada: o servidor anunciar outra é o modelo precisar do `port`."""
+    s = _SERVERS.get(name) or {}
+    m = re.match(r"https?://[^/]+:(\d+)", url_do_log(name)) if s.get("porta_host") else None
+    if m and int(m.group(1)) != s["porta"]:
+        return (f"\n[sandbox: publiquei a porta {s['porta']}, mas o servidor escutou na {m.group(1)}. Suba de novo com "
+                f"port={m.group(1)} e restart=true.]")
+    return ""
 
 
 def _log(name: str, tail: int) -> str:
@@ -272,8 +380,14 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
         return (f"{kind} '{vivos[0]}' já está rodando esse comando nesta pasta"
                 + (f", em {url}" if url else "") + ". Reaproveitei; nada foi reiniciado. "
                 "Para reiniciar (mudou configuração, travou), chame serve_start com restart=true.")
-    info = _start(name, command, cwd)
+    porta = int(args["port"]) if str(args.get("port") or "").isdigit() else None
+    info = _start(name, command, cwd, root, porta, servidor=kind == "Servidor")
     time.sleep(2.5)  # dá tempo de o servidor imprimir a porta
+    if _SERVERS.get(name, {}).get("porta_host") and kind == "Servidor":
+        # No container sobe mais devagar (pasta do Windows lida pelo WSL2): espera o anúncio da URL.
+        fim = time.monotonic() + 15
+        while time.monotonic() < fim and not url_do_log(name) and _info(name)["alive"]:
+            time.sleep(0.5)
     log, alive = _log(name, 30), _info(name)["alive"]
     status = "rodando" if alive else ("JÁ ENCERROU (veja o log: provável erro)" if kind == "Servidor"
                                       else "JÁ TERMINOU (o log abaixo é o resultado)")
@@ -282,13 +396,15 @@ def serve_start(root: Path, args: dict, kind: str = "Servidor") -> str:
     # Sem a URL no log, a porta em que o processo (ou um filho) já escuta; o cache pode ser de antes da subida.
     if kind == "Servidor":
         _PORTAS["t"] = 0.0
-    url = (url_do_log(name) or url_da_porta(info.get("pid") or 0)) if kind == "Servidor" and alive else ""
+    url = _url(name) if kind == "Servidor" and alive else ""
     if url:
         dica = (f"Endereço: {url} — vale para o navegador integrado e para o navegador do usuário. Mande-o ao "
                 f"usuário como link: [{url}]({url}).\n")
-    return (f"{kind} '{name}' iniciado (pid {info.get('pid')}), {status}.\n{dica}"
+    onde = " no container do sandbox" if _SERVERS.get(name, {}).get("porta_host") or getattr(
+        _SERVERS.get(name, {}).get("proc"), "_forja_container", None) else ""
+    return (f"{kind} '{name}' iniciado{onde} (pid {info.get('pid')}), {status}.\n{dica}"
             f"Use serve_status(name='{name}') para acompanhar e serve_stop para encerrar.\n"
-            f"--- log ---\n{log or '(vazio ainda)'}")
+            f"--- log ---\n{log or '(vazio ainda)'}{porta_errada(name)}")
 
 
 # ------------------------------------------------------------------ servidores que o Forja não subiu
@@ -541,7 +657,8 @@ register(Tool(
     {"type": "object", "properties": {
         "name": {"type": "string", "description": "Apelido curto, ex.: vite, api"},
         "command": {"type": "string"},
-        "cwd": {"type": "string", "description": "Subpasta da pasta de trabalho. Padrão: '.'"}},
+        "cwd": {"type": "string", "description": "Subpasta da pasta de trabalho. Padrão: '.'"},
+        "port": {"type": "integer", "description": "Porta em que o servidor escuta, se não for a padrão da ferramenta"}},
      "required": ["name", "command"]},
     serve_start, mutating=True, preview=serve_preview, always_ask=True))
 register(Tool(

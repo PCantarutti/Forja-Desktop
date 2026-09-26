@@ -241,7 +241,10 @@ export default function Sidebar(props: {
         })()}
         {c.pinned && !dim && <Pin className="size-3 shrink-0 text-faint" />}
         {c.origem && (
-          <span title="Aberta pela IA: só gera as imagens que o chat pediu para o site" className="shrink-0 text-sky-300/80">
+          <span title={(c.origem as any)?.externo === "claude"
+                  ? "Conversa do Claude (MCP): o que você escrever aqui chega a ele na próxima ferramenta que ele chamar"
+                  : "Aberta pela IA: só gera as imagens que o chat pediu para o site"}
+                className="shrink-0 text-sky-300/80">
             <Robo className="size-3.5" />
           </span>
         )}

@@ -250,6 +250,8 @@ function Detalhe({ linha, ferramenta, onFechar }: { linha: Linha; ferramenta?: T
             <dl className="grid grid-cols-[6.5rem_1fr] gap-x-2 gap-y-1">
               {inicio && campo("Início", new Date(inicio).toLocaleString("pt-BR"))}
               {linha.segundos != null && campo("Duração", fmtSeg(linha.segundos))}
+              {linha.res?.meta?.espera_aprovacao != null &&
+                campo("Aprovação", `${fmtSeg(Number(linha.res.meta.espera_aprovacao))} esperando você`)}
             </dl>
           </div>
         )}

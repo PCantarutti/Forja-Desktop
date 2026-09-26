@@ -156,7 +156,9 @@ class Session:
         if self._m.native:
             if not self._m.hosts:
                 raise ToolError("O app não está ligado ao navegador integrado (Electron sem conexão com o backend).")
-            self._ctx = browser.contexts[0]  # todas as views caem no contexto padrão do CDP
+            # Todas as views caem no contexto padrão do CDP, mas cookie e storage NÃO são divididos: cada
+            # conversa tem a própria partição do Electron, em memória (browserHost.js, forja-browser-<key>).
+            self._ctx = browser.contexts[0]
             marker = f"{MARKER}{self.key}/{uuid.uuid4().hex[:8]}"
             self._m.host_emit({"type": "create", "key": self.key, "marker": marker})
             deadline = time.monotonic() + MARKER_WAIT

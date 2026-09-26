@@ -166,14 +166,31 @@ def project_write(content: str) -> dict:
 # descrição, e o corpo o modelo pede com `recall`. Mantém o custo em centenas de tokens.
 
 TIPOS = ("usuario", "preferencia", "projeto", "referencia")
+# O tipo "projeto" mora no próprio projeto (<raiz do git>/.forja/memoria) e só entra no índice dele;
+# os outros tipos valem em qualquer pasta. Memória "projeto" antiga, gravada antes disto na pasta
+# global, continua global: não há como saber de que projeto ela era.
 INDEX_MAX = 8000          # caracteres de índice no prompt (~2k tokens)
 BODY_MAX = 4000           # corpo de uma memória
 INLINE_MAX = 300          # corpo até este tamanho entra inteiro no índice
-_INDEX: str | None = None  # congelado durante o turno: mexer no system prompt mata o cache do llama.cpp
+_INDEX: dict[str, str] = {}  # por projeto, congelado durante o turno: mexer no system prompt mata o cache do llama.cpp
 
 
 def personal_dir() -> Path:
     return config.PERSONAL_MEMORY_DIR
+
+
+def project_dir() -> Path:
+    return _raiz_projeto(workspace.root().resolve()) / ".forja" / "memoria"
+
+
+def _pastas() -> list[Path]:
+    """Projeto primeiro: o mesmo nome no projeto vence o global."""
+    return [project_dir(), personal_dir()]
+
+
+def _arquivo(nome: str) -> Path | None:
+    slug = _slug(nome)
+    return next((p / f"{slug}.md" for p in _pastas() if (p / f"{slug}.md").is_file()), None)
 
 
 def _slug(nome: str) -> str:
@@ -199,24 +216,26 @@ def _parse_front(texto: str) -> tuple[dict, str]:
 
 
 def personal_list() -> list[dict]:
-    pasta = personal_dir()
-    if not pasta.is_dir():
-        return []
-    saida = []
-    for f in sorted(pasta.glob("*.md")):
-        try:
-            cabeca, corpo = _parse_front(f.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-        saida.append({"name": cabeca.get("name") or f.stem, "slug": f.stem,
-                      "description": cabeca.get("description", ""), "type": cabeca.get("type", "usuario"),
-                      "updated": cabeca.get("updated", ""), "size": len(corpo)})
+    """As memórias globais e as do projeto atual (as de outros projetos ficam de fora)."""
+    saida, vistos = [], set()
+    for pasta, escopo in zip(_pastas(), ("projeto", "global")):
+        for f in sorted(pasta.glob("*.md")) if pasta.is_dir() else ():
+            if f.stem in vistos:
+                continue
+            try:
+                cabeca, corpo = _parse_front(f.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            vistos.add(f.stem)
+            saida.append({"name": cabeca.get("name") or f.stem, "slug": f.stem,
+                          "description": cabeca.get("description", ""), "type": cabeca.get("type", "usuario"),
+                          "updated": cabeca.get("updated", ""), "size": len(corpo), "scope": escopo})
     return sorted(saida, key=lambda m: (m["type"], m["name"].lower()))
 
 
 def personal_read(nome: str) -> dict:
-    f = personal_dir() / f"{_slug(nome)}.md"
-    if not f.is_file():
+    f = _arquivo(nome)
+    if not f:
         raise MemoryError(f"Não existe memória chamada '{nome}'.")
     cabeca, corpo = _parse_front(f.read_text(encoding="utf-8", errors="replace"))
     return {"name": cabeca.get("name") or f.stem, "slug": f.stem, "description": cabeca.get("description", ""),
@@ -227,9 +246,10 @@ def personal_write(nome: str, descricao: str, conteudo: str, tipo: str = "usuari
     if not str(descricao).strip():
         raise MemoryError("Descrição vazia: é ela que aparece no índice.")
     tipo = tipo if tipo in TIPOS else "usuario"
-    pasta = personal_dir()
+    pasta, outra = _pastas() if tipo == "projeto" else _pastas()[::-1]
     pasta.mkdir(parents=True, exist_ok=True)
     slug = _slug(nome)
+    (outra / f"{slug}.md").unlink(missing_ok=True)  # mudou de tipo: não fica cópia no outro lugar
     texto = (f"---{chr(10)}name: {str(nome).strip()[:80]}{chr(10)}description: {str(descricao).strip()[:200]}"
              f"{chr(10)}type: {tipo}{chr(10)}updated: {time.strftime('%Y-%m-%d')}{chr(10)}---{chr(10)}{chr(10)}"
              f"{str(conteudo).strip()[:BODY_MAX]}{chr(10)}")
@@ -240,8 +260,7 @@ def personal_write(nome: str, descricao: str, conteudo: str, tipo: str = "usuari
 def personal_delete(nomes: list[str]) -> int:
     apagados = 0
     for nome in nomes or []:
-        f = personal_dir() / f"{_slug(nome)}.md"
-        if f.is_file():
+        if f := _arquivo(nome):
             f.unlink()
             apagados += 1
     if not apagados:
@@ -255,8 +274,8 @@ def index(refresh: bool = False) -> str:
     Se ele mudasse no meio da conversa, o llama-server jogaria fora o prompt já processado e a
     resposta seguinte reprocessaria o histórico inteiro — caro justamente no modelo local.
     """
-    global _INDEX
-    if refresh or _INDEX is None:
+    chave = str(project_dir())
+    if refresh or chave not in _INDEX:
         linhas = []
         for m in personal_list():
             if m["size"] <= INLINE_MAX:
@@ -265,8 +284,8 @@ def index(refresh: bool = False) -> str:
             else:
                 linhas.append(f"- {m['name']} ({m['type']}) — {m['description']} (detalhes: recall)")
         texto = chr(10).join(linhas)
-        _INDEX = texto[:INDEX_MAX]
-    return _INDEX
+        _INDEX[chave] = texto[:INDEX_MAX]
+    return _INDEX[chave]
 
 
 def prompt_block() -> str:
@@ -307,8 +326,8 @@ register(Tool(
     "remember",
     "Guarda algo duradouro sobre o usuário: nome, gostos, como ele quer as respostas, correções do seu jeito "
     "de trabalhar, ferramentas que usa. Chame por conta própria assim que ele revelar isso, sem pedir licença; "
-    "o mesmo name sobrescreve. Não guarde segredo, senha, nem coisa efêmera; o que é do projeto vai para o "
-    "arquivo de memória do projeto.",
+    "o mesmo name sobrescreve. Não guarde segredo, senha, nem coisa efêmera. type 'projeto' guarda algo que "
+    "só vale para ESTE projeto (fica na pasta dele e não aparece nos outros).",
     _obj({"name": {"type": "string", "description": "Nome curto, serve de identificador"},
           "description": {"type": "string", "description": "Uma linha com o próprio fato (ex.: 'Nome: Pedro', não 'Nome do usuário')"},
           "content": {"type": "string", "description": "O fato em si, com o porquê"},

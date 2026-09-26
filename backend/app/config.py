@@ -81,6 +81,21 @@ for _candidato in (Path(__file__).resolve().parents[2] / "resources" / "ms-playw
 
 BROWSER_STREAM = os.getenv("BROWSER_STREAM", "jpeg")                  # jpeg (leve, padrão) | png (sem perda, 3-5x mais pesado)
 
+# Sandbox dos processos do agente (sandbox.py): Job Object no Windows, setrlimit no resto. 0 desliga.
+SANDBOX_MEMORIA_MB = -1   # -1 = automático: metade da RAM, no máximo 4 GB
+SANDBOX_PROCESSOS = 128   # processos vivos ao mesmo tempo na árvore de um comando (fork bomb)
+SANDBOX_CPU = 80          # teto de CPU em %, para o PC continuar usável num build pesado
+# Comandos do agente num container Docker (passo 3): desligado | autonomo (Automático, Ignorar permissões,
+# Maestro) | sempre. Desligado por padrão: o Docker Desktop consome RAM que um PC com IA local pode não ter.
+SANDBOX_ISOLADO = "desligado"
+# Qual Docker: auto (o Desktop se estiver aberto, senão o Engine dentro do WSL) | desktop | wsl.
+SANDBOX_MOTOR = "auto"
+# E17: o Claude (Claude Code/Desktop) controla o Forja por MCP em /mcp. Desligado por padrão; as ações dele
+# passam pelo modo de permissão abaixo, com aprovação no PC e no celular como qualquer outra.
+MCP_SERVIDOR = False
+MCP_PERMISSAO = "manual"
+SANDBOX_WSL_DISTRO = ""  # distro WSL com o Docker Engine; vazio = a distro padrão do WSL
+
 # type: ollama (API nativa, aceita num_ctx) | lmstudio (OpenAI + janela do modelo carregado) | openai
 PROVIDERS = {
     "ollama": {"id": "ollama", "name": "Ollama", "type": "ollama",

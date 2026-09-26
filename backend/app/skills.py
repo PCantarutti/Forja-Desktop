@@ -53,6 +53,17 @@ BUILTIN = [
                "aviso disser que as imagens viraram .webp, aponte para o .webp daí em diante.\n"
                "Não gere as imagens você mesmo e não chame image_generate: o usuário gera a fila pela tela "
                "Imagens a partir do botão que a ferramenta mostra no chat. $ARGUMENTS"},
+    {"name": "board", "kind": "prompt",
+     "description": "Procura bugs, melhorias, ideias de feature e problemas visuais e cria os cards no board do projeto",
+     "prompt": "Varredura do projeto para o board. Foco pedido: $ARGUMENTS (sem foco: bugs, melhorias, ideias de "
+               "feature e problemas visuais). Leia o código SEM alterar nada e sem rodar comando que mude algo: "
+               "comece por tree e code_search, leia os trechos com read_file ou ast, e use explore em áreas grandes. "
+               "Para cada achado que você CONFIRMAR lendo o código, crie um card com board_card: título curto, tipo, "
+               "arquivo, linha e o trecho copiado exatamente (o Forja confere e recusa se não bater), descrição do "
+               "impacto e um prompt pronto para outra IA resolver (contexto, arquivos, critério de aceite), mais o "
+               "verify_sugerido quando houver um comando que prove. No máximo 10 cards, os mais importantes; nada "
+               "de suposição ou gosto pessoal. Os cards caem em Novo e o usuário decide. No fim, liste os cards "
+               "criados, um por linha."},
     {"name": "explicar", "kind": "prompt",
      "description": "Explica a estrutura do projeto da pasta da conversa",
      "prompt": "Explore a pasta da conversa (list_dir, read_file) e explique em tópicos: o que o projeto faz, "

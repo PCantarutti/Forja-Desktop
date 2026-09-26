@@ -516,7 +516,8 @@ def _obj(props: dict, required: list[str]) -> dict:
 
 
 register(Tool(
-    "list_dir", "Lista arquivos e pastas de um diretório da pasta de trabalho.",
+    "list_dir", "Lista arquivos e pastas de um diretório da pasta de trabalho. Para a visão geral de um "
+    "projeto, use tree.",
     _obj({"path": {"type": "string", "description": "Diretório relativo à pasta de trabalho. Padrão: '.'"},
           "recursive": {"type": "boolean", "description": "Listar subpastas também. Padrão: false"}}, []),
     list_dir))

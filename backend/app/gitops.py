@@ -125,6 +125,39 @@ def commit(root: Path, message: str) -> dict:
     return {"sha": sha, "output": out.strip(), "message": message}
 
 
+MAX_COMMIT_BYTES = 5_000_000  # arquivo maior que isto não entra no commit automático da tarefa
+
+
+def commit_paths(root: Path, paths: list[str], message: str) -> str:
+    """Commit só destes caminhos (os que uma tarefa do Maestro escreveu), sem varrer o resto da árvore:
+    o usuário pode ter alterações próprias sem commit, e `git add -A` as levaria junto. Fica de fora
+    `.env*` e arquivo acima de MAX_COMMIT_BYTES. Devolve o hash curto, ou '' se nada mudou."""
+    candidatos = [p for p in dict.fromkeys(str(p).replace("\\", "/") for p in paths)
+                  if p and not Path(p).name.startswith(".env")
+                  and not ((root / p).is_file() and (root / p).stat().st_size > MAX_COMMIT_BYTES)]
+    if not candidatos:
+        return ""
+    rastreados = set(_run(root, "git ls-files -- " + " ".join(native.quote(p) for p in candidatos), 30)[1].splitlines())
+    # Apagado e nunca rastreado não existe para o git: o `git add` falharia com "did not match".
+    alvos = [p for p in candidatos if (root / p).exists() or p in rastreados]
+    if not alvos:
+        return ""
+    alvo = " ".join(native.quote(p) for p in alvos)
+    _ok(root, f"git add -A -- {alvo}", 60)
+    if _run(root, f"git diff --cached --quiet -- {alvo}", 30)[0] == 0:
+        return ""
+    rel = _write_forja_file(root, "commit-msg.txt", message)
+    try:
+        # Com caminhos, o commit leva só eles, mesmo que o usuário tenha outra coisa no índice.
+        _ok(root, f"git commit -q -F {native.quote(rel)} -- {alvo}", 120)
+    finally:
+        try:
+            (root / rel).unlink()
+        except OSError:
+            pass
+    return _run(root, "git rev-parse --short HEAD", 20)[1].strip()
+
+
 def create_pr(root: Path, title: str, body: str) -> dict:
     st = status(root)
     if not st.get("repo"):

@@ -18,6 +18,7 @@ import { CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, enviarClasse, pa
 import { GRADE_VAZIA, abertos, abrir as abrirTile, fechar as fecharTile, soltos, type Grade } from "./components/tiles";
 import { executarNoTerminal } from "./components/TerminalPanel";
 import SettingsDialog from "./components/Settings";
+import BoardView, { CardNoChat } from "./components/BoardView";
 import FolderPicker, { folderName } from "./components/FolderPicker";
 import ModelPicker from "./components/ModelPicker";
 import ContextRing from "./components/ContextRing";
@@ -62,7 +63,7 @@ import {
   turnosDe,
   type TurnStats,
 } from "./components/MessageView";
-import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Refresh, Square, Undo, X } from "./components/icons";
+import { ArrowUp, ChevronDown, Edit, ExternalLink, FolderOpen, Globe, Laptop, Paperclip, Quadro, Refresh, Square, Undo, X } from "./components/icons";
 import type { Activity, Approval, Attachment, BrowserState, Conversation, Draft, MaestroBoard, Message, ModelPhase, Settings, Skill, Stats, SubState, Task, ToolCall, ToolsSent } from "./types";
 import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView";
 
@@ -209,6 +210,20 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   write_file: (a) => `Escrevendo ${arquivo(a.path) ?? "um arquivo"}`,
   edit_file: (a) => `Editando ${arquivo(a.path) ?? "um arquivo"}`,
   list_dir: (a) => `Listando ${trecho(a.path, 40) ?? "a pasta"}`,
+  explore: (a) => `Explorando: ${trecho(a.question, 50) ?? "o código"}`,
+  code_search: (a) => `Procurando no código: ${trecho(a.query, 40) ?? "…"}`,
+  board_card: (a) => `Criando card no board: ${trecho(a.titulo, 40) ?? "…"}`,
+  tree: (a) => `Olhando a árvore de ${trecho(a.path, 40) ?? "pastas do projeto"}`,
+  ast: (a) => ({ outline: `Lendo a estrutura de ${arquivo(a.path) ?? "um arquivo"}`,
+                 symbol: `Lendo ${trecho(a.name, 30) ?? "um símbolo"} em ${arquivo(a.path) ?? "um arquivo"}`,
+                 node_at: `Localizando o código na linha ${String(a.line ?? "")}`,
+                 query: "Buscando pela estrutura do código" } as Record<string, string>)[String(a.operation)]
+    ?? "Analisando o código",
+  imports: (a) => ({ of: `Vendo o que ${arquivo(a.path) ?? "o arquivo"} importa`,
+                     importers: `Vendo quem importa ${arquivo(a.path) ?? "o arquivo"}`,
+                     graph: "Montando o grafo de imports",
+                     cycles: "Procurando ciclos de import" } as Record<string, string>)[String(a.operation)]
+    ?? "Analisando os imports",
   list_agents: () => "Conferindo os subagentes",
   lsp: (a) => `Consultando o language server (${String(a.operation ?? "")})`,
   session_search: (a) => `Procurando em conversas anteriores ${trecho(a.query, 30) ?? ""}`.trim(),
@@ -295,6 +310,14 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
 export default function App() {
   const [config, setConfig] = useState<Config>({ providers: [], num_ctx: 32768 });
   const [showSettings, setShowSettings] = useState(false);
+  const [showBoard, setShowBoard] = useState(false);
+  const [boardFoco, setBoardFoco] = useState<{ id: number; projeto: string } | null>(null);
+  // Card na resposta da IA (CardNoChat): clicar abre o board no projeto dele, com o card aberto.
+  useEffect(() => {
+    const abre = (e: Event) => { setBoardFoco((e as CustomEvent).detail); setShowBoard(true); };
+    window.addEventListener("forja:board", abre);
+    return () => window.removeEventListener("forja:board", abre);
+  }, []);
   const [allTools, setAllTools] = useState<ToolInfo[]>([]);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [geral, setSettings] = useState<Settings>(loadSettings);
@@ -1384,17 +1407,22 @@ export default function App() {
 
   // Linha de estatísticas sempre presente enquanto roda: iterações já concluídas do turno (valores reais do
   // provider) + a geração em andamento (tokens contados ao vivo, tempo correndo, t/s atual).
+  // Conversa do Claude por MCP: quem responde é ele, não o modelo escolhido aqui. O Run dela fica aberto
+  // enquanto ele trabalha, e sem isto a linha "ao vivo" mostrava o modelo do Maestro com ~0 tokens.
+  const doClaude = (conv?.origem as any)?.externo === "claude";
+  // o modelo do Claude (do transcript dele, via hook); o do Forja não é quem responde nesta conversa
+  const modeloVivo = doClaude ? ((conv?.origem as any)?.modelo ?? "Claude (via MCP)") : settings.model;
   const liveStats: TurnStats | null = (() => {
     void tick; // recalcula a cada 250 ms
     if (!running) return null;
     const done = messages.slice(lastUserIndex + 1).flatMap((m) => (m.role === "assistant" && m.meta?.stats ? [m.meta.stats as Stats] : []));
-    const base: TurnStats = done.length ? aggregate(done) : { model: settings.model, tokens: 0, seconds: 0, tps: null, estimated: true };
+    const base: TurnStats = done.length ? aggregate(done) : { model: modeloVivo, tokens: 0, seconds: 0, tps: null, estimated: true };
     const g = liveGen.current;
-    if (!g) return { ...base, model: settings.model || base.model, estimated: true };
+    if (!g) return { ...base, model: modeloVivo || base.model, estimated: true };
     const now = Date.now();
     const gen = g.tFirst ? (now - g.tFirst) / 1000 : 0;
     return {
-      model: settings.model || base.model,
+      model: modeloVivo || base.model,
       tokens: base.tokens + g.tokens,
       seconds: base.seconds + (now - g.t0) / 1000,
       tps: gen > 0.3 ? g.tokens / gen : base.tps,
@@ -1622,6 +1650,10 @@ export default function App() {
                   )}
                   {showTurn && (
                     <div className="mt-4 space-y-1.5">
+                      {/* cards que a IA criou no board neste turno: no fim da resposta, antes dos números */}
+                      {turn.cards.length > 0 && (
+                        <div className="mb-3">{turn.cards.map((c) => <CardNoChat key={c.id} card={c} />)}</div>
+                      )}
                       {turn.stats && (
                         <StatsRow
                           s={turn.stats}
@@ -1968,7 +2000,7 @@ export default function App() {
           }}
           ref={composer}
           rows={2}
-          placeholder={running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "maestro" ? "Qual é o objetivo? A Maestro planeja e delega ( / para comandos, @ para arquivos )" : section === "agent" ? "Peça algo ao agente... ( / para comandos, @ para arquivos )" : "Digite uma mensagem..."}
+          placeholder={doClaude ? "Mensagem para o Claude (chega a ele na próxima ferramenta que ele chamar)…" : running ? "Mensagem para o próximo passo do agente (entra na fila)…" : section === "maestro" ? "Qual é o objetivo? A Maestro planeja e delega ( / para comandos, @ para arquivos )" : section === "agent" ? "Peça algo ao agente... ( / para comandos, @ para arquivos )" : "Digite uma mensagem..."}
           className={campoPrompt}
         />
         <RodapePrompt>
@@ -2085,6 +2117,24 @@ export default function App() {
       {showSettings && (
         <SettingsDialog onClose={() => setShowSettings(false)} tools={allTools} mcp={mcp} onChanged={refreshTools} />
       )}
+      {showBoard && (
+        <BoardView
+          key={boardFoco?.id ?? "board"}
+          pasta={boardFoco?.projeto ?? (conv ? conv.workspace : pendingWs) ?? null}
+          foco={boardFoco?.id}
+          carimbo={activity.board}
+          onClose={() => { setShowBoard(false); setBoardFoco(null); }}
+          onAbrirConversa={async (id) => {
+            setShowBoard(false);
+            try {
+              const c = await api.get<{ kind?: string }>(`/conversations/${id}`);
+              irParaConversa(id, (c.kind as Section) || "agent");
+            } catch (e: any) {
+              setError(e.message);
+            }
+          }}
+        />
+      )}
 
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
@@ -2133,6 +2183,10 @@ export default function App() {
               <button onClick={() => openPath(".", "reveal")} title="Abrir a pasta no Explorer" className="rounded-md p-1 text-faint hover:bg-raised hover:text-fg">
                 <FolderOpen className="size-3.5" />
               </button>
+              <button onClick={() => setShowBoard(true)} title="Board do projeto: backlog, varredura e Iniciar"
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-raised px-2 py-0.5 text-xs text-muted hover:text-fg">
+                <Quadro className="size-3.5" /> Board
+              </button>
             </>
           )}
           {agentica && section !== "maestro" && currentId !== null && (
@@ -2177,7 +2231,7 @@ export default function App() {
             onBoard={setBoard}
             modelPhase={modelPhase}
             provider={settings.provider}
-            model={settings.model}
+            model={modeloVivo}
             conversa={conversaBlock}
             renderConversa={conversaDe}
             composer={composerBlock}

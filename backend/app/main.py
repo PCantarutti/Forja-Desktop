@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -16,11 +17,11 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 
 from fastapi.staticfiles import StaticFiles
 
-from . import (baterias, checkpoints, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
+from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                localai, lotes, lsp,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
@@ -47,6 +48,7 @@ async def lifespan(_app):
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
+    shell.limpa_logs()  # logs de comando e servidor com mais de 7 dias em %TEMP%\forja-serve
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
     vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
@@ -56,7 +58,8 @@ async def lifespan(_app):
     vivas.add(task)
     if mobile.lan_quer():  # celular na rede local, ligado na aba Celular
         await mobile.liga_lan(_app)
-    yield
+    async with mcp_servidor.gerente():  # /mcp: o Claude controlando o Forja (E17); o gerente vive com o app
+        yield
     await mobile.desliga_lan()
     task.cancel()
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
@@ -69,6 +72,9 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Forja", lifespan=lifespan)
+# /mcp fora de /api: tem o próprio porteiro (token fixo do MCP + interruptor), não o token da interface.
+from starlette.routing import Route  # noqa: E402
+app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=["GET", "POST", "DELETE"]))
 
 
 # ------------------------------------------------------------------ fronteira da API local
@@ -422,9 +428,179 @@ async def get_activity():
     with db.session() as s:
         n, maior, ultima = s.execute(select(func.count(db.Conversation.id), func.max(db.Conversation.id),
                                             func.max(db.Conversation.updated_at))).one()
+    try:  # card em andamento cuja conversa acabou vai para Revisão; o carimbo avisa as telas do board
+        await asyncio.to_thread(board.acompanha)
+        quadro = await asyncio.to_thread(board.carimbo)
+    except Exception:
+        quadro = ""
+    try:
+        await board_auto.tique()  # E15-C: backlog automático (no loop: o Iniciar precisa dele)
+    except Exception as e:  # nunca derruba o /api/activity, que é o pulso das telas
+        print(f"Forja: board automático: {e}", flush=True)
     # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
     return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
-            "lista": f"{n}-{maior}-{ultima}"}
+            "lista": f"{n}-{maior}-{ultima}", "board": quadro}
+
+
+# ------------------------------------------------------------------ board de issues (E15)
+
+def _board(fn, *a):
+    # Iniciar e Reabrir disparam um Run, que precisa do laço de eventos: por isso aqueles endpoints são
+    # async (endpoint síncrono roda numa thread, e o Run.start falhava com "no running event loop").
+    try:
+        return fn(*a)
+    except (board.BoardError, workspace.WorkspaceError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/board/projetos")
+def board_projetos():
+    """Pastas que já tiveram conversa de agente/Maestro ou card, pela raiz do projeto: o seletor do board."""
+    vistos: dict[str, float] = {}
+    with db.session() as s:
+        for w, quando in s.execute(select(db.Conversation.workspace, func.max(db.Conversation.updated_at))
+                                   .where(db.Conversation.kind.in_(("agent", "maestro")),
+                                          db.Conversation.workspace.is_not(None))
+                                   .group_by(db.Conversation.workspace)):
+            try:
+                p = board.projeto_de(w)
+            except workspace.WorkspaceError:
+                continue  # pasta que não existe mais
+            vistos[p] = max(vistos.get(p, 0), quando.timestamp() if quando else 0)
+        for (p,) in s.execute(select(db.Issue.projeto).distinct()):
+            vistos.setdefault(p, 0)
+    return [{"projeto": p, "nome": Path(p).name} for p in sorted(vistos, key=lambda k: -vistos[k])]
+
+
+@app.get("/api/board")
+def board_listar(pasta: str):
+    projeto = _board(board.projeto_de, pasta)
+    return {"projeto": projeto, "issues": board.listar(projeto), "varredura": board.estado_varredura(projeto),
+            "comandos": board.comandos_do_projeto(Path(projeto)) or convencoes.comandos(Path(projeto)), "board_card": board.board_card_ligado(projeto),
+            "vinculadas": len(board.vinculadas(projeto))}
+
+
+@app.post("/api/board/issues")
+def board_criar(body: dict):
+    projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
+    return _board(board.criar, projeto, {k: v for k, v in body.items() if k not in ("pasta", "impressao")})[0]
+
+
+@app.get("/api/board/issues/{issue_id}")
+def board_pega(issue_id: int):
+    return _board(board.pega, issue_id)
+
+
+@app.patch("/api/board/issues/{issue_id}")
+def board_atualizar(issue_id: int, body: dict):
+    return _board(board.atualizar, issue_id, body)
+
+
+@app.delete("/api/board/issues/{issue_id}")
+def board_apagar(issue_id: int):
+    board.apagar(issue_id)
+    return {"ok": True}
+
+
+@app.post("/api/board/issues/{issue_id}/rejeitar")
+def board_rejeitar(issue_id: int, body: dict):
+    return _board(board.rejeitar, issue_id, body.get("motivo"))
+
+
+@app.post("/api/board/issues/{issue_id}/iniciar")
+async def board_iniciar(issue_id: int, body: dict):
+    return _board(board.iniciar, issue_id, body.get("modo"))
+
+
+@app.post("/api/board/issues/{issue_id}/reabrir")
+async def board_reabrir(issue_id: int, body: dict):
+    return _board(board.reabrir, issue_id, body.get("comentario"))
+
+
+@app.post("/api/board/varrer")
+def board_varrer(body: dict):
+    return _board(board.varrer, str(body.get("pasta") or ""))
+
+
+# ------------------------------------------------------------------ o Claude controlando o Forja (E17)
+
+@app.post("/mcp/hook")
+async def mcp_hook(request: Request):
+    """Hook do Claude Code (forja_hook.py): o pedido, a resposta e as ferramentas dele entram na conversa-espelho.
+    Fora de /api: autentica pelo token fixo do MCP, não pelo da interface."""
+    if not secrets.compare_digest(request.headers.get("x-forja-token") or "-", mcp_servidor.token()):
+        raise HTTPException(401, "Token do Forja ausente ou errado.")
+    try:
+        dados = await request.json()
+    except ValueError:
+        raise HTTPException(400, "JSON inválido.") from None
+    return await mcp_servidor.hook(dados if isinstance(dados, dict) else {})
+
+
+@app.get("/api/mcp/servidor")
+def mcp_servidor_config():
+    return mcp_servidor.configuracao()
+
+
+@app.post("/api/mcp/servidor/token")
+def mcp_servidor_token():
+    mcp_servidor.rotaciona()
+    mcp_servidor.grava_endereco()
+    return mcp_servidor.configuracao()
+
+
+@app.post("/api/mcp/servidor/hooks")
+def mcp_servidor_hooks(body: dict):
+    """Instala os hooks no Claude Code do projeto (clique do usuário na tela: grava .claude/settings.local.json)."""
+    try:
+        return mcp_servidor.instala_hooks(str(body.get("pasta") or ""))
+    except (ValueError, OSError, workspace.WorkspaceError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/board/pedir")
+async def board_pedir(body: dict):
+    """'Pedir à IA': conversa de agente que procura bugs/melhorias/ideias e cria os cards (board_card)."""
+    return _board(board.pedir_ia, str(body.get("pasta") or ""), str(body.get("foco") or "tudo"),
+                  str(body.get("subpasta") or ""))
+
+
+@app.post("/api/board/ia")
+def board_ia(body: dict):
+    """Liga/desliga o board_card neste board: desligado, o agente não cria card sozinho (nem vê a ferramenta)."""
+    projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
+    return {"board_card": board.define_board_card(projeto, bool(body.get("ligado")))}
+
+
+@app.get("/api/board/auto")
+def board_auto_estado(pasta: str):
+    return board_auto.estado(_board(board.projeto_de, pasta))
+
+
+@app.post("/api/board/auto")
+def board_auto_define(body: dict):
+    """Executar backlog automaticamente (E15-C): só liga com as travas satisfeitas (sandbox e git)."""
+    projeto = _board(board.projeto_de, str(body.get("pasta") or ""))
+    return _board(board_auto.define, projeto, bool(body.get("ligado")), body.get("por_dia"))
+
+
+@app.get("/api/board/vinculos")
+def board_vinculos(pasta: str):
+    projeto = _board(board.projeto_de, pasta)
+    return {"projeto": projeto, "vinculadas": board.vinculadas(projeto), "sugestoes": board.sugestoes(projeto)}
+
+
+@app.post("/api/board/vinculos")
+def board_vincular(body: dict):
+    projeto = _board(board.projeto_de, str(body.get("pasta_board") or ""))
+    _board(board.vincular, projeto, str(body.get("pasta") or ""))
+    return board_vinculos(projeto)
+
+
+@app.delete("/api/board/vinculos")
+def board_desvincular(pasta: str):
+    board.desvincular(pasta)
+    return {"ok": True}
 
 
 @app.post("/api/servers/clear")
@@ -1778,6 +1954,7 @@ class OpenBody(BaseModel):
     conv: int | str | None = None
     path: str
     mode: str = "editor"  # editor | reveal
+    line: int | None = None  # editor: abrir nesta linha
 
 
 @app.post("/api/open")
@@ -1793,7 +1970,7 @@ async def open_in_system(body: OpenBody):
         except ToolError as e:
             raise HTTPException(400, str(e))
     try:
-        return {"opened": await asyncio.to_thread(native.open_path, host, body.mode)}
+        return {"opened": await asyncio.to_thread(native.open_path, host, body.mode, body.line)}
     except (ValueError, OSError) as e:
         raise HTTPException(400, str(e))
 
@@ -2037,6 +2214,12 @@ async def start_run(conv_id: int, body: RunBody):
         raise HTTPException(400, f"permission deve ser um de {', '.join(policy.MODES)}")
     if body.effort not in ("baixo", "medio", "alto", "maximo", "extremo"):
         raise HTTPException(400, "effort deve ser baixo, medio, alto, maximo ou extremo")
+    with db.session() as s:
+        espelho = mcp_servidor.eh_espelho(_get_conv(s, conv_id))
+    if espelho:  # conversa do Claude (MCP): o que o usuário escreve vai para a caixa de entrada dele
+        if not (body.content or "").strip():
+            raise HTTPException(400, "Escreva a mensagem para o Claude.")
+        return _sse(mcp_servidor.recebe_do_usuario(conv_id, body.content), 0)
     if active_run(conv_id):
         raise HTTPException(409, "Esta conversa já tem uma execução em andamento")
     with db.session() as s:
@@ -2106,6 +2289,12 @@ async def queue_message(run_id: str, body: dict):
     run = _get_run(run_id)
     if run.finished:
         raise HTTPException(409, "A execução já terminou; envie normalmente")
+    with db.session() as s:
+        espelho = mcp_servidor.eh_espelho(s.get(db.Conversation, run.conv_id))
+    if espelho:  # conversa do Claude com o Run dele aberto: a fala vai para a caixa de entrada dele, não para a fila
+        for ev in mcp_servidor.guarda_para_o_claude(run.conv_id, content):
+            await run.publish(ev)
+        return {"ok": True, "pending": 0, "claude": True}
     run.queue.append(content)
     await run.publish({"type": "queued", "content": content, "pending": len(run.queue)})
     return {"ok": True, "pending": len(run.queue)}

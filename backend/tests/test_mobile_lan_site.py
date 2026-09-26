@@ -20,6 +20,7 @@ def site():
             corpo = b"<html>ok</html>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
+            self.send_header("Last-Modified", "Fri, 25 Sep 2026 10:00:00 GMT")  # o WebView cacheava por isto
             self.send_header("Content-Length", str(len(corpo)))
             self.end_headers()
             self.wfile.write(corpo)
@@ -47,3 +48,5 @@ def test_proxy_repasse_com_host_de_localhost_so_para_o_celular(site, monkeypatch
     r = asyncio.run(pede())
     assert r.status_code == 200 and r.text == "<html>ok</html>"
     assert visto["host"] == f"localhost:{porta}"  # o Vite recusa host desconhecido
+    # a mesma porta do proxy serve outro site depois: o celular não pode mostrar o velho do cache
+    assert r.headers["cache-control"] == "no-store" and "last-modified" not in r.headers

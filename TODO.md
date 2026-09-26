@@ -179,25 +179,48 @@ que passou.
 e nada roda de novo os testes antigos.
 **Depende de:** E1 (a regressão usa os `verify_command` já obrigatórios).
 
-- [ ] **Commit automático por tarefa concluída.** Quando uma tarefa vira `completed`, fazer
+- [x] **Commit automático por tarefa concluída.** Quando uma tarefa vira `completed`, fazer
       `git add -A && git commit -m "forja(task <código>): <título>"` no projeto.
   - Se a pasta não é git: fazer `git init` só com o aceite do usuário, e perguntar na primeira vez.
     Sem aceite, manter o comportamento atual e avisar.
   - Respeitar o `.gitignore`. Nunca fazer commit de `.env*` nem de arquivos acima de 5 MB.
-- [ ] **Diff por tentativa.** `_mudancas` (`maestro.py:81`) passa a comparar com o commit da tarefa
+- [x] **Diff por tentativa.** `_mudancas` (`maestro.py:81`) passa a comparar com o commit da tarefa
       anterior (guardar o hash de início da tentativa em `taskdb`), não com `HEAD` + árvore suja.
-- [ ] **Rollback automático de tentativa que falhou.** Quando a tentativa termina `failed`, voltar os
+- [x] **Rollback automático de tentativa que falhou.** Quando a tentativa termina `failed`, voltar os
       arquivos ao hash de início (`git stash` ou `checkout`), para a próxima tentativa começar limpa.
       Guardar o diff descartado no `last_error`, para o Worker ver o que não funcionou.
-- [ ] **Regressão depois de cada tarefa.** Depois que o verify da tarefa N passar, rodar de novo os
+- [x] **Regressão depois de cada tarefa.** Depois que o verify da tarefa N passar, rodar de novo os
       `verify_command` das tarefas já concluídas (com um teto de tempo total, por exemplo 5 min).
   - Se alguma quebrar: a tarefa N volta para `failed`, com a mensagem "quebrou a tarefa X".
   - Idéia para modelos lentos: rodar primeiro só as tarefas que tocam os mesmos arquivos e a suíte
     completa a cada 5 tarefas.
-- [ ] `outside_contract` (`maestro.py:141`) deixa de ser só aviso. Um arquivo fora do contrato que
+- [x] `outside_contract` (`maestro.py:141`) deixa de ser só aviso. Um arquivo fora do contrato que
       quebra a regressão aparece em destaque no resultado.
-- [ ] Testes com um repo git em `tmp_path`: commit criado, diff isolado, rollback, e regressão pegando
+- [x] Testes com um repo git em `tmp_path`: commit criado, diff isolado, rollback, e regressão pegando
       uma tarefa que quebra a anterior.
+
+**Feito em 2026-09-25**, validado com o Maestro real (gpt-oss:120b do Ollama Cloud) num repo git:
+- TASK-001 virou o commit `48580da` e TASK-002 o `e4cb438`, cada um só com os arquivos da tarefa. O
+  FORJA.md e o `.forja/` do usuário ficaram fora;
+- a 1ª tentativa da TASK-002, instruída a estragar `soma`, passou no próprio verify, e a regressão
+  pegou a quebra da TASK-001;
+- os arquivos voltaram ao estado de antes, e o diff descartado foi para o briefing;
+- a 2ª tentativa, com `strategy`, passou.
+
+Diferenças em relação ao plano:
+- **Commit:**
+  - sem `git init` automático: a pasta sem git só recebe um aviso (uma vez por conversa);
+  - o commit leva só os arquivos que as tentativas aceitas escreveram, e não `git add -A`, que levaria
+    junto alterações do usuário.
+- **Diff por tentativa:** não guarda hash. Com um commit por tarefa e a tentativa falha revertida, o
+  `git diff HEAD` de cada arquivo já é o da tentativa.
+- **Rollback:** usa os checkpoints (`checkpoints.restore_attempt`), que funcionam com ou sem git. O que
+  o Worker mudou pelo `run_command` (ex.: `npm install`) não volta.
+- **Regressão:**
+  - roda a lista inteira de verify antigos, em série, com teto de 300 s;
+  - a otimização "só as que tocam os mesmos arquivos" ficou para quando o tempo pesar.
+- **Validação da entrega:** passou a aceitar um comando que cobre o verify, por exemplo
+  `pytest -q a.py b.py` para os verify `pytest -q a.py` e `pytest -q b.py`.
 
 **Pronto quando:** cada tarefa concluída é um commit, uma tentativa que falhou não deixa sujeira, e uma
 regressão é detectada no mesmo passo.
@@ -216,20 +239,20 @@ também pode usar o rollback.
       Maestro espera e, com `-np 1`, expulsa o cache do Maestro em **toda** tarefa. O Worker usa um slot
       diferente do principal, ou espera, conforme a política.
 
-- [ ] **Loop de correção dentro do Worker.** Se o `verify` falhar e sobrarem passos (dos 15 de
+- [x] **Loop de correção dentro do Worker.** Se o `verify` falhar e sobrarem passos (dos 15 de
       `config.py:113`), devolver a saída do teste ao Worker como mensagem ("o verify falhou: …, corrija")
       em vez de encerrar a tentativa. Teto de 2 voltas internas, e depois disso a tentativa vai para a
       Maestro como hoje.
-- [ ] **Compactar o histórico do Worker.** Hoje ele cresce sem limite e o resultado de ferramenta entra
+- [x] **Compactar o histórico do Worker.** Hoje ele cresce sem limite e o resultado de ferramenta entra
       inteiro (`subagents.py:603`). Aplicar o `compact.podar` a cada passo e cortar cada resultado a uma
       fração da janela (ver E4).
-- [ ] **Fallback de janela no meio da tentativa.** Hoje ele só existe antes do 1º passo
+- [x] **Fallback de janela no meio da tentativa.** Hoje ele só existe antes do 1º passo
       (`subagents.py:545`). Estourou no meio: podar e tentar de novo uma vez antes de dar erro.
-- [ ] **`task_result` mais enxuto para a Maestro.** Hoje cada `run_task` custa ~2–3k tokens (JSON com
+- [x] **`task_result` mais enxuto para a Maestro.** Hoje cada `run_task` custa ~2–3k tokens (JSON com
       saída de teste de até 4000 caracteres e 5×1500 de erros, `maestro.py:25-27`). Mandar status, as
       últimas 20 linhas relevantes do teste e os arquivos tocados. O resto fica no banco, acessível por
       `list_tasks code=… detail=true`.
-- [ ] **Escalonador determinístico.** Uma função `proxima_pronta()` escolhe a próxima tarefa pendente com
+- [x] **Escalonador determinístico.** Uma função `proxima_pronta()` escolhe a próxima tarefa pendente com
       as dependências feitas, por `priority` e depois pela ordem do plano. A Maestro pode chamar
       `run_task` sem `code`, e o código escolhe. Assim a ordem deixa de depender do modelo pequeno.
 - [ ] **Custo de troca de modelo** (a solução depende do número medido na E0). O Worker é a única
@@ -244,13 +267,35 @@ também pode usar o rollback.
     troca passa a custar só o tempo de carregar mais o de restaurar, sem reprocessar. Combina com a
     opção A.
   - Decidir depois de ver o baseline.
-- [ ] Limite de tamanho de tarefa no `plan_feature`: avisar quando o contrato declarar mais de ~5
+- [x] Limite de tamanho de tarefa no `plan_feature`: avisar quando o contrato declarar mais de ~5
       arquivos ou quando o `goal` tiver mais de uma ação ("e também…"), sugerindo dividir.
-- [ ] Testes:
+- [x] Testes:
   - Worker corrige após um verify falho sem voltar à Maestro;
   - escalonador respeita dependências e prioridade;
   - `task_result` fica abaixo de um teto de caracteres;
   - o Worker nunca usa o slot fixo do principal.
+
+**Feito em 2026-09-25 (parcial):**
+- **Validado no Forja real** (gpt-oss:120b):
+  - `run_task` sem `code` escolheu a tarefa pronta;
+  - o resultado enxuto chegou ao Maestro;
+  - a tarefa virou commit e a entrega fechou.
+- **Loop de correção validado só por teste:** nas duas rodadas reais, o próprio Worker rodou o
+  `pytest`, viu a falha e corrigiu dentro dos passos dele, antes do verify do Forja. O loop do Forja
+  fica como rede para o Worker que não se testa (comum em modelo pequeno; conferir na E16 com modelo
+  local).
+- **Achados da validação, corrigidos:**
+  - `update_task` com `max_attempts: 0` (o gpt-oss manda todos os campos vazios) trocava o limite da
+    tarefa para 1. Agora 0 é "não mexer";
+  - com a tarefa aprovada, os erros intermediários do Worker ("exit code 1… FAILURES", já corrigidos)
+    iam no resumo, e o Maestro bloqueou uma tarefa certa por isso. Agora ficam só no detalhe.
+- **Ficou para depois:**
+  - a política de execução, porque depende da E4;
+  - o custo de troca de modelo, porque depende do número da E0.
+- **Poda do histórico do Worker:**
+  - acima de 60% da janela, os resultados antigos são cortados a 1500 caracteres, em bloco;
+  - cada resultado novo tem teto de 25% da janela;
+  - se estourar no meio da tentativa, poda forte (600) e repete o passo uma vez.
 
 **Pronto quando:** o bench da E0 mostra menos voltas à Maestro por tarefa e menos tempo de relógio.
 
@@ -267,6 +312,16 @@ llama-server pode expulsar o cache do agente principal (hoje o backend não usa 
 primeiro, dentro desta entrega. A parte de cache em disco e dos padrões de KV depende das validações
 V1–V4 da E0. O resto da E4 não depende delas. **A política de execução depende da parte A da E13**: ela
 precisa saber o que cada backend deixa o Forja controlar.
+
+- [ ] **O prompt fixo não cabe em 8k.** Medido na E13-A: só o prompt do sistema (~2,7k tokens) e os
+      schemas das ferramentas (~9,7k) somam ~12,5k tokens antes da primeira mensagem. Um vLLM com
+      `--max-model-len 8192` recusa já o primeiro turno. Numa janela pequena, o catálogo tem de
+      encolher (menos ferramentas e descrições curtas), não só os resultados.
+- [ ] **Tetos de leitura proporcionais à janela.** Medido na E6: `session_search` custa ~120 tokens e um
+      `session_read` de conversa curta ~600. Mas o teto do `session_read` (`sessoes.MAX_LEITURA`, 12 mil
+      caracteres, ~3k tokens) e o do `@conversa:ID` são fixos. Numa janela de 8k, duas leituras cheias
+      ocupam quase metade. Esses tetos e os do `read_file`, `code_search` e `tree` passam a sair do
+      `ctx` real do modelo, junto com os outros tetos desta entrega.
 
 ### Política de execução (fazer primeiro)
 
@@ -543,12 +598,12 @@ métricas de sucesso (E10). A exploração produz conhecimento, e cada um desses
 
 O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro papel.
 
-- [ ] **Persona embutida `explorador`.**
+- [x] **Persona embutida `explorador`.**
   - Só leitura: `read_file`, `list_dir`, `glob`, `grep`, `lsp` e, depois da E5, `tree`, `ast`,
     `imports`. Sem `run_command`, sem escrita e sem navegador.
   - O bloqueio é por lista de ferramentas, não só por instrução no prompt.
   - Usa o slot `rapido`. Se for o mesmo modelo do chamador, não há troca de modelo.
-- [ ] **Ferramenta `explore(pergunta, paths?)` no Maestro,** fora do `MAESTRO_FORA`.
+- [x] **Ferramenta `explore(pergunta, paths?)` no Maestro,** fora do `MAESTRO_FORA`.
   - Por dentro chama o mecanismo do `delegate_task` com a persona `explorador`.
   - O padrão é **um por vez, com o Maestro esperando o relatório**. O Maestro depende do resultado para
     seguir, então "segundo plano" não ganha nada. O ganho é isolar o contexto, não a velocidade.
@@ -559,26 +614,26 @@ O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro
   - nuvem só com o interruptor de exploração ligado.
 
   O explorador não implementa nenhuma regra própria de slot ou VRAM.
-- [ ] **No modo agente:** criar `delegate_task(agent='explorador')`, ou um `level='explorar'`. Ajustar a
+- [x] **No modo agente:** criar `delegate_task(agent='explorador')`, ou um `level='explorar'`. Ajustar a
       regra do prompt ("para varrer muitos arquivos…", `agent.py:511` e `737`) para apontar o explorador
       em vez do `rapido` com todas as ferramentas.
-- [ ] **Relatório com formato fixo:** resposta direta, arquivos e linhas relevantes
+- [x] **Relatório com formato fixo:** resposta direta, arquivos e linhas relevantes
       (`caminho:linha — por quê`) e o que não foi encontrado. Teto de tamanho proporcional à janela do
       chamador (E4).
-- [ ] **O relatório fica no estado do projeto.** Gravar em `projstate` (SQLite, como o resto do estado
+- [x] **O relatório fica no estado do projeto.** Gravar em `projstate` (SQLite, como o resto do estado
       do Maestro) com a pergunta, os caminhos e a data, para sobreviver à compactação e ao reinício do
       app. Um bloco curto no prompt do Maestro lista as explorações já feitas, e o corpo é lido sob
       demanda, para não reexplorar depois de compactar.
   - Invalidar ou avisar quando um arquivo citado mudou desde a exploração (mtime).
-- [ ] **Reúso nas tasks:** o `plan_feature` e o `run_task` aceitam `explorations=[id]`, e o contrato do
+- [x] **Reúso nas tasks:** o `plan_feature` e o `run_task` aceitam `explorations=[id]`, e o contrato do
       Worker leva os trechos relevantes. O Worker já começa sabendo onde mexer e economiza passos dos
       15.
-- [ ] **Lembrete automático:** quando o Maestro ou o agente fizer muitas leituras seguidas sem escrever
+- [x] **Lembrete automático:** quando o Maestro ou o agente fizer muitas leituras seguidas sem escrever
       (por exemplo, mais de 6 `read_file`/`grep`) ou a janela passar de ~50% com resultados de leitura,
       o código injeta uma dica curta: "use explore/delegate para varrer e fique só com a conclusão". É
       uma dica, não um bloqueio.
 - [ ] **Métrica:** evento do tipo `exploracao` na tabela da E10, separado das tasks.
-- [ ] Testes:
+- [x] Testes:
   - a persona não recebe ferramenta de escrita, nem se o modelo pedir;
   - o explorador passa por `como_rodar` (os cenários de VRAM e slot são testados na E4);
   - com `-np 1` duas explorações rodam em sequência;
@@ -587,6 +642,35 @@ O explorador usa o mesmo mecanismo de subagente do `subagents.py`, mas com outro
   - o relatório sobrevive à compactação;
   - o aviso aparece quando um arquivo citado muda;
   - o contrato do Worker leva os trechos da exploração.
+
+**Feito em 2026-09-25 (sem a política da E4).**
+
+Validado no Forja real (Maestro, gpt-oss:120b, pacote `calc` com testes):
+- o Maestro chamou `explore` antes de planejar;
+- o relatório veio no formato (RESPOSTA / ARQUIVOS / NÃO ENCONTRADO) e foi guardado como EXP-001;
+- o Maestro passou `explorations: ["EXP-001"]` no plano;
+- o briefing do Worker trouxe "O QUE JÁ SE SABE DO CÓDIGO" com o relatório;
+- a tarefa passou de primeira e virou commit.
+
+Diferenças em relação ao plano:
+- **Onde fica o relatório:** em `.forja/exploracoes/EXP-NNN.md`, e não numa tabela do SQLite. É a
+  memória do projeto que já existia (FORJA.md e `.forja/`), sobrevive à compactação e ao reinício do
+  app, e o índice entra no bloco do Project State. Desatualizada = arquivo citado com o mtime mudado.
+- **Uma ferramenta `explore` para os dois modos**, e não um `level='explorar'`. No modo agente também
+  existe `delegate_task(agent='explorador')`.
+- **Onde roda:** não passa pela `como_rodar` (a E4 ainda não existe). Usa o slot `rapido`, com o
+  fallback de sempre, e roda em sequência (primeiro plano).
+- **Métrica:** fica para a E10.
+
+Achados da validação, corrigidos:
+- a 1ª rodada gravou como relatório a próxima chamada que o modelo escreveu como texto
+  (`{"path": ...}`). Agora o explorador é cobrado pelo formato (até 2 vezes), e relatório sem
+  `RESPOSTA:` não é guardado;
+- o Maestro pôs `explorations` no nível do plano, e não em cada tarefa. Agora vale para todas as
+  tarefas que não trouxerem as suas;
+- o loop do subagente recusa chamada de ferramenta fora da lista dele. Vale para toda persona, não só
+  para o explorador;
+- caminhos do `rollback` no resumo da Maestro passam a ser relativos.
 
 **Pronto quando:** o Maestro entende um repo desconhecido antes de planejar sem que a própria janela
 passe de ~30% com leituras, e nenhum explorador consegue escrever.
@@ -601,70 +685,93 @@ instalado, e não há imports nem AST.
 
 ### `tree`
 Árvore de diretórios indentada, para entender a forma de um projeto com poucos tokens.
-- [ ] Fica em `backend/app/tools.py`, junto do `list_dir`. Reaproveitar `IGNORED_DIRS`, `resolve_path` e
+- [x] Fica em `backend/app/tools.py`, junto do `list_dir`. Reaproveitar `IGNORED_DIRS`, `resolve_path` e
       `_rel`.
-- [ ] Parâmetros: `path`, `depth` (padrão 3, máx 10), `dirs_only`, `pattern` (glob; pastas sem nenhum
+- [x] Parâmetros: `path`, `depth` (padrão 3, máx 10), `dirs_only`, `pattern` (glob; pastas sem nenhum
       arquivo que case somem).
-- [ ] Saída com `├──` / `└──` / `│`. Pasta com mais de ~25 filhos mostra os primeiros e resume o resto em
+- [x] Saída com `├──` / `└──` / `│`. Pasta com mais de ~25 filhos mostra os primeiros e resume o resto em
       `… +N arquivos`. Mostra a contagem por pasta e as linhas dos arquivos de texto pequenos (< 1 MB).
-- [ ] Respeitar o `.gitignore` da raiz no subconjunto simples do `fnmatch`, e ignorar também `dist`,
+- [x] Respeitar o `.gitignore` da raiz no subconjunto simples do `fnmatch`, e ignorar também `dist`,
       `build` e `.next`. Teto de saída proporcional à janela (E4) ou de 500 linhas.
-- [ ] Decidir entre uma ferramenta separada e um `format: "tree"` no `list_dir`, pelo peso no catálogo
+- [x] Decidir entre uma ferramenta separada e um `format: "tree"` no `list_dir`, pelo peso no catálogo
       (E4). **Recomendação:** ferramenta separada, com a descrição do `list_dir` apontando para ela.
 
 ### `ast`
 Análise sintática sem language server.
-- [ ] Módulo novo `backend/app/codigo.py`, importado no `agent.py` junto do `lsp`.
-- [ ] Motor:
+- [x] Módulo novo `backend/app/codigo.py`, importado no `agent.py` junto do `lsp`.
+- [x] Motor:
   - Python: `ast` da stdlib.
   - Demais linguagens: tree-sitter (`tree-sitter` + `tree-sitter-language-pack`, com wheels cp312
     win_amd64/Linux). Medir o peso no instalador; se pesar demais, usar os pacotes por linguagem.
   - Linguagens: TS, TSX, JS, JSX, Go, Rust, Java, C#, C/C++, PHP.
   - Sem o tree-sitter instalado, continua funcionando para Python.
-- [ ] Operações:
+- [x] Operações:
   - `outline`: árvore de símbolos com assinatura, intervalo de linhas e a 1ª linha da docstring. Aceita
     uma pasta também.
   - `symbol`: o fonte de um símbolo pelo nome (aceita `Classe.metodo`), no formato do `read_file`.
   - `node_at`: a cadeia de nós até uma linha e coluna.
   - `query`: S-expression do tree-sitter sobre um arquivo ou pasta, com teto de resultados.
-- [ ] Erro de sintaxe não é falha: devolver o que der e avisar "erro de sintaxe perto da linha N".
-- [ ] Cache do parse por `(caminho, mtime, tamanho)`, até ~64 arquivos.
-- [ ] Ajustar as descrições para dividir o uso: ast = estrutura e símbolo por nome; lsp = referências e
+- [x] Erro de sintaxe não é falha: devolver o que der e avisar "erro de sintaxe perto da linha N".
+- [x] Cache do parse por `(caminho, mtime, tamanho)`, até ~64 arquivos.
+- [x] Ajustar as descrições para dividir o uso: ast = estrutura e símbolo por nome; lsp = referências e
       tipos; grep = texto.
 
 ### `imports`
 Grafo de dependências entre os arquivos do projeto.
-- [ ] Operações:
+- [x] Operações:
   - `of`: os imports de um arquivo, com a linha e o destino resolvido, marcando o que é externo e o que
     não resolveu.
   - `importers`: quem importa um arquivo, incluindo reexport.
   - `graph`: as arestas internas de uma pasta.
   - `cycles`: os ciclos encontrados, com no máximo ~20 na saída.
-- [ ] Resolução em Python:
+- [x] Resolução em Python:
   - `import x.y`, `from x import y` e os relativos `.`/`..`, usando `__init__.py`.
   - Raízes: a raiz do projeto e `src/`.
   - `import` dentro de função também conta, marcado `(local)`.
-- [ ] Resolução em JS/TS:
+- [x] Resolução em JS/TS:
   - `import … from`, `import()`, `require()` e `export … from`.
   - Caminho relativo testando as extensões e o `index.*`.
   - `paths`/`baseUrl` do `tsconfig.json`, só o 1º nível.
-- [ ] Índice sob demanda com o `_arquivos()` do `busca.py`, em cache por mtime, com teto de ~5 mil
+- [x] Índice sob demanda com o `_arquivos()` do `busca.py`, em cache por mtime, com teto de ~5 mil
       arquivos.
 
 ### Comum
-- [ ] Adicionar o `tree-sitter` ao `requirements.txt` dos dois repos. Conferir que o `.pyd` entra no
+- [x] Adicionar o `tree-sitter` ao `requirements.txt` dos dois repos. Conferir que o `.pyd` entra no
       Python portátil e no instalador, e fazer o rebuild da imagem Docker.
-- [ ] Usar o `timeout` da `Tool`, para uma pasta grande não travar o passo.
-- [ ] Mostrar rótulo e ícone na UI de chamadas de ferramenta, se ela tiver um mapa por nome
+- [x] Usar o `timeout` da `Tool`, para uma pasta grande não travar o passo.
+- [x] Mostrar rótulo e ícone na UI de chamadas de ferramenta, se ela tiver um mapa por nome
       (`frontend/`, `forja-mobile/src/Chat.tsx`).
-- [ ] Testes em `tests/test_codigo.py` e `tests/test_busca.py`:
+- [x] Testes em `tests/test_codigo.py` e `tests/test_busca.py`:
   - fixtures `.py` e `.ts`;
   - arquivo com erro de sintaxe;
   - tree-sitter ausente;
   - ciclo proposital;
   - alias do `tsconfig`.
-- [ ] Validar no app com o modelo local: "estrutura do repo", "o que importa `tools.py`?" e "mostra só a
+- [x] Validar no app com o modelo local: "estrutura do repo", "o que importa `tools.py`?" e "mostra só a
       `list_dir`". O agente tem de escolher `tree`, `imports` e `ast` sozinho.
+
+**Feito em 2026-09-25.**
+
+Diferenças em relação ao plano:
+- **Onde ficou:** o `tree` foi para o `codigo.py` junto com `ast` e `imports`, e não para o `tools.py`.
+  Continua sendo uma ferramenta própria, e a descrição do `list_dir` aponta para ela.
+- **Parser:** pacotes por linguagem (`tree-sitter` + python/javascript/typescript, ~0,55 MB, MIT). O
+  language pack ficou de fora, então Go, Rust, Java e as outras linguagens ficam para depois.
+- **Repositório aninhado ou worktree** (pasta com `.git` próprio, como `.claude/worktrees/*`) fica fora
+  do `tree` e do índice, porque é cópia do código.
+- **`cycles`** ignora import dentro de função, que é o jeito comum de quebrar um ciclo.
+
+Validação no Forja real (modo agente, gpt-oss:120b, no próprio repositório do Forja):
+- "estrutura do repo" → **`tree`** ✅;
+- "quem importa `gitops.py`" → **`imports importers`** ✅. Na 1ª rodada foi `grep`, e isso mudou com a
+  regra no prompt;
+- "mostra só a função" → **`read_file`** do arquivo inteiro, e não `ast symbol`, mesmo com a regra. É
+  preferência do gpt-oss, que pede todas as leituras de uma vez. Conferir com os modelos locais na E16.
+
+Resta conferir:
+- que o `.pyd` do tree-sitter vai no instalador. O `prepare.mjs` instala o `requirements.txt` no
+  Python portátil, mas o build do instalador não foi feito;
+- levar o `requirements.txt` para o `forja-web`, junto com o sync.
 
 **Pronto quando:** as três ferramentas funcionam sem nenhum language server instalado.
 
@@ -675,24 +782,52 @@ Grafo de dependências entre os arquivos do projeto.
 **Por quê:** RAG é 2/10. Não há índice nenhum, e o `session_search` pode esconder resultados.
 **Depende de:** E5, para indexar símbolos junto com o texto; a parte de sessões pode sair antes.
 
-- [ ] **`session_search` com FTS5.** Criar uma tabela virtual FTS5 sobre `messages` no SQLite que já
+- [x] **`session_search` com FTS5.** Criar uma tabela virtual FTS5 sobre `messages` no SQLite que já
       existe (`db.py`), com gatilhos de insert, update e delete, e ranking `bm25`. Corrigir o
       `limit(400)` que é aplicado antes do filtro de pasta (`sessoes.py:58`).
-- [ ] **Busca em código com ranking.** Criar a ferramenta `code_search` (ou um modo do `grep`) sobre um
+      *Feito:* `messages_fts` com conteúdo próprio (rowid = id da mensagem), só falas do usuário e do
+      agente (saída de ferramenta fica fora), sem acento (`remove_diacritics 2`). Criada e preenchida
+      na primeira subida (`db._fts_mensagens`). A pasta filtra antes do limite. A consulta vira palavras
+      entre aspas com prefixo, unidas por OR (`sessoes.consulta_fts`). Sem FTS5 no SQLite, cai no LIKE.
+- [x] **Busca em código com ranking.** Criar a ferramenta `code_search` (ou um modo do `grep`) sobre um
       índice FTS5 por projeto, com os arquivos e os símbolos do `ast outline`. Indexação incremental por
       mtime, feita na primeira chamada. Responde "onde se trata X" quando o nome exato não é conhecido.
+      *Feito:* `codebusca.py`. Trechos de 40 linhas com caminho, símbolos, identificadores camelCase
+      quebrados em palavras e o texto, com bm25 por coluna. Documentação e teste têm peso menor, porque
+      citam o assunto mais vezes que a implementação. O índice é cache em `DATA_DIR/indices`, não
+      memória do projeto. Primeira indexação de ~1000 arquivos: ~3 s; as seguintes, ~0,2 s.
+      *Desvio encontrado:* numa pasta que agrupa vários repositórios (`mesaflow/` com api, admin e
+      site, cada um com `.git`), o `_analisaveis` pulava todos, e o índice ficava só com a
+      documentação. Agora o repo aninhado só é pulado quando a raiz também é um repo, ou quando ele
+      está numa pasta oculta (as worktrees em `.claude/`). Isso vale também para o `ast` e o `imports`.
 - [ ] **Embeddings: só se o FTS5 não bastar.** Avaliar depois de usar. O llama.cpp embutido serve
       embeddings (`--embedding`), mas isso exige outro modelo carregado e compete com o slot. Se um dia
       existir, passa por `como_rodar("embeddings", …)` (E4): sem VRAM, pula e usa o FTS5, nunca troca
       de modelo. Deixar anotado, sem construir agora.
-- [ ] **Memória por projeto.** O tipo "projeto" do `memory.py` passa a gravar sob a raiz do projeto
+- [x] **Memória por projeto.** O tipo "projeto" do `memory.py` passa a gravar sob a raiz do projeto
       (`.forja/memoria/` ou uma chave pela raiz do git), e o índice injetado mostra as memórias globais e
       as do projeto atual, não todas.
-- [ ] Testes: ranking do FTS5; filtro por pasta antes do limite; memória de projeto que não vaza para
-      outro projeto.
+      *Feito:* `<raiz do git>/.forja/memoria/`, a partir de qualquer subpasta. O índice congelado do
+      turno agora é por projeto (antes era um só, e trocar de pasta mostrava o índice da outra).
+      Memória que muda de tipo sai do lugar antigo. As "projeto" antigas, na pasta global, continuam
+      globais: não há como saber de que projeto eram.
+- [x] Testes: ranking do FTS5; filtro por pasta antes do limite; memória de projeto que não vaza para
+      outro projeto. (`tests/test_codebusca.py`)
 
 **Pronto quando:** "onde o app trata login?" acha o arquivo certo sem que o modelo saiba o nome do
 arquivo.
+
+*Validado no Forja real* (gpt-oss:120b, modo manual, no `C:\Projetos\mesaflow`), com a pergunta "onde o
+app trata o login dos funcionários?":
+- **1ª rodada:** o agente não usou a `code_search`. Foi de `tree` e `grep` e tentou uma ferramenta
+  `search` que não existe, ou seja, queria buscar por assunto e não reconheceu a ferramenta. A regra do
+  prompt passou a ser "comece por code_search", no agente e no explorador.
+- **2ª rodada:** a primeira chamada foi `code_search "login staff"`, que trouxe
+  `AuthUseCases.loginStaff` no topo, e a resposta saiu certa (backend e tela).
+- **Conversa seguinte:** o `session_search` achou a conversa anterior pelo assunto, e o `remember` com
+  tipo projeto gravou em `mesaflow/.forja/memoria/`. O `.forja` criado pela validação foi apagado.
+- **Defeito visto e corrigido:** `code_search` com uma pasta inexistente respondia "nada casa". Agora é
+  erro, com a dica de usar o `tree`.
 
 ---
 
@@ -758,18 +893,43 @@ commit.
 **Por quê:** 7/10. Funciona, mas há casos que enganam o agente.
 **Depende de:** nada. São correções pequenas e independentes, agrupadas por serem baratas.
 
-- [ ] **Sentinela no `terminal_send`.** Depois de cada comando, mandar `echo __FORJA_FIM_$LASTEXITCODE`
+- [x] **Sentinela no `terminal_send`.** Depois de cada comando, mandar `echo __FORJA_FIM_$LASTEXITCODE`
       (no bash, `$?`). O fim passa a ser certo e vem com o exit code, em vez de "quieto" por silêncio.
       Continua caindo no "quieto" em REPL interativo.
-- [ ] **Browser nativo: contexto por conversa.** Hoje todas as sessões usam `contexts[0]` e dividem
+- [x] **Browser nativo: contexto por conversa.** Hoje todas as sessões usam `contexts[0]` e dividem
       cookies e storage (`browser.py:~160`). Criar um contexto por conversa, ou pelo menos documentar e
       oferecer um "limpar sessão do navegador".
-- [ ] **Limpar `%TEMP%\forja-serve`.** Apagar os logs de mais de 7 dias ao iniciar.
-- [ ] **O `run_command` não guarda a saída inteira em memória.** Escrever direto no arquivo e ler só
+- [x] **Limpar `%TEMP%\forja-serve`.** Apagar os logs de mais de 7 dias ao iniciar.
+- [x] **O `run_command` não guarda a saída inteira em memória.** Escrever direto no arquivo e ler só
       cabeça e cauda (casa com o spill da E4).
-- [ ] **Tempo de ferramenta sem a espera de aprovação.** Hoje `meta["segundos"]` inclui a espera pela
+- [x] **Tempo de ferramenta sem a espera de aprovação.** Hoje `meta["segundos"]` inclui a espera pela
       aprovação (`agent.py:1880`). Separar em `segundos` e `espera_aprovacao`.
-- [ ] Testes: sentinela com exit code ≠ 0; limpeza de logs antigos.
+- [x] Testes: sentinela com exit code ≠ 0; limpeza de logs antigos.
+
+**Feito em 2026-09-25.**
+
+Validado no Forja real (modo agente, gpt-oss:120b):
+- `Start-Sleep -Seconds 4; cmd /c exit 3` no terminal voltou `[comando terminou: exit 3]`. Antes, os 4 s
+  calados virariam "terminal quieto" no meio;
+- a saída de 6000 linhas do `run_command` veio cortada, com o caminho do log completo, e o agente abriu
+  esse arquivo com `read_file` e leu a linha 3000.
+
+Como ficou:
+- **Sentinela:** se não voltar dentro do `wait` (comando longo, ou um REPL que engoliu a linha), o
+  terminal fica "pendente" e não recebe outro sentinela. O `terminal_read` avisa `[o comando anterior
+  terminou: exit N]` quando o pendente aparece. Dentro de um REPL, o fim volta a ser inferido pelo
+  silêncio.
+- **Navegador: já estava resolvido, e a revisão errou.** Cada conversa tem a própria partição do
+  Electron, em memória (`browserHost.js`, `forja-browser-<key>`), e as partições antigas em disco são
+  apagadas ao abrir (`main.js`). O `contexts[0]` do Playwright é só a porta CDP, e agora um comentário
+  explica isso.
+- **`run_command`:** guarda só a cabeça e a cauda da saída na memória. Com a saída cortada, o log vai
+  para a pasta de spill (legível pelo `read_file`), em vez de ser apagado. Isso adianta o item do spill
+  da E4.
+- **Limpeza:** os logs com mais de 7 dias em `%TEMP%\forja-serve` e em `spill/run-*.log` são apagados
+  quando o backend sobe.
+- **Tempo de ferramenta:** `segundos` não inclui mais a espera no card de aprovação. A espera vai em
+  `espera_aprovacao` e aparece na Trajetória.
 
 ---
 
@@ -828,7 +988,7 @@ sandbox é o que torna o modo autônomo seguro.**
 Deve estar pronto (pelo menos o passo 3) antes de o Maestro autônomo virar o fluxo recomendado.
 
 ### Passo 1: Job Object do Windows em todo processo do agente
-- [ ] Todo processo criado por `run_command`, `serve_start` e `terminal_open` (e pelo `verify_command`
+- [x] Todo processo criado por `run_command`, `serve_start` e `terminal_open` (e pelo `verify_command`
       e pela regressão, E1/E2) entra num **Job Object** criado pelo Forja (via `ctypes`, sem
       dependência nova):
   - `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`: a árvore inteira morre quando o comando termina, é cancelado
@@ -836,34 +996,56 @@ Deve estar pronto (pelo menos o passo 3) antes de o Maestro autônomo virar o fl
   - limite de memória por job (padrão 4 GB, ou 50% da RAM, o que for menor);
   - limite de processos ativos (padrão 64), contra fork bomb;
   - limite de CPU (`CpuRate`, padrão 80%), para o PC continuar usável.
-- [ ] Os limites entram nos perfis de hardware (E4) e ficam configuráveis. Estouro de limite aparece
+- [x] Os limites entram nos perfis de hardware (E4) e ficam configuráveis. Estouro de limite aparece
       para o modelo como erro claro ("o comando passou do limite de memória de 4 GB do sandbox").
-- [ ] Linux/macOS (web e runner): o equivalente é `setrlimit` + grupo de processos (`os.setsid` +
+- [x] Linux/macOS (web e runner): o equivalente é `setrlimit` + grupo de processos (`os.setsid` +
       `killpg`).
-- [ ] Testes: processo filho de um filho morre com o job; o limite de memória derruba um script que
+- [x] Testes: processo filho de um filho morre com o job; o limite de memória derruba um script que
       aloca além dele; o limite de processos barra uma fork bomb.
 
 ### Passo 2: ambiente limpo para os processos
-- [ ] O processo filho **não herda** o ambiente do backend. Hoje ele recebe tudo:
+- [x] O processo filho **não herda** o ambiente do backend. Hoje ele recebe tudo:
   - fica de fora qualquer variável com `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `FORJA_*`,
     `ANTHROPIC_*`, `OPENAI_*`, `AWS_*`, `AZURE_*`, `GITHUB_TOKEN`, `HF_TOKEN`;
   - só passa uma lista do que é necessário: `PATH`, `SystemRoot`, `TEMP`, `USERPROFILE`, `HOME`,
     `LANG`, as de toolchain (`JAVA_HOME`, `GOPATH`, …) e o que o FORJA.md do projeto declarar em
     `env_allow`.
-- [ ] O `.env` do projeto não é carregado pelo Forja. Se o projeto precisar, o próprio comando do
+- [x] O `.env` do projeto não é carregado pelo Forja. Se o projeto precisar, o próprio comando do
       projeto o lê.
-- [ ] Testes: uma variável `X_API_KEY` no backend não aparece no `env` do processo; o `env_allow` do
+- [x] Testes: uma variável `X_API_KEY` no backend não aparece no `env` do processo; o `env_allow` do
       FORJA.md aparece.
 
+**Passos 1 e 2 feitos em 2026-09-25** (`app/sandbox.py`).
+
+Validado no Forja real (modo agente, backend com `TESTE_API_KEY` no ambiente):
+- `$env:TESTE_API_KEY` saiu vazio e o `PATH` continuou;
+- um filho aberto com `Start-Process` morreu quando o comando terminou (o arquivo que ele escreveria
+  depois de 3 s não apareceu).
+
+Diferenças em relação ao plano:
+- **Ambiente com lista de bloqueio, e não de liberação.** Nome com KEY/TOKEN/SECRET/PASSWORD/
+  CREDENTIAL, ou com prefixo `FORJA_`, `ANTHROPIC_`, `OPENAI_`, `AWS_`, `AZURE_`, `HF_`… não passa.
+  Uma lista de liberação quebraria toolchains que dependem de dezenas de variáveis do sistema.
+  `env_allow:` no FORJA.md libera.
+- **Limites padrão:**
+  - memória automática, metade da RAM até 4 GB;
+  - 128 processos (e não 64: builds com node e testes com navegador abrem muitos);
+  - CPU a 80%;
+  - os três configuráveis em Configurações ("Sandbox: …"). Entram nos perfis quando a E4 existir.
+- **O processo entra no job logo depois de criado, e não suspenso.** Um filho aberto no primeiro
+  milissegundo escapa, e isso está anotado no código.
+- **Linux/macOS:** só o `setrlimit` de memória. O `RLIMIT_NPROC` é por usuário e não por árvore, e
+  quebraria o resto do sistema.
+
 ### Passo 3: modo sandbox com WSL2 ou Docker (isolamento de verdade)
-- [ ] **Detecção:** se WSL2 ou Docker estiver disponível, a tela oferece "Executar comandos do agente
+- [x] **Detecção:** se WSL2 ou Docker estiver disponível, a tela oferece "Executar comandos do agente
       em sandbox". Vem **ligado por padrão nos modos Automático, Ignorar permissões e Maestro**, e
       desligado no Manual, onde o usuário aprova cada comando. Sem WSL/Docker, avisar uma vez, com o
       link de instalação, e seguir com os passos 1 e 2.
-- [ ] **Arquivos:** só a pasta do projeto é montada (leitura e escrita). O resto do disco não existe
+- [x] **Arquivos:** só a pasta do projeto é montada (leitura e escrita). O resto do disco não existe
       lá dentro. O cache de pacotes (npm, pip, cargo) fica num volume próprio do Forja, para não baixar
       tudo de novo a cada comando.
-- [ ] **Rede por fase:**
+- [x] **Rede por fase:**
   - `install` (npm/pnpm/yarn install, pip install, cargo fetch, …): rede **ligada**, de preferência só
     para os registros de pacotes;
   - `build`, `test`, `verify_command` e regressão: rede **desligada** (`--network none`);
@@ -871,21 +1053,117 @@ Deve estar pronto (pelo menos o passo 3) antes de o Maestro autônomo virar o fl
 
   A fase é detectada pelo comando (lista de instaladores conhecidos) e o modelo pode pedir outra
   com um motivo. Pedido de rede fora da fase de install pede aprovação.
-- [ ] **Processos:** o processo roda como usuário comum (não root), sem `--privileged`, com os limites
+- [x] **Processos:** o processo roda como usuário comum (não root), sem `--privileged`, com os limites
       do passo 1 (`--memory`, `--cpus`, `--pids-limit`).
-- [ ] **Imagem:** base mínima com node, python e git. O projeto pode declarar a própria imagem no
+- [x] **Imagem:** base mínima com node, python e git. O projeto pode declarar a própria imagem no
       FORJA.md (`sandbox_image`). A imagem é baixada uma vez, com o tamanho mostrado antes.
-- [ ] **Terminal e servidores de dev** também rodam no sandbox, e o `browser_*` acessa a porta exposta.
-- [ ] **Web:** o container do backend deixa de montar o disco C inteiro por padrão (`HOST_MOUNTS` vira
+- [x] **Terminal e servidores de dev** também rodam no sandbox, e o `browser_*` acessa a porta exposta.
+  *Feito em 2026-09-25.*
+  - `serve_start` (e o `run_command(background)`, que passava por ele e escapava do sandbox) sobe no
+    container com `-p 127.0.0.1:PORTA:PORTA`. A porta vem do comando, da ferramenta (vite 5173, next 3000,
+    flask 5000, o resto 8000) ou do novo argumento `port`. Ocupada no Windows, vai para uma livre, e o
+    endereço devolvido já é o do Windows.
+  - Servidor de dev costuma escutar só no localhost do container, que o `-p` não alcança. Um repassador
+    em Python (`/forja/repassa.py`, montado só para leitura) espera o servidor subir e escuta no IP do
+    container. Se o servidor já escuta em todas as interfaces, o repassador sai calado.
+  - `terminal_open` do agente é bash no container, sem rede. O terminal do usuário na interface continua
+    no Windows.
+  - Validado no Forja real (gpt-oss:120b, Ignorar permissões, Docker do WSL):
+    - `python3 -m http.server 8777 --bind 127.0.0.1` subiu no container;
+    - o navegador do Forja abriu `http://localhost:8777` e tirou o print da página;
+    - o terminal respondeu `id -u` = 1000 e `uname` = Linux.
+  - **Desvio:** o servidor roda com rede `bridge` (o `-p` não existe com `--network none`), então ele tem
+    rede enquanto roda.
+  - **Celular:** pela rede local o site do container abriu no app (proxy do Forja para `localhost:PORTA`). Na
+    primeira vez apareceu a página de OUTRO projeto: o WebView guardava em cache o que a mesma porta do proxy
+    (47820) já tinha servido antes, pelo Forja normal. O proxy agora manda `Cache-Control: no-store` e tira
+    `ETag`/`Last-Modified`.
+- [x] **Web:** o container do backend deixa de montar o disco C inteiro por padrão (`HOST_MOUNTS` vira
       opt-in), e o forja-runner ganha o mesmo modo sandbox.
-- [ ] Testes:
+  *Feito em 2026-09-25 no forja-web, branch `feat/e12-web` (22b2505, a partir do `sync-desktop-0.7`).*
+  - O disco C passou para o `docker-compose.discos.yml`, ligado por `COMPOSE_FILE` no `.env`.
+    **Quem atualizar sem essa linha perde o disco C no seletor**; o README e o `.env.example` explicam.
+  - `FORJA_RUNNER_SANDBOX=docker|wsl` põe o `/run` e o `/run/stream` do runner num container:
+    - só a pasta da conversa, uid 1000 e rede só na instalação;
+    - timeout derruba o container junto.
+  - Os servidores do runner seguem no sistema.
+  - Conferido com o Docker do WSL: o comando viu a pasta e não viu `/mnt/c`, e ficou sem rede fora da
+    instalação.
+- [x] Testes:
   - o sandbox não enxerga um arquivo fora do projeto;
   - `curl` falha na fase de test;
   - `npm install` funciona na fase de install;
   - o processo roda sem root;
   - sem Docker/WSL, cai para os passos 1 e 2 com aviso.
 - [ ] Validar no app real com o bench da E0 rodando inteiro no sandbox. Medir o custo de tempo contra
-      rodar sem sandbox.
+      rodar sem sandbox. *Fica para depois da E0: o bench ainda não existe. A medição por caso está na tabela
+      abaixo.*
+
+**Passo 3 feito em 2026-09-25 (parcial)**, com a configuração "Sandbox isolado (Docker)".
+
+Validado no Forja real (modo agente, Docker Desktop, imagem python:3.12-bookworm):
+- o comando rodou num Debian (o modelo usou bash, pela linha no contexto), como uid 1000 (não root);
+- viu o arquivo do projeto, mas não o disco do Windows;
+- `pip install six` funcionou (fase de instalação, com rede);
+- `urlopen` fora da instalação falhou (sem rede);
+- nenhum container ficou para trás.
+
+Diferenças em relação ao plano:
+- **Desligado por padrão, e não ligado nos modos autônomos.** O Docker Desktop consome RAM que um PC
+  rodando IA local pode não ter. As opções são: desligado, só nos modos autônomos (Automático, Ignorar
+  permissões e Maestro), e sempre. O Forja **nunca abre o Docker sozinho**: parado, o comando roda no
+  Windows e a saída avisa. Imagem ausente é baixada em segundo plano, e até lá o comando roda no
+  Windows com aviso.
+- **O que vai para o container:** o `run_command` (do agente e do Worker, inclusive o verify) e a
+  regressão da E2. O `git` e os hooks continuam no Windows.
+- **Servidores de dev (`serve_start`) e o terminal continuam no Windows (item acima em aberto).**
+  Assim o navegador do Forja e o celular pela tailnet seguem enxergando o servidor como hoje. Levar
+  para o container exige `-p` (publicar a porta no Windows) e o servidor escutar em `0.0.0.0`, e aí o
+  acesso pelo celular continua. Fica para quando o isolamento do servidor valer o custo.
+- **Imagem:** a `node:22-bookworm` se houver `package.json`, senão a `python:3.12-bookworm`, ou a
+  `sandbox_image:` do FORJA.md. São oficiais e maiores que uma imagem mínima (~380 MB comprimida),
+  em troca de git, pip e compiladores sem build próprio.
+- **Cache de pacotes:** fica em `<dados do Forja>/sandbox-cache`, montado em `/cache`. O pip instala
+  no usuário (`PIP_USER`), já que o processo não é root.
+- **Web:** o `HOST_MOUNTS` opt-in e o forja-runner com o mesmo modo ficam para o sync com o
+  `forja-web`.
+
+**Motor WSL (2026-09-25).** Configuração "Sandbox isolado: qual Docker": Automático (o Docker Desktop
+se estiver aberto, senão o Docker Engine dentro do WSL), Docker Desktop ou Docker Engine no WSL, e a
+distro do WSL. O motor WSL:
+- chama `wsl.exe --exec docker …`. Com `--`, o `wsl.exe` passava a linha pelo shell do Linux e perdia
+  as aspas (`$i`, `&&`, `>`), e isso foi pego na medição;
+- traduz os caminhos (`C:\x` → `/mnt/c/x`);
+- tem as próprias imagens, separadas das do Docker Desktop.
+
+Na tela de Configurações há um **tutorial** para instalar o Docker das duas formas.
+
+Validado no Forja real: com o Docker Desktop fora do ar, o Automático caiu no Engine do WSL (29.1.3). O
+comando com aspas, `$i`, `>` e `&&` rodou num Debian, e os arquivos apareceram na pasta do Windows.
+
+Medição (mediana de 3 rodadas, mesma pasta de projeto no disco C, os três na mesma sessão depois de
+reiniciar o Windows):
+
+| Caso | Windows, sem sandbox | Docker Engine no WSL | Docker Desktop 4.x (29.7.2) |
+|---|---|---|---|
+| Subir o comando (vazio) | 0,19 s | 0,35 s | 0,48 s |
+| 2000 arquivos (escrever e ler) | 2,50 s | 7,42 s | 7,65 s |
+| pytest (60 testes) | 0,49 s | 3,34 s | 3,41 s |
+| pip install (já em cache) | 0,80 s | 1,87 s | 2,00 s |
+
+Os dois Dockers empatam em trabalho, porque os dois leem o projeto pelo mesmo caminho lento do WSL2
+para o disco do Windows. O Engine do WSL sobe o comando ~0,1 s mais rápido e não precisa do Docker
+Desktop aberto (menos RAM ociosa). Por isso o Automático está bom como está: usa o que estiver de pé.
+
+- [x] **Medir o Docker Desktop.** Feito. Antes ele não abria: bug do Docker Desktop no Windows 11 build
+      26200, que não consegue renomear os sockets AF_UNIX velhos (erro 1920, nem o Windows renomeia).
+      Contorno: com o Docker fechado, renomear as pastas `%LOCALAPPDATA%\Docker\run` e
+      `%LOCALAPPDATA%\docker-secrets-engine` juntas (não apagar) e abrir uma vez. Issue:
+      docker/desktop-feedback#676.
+- [x] **Cache de pacotes num volume do Linux.** *Feito em 2026-09-25:* o volume `forja-sandbox-cache`, criado
+      uma vez por motor com `chown` para o uid 1000; se falhar, fica a pasta do Windows. Medido no WSL: o
+      pytest caiu de 3,37 s para 1,69 s e o pip, de 1,79 s para 1,41 s. Antes o cache ficava no disco do Windows, lido por
+      `/mnt/c`.
 
 ### Passo 4 (depois): AppContainer do Windows
 - [ ] Isolamento nativo sem Docker/WSL. O processo roda num **AppContainer**:
@@ -899,6 +1177,26 @@ Deve estar pronto (pelo menos o passo 3) antes de o Maestro autônomo virar o fl
   - a interação com o antivírus.
 
   Fazer um protótipo com `npm install && npm test` num projeto real antes de construir.
+
+**Protótipo feito em 2026-09-25**: ctypes com `CreateAppContainerProfile` e
+`PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`, e o ACL por `icacls`. Rodou numa cópia do frontend do Forja,
+sem baixar nada. **Não dá para construir por enquanto.**
+- **O isolamento funciona:**
+  - lê a pasta liberada;
+  - leitura em Documentos ou no repositório do Forja dá `EPERM`;
+  - sem a capability, a rede falha com `ENOTFOUND`; com `internetClient`, responde 200.
+- **O custo do ACL é aceitável:** 5,4 a 6,2 s na primeira vez para ~10,5 mil arquivos, pelo `icacls /T`.
+- **A toolchain quebra, em três pontos:**
+  1. O Node instalado em `G:\Program Files` não tem `ALL APPLICATION PACKAGES` no ACL e nem é
+     encontrado. Seria preciso dar ACL também à pasta da toolchain do usuário.
+  2. O `realpath` do Node faz `lstat` em `C:\` e leva `EPERM`. Contorna com
+     `NODE_OPTIONS=--preserve-symlinks --preserve-symlinks-main`.
+  3. **Processo filho trava:** `execFileSync` de outro node não volta nem com timeout. Por isso o `tsc`
+     passa e o `vite build` (esbuild) e o `node --test` travam, e morreram no limite de 120 s. É o fim
+     da linha para npm, vite, pytest com subprocess etc., até achar a causa, provavelmente os pipes
+     nomeados do libuv dentro do AppContainer.
+- **Decisão:** o Docker/WSL continua sendo o isolamento de verdade. O AppContainer volta quando alguém
+  resolver o processo filho: testar primeiro com LPAC ou com um broker que crie os pipes fora.
 
 **Integração com o resto do plano:**
 - **Perfis (E4):** os perfis ligam o sandbox automaticamente conforme o modo de permissão, e os limites
@@ -932,7 +1230,30 @@ devolve `None` (`llm.py:96`) e o agente supõe 32768 tokens (`NUM_CTX`). Um vLLM
 da E4.
 
 ### Parte A: capacidades por backend e janela real (antes da E4)
-- [ ] **Tabela de capacidades por tipo de backend**, num lugar só (ex.: `llm.CAPACIDADES[tipo]`), com
+
+*Feita em 2026-09-25 (menos a leitura pela `como_rodar`, que nasce na E4).* Resumo:
+- **Tabela e rótulos:** `llm.CAPACIDADES` e `llm.ROTULOS_CAPACIDADE`. Para consultar,
+  `llm.capacidade(provider, nome)`, que devolve "sim", "parcial" ou "nao".
+- **Ollama Cloud como tipo próprio:** `ollama_nuvem`. Lá não há o que carregar nem VRAM nossa, e a
+  janela é a do modelo.
+- **Janela real:** o tipo `openai` usa o campo manual `context_window` quando está preenchido. Sem ele,
+  lê do servidor (`max_model_len`, `context_length`, `top_provider.context_length`, o `/props` do
+  llama-server), com cache de 10 min. Sem nenhum dos dois, o turno recusa (`llm.janela_obrigatoria`).
+- **Ollama:** local lê o `/api/ps`; nuvem lê o `/api/show`.
+- **Tela:** a de Provedores mostra o campo e o que cada tipo não faz.
+- **Testes:** `tests/test_backends.py`.
+
+*Validado no Forja real:*
+- **vLLM falso** (`max_model_len` 8192): o anel de contexto mostrou 8192. Antes o Forja supunha 32768.
+- **Servidor que não informa a janela:** o turno recusa com a mensagem e nem chama o modelo.
+  Preenchida a janela (16000), roda com 16000.
+- **Ollama Cloud (`gpt-oss:120b`):** a janela lida é **131.072**, e não os 32.768 de antes. Conferido
+  com um prompt de 62 mil tokens mandando `num_ctx=32768`: a nuvem **ignora o `num_ctx`**, contou
+  tudo e acertou o último item. O Forja estava compactando a nuvem com 1/4 da janela.
+- **Não confirmado ao vivo:** os "parcial" do Ollama local e do LM Studio (sem servidor ligado aqui,
+  e sem VRAM livre). Confirmar quando a E4 for usar cada um.
+
+- [x] **Tabela de capacidades por tipo de backend**, num lugar só (ex.: `llm.CAPACIDADES[tipo]`), com
       o que o Forja consegue fazer em cada um:
   - carregar e descarregar modelo;
   - ler a VRAM;
@@ -953,21 +1274,22 @@ da E4.
 
   Os valores "parcial" precisam ser confirmados na versão atual de cada servidor antes de entrar na
   tabela.
-- [ ] **A `como_rodar` e os perfis (E4) leem essa tabela.** Quando o backend não oferece a capacidade,
+- [ ] **A `como_rodar` e os perfis (E4) leem essa tabela.** (Fica para a E4: a tabela e o
+      `llm.capacidade` já existem; falta quem os consulte.) Quando o backend não oferece a capacidade,
       o comportamento é o seguro: um modelo só, chamadas auxiliares em sequência, sem trocar de modelo
       e sem cache em disco. Nunca tentar uma operação que o backend não tem.
-- [ ] **A tela mostra o que fica indisponível** no backend escolhido. Exemplo: "com LM Studio: sem cache
+- [x] **A tela mostra o que fica indisponível** no backend escolhido. Exemplo: "com LM Studio: sem cache
       em disco, sem paralelo controlado pelo Forja, descarga pelo próprio LM Studio".
-- [ ] **Janela real no tipo `openai`:**
+- [x] **Janela real no tipo `openai`:**
   - ler `max_model_len` do `/v1/models` (é o campo que o vLLM informa);
   - ler `context_length`/`max_context_length` quando o servidor informar;
   - sem nenhum dos dois, usar um campo manual **"janela de contexto"** no cadastro do servidor, que
     passa a ser obrigatório para o tipo genérico. **Nunca supor 32k.**
-- [ ] **Janela real no Ollama:** conferir a janela carregada de fato em `/api/ps`, em vez de só confiar no
+- [x] **Janela real no Ollama:** conferir a janela carregada de fato em `/api/ps`, em vez de só confiar no
       `num_ctx` enviado. O Ollama pode limitar a janela pela memória.
-- [ ] Testes com servidor falso de cada tipo: a janela lida corretamente; um `openai` sem janela e sem
+- [x] Testes com servidor falso de cada tipo: a janela lida corretamente; um `openai` sem janela e sem
       campo manual recusa com mensagem clara; a `como_rodar` com um backend sem slots escolhe
-      sequencial.
+      sequencial. (O da `como_rodar` fica para a E4.)
 
 ### Parte B: controle e métricas fora do llama.cpp (depois da E4)
 - [ ] **Cache perdido em qualquer backend** (E0/E10): Ollama por `prompt_eval_count` contra o tamanho do
@@ -1002,7 +1324,35 @@ principalmente ao Maestro e ao Worker. O modo agente também ganha, porque lê o
 parte 4 depende da E1.
 
 ### Parte 1: detectar pelo código, sem LLM
-- [ ] Um detector (`projstate.detectar_convencoes(root)`) lê o que o projeto já declara:
+
+*Feita em 2026-09-25.*
+- **Código:** `convencoes.py`, módulo próprio em vez de `projstate.detectar_convencoes`.
+  - Lê `package.json` (dependências, `"type": "module"`, scripts), o lockfile (npm, pnpm, yarn, bun,
+    uv, poetry, pipenv), `tsconfig` (strict, `paths`, tolerante a comentário), Tailwind (config ou
+    `@tailwind` no CSS), ESLint, Prettier (com `semi` e `singleQuote`), Biome, `pyproject` (Ruff,
+    Black, pytest, mypy, `line-length`, dependências também em lista de uma linha), `requirements*.txt`,
+    `.editorconfig`, Go, Rust, e as pastas de camada até 3 níveis.
+  - Projeto com `back/` e `front/`: cada subpasta com manifesto é lida à parte, e os itens dizem de
+    qual são ("front: TypeScript strict").
+  - Os comandos saem sem `cd pasta &&` (quebrava com espaço no nome e no PowerShell 5.1); a pasta vai
+    à parte.
+- **Onde entra:**
+  - o arquivo é `.forja/knowledge/convencoes.md`, bloco "Detectado" entre marcadores; o resto do
+    arquivo é do usuário e fica preservado. Só regrava quando muda;
+  - o bloco é atualizado quando a execução do Maestro começa (`projstate.congelar`) e antes do
+    `plan_feature`;
+  - entra por extenso no prompt da Maestro e no briefing de todo Worker;
+  - no modo agente, entra só se o arquivo já existir (o agente não cria `.forja/` sozinho);
+  - o board passa a usar os comandos detectados quando o FORJA.md não tem `test_command:`.
+- **Validado no app real** (`.devval/conv-proj`, com `front/` React + TS strict + Tailwind + Vitest e
+  `back/` FastAPI + Ruff + pytest), por MCP: `plan_feature` → `run_task` para o Worker
+  (gpt-oss:120b), concluída. O `convencoes.md` nasceu com cada item e a origem, e o **briefing do
+  Worker** trouxe "Convenções do projeto (siga-as…)".
+- **Nos repositórios reais do usuário** (mesaflow, agenda, forja-desktop), só leitura: a detecção
+  acertou TS strict, Fastify, Next.js, Vitest, Playwright, ESLint, Prettier, os scripts de cada
+  subprojeto e as camadas (routes/, services/, domain/, adapters/).
+
+- [x] Um detector (`projstate.detectar_convencoes(root)`) lê o que o projeto já declara:
   - `tsconfig.json` com `strict`/`noImplicitAny` → "TypeScript strict";
   - `tailwind.config.*` ou `@tailwind` no CSS → "Tailwind";
   - `vitest`/`jest`/`pytest` nas dependências → o framework de testes, que já sugere o `verify_command`;
@@ -1010,10 +1360,10 @@ parte 4 depende da E1.
   - a estrutura de pastas (`services/`, `components/`, `hooks/`, `repositories/`) → como o código é
     separado;
   - o gerenciador de pacotes, pelo lockfile (npm/pnpm/yarn/bun, pip/uv/poetry).
-- [ ] Roda ao abrir um projeto e antes do `plan_feature`. O resultado entra em
+- [x] Roda ao abrir um projeto e antes do `plan_feature`. O resultado entra em
       `.forja/knowledge/convencoes.md` na seção "detectado", sempre com a origem (ex.: "TypeScript strict
       — `tsconfig.json:5`"). Quando o arquivo de origem muda, a entrada é refeita.
-- [ ] Testes com projetos de fixture (TS + Tailwind + Vitest, Python + Ruff + pytest): cada convenção é
+- [x] Testes com projetos de fixture (TS + Tailwind + Vitest, Python + Ruff + pytest): cada convenção é
       detectada com a origem certa.
 
 ### Parte 2: aprender com o que deu errado
@@ -1084,7 +1434,79 @@ partes:
 E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E12.
 
 ### Parte A: MVP sem LLM (board, cards e o botão Iniciar)
-- [ ] **Tabela `issues` por projeto** (pela pasta raiz, não por conversa como `Feature`/`Task`,
+
+*Feita em 2026-09-25.*
+- **Código:** `board.py`, a tabela `Issue`, as rotas `/api/board/*` e o carimbo `board` no
+  `/api/activity`. No desktop, `BoardView.tsx` abre pelo botão **Board** na barra superior (seções
+  Agente e Maestro). No celular, `src/Board.tsx`, na página Board da gaveta.
+- **Arrastar:** mesmo gesto dos painéis do Maestro (`RightPanel.alca`). O card levanta e segue o
+  ponteiro, a coluna acende, e soltar em "Em andamento" é o mesmo que Iniciar.
+- **Testes:** `tests/test_board.py`.
+- **Desvios:**
+  - A varredura não roda `browser_validate`. Ela não sabe quais rotas o app tem nem se o servidor
+    de dev está de pé; isso fica para a parte B.
+  - Comandos do projeto são linhas `test_command:`, `typecheck_command:` e `lint_command:` no
+    FORJA.md, no mesmo estilo do `env_allow:`. A E14 depois detecta sozinha.
+  - O verify roda depois de a conversa terminar, e o resultado vai para o histórico. O card vai para
+    Revisão mesmo com o verify falhando, marcado assim. Quem decide é a revisão.
+  - O commit do card é o HEAD novo desde o Iniciar. O modo agente não commita sozinho, então ali
+    costuma vir vazio; no Maestro é o commit por tarefa da E2.
+
+*Validado no Forja real* (`.devval/board-proj`, projeto com 3 comentários e um teste falhando):
+- "Varrer agora" pela tela criou 4 cards em Novo, cada um com `arquivo:linha`.
+- **Aceitar → Iniciar** no card do teste: o agente (gpt-oss:120b) corrigiu `soma`. O card foi
+  sozinho para Revisão, e o verify rodou e passou. O FIXME removido pelo agente virou "resolvido?".
+- Arrastar com o mouse de Novo para Backlog funcionou, e o clique de depois não abre o card.
+- **Defeitos vistos e corrigidos:**
+  - o Iniciar dava 500 ("no running event loop": endpoint síncrono), e agora há teste que passa
+    pela API com o Run real;
+  - o erro sumia da tela;
+  - a área padrão `fullstack` mandava todo card manual para o Maestro;
+  - uma falha no Iniciar deixava conversa órfã.
+- [x] **Testado no celular de verdade** (Galaxy A54, APK de release instalado com `adb install -r`,
+  pareado pelo QR com a instância de teste na rede local). Os três sentidos:
+  - **celular → PC:** Aceitar no celular aparece no board aberto do PC na hora (menos de 4 s, contando
+    o toque);
+  - **PC → celular:** card criado no PC aparece no celular em 5,6 s (ciclo de 4 s do `/api/activity`);
+  - **Iniciar pelo celular:** o PC viu "Em andamento" em 1,7 s. O agente implementou o TODO, e o card
+    foi para Revisão nos dois aparelhos.
+  - Para isso a porta da rede local virou configurável: `FORJA_LAN_PORTA`, padrão 47811. A instância de
+    teste usou a 47812, porque a 47811 estava com a instância de outra sessão.
+
+**Acréscimos pedidos depois do MVP** (2026-09-25, validados no Forja real com gpt-oss:120b):
+- **A IA cria card: ferramenta `board_card`.** O card cai em Novo, e a evidência é conferida no disco:
+  - o arquivo existe e a linha existe;
+  - o trecho está de fato perto da linha (card inventado é recusado);
+  - card aberto no mesmo arquivo, a até 2 linhas, é o mesmo card. Na validação, a IA apontou o `def`
+    numa vez e o `return` na outra e repetia;
+  - "bug", "melhoria"… viram o tipo certo, e área inválida é deduzida pelo caminho;
+  - verify que é nome de ferramenta (veio `browser_screenshot`) é descartado.
+
+  Tem teto de 20 cards por conversa e apelidos (`create_issue`, `add_card`…).
+- **Interruptor "IA cria cards sozinha", por board.** Desligado, o `board_card` nem entra no catálogo nem
+  no prompt. Um pedido explícito (skill `/board` ou "Pedir à IA") libera só naquela conversa.
+- **"Pedir à IA" no board e a skill `/board [foco]`.**
+  - O pedido abre uma conversa de agente em modo manual, que só lê. Foco: tudo, bugs, melhorias,
+    features ou visual, e opcionalmente uma subpasta.
+  - O pedido leva os cards abertos e os rejeitados recentes, para não repetir.
+  - Resultado num projeto com 5 bugs plantados: 5 cards corretos em 15 s. Ficaram de fora o contraste e
+    o `alt` da imagem. Pedido de novo, não duplicou.
+- **Card visual com print.**
+  - O Iniciar de card visual pede um print ANTES e um DEPOIS.
+  - Na Revisão, o primeiro e o último print da conversa viram evidência do card.
+  - Validado: o agente usou `serve_start` → `browser_screenshot` → `edit_file` → recarregar →
+    `browser_screenshot`, e o card chegou à Revisão com os dois prints, em 18 s.
+- **Pastas vinculadas.**
+  - `/projeto` com `back/` e `front/`, cada um com `.git`: "Pastas" › "Vincular todos". Conversa na
+    pasta vinculada, ou numa subpasta dela, usa o board da raiz, e a varredura passa por todas.
+  - Também dá para vincular uma pasta fora da raiz; o caminho fica com `../`.
+  - Os cards do board antigo da pasta vêm junto, com os caminhos refeitos.
+  - A impressão digital usa o caminho absoluto, para não duplicar depois de vincular.
+- **Card na resposta da IA**, igual ao do board, no fim da resposta. Clicar abre o board no card, e
+  ao lado ficam "Ir para o código" (editor na linha) e "Iniciar" (aceita e inicia).
+- **Board em 90% da tela.** Com a escala de 1,1 do Windows, o 100vw cortava a coluna Concluído.
+
+- [x] **Tabela `issues` por projeto** (pela pasta raiz, não por conversa como `Feature`/`Task`,
       `db.py:114`). Campos:
   - `id`, `projeto` (raiz), `titulo`, `descricao`;
   - `tipo` (bugfix | feature | improvement | visual | todo | seguranca);
@@ -1094,18 +1516,18 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - `evidencias` (JSON com `arquivo:linha`, saída, caminho do screenshot);
   - `prompt`, `verify_sugerido`, `origem` (manual | varredura-deterministica | varredura-ia | visual);
   - `impressao`, `motivo_rejeicao`, `conversa_id`, `feature_id`, `commit`, datas.
-- [ ] **Tela "Projeto › Board"** (componente novo, ao lado do `MaestroView.tsx`):
+- [x] **Tela "Projeto › Board"** (componente novo, ao lado do `MaestroView.tsx`):
   - colunas Novo → Backlog → Em andamento → Revisão → Concluído, com arrastar entre colunas;
   - filtros por tipo, área e severidade;
   - uma busca;
   - contagem por coluna.
-- [ ] **Card:** título, tags coloridas por tipo e área, severidade e origem. Aberto, mostra:
+- [x] **Card:** título, tags coloridas por tipo e área, severidade e origem. Aberto, mostra:
   - as evidências clicáveis (abre o arquivo na linha, ou o screenshot);
   - o prompt, editável;
   - o `verify` sugerido;
   - o histórico.
-- [ ] **Criar card à mão** ("+ Novo item"), com o mesmo formulário.
-- [ ] **Botão "Iniciar":**
+- [x] **Criar card à mão** ("+ Novo item"), com o mesmo formulário.
+- [x] **Botão "Iniciar":**
   - sugere o modo: bugfix, todo e visual pequenos → **agente**; feature, ou área fullstack →
     **Maestro**. O usuário pode trocar na hora;
   - cria uma conversa nova na pasta do projeto com o prompt do card, o `verify` e as evidências, e
@@ -1114,7 +1536,7 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
   - **Fim:** quando a conversa termina (a feature do Maestro virou `done`, ou o turno do agente acabou
     com o verify passando), o card vai para "Revisão", com o commit (E2, quando existir). O usuário
     aprova e ele vai para "Concluído", ou reabre com um comentário que vira mensagem na mesma conversa.
-- [ ] **Varredura determinística (camada 1)**, sem LLM, pelo botão "Varrer agora":
+- [x] **Varredura determinística (camada 1)**, sem LLM, pelo botão "Varrer agora":
   - `TODO`/`FIXME`/`HACK`/`XXX` pelo `grep` (`busca.py`) → tipo `todo`, com o texto do comentário;
   - erros de `tsc --noEmit`, lint e testes que falham (comandos do FORJA.md; depois da E14, os
     detectados) → `bugfix`, com a saída;
@@ -1124,10 +1546,10 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
 
   Um card por problema, com impressão digital. Reexecutar não duplica, e um problema que sumiu marca
   o card "resolvido?" para o usuário confirmar.
-- [ ] **Sincronizar com o celular** (regra do `CLAUDE.md`): card novo, mudança de coluna e fim da
+- [x] **Sincronizar com o celular** (regra do `CLAUDE.md`): card novo, mudança de coluna e fim da
       varredura entram no `/api/activity`. O Forja Mobile ganha a lista do board para triar pelo
       celular (aceitar, rejeitar, iniciar). Testar nos dois sentidos com o celular de verdade.
-- [ ] Testes:
+- [x] Testes:
   - a impressão digital evita duplicado;
   - rejeitado não volta;
   - um `TODO` detectado vira card com `arquivo:linha`;
@@ -1169,21 +1591,54 @@ E11 (explorador) e da E14 (convenções). A parte C depende da E1, da E2 e da E1
       mudados; a varredura para quando o principal pede o modelo; o teto de cards é respeitado.
 
 ### Parte C: execução automática ("sozinho", de ponta a ponta)
-- [ ] **Opção "Executar backlog automaticamente"**, por projeto e desligada por padrão. Pega os cards
+
+*Feita em 2026-09-25* (`app/board_auto.py`, o interruptor "Executar backlog sozinho" no board; testes em
+`tests/test_board_auto.py`).
+
+Validada no Forja real (gpt-oss:120b na nuvem, Docker do WSL, projeto git `.devval/auto-proj` com dois bugs
+e testes falhando):
+- o interruptor ligado pela tela;
+- o card #14 foi sozinho para Em andamento (modo agente, Automático, comandos no container);
+- a conversa corrigiu o bug, e o card chegou à Revisão com "verify passou" e o commit `c142310`, que leva
+  só o arquivo que a conversa escreveu;
+- tudo em 29 s. O card #15, criado depois, rodou sozinho do mesmo jeito (`72b9d55`, "2/5 hoje");
+- o push "Card pronto para revisão · #15" chegou ao celular.
+
+Como ficou:
+- **Travas para ligar:** o Sandbox isolado ligado e com um Docker respondendo, e o projeto num repositório
+  git. Sem isso o interruptor fica desabilitado, e a dica diz o motivo.
+- **O que roda:** um card por vez e nenhum outro em andamento no projeto; mais severo primeiro, depois o
+  mais antigo. Card em Novo e de segurança nunca rodam. Card de agente sem `verify_sugerido` fica de fora,
+  porque nada provaria que ficou pronto.
+- **Modo e permissão:** o card roda no modo sugerido e na permissão Automático (`board.iniciar(...,
+  permissao="auto")`), e por isso o sandbox "só nos modos autônomos" vale. O modelo é o último usado,
+  como no Iniciar.
+- **Fim de card de agente:** o verify do `acompanha` é obrigatório. Se passa, os arquivos escritos na
+  conversa viram o commit do card (`gitops.commit_paths`, o mesmo do commit por tarefa). Se falha, a
+  execução para. No Maestro, verify, commit por tarefa e regressão já são dele; tarefa em `needs_human`
+  para tudo.
+- **Parada:** aparece no board ("Parou: …", com "seguir") e vai por push. Religar é o "pode seguir".
+  O limite é por dia (padrão 5, até 50).
+- **O tique:** vem do `/api/activity`, no laço de eventos (o Iniciar precisa dele). `docker info` e `git`
+  vão para thread, e só quando há card para rodar. Sem o PC nem o celular abertos, nada roda.
+  ponytail: sem agendador próprio.
+- O estado (ligado, feitos hoje, em curso, parado) não aparece no celular. O card mudando de coluna já
+  sincroniza pelo carimbo do board.
+- [x] **Opção "Executar backlog automaticamente"**, por projeto e desligada por padrão. Pega os cards
       do Backlog, por severidade e depois por ordem, e inicia um de cada vez no modo sugerido, sem
       clique.
-- [ ] **Só pode ser ligada com o sandbox (E12, passo 3 ou 4) ativo** e com as travas da E1/E2 (verify
+- [x] **Só pode ser ligada com o sandbox (E12, passo 3 ou 4) ativo** e com as travas da E1/E2 (verify
       obrigatório, commit por tarefa, regressão). Sem isso, o interruptor fica desabilitado com o
       motivo.
-- [ ] **Só cards aceitos pelo usuário.** O que está em "Novo" nunca é executado sozinho, mesmo com a
+- [x] **Só cards aceitos pelo usuário.** O que está em "Novo" nunca é executado sozinho, mesmo com a
       opção ligada.
-- [ ] **Limites:**
+- [x] **Limites:**
   - no máximo N cards por dia (padrão 5);
   - parar na 1ª falha que acabar em `needs_human`;
   - nunca executar card `seguranca` sem aprovação.
-- [ ] **Resultado sempre passa pela coluna Revisão.** Concluído só com a aprovação do usuário. O push no
+- [x] **Resultado sempre passa pela coluna Revisão.** Concluído só com a aprovação do usuário. O push no
       celular avisa "card X pronto para revisão".
-- [ ] Testes: a opção não liga sem sandbox; um card em "Novo" não é executado; o limite diário é
+- [x] Testes: a opção não liga sem sandbox; um card em "Novo" não é executado; o limite diário é
       respeitado; parar em `needs_human`.
 
 **Pronto quando:**
@@ -1227,7 +1682,41 @@ turno), o nível 4 usa a E2 (commit por tarefa) e o juiz usa a E4 (`como_rodar`)
 sandbox (E12).
 
 ### Parte A: placar de progresso, níveis 1–2 e filtro do raciocínio (sem LLM)
-- [ ] **Placar de progresso por passo.** Conta como progresso:
+
+*Feita em 2026-09-25* (`app/progresso.py`, ligada no laço de `agent.py`; testes em `tests/test_progresso.py`).
+
+Validada no Forja real com um provedor falso compatível com OpenAI (`scratchpad/modelo_falso.py`), porque o
+gpt-oss:120b não entrou em loop nem quando pedi:
+- modelo chamando `list_dir('.')` sem parar: lembrete na 3ª; na 5ª, a intervenção, a chamada bloqueada e o
+  aviso "Recuperação de loop" na conversa; as 4 seguintes recusadas; o modelo mudou de rumo;
+- raciocínio repetitivo: abortado com compressão 0,04 depois de ~2 mil caracteres. O raciocínio não volta ao
+  histórico, e o turno seguinte recebeu a intervenção.
+
+Diferenças em relação ao plano:
+- **Nível 2 da repetição exata:** fica na 5ª repetição, no lugar do lembrete forte. O lembrete forte da 8ª
+  e o freio da 10ª continuam.
+- **O que conta como progresso:**
+  - o resultado da ferramenta, comparado sem os números (tempo, pid e linha não contam como "novo");
+  - escrita, pelo hash do arquivo depois dela: voltar a um conteúdo anterior é desfazer;
+  - comando que falhava e passou.
+
+  A tarefa concluída entra pelo resultado diferente. Chamada de espera (`_poll`: task_status,
+  terminal_read) não conta: esperar o Worker não é girar.
+- **"Testei" sem teste:** só vale depois de o modelo ter escrito algo. Em conversa sem escrita, "testei" é
+  resposta, não alucinação. É um lembrete por turno, e soma ponto de alucinação. A pontuação chega a 3
+  com: ferramenta inexistente (1), o mesmo `path` inexistente 2× (1) e `old_str` não encontrado 2× no
+  mesmo arquivo (1).
+- **Intervenção:** zera a contagem de passos sem progresso, para não emendar lembrete e intervenção.
+- **Teto do raciocínio no turno seguinte:** metade (`budget_mult=0.5`).
+- **Filtro do raciocínio:** analisa a cada ~2 mil caracteres (~500 tokens), sobre os últimos 4 mil. Os
+  limites são estes:
+  - compressão abaixo de 0,25;
+  - um 12-grama repetido 3×;
+  - mais de 20 hesitações por mil tokens.
+- **Mediana:** fica em `app_settings` (`raciocinio_por_modelo`, as últimas 40 amostras), e não na
+  `model_settings`: é estatística, não ajuste do usuário. `pensa_demais()` (> 3× a mediana) fica pronta
+  para o juiz da parte B; na parte A ela não muda nada.
+- [x] **Placar de progresso por passo.** Conta como progresso:
   - um arquivo mudou sem desfazer uma mudança anterior (comparar com o hash do conteúdo de antes);
   - um verify ou teste que falhava passou;
   - uma tarefa foi concluída;
@@ -1235,7 +1724,7 @@ sandbox (E12).
   - uma mensagem do usuário.
 
   Guardar em `Run` junto do `LoopDetector`.
-- [ ] **Detector ampliado.** Além da repetição exata:
+- [x] **Detector ampliado.** Além da repetição exata:
   - ciclos curtos (período 2–4) na sequência de chamadas;
   - a mesma assinatura de erro (primeira linha do erro, sem números nem caminhos) voltando ≥ 3×;
   - N passos seguidos sem progresso (padrão 8);
@@ -1245,15 +1734,15 @@ sandbox (E12).
     - `edit_file` com `old_str` não encontrado 2× no mesmo arquivo;
     - afirmação de "testei/verifiquei/passou" sem um `run_command` ok desde a última escrita (reaproveitar
       o `detect_promise` e o item "Não afirme que algo foi verificado" que já existe).
-- [ ] **Nível 1, lembrete:** o que existe hoje, disparado também por 4 passos sem progresso.
-- [ ] **Nível 2, intervenção:** com 5 repetições, 8 passos sem progresso ou a pontuação de alucinação
+- [x] **Nível 1, lembrete:** o que existe hoje, disparado também por 4 passos sem progresso.
+- [x] **Nível 2, intervenção:** com 5 repetições, 8 passos sem progresso ou a pontuação de alucinação
       acima do limite, o harness injeta uma mensagem estruturada:
       "Você está em loop: fez X N vezes; resultado: Y; estado: arquivos mudados, testes. Escreva em 3
       linhas o que está errado e escolha uma abordagem **diferente**."
   - **Proibir de verdade** a chamada exata pelos próximos K passos (padrão 5): se o modelo repetir, a
     ferramenta recusa com a mensagem "chamada bloqueada pela recuperação de loop; escolha outra ação".
   - O próximo turno sai com o teto de raciocínio menor, para o modelo agir em vez de pensar.
-- [ ] **Filtro do raciocínio durante o streaming**, a cada ~500 tokens de raciocínio:
+- [x] **Filtro do raciocínio durante o streaming**, a cada ~500 tokens de raciocínio:
   - **compressão:** `zlib` nos últimos ~4k caracteres. Razão abaixo de ~0,25 = texto repetitivo;
   - **frases repetidas:** a mesma frase ou n-grama longo (≥ 12 palavras) 3× ou mais;
   - **marcadores de hesitação em série:** "wait", "actually", "hmm", "espera", "na verdade" acima de N
@@ -1262,10 +1751,10 @@ sandbox (E12).
   Degeneração clara: **aborta a geração** e vai para o nível 2. A geração não é pausada: o llama.cpp
   não retoma um raciocínio pela metade de forma confiável, então a análise roda sobre o texto que já
   saiu e só aborta se precisar.
-- [ ] **Mediana de raciocínio por modelo:** guardar a mediana de tokens de raciocínio por turno de cada
+- [x] **Mediana de raciocínio por modelo:** guardar a mediana de tokens de raciocínio por turno de cada
       modelo (`model_setting`). "Pensar muito" passa a ser relativo ao modelo (> 3× a mediana), não um
       número fixo. Um modelo que normalmente pensa 3k não é suspeito aos 2k.
-- [ ] Testes:
+- [x] Testes:
   - ciclo A,B,A,B detectado;
   - mesmo erro com chamadas diferentes detectado;
   - chamada bloqueada é recusada nos K passos;
@@ -1434,13 +1923,51 @@ servidor.
 `issue_*` dependem da tabela `issues` da E15-A. A E1 e a E2 tornam o fluxo confiável, mas não bloqueiam o
 começo.
 
+*Feita em 2026-09-25.*
+- **Código:**
+  - `mcp_servidor.py` (servidor FastMCP do pacote `mcp` 1.30, gerente de sessões no lifespan) e
+    `forja_hook.py` (o hook do Claude Code);
+  - a seção "Permitir que o Claude controle o Forja" em Configurações › MCP, com o comando
+    `claude mcp add` pronto, o JSON, a revogação do token e "Instalar no Claude Code";
+  - `tests/test_mcp_servidor.py`, com um cliente MCP de verdade contra um uvicorn local.
+- **Como funciona sem duplicar lógica:** cada ferramenta MCP vira uma chamada de ferramenta do Forja
+  executada por `agent._run_call`, num Run da conversa-espelho (`Run.start` aceita um gerador próprio).
+  Valem os mesmos portões, a mesma aprovação no PC e no celular, e tudo fica registrado e ao vivo.
+- **Desvios:**
+  - **Token fixo próprio** (`DATA_DIR/mcp_token`) em vez do da interface, que muda a cada abertura
+    do app e quebraria o `mcp.json`.
+  - **`path` em toda ferramenta:** o Claude passa a pasta do projeto.
+  - **Uma conversa-espelho por projeto,** reaproveitada por 6 h. O MCP e os hooks caem na mesma, porque
+    o id de sessão de um não é o do outro.
+  - **Ferramentas a mais:**
+    - `forja_md`, porque o `plan_feature` exige FORJA.md, e sem ela o Claude sem ferramentas de
+      escrita travava;
+    - `validate_feature`, que roda só os verifies da funcionalidade e encerra pelo `session_note`.
+      O Claude não tem `run_command` pelo MCP, e a funcionalidade ficava em "validando".
+- **Validado com o Claude Code 2.1.233 de verdade** (`claude -p`, restrito às ferramentas do Forja e à
+  leitura), no `.devval/board-bugs`:
+  - **1ª rodada:** parou no FORJA.md, o que levou ao `forja_md`.
+  - **2ª rodada, em 103 s:** escreveu o FORJA.md, planejou, despachou a TASK-001 para o Worker local
+    (gpt-oss:120b), acompanhou com `task_status` e fechou com o verify passando (commit `fde91ee`). O
+    card repetido foi recusado, porque o #13 já cobria o ponto.
+  - **Encerramento:** o `validate_feature` encerrou a funcionalidade.
+  - **Registro na conversa-espelho, tipo Maestro:** o pedido (hook `UserPromptSubmit`), as leituras
+    do Claude (`PostToolUse`), as chamadas MCP, as notas e a resposta final (`Stop`).
+  - **Celular:** a conversa aparece na lista do Maestro. A mensagem escrita nele foi para a caixa de
+    entrada e chegou ao Claude uma vez só, no `forja_inbox`.
+  - **Defeitos vistos e corrigidos:**
+    - com o Run do Claude aberto, a tela mostrava o modelo do Maestro "ao vivo" e mandava a mensagem
+      para a fila do agente; agora vai para a caixa de entrada e o rótulo é "Claude (via MCP)";
+    - o pedido chegava com BOM;
+    - "Claude usou ToolSearch" era ruído.
+
 ### Servidor
-- [ ] Endpoint `/mcp` com transporte streamable HTTP, montado no FastAPI existente:
+- [x] Endpoint `/mcp` com transporte streamable HTTP, montado no FastAPI existente:
   - só em `127.0.0.1`;
   - autenticado pelo mesmo token (`x-forja-token`), que a tela de configurações mostra junto com o
     trecho pronto para colar no `mcp.json` do Claude Code/Desktop;
   - interruptor "Permitir que o Claude controle o Forja", **desligado por padrão**.
-- [ ] Cada ferramenta MCP chama a função que já existe. Não há lógica duplicada, e as regras e portões
+- [x] Cada ferramenta MCP chama a função que já existe. Não há lógica duplicada, e as regras e portões
       da E1 valem igual.
 
 ### Ferramentas
@@ -1454,7 +1981,7 @@ começo.
 | `forja_note(texto)` | Mensagem de progresso explícita do Claude para o painel |
 | `forja_inbox()` | Mensagens que o usuário escreveu no Forja ou no celular para o Claude (ver abaixo) |
 
-- [ ] As ferramentas que alteram estado (`run_task`, `update_task`, `issue_update` com mudança de
+- [x] As ferramentas que alteram estado (`run_task`, `update_task`, `issue_update` com mudança de
       coluna) respeitam o modo de permissão da conversa-espelho. No Manual, a aprovação aparece no
       Forja e no celular, como qualquer outra.
 
@@ -1462,12 +1989,12 @@ começo.
 O MCP funciona por chamadas de ferramenta: o texto que o Claude escreve para o usuário **não** chega ao
 servidor sozinho. Três mecanismos, do mais garantido ao opcional, resolvem isso:
 
-- [ ] **1. Conversa-espelho automática (garantida):** cada sessão MCP (`Mcp-Session-Id`) vira uma
+- [x] **1. Conversa-espelho automática (garantida):** cada sessão MCP (`Mcp-Session-Id`) vira uma
       conversa no Forja, do tipo "Claude (externo)", ligada ao projeto. **Toda chamada de ferramenta que
       o Claude faz ao Forja fica registrada nela pelo próprio servidor**, sem depender do modelo:
       planos, `run_task`, resultados, cards criados. A árvore de tarefas aparece no `MaestroView`
       normalmente, porque os dados são as mesmas `Feature`/`Task`.
-- [ ] **2. Hooks do Claude Code (automático, com o texto inteiro):** o Forja oferece "Instalar
+- [x] **2. Hooks do Claude Code (automático, com o texto inteiro):** o Forja oferece "Instalar
       integração no Claude Code". Com a aprovação do usuário, grava os hooks no `settings.json` do
       Claude Code do projeto (`.claude/settings.json`):
   - `UserPromptSubmit` manda o pedido do usuário;
@@ -1478,10 +2005,10 @@ servidor sozinho. Três mecanismos, do mais garantido ao opcional, resolvem isso
   Cada hook faz um POST em `127.0.0.1` com o token, e a conversa-espelho passa a mostrar o diálogo
   completo, como uma conversa normal do Forja. Antes de construir, conferir o formato atual da
   entrada de cada hook na documentação do Claude Code.
-- [ ] **3. `forja_note` (opcional):** para progresso no meio de um turno longo. As instruções do servidor
+- [x] **3. `forja_note` (opcional):** para progresso no meio de um turno longo. As instruções do servidor
       MCP pedem ao Claude que o use a cada etapa, mas ele não é obrigatório, porque os mecanismos 1 e 2
       já cobrem o essencial.
-- [ ] **Do Forja para o Claude (o caminho de volta):** um servidor MCP não consegue abrir um turno novo no
+- [x] **Do Forja para o Claude (o caminho de volta):** um servidor MCP não consegue abrir um turno novo no
       Claude Code sozinho. A solução é uma caixa de entrada:
   - o que o usuário escreve na conversa-espelho (no PC ou no celular) fica na fila;
   - a fila chega ao Claude **dentro do próximo resultado de qualquer ferramenta do Forja** (ex.:
@@ -1489,18 +2016,18 @@ servidor sozinho. Três mecanismos, do mais garantido ao opcional, resolvem isso
 
   Enquanto o Claude estiver trabalhando com o Forja, o usuário consegue redirecioná-lo pelo celular.
   Com o Claude parado, a mensagem espera o próximo turno, e a tela avisa isso.
-- [ ] **Sincronizar com o celular** (regra do `CLAUDE.md`): a conversa-espelho, as tarefas e os cards
+- [x] **Sincronizar com o celular** (regra do `CLAUDE.md`): a conversa-espelho, as tarefas e os cards
       entram no `/api/activity`. Testar nos dois sentidos com o celular de verdade.
 
 ### Testes e validação
-- [ ] Testes com um cliente MCP falso (o próprio `mcp` em modo cliente):
+- [x] Testes com um cliente MCP falso (o próprio `mcp` em modo cliente):
   - sem token é recusado;
   - com o interruptor desligado, recusa;
   - `run_task` devolve na hora e o `task_status` acompanha;
   - `issue_create` sem evidência é recusado;
   - toda chamada aparece na conversa-espelho;
   - mensagem da caixa de entrada chega no próximo resultado.
-- [ ] Validar com o Claude Code de verdade num projeto real: planejar uma feature pequena, despachar 2–3
+- [x] Validar com o Claude Code de verdade num projeto real: planejar uma feature pequena, despachar 2–3
       tarefas para Workers locais, criar cards com evidência, e acompanhar tudo no painel do Forja e no
       celular.
 

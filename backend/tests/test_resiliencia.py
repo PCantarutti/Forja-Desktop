@@ -58,7 +58,8 @@ def test_repeticao_lembra_antes_de_parar(monkeypatch):
     monkeypatch.setattr(agent.config, "MAX_ITERATIONS", 50)
     eventos = _roda(monkeypatch, stream)
     nudges = _textos(eventos, "nudge")
-    assert len(nudges) == 3  # 3ª, 5ª e 8ª
+    assert len(nudges) == 3  # 3ª, 5ª (intervenção da E16, com a chamada bloqueada) e 8ª
+    assert "Você está em loop" in nudges[1]
     assert any("Loop detectado: list_dir pedida 10 vezes" in t for t in _textos(eventos, "warning"))
 
 

@@ -8,6 +8,7 @@ import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
 import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Download, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 import { VideoPlayer } from "./VideoPlayer";
+import type { CardMini } from "./BoardView";
 
 /** Quem fornece isto ganha o botão "Testar" nos blocos de código (código, linguagem do bloco).
  * Só o Comparar fornece: no chat o bloco continua só com o copiar. */
@@ -511,7 +512,8 @@ export function aggregate(list: Stats[]): TurnStats {
   };
 }
 
-export type Turno = { stats: TurnStats | null; text: string; userId: number | null };
+// cards: os que a IA criou no board neste turno (board_card), desenhados no FIM da resposta, não no meio
+export type Turno = { stats: TurnStats | null; text: string; userId: number | null; cards: CardMini[] };
 
 /** Estatísticas por turno (todas as iterações até a próxima mensagem do usuário), chaveadas pelo
  *  índice da última resposta do turno — é onde a linha de estatísticas é desenhada. */
@@ -521,16 +523,21 @@ export function turnosDe(messages: Message[]): Map<number, Turno> {
   let text: string[] = [];
   let last = -1;
   let userId: number | null = null;
+  let cards: CardMini[] = [];
   const flush = () => {
-    if (last >= 0) out.set(last, { stats: acc.length ? aggregate(acc) : null, text: text.join("\n\n"), userId });
+    if (last >= 0) out.set(last, { stats: acc.length ? aggregate(acc) : null, text: text.join("\n\n"), userId, cards });
     acc = [];
     text = [];
+    cards = [];
     last = -1;
   };
   messages.forEach((m, i) => {
     if (m.role === "user") {
       flush();
       userId = m.id;
+    } else if (m.role === "tool" && m.meta?.board_card) {
+      const c = m.meta.board_card as CardMini;
+      if (!cards.some((x) => x.id === c.id)) cards.push(c);  // "já existe" repete o mesmo card
     } else if (m.role === "assistant") {
       last = i;
       if (m.meta?.stats) acc.push(m.meta.stats);
@@ -834,6 +841,12 @@ const ACTION: Record<string, string> = {
   edit_file: "Editou um arquivo",
   write_file: "Escreveu um arquivo",
   list_dir: "Olhou a pasta",
+  tree: "Olhou a árvore do projeto",
+  code_search: "Procurou no código",
+  board_card: "Criou card no board",
+  explore: "Explorou o código",
+  ast: "Leu a estrutura do código",
+  imports: "Conferiu os imports",
   search: "Procurou no projeto",
   web_search: "Pesquisou na web",
   fetch_url: "Abriu uma página",
