@@ -8,6 +8,39 @@ export type Forma = { id: string; w: number; h: number };
 /** Uma resolução do seletor ("720p", "1024"). `apagada`: fora do que o modelo aguenta bem (o título explica). */
 export type Qualidade = { id: string; titulo?: string; apagada?: boolean };
 
+// As distrações do tracejado do Livre parado (keyframes em index.css) e quanto cada uma dura.
+const TRUQUES: [string, number][] = [["livre-forma", 1800], ["livre-onda", 1300], ["livre-achata", 1000], ["livre-pisca", 1100], ["livre-pulo", 1000], ["livre-gira", 1400]];
+
+/** Sorteia um truque a cada 4–9 s, nunca o mesmo duas vezes seguidas; `quieto` para tudo na hora. */
+function useTruque(quieto: boolean): string {
+  const [truque, setTruque] = useState("");
+  useEffect(() => {
+    if (quieto || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return setTruque("");
+    let vivo = true, ultimo = "", t: ReturnType<typeof setTimeout>;
+    const proximo = () => {
+      t = setTimeout(() => {
+        if (!vivo) return;
+        const opcoes = TRUQUES.filter(([n]) => n !== ultimo);
+        const [nome, dura] = opcoes[Math.floor(Math.random() * opcoes.length)];
+        ultimo = nome;
+        setTruque(nome);
+        t = setTimeout(() => {
+          if (!vivo) return;
+          setTruque("");
+          proximo();
+        }, dura);
+      }, 4000 + Math.random() * 5000);
+    };
+    proximo();
+    return () => {
+      vivo = false;
+      clearTimeout(t);
+      setTruque("");
+    };
+  }, [quieto]);
+  return truque;
+}
+
 const razaoDe = (id: string) => {
   const [a, b] = id.split(":").map(Number);
   return a / b;
@@ -33,6 +66,8 @@ export default function SeletorFormato(props: {
 }) {
   const [livre, setLivre] = useState(false);
   const livreAtivo = livre || !props.prop;
+  const [sobreLivre, setSobreLivre] = useState(false);
+  const truque = useTruque(livreAtivo || sobreLivre);
   const [razaoLivre, setRazaoLivre] = useState<[number, number]>(() => (props.prop ? par(props.prop) : razaoSimples(props.w, props.h)));
   const mudaRazao = (a: number, b: number) => {
     const ra = Math.max(1, Math.min(64, Math.round(a) || 1)), rb = Math.max(1, Math.min(64, Math.round(b) || 1));
@@ -66,9 +101,10 @@ export default function SeletorFormato(props: {
         ))}
         <button onClick={() => { if (!livreAtivo) setRazaoLivre(props.prop ? par(props.prop) : razaoSimples(props.w, props.h)); setLivre(true); }}
                 title="Personalizado: escolha uma proporção qualquer (5:7, 3:2…)"
+                onPointerEnter={() => setSobreLivre(true)} onPointerLeave={() => setSobreLivre(false)}
                 className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${livreAtivo ? aceso : apagado}`}>
           <span className="flex h-5 items-center justify-center">
-            <span className="block rounded-[3px] border-[1.5px] border-dashed border-current transition-[width,height] duration-200 ease-[cubic-bezier(.2,0,0,1)]"
+            <span className={`block rounded-[3px] border-[1.5px] border-dashed border-current transition-[width,height] duration-200 ease-[cubic-bezier(.2,0,0,1)] ${truque}`}
                   style={livreAtivo ? { width: razaoLivre[0] * escala, height: razaoLivre[1] * escala } : { width: 22, height: 15 }} />
           </span>
           <span className={livreAtivo ? "font-mono text-[10.5px]" : "text-[10.5px]"}>{livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : "Livre"}</span>
