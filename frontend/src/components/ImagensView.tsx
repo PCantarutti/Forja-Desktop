@@ -922,7 +922,7 @@ function Ajustes(props: {
   // o tamanho nativo dos modelos marcados diz até onde a resolução vai bem
   const nativo = Math.max(0, ...st.image_models.filter((m) => props.models.includes(m.path)).map((m) => Math.min(m.params?.width ?? 0, m.params?.height ?? 0)));
   return (
-    <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side text-xs">
+    <aside className="flex w-[300px] shrink-0 flex-col overflow-hidden border-l border-line bg-side text-xs">
       <div className="flex items-center gap-2 px-4 pt-4 pb-1.5">
         <span className="text-[13px] font-semibold text-fg">Parâmetros</span>
         <span className="ml-auto" />
@@ -934,7 +934,7 @@ function Ajustes(props: {
           <X className="size-3.5" />
         </button>
       </div>
-      <div className="flex flex-col gap-[18px] px-4 pt-1.5 pb-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-4 pt-1.5 pb-4">
         <Secao titulo="Modelos" dica="divide as variações">
           <div className="flex flex-col gap-0.5 rounded-[10px] border border-line bg-surface p-1.5">
             {!st.image_models.length && <span className="px-1.5 py-1 text-faint">Nenhum modelo de imagem nas pastas.</span>}
@@ -1017,7 +1017,8 @@ function Ajustes(props: {
           </Secao>
         </div>
 
-        <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3 text-[11.5px] text-muted">
+      </div>
+      <div className="flex shrink-0 flex-col gap-2 border-t border-line px-4 py-3 text-[11.5px] text-muted">
           <div className="flex items-center gap-1.5">
             <span className="shrink-0">Salvar em</span>
             <input value={o.out_dir || st.image_dir} onChange={(e) => set("out_dir", e.target.value)} spellCheck={false}
@@ -1033,8 +1034,10 @@ function Ajustes(props: {
           </div>
           <label className="flex items-center gap-1.5" title="0 = guardar para sempre. Vale para imagens e vídeos descartados.">
             Descartadas somem em
-            <input type="number" min={0} value={o.descarte_dias} onChange={(e) => salvarPrazo(Number(e.target.value))}
-                   className={`${numeroPilula} font-mono text-fg-2`} style={larguraNumero(o.descarte_dias)} />
+<label data-arrasta data-passo={1} className="rounded-[8px] border border-line bg-surface px-2 py-0.5 focus-within:border-focus">
+              <input type="number" min={0} max={365} step={1} value={o.descarte_dias} aria-label="Dias até apagar as descartadas" onChange={(e) => salvarPrazo(Number(e.target.value))}
+                     className={`${numeroCaixa} w-8 text-center`} />
+            </label>
             {o.descarte_dias === 1 ? "dia" : "dias"}
           </label>
           <div className="flex items-center gap-2">
@@ -1043,7 +1046,6 @@ function Ajustes(props: {
             </button>
             {limpando && <span className="text-faint">{limpando}</span>}
           </div>
-        </div>
       </div>
     </aside>
   );

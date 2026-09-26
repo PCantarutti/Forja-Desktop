@@ -992,7 +992,7 @@ function AjustesVideo(props: {
   const fracao = gbGpu ? Math.min(1, gbModelo / gbGpu) : 0;
 
   return (
-    <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side text-xs">
+    <aside className="flex w-[300px] shrink-0 flex-col overflow-hidden border-l border-line bg-side text-xs">
       <div className="flex items-center gap-2 px-4 pt-4 pb-1.5">
         <span className="text-[13px] font-semibold text-fg">Parâmetros</span>
         <button onClick={props.onSalvarPadrao} title="Estes ajustes viram o padrão da aba e da ferramenta de vídeo do agente"
@@ -1003,7 +1003,7 @@ function AjustesVideo(props: {
           <X className="size-3.5" />
         </button>
       </div>
-      <div className="flex flex-col gap-[18px] px-4 pt-1.5 pb-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-4 pt-1.5 pb-4">
         <Secao titulo="Modelo">
           <div className="flex flex-col gap-[7px] rounded-[10px] border border-line bg-surface px-[11px] py-2.5">
             <button onClick={() => setListaAberta((v) => !v)} className="flex items-center gap-2 text-left" title={atual?.path}>
@@ -1192,8 +1192,8 @@ function AjustesVideo(props: {
               )}
             </>
         </div>
-        <RodapeVideo st={st} onError={props.onError} />
       </div>
+      <RodapeVideo st={st} onError={props.onError} />
     </aside>
   );
 }
@@ -1234,7 +1234,7 @@ function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
     }
   }
   return (
-    <div className="mt-2 flex flex-col gap-2 border-t border-line pt-3 text-[11.5px] text-muted">
+    <div className="flex shrink-0 flex-col gap-2 border-t border-line px-4 py-3 text-[11.5px] text-muted">
       <div className="flex items-center gap-1.5">
         <span className="shrink-0">Salvar em</span>
         <input value={pasta} onChange={(e) => setPasta(e.target.value)} spellCheck={false} title={pasta}
@@ -1250,8 +1250,10 @@ function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
       </div>
       <label className="flex items-center gap-1.5" title="0 = guardar para sempre. Vale para imagens e vídeos descartados.">
         Descartadas somem em
-        <input type="number" min={0} value={dias} onChange={(e) => prazo(Number(e.target.value))}
-               className="bg-transparent text-right font-mono text-fg-2 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none" style={{ width: `${String(dias).length + 0.6}ch` }} />
+<label data-arrasta data-passo={1} className="rounded-[8px] border border-line bg-surface px-2 py-0.5 focus-within:border-focus">
+              <input type="number" min={0} max={365} step={1} value={dias} aria-label="Dias até apagar as descartadas" onChange={(e) => prazo(Number(e.target.value))}
+                     className={`${numeroCaixa} w-8 text-center`} />
+            </label>
         {dias === 1 ? "dia" : "dias"}
       </label>
       <div className="flex items-center gap-2">
