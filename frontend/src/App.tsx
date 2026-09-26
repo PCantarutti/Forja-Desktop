@@ -2218,9 +2218,9 @@ export default function App() {
       {/* Área de conteúdo: faixa superior com os botões do painel (como a barra de janela do Claude Desktop),
           e embaixo o chat com o painel lateral abrindo à direita, logo abaixo dos botões. */}
       <div className="flex min-w-0 flex-1 flex-col bg-bg">
-        <div className={`arrasta livre-controles @container/cab grid h-12 shrink-0 grid-cols-[minmax(0,1fr)_minmax(0,auto)_max-content] items-center gap-3 px-3 ${sidebarHidden ? "pl-12" : ""}`}>
+        <div className={`arrasta livre-controles cab-centro @container/cab grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 px-3`}>
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
-          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          <div className={`flex min-w-0 flex-1 items-center gap-2 overflow-hidden ${sidebarHidden ? "pl-9" : ""}`}>
           <span className="min-w-12 truncate text-sm font-medium text-fg" title={conv?.title}>
             {conv?.title ?? "Nova conversa"}
           </span>
@@ -2263,8 +2263,8 @@ export default function App() {
           )}
           {picking && <span className="text-xs text-muted">Escolha a pasta na janela do sistema (pode estar atrás do navegador).</span>}
           </div>
-          {/* Indicador da IA local entre o título e os botões: coluna própria, para não cair por cima deles
-              quando a janela estreita (o título é quem encolhe). */}
+          {/* Indicador da IA local no centro do cabeçalho: as laterais são 1fr iguais, então ele só sai do
+              meio quando os botões da direita não cabem na metade deles (em vez de cair por cima). */}
           <ModeloCarregado />
           <RightTabsBar
             abertos={soltos(gradeTela)}

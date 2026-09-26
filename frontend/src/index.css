@@ -248,7 +248,11 @@ select option, select optgroup { background: var(--color-surface); color: var(--
    variáveis titlebar-area-* só existem com a sobreposição ativa: no navegador comum vira padding 0. */
 .arrasta { -webkit-app-region: drag; }
 .arrasta :is(button, a, input, select, textarea, [role="tab"], [role="button"], [role="separator"]) { -webkit-app-region: no-drag; }
-.livre-controles { padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 0.75rem); }
+.livre-controles { --controles: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)); padding-right: calc(var(--controles) + 0.75rem); }
+/* Cabeçalho com item no centro exato: o recuo dos botões da janela é espelhado na esquerda e a primeira
+   coluna ocupa esse espelho de volta (margem negativa), então as laterais da grade ficam simétricas. */
+.cab-centro { padding-left: calc(var(--controles) + 0.75rem); }
+.cab-centro > :first-child { margin-left: calc(-1 * var(--controles)); }
 body { background: var(--color-bg); color: var(--color-fg); font-family: var(--font-sans); -webkit-font-smoothing: antialiased; }
 code, kbd, pre, samp { font-family: var(--font-mono); }
 /* Movimento do design: 120–150 ms, sem bounce. */
