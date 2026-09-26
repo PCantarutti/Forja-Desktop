@@ -378,7 +378,8 @@ export default function PesquisaView(props: {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-4xl flex-col gap-3">
+        <div className="mx-auto flex max-w-6xl flex-col items-start gap-3 xl:flex-row">
+        <div className="flex w-full min-w-0 flex-1 flex-col gap-3">
           {!estado && (
             <div className={`${card} text-xs text-muted`}>
               <p className="text-sm text-fg">Uma pergunta, várias páginas lidas, um relatório com fontes.</p>
@@ -481,35 +482,36 @@ export default function PesquisaView(props: {
                   </span>
                 </div>
               )}
-              {!!estado.fontes.length && (
-                <div className={card}>
-                  <p className="mb-2 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Fontes · {estado.fontes.length}</p>
-                  {estado.fontes.map((f) => (
-                    <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
-                      <div className="flex items-center gap-2">
-                        <button className="min-w-0 flex-1 truncate text-left text-fg hover:underline"
-                                onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
-                          {f.titulo}
-                        </button>
-                        <span className="shrink-0 font-mono text-[11px] text-faint">{f.dominio}</span>
-                        <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
-                        <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
-                           className="shrink-0 text-faint hover:text-fg">
-                          <ExternalLink className="size-3.5" />
-                        </a>
-                      </div>
-                      {aberta === f.id && (
-                        <div className="mt-1 border-l border-line pl-3 text-muted">
-                          <p>{f.resumo || f.erro || "Sem resumo."}</p>
-                          {f.trecho && <p className="mt-1 italic text-faint">“{f.trecho}”</p>}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
 
             </>
+          )}
+        </div>
+          {estado && !!estado.fontes.length && (
+            <aside className={`${card} w-full shrink-0 xl:sticky xl:top-0 xl:w-[300px]`}>
+              <p className="mb-2 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Fontes · {estado.fontes.length}</p>
+              {estado.fontes.map((f) => (
+                <div key={f.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
+                  <button className="line-clamp-2 w-full text-left text-fg hover:underline"
+                          onClick={() => setAberta(aberta === f.id ? "" : f.id)}>
+                    {f.titulo}
+                  </button>
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint">{f.dominio}</span>
+                    <span className={`shrink-0 ${CORES[f.status]}`}>{ROTULOS[f.status]}</span>
+                    <a href={f.url} target="_blank" rel="noreferrer" title="Abrir a página"
+                       className="shrink-0 text-faint hover:text-fg">
+                      <ExternalLink className="size-3.5" />
+                    </a>
+                  </div>
+                  {aberta === f.id && (
+                    <div className="mt-1 border-l border-line pl-3 text-muted">
+                      <p>{f.resumo || f.erro || "Sem resumo."}</p>
+                      {f.trecho && <p className="mt-1 italic text-faint">“{f.trecho}”</p>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </aside>
           )}
         </div>
       </div>
