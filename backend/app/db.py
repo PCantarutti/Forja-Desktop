@@ -98,6 +98,17 @@ class Checkpoint(Base):
     created_at: Mapped[datetime] = mapped_column(default=_now)
 
 
+class Metrica(Base):
+    """E10: um evento por linha (tarefa, ferramenta, resposta do LLM, rota da como_rodar, troca de modelo,
+    recuperação de loop...). `dados` varia por tipo; a tela de métricas agrega."""
+    __tablename__ = "metricas"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    t: Mapped[datetime] = mapped_column(default=_now, index=True)
+    tipo: Mapped[str] = mapped_column(String(30), index=True)
+    conv_id: Mapped[int | None] = mapped_column(nullable=True)
+    dados: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class AppSetting(Base):
     """Configurações editadas na UI. Só existem aqui as chaves que o usuário mudou."""
     __tablename__ = "app_settings"

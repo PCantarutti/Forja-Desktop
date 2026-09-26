@@ -2032,6 +2032,8 @@ async def _execute(conv_id: int, call: dict, req: RunRequest, run: Run,
 
 
 def _save_result(conv_id: int, call: dict, out: dict) -> dict:
+    metricas.registra("ferramenta", conv=conv_id, nome=call["name"], status=out.get("status") or "erro",
+                      segundos=(out.get("meta") or {}).get("segundos"))  # E10
     m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"],
               status=out.get("status") or "erro", content=out.get("text") or "",
               meta=out.get("meta") or {"arguments": call["arguments"]})

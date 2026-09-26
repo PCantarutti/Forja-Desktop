@@ -1139,16 +1139,16 @@ Como ficou:
 **Por quê:** 5/10. Há números por resposta, mas nada responde "o Maestro melhorou?".
 **Depende de:** E0. Idealmente é a última entrega, para repetir o bench.
 
-- [ ] **Tabela `metricas` no SQLite**, com uma linha por evento:
+- [x] **Tabela `metricas` no SQLite**, com uma linha por evento:
   - tarefa concluída ou falha (tentativas, tempo, modelo);
   - chamada de ferramenta (nome, ok ou erro, segundos);
   - resposta (tokens de prompt, completion e cache);
   - chamada auxiliar (papel, caminho escolhido pela `como_rodar` e motivo);
   - **cache perdido por turno do principal** (`prompt_n` − `cache_n`), com qual chamada auxiliar rodou
     antes.
-- [ ] **Log estruturado.** Um `logging` com JSON por linha em `FORJA_DATA/logs/agente.jsonl`, com
+- [x] **Log estruturado.** Um `logging` com JSON por linha em `FORJA_DATA/logs/agente.jsonl`, com
       rotação. Hoje só o `lotes.py` loga.
-- [ ] **Tela de métricas** (ou uma aba nas configurações) com:
+- [x] **Tela de métricas** (ou uma aba nas configurações) com:
   - taxa de sucesso de tarefa na 1ª tentativa;
   - tentativas médias;
   - taxa de `needs_human`;
@@ -1159,6 +1159,16 @@ Como ficou:
   - ferramentas que mais falham.
 - [ ] **Repetir o bench da E0** nas duas configurações e salvar como `docs/bench/<data>-final.json`,
       comparando com o baseline.
+
+**Feito (2026-09-26):** tabela `metricas` (`db.Metrica`: tipo, conversa, dados JSON; poda de 60 dias na
+abertura), com os eventos `llm` (timings do llama-server: `reprocessados`/`cache_n`, e `aux_antes` = a última
+chamada auxiliar antes deste turno do principal), `ferramenta`, `tarefa`, `rota`, `troca`, `kvcache`,
+`recuperacao`, `juiz`, `filtro_raciocinio`, `exploracao`. Log JSON por linha em `logs/agente.jsonl` com
+rotação (5 MB × 3); o `FORJA_METRICAS` do bench continua. `GET /api/metricas?dias=` e a aba Configurações ›
+Métricas. Validado com uma rodada real do Maestro: a tela mostrou 56% de sucesso na 1ª tentativa em 24 h,
+as rotas da `como_rodar` e a `session_note` como a ferramenta que mais falha (o Maestro tenta encerrar antes
+de validar). O cache do principal só aparece com IA local (a nuvem não manda os timings). **Falta:**
+repetir o bench da E0 (horas de GPU).
 
 **Pronto quando:** existe um número de antes e de depois para o pipeline inteiro.
 

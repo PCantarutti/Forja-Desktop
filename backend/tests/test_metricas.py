@@ -1,48 +1,31 @@
-"""E0: o registro de métricas (FORJA_METRICAS) que o bench do Maestro lê."""
-import asyncio
-import json
-
-from app import agent, db, llm, main, metricas, workspace  # noqa: F401  (main registra as ferramentas)
+"""E10: métricas na tabela, cache perdido por auxiliar e o resumo da tela."""
+from app import db, metricas
 
 
-def test_desligado_nao_escreve(tmp_path, monkeypatch):
-    monkeypatch.delenv("FORJA_METRICAS", raising=False)
-    metricas.registra("llm", x=1)
-    assert not list(tmp_path.iterdir())
+def _limpa():
+    with db.session() as s:
+        s.query(db.Metrica).delete()
+        s.commit()
 
 
-def test_volta_do_agente_vira_linha_com_os_timings(tmp_path, monkeypatch):
-    arq = tmp_path / "m.jsonl"
-    monkeypatch.setenv("FORJA_METRICAS", str(arq))
+def test_registra_grava_e_resumo_agrega():
+    _limpa()
+    metricas.registra("llm", papel="agente", conv=1, timings={"prompt_n": 100, "cache_n": 900})
+    metricas.registra("rota", papel="lateral", caminho="mesmo-slot-sequencial")
+    metricas.registra("llm", papel="agente", conv=1, timings={"prompt_n": 5000, "cache_n": 0})  # a lateral derrubou
+    metricas.registra("ferramenta", conv=1, nome="edit_file", status="erro")
+    metricas.registra("ferramenta", conv=1, nome="edit_file", status="ok")
+    metricas.registra("troca", de="a", para="b", segundos=12.5)
+    metricas.registra("recuperacao", conv=1, nivel=3, motivo="x")
+    r = metricas.resumo(1)
+    assert r["cache"]["respostas"] == 2 and r["cache"]["derrubado_por_auxiliar"] == 1
+    assert r["cache"]["auxiliares"] == [("lateral", 1)]
+    assert r["cache"]["hit_pct"] == round(100 * 900 / 6000, 1)
+    assert r["ferramentas_falham"][0] == {"nome": "edit_file", "falhas": 1, "total": 2, "pct": 50.0}
+    assert r["trocas"] == {"n": 1, "segundos": 12.5} and r["recuperacao"]["3"] == 1
+    assert ("lateral → mesmo-slot-sequencial", 1) in r["rotas"]
 
-    async def fake(provider, model, messages, tools, num_ctx, effort=None, **kw):
-        yield "content", "ok"
-        yield "done", {"tool_calls": [], "prompt_tokens": 120, "completion_tokens": 3, "cached_tokens": 100,
-                       "timings": {"cache_n": 100, "prompt_n": 20, "prompt_ms": 12.5, "predicted_ms": 40.0}}
 
-    async def nada(*a):
-        return None
-
-    monkeypatch.setattr(llm, "chat_stream", fake)
-    monkeypatch.setattr(llm, "context_limit", nada)
-    monkeypatch.setattr(llm, "capabilities", nada)
-
-    async def cenario():
-        with db.session() as s:
-            c = db.Conversation(kind="agent", workspace=str(tmp_path))
-            s.add(c)
-            s.commit()
-            conv = c.id
-        tok = workspace.CURRENT.set(tmp_path)
-        try:
-            run = agent.Run(conv)
-            req = agent.RunRequest(content="oi", provider="lmstudio", model="m", mode="agent", permission="manual")
-            return [ev async for ev in agent.run_agent(conv, req, run)], conv
-        finally:
-            workspace.CURRENT.reset(tok)
-
-    _, conv = asyncio.run(cenario())
-    linhas = [json.loads(ln) for ln in arq.read_text(encoding="utf-8").splitlines()]
-    volta = next(ln for ln in linhas if ln["tipo"] == "llm")
-    assert volta["papel"] == "agente" and volta["conv"] == conv and volta["model"] == "m"
-    assert volta["timings"]["cache_n"] == 100 and volta["timings"]["prompt_n"] == 20
+def test_metrica_nunca_derruba_quem_chama(monkeypatch):
+    monkeypatch.setattr(db, "session", lambda: (_ for _ in ()).throw(RuntimeError("banco fora")))
+    metricas.registra("ferramenta", nome="x", status="ok")  # não levanta

@@ -22,7 +22,7 @@ from sqlalchemy import func, or_, select
 from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
-               kvcache, localai, lotes, lsp,
+               kvcache, localai, lotes, lsp, metricas,
                mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
@@ -48,6 +48,7 @@ async def lifespan(_app):
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
+    metricas.poda()  # E10: métricas com mais de 60 dias
     shell.limpa_logs()  # logs de comando e servidor com mais de 7 dias em %TEMP%\forja-serve
     # Guardadas em `vivas` pelo mesmo motivo de pesquisa/comparar: o loop só tem referência fraca.
     vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
@@ -783,6 +784,12 @@ def conversa_autonomo_define(conv_id: int, body: AutonomoBody):
     from . import autonomo
     autonomo.define(conv_id, body.ligado)
     return {"ligado": autonomo.ligado(conv_id), "opcoes": autonomo.opcoes()}
+
+
+@app.get("/api/metricas")
+async def metricas_resumo(dias: int = 7):
+    """E10: o que a tela de métricas mostra (sucesso na 1ª tentativa, cache do principal, rotas, trocas...)."""
+    return await asyncio.to_thread(metricas.resumo, max(1, min(dias, 60)))
 
 
 @app.get("/api/perfil/workers")

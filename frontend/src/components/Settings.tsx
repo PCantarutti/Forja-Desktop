@@ -1,3 +1,4 @@
+import Metricas from "./Metricas";
 import { useEffect, useState } from "react";
 import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { api } from "../api";
@@ -75,7 +76,7 @@ type Memory = {
   raw?: string;
 };
 
-const BASE_TABS = ["Aplicativo", "Tema", "Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular"] as const;
+const BASE_TABS = ["Aplicativo", "Tema", "Geral", "Pastas", "Runtime", "Hardware", "Provedores", "Subagentes", "Maestro", "Ferramentas", "Skills", "Permissões", "MCP", "Memória", "Celular", "Métricas"] as const;
 type Tab = (typeof BASE_TABS)[number];
 // Navegação agrupada do redesign. "Tema" (cores e fonte) vale no desktop e na web; janela, bandeja e
 // início com o Windows (em "Aplicativo") só aparecem dentro do Electron.
@@ -85,6 +86,7 @@ const GRUPOS: { titulo: string; tabs: Tab[] }[] = [
   { titulo: "Modelos", tabs: ["Provedores", "Subagentes", "Maestro"] },
   { titulo: "Agente", tabs: ["Ferramentas", "Skills", "Permissões", "MCP", "Memória"] },
   { titulo: "Integrações", tabs: ["Celular"] },
+  { titulo: "Uso", tabs: ["Métricas"] },
 ];
 
 // O subtítulo ao lado do nome da aba, no cabeçalho (como no design).
@@ -95,6 +97,7 @@ const SUBTITULO: Partial<Record<Tab, string>> = {
   Pastas: "Onde as coisas ficam",
   Runtime: "llama.cpp e stable-diffusion.cpp",
   Hardware: "O que o motor atual enxerga",
+  Métricas: "O Maestro melhorou? Tarefas, cache, rotas e falhas",
   Provedores: "Onde os modelos rodam",
   Subagentes: "delegate_task: o agente escolhe o nível",
   Maestro: "Planeja, despacha e valida",
@@ -321,6 +324,8 @@ export default function Settings(props: {
               <RuntimeTab onError={setError} />
             ) : tab === "Hardware" ? (
               <HardwareTab onError={setError} />
+            ) : tab === "Métricas" ? (
+              <Metricas onError={setError} />
             ) : tab === "Celular" ? (
               <CelularTab onError={setError} />
             ) : !s ? (
@@ -426,7 +431,7 @@ export default function Settings(props: {
             <button onClick={props.onClose} className={btn}>
               {Object.keys(dirty).length ? "Cancelar" : "Fechar"}
             </button>
-            {!["MCP", "Memória", "Aplicativo", "Tema", "Pastas", "Runtime", "Hardware", "Skills"].includes(tab) && (
+            {!["MCP", "Memória", "Aplicativo", "Tema", "Pastas", "Runtime", "Hardware", "Skills", "Métricas"].includes(tab) && (
               <button className={btnPrimary} disabled={busy || !Object.keys(dirty).length} onClick={() => save()}>
                 Salvar
               </button>

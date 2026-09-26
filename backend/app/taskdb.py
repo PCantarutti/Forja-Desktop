@@ -709,7 +709,13 @@ def finish_attempt(attempt_id: int, status: str, result: dict | None = None,
         if result is not None and (task := s.get(db.Task, att.task_id)):
             task.result = result
             task.updated_at = _now()
+        task = s.get(db.Task, att.task_id)
         s.commit()
+        dados = {"tarefa": task.code if task else None, "conv": task.conversation_id if task else None,
+                 "status": status, "tentativa": task.attempt_count if task else None,
+                 "segundos": att.seconds, "tokens": att.tokens, "modelo": (att.worker or {}).get("model")}
+    from . import metricas  # E10: fora da sessão, que a métrica abre a própria
+    metricas.registra("tarefa", **dados)
 
 
 def save_transcript(attempt_id: int, transcript: list) -> None:
