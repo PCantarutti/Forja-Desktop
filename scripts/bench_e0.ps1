@@ -11,6 +11,7 @@ $log = "..\.devbench\bench_e0.log"
 New-Item -ItemType Directory -Force ..\.devbench | Out-Null
 $saida = "docs\bench\2026-09-baseline.json"
 $qwen = "Qwen3.6-35B-A3B-Q4_K_M"
+$final = "docs\bench\2026-09-26-final.json"
 foreach ($e in $Etapas) {
     "=== $e $(Get-Date -Format s)" | Out-File $log -Append -Encoding utf8
     switch ($e) {
@@ -18,6 +19,11 @@ foreach ($e in $Etapas) {
         "b"     { & $py scripts\bench_maestro.py --maestro $qwen --worker Ornith-1.5-9B-Q4_K_M --rotulo b-modelos-diferentes --saida $saida --timeout 150 2>&1 | Out-File $log -Append -Encoding utf8 }
         "a-f16" { & $py scripts\bench_maestro.py --maestro $qwen --worker $qwen --rotulo a-mesmo-modelo-kv-f16 --kv f16 --saida "docs\bench\2026-09-kvcache.json" --timeout 150 2>&1 | Out-File $log -Append -Encoding utf8 }
         "kv"    { & $py scripts\bench_kvcache.py 2>&1 | Out-File $log -Append -Encoding utf8 }
+        # Fechamento (E10), paralelo (E7) e sandbox (E12), com o código de agora
+        "fa"    { & $py scripts\bench_maestro.py --maestro $qwen --worker $qwen --rotulo final-a-mesmo-modelo --saida $final --timeout 150 2>&1 | Out-File $log -Append -Encoding utf8 }
+        "fb"    { & $py scripts\bench_maestro.py --maestro $qwen --worker Ornith-1.5-9B-Q4_K_M --rotulo final-b-modelos-diferentes --saida $final --timeout 150 2>&1 | Out-File $log -Append -Encoding utf8 }
+        "fw2"   { & $py scripts\bench_maestro.py --maestro $qwen --worker $qwen --rotulo final-2-workers --workers 2 --saida $final --timeout 150 2>&1 | Out-File $log -Append -Encoding utf8 }
+        "fsb"   { & $py scripts\bench_maestro.py --maestro $qwen --worker $qwen --rotulo final-sandbox --sandbox --saida $final --timeout 150 2>&1 | Out-File $log -Append -Encoding utf8 }
     }
 }
 "=== fim $(Get-Date -Format s)" | Out-File $log -Append -Encoding utf8

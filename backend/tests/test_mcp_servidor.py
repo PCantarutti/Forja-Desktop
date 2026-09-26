@@ -175,7 +175,7 @@ def test_mensagem_com_o_run_do_claude_aberto_vai_para_a_caixa(servidor, ligado):
     from fastapi.testclient import TestClient
     with TestClient(main.app) as c:
         r = c.post(f"/api/runs/{run.id}/queue", json={"content": "use pytest, não unittest"},
-                   headers={"x-forja-token": config.API_TOKEN} if config.API_TOKEN else {})
+                   headers={"x-forja-token": config.API_TOKEN} if getattr(config, "API_TOKEN", "") else {})
         assert r.status_code == 200 and r.json()["claude"] is True
     assert run.queue == [] and mcp_servidor.caixa(conv, marcar=False) == ["use pytest, não unittest"]
 

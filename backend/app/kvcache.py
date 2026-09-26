@@ -37,8 +37,8 @@ def pasta() -> Path:
 
 def tipo_de_cache(path: str) -> str:
     """comum | swa | hibrido, pelas camadas do GGUF."""
-    from . import localai
     try:
+        from . import localai
         tipos = {c.get("kind") for c in localai.gguf_info(path).get("layers") or []}
     except Exception:
         return "comum"
@@ -70,7 +70,10 @@ def limite_bytes() -> int:
 # ------------------------------------------------------------------ chave e arquivos
 
 def _estado() -> dict:
-    from . import localai
+    try:  # sem o llama.cpp embutido (Forja em Docker) não há slot para salvar
+        from . import localai
+    except ImportError:
+        return {}
     return localai.status()
 
 

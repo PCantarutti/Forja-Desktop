@@ -645,9 +645,9 @@ def test_run_task_so_paraleliza_fora_do_modo_sequencial(monkeypatch):
 
 def test_limite_de_workers_acompanha_a_configuracao(monkeypatch):
     """O semáforo fica em cache: sem o limite na chave, mudar MAX_WORKERS não teria efeito."""
-    from app import localai, perfis
+    from app import modelctl, perfis
     monkeypatch.setattr(config, "PERFIL_HARDWARE", "performance")
-    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    monkeypatch.setattr(modelctl, "localai", None)  # sem servidor local: só o teto do perfil vale
     perfis.reavaliar()
     try:
         monkeypatch.setattr(config, "MAX_WORKERS", 2)

@@ -7,6 +7,8 @@
   Forja do usuário nem na instância de validação.
 - Os parâmetros de carga de cada modelo vêm do local.json do usuário (%APPDATA%\\Forja), com a janela que
   o papel exige (Maestro >= 32k). O runtime do llama.cpp é copiado de lá.
+- `--instancia`: roda numa instância do Forja já aberta (a de validação, 8799), para acompanhar na tela. A instância
+  precisa ter subido com FORJA_METRICAS apontando para `--metricas`; o banco é o dela, filtrado pela conversa.
 - Mede pelo FORJA_METRICAS (app/metricas.py): cada volta do Maestro e do Worker com os timings do llama-server
   e cada troca de modelo. O resto vem do banco (tarefas, tentativas) e da suíte de aceite escondida.
 """
@@ -110,8 +112,9 @@ def roda_aceite(projeto: Path) -> dict:
     return {"suite_do_projeto": proprio, "aceite": aceite}
 
 
-def resumo_metricas(arq: Path) -> dict:
+def resumo_metricas(arq: Path, desde: float = 0) -> dict:
     eventos = [json.loads(ln) for ln in arq.read_text(encoding="utf-8").splitlines()] if arq.exists() else []
+    eventos = [e for e in eventos if e.get("t", 0) >= desde]  # arquivo da instância: só os deste bench
     llm = [e for e in eventos if e["tipo"] == "llm"]
     trocas = [e for e in eventos if e["tipo"] == "troca"]
 
@@ -146,17 +149,20 @@ def resumo_metricas(arq: Path) -> dict:
                 "ms_reprocessando_total": sum(p["prompt_ms"] for p in perdido), "voltas": perdido}}
 
 
-def resumo_banco(db: Path) -> dict:
+def resumo_banco(db: Path, conv: int | None = None) -> dict:
     c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    onde = f" where conversation_id = {int(conv)}" if conv else ""
     tarefas = [dict(zip(("code", "title", "status", "attempt_count"), r))
-               for r in c.execute("select code, title, status, attempt_count from tasks order by id")]
-    tentativas = c.execute("select count(*), coalesce(sum(seconds),0) from attempts").fetchone()
+               for r in c.execute(f"select code, title, status, attempt_count from tasks{onde} order by id")]
+    tentativas = c.execute("select count(*), coalesce(sum(a.seconds),0) from attempts a join tasks t on t.id = a.task_id"
+                           + (f" where t.conversation_id = {int(conv)}" if conv else "")).fetchone()
     return {"tarefas": len(tarefas), "por_status": {s: sum(t["status"] == s for t in tarefas)
                                                      for s in sorted({t["status"] for t in tarefas})},
             "needs_human": sum(t["status"] == "needs_human" for t in tarefas),
             "tentativas_total": tentativas[0], "segundos_nos_workers": round(tentativas[1], 1),
             "tentativas_por_tarefa": {t["code"]: t["attempt_count"] for t in tarefas}, "lista": tarefas,
-            "features": [dict(zip(("title", "status"), r)) for r in c.execute("select title, status from features")]}
+            "features": [dict(zip(("title", "status"), r)) for r in c.execute(
+                "select title, status from features" + (f" where conversation_id = {int(conv)}" if conv else ""))]}
 
 
 def main() -> None:
@@ -168,30 +174,51 @@ def main() -> None:
     ap.add_argument("--timeout", type=int, default=150, help="minutos")
     ap.add_argument("--kv", default="", help="cache_type_k/v para os dois modelos (ex.: f16, q8_0); vazio = o do usuário")
     ap.add_argument("--effort", default="medio")
+    ap.add_argument("--workers", type=int, default=1, help="Workers em paralelo (E7): abre N+1 slots e usa o perfil Balanced")
+    ap.add_argument("--sandbox", action="store_true", help="comandos no sandbox isolado (E12), modo 'sempre'")
+    ap.add_argument("--instancia", default="", help="URL da API de uma instância aberta (ex.: http://127.0.0.1:8799)")
+    ap.add_argument("--token", default="", help="x-forja-token da instância")
+    ap.add_argument("--metricas", default="", help="arquivo FORJA_METRICAS com que a instância subiu")
+    ap.add_argument("--db", default="", help="forja.db da instância")
     a = ap.parse_args()
 
     modelos = {"maestro": acha_gguf(a.maestro), "worker": acha_gguf(a.worker)}
     extra = {"cache_type_k": a.kv, "cache_type_v": a.kv} if a.kv else {}
+    if a.workers > 1:
+        extra["parallel"] = a.workers + 1  # o slot 0 é do Maestro
     dados = RAIZ.parent / ".devbench" / f"{a.rotulo}-{datetime.now():%Y%m%d-%H%M%S}"
-    prepara_dados(dados, modelos, extra)
+    if a.instancia:
+        dados.mkdir(parents=True)
+        proc, token, metricas = None, a.token, Path(a.metricas)
+        api = httpx.Client(base_url=f"{a.instancia.rstrip('/')}/api", headers={"x-forja-token": token}, timeout=120)
+        api.post("/local/unload")  # carrega de novo com os parâmetros do bench
+        for papel, caminho in modelos.items():
+            atual = api.post("/local/model", json={"path": str(caminho), "params": {}}).json().get("params") or {}
+            api.put("/local/params", json={"path": str(caminho), "params": {
+                **atual, "ctx": max(int(atual.get("ctx") or 0), CTX[papel]), **extra}}).raise_for_status()
+    else:
+        prepara_dados(dados, modelos, extra)
+        token, metricas = secrets.token_hex(16), dados / "metricas.jsonl"
+        proc = sobe_backend(dados, token, metricas)
+        api = httpx.Client(base_url=f"http://127.0.0.1:{PORTA_API}/api", headers={"x-forja-token": token}, timeout=120)
     projeto = dados / "ws" / "bench-tarefas"
     prepara_projeto(projeto)
-    token, metricas = secrets.token_hex(16), dados / "metricas.jsonl"
-    proc = sobe_backend(dados, token, metricas)
-    api = httpx.Client(base_url=f"http://127.0.0.1:{PORTA_API}/api", headers={"x-forja-token": token}, timeout=120)
     alias = {p: m.stem for p, m in modelos.items()}
     inicio = time.time()
     resultado: dict = {"rotulo": a.rotulo, "quando": datetime.now().isoformat(timespec="seconds"),
                        "maestro": alias["maestro"], "worker": alias["worker"], "kv": a.kv or "do usuário",
-                       "effort": a.effort, "dados": str(dados)}
+                       "effort": a.effort, "dados": str(dados), "workers": a.workers, "sandbox": a.sandbox}
     try:
         worker = {"provider": "local", "model": alias["worker"]}
         r = api.put("/settings", json={"maestro_model": {"provider": "local", "model": alias["maestro"]},
                                        "subagents": {"rapido": worker, "capaz": worker, "nuvem": worker},
-                                       "max_workers": 1, "maestro_browser": False, "model_lifecycle": "persistent",
-                                       "sandbox_isolado": "desligado"})
+                                       "max_workers": a.workers, "maestro_browser": False, "model_lifecycle": "persistent",
+                                       "sandbox_isolado": "sempre" if a.sandbox else "desligado",
+                                       **({"perfil_hardware": "balanced"} if a.workers > 1 else {})})
         r.raise_for_status()
         conv = api.post("/conversations", json={"kind": "maestro", "workspace": str(projeto)}).json()["id"]
+        api.patch(f"/conversations/{conv}", json={"title": f"Bench: {a.rotulo}"})
+        print(f"conversa {conv}", flush=True)
         pedido = (BENCH / "pedido.md").read_text(encoding="utf-8")
         with api.stream("POST", f"/conversations/{conv}/run", json={
                 "content": pedido, "provider": "local", "model": alias["maestro"], "permission": "bypass",
@@ -223,9 +250,11 @@ def main() -> None:
                 break
         resultado.update(estado=estado, relogio_s=round(time.time() - inicio, 1), aprovacoes_pedidas=aprovacoes)
     finally:
-        derruba(proc)
+        if proc is not None:
+            derruba(proc)
         time.sleep(3)
-    resultado.update(banco=resumo_banco(dados / "forja.db"), metricas=resumo_metricas(metricas),
+    resultado.update(banco=resumo_banco(Path(a.db) if a.instancia else dados / "forja.db", conv if a.instancia else None),
+                     metricas=resumo_metricas(metricas, inicio if a.instancia else 0),
                      testes=roda_aceite(projeto))
     geracao = sum(p["segundos"] for p in resultado["metricas"]["por_papel"].values())
     resultado["resumo"] = {
