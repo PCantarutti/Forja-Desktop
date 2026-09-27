@@ -57,7 +57,7 @@ def test_argv_traduz_os_controles_avancados():
                 "--mmproj": "C:/m/mmproj.gguf"}  # --override-kv depende da arquitetura: teste separado
     for flag, valor in esperado.items():
         assert a[a.index(flag) + 1] == valor, flag
-    assert "--kv-unified" in a and "--mlock" in a and "--no-mmap" in a
+    assert "--kv-unified" in a and "--no-mmap" in a and "--mlock" not in a  # mlock sem mmap é ignorado
     assert "--no-kv-offload" not in a
 
 
@@ -82,7 +82,7 @@ def test_nao_manda_opcao_que_a_build_nao_conhece():
     p = {**localai.DEFAULT_PARAMS, "mlock": True, "mmap": False, "ctx_checkpoints": 32, "n_cpu_moe": 30}
 
     novo = localai.argv(Path("llama-server"), "m.gguf", p, NOVO)
-    assert novo[novo.index("--load-mode") + 1] == "mlock"  # mlock sem mmap
+    assert novo[novo.index("--load-mode") + 1] == "none"  # mlock sem mmap derruba o servidor: vira só sem mmap
     assert "--mlock" not in novo and "--no-mmap" not in novo
     assert "--ctx-checkpoints" in novo and "--n-cpu-moe" in novo
 
@@ -98,7 +98,7 @@ def test_load_mode_cobre_as_quatro_combinacoes():
         return a[a.index("--load-mode") + 1] if "--load-mode" in a else ""
 
     assert (modo(False, True), modo(True, True), modo(False, False), modo(True, False)) == (
-        "", "mmap+mlock", "none", "mlock")
+        "", "mmap+mlock", "none", "none")  # mlock sem mmap é ignorado (GGML_ASSERT no llama.cpp)
 
 
 def test_params_salvos_por_modelo(isolado):
