@@ -393,7 +393,9 @@ def plano(command: str, cwd: Path, root: Path | None) -> tuple[list[str], str, s
 
 
 def _nome() -> str:
-    return f"forja-sbx-{os.getpid()}-{_time.time_ns() % 10**12}"  # "forja-*" puro colide com o compose do forja-web
+    # "forja-*" puro colide com o compose do forja-web. Aleatório e não o relógio: no Windows o time_ns anda
+    # em saltos, e dois Workers rodando o verify no mesmo instante ganhavam o mesmo nome (docker: Conflict).
+    return f"forja-sbx-{os.getpid()}-{os.urandom(6).hex()}"
 
 
 def _caixa(root: Path) -> tuple[str, str, str]:

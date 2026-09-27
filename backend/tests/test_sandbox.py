@@ -283,3 +283,14 @@ def test_cache_de_pacotes_num_volume_do_linux(tmp_path, monkeypatch):
     saida = run_tool("run_command", {"command": "stat -c %u /cache/pip && df /cache | tail -1", "timeout": 120},
                      tmp_path)
     assert "wsl" in sandbox._VOLUME_OK and "1000" in saida and "9p" not in saida and "drvfs" not in saida
+
+def test_nome_do_container_nao_repete_entre_workers_ao_mesmo_tempo():
+    """Dois Workers no verify no mesmo instante: com o relógio no nome o Docker acusava Conflict."""
+    import threading as _th
+    nomes = []
+    ts = [_th.Thread(target=lambda: nomes.extend(sandbox._nome() for _ in range(200))) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len(set(nomes)) == 800 and all(n.startswith("forja-sbx-") for n in nomes)
