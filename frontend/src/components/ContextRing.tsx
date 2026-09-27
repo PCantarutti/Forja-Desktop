@@ -91,7 +91,7 @@ export default function ContextRing(props: {
                  title="Com o cache KV unificado, os slots do llama-server dividem um cache só: cada conversa pode crescer até o total, mas a soma de todas não passa dele.">
               <div className="flex items-center justify-between gap-3">
                 <span>Compartilhado</span>
-                <span className="text-fg">{fmtK(props.compartilhado.usado)} / {fmtK(props.compartilhado.total)}</span>
+                <span className="whitespace-nowrap text-fg">{fmtK(props.compartilhado.usado)} / {fmtK(props.compartilhado.total)}</span>
               </div>
               <div className="mt-1 flex h-1 overflow-hidden rounded-full bg-line">
                 <div className="h-full bg-accent" style={{ width: `${Math.min(100, (props.compartilhado.usado / props.compartilhado.total) * 100)}%` }} />
