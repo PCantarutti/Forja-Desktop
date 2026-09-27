@@ -1202,29 +1202,30 @@ def test_gpu_cuda_nao_ganha_env_do_vulkan(isolado):
     assert localai.vulkan_env(todas) == ({"GGML_VK_ASYNC_USE_TRANSFER_QUEUE": "1"}, {})
 
 
-def test_runtime_personalizado(isolado, monkeypatch, tmp_path):
+@pytest.mark.parametrize("kind, exe", [("llama", "llama-server"), ("sd", "sd-cli"), ("ffmpeg", "ffmpeg")])
+def test_runtime_personalizado(isolado, monkeypatch, tmp_path, kind, exe):
     """Uma pasta própria vira o backend 'custom': entra na lista, pode ser escolhida e nunca é baixada."""
     monkeypatch.setattr(localai, "find_exe", FIND_EXE_REAL)
     monkeypatch.setattr(localai, "runtime_version", lambda exe: "")
-    pasta = tmp_path / "meu-llama"
+    pasta = tmp_path / "meu-build"
     pasta.mkdir()
     sufixo = ".exe" if localai.native.WINDOWS else ""
 
     with pytest.raises(localai.ToolError):
-        localai.set_runtime_dir("llama", str(pasta))  # sem binário dentro
+        localai.set_runtime_dir(kind, str(pasta))  # sem binário dentro
 
-    (pasta / ("llama-server" + sufixo)).write_bytes(b"")
-    r = localai.set_runtime_dir("llama", str(pasta))["llama"]
+    (pasta / (exe + sufixo)).write_bytes(b"")
+    r = localai.set_runtime_dir(kind, str(pasta))[kind]
     assert r["custom_dir"] == str(pasta)
     assert any(i["backend"] == "custom" for i in r["available"])
 
-    r = localai.set_runtime("llama", "custom")["llama"]
+    r = localai.set_runtime(kind, "custom")[kind]
     assert r["chosen"] == "custom" and r["backend"] == "custom"
-    assert localai.find_exe("llama") == pasta / ("llama-server" + sufixo)
+    assert localai.find_exe(kind) == pasta / (exe + sufixo)
     with pytest.raises(localai.ToolError):
-        localai.install_runtime("llama", "custom")
+        localai.install_runtime(kind, "custom")
 
-    r = localai.set_runtime_dir("llama", "")["llama"]
+    r = localai.set_runtime_dir(kind, "")[kind]
     assert r["custom_dir"] == "" and r["chosen"] == ""
 
 

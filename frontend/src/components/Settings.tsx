@@ -575,15 +575,15 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
               ))}
             </select>
           </div>
-          {kind === "llama" && (
+          {kind !== "comfy" && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted">Personalizado</span>
               <input
                 className={input}
-                placeholder="pasta com llama-server.exe (build próprio)"
+                placeholder={`pasta com ${kind === "llama" ? "llama-server.exe" : kind === "sd" ? "sd-cli.exe" : "ffmpeg.exe"} (build próprio)`}
                 defaultValue={r.custom_dir || ""}
                 onBlur={(e) => e.target.value !== (r.custom_dir || "") && acao(api.put("/local/runtime-dir", { kind, dir: e.target.value }))}
-                title="Uma pasta fora do Forja com o seu build do llama.cpp. Aparece em 'Em uso' como 'custom' e as atualizações não mexem nela. Vazio = remove."
+                title="Uma pasta fora do Forja com o seu build. Aparece em 'Em uso' como 'custom' e as atualizações não mexem nela. Vazio = remove."
               />
             </div>
           )}
