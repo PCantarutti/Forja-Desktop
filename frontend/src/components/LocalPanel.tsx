@@ -44,7 +44,7 @@ const AJUDA: Record<string, string> = {
   kv_unified: "Um cache KV único para todos os slots, em vez de um pedaço por slot.",
   swa_full: "Modelo de janela deslizante (Gemma): guarda o cache de todas as camadas. Usa mais VRAM, e é o que deixa o cache do prompt em disco restaurar.",
   no_kv_offload: "Cache KV na VRAM. Desligue para deixá-lo na RAM: libera VRAM e custa velocidade.",
-  mlock: "Trava o modelo na memória para o Windows não empurrar para o disco.",
+  mlock: "Trava o modelo na RAM para o Windows não empurrar para o disco. Só vale com mmap ligado: sem mmap o llama.cpp ignora.",
   mmap: "Mapeia o arquivo em vez de copiar tudo para a RAM. Ligado carrega mais rápido; com especialistas na CPU o llama.cpp sugere desligar.",
   mmproj: "Arquivo mmproj-*.gguf do mesmo modelo: liga a visão, e aí as imagens do chat chegam ao modelo.",
   spec_type: "O modelo adivinha vários tokens de uma vez e confere num passo só: mesma resposta, mais tokens por segundo quando o palpite acerta. MTP usa as camadas de predição do próprio modelo (só se o GGUF as tiver); n-grama reaproveita trechos que já apareceram (bom para código e edições); modelo rascunho usa um modelo menor da mesma família.",
@@ -515,15 +515,15 @@ function Especulativa(p: {
         </select>
       </Field>
       {tipo && (
-        <Num label="Tokens por rascunho" chave="spec_draft_n_max" value={p.form.spec_draft_n_max ?? 0} max={16}
+        <Num label="Draft tokens (draft-max)" chave="spec_draft_n_max" value={p.form.spec_draft_n_max ?? 0} max={16}
              onChange={(v) => p.set("spec_draft_n_max", v)} mudado={p.mudou("spec_draft_n_max")} onReset={() => p.reset("spec_draft_n_max")} hint="0 = automático (2 no MTP, 3 nos outros)" />
       )}
       {comRascunho && (
         <>
-          <Field label="Modelo rascunho (GGUF)" chave="spec_draft_model" mudado={p.mudou("spec_draft_model")} onReset={() => p.reset("spec_draft_model")}>
+          <Field label="Draft model (GGUF)" chave="spec_draft_model" mudado={p.mudou("spec_draft_model")} onReset={() => p.reset("spec_draft_model")}>
             <input className={input} value={p.form.spec_draft_model ?? ""} onChange={(e) => p.set("spec_draft_model", e.target.value)} placeholder="caminho do .gguf menor" />
           </Field>
-          <Num label="Camadas do rascunho na GPU" chave="spec_draft_ngl" value={p.form.spec_draft_ngl ?? -1}
+          <Num label="Draft GPU layers (draft n_gpu_layers)" chave="spec_draft_ngl" value={p.form.spec_draft_ngl ?? -1}
                onChange={(v) => p.set("spec_draft_ngl", v)} mudado={p.mudou("spec_draft_ngl")} onReset={() => p.reset("spec_draft_ngl")} hint="-1 = padrão" />
         </>
       )}
@@ -884,7 +884,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
 
           <div className="mt-3 flex flex-col gap-2.5">
             <Num
-              label="Tamanho do contexto"
+              label="Context length (n_ctx)"
               chave="ctx"
               value={form.ctx}
               max={info?.ctx_train || undefined}
@@ -895,7 +895,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               hint={info?.ctx_train ? `O modelo suporta até ${info.ctx_train.toLocaleString("pt-BR")} tokens.` : undefined}
             />
             <Num
-              label="Camadas na GPU"
+              label="GPU offload (n_gpu_layers)"
               chave="ngl"
               value={form.ngl}
               max={info?.n_layer || 999}
@@ -913,14 +913,14 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               onReset={() => reset("flash_attn")}
             />
             <div className="grid grid-cols-2 gap-2">
-              <Field label="Cache K" chave="cache_type_k" mudado={mudou("cache_type_k")} onReset={() => reset("cache_type_k")}>
+              <Field label="KV cache type K" chave="cache_type_k" mudado={mudou("cache_type_k")} onReset={() => reset("cache_type_k")}>
                 <select className={input} value={form.cache_type_k} onChange={(e) => set("cache_type_k", e.target.value)}>
                   {CACHE_TYPES.map((t) => (
                     <option key={t}>{t}</option>
                   ))}
                 </select>
               </Field>
-              <Field label="Cache V" chave="cache_type_v" mudado={mudou("cache_type_v")} onReset={() => reset("cache_type_v")}>
+              <Field label="KV cache type V" chave="cache_type_v" mudado={mudou("cache_type_v")} onReset={() => reset("cache_type_v")}>
                 <select className={input} value={form.cache_type_v} onChange={(e) => set("cache_type_v", e.target.value)}>
                   {CACHE_TYPES.map((t) => (
                     <option key={t}>{t}</option>
@@ -928,10 +928,10 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
                 </select>
               </Field>
             </div>
-            <Num label="Camadas MoE na CPU" chave="n_cpu_moe" value={form.n_cpu_moe} max={info?.n_layer || undefined} onChange={(v) => set("n_cpu_moe", v)} mudado={mudou("n_cpu_moe")} onReset={() => reset("n_cpu_moe")} hint="0 = nenhuma" />
-            <Num label="Previsões simultâneas" chave="parallel" value={form.parallel} onChange={(v) => set("parallel", v)} mudado={mudou("parallel")} onReset={() => reset("parallel")} hint="0 = automático" />
+            <Num label="MoE layers on CPU (n_cpu_moe)" chave="n_cpu_moe" value={form.n_cpu_moe} max={info?.n_layer || undefined} onChange={(v) => set("n_cpu_moe", v)} mudado={mudou("n_cpu_moe")} onReset={() => reset("n_cpu_moe")} hint="0 = nenhuma" />
+            <Num label="Parallel slots (n_parallel)" chave="parallel" value={form.parallel} onChange={(v) => set("parallel", v)} mudado={mudou("parallel")} onReset={() => reset("parallel")} hint="0 = automático" />
             <Num
-              label="Threads da CPU"
+              label="CPU threads"
               chave="threads"
               value={form.threads}
               onChange={(v) => set("threads", v)}
@@ -939,7 +939,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               onReset={() => reset("threads")}
               hint="0 = automático"
             />
-            <Field label="Projetor multimodal (mmproj)" chave="mmproj" mudado={mudou("mmproj")} onReset={() => reset("mmproj")}>
+            <Field label="Multimodal projector (mmproj)" chave="mmproj" mudado={mudou("mmproj")} onReset={() => reset("mmproj")}>
               <input className={input} value={form.mmproj} onChange={(e) => set("mmproj", e.target.value)} placeholder="opcional" />
             </Field>
 
@@ -953,21 +953,21 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
             {adv && (
               <>
                 <Secao titulo="Desempenho e memória">
-                  <Num label="Lote de avaliação" chave="batch" value={form.batch} onChange={(v) => set("batch", v)} mudado={mudou("batch")} onReset={() => reset("batch")} />
-                  <Num label="Lote físico" chave="ubatch" value={form.ubatch} onChange={(v) => set("ubatch", v)} mudado={mudou("ubatch")} onReset={() => reset("ubatch")} />
-                  <Num label="Checkpoints de contexto" chave="ctx_checkpoints" value={form.ctx_checkpoints} onChange={(v) => set("ctx_checkpoints", v)} mudado={mudou("ctx_checkpoints")} onReset={() => reset("ctx_checkpoints")} />
-                  <Toggle label="Ajustar para caber na memória" chave="fit" value={form.fit} onChange={(v) => set("fit", v)} mudado={mudou("fit")} onReset={() => reset("fit")} />
-                  <Toggle label="Cache KV unificado" chave="kv_unified" value={form.kv_unified} onChange={(v) => set("kv_unified", v)} mudado={mudou("kv_unified")} onReset={() => reset("kv_unified")} />
-                  <Toggle label="Guardar a janela inteira" chave="swa_full" value={!!form.swa_full} onChange={(v) => set("swa_full", v)} mudado={mudou("swa_full")} onReset={() => reset("swa_full")} />
-                  <Toggle label="Descarregar cache KV para a GPU" chave="no_kv_offload" value={!form.no_kv_offload} onChange={(v) => set("no_kv_offload", !v)} mudado={mudou("no_kv_offload")} onReset={() => reset("no_kv_offload")} />
-                  <Toggle label="Manter modelo na memória" chave="mlock" value={form.mlock} onChange={(v) => set("mlock", v)} mudado={mudou("mlock")} onReset={() => reset("mlock")} />
-                  <Toggle label="Tentar mmap()" chave="mmap" value={form.mmap} onChange={(v) => set("mmap", v)} mudado={mudou("mmap")} onReset={() => reset("mmap")} />
+                  <Num label="Batch size (n_batch)" chave="batch" value={form.batch} onChange={(v) => set("batch", v)} mudado={mudou("batch")} onReset={() => reset("batch")} />
+                  <Num label="Physical batch size (n_ubatch)" chave="ubatch" value={form.ubatch} onChange={(v) => set("ubatch", v)} mudado={mudou("ubatch")} onReset={() => reset("ubatch")} />
+                  <Num label="Context checkpoints" chave="ctx_checkpoints" value={form.ctx_checkpoints} onChange={(v) => set("ctx_checkpoints", v)} mudado={mudou("ctx_checkpoints")} onReset={() => reset("ctx_checkpoints")} />
+                  <Toggle label="Fit to memory (--fit)" chave="fit" value={form.fit} onChange={(v) => set("fit", v)} mudado={mudou("fit")} onReset={() => reset("fit")} />
+                  <Toggle label="Unified KV cache (--kv-unified)" chave="kv_unified" value={form.kv_unified} onChange={(v) => set("kv_unified", v)} mudado={mudou("kv_unified")} onReset={() => reset("kv_unified")} />
+                  <Toggle label="Full SWA cache (--swa-full)" chave="swa_full" value={!!form.swa_full} onChange={(v) => set("swa_full", v)} mudado={mudou("swa_full")} onReset={() => reset("swa_full")} />
+                  <Toggle label="Offload KV cache to GPU" chave="no_kv_offload" value={!form.no_kv_offload} onChange={(v) => set("no_kv_offload", !v)} mudado={mudou("no_kv_offload")} onReset={() => reset("no_kv_offload")} />
+                  <Toggle label="mlock" chave="mlock" value={form.mlock} onChange={(v) => set("mlock", v)} mudado={mudou("mlock")} onReset={() => reset("mlock")} />
+                  <Toggle label="mmap" chave="mmap" value={form.mmap} onChange={(v) => set("mmap", v)} mudado={mudou("mmap")} onReset={() => reset("mmap")} />
                 </Secao>
                 <Secao titulo="Modelo">
-                  <Num label="Número de especialistas" chave="n_expert" value={form.n_expert} onChange={(v) => set("n_expert", v)} mudado={mudou("n_expert")} onReset={() => reset("n_expert")} />
-                  <Num label="Semente" chave="seed" value={form.seed} onChange={(v) => set("seed", v)} mudado={mudou("seed")} onReset={() => reset("seed")} hint="0 = aleatória" />
-                  <Num label="RoPE freq. base" chave="rope_freq_base" value={form.rope_freq_base} onChange={(v) => set("rope_freq_base", v)} mudado={mudou("rope_freq_base")} onReset={() => reset("rope_freq_base")} hint="0 = automático" />
-                  <Num label="RoPE escala" chave="rope_freq_scale" value={form.rope_freq_scale} onChange={(v) => set("rope_freq_scale", v)} mudado={mudou("rope_freq_scale")} onReset={() => reset("rope_freq_scale")} hint="0 = automático" />
+                  <Num label="Experts used (expert_used_count)" chave="n_expert" value={form.n_expert} onChange={(v) => set("n_expert", v)} mudado={mudou("n_expert")} onReset={() => reset("n_expert")} />
+                  <Num label="Seed" chave="seed" value={form.seed} onChange={(v) => set("seed", v)} mudado={mudou("seed")} onReset={() => reset("seed")} hint="0 = aleatória" />
+                  <Num label="RoPE frequency base" chave="rope_freq_base" value={form.rope_freq_base} onChange={(v) => set("rope_freq_base", v)} mudado={mudou("rope_freq_base")} onReset={() => reset("rope_freq_base")} hint="0 = automático" />
+                  <Num label="RoPE frequency scale" chave="rope_freq_scale" value={form.rope_freq_scale} onChange={(v) => set("rope_freq_scale", v)} mudado={mudou("rope_freq_scale")} onReset={() => reset("rope_freq_scale")} hint="0 = automático" />
                 </Secao>
                 <button className="self-start text-faint underline hover:text-fg" onClick={() => setTodas(!todas)}>
                   {todas ? "esconder todas as opções do llama.cpp" : `todas as opções do llama.cpp (${opcoes?.secoes.reduce((n, s) => n + s.opcoes.length, 0) ?? "…"})`}
@@ -1466,7 +1466,7 @@ function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: st
         .gguf recomenda — e, quando não há arquivo local, o padrão do llama.cpp.
       </p>
       <div className="mt-3 flex flex-col gap-2.5">
-        <Num label="Temperatura" chave="temperature" value={form.temperature} max={2} step={0.05}
+        <Num label="Temperature" chave="temperature" value={form.temperature} max={2} step={0.05}
           onChange={(v) => set("temperature", v)} mudado={mudou("temperature")} onReset={() => reset("temperature")} />
         <Num label="Top K" chave="top_k" value={form.top_k} max={200} hint="0 = desligado"
           onChange={(v) => set("top_k", v)} mudado={mudou("top_k")} onReset={() => reset("top_k")} />
@@ -1474,17 +1474,17 @@ function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: st
           onChange={(v) => set("top_p", v)} mudado={mudou("top_p")} onReset={() => reset("top_p")} />
         <Num label="Min P" chave="min_p" value={form.min_p} max={1} step={0.01} hint="0 = desligado"
           onChange={(v) => set("min_p", v)} mudado={mudou("min_p")} onReset={() => reset("min_p")} />
-        <Num label="Penalidade de repetição" chave="repeat_penalty" value={form.repeat_penalty} max={2} step={0.01}
+        <Num label="Repeat penalty" chave="repeat_penalty" value={form.repeat_penalty} max={2} step={0.01}
           hint="1 = desligada" onChange={(v) => set("repeat_penalty", v)} mudado={mudou("repeat_penalty")}
           onReset={() => reset("repeat_penalty")} />
-        <Num label="Limite da resposta (tokens)" chave="max_tokens" value={form.max_tokens} hint="0 = sem limite"
+        <Num label="Max tokens" chave="max_tokens" value={form.max_tokens} hint="0 = sem limite"
           onChange={(v) => set("max_tokens", v)} mudado={mudou("max_tokens")} onReset={() => reset("max_tokens")} />
-        <Toggle label="Pensar antes de responder" chave="think" value={form.think}
+        <Toggle label="Thinking" chave="think" value={form.think}
           onChange={(v) => set("think", v)} mudado={mudou("think")} onReset={() => reset("think")} />
-        <Num label="Teto de raciocínio (tokens)" chave="reasoning_budget" value={form.reasoning_budget}
+        <Num label="Reasoning budget (tokens)" chave="reasoning_budget" value={form.reasoning_budget}
           hint="-1 = sem teto" onChange={(v) => set("reasoning_budget", v)} mudado={mudou("reasoning_budget")}
           onReset={() => reset("reasoning_budget")} />
-        <Field label="Strings de parada" chave="stop" hint="Uma por linha." mudado={mudou("stop")}
+        <Field label="Stop strings" chave="stop" hint="Uma por linha." mudado={mudou("stop")}
           onReset={() => reset("stop")}>
           <textarea
             className={`${input} h-16 resize-none`}

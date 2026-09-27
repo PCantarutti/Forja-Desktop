@@ -1743,10 +1743,13 @@ def _load_mode(mlock: bool, mmap: bool, known: frozenset[str]) -> list[str]:
     """mlock/mmap: builds novas têm um --load-mode só; as antigas, --mlock e --no-mmap separados.
 
     mlock sem mmap tenta travar o modelo inteiro na RAM de uma vez e o llama.cpp aborta
-    (GGML_ASSERT(addr)) quando não consegue — é a combinação que o LM Studio nem oferece.
+    (GGML_ASSERT(addr) em llama_mlock::grow_to, visto no b11146) — é a combinação que o LM Studio nem
+    oferece, por isso o mlock é ignorado nesse caso.
     """
+    if mlock and not mmap:
+        mlock = False  # ver docstring
     if "--load-mode" in known:
-        modo = {(False, True): "", (True, True): "mmap+mlock", (False, False): "none", (True, False): "mlock"}
+        modo = {(False, True): "", (True, True): "mmap+mlock", (False, False): "none"}
         escolha = modo[(mlock, mmap)]
         return ["--load-mode", escolha] if escolha else []
     out = []

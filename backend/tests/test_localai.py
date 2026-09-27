@@ -1246,3 +1246,12 @@ def test_moe_ganha_lote_fisico_maior(isolado, monkeypatch):
 
     assert (localai.defaults_for(str(moe))["ubatch"], localai.defaults_for(str(moe))["batch"]) == (2048, 2048)
     assert localai.defaults_for(str(denso))["ubatch"] == 512
+
+
+def test_mlock_sem_mmap_e_ignorado(isolado):
+    """--load-mode mlock derruba o llama-server (GGML_ASSERT em llama_mlock::grow_to): vira só 'none'."""
+    known = frozenset(["--load-mode"])
+    assert localai._load_mode(True, False, known) == ["--load-mode", "none"]
+    assert localai._load_mode(True, True, known) == ["--load-mode", "mmap+mlock"]
+    assert localai._load_mode(False, False, known) == ["--load-mode", "none"]
+    assert localai._load_mode(True, False, frozenset(["--mlock", "--no-mmap"])) == ["--no-mmap"]
