@@ -558,7 +558,7 @@ function TodasOpcoes(p: { secoes: { nome: string; opcoes: OpcaoLlama[] }[]; valo
           {Object.entries(p.valor).map(([f, v]) => (v ? `${f} ${v}` : f)).join("  ")}
         </p>
       )}
-      <div className="max-h-96 overflow-y-auto pr-1">
+      <div className="pr-1">
         {p.secoes.map((s) => {
           const lista = s.opcoes.filter((o) => (!so || o.flag in p.valor)
             && (!filtro || o.nomes.join(" ").toLowerCase().includes(filtro) || o.descricao.toLowerCase().includes(filtro)));
@@ -841,7 +841,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
           className={`${card} flex w-[640px] max-w-[calc(100vw-32px)] flex-col overflow-hidden`}
           style={{ position: "fixed", top: 12, bottom: 12, right: Math.max(12, ancora + 12) }}
         >
-          <div className="mb-2 flex items-center gap-2">
+          <div className="mb-2 flex shrink-0 items-center gap-2">
             <div className="min-w-0 flex-1">
               <p className="truncate font-medium text-fg">{view.path.split(/[\\/]/).pop()}</p>
               {info?.arch && (
@@ -851,18 +851,24 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
                 </p>
               )}
             </div>
-            <div className="flex rounded-lg border border-line p-0.5">
+            <div className="flex shrink-0 rounded-lg border border-line p-0.5">
               {(["params", "perfis"] as const).map((a) => (
                 <button
                   key={a}
-                  className={`rounded-md px-2.5 py-1 text-xs ${aba === a ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                  type="button"
+                  className={`rounded-md px-3.5 py-2 text-xs ${aba === a ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
                   onClick={() => setAba(a)}
                 >
                   {a === "params" ? "Parâmetros" : `Perfis${Object.keys(view.presets.lista).length ? ` (${Object.keys(view.presets.lista).length})` : ""}`}
                 </button>
               ))}
             </div>
-            <button className="text-faint hover:text-fg" title="Fechar" onClick={() => pick({ path: sel } as LocalModel)}>
+            <button
+              type="button"
+              className="grid size-9 shrink-0 place-items-center rounded-lg text-faint hover:bg-raised hover:text-fg"
+              title="Fechar"
+              onClick={() => pick({ path: sel } as LocalModel)}
+            >
               <X className="size-4" />
             </button>
           </div>
