@@ -578,13 +578,26 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
           {kind !== "comfy" && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted">Personalizado</span>
-              <input
-                className={input}
-                placeholder={`pasta com ${kind === "llama" ? "llama-server.exe" : kind === "sd" ? "sd-cli.exe" : "ffmpeg.exe"} (build próprio)`}
-                defaultValue={r.custom_dir || ""}
-                onBlur={(e) => e.target.value !== (r.custom_dir || "") && acao(api.put("/local/runtime-dir", { kind, dir: e.target.value }))}
-                title="Uma pasta fora do Forja com o seu build. Aparece em 'Em uso' como 'custom' e as atualizações não mexem nela. Vazio = remove."
-              />
+              <span
+                className={`${input} truncate ${r.custom_dir ? "" : "text-muted"}`}
+                title="Uma pasta fora do Forja com o seu build. Aparece em 'Em uso' como 'custom' e as atualizações não mexem nela."
+              >
+                {r.custom_dir || `pasta com ${kind === "llama" ? "llama-server.exe" : kind === "sd" ? "sd-cli.exe" : "ffmpeg.exe"} (build próprio)`}
+              </span>
+              <button
+                className={btn}
+                onClick={async () => {
+                  const dir = window.forja ? await window.forja.pickFolder(r.custom_dir || "") : prompt("Pasta do build:", r.custom_dir || "");
+                  if (dir) acao(api.put("/local/runtime-dir", { kind, dir }));
+                }}
+              >
+                Escolher…
+              </button>
+              {!!r.custom_dir && (
+                <button className={btn} title="Remove o runtime personalizado (a pasta fica no disco)" onClick={() => acao(api.put("/local/runtime-dir", { kind, dir: "" }))}>
+                  Remover
+                </button>
+              )}
             </div>
           )}
           <div className="flex flex-wrap gap-2">
