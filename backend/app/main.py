@@ -687,6 +687,11 @@ class DeviceBody(BaseModel):
     enabled: bool = True
 
 
+class RuntimeDirBody(BaseModel):
+    kind: str = "llama"
+    dir: str = ""  # vazia = remove o runtime personalizado
+
+
 class LocalPrefsBody(BaseModel):
     """Preferências da IA local que não pertencem a um modelo específico."""
     hf_token: str | None = None
@@ -732,6 +737,15 @@ async def local_runtime_choice(body: RuntimeChoiceBody):
     """Troca o motor em uso (CPU, Vulkan, CUDA) sem baixar nada de novo."""
     try:
         return await asyncio.to_thread(localai.set_runtime, body.kind, body.backend)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.put("/api/local/runtime-dir")
+async def local_runtime_dir(body: RuntimeDirBody):
+    """Runtime personalizado: pasta com um build próprio, que o Forja nunca sobrescreve ao atualizar."""
+    try:
+        return await asyncio.to_thread(localai.set_runtime_dir, body.kind, body.dir)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

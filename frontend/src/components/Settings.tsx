@@ -575,6 +575,18 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
               ))}
             </select>
           </div>
+          {kind === "llama" && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted">Personalizado</span>
+              <input
+                className={input}
+                placeholder="pasta com llama-server.exe (build próprio)"
+                defaultValue={r.custom_dir || ""}
+                onBlur={(e) => e.target.value !== (r.custom_dir || "") && acao(api.put("/local/runtime-dir", { kind, dir: e.target.value }))}
+                title="Uma pasta fora do Forja com o seu build do llama.cpp. Aparece em 'Em uso' como 'custom' e as atualizações não mexem nela. Vazio = remove."
+              />
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {r.backends.map((b: string) => {
               const tem = r.available.some((a: any) => a.backend === b);

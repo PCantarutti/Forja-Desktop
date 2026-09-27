@@ -1179,3 +1179,69 @@ def test_mtp_automatico_vai_com_2_tokens_por_rascunho():
     a = localai.argv(Path("llama-server.exe"), "m.gguf", {**p, "spec_draft_n_max": 4})
     assert a[a.index("--spec-draft-n-max") + 1] == "4"
     assert "--spec-draft-n-max" not in localai.argv(Path("llama-server.exe"), "m.gguf", {**p, "spec_type": "ngram-mod"})
+
+
+def test_gpu_vulkan_desligada_some_do_driver(isolado, monkeypatch):
+    """iGPU como Vulkan0 desligada: além do --device, GGML_VK_VISIBLE_DEVICES esconde ela e o id renumera."""
+    gpus = [{"id": "Vulkan0", "enabled": False}, {"id": "Vulkan1", "enabled": True}]
+    monkeypatch.setattr(localai, "hardware", lambda: {"gpus": gpus, "vram": 0, "vram_free": 0, "ram": 0, "ram_free": 0})
+
+    env, mapa = localai.vulkan_env(gpus)
+    a = localai.argv(Path("llama-server"), "m.gguf", localai.DEFAULT_PARAMS, frozenset(["--device"]))
+
+    assert env == {"GGML_VK_ASYNC_USE_TRANSFER_QUEUE": "1", "GGML_VK_VISIBLE_DEVICES": "1"}
+    assert mapa == {"Vulkan1": "Vulkan0"}
+    assert a[a.index("--device") + 1] == "Vulkan0"
+    assert localai.ambiente() == env
+
+
+def test_gpu_cuda_nao_ganha_env_do_vulkan(isolado):
+    gpus = [{"id": "CUDA0", "enabled": True}, {"id": "CUDA1", "enabled": False}]
+    assert localai.vulkan_env(gpus) == ({}, {})
+    todas = [{"id": "Vulkan0", "enabled": True}, {"id": "Vulkan1", "enabled": True}]
+    assert localai.vulkan_env(todas) == ({"GGML_VK_ASYNC_USE_TRANSFER_QUEUE": "1"}, {})
+
+
+def test_runtime_personalizado(isolado, monkeypatch, tmp_path):
+    """Uma pasta própria vira o backend 'custom': entra na lista, pode ser escolhida e nunca é baixada."""
+    monkeypatch.setattr(localai, "find_exe", FIND_EXE_REAL)
+    monkeypatch.setattr(localai, "runtime_version", lambda exe: "")
+    pasta = tmp_path / "meu-llama"
+    pasta.mkdir()
+    sufixo = ".exe" if localai.native.WINDOWS else ""
+
+    with pytest.raises(localai.ToolError):
+        localai.set_runtime_dir("llama", str(pasta))  # sem binário dentro
+
+    (pasta / ("llama-server" + sufixo)).write_bytes(b"")
+    r = localai.set_runtime_dir("llama", str(pasta))["llama"]
+    assert r["custom_dir"] == str(pasta)
+    assert any(i["backend"] == "custom" for i in r["available"])
+
+    r = localai.set_runtime("llama", "custom")["llama"]
+    assert r["chosen"] == "custom" and r["backend"] == "custom"
+    assert localai.find_exe("llama") == pasta / ("llama-server" + sufixo)
+    with pytest.raises(localai.ToolError):
+        localai.install_runtime("llama", "custom")
+
+    r = localai.set_runtime_dir("llama", "")["llama"]
+    assert r["custom_dir"] == "" and r["chosen"] == ""
+
+
+def test_moe_ganha_lote_fisico_maior(isolado, monkeypatch):
+    """Subir experts para a GPU custa por lote: em MoE o padrão de -ub sobe para 2048 (medido: 3x no prefill)."""
+    ajuda = """
+  -b,    --batch-size N                   logical maximum batch size (default: 2048)
+  -ub,   --ubatch-size N                  physical maximum batch size (default: 512)
+"""
+    monkeypatch.setattr(localai, "find_exe", lambda kind: Path("llama-server"))
+    monkeypatch.setattr(localai, "_help", lambda exe: ajuda)
+    localai.help_defaults.cache_clear()
+    pack = __import__("struct").pack
+    moe = _gguf(isolado / "moe.gguf", "qwen35moe", [("qwen35moe.block_count", 4, pack("<I", 40)),
+                                                    ("qwen35moe.expert_count", 4, pack("<I", 256)),
+                                                    ("qwen35moe.expert_used_count", 4, pack("<I", 8))])
+    denso = _gguf(isolado / "denso.gguf", "llama", [("llama.block_count", 4, pack("<I", 32))])
+
+    assert (localai.defaults_for(str(moe))["ubatch"], localai.defaults_for(str(moe))["batch"]) == (2048, 2048)
+    assert localai.defaults_for(str(denso))["ubatch"] == 512

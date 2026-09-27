@@ -210,7 +210,7 @@ def _image_valores(patch: dict) -> dict:
 def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
-            "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
+            "runtime_dir": {}, "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
             "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0,
             "slots_liberados": [], "video_dir": "", "padroes_e4_visto": False}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
 
@@ -311,6 +311,11 @@ def defaults_for(path: str = "") -> dict:
         d["ngl"] = info["n_layer"]                                   # tudo na GPU, como o LM Studio
         d["ctx"] = min(info["ctx_train"] or d["ctx"], 32768)         # a janela cheia costuma não caber
         d["n_expert"] = info["n_expert_used"] or 0
+        if info["n_expert"]:
+            # MoE: o custo de subir os experts para a GPU é por lote, não por token; um lote físico maior
+            # dilui esse custo. Medido no Qwen3.6-35B-A3B com -ncmoe 24: -ub 512 = 330 t/s, 2048 = 939 t/s.
+            d["ubatch"] = max(int(d["ubatch"] or 0), 2048)
+            d["batch"] = max(int(d["batch"] or 0), d["ubatch"])
     return d
 
 
@@ -418,7 +423,17 @@ def tipos_especulativos(exe: str | None = None) -> list[str]:
 
 # ------------------------------------------------------------------ runtimes
 
+CUSTOM = "custom"  # pasta apontada pelo usuário (build próprio): o Forja usa, mas nunca baixa nem sobrescreve
+
+
+def custom_dir(kind: str) -> Path | None:
+    pasta = (read_config().get("runtime_dir") or {}).get(kind) or ""
+    return Path(pasta) if pasta else None
+
+
 def runtime_dir(kind: str, backend: str) -> Path:
+    if backend == CUSTOM:
+        return custom_dir(kind) or (RUNTIMES / kind / CUSTOM)
     return RUNTIMES / kind / backend
 
 
@@ -464,6 +479,33 @@ def set_runtime(kind: str, backend: str) -> dict:
     return runtimes()
 
 
+def set_runtime_dir(kind: str, pasta: str) -> dict:
+    """Runtime personalizado: uma pasta com o binário (build próprio do llama.cpp, por exemplo). Sobrevive às
+    atualizações porque fica fora de `runtimes/`. Pasta vazia = remove a opção."""
+    if kind not in EXE:
+        raise ToolError(f"Runtime desconhecido: {kind}")
+    pasta = pasta.strip()
+    data = read_config()
+    dirs = dict(data.get("runtime_dir") or {})
+    escolha = dict(data.get("runtime") or {})
+    if pasta:
+        sufixo = ".exe" if native.WINDOWS else ""
+        if not any((Path(pasta) / (name + sufixo)).exists() for name in EXE[kind]):
+            raise ToolError(f"Não achei {EXE[kind][0]}{sufixo} em {pasta}.")
+        dirs[kind] = pasta
+    else:
+        dirs.pop(kind, None)
+        if escolha.get(kind) == CUSTOM:
+            escolha.pop(kind)  # volta para o mais rápido instalado
+    data["runtime_dir"] = dirs
+    data["runtime"] = escolha
+    write_config(data)
+    _devices.cache_clear()
+    _help.cache_clear()
+    help_defaults.cache_clear()
+    return runtimes()
+
+
 @functools.lru_cache(maxsize=8)
 def runtime_version(exe: str) -> str:
     """"build 11064" do --version. Serve para a tela de Runtime dizer o que está instalado."""
@@ -487,14 +529,16 @@ def runtimes() -> dict:
         exe = find_exe(kind)
         instalados = []
         backends = [b for b in BACKENDS if b in ASSETS[kind]]  # o ffmpeg só tem o build de CPU
-        for backend in backends:
+        for backend in backends + [CUSTOM]:
             achado = exe_em(kind, backend)
             if achado:
                 instalados.append({"backend": backend, "exe": str(achado),
                                    "version": runtime_version(str(achado)) if kind in ("llama", "ffmpeg") else ""})
+        em_uso = next((i["backend"] for i in instalados if exe and i["exe"] == str(exe)), "")
         out[kind] = {"installed": bool(exe), "exe": str(exe) if exe else "",
-                     "backend": exe.parent.name if exe else "", "backends": backends,
-                     "available": instalados, "chosen": escolha.get(kind, "")}
+                     "backend": em_uso, "backends": backends,
+                     "available": instalados, "chosen": escolha.get(kind, ""),
+                     "custom_dir": str(custom_dir(kind) or "")}
     out["comfy"] = _runtime_comfy()
     return out
 
@@ -545,6 +589,8 @@ def install_runtime(kind: str, backend: str) -> dict:
         return comfy.instalar()  # versão fixa, o pacote da marca da GPU (o `backend` não escolhe nada)
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
+    if backend == CUSTOM:
+        raise ToolError("O runtime personalizado é seu: o Forja não baixa nem atualiza essa pasta.")
     if backend not in BACKENDS or backend not in ASSETS[kind]:
         raise ToolError(f"Não há build de {backend} para o {kind}.")
     if not SUPPORTED:
@@ -1545,6 +1591,28 @@ def _absorve(bloco: list[str], out: dict) -> None:
         out.setdefault(nome, valor)
 
 
+def vulkan_env(gpus: list[dict]) -> tuple[dict, dict]:
+    """GPU desligada em Vulkan é escondida do driver (GGML_VK_VISIBLE_DEVICES), não só tirada do --device.
+    O ggml pina a memória de host dos experts no device 0 do driver; com uma iGPU como Vulkan0 e a dedicada
+    como Vulkan1, todo upload de expert vira staging síncrono (medido: 757 -> 1134 t/s de prefill na Arc B580
+    com o Qwen3.6-35B-A3B). A fila de transferência assíncrona só vem ligada de fábrica em AMD; na Intel deu
+    +10%. Esconder renumera os devices, por isso devolve também {id antigo: id novo} para o --device."""
+    ids = [g["id"] for g in gpus]
+    if not ids or not all(re.fullmatch(r"Vulkan[0-9]+", i) for i in ids):
+        return {}, {}
+    env = {"GGML_VK_ASYNC_USE_TRANSFER_QUEUE": "1"}
+    ligadas = [g["id"] for g in gpus if g["enabled"]]
+    if not ligadas or len(ligadas) == len(ids):
+        return env, {}
+    env["GGML_VK_VISIBLE_DEVICES"] = ",".join(i[len("Vulkan"):] for i in ligadas)
+    return env, {i: f"Vulkan{n}" for n, i in enumerate(ligadas)}
+
+
+def ambiente() -> dict:
+    """Variáveis de ambiente do llama-server além das herdadas."""
+    return vulkan_env(hardware()["gpus"])[0]
+
+
 def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> list[str]:
     """Parâmetros de carga -> linha de comando do llama-server. Zero/vazio = deixa o padrão dele."""
     ok = (lambda flag: not known or flag in known)  # sem lista de opções conhecidas, não filtra nada
@@ -1560,9 +1628,11 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
     if p.get("fit", True) and ok("--fit"):
         # Ele reduz sozinho o que não couber (e a nossa estimativa é estimativa).
         a += ["-fit", "on"]
-    ligadas = [g["id"] for g in hardware()["gpus"] if g["enabled"]]
-    if ligadas and len(ligadas) != len(hardware()["gpus"]) and ok("--device"):
-        a += ["--device", ",".join(ligadas)]  # GPU desligada em Configurações › Hardware
+    gpus = hardware()["gpus"]
+    ligadas = [g["id"] for g in gpus if g["enabled"]]
+    if ligadas and len(ligadas) != len(gpus) and ok("--device"):
+        mapa = vulkan_env(gpus)[1]  # GPU desligada em Configurações › Hardware (escondida do driver, se Vulkan)
+        a += ["--device", ",".join(mapa.get(g, g) for g in ligadas)]
     for key, flag in (("threads", "-t"), ("batch", "-b"), ("ubatch", "-ub"), ("ctx_checkpoints", "--ctx-checkpoints"),
                       ("n_cpu_moe", "--n-cpu-moe")):
         if int(p.get(key) or 0) > 0 and ok(flag):
@@ -1882,10 +1952,13 @@ def load(path: str, patch: dict | None = None, temporario: dict | None = None) -
                      "eta": gb * float(read_config().get("speed") or SEGUNDOS_POR_GB)})
     fh = open(LOG_FILE, "wb")  # sobrescreve: o log é sempre do modelo carregado agora
     cmd = argv(exe, path, p, flags(str(exe)))
+    extra = ambiente()
+    if extra:
+        fh.write((" ".join(f"{k}={v}" for k, v in extra.items()) + " ").encode("utf-8"))
     fh.write((" ".join(cmd) + "\n").encode("utf-8"))
     fh.flush()
     proc = subprocess.Popen(cmd, cwd=str(exe.parent), stdout=fh, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, **native.popen_kwargs())
+                            stdin=subprocess.DEVNULL, env={**os.environ, **extra}, **native.popen_kwargs())
     PID_FILE.write_text(f"{proc.pid}:{config.LOCAL_PORT}", "utf-8")
     global _proc
     with _proc_lock:
