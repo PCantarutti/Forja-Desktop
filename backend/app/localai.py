@@ -210,7 +210,7 @@ def _image_valores(patch: dict) -> dict:
 def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
-            "runtime_dir": {}, "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
+            "runtime_dir": {}, "presets": {}, "preset_ativo": {}, "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
             "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0,
             "slots_liberados": [], "video_dir": "", "padroes_e4_visto": False}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
 
@@ -380,13 +380,67 @@ def params(path: str) -> dict:
     return {**defaults_for(path), **overrides(path)}
 
 
-def save_params(path: str, patch: dict) -> dict:
+def save_params(path: str, patch: dict, preset: str | None = None) -> dict:
     d = defaults_for(path)
     novo = {**overrides(path), **_clean_params(patch)}
     data = read_config()
     data["models"][str(path)] = {k: v for k, v in novo.items() if v != d[k]}  # padrão não vira override
+    ativo = dict(data.get("preset_ativo") or {})
+    if preset:
+        ativo[str(path)] = preset
+    else:
+        ativo.pop(str(path), None)  # mexeu à mão: já não é o perfil
+    data["preset_ativo"] = ativo
     write_config(data)
     return {**d, **data["models"][str(path)]}
+
+
+# ------------------------------------------------------------------ perfis (presets) por modelo
+
+def presets(path: str) -> dict:
+    """Perfis salvos deste modelo (só o que difere do padrão) e qual está aplicado."""
+    cfg = read_config()
+    return {"ativo": (cfg.get("preset_ativo") or {}).get(str(path), ""),
+            "lista": dict((cfg.get("presets") or {}).get(str(path), {}))}
+
+
+def save_preset(path: str, nome: str, patch: dict) -> dict:
+    nome = nome.strip()
+    if not nome:
+        raise ToolError("Dê um nome ao perfil.")
+    d = defaults_for(path)
+    valores = {k: v for k, v in {**d, **_clean_params(patch)}.items() if v != d[k]}
+    data = read_config()
+    todos = dict(data.get("presets") or {})
+    do_modelo = dict(todos.get(str(path), {}))
+    do_modelo[nome] = valores
+    todos[str(path)] = do_modelo
+    data["presets"] = todos
+    write_config(data)
+    return presets(path)
+
+
+def apply_preset(path: str, nome: str) -> dict:
+    lista = presets(path)["lista"]
+    if nome not in lista:
+        raise ToolError(f"Perfil não encontrado: {nome}")
+    save_params(path, {**defaults_for(path), **lista[nome]}, preset=nome)  # o que o perfil não fixa volta ao padrão
+    return presets(path)
+
+
+def delete_preset(path: str, nome: str) -> dict:
+    data = read_config()
+    todos = dict(data.get("presets") or {})
+    do_modelo = dict(todos.get(str(path), {}))
+    do_modelo.pop(nome, None)
+    todos[str(path)] = do_modelo
+    data["presets"] = todos
+    ativo = dict(data.get("preset_ativo") or {})
+    if ativo.get(str(path)) == nome:
+        ativo.pop(str(path))
+    data["preset_ativo"] = ativo
+    write_config(data)
+    return presets(path)
 
 
 def _clean_params(patch: dict) -> dict:
@@ -2680,7 +2734,7 @@ def model_view(path: str, patch: dict | None = None) -> dict:
     from . import db  # import local: db não é necessário para nada mais deste módulo
     inf_d = inference_defaults(path)
     inf = {**inf_d, **(db.get_model_setting(alias_of(path)).get("inference") or {})}
-    return {"path": path, "info": info, "defaults": d, "params": atual,
+    return {"path": path, "info": info, "defaults": d, "params": atual, "presets": presets(path),
             "overrides": sorted(k for k, v in atual.items() if v != d[k]),
             "estimate": estimate(path, atual), "model": alias_of(path),
             "inference": inf, "inference_defaults": inf_d,

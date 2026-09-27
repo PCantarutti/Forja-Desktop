@@ -15,6 +15,8 @@ export function Modal(props: {
   label: string;
   /** Classes do painel (tamanho e layout são de cada tela). */
   className: string;
+  /** Posição fixa do painel (ex.: ancorado ao lado de quem abriu) em vez de centralizado. */
+  style?: React.CSSProperties;
   children: React.ReactNode;
 }) {
   const painel = useRef<HTMLDivElement>(null);
@@ -75,6 +77,7 @@ export function Modal(props: {
         aria-label={props.label}
         tabIndex={-1}
         className={props.className + " shadow-dialog focus:outline-none"}
+        style={props.style}
         onClick={(e) => e.stopPropagation()}
       >
         {props.children}
