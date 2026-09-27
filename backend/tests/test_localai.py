@@ -1255,3 +1255,25 @@ def test_mlock_sem_mmap_e_ignorado(isolado):
     assert localai._load_mode(True, True, known) == ["--load-mode", "mmap+mlock"]
     assert localai._load_mode(False, False, known) == ["--load-mode", "none"]
     assert localai._load_mode(True, False, frozenset(["--mlock", "--no-mmap"])) == ["--no-mmap"]
+
+
+def test_perfis_por_modelo(isolado, monkeypatch):
+    """Perfil = só o que difere do padrão; aplicar vira os parâmetros do modelo e o resto volta ao padrão."""
+    p = "m.gguf"
+    localai.save_params(p, {"ctx": 4096, "n_cpu_moe": 9})
+    r = localai.save_preset(p, "98k", {**localai.defaults_for(p), "ctx": 98304, "cache_type_k": "q4_0", "cache_type_v": "q4_0"})
+    assert r["lista"]["98k"] == {"ctx": 98304, "cache_type_k": "q4_0", "cache_type_v": "q4_0"}
+    assert r["ativo"] == ""
+    with pytest.raises(localai.ToolError):
+        localai.save_preset(p, "  ", {})
+
+    r = localai.apply_preset(p, "98k")
+    assert r["ativo"] == "98k"
+    assert localai.params(p)["ctx"] == 98304 and localai.params(p)["n_cpu_moe"] == 0  # o 9 antigo caiu
+    assert localai.model_view(p)["presets"]["ativo"] == "98k"
+
+    localai.save_params(p, {"ctx": 8192})  # mexeu à mão: perfil deixa de estar ativo
+    assert localai.presets(p)["ativo"] == ""
+    assert localai.delete_preset(p, "98k")["lista"] == {}
+    with pytest.raises(localai.ToolError):
+        localai.apply_preset(p, "98k")

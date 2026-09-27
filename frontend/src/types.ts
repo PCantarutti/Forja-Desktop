@@ -406,6 +406,7 @@ export type ModelView = {
   info: ModelInfo;
   defaults: LlamaParams;
   params: LlamaParams;
+  presets: { ativo: string; lista: Record<string, Partial<LlamaParams>> };
   overrides: (keyof LlamaParams)[];
   estimate: MemoryEstimate;
   model: string; // id do modelo no chat (alias do llama-server)

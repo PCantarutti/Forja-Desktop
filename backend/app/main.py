@@ -692,6 +692,12 @@ class RuntimeDirBody(BaseModel):
     dir: str = ""  # vazia = remove o runtime personalizado
 
 
+class PresetBody(BaseModel):
+    path: str
+    name: str
+    params: dict = {}
+
+
 class LocalPrefsBody(BaseModel):
     """Preferências da IA local que não pertencem a um modelo específico."""
     hf_token: str | None = None
@@ -899,6 +905,33 @@ async def local_load(body: LoadBody):
 async def local_unload():
     await asyncio.to_thread(localai.unload)
     return {"ok": True}
+
+
+@app.put("/api/local/preset")
+async def local_preset_save(body: PresetBody):
+    """Guarda os parâmetros atuais do modelo como um perfil nomeado."""
+    try:
+        return await asyncio.to_thread(localai.save_preset, body.path, body.name, body.params)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/preset/apply")
+async def local_preset_apply(body: PresetBody):
+    """Aplica um perfil: vira os parâmetros salvos do modelo (o que o perfil não fixa volta ao padrão)."""
+    try:
+        antes = localai.params(body.path)
+        out = await asyncio.to_thread(localai.apply_preset, body.path, body.name)
+        if any(antes.get(k) != localai.params(body.path).get(k) for k in kvcache.CAMPOS):
+            kvcache.apagar_modelo(body.path)
+        return out
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/local/preset/delete")
+async def local_preset_delete(body: PresetBody):
+    return await asyncio.to_thread(localai.delete_preset, body.path, body.name)
 
 
 @app.put("/api/local/params")

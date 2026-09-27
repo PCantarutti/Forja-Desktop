@@ -8,6 +8,7 @@ import ModelSearch from "./ModelSearch";
 import SelosModo from "./SelosModo";
 import { BaixarAmpliacao } from "./AmpliarVideo";
 import { useStickyBottom } from "../useStickyBottom";
+import { Modal } from "./Modal";
 
 const POLL_MS = 3000;
 export const card = "rounded-xl border border-line bg-surface p-3.5";
@@ -557,7 +558,7 @@ function TodasOpcoes(p: { secoes: { nome: string; opcoes: OpcaoLlama[] }[]; valo
           {Object.entries(p.valor).map(([f, v]) => (v ? `${f} ${v}` : f)).join("  ")}
         </p>
       )}
-      <div className="max-h-96 overflow-y-auto pr-1">
+      <div className="pr-1">
         {p.secoes.map((s) => {
           const lista = s.opcoes.filter((o) => (!so || o.flag in p.valor)
             && (!filtro || o.nomes.join(" ").toLowerCase().includes(filtro) || o.descricao.toLowerCase().includes(filtro)));
@@ -602,6 +603,15 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
   const [form, setForm] = useState<LlamaParams | null>(null);
   const [adv, setAdv] = useState(false);
   const [todas, setTodas] = useState(false);
+  const [aba, setAba] = useState<"params" | "perfis">("params");
+  const lista = useRef<HTMLElement>(null);  // a modal de configurações abre ancorada à esquerda deste painel
+  const [ancora, setAncora] = useState(0);
+  useEffect(() => {
+    const medir = () => setAncora(lista.current ? window.innerWidth - lista.current.getBoundingClientRect().left : 0);
+    medir();
+    window.addEventListener("resize", medir);
+    return () => window.removeEventListener("resize", medir);
+  }, [sel]);
   const [opcoes, setOpcoes] = useState<{ secoes: { nome: string; opcoes: OpcaoLlama[] }[]; spec_tipos: string[] } | null>(null);
   useEffect(() => {
     api.get<NonNullable<typeof opcoes>>("/local/opcoes").then(setOpcoes).catch(() => setOpcoes({ secoes: [], spec_tipos: [] }));
@@ -769,7 +779,7 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
         </div>
       )}
 
-      <section className={card}>
+      <section className={card} ref={lista}>
         <div className="mb-2 flex items-center justify-between">
           <span className="text-fg">Modelos ({st.models.length})</span>
           <span className="text-faint">{st.dirs.length} pasta(s)</span>
@@ -825,14 +835,45 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
       />
 
       {sel && form && view && (
-        <section className={card}>
-          <p className="truncate font-medium text-fg">{view.path.split(/[\\/]/).pop()}</p>
-          {info?.arch && (
-            <p className="mt-0.5 text-faint">
-              {info.arch} · {info.n_layer} camadas{info.n_expert ? ` · ${info.n_expert} especialistas` : ""} · {size(info.size)}
-            </p>
-          )}
-
+        <Modal
+          label="Configurações do modelo"
+          onClose={() => pick({ path: sel } as LocalModel)}
+          className={`${card} flex w-[640px] max-w-[calc(100vw-32px)] flex-col overflow-hidden`}
+          style={{ position: "fixed", top: 12, bottom: 12, right: Math.max(12, ancora + 12) }}
+        >
+          <div className="mb-2 flex shrink-0 items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium text-fg">{view.path.split(/[\\/]/).pop()}</p>
+              {info?.arch && (
+                <p className="mt-0.5 text-faint">
+                  {info.arch} · {info.n_layer} camadas{info.n_expert ? ` · ${info.n_expert} especialistas` : ""} · {size(info.size)}
+                  {view.presets.ativo ? ` · perfil ${view.presets.ativo}` : ""}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 rounded-lg border border-line p-0.5">
+              {(["params", "perfis"] as const).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  className={`rounded-md px-3.5 py-2 text-xs ${aba === a ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                  onClick={() => setAba(a)}
+                >
+                  {a === "params" ? "Parâmetros" : `Perfis${Object.keys(view.presets.lista).length ? ` (${Object.keys(view.presets.lista).length})` : ""}`}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="grid size-9 shrink-0 place-items-center rounded-lg text-faint hover:bg-raised hover:text-fg"
+              title="Fechar"
+              onClick={() => pick({ path: sel } as LocalModel)}
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          {/* sempre visível: não rola com o formulário */}
+          <div className="shrink-0">
           {est?.ok && (
             <div className="mt-2.5 rounded-xl border border-line bg-raised/60 p-2.5">
               <div className="flex items-center gap-1.5">
@@ -881,6 +922,17 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               </p>
             </div>
           )}
+          </div>
+          {aba === "perfis" && (
+            <Perfis
+              view={view}
+              form={form}
+              onDone={() => consultar(sel)}
+              onError={props.onError}
+            />
+          )}
+          <div className={`min-h-0 flex-1 overflow-y-auto pr-1 ${aba === "perfis" ? "hidden" : ""}`}>
+
 
           <div className="mt-3 flex flex-col gap-2.5">
             <Num
@@ -997,9 +1049,79 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               modelo e não mexa mais.
             </p>
           )}
-        </section>
+          </div>
+        </Modal>
       )}
     </>
+  );
+}
+
+/** Aba Perfis: conjuntos nomeados de parâmetros do modelo. Aplicar vira os parâmetros salvos (o que o perfil
+ *  não fixa volta ao padrão); salvar guarda o formulário atual com um nome. */
+function Perfis(props: { view: ModelView; form: LlamaParams; onDone: () => void; onError: (e: string) => void }) {
+  const { view, form } = props;
+  const [nome, setNome] = useState("");
+  const [busy, setBusy] = useState("");
+  const nomes = Object.keys(view.presets.lista).sort();
+  const RESUMO: [keyof LlamaParams, string][] = [["ctx", "ctx"], ["ngl", "ngl"], ["n_cpu_moe", "n_cpu_moe"], ["cache_type_k", "KV"],
+    ["ubatch", "ub"], ["parallel", "np"], ["spec_type", "spec"], ["spec_draft_n_max", "draft"]];
+  const resumo = (p: Partial<LlamaParams>) => {
+    const partes = RESUMO.filter(([k]) => k in p).map(([k, r]) => `${r} ${String(p[k])}`);
+    const outros = Object.keys(p).length - partes.length;
+    return (partes.join(" · ") || "tudo no padrão") + (outros > 0 ? ` · +${outros}` : "");
+  };
+  const acao = async (rotulo: string, fn: () => Promise<unknown>) => {
+    setBusy(rotulo);
+    try {
+      await fn();
+      props.onDone();
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setBusy("");
+    }
+  };
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      {!nomes.length && <p className="text-muted">Nenhum perfil ainda. Ajuste os parâmetros na aba Parâmetros e salve com um nome.</p>}
+      <div className="flex flex-col gap-1.5">
+        {nomes.map((n) => (
+          <div key={n} className={`flex items-center gap-2 rounded-lg border px-2.5 py-2 ${view.presets.ativo === n ? "border-accent/60 bg-raised" : "border-line"}`}>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-fg">
+                {n}
+                {view.presets.ativo === n && <span className="ml-2 rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent">em uso</span>}
+              </p>
+              <p className="truncate text-faint" title={JSON.stringify(view.presets.lista[n])}>{resumo(view.presets.lista[n])}</p>
+            </div>
+            <button className={btn} disabled={!!busy} onClick={() => acao("Aplicando…", () => api.post("/local/preset/apply", { path: view.path, name: n }))}>
+              Aplicar
+            </button>
+            <Confirma
+              rotulo={<Trash className="size-3.5" />}
+              pergunta="Excluir este perfil?"
+              titulo={`Excluir perfil ${n}`}
+              className="shrink-0 text-faint hover:text-red-400"
+              onSim={() => void acao("Excluindo…", () => api.post("/local/preset/delete", { path: view.path, name: n }))}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <input
+          className={`${input} flex-1`}
+          placeholder="nome do novo perfil (parâmetros atuais)"
+          value={nome}
+          onChange={(e) => setNome(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && nome.trim() && acao("Salvando…", () => api.put("/local/preset", { path: view.path, name: nome, params: form }).then(() => setNome("")))}
+        />
+        <button className={btnPrimary} disabled={!nome.trim() || !!busy} onClick={() => acao("Salvando…", () => api.put("/local/preset", { path: view.path, name: nome, params: form }).then(() => setNome("")))}>
+          Salvar perfil
+        </button>
+      </div>
+      {busy && <p className="mt-1 text-muted">{busy}</p>}
+      <p className="mt-2 text-faint">Aplicar um perfil troca os parâmetros salvos do modelo; o que ele não fixa volta ao padrão. Vale no próximo carregamento.</p>
+    </div>
   );
 }
 
