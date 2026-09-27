@@ -87,7 +87,7 @@ def test_nao_manda_opcao_que_a_build_nao_conhece():
     assert "--ctx-checkpoints" in novo and "--n-cpu-moe" in novo
 
     antigo = localai.argv(Path("llama-server"), "m.gguf", p, ANTIGO)
-    assert "--mlock" in antigo and "--no-mmap" in antigo and "--load-mode" not in antigo
+    assert "--mlock" not in antigo and "--no-mmap" in antigo and "--load-mode" not in antigo  # idem no build antigo
     # a build antiga não conhece estas: ficam de fora em vez de derrubar o servidor
     assert "--ctx-checkpoints" not in antigo and "--n-cpu-moe" not in antigo
 
