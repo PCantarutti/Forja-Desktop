@@ -682,5 +682,135 @@
       "aceite": "5/6",
       "suite_do_projeto_passa": true
     }
+  },
+  "paralelo-2-workers-sandbox-2": {
+    "rotulo": "paralelo-2-workers-sandbox-2",
+    "quando": "2026-09-26T21:31:12",
+    "maestro": "Qwen3.6-35B-A3B-Q4_K_M",
+    "worker": "Qwen3.6-35B-A3B-Q4_K_M",
+    "kv": "do usuário",
+    "effort": "medio",
+    "dados": "C:\\Projetos\\Forja\\.devbench\\paralelo-2-workers-sandbox-2-20260926-213112",
+    "workers": 2,
+    "sandbox": true,
+    "mmap": true,
+    "estado": "terminou",
+    "relogio_s": 1801.3,
+    "aprovacoes_pedidas": [],
+    "banco": {
+      "tarefas": 3,
+      "por_status": {
+        "completed": 3
+      },
+      "needs_human": 0,
+      "tentativas_total": 3,
+      "segundos_nos_workers": 2004.6,
+      "tentativas_por_tarefa": {
+        "TASK-001": 1,
+        "TASK-002": 1,
+        "TASK-003": 1
+      },
+      "lista": [
+        {
+          "code": "TASK-001",
+          "title": "Criar tests/test_modelo.py com testes para o módulo modelo (Tarefa dataclass e PRIORIDADES).",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-002",
+          "title": "Criar tests/test_armazem.py com testes para o módulo armazem (Armazem CRUD, filtros, atrasadas, persistência).",
+          "status": "completed",
+          "attempt_count": 1
+        },
+        {
+          "code": "TASK-003",
+          "title": "Criar tests/test_cli.py com testes para a CLI (main, add, list, done, rm, stats, export).",
+          "status": "completed",
+          "attempt_count": 1
+        }
+      ],
+      "features": [
+        {
+          "title": "Suíte de testes do pacote tarefas",
+          "status": "done"
+        }
+      ]
+    },
+    "metricas": {
+      "por_papel": {
+        "maestro": {
+          "chamadas": 9,
+          "segundos": 244.6,
+          "prompt_tokens": 176105,
+          "completion_tokens": 3182,
+          "prompt_processado": 21475,
+          "prompt_do_cache": 154630,
+          "taxa_cache": 0.878,
+          "prompt_ms": 126297,
+          "geracao_ms": 117584
+        },
+        "worker": {
+          "chamadas": 27,
+          "segundos": 1853.4,
+          "prompt_tokens": 308228,
+          "completion_tokens": 29148,
+          "prompt_processado": 48133,
+          "prompt_do_cache": 260095,
+          "taxa_cache": 0.844,
+          "prompt_ms": 262827,
+          "geracao_ms": 1581811
+        }
+      },
+      "trocas_de_modelo": 1,
+      "segundos_workers_juntos": 374.3,
+      "segundos_em_troca": 17.3,
+      "trocas": [
+        {
+          "de": "",
+          "para": "Qwen3.6-35B-A3B-Q4_K_M",
+          "segundos": 17.34
+        }
+      ],
+      "cache_perdido_do_maestro": {
+        "voltas_depois_de_run_task": 1,
+        "prompt_reprocessado_total": 2014,
+        "prompt_reprocessado_medio": 2014,
+        "ms_reprocessando_total": 10519,
+        "voltas": [
+          {
+            "prompt_processado": 2014,
+            "prompt_do_cache": 19324,
+            "prompt_ms": 10519
+          }
+        ]
+      }
+    },
+    "testes": {
+      "suite_do_projeto": {
+        "exit": 0,
+        "passed": 73,
+        "failed": 0,
+        "error": 0,
+        "resumo": "73 passed in 0.23s"
+      },
+      "aceite": {
+        "exit": 1,
+        "passed": 5,
+        "failed": 1,
+        "error": 0,
+        "resumo": "1 failed, 5 passed in 0.98s"
+      }
+    },
+    "resumo": {
+      "relogio_min": 30.0,
+      "troca_de_modelo_min": 0.3,
+      "chamadas_ao_llm_min": 35.0,
+      "tarefas": 3,
+      "needs_human": 0,
+      "tentativas": 3,
+      "aceite": "5/6",
+      "suite_do_projeto_passa": true
+    }
   }
 }
