@@ -191,6 +191,17 @@ def safetensors(pasta: Path, nome: str, camadas: list[str]) -> str:
     return str(f)
 
 
+def test_vae_avulso_nao_e_modelo_de_imagem(isolado):
+    """O VAE do Qwen-Image 2.1 guardado junto do GGUF aparecia no seletor como modelo. O T5 (encoder sem decoder)
+    e o checkpoint completo (first_stage_model + diffusion_model) continuam na lista."""
+    m = isolado / "modelos"
+    qwen = safetensors(m, "qwen_image_2.1_vae_bf16.safetensors", ["conv1.weight", "decoder.head.0.gamma", "encoder.conv1.weight"])
+    sd = safetensors(m, "x.safetensors", ["encoder.down.0.weight", "decoder.up.0.weight", "quant_conv.weight"])
+    t5 = safetensors(m, "t5.safetensors", ["encoder.block.0.weight", "shared.weight"])
+    ck = safetensors(m, "ck.safetensors", ["model.diffusion_model.x", "first_stage_model.decoder.x"])
+    assert [localai.kind_of(Path(x)) for x in (qwen, sd, t5, ck)] == ["outro", "outro", "image", "image"]
+
+
 def test_esrgan_formato_antigo_e_seedvr2_pelo_conteudo(isolado):
     """UltraSharp e os da comunidade nomeiam as camadas do jeito antigo (model.0, RDB1); o SeedVR2 tem os blocos
     com modulação por texto. O VAE dele não vira modelo de imagem."""

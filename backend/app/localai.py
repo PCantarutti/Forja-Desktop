@@ -1135,6 +1135,20 @@ ARCH_CODIFICADOR = ("t5encoder", "t5", "umt5")
 FORA_DO_VIDEO = ("vae", "umt5", "clip", "lora", "lightx2v", "causvid")
 
 
+RAIZES_VAE = {"encoder", "decoder", "quant_conv", "post_quant_conv", "conv1", "conv2"}
+
+
+def eh_vae(path: str) -> bool:
+    """VAE avulso pelos tensores: só encoder/decoder (e as convs entre eles), sem nada de difusão. Vale para o
+    ae do Flux, o do SD (quant_conv) e os do Qwen-Image/Wan (conv1/conv2). O T5 também tem `encoder.`, mas
+    não tem `decoder.`."""
+    try:
+        raizes = {k.split(".")[0] for k in loras.cabecalho(path) if k != "__metadata__"}
+    except (OSError, ValueError, struct.error):
+        return False
+    return "decoder" in raizes and raizes <= RAIZES_VAE
+
+
 def kind_of(f: Path) -> str:
     """chat, image ou video. Modelo de linguagem tem camadas e cabeças de atenção no cabeçalho; difusão
     não; vídeo é a difusão com arquitetura de vídeo (Wan).
@@ -1153,6 +1167,8 @@ def kind_of(f: Path) -> str:
             return "ampliador"  # ESRGAN, SeedVR2 ou DAT/HAT/SwinIR: amplia, não gera nada
         if f.suffix.lower() == ".pth":
             return "outro"  # .pth que não é ESRGAN não vira modelo de imagem
+        if eh_vae(str(f)):
+            return "outro"  # VAE avulso (Qwen, Flux, Wan, SD): peça do modelo, sozinho não gera
     if f.suffix.lower() != ".gguf":
         # .safetensors/.ckpt: só difusão usa por aqui. Wan pelo nome — o VAE e o umt5 dele não são modelo.
         # "wan" como palavra: substring pegava "swan", "Taiwan" e as LoRAs do Wan
