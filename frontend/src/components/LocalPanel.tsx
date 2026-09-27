@@ -872,16 +872,8 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               <X className="size-4" />
             </button>
           </div>
-          {aba === "perfis" && (
-            <Perfis
-              view={view}
-              form={form}
-              onDone={() => consultar(sel)}
-              onError={props.onError}
-            />
-          )}
-          <div className={`min-h-0 flex-1 overflow-y-auto pr-1 ${aba === "perfis" ? "hidden" : ""}`}>
-
+          {/* sempre visível: não rola com o formulário */}
+          <div className="shrink-0">
           {est?.ok && (
             <div className="mt-2.5 rounded-xl border border-line bg-raised/60 p-2.5">
               <div className="flex items-center gap-1.5">
@@ -930,6 +922,17 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               </p>
             </div>
           )}
+          </div>
+          {aba === "perfis" && (
+            <Perfis
+              view={view}
+              form={form}
+              onDone={() => consultar(sel)}
+              onError={props.onError}
+            />
+          )}
+          <div className={`min-h-0 flex-1 overflow-y-auto pr-1 ${aba === "perfis" ? "hidden" : ""}`}>
+
 
           <div className="mt-3 flex flex-col gap-2.5">
             <Num
