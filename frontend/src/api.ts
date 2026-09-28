@@ -1,6 +1,9 @@
 // Token desta execução do app, exigido pelo backend nas rotas /api. Ausente quando a UI abre
 // numa aba comum do navegador (dev com Vite) — e ali o backend também não exige.
 const auth = (): Record<string, string> => (window.forja?.token ? { "X-Forja-Token": window.forja.token } : {});
+// <img src> e link de download não mandam header: levam o token neste cookie (sem Max-Age, morre com o
+// app, como o próprio token). Strict: página de outro site não consegue fazer o navegador mandá-lo.
+if (window.forja?.token) document.cookie = `forja_token=${window.forja.token}; path=/api; SameSite=Strict`;
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const r = await fetch(`/api${path}`, {
@@ -36,11 +39,11 @@ export async function uploadFile(file: File, conv: number | null = null) {
   return r.json();
 }
 
-/** Imagem de fora para editar na aba Imagens; volta o caminho absoluto no disco. */
-export async function uploadReferencia(file: File): Promise<string> {
+/** Imagem sem caminho no disco (colada, máscara, quadro) para editar; vai para referencias/ da aba e volta o caminho absoluto. */
+export async function uploadReferencia(file: File, video = false): Promise<string> {
   const form = new FormData();
   form.append("file", file);
-  const r = await fetch("/api/imagens/referencia", { method: "POST", body: form, headers: auth() });
+  const r = await fetch(`/api/imagens/referencia${video ? "?video=true" : ""}`, { method: "POST", body: form, headers: auth() });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
   return (await r.json()).path;
 }

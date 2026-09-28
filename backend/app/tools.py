@@ -254,14 +254,22 @@ SKILLS_DIR = (config.DATA_DIR / "skills").resolve()  # skills do usuário: recur
 
 
 def resolve_leitura(root: Path, path: str | None) -> Path:
-    """resolve_path, mais a pasta de spill e a de skills do usuário: os únicos lugares fora da raiz
-    que dá para ler."""
+    """resolve_path, mais o spill desta conversa, a pasta de skills do usuário e os anexos por referência
+    da conversa: os únicos lugares fora da raiz que dá para ler."""
     raw = (path or "").strip()
     if raw:
         alvo = Path(raw).expanduser()
-        if alvo.is_absolute() and ((alvo := alvo.resolve()).is_relative_to(SPILL_DIR)
-                                   or alvo.is_relative_to(SKILLS_DIR)):
-            return alvo
+        if alvo.is_absolute():
+            from . import shell, uploads  # tardio: os dois importam este módulo
+            alvo = alvo.resolve()
+            conv = shell.CONV.get()
+            # spill/<conversa>/ é só dela (o id volta a ser usado depois que a conversa de id maior é
+            # apagada); os logs de run_command ficam soltos na raiz do spill.
+            if alvo.is_relative_to(SPILL_DIR) and (not conv or alvo.parent == SPILL_DIR
+                                                   or alvo.is_relative_to(SPILL_DIR / conv)):
+                return alvo
+            if alvo.is_relative_to(SKILLS_DIR) or uploads.externo_liberado(conv, str(alvo)):
+                return alvo
     return resolve_path(root, path)
 
 

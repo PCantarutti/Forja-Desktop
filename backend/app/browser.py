@@ -1031,10 +1031,7 @@ async def screenshot(_root: Path, args: dict) -> dict:
         raise
     except Exception as e:
         raise ToolError((_act_err(alvo, e) if alvo else f"Falha no screenshot: {_err(e)}")) from e
-    try:
-        att = uploads.save("browser.jpg", jpg, "image/jpeg")
-    except ValueError as e:
-        raise ToolError(str(e)) from e
+    att = uploads.salvar_captura("browser.jpg", jpg)  # fora do repositório (ver uploads.CAPTURAS_DIR)
 
     if alvo:
         return {"text": f"{await _summary(page)}\nScreenshot de '{alvo}' anexado.", "attachments": [att]}

@@ -1,4 +1,6 @@
 """E15-A: board de issues — impressão digital, varredura determinística, Iniciar e acompanhamento."""
+from pathlib import Path
+
 import pytest
 
 from app import board, db
@@ -363,3 +365,35 @@ def test_board_card_nao_repete_o_mesmo_ponto_e_aceita_tipo_solto(proj):
     assert "Já existe o card #" in de_novo["text"] and de_novo["board_card"]["id"] == r["board_card"]["id"]
     longe = run_tool("board_card", {"titulo": "Longe", "tipo": "melhoria", "arquivo": "web.tsx", "linha": 1}, root)
     assert "criado" in longe["text"] and longe["board_card"]["tipo"] == "improvement"
+
+
+def test_prints_do_card_sobrevivem_a_conversa_e_saem_com_o_card(proj, monkeypatch, tmp_path):
+    """O card copia o antes/depois para board/<id>/: apagar a conversa leva os prints dela, o card não."""
+    from app import uploads
+    _, projeto = proj
+    monkeypatch.setattr(uploads, "EVIDENCIAS_DIR", tmp_path / "board")
+    monkeypatch.setattr(board, "_escolha", lambda modo: {"provider": "p", "model": "m", "permission": "manual", "effort": "medio"})
+    monkeypatch.setattr(board, "_dispara", lambda *a: None)
+    card, _ = board.criar(projeto, {"titulo": "Menu torto", "tipo": "visual", "area": "frontend"})
+    card = board.iniciar(card["id"])
+    prints = []
+    for n in (1, 2):
+        f = tmp_path / "capturas" / f"p{n}.jpg"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(b"jpg%d" % n)
+        prints.append(f)
+    with db.session() as s:
+        for f in prints:
+            s.add(db.Message(conversation_id=card["conversa_id"], role="tool", name="browser_screenshot",
+                             content="ok", meta={"attachments": [{"path": str(f), "kind": "image"}]}))
+        s.add(db.Message(conversation_id=card["conversa_id"], role="assistant", content="corrigido"))
+        s.commit()
+    board.acompanha()
+    imgs = [e for e in board.listar(projeto)[0]["evidencias"] if e.get("imagem")]
+    copias = [Path(e["imagem"]) for e in imgs]
+    assert all(c.parent == tmp_path / "board" / str(card["id"]) for c in copias)
+    for f in prints:
+        f.unlink()  # a conversa foi apagada: os prints dela sumiram
+    assert [c.read_bytes() for c in copias] == [b"jpg1", b"jpg2"]
+    board.apagar(card["id"])
+    assert not (tmp_path / "board" / str(card["id"])).exists()

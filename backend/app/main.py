@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -28,7 +29,7 @@ from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servido
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
-from .tools import REGISTRY, ToolError
+from .tools import REGISTRY, SPILL_DIR, ToolError
 
 
 settings.apply()
@@ -47,6 +48,8 @@ async def lifespan(_app):
     taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
+    lotes.limpar_referencias()  # cópias coladas que nenhuma mensagem cita (nunca usadas, ou de versão antiga)
+    uploads.limpar_capturas_avulsas()  # prints tirados fora de uma conversa, com mais de 7 dias
     checkpoints.podar_antigos()  # desfazer de mais de um mês atrás: o banco não cresce para sempre
     metricas.poda()  # E10: métricas com mais de 60 dias
     shell.limpa_logs()  # logs de comando e servidor com mais de 7 dias em %TEMP%\forja-serve
@@ -94,12 +97,14 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # - `X-Forja-Token`, gerado pelo Electron a cada execução, é exigido no resto das rotas /api. É o que
 #   mata o vetor do processo local. Vazio (dev com Vite, repo Docker atrás do nginx) desliga a parte.
 #
-# Fora da exigência de token: os GET que o navegador busca sem passar pelo fetch() da interface e que,
-# por isso, não têm como mandar header — <img src>, link de download (`/export`) e a página do
-# relatório da pesquisa, que o botão abre no navegador do usuário via window.open (`/relatorio`). São
-# leitura confinada, sem efeito colateral, e sem CORS página nenhuma consegue ler a resposta.
-SEM_TOKEN = ("/api/files", "/api/local/image/file")
-SUFIXO_SEM_TOKEN = ("/export", "/relatorio")
+# Os GET que o navegador busca sem passar pelo fetch() da interface (<img src>, link de download do
+# `/export`) não mandam header: o token vem no cookie `forja_token`, que o api.ts grava ao abrir (a
+# janela do Electron manda sozinha, SameSite=Strict), ou em `?t=` (o celular, que monta a URL). Sem
+# isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
+# inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
+# navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file")
+SUFIXO_SEM_TOKEN = ("/relatorio",)
 
 
 def mesma_origem(origin: str, host: str) -> bool:
@@ -114,9 +119,11 @@ async def fronteira(request, call_next):
     if origin and not mesma_origem(origin, request.headers.get("host", "")):
         return JSONResponse({"detail": "Origem não autorizada"}, status_code=403)
     path = request.url.path
-    if (config.API_TOKEN and path.startswith("/api/") and not path.startswith(SEM_TOKEN)
-            and not path.endswith(SUFIXO_SEM_TOKEN)
-            and request.headers.get("x-forja-token") not in (config.API_TOKEN, mobile.token())):
+    token = request.headers.get("x-forja-token")
+    if path.startswith(TOKEN_FORA_DO_HEADER) or path.endswith("/export"):
+        token = token or request.cookies.get("forja_token") or request.query_params.get("t")
+    if (config.API_TOKEN and path.startswith("/api/") and not path.endswith(SUFIXO_SEM_TOKEN)
+            and token not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
 
@@ -1215,17 +1222,17 @@ class PromptBody(BaseModel):
 
 
 @app.post("/api/imagens/referencia")
-async def imagens_referencia(file: UploadFile = File(...)):
-    """Imagem sem caminho no disco (colada, ou o Forja no navegador/Docker): vai para
-    <pasta de imagens>/referencias/, que a rota de arquivo já serve. No app o normal é a rota de
-    baixo, que guarda só o caminho do arquivo da pessoa."""
-    # ponytail: referências não entram no expurgo; ficam até alguém apagar a pasta
+async def imagens_referencia(file: UploadFile = File(...), video: bool = False):
+    """Imagem sem caminho no disco (colada, máscara pintada, quadro tirado do vídeo, o celular): vai para
+    <pasta da aba>/referencias/, que a rota de arquivo já serve. No app o normal é a rota de baixo, que
+    guarda só o caminho do arquivo da pessoa. A cópia sai com a conversa que a usou, e a que nenhuma
+    mensagem cita sai no expurgo da subida (lotes.limpar_referencias)."""
     dados = await file.read()
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(400, "Envie uma imagem (PNG, JPG ou WebP).")
     if len(dados) > 50_000_000:
         raise HTTPException(400, "Imagem maior que 50 MB.")
-    pasta = imagegen.out_dir() / "referencias"
+    pasta = lotes.referencias_dir(video)
     pasta.mkdir(parents=True, exist_ok=True)
     # nome pelo conteúdo: mandar a mesma imagem de novo reaproveita o arquivo em vez de duplicar
     alvo = pasta / f"{hashlib.sha256(dados).hexdigest()[:16]}-{uploads.safe_name(file.filename or 'ref.png')}"
@@ -1790,7 +1797,7 @@ async def browser_upload(conv: str = "0", file: UploadFile | None = File(None)):
             await s.upload([])
         else:
             root = _conv_root(conv)
-            att = uploads.save(file.filename or "arquivo", await file.read(), file.content_type, root)
+            att = uploads.save(file.filename or "arquivo", await file.read(), file.content_type, root, conv)
             await s.upload([str(root / att["path"])])
     except (ToolError, ValueError, OSError) as e:
         raise HTTPException(400, str(e))
@@ -1922,7 +1929,7 @@ async def bulk_conversations(body: BulkBody):
     """Ação em várias conversas de uma vez (seleção múltipla na barra lateral)."""
     if body.action not in ("archive", "unarchive", "pin", "unpin", "delete"):
         raise HTTPException(400, "action deve ser archive, unarchive, pin, unpin ou delete")
-    done, skipped, closed = 0, [], []
+    done, skipped, closed, limpezas = 0, [], [], []
     with db.session() as s:
         for cid in body.ids:
             c = s.get(db.Conversation, cid)
@@ -1933,7 +1940,7 @@ async def bulk_conversations(body: BulkBody):
                     skipped.append(cid)  # não apaga conversa com execução em andamento
                     continue
                 s.query(db.Checkpoint).filter(db.Checkpoint.conversation_id == cid).delete()
-                lotes.apagar_imagens(cid)  # conversa de imagem: as geradas vão junto (a tela avisou)
+                limpezas.append(_limpar_disco(cid, c.workspace))  # o mesmo do apagar de uma
                 s.delete(c)
                 closed.append(cid)
             elif body.action in ("archive", "unarchive"):
@@ -1942,9 +1949,10 @@ async def bulk_conversations(body: BulkBody):
                 c.pinned = body.action == "pin"
             done += 1
         s.commit()
+    for depois in limpezas:
+        depois()
     for cid in closed:
         await MANAGER.close(str(cid))
-        mirror.remove(cid)
     return {"ok": True, "done": done, "skipped": skipped}
 
 
@@ -2289,13 +2297,32 @@ async def delete_conversation(conv_id: int):
         raise HTTPException(409, "Esta conversa tem uma execução em andamento. Pare antes de apagar.")
     with db.session() as s:
         c = _get_conv(s, conv_id)
-        lotes.apagar_imagens(conv_id)  # conversa de imagem: as geradas vão junto (a tela avisou)
+        depois = _limpar_disco(conv_id, c.workspace)
         s.delete(c)
         s.commit()
-    mirror.remove(conv_id)  # o .md espelhado vai junto
-    kvcache.apagar_conversa(conv_id)  # E4: e o cache do prompt dela em disco
+    depois()
     await MANAGER.close(str(conv_id))  # a sessão do navegador morre com a conversa
     return {"ok": True}
+
+
+def _limpar_disco(conv_id: int, pasta: str | None):
+    """Tudo o que a conversa deixou no disco sai com ela. O que depende das mensagens roda agora, antes
+    de elas saírem do banco; o resto, na função devolvida, que roda depois do commit. Anexo por
+    referência e imagem de slot do site são arquivos do usuário e ficam."""
+    lotes.apagar_imagens(conv_id)  # conversa de imagem/vídeo: as geradas vão junto (a tela avisou)
+    refs = lotes.referencias_da_conversa(conv_id)
+    try:
+        raiz = workspace.resolve(pasta)
+    except workspace.WorkspaceError:
+        raiz = None  # pasta que não existe mais: só os prints, que moram fora dela
+    uploads.apagar_da_conversa(conv_id, raiz)
+
+    def depois() -> None:
+        lotes.apagar_referencias(refs, conv_id)  # só as que outra conversa não usa
+        mirror.remove(conv_id)  # o .md espelhado
+        kvcache.apagar_conversa(conv_id)  # E4: o cache do prompt em disco
+        shutil.rmtree(SPILL_DIR / str(conv_id), ignore_errors=True)  # saídas grandes das ferramentas
+    return depois
 
 
 # ------------------------------------------------------------------ execução
@@ -2316,7 +2343,9 @@ def get_file(path: str, conv: str = "0"):
     try:
         p = resolve_path(_conv_root(conv), path)
     except ToolError as e:
-        raise HTTPException(400, str(e))
+        if not uploads.externo_liberado(conv, path):  # anexo por referência, fora da pasta
+            raise HTTPException(400, str(e))
+        p = Path(path)
     if not p.is_file():
         raise HTTPException(404, "Arquivo não encontrado")
     return FileResponse(p)
@@ -2354,7 +2383,21 @@ def workspace_files(conv: str = "0", q: str = "", limit: int = 50):
 async def upload(file: UploadFile = File(...), conv: str = "0"):
     """Salva o anexo dentro da pasta de trabalho da conversa para o agente conseguir abrir."""
     try:
-        return uploads.save(file.filename or "arquivo", await file.read(), file.content_type, _conv_root(conv))
+        return uploads.save(file.filename or "arquivo", await file.read(), file.content_type, _conv_root(conv), conv)
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e))
+
+
+class ReferenciaBody(BaseModel):
+    path: str
+    conv: int = 0
+
+
+@app.post("/api/uploads/referencia")
+def upload_referencia(body: ReferenciaBody):
+    """Anexo que já está no disco (o app sabe o caminho): nada é copiado, a mensagem guarda o caminho."""
+    try:
+        return uploads.referenciar(body.path, _conv_root(body.conv))
     except (ValueError, OSError) as e:
         raise HTTPException(400, str(e))
 

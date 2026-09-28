@@ -1153,7 +1153,9 @@ export default function App() {
     for (const f of lista) {
       if (conv === null) break;
       try {
-        const att = await uploadFile(f, conv);
+        // Arquivo do disco (escolhido ou arrastado) é usado onde está, sem cópia; colado não tem caminho e sobe.
+        const noDisco = window.forja?.caminhoDe?.(f);
+        const att = noDisco ? await api.post<any>("/uploads/referencia", { path: noDisco, conv }) : await uploadFile(f, conv);
         setAttachments((list) => [...list, att]);
       } catch (e: any) {
         setError(`${f.name}: ${e.message}`);

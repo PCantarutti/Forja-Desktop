@@ -68,7 +68,7 @@ function quadroDe(src: string, tempo: number | "fim"): Promise<Blob | null> {
 }
 
 async function subirQuadro(b: Blob, nome: string): Promise<string> {
-  return uploadReferencia(new File([b], nome, { type: "image/png" }));
+  return uploadReferencia(new File([b], nome, { type: "image/png" }), true);
 }
 
 type Slots = [string | null, string | null]; // [início, fim]
@@ -274,7 +274,7 @@ export default function VideoView(props: {
       const noDisco = window.forja?.caminhoDe?.(f);
       const path = noDisco
         ? (await api.post<{ path: string }>("/imagens/referencia/caminho", { path: noDisco })).path
-        : await uploadReferencia(f);
+        : await uploadReferencia(f, true);
       escolherQuadro(i, path);
     } catch (e: any) {
       mostrarErro(e.message);

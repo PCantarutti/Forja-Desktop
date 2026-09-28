@@ -27,7 +27,7 @@ from pathlib import Path
 
 import httpx
 
-from . import config, downloads, loras, native
+from . import config, downloads, loras, native, segredo
 from .tools import ToolError
 
 RUNTIMES = config.DATA_DIR / "runtimes"
@@ -2090,7 +2090,7 @@ HF = "https://huggingface.co"
 
 def hf_token() -> str:
     """Token do Hugging Face (Configurações). Sem ele, repositório gated responde 401."""
-    return str(read_config().get("hf_token") or "").strip()
+    return segredo.decifrar(str(read_config().get("hf_token") or "")).strip()
 
 
 def hf_headers() -> dict:
@@ -2098,7 +2098,7 @@ def hf_headers() -> dict:
 
 
 def set_hf_token(token: str) -> bool:
-    _patch("hf_token", str(token).strip())
+    _patch("hf_token", segredo.cifrar(str(token).strip()))  # cifrado no local.json (segredo.py)
     return bool(hf_token())
 NOVA_LINHA = chr(10)
 TAB = chr(9)

@@ -11,7 +11,7 @@ import json
 import re
 from typing import Any
 
-from . import config, db, llm
+from . import config, db, llm, segredo
 
 ENV_DEFAULTS: dict[str, Any] = {
     "providers": [copy.deepcopy(p) for p in config.PROVIDERS.values()],
@@ -146,6 +146,8 @@ def load() -> dict:
     with db.session() as s:
         for row in s.query(db.AppSetting).all():
             values[row.key] = row.value
+    # A chave de API fica cifrada no banco (segredo.py); dentro do app ela circula aberta.
+    values["providers"] = [{**p, "api_key": segredo.decifrar(p.get("api_key") or "")} for p in values["providers"]]
     # Slot de subagente novo chegando em banco antigo: a linha salva substitui a chave inteira, e sem
     # os slots que faltam a tela de Subagentes quebra ao ler o que não existe.
     values["subagents"] = {**ENV_DEFAULTS["subagents"], **(values["subagents"] or {})}
@@ -391,7 +393,10 @@ def update(patch: dict) -> dict:
     values = validate(patch, load())
     with db.session() as s:
         for key in patch:
-            s.merge(db.AppSetting(key=key, value=values[key]))
+            valor = values[key]
+            if key == "providers":
+                valor = [{**p, "api_key": segredo.cifrar(p.get("api_key") or "")} for p in valor]
+            s.merge(db.AppSetting(key=key, value=valor))
         s.commit()
     apply(values)
     return public(values)
