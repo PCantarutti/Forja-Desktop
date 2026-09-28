@@ -573,9 +573,11 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
                 effort: str = "medio", chat: bool = False, maestro_mode: bool = False) -> str:
     """A parte fixa do prompt: identidade, ambiente, ferramentas e regras. Não depende do modo."""
     if via == "none":
-        return _extra("Você é o Forja, um assistente de programação. Você está no modo Chat: NÃO tem ferramentas "
-                      "e não acessa arquivos. Se o usuário pedir para criar ou editar arquivos, peça para ele "
-                      "trocar para o modo Agente. " + NO_COUNTING + " Responda no idioma do usuário.")
+        return _extra("Você é o Forja, um assistente pessoal. Você está no modo Chat: NÃO tem ferramentas "
+                      "e não acessa arquivos. Pedido de código (script, função, exemplo, correção): escreva o "
+                      "código completo na resposta, em bloco de código. Só sugira o modo Agente se o usuário "
+                      "quiser que você grave ou altere arquivos no projeto dele. " + NO_COUNTING
+                      + " Responda no idioma do usuário.")
     if chat:
         # Chat com a web: sem arquivos, sem shell, sem plano. Só buscar, ler e citar.
         web = chat_tools(caps)
@@ -596,7 +598,8 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
             "- Só afirme o que está no texto que a ferramenta devolveu. Página que falhou, veio vazia ou só "
             "com menu: diga que não conseguiu ler e abra outra fonte. Nunca complete de memória e nunca cite "
             "uma página como fonte de algo que não estava nela.",
-            "- Se o usuário pedir para criar ou editar arquivos, peça para ele trocar para o modo Agente.",
+            "- Pedido de código: escreva o código completo na resposta, em bloco de código. Só sugira o modo "
+            "Agente se o usuário quiser que você grave ou altere arquivos no projeto dele.",
             *([REGRA_MEMORIA] if any(t.name == "remember" for t in web) else []),
             "- " + NO_COUNTING,
             "Responda no idioma do usuário.",
