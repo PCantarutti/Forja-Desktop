@@ -3,11 +3,11 @@ import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
-import { createPortal } from "react-dom";
+import { Lightbox } from "./Lightbox";
 import type { Approval, AskQuestion, Attachment, Message, Preview, SlotImagem, SlotsPendentes, Task, ToolCall, Stats } from "../types";
 import { SourceChip, SourceList } from "./Sources";
 import { useStickyBottom } from "../useStickyBottom";
-import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Download, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
+import { Brain, Check, Chevron, Edit, ChevronDown, Clipboard, Split, Clock, Copy, Cube, Eye, EyeOff, FolderOpen, Gauge, Shield, Tokens, X } from "./icons";
 import { VideoPlayer } from "./VideoPlayer";
 import type { CardMini } from "./BoardView";
 
@@ -214,54 +214,7 @@ export const setFileConv = (conv: number | null) => {
 };
 export const fileUrl = (a: Attachment) => `/api/files?path=${encodeURIComponent(a.path)}&conv=${fileConv}`;
 
-/** Imagem em tela cheia; clique (ou Esc) fecha. */
-export function Lightbox({ src, onClose, titulo }: { src: string; onClose: () => void; titulo?: string }) {
-  const [real, setReal] = useState(false);          // false = cabe na tela; true = pixel a pixel, com rolagem
-  const [medida, setMedida] = useState<[number, number] | null>(null);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const nome = titulo || decodeURIComponent(src.split(/[/?=&]/).filter(Boolean).pop() || "Imagem");
-  const botao = "flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-fg";
-  // Portal no body: desenhado dentro da resposta, herdava o CSS dela (miniatura de 280px numa célula de
-  // tabela) e o "ampliar" mostrava a imagem do mesmo tamanho, só que com o fundo escuro.
-  return createPortal(
-    <div onClick={onClose} role="dialog" aria-label={nome}
-         className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
-      <div onClick={(e) => e.stopPropagation()}
-           className="flex max-h-full max-w-[min(1400px,100%)] flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-popover">
-        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-          <span className="min-w-0 truncate text-sm text-fg" title={nome}>{nome}</span>
-          {medida && <span className="shrink-0 text-[11px] text-faint">{medida[0]}×{medida[1]}</span>}
-          <div className="ml-auto flex shrink-0 items-center gap-1">
-            <button className={botao} onClick={() => setReal((v) => !v)}
-                    title={real ? "Ajustar à tela" : "Ver no tamanho real (com rolagem)"}>
-              {real ? "Ajustar à tela" : "Tamanho real"}
-            </button>
-            <a className={botao} href={src} download title="Baixar a imagem">
-              <Download className="size-3.5" />
-            </a>
-            <button className={botao} onClick={onClose} title="Fechar (Esc)">
-              <X className="size-3.5" />
-            </button>
-          </div>
-        </div>
-        <div className={`min-h-0 flex-1 bg-bg p-3 ${real ? "overflow-auto" : "flex items-center justify-center overflow-hidden"}`}>
-          <img
-            src={src}
-            alt={nome}
-            onLoad={(e) => setMedida([e.currentTarget.naturalWidth, e.currentTarget.naturalHeight])}
-            onClick={() => setReal((v) => !v)}
-            className={`rounded-lg ${real ? "max-w-none cursor-zoom-out" : "max-h-[calc(100vh-8rem)] max-w-full cursor-zoom-in object-contain"}`}
-          />
-        </div>
-      </div>
-    </div>,
-    document.body,
-  );
-}
+export { Lightbox };
 
 /** Screenshot devolvido por uma ferramenta: grande no chat, clique abre em tela cheia. */
 export function ToolImages({ list, bare, modelSees }: { list: Attachment[]; bare?: boolean; modelSees?: boolean }) {

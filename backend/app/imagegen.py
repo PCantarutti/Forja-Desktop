@@ -303,6 +303,8 @@ def generate(prompt: str, out: Path, opts: dict | None = None, job_id: str = "",
         livre = localai.vram_livre_para_vae(str(o["model"]), bool(o.get("offload")))
         o["_bloco"] = bloco_vae(livre, localai.vae_medidas(str(o.get("vae") or "")), o.get("_teto_bloco"))
     out.parent.mkdir(parents=True, exist_ok=True)
+    modelo = str(o.get("model") or o.get("diffusion_model") or "")
+    localai.set_gerando(modelo, "vídeo" if localai.eh_video(modelo) else "imagem")
     proc = subprocess.Popen(argv(exe, prompt, out, o, refs), cwd=str(exe.parent), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True,
                             encoding="utf-8", errors="replace", **native.popen_kwargs())

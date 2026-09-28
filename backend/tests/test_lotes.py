@@ -125,6 +125,23 @@ def test_lote_de_edicao_leva_as_referencias_em_cada_imagem(monkeypatch):
         assert pedido.meta["refs"] == ["C:/r/a.png"]  # "Reaproveitar" traz a edição de volta
 
 
+def test_mais_no_mesmo_lote_continua_as_sementes_com_o_mesmo_prompt(monkeypatch):
+    chamadas = _fake_sd(monkeypatch)
+    conv = _conversa()
+    msg = lotes.start(conv, "a fox", models=["m1.safetensors"], count=2, seed=1000, refs=["C:/r/a.png"])
+    _esperar(msg["id"])
+    lotes.mais(msg["id"], 3)
+    pronto = _esperar(msg["id"])
+
+    imagens = pronto["meta"]["images"]
+    assert [i["seed"] for i in imagens] == [1000, 1001, 1002, 1003, 1004]
+    assert [i["status"] for i in imagens] == ["pronta"] * 5 and pronto["meta"]["count"] == 5
+    assert len({i["path"] for i in imagens}) == 5
+    assert [c["prompt"] for c in chamadas] == ["a fox"] * 5 and chamadas[-1]["refs"] == ["C:/r/a.png"]
+    with db.session() as s:  # nada de pedido novo: continua um lote só
+        assert [m.role for m in s.get(db.Conversation, conv).messages] == ["user", "assistant"]
+
+
 def test_lote_grava_as_duas_mensagens_e_titula(monkeypatch):
     _fake_sd(monkeypatch)
     conv = _conversa()

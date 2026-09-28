@@ -8,7 +8,7 @@ import { campoPrompt } from "./Composer";
 import SeletorFormato, { type Forma } from "./Formato";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
 import { PROPORCOES, estimarTempo, proporcaoPerto, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
-import { A_REFAZER, AnelProgresso, BarraTopo, Caixa, Chip, duracao, Fundo, Liquido, listras, numeroCaixa, rotuloSementes, Secao, SEEDS, Stepper, urlDa, velocidade } from "./ImagensView";
+import { A_REFAZER, AnelProgresso, BarraTopo, FiltroLotes, type Filtro, passaNoFiltro, Caixa, Chip, duracao, Fundo, Liquido, listras, numeroCaixa, rotuloSementes, Secao, SEEDS, Stepper, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
 import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
@@ -21,7 +21,6 @@ import AberturaSobreposta, { useAbertura } from "./AberturaSobreposta";
 const POLL_MS = 1500;
 const KEY_LLM = "forja.video.llm";
 const KEY_PARAMETROS = "forja.video.parametros";
-type Filtro = "todas" | "mantidas" | "sem";
 
 const MODOS: { id: ModoVideo; rotulo: string; curto: string; dica: string; exemplo: string }[] = [
   { id: "t2v", rotulo: "Texto", curto: "texto → vídeo", dica: "Só o prompt: o modelo inventa a cena inteira.",
@@ -132,6 +131,10 @@ export default function VideoView(props: {
   });
   const fim = useRef<HTMLDivElement>(null);
   const texto = useRef<HTMLTextAreaElement>(null);
+  // "Reaproveitar": o prompt da tomada fica esmaecido no campo e Enter gera mais NELA (mesmo lote).
+  // Digitar anula e vira uma tomada nova; Tab traz o texto para editar.
+  const [reuso, setReuso] = useState<{ lote: number; letra: string; prompt: string } | null>(null);
+  useEffect(() => setReuso(null), [props.conv]);
   const mostrarErro = useCallback((e: string) => setErro(e), []);
 
   useEffect(() => {
@@ -305,6 +308,7 @@ export default function VideoView(props: {
   }
 
   async function gerar(confirm = false) {
+    if (reuso && !prompt.trim()) return gerarMais(confirm);
     // Com uma geração rodando, a nova entra na fila do backend (um sd-cli por vez, na ordem).
     if (!o || !st || !prompt.trim() || !modelo || !st.runtimes.sd.installed) return;
     if (refs.length < precisaQuadros) {
@@ -337,6 +341,21 @@ export default function VideoView(props: {
       setPrompt("");
       props.onConversationChanged();
       carregarConversa(conv);
+    } catch (e: any) {
+      if (e.status === 409) setPerguntando(true);
+      else mostrarErro(e.message);
+    }
+  }
+
+  async function gerarMais(confirm = false) {
+    if (!reuso || !modelo) return;
+    try {
+      await api.post(`/imagens/${reuso.lote}/mais`, { count, models: [modelo], confirm });
+      setPerguntando(false);
+      setErro("");
+      setReuso(null);
+      props.onConversationChanged();
+      carregarConversa();
     } catch (e: any) {
       if (e.status === 409) setPerguntando(true);
       else mostrarErro(e.message);
@@ -397,7 +416,8 @@ export default function VideoView(props: {
     }
   }
 
-  function reaproveitar(meta: LoteMeta, pedido: Message, semente?: number) {
+  // Com semente é "refazer com esta semente" (o prompt vai para o campo); sem, é gerar mais no mesmo lote.
+  function reaproveitar(meta: LoteMeta, pedido: Message, semente?: number, lote?: { id: number; letra: string }) {
     const pm = pedido.meta as PedidoMeta | null;
     const r = pm?.refs ?? [];
     setSlots([r[0] ?? null, r[1] ?? null]);
@@ -407,7 +427,13 @@ export default function VideoView(props: {
     const usado = pm?.models?.[0];
     if (usado && st?.video_models.some((m) => m.path === usado)) setModelo(usado);
     setCount(semente ? 1 : meta.count);
-    setPrompt(pedido.content);
+    if (!semente && lote && !meta.opts.ampliacao) { // ampliação não ganha "mais": o prompt vai para o campo
+      setPrompt("");
+      setReuso({ lote: lote.id, letra: lote.letra, prompt: pedido.content });
+    } else {
+      setPrompt(pedido.content);
+      setReuso(null);
+    }
     texto.current?.focus();
   }
 
@@ -462,18 +488,8 @@ export default function VideoView(props: {
         unidade={["tomada", "tomadas"]}
         esquerda={
           <div className="flex items-center gap-2.5">
-            <div className="flex gap-0.5 rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label="Filtrar tomadas">
-              {([
-                ["todas", "Todas", lotes.flatMap((l) => (l.resposta.meta as LoteMeta).images).length],
-                ["mantidas", "Mantidas", lotes.flatMap((l) => (l.resposta.meta as LoteMeta).images).filter((i) => i.status === "mantida").length],
-                ["sem", "Sem decisão", lotes.flatMap((l) => (l.resposta.meta as LoteMeta).images).filter((i) => i.status === "pronta").length],
-              ] as [Filtro, string, number][]).map(([id, rot, n]) => (
-                <button key={id} role="radio" aria-checked={filtro === id} onClick={() => setFiltro(id)}
-                        className={`rounded-[6px] px-2.5 py-[3px] ${filtro === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
-                  {rot} <span className="font-mono text-faint">{n}</span>
-                </button>
-              ))}
-            </div>
+            <FiltroLotes filtro={filtro} onFiltro={setFiltro} rotulo="Filtrar tomadas"
+                         itens={lotes.flatMap((l) => (l.resposta.meta as LoteMeta).images)} />
             <span className="hidden text-xs text-faint 2xl:inline">Passe o mouse para tocar · arraste um quadro para o slot</span>
           </div>
         }
@@ -512,6 +528,7 @@ export default function VideoView(props: {
           {lotes.map(({ pedido, resposta }, iLote) => (
             <Tomada
               key={resposta.id}
+              reaproveitando={reuso?.lote === resposta.id}
               letra={String.fromCharCode(65 + (iLote % 26))}
               ultimo={iLote === lotes.length - 1}
               filtro={filtro}
@@ -522,7 +539,8 @@ export default function VideoView(props: {
               onPasta={(p) => abrirArquivo(p, "reveal")}
               onError={mostrarErro}
               onMudou={carregarConversa}
-              onReaproveitar={(semente) => reaproveitar(resposta.meta as LoteMeta, pedido, semente)}
+              onReaproveitar={(semente) => reaproveitar(resposta.meta as LoteMeta, pedido, semente,
+                                                       { id: resposta.id, letra: String.fromCharCode(65 + (iLote % 26)) })}
             />
           ))}
           <div ref={fim} />
@@ -656,19 +674,34 @@ export default function VideoView(props: {
                 </div>
               )}
               <div className="flex min-w-0 flex-1 flex-col gap-1">
-
+              {reuso && (
+                <span className="flex items-center gap-1.5 text-[11.5px] text-accent-text">
+                  Mais vídeos na tomada {reuso.letra} · Enter gera · Tab edita o prompt · digitar começa uma tomada nova
+                  <button onClick={() => setReuso(null)} title="Não reaproveitar" className="text-faint hover:text-fg">
+                    <X className="size-3" />
+                  </button>
+                </span>
+              )}
               <textarea
                 ref={texto}
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  if (e.target.value) setReuso(null);
+                }}
                 onKeyDown={(e) => {
+                  if (e.key === "Tab" && reuso && !prompt) {
+                    e.preventDefault();
+                    setPrompt(reuso.prompt);
+                    setReuso(null);
+                  }
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
                     gerar();
                   }
                 }}
                 rows={2}
-                placeholder={MODOS.find((m) => m.id === modo)?.exemplo}
+                placeholder={reuso ? reuso.prompt : MODOS.find((m) => m.id === modo)?.exemplo}
                 className={campoPrompt}
               />
               {(negAberto || !!o.negative) && (
@@ -714,11 +747,11 @@ export default function VideoView(props: {
                   </span>
                   <button
                     onClick={() => gerar()}
-                    disabled={!prompt.trim() || !modelo || semRuntime || refs.length < precisaQuadros}
+                    disabled={!(prompt.trim() || reuso) || !modelo || semRuntime || refs.length < precisaQuadros}
                     title={refs.length < precisaQuadros ? "Faltam os quadros" : st.image_busy || ocupado ? "Entra na fila: gera quando a atual terminar" : "Gerar (Enter)"}
                     className="inline-flex shrink-0 items-center gap-2 rounded-[10px] bg-accent px-3.5 py-2 text-[13px] font-semibold text-accent-fg hover:brightness-110 disabled:bg-raised disabled:text-faint disabled:hover:brightness-100"
                   >
-                    Gerar {count}
+                    {reuso && !prompt.trim() ? `Gerar mais ${count}` : `Gerar ${count}`}
                     <span className="font-mono text-[10.5px] font-medium opacity-65">Enter</span>
                   </button>
                 </div>
@@ -1285,10 +1318,11 @@ function Tomada(props: {
   letra: string;
   ultimo: boolean;
   filtro: Filtro;
+  reaproveitando: boolean; // o campo está pronto para gerar mais nesta tomada
 }) {
   const meta = props.resposta.meta as LoteMeta;
   const itens = meta.images;
-  const mostra = (i: LoteImagem) => props.filtro === "todas" || (props.filtro === "mantidas" ? i.status === "mantida" : i.status === "pronta");
+  const mostra = (i: LoteImagem) => passaNoFiltro(props.filtro, i);
   const pm = props.pedido.meta as PedidoMeta | null;
   const viva = props.resposta.status === "running";
   const [sel, setSel] = useState<Set<string>>(new Set());
@@ -1349,8 +1383,8 @@ function Tomada(props: {
             Cancelar
           </button>
         ) : (
-          <button onClick={() => props.onReaproveitar()} title="Traz prompt, quadros e ajustes desta tomada para o campo"
-                  className="shrink-0 rounded-[7px] border border-line px-2 py-0.5 text-xs text-muted hover:bg-raised hover:text-fg">
+          <button onClick={() => props.onReaproveitar()} title="Deixa o campo pronto para gerar mais vídeos nesta tomada, com o mesmo prompt, quadros e ajustes"
+                  className={`shrink-0 rounded-[7px] border px-2 py-0.5 text-xs hover:bg-raised hover:text-fg ${props.reaproveitando ? "border-accent text-accent-text" : "border-line text-muted"}`}>
             Reaproveitar
           </button>
         )}

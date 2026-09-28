@@ -757,7 +757,8 @@ def uso() -> dict:
             for g in (devices(str(exe)) if exe else [])]
     ram, livre = system_ram()
     return {"modelo": modelo, "carregando": st.get("loading") or None, "gpus": gpus,
-            "ram": {"total": ram, "usado": max(0, ram - livre)}, "gerando_imagem": image_busy()}
+            "ram": {"total": ram, "usado": max(0, ram - livre)}, "gerando_imagem": image_busy(),
+            "gerando": _gerando if image_busy() else None}
 
 
 def system_ram() -> tuple[int, int]:
@@ -1897,7 +1898,19 @@ def image_busy() -> bool:
 
 
 def set_image_busy(ligado: bool) -> None:
+    global _gerando
+    if not ligado:
+        _gerando = None
     (_imagem.set if ligado else _imagem.clear)()
+
+
+_gerando: dict | None = None  # o que o sd.cpp (ou a ampliação) roda agora: o indicador do topo mostra
+
+
+def set_gerando(path: str, tipo: str) -> None:
+    """`tipo`: "imagem", "vídeo" ou "ampliação". Some sozinho com set_image_busy(False), no fim do lote."""
+    global _gerando
+    _gerando = {"nome": Path(path).stem if path else tipo, "path": path, "tipo": tipo}
 
 
 def clear_error() -> None:
