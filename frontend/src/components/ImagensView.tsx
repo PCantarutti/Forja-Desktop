@@ -7,7 +7,7 @@ import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
 import { ArrowRight, ArrowUp, Check, Copy, Edit, FolderOpen, PanelRight, Plus, Refresh, Robo, Sliders, Square, TelaCheia, Trash, Undo, X } from "./icons";
 import { campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada } from "./Composer";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
-import { Lightbox } from "./MessageView";
+import { Lightbox } from "./Lightbox";
 import SeletorFormato, { type Forma } from "./Formato";
 import { colunasPara, distribuir } from "./mosaico";
 import MascaraEditor, { type ModoPintura } from "./MascaraEditor";
@@ -138,7 +138,13 @@ export default function ImagensView(props: {
   // Conversa aberta pela IA (skill gerar-imagens): de qual chat e projeto vieram os slots. null = comum.
   const [origem, setOrigem] = useState<Origem | null>(null);
   const [melhorando, setMelhorando] = useState(false);
-  const [zoom, setZoom] = useState<string | null>(null);
+  // antes: a original de uma ampliação ou edição, que o visualizador compara na cortina
+  const [zoom, setZoom] = useState<{ src: string; antes?: string } | null>(null);
+  const [filtro, setFiltro] = useState<Filtro>("todas");
+  // "Reaproveitar": o prompt do lote fica esmaecido no campo e Enter gera mais imagens NESSE lote.
+  // Digitar qualquer coisa anula (vira um lote novo); Tab traz o texto para editar.
+  const [reuso, setReuso] = useState<{ lote: number; numero: number; prompt: string } | null>(null);
+  const campo = useRef<HTMLTextAreaElement>(null);
   const [ampliarPc, setAmpliarPc] = useState(false);
   // Na primeira vez herda o par do Chat; a partir daí é escolha própria desta aba.
   const [llm, setLlm] = useState(() => {
@@ -160,6 +166,7 @@ export default function ImagensView(props: {
   }, [llm]);
 
   const ocupado = messages.some(rodando);
+  useEffect(() => setReuso(null), [props.conv]);
 
   const carregarLocal = useCallback(async () => {
     try {
@@ -285,6 +292,7 @@ export default function ImagensView(props: {
   }, [models, count]);
 
   async function gerar(confirm = false) {
+    if (reuso && !prompt.trim()) return gerarMais(confirm);
     const slots = slotsPendentes;
     if (!o || (!slots && !prompt.trim()) || !models.length) return;
     if (slots) return gerarDoBackend({ slots_de: slots.message_id }, confirm);
@@ -319,6 +327,25 @@ export default function ImagensView(props: {
       carregarConversa(conv);
     } catch (e: any) {
       if (e.status === 409) { setMotivo(e.message); setPerguntando(() => () => gerar(true)); } // VRAM: a conta é do usuário
+      else mostrarErro(e.message);
+    }
+  }
+
+  async function gerarMais(confirm = false) {
+    if (!reuso) return;
+    if (!models.length) {
+      setAbrirAjustes(true);
+      return mostrarErro("Escolha nos ajustes o modelo que gera as imagens.");
+    }
+    try {
+      await api.post(`/imagens/${reuso.lote}/mais`, { count, models, confirm });
+      setPerguntando(null);
+      setErro("");
+      setReuso(null);
+      props.onConversationChanged();
+      carregarConversa();
+    } catch (e: any) {
+      if (e.status === 409) { setMotivo(e.message); setPerguntando(() => () => gerarMais(true)); }
       else mostrarErro(e.message);
     }
   }
@@ -439,15 +466,23 @@ export default function ImagensView(props: {
     }
   }
 
-  function reaproveitar(meta: LoteMeta, pedido: Message) {
+  function reaproveitar(meta: LoteMeta, pedido: Message, lote: number, numero: number) {
     const usados: string[] = (pedido.meta as PedidoMeta | null)?.models ?? [];
     setRefs((pedido.meta as PedidoMeta | null)?.refs ?? []);
     setO((c) => c && { ...c, ...meta.opts });
     if (usados.length) setModels(usados);
     setCount(meta.count);
     setSeedMode(meta.seed_mode);
-    setPrompt(pedido.content);
+    // Lote de ampliação não ganha "mais" (é uma imagem só, de outra origem): o prompt vai para o campo, como antes.
+    if (meta.opts.ampliacao) {
+      setPrompt(promptDaImagem(pedido));
+      setReuso(null);
+    } else {
+      setPrompt("");
+      setReuso({ lote, numero, prompt: pedido.content });
+    }
     setAbrirAjustes(true);
+    campo.current?.focus();
   }
 
   if (!st || !o) return <div className="grid h-full place-items-center text-sm text-faint">Carregando…</div>;
@@ -467,7 +502,7 @@ export default function ImagensView(props: {
           itens={variacoes.get(slotAberto) ?? []}
           count={count}
           ocupado={ocupado || st.image_busy}
-          onZoom={setZoom}
+          onZoom={(src) => setZoom({ src })}
           onEscolher={(path) => escolher(slotAberto, path)}
           onRegerar={(prompt) => {
             const todas = variacoes.get(slotAberto) ?? [];
@@ -477,7 +512,12 @@ export default function ImagensView(props: {
           onClose={() => setSlotAberto(null)}
         />
       )}
-      {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
+      {zoom && (
+        <Lightbox src={zoom.src} antes={zoom.antes} onClose={() => setZoom(null)}
+                  outras={visiveis.flatMap((l, n) => (l.resposta.meta as LoteMeta).images
+                    .filter((i) => ["pronta", "mantida"].includes(i.status))
+                    .map((i, k) => ({ src: srcDe(i), nome: `Lote ${n + 1} · ${k + 1}` })))} />
+      )}
       {ampliarPc && (
         <Modal label="Ampliar imagem do PC" onClose={() => setAmpliarPc(false)} className="w-full max-w-2xl rounded-xl border border-line bg-surface p-4">
           <p className="mb-3 text-sm text-fg">Ampliar imagem do PC</p>
@@ -501,6 +541,10 @@ export default function ImagensView(props: {
       <BarraTopo
         contagem={visiveis.reduce((n, l) => n + (l.resposta.meta as LoteMeta).images.length, 0)}
         unidade={["imagem", "imagens"]}
+        esquerda={visiveis.length > 0 && !origem ? (
+          <FiltroLotes filtro={filtro} onFiltro={setFiltro} rotulo="Filtrar imagens"
+                       itens={visiveis.flatMap((l) => (l.resposta.meta as LoteMeta).images)} />
+        ) : undefined}
         status={(() => {
           const viva = visiveis.find((l) => rodando(l.resposta));
           if (viva) {
@@ -555,17 +599,19 @@ export default function ImagensView(props: {
               key={resposta.id}
               numero={i + 1}
               ultimo={i === visiveis.length - 1}
+              filtro={origem ? "todas" : filtro}
+              reaproveitando={reuso?.lote === resposta.id}
               pedido={pedido}
               resposta={resposta}
               noSite={noSite}
               foraDoCodigo={foraDoCodigo}
               versoes={(chave) => variacoes.get(chave) ?? []}
-              onZoom={setZoom}
+              onZoom={(src, antes) => setZoom({ src, antes })}
               onAbrirSlot={(chave) => ((variacoes.get(chave)?.length ?? 0) > 1 ? (setSlotAberto(chave), true) : false)}
               onRegerar={regerar}
               onError={mostrarErro}
               onMudou={carregarConversa}
-              onReaproveitar={() => reaproveitar(resposta.meta as LoteMeta, pedido)}
+              onReaproveitar={() => reaproveitar(resposta.meta as LoteMeta, pedido, resposta.id, i + 1)}
               onEditar={editar}
               onSemente={(s) => {
                 setO((c) => c && { ...c, seed: s });
@@ -739,10 +785,27 @@ export default function ImagensView(props: {
                       : `Editando ${refs.length} ${refs.length === 1 ? "imagem" : "imagens"} · o lápis marca onde mudar`}
                   </span>
                 )}
+                {reuso && (
+                  <span className="flex items-center gap-1.5 text-[11.5px] text-accent-text">
+                    Mais imagens no Lote {reuso.numero} · Enter gera · Tab edita o prompt · digitar começa um lote novo
+                    <button onClick={() => setReuso(null)} title="Não reaproveitar" className="text-faint hover:text-fg">
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                )}
                 <textarea
+                  ref={campo}
                   value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
+                  onChange={(e) => {
+                    setPrompt(e.target.value);
+                    if (e.target.value) setReuso(null);
+                  }}
                   onKeyDown={(e) => {
+                    if (e.key === "Tab" && reuso && !prompt) {
+                      e.preventDefault();
+                      setPrompt(reuso.prompt);
+                      setReuso(null);
+                    }
                     if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
                       gerar();
@@ -750,7 +813,8 @@ export default function ImagensView(props: {
                   }}
                   rows={2}
                   placeholder={
-                    refs.length
+                    reuso ? reuso.prompt
+                    : refs.length
                       ? "change the sky to a sunset, keep everything else the same"
                       : "a red fox in the snow, cinematic lighting — em inglês funciona melhor"
                   }
@@ -806,11 +870,11 @@ export default function ImagensView(props: {
                 </span>
                 <button
                   onClick={() => gerar()}
-                  disabled={!prompt.trim() || !models.length || semRuntime}
+                  disabled={!(prompt.trim() || reuso) || !models.length || semRuntime}
                   title={!models.length ? "Escolha um modelo em Parâmetros" : st.image_busy || ocupado ? "Entra na fila: gera quando o lote atual terminar" : "Gerar (Enter)"}
                   className="inline-flex shrink-0 items-center gap-2 rounded-[10px] bg-accent px-3.5 py-2 text-[13px] font-semibold text-accent-fg hover:brightness-110 disabled:bg-raised disabled:text-faint disabled:hover:brightness-100"
                 >
-                  Gerar {count}
+                  {reuso && !prompt.trim() ? `Gerar mais ${count}` : `Gerar ${count}`}
                   <span className="font-mono text-[10.5px] font-medium opacity-65">Enter</span>
                 </button>
               </div>
@@ -1104,6 +1168,24 @@ export function Stepper(props: { valor: number; min: number; max: number; onValo
   );
 }
 
+export type Filtro = "todas" | "mantidas" | "sem";
+export const passaNoFiltro = (f: Filtro, i: LoteImagem) =>
+  f === "todas" || (f === "mantidas" ? i.status === "mantida" : i.status === "pronta");
+
+/** Todas · Mantidas · Sem decisão, com a contagem de cada (Imagem e Vídeo). */
+export function FiltroLotes(props: { filtro: Filtro; onFiltro: (f: Filtro) => void; itens: LoteImagem[]; rotulo: string }) {
+  return (
+    <div className="flex gap-0.5 rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label={props.rotulo}>
+      {([["todas", "Todas"], ["mantidas", "Mantidas"], ["sem", "Sem decisão"]] as [Filtro, string][]).map(([id, rot]) => (
+        <button key={id} role="radio" aria-checked={props.filtro === id} onClick={() => props.onFiltro(id)}
+                className={`rounded-[6px] px-2.5 py-[3px] ${props.filtro === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+          {rot} <span className="font-mono text-faint">{props.itens.filter((i) => passaNoFiltro(id, i)).length}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Faixa do topo da galeria (Imagem e Vídeo): contagem, estado da GPU no meio e o botão do painel Parâmetros. */
 export function BarraTopo(props: {
   contagem: number;
@@ -1150,7 +1232,7 @@ function promptDaImagem(pedido: Message): string {
 function Lote(props: {
   pedido: Message;
   resposta: Message;
-  onZoom: (src: string) => void;
+  onZoom: (src: string, antes?: string) => void;
   noSite: (img: LoteImagem) => LoteImagem;
   foraDoCodigo: Set<string>;
   versoes: (slot: string) => { img: LoteImagem; lote: Message }[];
@@ -1161,6 +1243,8 @@ function Lote(props: {
   onMudou: () => void;
   onReaproveitar: () => void;
   onSemente: (s: number) => void;
+  filtro: Filtro;
+  reaproveitando: boolean; // o campo está pronto para gerar mais neste lote
   numero: number;   // "Lote N" no cabeçalho
   ultimo: boolean;  // o mais recente leva o destaque
 }) {
@@ -1227,6 +1311,11 @@ function Lote(props: {
     }
   }
 
+  const exibidas = imagens.filter((i) => passaNoFiltro(props.filtro, i));
+  if (!exibidas.length) return null;
+  // edição: a imagem editada; ampliação: a original — o visualizador compara com ela na cortina
+  const origemDoLote = (props.pedido.meta as PedidoMeta | null)?.refs?.[0] ?? meta.opts.ampliacao?.origem;
+
   return (
     <section className="mb-8">
       {ampliando && (
@@ -1272,8 +1361,8 @@ function Lote(props: {
             Cancelar
           </button>
         ) : !deSlots && (
-          <button onClick={props.onReaproveitar} title="Traz prompt e ajustes deste lote para o campo"
-                  className="shrink-0 rounded-[7px] border border-line px-2 py-0.5 text-xs text-muted hover:bg-raised hover:text-fg">
+          <button onClick={props.onReaproveitar} title="Deixa o campo pronto para gerar mais imagens neste lote, com o mesmo prompt e ajustes"
+                  className={`shrink-0 rounded-[7px] border px-2 py-0.5 text-xs hover:bg-raised hover:text-fg ${props.reaproveitando ? "border-accent text-accent-text" : "border-line text-muted"}`}>
             Reaproveitar
           </button>
         )}
@@ -1292,8 +1381,8 @@ function Lote(props: {
         </div>
       )}
 
-      <Mosaico proporcoes={imagens.map((img) => proporcaoDe(deSlots ? props.noSite(img) : img, meta.opts) ?? 1)}>
-        {imagens.map((img) => {
+      <Mosaico proporcoes={exibidas.map((img) => proporcaoDe(deSlots ? props.noSite(img) : img, meta.opts) ?? 1)}>
+        {exibidas.map((img) => {
           const chave = img.destino ?? img.slot;
           const versoes = chave ? props.versoes(chave) : [];
           const mostrada = deSlots ? props.noSite(img) : img;
@@ -1320,7 +1409,7 @@ function Lote(props: {
               })
             }
             onZoom={() => {
-              if (!chave || !props.onAbrirSlot(chave)) props.onZoom(srcDe(mostrada));
+              if (!chave || !props.onAbrirSlot(chave)) props.onZoom(srcDe(mostrada), deSlots || !origemDoLote ? undefined : urlDa(origemDoLote));
             }}
             onRegerar={chave ? () => props.onRegerar(loteDaMostrada, mostrada.path) : undefined}
             onSemente={() => props.onSemente(mostrada.seed)}
@@ -1328,7 +1417,7 @@ function Lote(props: {
             onEditar={() => props.onEditar(mostrada.path)}
             onAmpliar={() => setAmpliando({ img: mostrada, lote: loteDaMostrada })}
             // edição: a imagem editada por trás; ampliação: a original, enquanto amplia
-            origem={(props.pedido.meta as PedidoMeta | null)?.refs?.[0] ?? meta.opts.ampliacao?.origem}
+            origem={origemDoLote}
           />
           );
         })}

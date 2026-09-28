@@ -1336,6 +1336,23 @@ async def imagens_continuar(message_id: int, body: ContinuarBody):
         raise HTTPException(400, str(e))
 
 
+class MaisBody(BaseModel):
+    count: int = 1
+    models: list[str] = []
+    confirm: bool = False
+
+
+@app.post("/api/imagens/{message_id}/mais")
+async def imagens_mais(message_id: int, body: MaisBody):
+    """"Reaproveitar" com o campo vazio: mais imagens no mesmo lote, com o prompt e os ajustes dele."""
+    try:
+        return await asyncio.to_thread(lotes.mais, message_id, body.count, body.models or None, body.confirm)
+    except imagegen.ModeloCarregado as e:
+        raise HTTPException(409, str(e))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/imagens/{conv_id}/arquivos")
 def imagens_arquivos(conv_id: int):
     """Para o aviso de "apagar conversa": quantas imagens vão junto e onde estão."""

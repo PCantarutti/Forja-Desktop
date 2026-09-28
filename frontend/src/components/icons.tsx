@@ -37,6 +37,7 @@ export const Refresh = base(<><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 
 export const Shield = base(<><path d="M12 3l7 3v6c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z" /><path d="m9 12 2 2 4-4" /></>);
 export const X = base(<path d="M6 6l12 12M18 6L6 18" />);
 export const Plus = base(<path d="M12 5v14M5 12h14" />);
+export const Minus = base(<path d="M5 12h14" />);
 export const GitBranch = base(<><circle cx="6" cy="5" r="2.5" /><circle cx="6" cy="19" r="2.5" /><circle cx="18" cy="8" r="2.5" /><path d="M6 7.5v9M18 10.5c0 3-3 4-6 4s-6 1-6 3" /></>);
 export const Terminal = base(<><path d="m5 7 5 5-5 5" /><path d="M12 17h7" /></>);
 export const Pin = base(<><path d="M9 4h6l-1 6 3 3v1H7v-1l3-3z" /><path d="M12 14v6" /></>);

@@ -794,6 +794,7 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
     a = meta["opts"]["ampliacao"]
     item = imagens[0]
     localai.set_image_busy(True)
+    localai.set_gerando(a["modelo"], "ampliação")  # sem modelo é Lanczos: o nome vira "ampliação"
     previa = previas_dir(_video(item["path"])) / (Path(item["path"]).stem + ".png")
     previa.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -908,14 +909,7 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
         _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
         _enfileirar(_ampliar_trabalho, msg["conversation_id"], message_id, job["id"])
         return {"ok": True}
-    with db.session() as s:
-        pedido = (s.query(db.Message)
-                  .filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
-                          db.Message.id < message_id)
-                  .order_by(db.Message.id.desc()).first())
-        if not pedido:
-            raise ToolError("Pedido do lote não encontrado.")
-        prompt, refs = pedido.content, list((pedido.meta or {}).get("refs") or [])
+    prompt, refs, _ = _pedido(msg)
     if not localai.image_busy():
         _liberar_vram(confirm)
     for i in imagens:
@@ -926,6 +920,63 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
     downloads.update(job["id"], done=0, total=faltam)
     _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
     opts = msg["meta"].get("opts") or {}
+    _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, opts, job["id"], refs)
+    return {"ok": True}
+
+
+def _pedido(msg: dict) -> tuple[str, list[str], dict]:
+    """(prompt, referências, meta) do pedido do usuário que abriu o lote: a mensagem logo antes dele."""
+    with db.session() as s:
+        pedido = (s.query(db.Message)
+                  .filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
+                          db.Message.id < msg["id"])
+                  .order_by(db.Message.id.desc()).first())
+        if not pedido:
+            raise ToolError("Pedido do lote não encontrado.")
+        return pedido.content, list((pedido.meta or {}).get("refs") or []), dict(pedido.meta or {})
+
+
+def mais(message_id: int, count: int, models: list[str] | None = None, confirm: bool = False) -> dict:
+    """"Reaproveitar" sem mexer no prompt: mais `count` imagens (ou tomadas) NO MESMO lote, com o prompt, as
+    referências e os ajustes dele. As sementes seguem o modo do lote: incremental continua de onde parou,
+    aleatória sorteia, fixa repete a do lote."""
+    msg = _mensagem(message_id)
+    meta = msg["meta"]
+    # A thread do lote grava a lista de imagens inteira no fim: acrescentar enquanto ela roda se perderia.
+    if msg["status"] == "running":
+        raise ToolError("O lote ainda está rodando: espere terminar para gerar mais nele.")
+    imagens = list(meta["images"])
+    opts = dict(meta.get("opts") or {})
+    if opts.get("ampliacao") or meta.get("variacao_de") or any(i.get("destino") or i.get("slot") for i in imagens):
+        raise ToolError("Gerar mais no mesmo lote é só para lotes comuns (não ampliação nem imagens do site).")
+    prompt, refs, pm = _pedido(msg)
+    count = max(1, min(int(count or 1), MAX_VARIACOES))
+    escolhidos = _distribuir(list(models or pm.get("models") or dict.fromkeys(i["model"] for i in imagens)), count)
+    ext = Path(imagens[0]["path"]).suffix or ".png"
+    exe = imagegen._exe()
+    for m in dict.fromkeys(escolhidos):  # valida runtime e modelo antes de descarregar o LLM por nada
+        imagegen.argv(exe, prompt, imagegen.OUT_DIR / f"x{ext}", imagegen._opts({**opts, "model": m}), refs)
+    if not localai.image_busy():
+        _liberar_vram(confirm)
+
+    modo = meta.get("seed_mode") or "incremental"
+    base = (max(i["seed"] for i in imagens) + 1) if modo == "incremental" else imagens[0]["seed"]
+    sementes = _sementes(count, base % SEED_MAX or 1, modo)
+    pasta = imagegen.video_dir() if ext == ".webm" else imagegen.out_dir()
+    pasta.mkdir(parents=True, exist_ok=True)
+    marca = time.strftime("%Y%m%d-%H%M%S")
+    n = len(imagens)
+    imagens += [{"path": str(pasta / f"{marca}-{n + i:02d}-s{s}{ext}"), "seed": s, "model": m,
+                 "model_name": _nome(m), "status": "pendente", "error": ""}
+                for i, (m, s) in enumerate(zip(escolhidos, sementes))]
+    job = downloads.create("lote", prompt[:60])
+    downloads.update(job["id"], done=0, total=count)
+    _patch(message_id, status="running", meta={"job": job["id"], "count": len(imagens), "images": imagens})
+    with db.session() as s:  # a conversa sobe na barra lateral, como num lote novo
+        conv = s.get(db.Conversation, msg["conversation_id"])
+        if conv:
+            conv.updated_at = db._now()
+            s.commit()
     _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, opts, job["id"], refs)
     return {"ok": True}
 

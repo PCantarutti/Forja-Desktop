@@ -11,6 +11,8 @@ export type Uso = {
   gpus: Gpu[];
   ram: { total: number; usado: number };
   gerando_imagem: boolean;
+  // O que o sd.cpp (ou a ampliação) está rodando agora: imagem e vídeo não passam pelo llama-server.
+  gerando: { nome: string; path: string; tipo: "imagem" | "vídeo" | "ampliação" } | null;
 };
 
 const gb = (b: number) => `${(b / 2 ** 30).toFixed(1).replace(".", ",")} GB`;
@@ -51,15 +53,21 @@ export default function ModeloCarregado() {
   useEffect(() => {
     const carrega = () => api.get<Uso>("/local/uso").then(setUso).catch(() => {});
     carrega();
-    const t = setInterval(carrega, aberto ? 2500 : 8000); // aberto, os números andam quase ao vivo
+    // aberto, os números andam quase ao vivo; fechado, 4 s (o ritmo do /api/activity) para uma geração
+    // de imagem ou vídeo que começou aparecer logo no indicador
+    const t = setInterval(carrega, aberto ? 2500 : 4000);
     return () => clearInterval(t);
   }, [aberto]);
 
   if (!uso) return null;
   const m = uso.modelo;
   const g = principal(uso.gpus);
-  const ponto = uso.carregando ? "bg-amber-400 animate-pulse" : m ? "bg-emerald-400" : "bg-faint";
-  const titulo = uso.carregando ? `Carregando ${uso.carregando.name}… ${uso.carregando.percent}%` : m ? m.alias : "Nenhum modelo carregado";
+  const ger = uso.gerando;
+  const ponto = uso.carregando ? "bg-amber-400 animate-pulse" : ger ? "bg-sky-400 animate-pulse" : m ? "bg-emerald-400" : "bg-faint";
+  const titulo = uso.carregando ? `Carregando ${uso.carregando.name}… ${uso.carregando.percent}%`
+    : ger ? `${ger.nome}${m ? ` + ${m.alias}` : ""}`
+    : m ? m.alias : "Nenhum modelo carregado";
+  const fazendo = ger && `Gerando ${ger.tipo === "ampliação" ? "ampliação" : ger.tipo}`;
 
   async function descarregar() {
     setDescarregando(true);
@@ -72,14 +80,15 @@ export default function ModeloCarregado() {
     <>
       <button
         onClick={() => setAberto(true)}
-        title={`${titulo}
+        title={`${fazendo ? `${fazendo}: ${ger!.nome}${m ? `\nLLM: ${m.alias}` : ""}` : titulo}
 IA local: modelo carregado e memória`}
-        className="flex min-w-0 max-w-80 items-center gap-2 rounded-[9px] border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
+        className="flex min-w-0 max-w-[30rem] items-center gap-2 rounded-[9px] border border-line bg-surface px-3 py-1 text-xs hover:border-[#3d3d3d] hover:bg-raised"
       >
         <span className={`size-2 shrink-0 rounded-full ${ponto}`} />
-        <span className={`min-w-0 truncate max-[1060px]:hidden ${m || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
+        {fazendo && <span className="shrink-0 text-sky-300 max-[1060px]:hidden">{fazendo}</span>}
+        <span className={`min-w-0 truncate max-[1060px]:hidden ${m || ger || uso.carregando ? "text-fg" : "text-muted"}`}>{titulo}</span>
         {/* Sem modelo, a placa "mais usada" pode ser a integrada: o número confundia. Fica no painel. */}
-        {m && g && (
+        {(m || ger) && g && (
           <>
             <span className="w-12 shrink-0"><Barra usado={g.usado} total={g.total} /></span>
             <span className="shrink-0 font-mono text-[11px] text-faint max-[1060px]:hidden">{gb(g.usado).replace(" GB", "")}/{gb(g.total)}</span>
@@ -97,7 +106,8 @@ IA local: modelo carregado e memória`}
                 <span className="truncate" title={m?.path}>{titulo}</span>
               </div>
               <div className="mt-0.5 text-xs text-muted">
-                {m ? `IA local · no ar há ${tempo(m.uptime)}` : uso.carregando ? "IA local · subindo o llama-server" : "IA local · o llama-server está desligado"}
+                {ger ? `${fazendo} no sd.cpp${m ? ` · LLM no ar há ${tempo(m.uptime)}` : ""}`
+                  : m ? `IA local · no ar há ${tempo(m.uptime)}` : uso.carregando ? "IA local · subindo o llama-server" : "IA local · o llama-server está desligado"}
               </div>
             </div>
             <button onClick={() => setAberto(false)} title="Fechar" aria-label="Fechar"
@@ -126,7 +136,11 @@ IA local: modelo carregado e memória`}
             <div className="text-[10.5px] tracking-[.08em] text-faint font-mono uppercase">Memória da máquina</div>
             {uso.gpus.map((x) => <Memoria key={x.nome} rotulo={x.nome} usado={x.usado} total={x.total} />)}
             <Memoria rotulo="RAM" usado={uso.ram.usado} total={uso.ram.total} />
-            {uso.gerando_imagem && <div className="text-xs text-sky-300">Gerando imagem ou vídeo agora: a GPU está com o sd.cpp.</div>}
+            {uso.gerando_imagem && (
+              <div className="text-xs text-sky-300" title={ger?.path}>
+                {ger ? `${fazendo} com ${ger.nome}: a GPU está com o sd.cpp.` : "Gerando imagem ou vídeo agora: a GPU está com o sd.cpp."}
+              </div>
+            )}
           </div>
 
           {m && (
