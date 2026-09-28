@@ -42,6 +42,7 @@ export const CORES: Record<LoteImagem["status"], string> = {
 export const A_REFAZER: LoteImagem["status"][] = ["interrompida", "pendente", "cancelada", "erro"];
 
 const MAX_REFS = 10;  // Qwen-Image 2.1; o backend barra também
+const LADO_MAX_EDICAO = 3840; // o painel adota o tamanho da foto a editar até este lado maior (o teto do Personalizada)
 export const urlDa = (p: string) => `/api/local/image/file?path=${encodeURIComponent(p)}`;
 // O arquivo do slot troca de conteúdo sem trocar de caminho ("Usar no site"): a semente na URL fura o cache.
 const srcDe = (img: LoteImagem) => urlDa(img.path) + (img.destino ? `&v=${img.seed}` : "");
@@ -323,6 +324,8 @@ export default function ImagensView(props: {
       setPerguntando(null);
       setErro("");
       setPrompt(""); // "Reaproveitar" no lote traz o texto de volta
+      setRefs([]);   // as imagens da edição foram com o lote (ficam no pedido dele); o campo volta vazio
+      setSumidas(new Set());
       props.onConversationChanged();
       carregarConversa(conv);
     } catch (e: any) {
@@ -429,13 +432,31 @@ export default function ImagensView(props: {
     }
   }
 
-  function editar(path: string) {
+  /** `adotar`: é a foto a editar (a primeira do campo), e o painel passa a usar o tamanho dela. */
+  function editar(path: string, adotar = !refs.length) {
     setRefs((r) => (r.includes(path) ? r : [...r, path]));
+    if (adotar) adotarTamanho(path);
+  }
+
+  // Editar sai na resolução e na proporção da foto, no múltiplo de 64 que o sd.cpp pede. Sem isto a foto
+  // era espremida no formato do último lote (um retrato virava quadrado).
+  function adotarTamanho(path: string) {
+    const img = new Image();
+    img.onload = () => {
+      const { naturalWidth: w, naturalHeight: h } = img;
+      if (!w || !h) return;
+      // ponytail: foto de celular (4000+) desce ao teto de 3840 do painel, na mesma proporção; não cabe na VRAM é o 409 que avisa
+      const k = Math.min(1, LADO_MAX_EDICAO / Math.max(w, h));
+      const snap = (x: number) => Math.max(64, Math.round((x * k) / 64) * 64);
+      setO((c) => c && { ...c, width: snap(w), height: snap(h) });
+    };
+    img.src = urlDa(path);
   }
 
   async function anexar(files: FileList | null) {
     const velha = trocar.current;
     trocar.current = null;
+    let primeira = !refs.length && !velha;  // só a primeira foto anexada define o tamanho
     try {
       for (const f of Array.from(files ?? [])) {
         // No app, o caminho do próprio arquivo: nada é copiado. Sem caminho (colada, navegador), cópia.
@@ -448,7 +469,8 @@ export default function ImagensView(props: {
           setSumidas((s) => new Set([...s].filter((x) => x !== velha && x !== path)));
           break;  // reanexar troca uma só
         }
-        editar(path);
+        editar(path, primeira);
+        primeira = false;
       }
     } catch (e: any) {
       mostrarErro(e.message);

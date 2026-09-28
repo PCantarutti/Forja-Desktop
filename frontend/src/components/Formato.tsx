@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Caixa, numeroCaixa } from "./ImagensView";
 import { Trocar } from "./icons";
 import { outroLado, razaoSimples, tamanhoNaRazao } from "./videoConta";
@@ -141,10 +141,23 @@ export default function SeletorFormato(props: {
   const livreAtivo = livre || !props.prop;
   const [sobreLivre, setSobreLivre] = useState(false);
   const [razaoLivre, setRazaoLivre] = useState<[number, number]>(() => (props.prop ? par(props.prop) : razaoSimples(props.w, props.h)));
+  // O último tamanho que o próprio seletor pôs. Tamanho que chega de fora (a foto a editar, o Salvar como
+  // padrão) recalcula o formato: antes o Livre seguia mostrando a proporção de antes da foto.
+  const proprio = useRef("");
+  const onTamanho = (w: number, h: number) => {
+    proprio.current = `${w}x${h}`;
+    props.onTamanho(w, h);
+  };
+  useEffect(() => {
+    const externo = `${props.w}x${props.h}` !== proprio.current;
+    if (externo) setLivre(false);
+    // no Livre escolhido a dedo, a proporção é a digitada (o múltiplo de 64 arredonda o tamanho, não ela)
+    if (externo || !livre) setRazaoLivre(props.prop ? par(props.prop) : razaoSimples(props.w, props.h));
+  }, [props.w, props.h, props.prop]); // eslint-disable-line react-hooks/exhaustive-deps
   const mudaRazao = (a: number, b: number) => {
     const ra = Math.max(1, Math.min(64, Math.round(a) || 1)), rb = Math.max(1, Math.min(64, Math.round(b) || 1));
     setRazaoLivre([ra, rb]);
-    props.onTamanho(...tamanhoNaRazao(props.w, props.h, ra, rb, props.mult));
+    onTamanho(...tamanhoNaRazao(props.w, props.h, ra, rb, props.mult));
   };
   const base = props.formas[0].id;
   /** Resolução no Livre: o lado menor vai para o da resolução e a proporção atual fica. */
@@ -152,7 +165,7 @@ export default function SeletorFormato(props: {
     const menor = Math.min(...props.tamanhoPara(base, q));
     const r = props.w / props.h;
     const snap = (v: number) => Math.max(props.mult, Math.round(v / props.mult) * props.mult);
-    props.onTamanho(...(r >= 1 ? [snap(menor * r), snap(menor)] : [snap(menor), snap(menor / r)]) as [number, number]);
+    onTamanho(...(r >= 1 ? [snap(menor * r), snap(menor)] : [snap(menor), snap(menor / r)]) as [number, number]);
   };
   const aceso = "border-accent-line bg-accent-soft text-accent-text";
   const apagado = "border-line text-muted hover:border-focus hover:text-fg";
@@ -161,7 +174,7 @@ export default function SeletorFormato(props: {
     <>
       <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${props.formas.length + 1}, minmax(0, 1fr))` }}>
         {props.formas.map((f) => (
-          <button key={f.id} onClick={() => { setLivre(false); props.onTamanho(...props.tamanhoPara(f.id, props.qual ?? props.quals[0].id)); }}
+          <button key={f.id} onClick={() => { setLivre(false); onTamanho(...props.tamanhoPara(f.id, props.qual ?? props.quals[0].id)); }}
                   className={`flex flex-col items-center gap-[5px] rounded-[9px] border pt-2 pb-1.5 ${!livreAtivo && props.prop === f.id ? aceso : apagado}`}>
             <span className="flex h-5 items-center justify-center">
               <span className="block rounded-[3px] border-[1.5px] border-current" style={{ width: f.w, height: f.h }} />
@@ -201,7 +214,7 @@ export default function SeletorFormato(props: {
       )}
       <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" title={props.dicaQuals}>
         {props.quals.map((q) => (
-          <button key={q.id} onClick={() => (livreAtivo ? qualidadeLivre(q.id) : props.onTamanho(...props.tamanhoPara(props.prop ?? base, q.id)))}
+          <button key={q.id} onClick={() => (livreAtivo ? qualidadeLivre(q.id) : onTamanho(...props.tamanhoPara(props.prop ?? base, q.id)))}
                   title={q.titulo ?? props.tamanhoPara(props.prop ?? base, q.id).join(" × ")}
                   className={`flex-1 rounded-[6px] py-1 ${props.qual === q.id && !livreAtivo ? "bg-raised text-fg" : q.apagada ? "text-faint hover:text-muted" : "text-muted hover:text-fg"}`}>
             {q.id}
@@ -211,7 +224,7 @@ export default function SeletorFormato(props: {
       <TamanhoPersonalizado w={props.w} h={props.h} passo={props.mult}
                             razao={livreAtivo ? razaoLivre[0] / razaoLivre[1] : props.prop ? razaoDe(props.prop) : null}
                             rotulo={livreAtivo ? `${razaoLivre[0]}:${razaoLivre[1]}` : props.prop ?? ""}
-                            onAplicar={props.onTamanho} />
+                            onAplicar={onTamanho} />
     </>
   );
 }
