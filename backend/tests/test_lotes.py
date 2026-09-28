@@ -142,6 +142,22 @@ def test_mais_no_mesmo_lote_continua_as_sementes_com_o_mesmo_prompt(monkeypatch)
         assert [m.role for m in s.get(db.Conversation, conv).messages] == ["user", "assistant"]
 
 
+def test_mais_usa_os_ajustes_da_tela_e_nao_os_do_lote(monkeypatch):
+    chamadas = _fake_sd(monkeypatch)
+    msg = lotes.start(_conversa(), "a fox", opts={"steps": 30, "width": 512, "height": 512},
+                      models=["m1.safetensors"], count=1, seed=1000)
+    _esperar(msg["id"])
+    lotes.mais(msg["id"], 2, models=["m2.safetensors"], opts={"steps": 8, "width": 768, "height": 512},
+               seed=77, seed_mode="fixa")
+    imagens = _esperar(msg["id"])["meta"]["images"]
+
+    assert [c["steps"] for c in chamadas] == [30, 8, 8] and [c["width"] for c in chamadas] == [512, 768, 768]
+    assert [c["model"] for c in chamadas] == ["m1.safetensors", "m2.safetensors", "m2.safetensors"]
+    assert [i["seed"] for i in imagens] == [1000, 77, 77]
+    assert imagens[1]["opts"]["steps"] == 8 and (imagens[1]["width"], imagens[1]["height"]) == (768, 512)
+    assert "opts" not in imagens[0]  # a do lote segue com os ajustes do lote
+
+
 def test_lote_grava_as_duas_mensagens_e_titula(monkeypatch):
     _fake_sd(monkeypatch)
     conv = _conversa()

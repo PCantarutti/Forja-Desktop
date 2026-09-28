@@ -1340,13 +1340,17 @@ class MaisBody(BaseModel):
     count: int = 1
     models: list[str] = []
     confirm: bool = False
+    opts: dict = {}  # os ajustes da tela agora: reaproveitar é o prompt, não os parâmetros do lote
+    seed: int = 0
+    seed_mode: str = ""
 
 
 @app.post("/api/imagens/{message_id}/mais")
 async def imagens_mais(message_id: int, body: MaisBody):
-    """"Reaproveitar" com o campo vazio: mais imagens no mesmo lote, com o prompt e os ajustes dele."""
+    """"Reaproveitar" com o campo vazio: mais imagens no mesmo lote, com o prompt dele e os ajustes da tela."""
     try:
-        return await asyncio.to_thread(lotes.mais, message_id, body.count, body.models or None, body.confirm)
+        return await asyncio.to_thread(lotes.mais, message_id, body.count, body.models or None, body.confirm,
+                                       body.opts, body.seed, body.seed_mode)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:
