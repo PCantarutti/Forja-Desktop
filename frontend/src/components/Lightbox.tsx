@@ -181,7 +181,7 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const f = vivo.current;
-      if (e.key === "Escape") f.escolhendo ? setEscolhendo(false) : f.fechar();
+      if (e.key === "Escape") { if (f.escolhendo) setEscolhendo(false); else f.fechar(); }
       else if (e.key === "+" || e.key === "=") f.zoom((s) => s * 1.25);
       else if (e.key === "-") f.zoom((s) => s / 1.25);
       else if (e.key === "0") f.ajustar();
