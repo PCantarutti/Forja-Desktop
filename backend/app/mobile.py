@@ -20,7 +20,7 @@ import time
 
 import httpx
 
-from . import config
+from . import config, segredo
 
 EXPO_PUSH = "https://exp.host/--/api/v2/push/send"
 # Eventos que viram notificação: a IA parada esperando você, ou o turno terminado.
@@ -45,15 +45,20 @@ def token() -> str:
     if _atual is None:
         f = _token_file()
         if not f.exists():
-            f.write_text(secrets.token_hex(32), encoding="utf-8")
-        _atual = f.read_text(encoding="utf-8").strip()
+            f.write_text(segredo.cifrar(secrets.token_hex(32)), encoding="utf-8")
+        guardado = f.read_text(encoding="utf-8").strip()
+        _atual = segredo.decifrar(guardado)
+        if not _atual:  # cifrado por outra conta do Windows: não abre, e o celular pareia de novo
+            return rotate()
+        if guardado == _atual:  # arquivo de antes da cifra: regrava cifrado, com o mesmo token
+            f.write_text(segredo.cifrar(_atual), encoding="utf-8")
     return _atual
 
 
 def rotate() -> str:
     """Novo token e nenhum aparelho registrado: o celular antigo precisa parear de novo."""
     global _atual
-    _token_file().write_text(secrets.token_hex(32), encoding="utf-8")
+    _token_file().write_text(segredo.cifrar(secrets.token_hex(32)), encoding="utf-8")
     _push_file().unlink(missing_ok=True)
     _atual = None
     return token()
