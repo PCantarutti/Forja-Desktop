@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, Minus, Plus, Split, TelaCheia, X } from "./icons";
 
 /** Outra imagem que dá para pôr ao lado desta (as da mesma conversa). */
 export type Comparavel = { src: string; nome: string };
 type Modo = "lado" | "deslizar";
+const DURACAO = 280; // ms da ida (miniatura → centro) e da volta
 
 const nomeDe = (src: string) => {
   if (src.startsWith("data:")) return "";
@@ -25,6 +26,10 @@ const nomeDe = (src: string) => {
  * antiga à esquerda e a nova à direita; qualquer outra da conversa (`outras`) abre lado a lado. Nos dois
  * modos o zoom e o arrasto valem para as duas imagens juntas, então o mesmo pedaço fica sob o olho. A
  * outra imagem ocupa a caixa desta: ampliada 2× ela sai do mesmo tamanho na tela, e a diferença é detalhe.
+ *
+ * Abrir sai da miniatura: o primeiro quadro desenha a imagem em cima dela (mesma posição e escala) e o
+ * seguinte liga a transição até o centro; fechar faz o caminho de volta. A miniatura é achada pelo `src`,
+ * então quem abre não passa nada. Com "reduzir movimento" no sistema, ou sem miniatura na tela, só aparece.
  */
 export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
   src: string;
@@ -44,6 +49,9 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
   const [escolhendo, setEscolhendo] = useState(false);
   const [corte, setCorte] = useState(0.5); // onde está a barra da cortina, em fração da largura
   const lado = !!outra && modo === "lado";
+  const [fase, setFase] = useState<"entrando" | "aberto" | "saindo">("entrando");
+  const [animando, setAnimando] = useState(false); // a transição longa, só na ida e na volta
+  const [visivel, setVisivel] = useState(false);   // fundo e barras em fade
   const opcoes: Comparavel[] = [
     ...(antes ? [{ src: antes, nome: "Original (antes)" }] : []),
     ...outras.filter((o) => o.src !== src && o.src !== antes),
@@ -84,6 +92,40 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
     const x = e.clientX - r.left;
     return [x - (lado && x > w ? w : 0) - w / 2, e.clientY - r.top - r.height / 2] as const;
   };
+  /** O transform que põe a imagem exatamente sobre a miniatura dela na página (null: não tem de onde sair). */
+  const naMiniatura = () => {
+    const el = palco.current;
+    if (!el || !medida || matchMedia("(prefers-reduced-motion: reduce)").matches) return null;
+    // ponytail: a primeira <img> visível com o mesmo src fora do visualizador; duas iguais na tela, vale a primeira
+    const mini = [...document.querySelectorAll("img")].find((i) =>
+      i.getAttribute("src") === src && !i.closest("[data-lightbox]") && i.getBoundingClientRect().width > 0);
+    if (!mini) return null;
+    const r = mini.getBoundingClientRect(), p = el.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > innerHeight) return null; // rolou para fora da tela
+    // cobre a caixa da miniatura, como o object-cover dos cards
+    return { s: Math.max(r.width / medida[0], r.height / medida[1]),
+             x: r.left + r.width / 2 - p.left - p.width / 2, y: r.top + r.height / 2 - p.top - p.height / 2 };
+  };
+  const fechar = () => {
+    if (fase === "saindo") return;
+    const r = !outra && naMiniatura();
+    if (!r) return onClose();
+    setFase("saindo");
+    setVisivel(false);
+    setEscolhendo(false);
+    setAnimando(true);
+    setV(r);
+    setTimeout(onClose, DURACAO);
+  };
+  // A faixa de miniaturas rola para os lados: a roda do mouse (vertical) vira rolagem horizontal ali. Nativo e
+  // não passivo para a roda não rolar também a página por trás; o touchpad, que já manda deltaX, fica como é.
+  const faixa = useCallback((el: HTMLDivElement | null) => {
+    el?.addEventListener("wheel", (e) => {
+      if (Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    }, { passive: false });
+  }, []);
   const comparar = (c: Comparavel | null) => {
     setOutra(c);
     setEscolhendo(false);
@@ -93,13 +135,32 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
   };
 
   // Os listeners de janela leem sempre a versão atual das funções (o modo muda a conta do ponto).
-  const vivo = useRef({ zoom, pontoNoPalco, ajustar, real, onClose, escolhendo });
-  vivo.current = { zoom, pontoNoPalco, ajustar, real, onClose, escolhendo };
+  const vivo = useRef({ zoom, pontoNoPalco, ajustar, real, fechar, escolhendo });
+  vivo.current = { zoom, pontoNoPalco, ajustar, real, fechar, escolhendo };
 
   useEffect(() => {
+    const q = requestAnimationFrame(() => setVisivel(true));
+    return () => cancelAnimationFrame(q);
+  }, []);
+
+  // layout, não effect: roda antes da pintura, senão o 1º quadro mostrava a imagem no tamanho natural
+  useLayoutEffect(() => {
     if (!ajustado || !medida) return;
     const f = () => setV({ s: escalaAjuste(), x: 0, y: 0 });
-    f();
+    const r = fase === "entrando" && naMiniatura();
+    if (r) {
+      setV(r);
+      // dois quadros: o primeiro pinta a imagem sobre a miniatura, o segundo liga a transição e vai ao centro
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        setAnimando(true);
+        setFase("aberto");
+        f();
+        setTimeout(() => setAnimando(false), DURACAO);
+      }));
+    } else {
+      if (fase === "entrando") setFase("aberto");
+      f();
+    }
     window.addEventListener("resize", f);
     return () => window.removeEventListener("resize", f);
   }, [ajustado, medida, lado]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -120,7 +181,7 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const f = vivo.current;
-      if (e.key === "Escape") f.escolhendo ? setEscolhendo(false) : f.onClose();
+      if (e.key === "Escape") f.escolhendo ? setEscolhendo(false) : f.fechar();
       else if (e.key === "+" || e.key === "=") f.zoom((s) => s * 1.25);
       else if (e.key === "-") f.zoom((s) => s / 1.25);
       else if (e.key === "0") f.ajustar();
@@ -152,7 +213,8 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
         marginLeft: -medida[0] / 2,
         marginTop: -medida[1] / 2,
         transform: `translate(${v.x}px, ${v.y}px) scale(${v.s})`,
-        transition: arrastando ? "none" : "transform 120ms ease-out",
+        transition: arrastando || (fase === "entrando" && !animando) ? "none"
+          : animando ? `transform ${DURACAO}ms cubic-bezier(.2,.8,.2,1)` : "transform 120ms ease-out",
         imageRendering: v.s >= 3 ? "pixelated" : "auto", // de perto, o pixel de verdade, não o borrão
       } : { opacity: 0 }}
     />
@@ -161,7 +223,10 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
   // Portal no body: desenhado dentro da resposta, herdava o CSS dela (miniatura de 280px numa célula de
   // tabela) e o "ampliar" mostrava a imagem do mesmo tamanho, só que com o fundo escuro.
   return createPortal(
-    <div role="dialog" aria-label={nome} className="fixed inset-0 z-50 select-none bg-black/85 backdrop-blur-sm">
+    <div role="dialog" aria-label={nome} data-lightbox
+         className={`fixed inset-0 z-50 select-none ${fase === "saindo" ? "pointer-events-none" : ""}`}>
+      <div className={`absolute inset-0 bg-black/85 backdrop-blur-sm transition-opacity ${visivel ? "" : "opacity-0"}`}
+           style={{ transitionDuration: `${DURACAO}ms` }} />
       <div
         ref={palco}
         className={`absolute inset-0 overflow-hidden ${arrastando ? "cursor-grabbing" : passaDaTela ? "cursor-grab" : ""}`}
@@ -186,7 +251,7 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
           // Clique solto no fundo fecha; na imagem, não (lá o duplo clique é o zoom).
           if (a && !a.moveu && !(e.target instanceof HTMLImageElement)) {
             if (escolhendo) setEscolhendo(false);
-            else onClose();
+            else fechar();
           }
         }}
         onDoubleClick={(e) => {
@@ -254,22 +319,22 @@ export function Lightbox({ src, onClose, titulo, antes, outras = [] }: {
         </>
       )}
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 livre-controles bg-gradient-to-b from-black/70 to-transparent pt-2 pb-10 pl-4">
+      <div className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start gap-3 livre-controles transition-opacity duration-300 ${visivel ? "" : "opacity-0"} bg-gradient-to-b from-black/70 to-transparent pt-2 pb-10 pl-4`}>
         <div className="min-w-0 pt-1">
           <div className="truncate text-sm text-white/90" title={nome}>{nome}</div>
           {medida && <div className="text-[11px] text-white/50 tabular-nums">{medida[0]} × {medida[1]} px</div>}
         </div>
         <div className={`${barra} ml-auto`}>
           <a className={botao} href={src} download title="Baixar a imagem"><Download className="size-4" /></a>
-          <button className={botao} onClick={onClose} title="Fechar (Esc)"><X className="size-4" /></button>
+          <button className={botao} onClick={fechar} title="Fechar (Esc)"><X className="size-4" /></button>
         </div>
       </div>
 
-      <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex flex-col items-center gap-2">
+      <div className={`pointer-events-none absolute inset-x-0 bottom-5 z-20 flex flex-col items-center gap-2 transition-opacity duration-300 ${visivel ? "" : "opacity-0"}`}>
         {escolhendo && (
           <div className={`${barra} max-w-[min(900px,calc(100%-2rem))] flex-col items-stretch gap-2 p-2`}>
             <span className="px-1 text-[11px] text-white/60">Comparar com</span>
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div ref={faixa} className="flex gap-2 overflow-x-auto overscroll-contain pb-1">
               {opcoes.map((c) => (
                 <button key={c.src} onClick={() => comparar(c)} title={c.nome}
                         className={`shrink-0 overflow-hidden rounded-lg border ${outra?.src === c.src ? "border-accent" : "border-white/10 hover:border-white/40"}`}>

@@ -510,6 +510,7 @@ export type LoteImagem = {
   seed: number;
   model: string;
   model_name: string;
+  opts?: Partial<ImageOpts>; // acrescentada pelo Reaproveitar com os ajustes da tela: vale por cima dos do lote
   // interrompida: o app fechou no meio do lote ("Continuar" gera de novo, com a mesma semente)
   status: "pendente" | "gerando" | "pronta" | "erro" | "mantida" | "descartada" | "cancelada" | "interrompida";
   error: string;

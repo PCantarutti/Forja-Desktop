@@ -133,7 +133,8 @@ export default function VideoView(props: {
   const texto = useRef<HTMLTextAreaElement>(null);
   // "Reaproveitar": o prompt da tomada fica esmaecido no campo e Enter gera mais NELA (mesmo lote).
   // Digitar anula e vira uma tomada nova; Tab traz o texto para editar.
-  const [reuso, setReuso] = useState<{ lote: number; letra: string; prompt: string } | null>(null);
+  // Reaproveita-se o prompt, não os parâmetros: o que está no painel agora vale para as tomadas novas.
+  const [reuso, setReuso] = useState<{ lote: number; letra: string; prompt: string; refs: string[] } | null>(null);
   useEffect(() => setReuso(null), [props.conv]);
   const mostrarErro = useCallback((e: string) => setErro(e), []);
 
@@ -322,13 +323,7 @@ export default function VideoView(props: {
       const conv = await props.ensureConversation();
       await api.post(`/imagens/${conv}/gerar`, {
         prompt,
-        // Arquivos e ligações de memória são do modelo (IA local › Modelos): o padrão da aba não passa por cima.
-        opts: {
-          ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined,
-          te_cpu: undefined, preview: undefined, taesd: undefined, vae: undefined, clip_l: undefined, t5xxl: undefined,
-          llm: undefined, llm_vision: undefined, clip_vision: undefined, high_noise_model: undefined, variante: undefined,
-          diffusion_model: undefined, out_dir: undefined, descarte_dias: undefined,
-        },
+        opts: optsDaTela(),
         models: [modelo],
         count,
         seed: o.seed,
@@ -347,10 +342,20 @@ export default function VideoView(props: {
     }
   }
 
+  // Arquivos e ligações de memória são do modelo (IA local › Modelos): o padrão da aba não passa por cima.
+  const optsDaTela = () => o && {
+    ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined,
+    te_cpu: undefined, preview: undefined, taesd: undefined, vae: undefined, clip_l: undefined, t5xxl: undefined,
+    llm: undefined, llm_vision: undefined, clip_vision: undefined, high_noise_model: undefined, variante: undefined,
+    diffusion_model: undefined, out_dir: undefined, descarte_dias: undefined,
+  };
+
   async function gerarMais(confirm = false) {
-    if (!reuso || !modelo) return;
+    if (!reuso || !modelo || !o) return;
     try {
-      await api.post(`/imagens/${reuso.lote}/mais`, { count, models: [modelo], confirm });
+      await api.post(`/imagens/${reuso.lote}/mais`, {
+        count, models: [modelo], confirm, opts: optsDaTela(), seed: o.seed, seed_mode: seedMode,
+      });
       setPerguntando(false);
       setErro("");
       setReuso(null);
@@ -416,9 +421,21 @@ export default function VideoView(props: {
     }
   }
 
-  // Com semente é "refazer com esta semente" (o prompt vai para o campo); sem, é gerar mais no mesmo lote.
+  // Com semente é "refazer com esta semente": prompt, quadros e ajustes da tomada vão para o campo. Sem, é o
+  // Reaproveitar: só o prompt, e o Enter gera mais na mesma tomada com os ajustes que estão no painel.
   function reaproveitar(meta: LoteMeta, pedido: Message, semente?: number, lote?: { id: number; letra: string }) {
     const pm = pedido.meta as PedidoMeta | null;
+    if (!semente && lote) {
+      if (meta.opts.ampliacao) { // ampliação não ganha "mais": o prompt vai para o campo
+        setPrompt(pedido.content);
+        setReuso(null);
+      } else {
+        setPrompt("");
+        setReuso({ lote: lote.id, letra: lote.letra, prompt: pedido.content, refs: pm?.refs ?? [] });
+      }
+      texto.current?.focus();
+      return;
+    }
     const r = pm?.refs ?? [];
     setSlots([r[0] ?? null, r[1] ?? null]);
     setModo(r.length === 2 ? "flf2v" : r.length === 1 ? "i2v" : "t2v");
@@ -427,13 +444,8 @@ export default function VideoView(props: {
     const usado = pm?.models?.[0];
     if (usado && st?.video_models.some((m) => m.path === usado)) setModelo(usado);
     setCount(semente ? 1 : meta.count);
-    if (!semente && lote && !meta.opts.ampliacao) { // ampliação não ganha "mais": o prompt vai para o campo
-      setPrompt("");
-      setReuso({ lote: lote.id, letra: lote.letra, prompt: pedido.content });
-    } else {
-      setPrompt(pedido.content);
-      setReuso(null);
-    }
+    setPrompt(pedido.content);
+    setReuso(null);
     texto.current?.focus();
   }
 
@@ -693,6 +705,9 @@ export default function VideoView(props: {
                   if (e.key === "Tab" && reuso && !prompt) {
                     e.preventDefault();
                     setPrompt(reuso.prompt);
+                    // os quadros fazem parte do que o prompt descreve: vêm junto, e o modo acompanha
+                    setSlots([reuso.refs[0] ?? null, reuso.refs[1] ?? null]);
+                    setModo(reuso.refs.length === 2 ? "flf2v" : reuso.refs.length === 1 ? "i2v" : "t2v");
                     setReuso(null);
                   }
                   if (e.key === "Enter" && !e.shiftKey) {

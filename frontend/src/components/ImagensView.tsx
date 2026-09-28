@@ -143,7 +143,8 @@ export default function ImagensView(props: {
   const [filtro, setFiltro] = useState<Filtro>("todas");
   // "Reaproveitar": o prompt do lote fica esmaecido no campo e Enter gera mais imagens NESSE lote.
   // Digitar qualquer coisa anula (vira um lote novo); Tab traz o texto para editar.
-  const [reuso, setReuso] = useState<{ lote: number; numero: number; prompt: string } | null>(null);
+  // Reaproveita-se o prompt, não os parâmetros: o que está no painel agora vale para as imagens novas.
+  const [reuso, setReuso] = useState<{ lote: number; numero: number; prompt: string; refs: string[] } | null>(null);
   const campo = useRef<HTMLTextAreaElement>(null);
   const [ampliarPc, setAmpliarPc] = useState(false);
   // Na primeira vez herda o par do Chat; a partir daí é escolha própria desta aba.
@@ -311,8 +312,7 @@ export default function ImagensView(props: {
       const conv = await props.ensureConversation();
       await api.post(`/imagens/${conv}/gerar`, {
         prompt,
-        // offload/flash attention são do modelo (IA local › Modelos): o global não passa por cima
-        opts: { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined, vae_tiling: undefined, te_cpu: undefined, preview: undefined, taesd: undefined },
+        opts: optsDaTela(),
         models,
         count,
         seed: o.seed,
@@ -331,14 +331,18 @@ export default function ImagensView(props: {
     }
   }
 
+  // offload/flash attention são do modelo (IA local › Modelos): o global não passa por cima
+  const optsDaTela = () => o && { ...o, model: undefined, seed: undefined, offload: undefined, flash_attn: undefined,
+    vae_tiling: undefined, te_cpu: undefined, preview: undefined, taesd: undefined };
+
   async function gerarMais(confirm = false) {
-    if (!reuso) return;
+    if (!reuso || !o) return;
     if (!models.length) {
       setAbrirAjustes(true);
       return mostrarErro("Escolha nos ajustes o modelo que gera as imagens.");
     }
     try {
-      await api.post(`/imagens/${reuso.lote}/mais`, { count, models, confirm });
+      await api.post(`/imagens/${reuso.lote}/mais`, { count, models, confirm, opts: optsDaTela(), seed: o.seed, seed_mode: seedMode });
       setPerguntando(null);
       setErro("");
       setReuso(null);
@@ -466,22 +470,16 @@ export default function ImagensView(props: {
     }
   }
 
+  /** Só o prompt (e as imagens que ele edita): modelo, passos, tamanho, variações e semente ficam os do painel. */
   function reaproveitar(meta: LoteMeta, pedido: Message, lote: number, numero: number) {
-    const usados: string[] = (pedido.meta as PedidoMeta | null)?.models ?? [];
-    setRefs((pedido.meta as PedidoMeta | null)?.refs ?? []);
-    setO((c) => c && { ...c, ...meta.opts });
-    if (usados.length) setModels(usados);
-    setCount(meta.count);
-    setSeedMode(meta.seed_mode);
-    // Lote de ampliação não ganha "mais" (é uma imagem só, de outra origem): o prompt vai para o campo, como antes.
+    // Lote de ampliação não ganha "mais" (é uma imagem só, de outra origem): o prompt vai para o campo.
     if (meta.opts.ampliacao) {
       setPrompt(promptDaImagem(pedido));
       setReuso(null);
     } else {
       setPrompt("");
-      setReuso({ lote, numero, prompt: pedido.content });
+      setReuso({ lote, numero, prompt: pedido.content, refs: (pedido.meta as PedidoMeta | null)?.refs ?? [] });
     }
-    setAbrirAjustes(true);
     campo.current?.focus();
   }
 
@@ -804,6 +802,7 @@ export default function ImagensView(props: {
                     if (e.key === "Tab" && reuso && !prompt) {
                       e.preventDefault();
                       setPrompt(reuso.prompt);
+                      setRefs(reuso.refs); // prompt de edição sem a imagem editada não faz sentido
                       setReuso(null);
                     }
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -1229,6 +1228,11 @@ function promptDaImagem(pedido: Message): string {
 
 // ---------------------------------------------------------------- um lote
 
+const ajustesTexto = (o: Partial<ImageOpts>) =>
+  [o.width && `${o.width}×${o.height}`, o.steps !== undefined && `${o.steps} passos`,
+   o.cfg !== undefined && `CFG ${String(o.cfg).replace(".", ",")}`, o.sampler,
+   o.hires && `alta resolução ${fmtNum(o.hires_scale ?? 1.5)}× · denoise ${fmtNum(o.hires_denoise ?? 0.45)}`].filter(Boolean).join(" · ");
+
 function Lote(props: {
   pedido: Message;
   resposta: Message;
@@ -1312,6 +1316,11 @@ function Lote(props: {
   }
 
   const exibidas = imagens.filter((i) => passaNoFiltro(props.filtro, i));
+  // Reaproveitar acrescenta imagens com os ajustes da tela: agrupa as imagens por ajuste para o tooltip
+  const variam = [...imagens.reduce((m, img, k) => {
+    const t = ajustesTexto({ ...meta.opts, ...img.opts });
+    return m.set(t, [...(m.get(t) ?? []), k + 1]);
+  }, new Map<string, number[]>())];
   if (!exibidas.length) return null;
   // edição: a imagem editada; ampliação: a original — o visualizador compara com ela na cortina
   const origemDoLote = (props.pedido.meta as PedidoMeta | null)?.refs?.[0] ?? meta.opts.ampliacao?.origem;
@@ -1344,9 +1353,12 @@ function Lote(props: {
           {viva ? `gerando ${prontas + 1} de ${imagens.length} · `
             : props.resposta.status === "interrompido" ? `interrompido: ${imagens.length - faltam} de ${imagens.length} · `
             : deSlots ? `${imagens.length} do site · ` : ""}
-          {[meta.opts.width && `${meta.opts.width}×${meta.opts.height}`, meta.opts.steps !== undefined && `${meta.opts.steps} passos`,
-            meta.opts.cfg !== undefined && `CFG ${String(meta.opts.cfg).replace(".", ",")}`, meta.opts.sampler,
-            meta.opts.hires && `alta resolução ${fmtNum(meta.opts.hires_scale ?? 1.5)}× · denoise ${fmtNum(meta.opts.hires_denoise ?? 0.45)}`].filter(Boolean).join(" · ")}
+          {ajustesTexto(meta.opts)}
+          {variam.length > 1 && (
+            <span className="text-accent-text" title={variam.map(([t, ns]) => `${ns.length === 1 ? "Imagem" : "Imagens"} ${ns.join(", ")}: ${t}`).join("\n")}>
+              {" · ajustes variam"}
+            </span>
+          )}
           {" · "}
           <button
             onClick={() => props.onSemente(imagens[0].seed)}

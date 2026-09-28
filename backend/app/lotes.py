@@ -543,7 +543,7 @@ def _temporario(arquivo: Path) -> Path:
     return arquivo.with_name(f".{arquivo.stem}.gerando.png")
 
 
-def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: str,
+def _trabalhar(conv_id: int, message_id: int, prompt: str, opts_lote: dict, job_id: str,
                refs: list[str] | None = None) -> None:
     imagens = list(_mensagem(message_id)["meta"]["images"])
     localai.set_image_busy(True)
@@ -560,6 +560,8 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
                         resto["status"] = "cancelada"
                 _patch(message_id, meta={"images": imagens})
                 break
+            # imagem acrescentada por "mais" traz os ajustes com que foi pedida; as outras, os do lote
+            opts = {**opts_lote, **(item.get("opts") or {})}
             item["status"] = "gerando"
             item["progress"] = 0.0
             # Já no começo (carregando o modelo, antes da 1ª prévia): o card sabe que não vai de líquido.
@@ -936,20 +938,23 @@ def _pedido(msg: dict) -> tuple[str, list[str], dict]:
         return pedido.content, list((pedido.meta or {}).get("refs") or []), dict(pedido.meta or {})
 
 
-def mais(message_id: int, count: int, models: list[str] | None = None, confirm: bool = False) -> dict:
-    """"Reaproveitar" sem mexer no prompt: mais `count` imagens (ou tomadas) NO MESMO lote, com o prompt, as
-    referências e os ajustes dele. As sementes seguem o modo do lote: incremental continua de onde parou,
-    aleatória sorteia, fixa repete a do lote."""
+def mais(message_id: int, count: int, models: list[str] | None = None, confirm: bool = False,
+         opts: dict | None = None, seed: int = 0, seed_mode: str = "") -> dict:
+    """"Reaproveitar" sem mexer no prompt: mais `count` imagens (ou tomadas) NO MESMO lote, com o prompt e as
+    referências dele. Reaproveita-se o prompt, não os ajustes: `opts`, `models` e `seed_mode` são os da tela
+    agora, e ficam em cada imagem nova (o "Continuar" e o tamanho do card usam os dela). Sem `opts`, os do lote.
+    Sementes: incremental continua de onde o lote parou, aleatória sorteia, fixa usa `seed` (ou a do lote)."""
     msg = _mensagem(message_id)
     meta = msg["meta"]
     # A thread do lote grava a lista de imagens inteira no fim: acrescentar enquanto ela roda se perderia.
     if msg["status"] == "running":
         raise ToolError("O lote ainda está rodando: espere terminar para gerar mais nele.")
     imagens = list(meta["images"])
-    opts = dict(meta.get("opts") or {})
-    if opts.get("ampliacao") or meta.get("variacao_de") or any(i.get("destino") or i.get("slot") for i in imagens):
+    if (meta.get("opts") or {}).get("ampliacao") or meta.get("variacao_de") or any(i.get("destino") or i.get("slot") for i in imagens):
         raise ToolError("Gerar mais no mesmo lote é só para lotes comuns (não ampliação nem imagens do site).")
     prompt, refs, pm = _pedido(msg)
+    novos = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
+    opts = {**(meta.get("opts") or {}), **novos}
     count = max(1, min(int(count or 1), MAX_VARIACOES))
     escolhidos = _distribuir(list(models or pm.get("models") or dict.fromkeys(i["model"] for i in imagens)), count)
     ext = Path(imagens[0]["path"]).suffix or ".png"
@@ -959,15 +964,17 @@ def mais(message_id: int, count: int, models: list[str] | None = None, confirm: 
     if not localai.image_busy():
         _liberar_vram(confirm)
 
-    modo = meta.get("seed_mode") or "incremental"
-    base = (max(i["seed"] for i in imagens) + 1) if modo == "incremental" else imagens[0]["seed"]
+    modo = seed_mode or meta.get("seed_mode") or "incremental"
+    base = (max(i["seed"] for i in imagens) + 1) if modo == "incremental" else int(seed or 0) or imagens[0]["seed"]
     sementes = _sementes(count, base % SEED_MAX or 1, modo)
     pasta = imagegen.video_dir() if ext == ".webm" else imagegen.out_dir()
     pasta.mkdir(parents=True, exist_ok=True)
     marca = time.strftime("%Y%m%d-%H%M%S")
     n = len(imagens)
+    tamanho = {k: novos[k] for k in ("width", "height") if novos.get(k)}  # o card desenha na proporção dela
     imagens += [{"path": str(pasta / f"{marca}-{n + i:02d}-s{s}{ext}"), "seed": s, "model": m,
-                 "model_name": _nome(m), "status": "pendente", "error": ""}
+                 "model_name": _nome(m), "status": "pendente", "error": "", **tamanho,
+                 **({"opts": novos} if novos else {})}
                 for i, (m, s) in enumerate(zip(escolhidos, sementes))]
     job = downloads.create("lote", prompt[:60])
     downloads.update(job["id"], done=0, total=count)
@@ -977,7 +984,7 @@ def mais(message_id: int, count: int, models: list[str] | None = None, confirm: 
         if conv:
             conv.updated_at = db._now()
             s.commit()
-    _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, opts, job["id"], refs)
+    _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, meta.get("opts") or {}, job["id"], refs)
     return {"ok": True}
 
 
