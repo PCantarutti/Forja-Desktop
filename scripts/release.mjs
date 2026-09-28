@@ -46,6 +46,24 @@ const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" })
 const rodar = (cmd, args, cwd = ROOT) =>
   execFileSync(cmd, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
 
+/**
+ * fetch que aguenta a conexão morta do pool. O script bloqueia o event loop por minutos (execFileSync nos
+ * testes e no empacotamento); nesse tempo o GitHub fecha a conexão ociosa, mas o timer do Node que a
+ * tiraria do pool não roda, e o primeiro fetch depois dela sai "fetch failed" (UND_ERR_SOCKET other side
+ * closed) em poucos ms. Foi assim que a descrição da 0.8.1 e da 0.8.2 não foi gravada. A segunda
+ * tentativa abre conexão nova.
+ */
+async function fetchGithub(url, opcoes) {
+  try {
+    return await fetch(url, opcoes);
+  } catch (e) {
+    if (!["UND_ERR_SOCKET", "ECONNRESET"].includes(e.cause?.code)) throw e;
+    return fetch(url, opcoes);
+  }
+}
+/** "fetch failed" não diz nada: o motivo de verdade vem no cause. */
+const motivo = (e) => [e.message, e.cause?.code, e.cause?.message].filter(Boolean).join(" · ");
+
 // ------------------------------------------------------------------ conferências
 
 async function conferirGit() {
@@ -243,16 +261,16 @@ async function descreverRelease(versao, notas) {
   const h = { Authorization: `token ${token}`, "User-Agent": "forja-release", "Content-Type": "application/json" };
   try {
     // Rascunho não aparece em /releases/tags/...: só na lista, e só para quem tem escrita.
-    const lista = await (await fetch(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`, { headers: h })).json();
+    const lista = await (await fetchGithub(`https://api.github.com/repos/${owner}/${repo}/releases?per_page=20`, { headers: h })).json();
     const rel = Array.isArray(lista) && lista.find((r) => r.tag_name === `v${versao}`);
     if (!rel) return aviso(`não achei a release v${versao} para preencher a descrição.`);
     // tag_name vai junto SEMPRE: editar um rascunho sem ele troca a tag por "untagged-…", e a
     // release publicada sai sem tag (a 0.6.1 sumiu da lista assim, 23/09/2026).
-    const r = await fetch(rel.url, { method: "PATCH", headers: h, body: JSON.stringify({ tag_name: rel.tag_name, body: notas }) });
+    const r = await fetchGithub(rel.url, { method: "PATCH", headers: h, body: JSON.stringify({ tag_name: rel.tag_name, body: notas }) });
     if (!r.ok) return aviso(`o GitHub respondeu ${r.status} ao gravar a descrição.`);
     ok("descrição da release preenchida com as notas");
   } catch (e) {
-    aviso(`não deu para preencher a descrição: ${e.message}`);
+    aviso(`não deu para preencher a descrição: ${motivo(e)}`);
   }
 }
 
