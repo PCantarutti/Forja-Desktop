@@ -81,6 +81,7 @@ def diff(root: Path, path: str | None = None) -> str:
 
 
 async def generate_message(root: Path, provider: str, model: str) -> str:
+    ignora(root, UPLOADS_DIR)  # anexos, prints e prévias do usuário não entram no commit
     _ok(root, "git add -A", 60)
     stat = _run(root, "git diff --cached --stat", 60)[1]
     patch = _run(root, "git diff --cached", 60)[1]
@@ -109,6 +110,7 @@ def _write_forja_file(root: Path, name: str, text: str) -> str:
 def commit(root: Path, message: str) -> dict:
     if not message.strip():
         raise ToolError("Mensagem de commit vazia.")
+    ignora(root, UPLOADS_DIR)
     _ok(root, "git add -A", 60)
     if not _run(root, "git diff --cached --quiet", 30)[0]:
         raise ToolError("Nada para commitar: a árvore está limpa.")
@@ -200,19 +202,27 @@ WT_DIR = ".forja/wt"
 _ID = "-c user.name=Forja -c user.email=forja@local"
 
 
-def _ignora_wt(root: Path) -> None:
-    """`.forja/wt/` fora do `git status` da pasta principal, sem mexer no .gitignore do usuário."""
-    git = root / ".git"
-    if not git.is_dir():
+UPLOADS_DIR = ".forja/uploads"  # o mesmo de uploads.UPLOAD_DIR (importar de lá fecharia um ciclo)
+
+
+def ignora(root: Path, pasta: str) -> None:
+    """`pasta` fora do `git status` (e do `git add -A` do commit), sem mexer no .gitignore do usuário.
+    Sem barra no começo, a linha vale em qualquer nível: a pasta da conversa pode ser uma subpasta do repo."""
+    git = next((p / ".git" for p in (root, *root.parents) if (p / ".git").is_dir()), None)
+    if git is None:
         return
     exclude = git / "info" / "exclude"
     try:
         atual = exclude.read_text("utf-8") if exclude.exists() else ""
-        if WT_DIR + "/" not in atual:
+        if pasta + "/" not in atual.splitlines():
             exclude.parent.mkdir(parents=True, exist_ok=True)
-            exclude.write_text(atual.rstrip("\n") + ("\n" if atual else "") + WT_DIR + "/\n", encoding="utf-8")
+            exclude.write_text(atual.rstrip("\n") + ("\n" if atual else "") + pasta + "/\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def _ignora_wt(root: Path) -> None:
+    ignora(root, WT_DIR)
 
 
 def worktree_tarefa(root: Path, code: str) -> Path:

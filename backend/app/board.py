@@ -24,7 +24,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from . import config, convencoes, db, workspace
+from . import config, convencoes, db, uploads, workspace
 from .memory import _raiz_projeto
 
 TIPOS = ("bugfix", "feature", "improvement", "visual", "todo", "seguranca")
@@ -264,6 +264,7 @@ def apagar(issue_id: int) -> None:
         if i := s.get(db.Issue, issue_id):
             s.delete(i)
             s.commit()
+    shutil.rmtree(uploads.EVIDENCIAS_DIR / str(issue_id), ignore_errors=True)  # o antes/depois copiado
 
 
 def carimbo() -> str:
@@ -632,13 +633,27 @@ def _prints(s, conv_id: int) -> list[dict]:
 
 
 def _anexa_prints(s, i: db.Issue) -> None:
-    """Primeiro e último print da conversa viram o ANTES e o DEPOIS do card (troca os de uma rodada anterior)."""
+    """Primeiro e último print da conversa viram o ANTES e o DEPOIS do card (troca os de uma rodada anterior).
+
+    Os dois são copiados para `board/<card>/`: o card vive mais que a conversa, e apagar a conversa leva
+    os prints dela. A cópia sai quando o card é apagado (apagar) ou trocada na próxima rodada."""
     prints = _prints(s, i.conversa_id)
     if not prints:
         return
     escolhidos = [("antes", prints[0]), ("depois", prints[-1])] if len(prints) > 1 else [("print", prints[0])]
-    i.evidencias = [e for e in i.evidencias or [] if not e.get("imagem")] + [
-        {"imagem": p["path"], "conv": i.conversa_id, "rotulo": r} for r, p in escolhidos]
+    pasta = uploads.EVIDENCIAS_DIR / str(i.id)
+    shutil.rmtree(pasta, ignore_errors=True)  # os da rodada anterior
+    evid = []
+    for r, p in escolhidos:
+        origem = Path(i.projeto) / p["path"]  # print novo é absoluto; o de versão antiga, relativo ao projeto
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+            copia = pasta / f"{r}-{origem.name}"
+            shutil.copyfile(origem, copia)
+            evid.append({"imagem": str(copia), "conv": i.conversa_id, "rotulo": r})
+        except OSError:
+            evid.append({"imagem": p["path"], "conv": i.conversa_id, "rotulo": r})  # sem o arquivo: aponta o original
+    i.evidencias = [e for e in i.evidencias or [] if not e.get("imagem")] + evid
     _evento(i, f"{len(escolhidos)} print(s) da conversa anexado(s) ao card")
 
 

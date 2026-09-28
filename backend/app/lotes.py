@@ -12,6 +12,7 @@ passarem de `image.descarte_dias` (padrão 7).
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import random
@@ -26,6 +27,7 @@ from . import slots as projeto
 from .tools import ToolError
 
 DESCARTADAS = "descartadas"
+REFERENCIAS = "referencias"
 MAX_VARIACOES = 50  # o sd-cli é sequencial; acima disso é espera, não geração
 SEED_MAX = 2**31 - 1
 
@@ -57,14 +59,87 @@ def _consumir() -> None:
             logging.exception("lote da fila falhou")
 
 
-def descartadas_dir() -> Path:
-    return imagegen.out_dir() / DESCARTADAS
+def _video(path: str | Path) -> bool:
+    return str(path).endswith(".webm")
 
 
-def previas_dir() -> Path:
+def descartadas_dir(video: bool = False) -> Path:
+    return imagegen.pasta(video) / DESCARTADAS
+
+
+def previas_dir(video: bool = False) -> Path:
     """Prévia de cada imagem enquanto ela gera. Dentro da pasta de saída porque é de lá que a rota de
     arquivo aceita servir; o arquivo some quando a imagem termina."""
-    return imagegen.out_dir() / ".previas"
+    return imagegen.pasta(video) / ".previas"
+
+
+def referencias_dir(video: bool = False) -> Path:
+    """Cópia de imagem sem caminho no disco (colada, máscara pintada, quadro tirado do vídeo)."""
+    return imagegen.pasta(video) / REFERENCIAS
+
+
+def _pastas_de_referencia() -> set[Path]:
+    return {(p / REFERENCIAS).resolve() for p in imagegen.pastas_saida()}
+
+
+def _citadas(nomes: set[str], exceto_conv: int | None = None) -> set[str]:
+    """Quais destes nomes de arquivo ainda aparecem no meta de alguma mensagem (o nome da cópia leva o
+    sha do conteúdo: casar pelo nome basta, e evita comparar caminho com barra escapada no JSON)."""
+    if not nomes:
+        return set()
+    achados: set[str] = set()
+    with db.session() as s:
+        q = s.query(db.Message.meta).filter(db.Message.meta.isnot(None))
+        if exceto_conv is not None:
+            q = q.filter(db.Message.conversation_id != exceto_conv)
+        for (meta,) in q.yield_per(500):
+            texto = json.dumps(meta, ensure_ascii=False)
+            if REFERENCIAS in texto:
+                achados |= {n for n in nomes if n in texto}
+    return achados
+
+
+def referencias_da_conversa(conv_id: int) -> list[Path]:
+    """As cópias em referencias/ que esta conversa usou (pedido, máscara, quadro de vídeo)."""
+    pastas = _pastas_de_referencia()
+    arquivos = {f.name: f for p in pastas if p.is_dir() for f in p.iterdir() if f.is_file()}
+    with db.session() as s:
+        textos = [json.dumps(m, ensure_ascii=False) for (m,) in s.query(db.Message.meta)
+                  .filter(db.Message.conversation_id == conv_id, db.Message.meta.isnot(None)).all()]
+    return [f for n, f in arquivos.items() if any(n in t for t in textos)]
+
+
+def apagar_referencias(candidatas: list[Path], conv_id: int) -> int:
+    """Com a conversa saindo, as cópias dela vão junto — menos a que outra conversa também usa (a
+    mesma imagem colada duas vezes é um arquivo só)."""
+    em_uso = _citadas({f.name for f in candidatas}, exceto_conv=conv_id)
+    n = 0
+    for f in candidatas:
+        if f.name not in em_uso:
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
+    return n
+
+
+def limpar_referencias(horas: float = 24) -> int:
+    """Expurgo de cópia que nenhuma mensagem cita: colada e nunca usada (o lote não saiu), ou que
+    sobrou de versão anterior. A carência protege a que está no campo esperando o Gerar."""
+    limite = time.time() - horas * 3600
+    velhas = [f for p in _pastas_de_referencia() if p.is_dir() for f in p.iterdir()
+              if f.is_file() and f.stat().st_mtime < limite]
+    em_uso = _citadas({f.name for f in velhas})
+    n = 0
+    for f in velhas:
+        if f.name not in em_uso:
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                pass
+    return n
 
 
 def _sementes(count: int, seed: int, modo: str) -> list[int]:
@@ -492,7 +567,7 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts: dict, job_id: s
             _patch(message_id, meta={"images": imagens})
             # Prévia de vídeo tem vários quadros: com .png o sd-cli grava .avi, que o Chromium não toca;
             # WebP animado ele grava e o <img> do card anima sozinho.
-            previa = previas_dir() / (Path(item["path"]).stem + (".webp" if item["path"].endswith(".webm") else ".png"))
+            previa = previas_dir(_video(item["path"])) / (Path(item["path"]).stem + (".webp" if _video(item["path"]) else ".png"))
             previa.parent.mkdir(parents=True, exist_ok=True)
 
             def progresso(passo: int, total_passos: int, s_passo: float = 0.0, item=item, previa=previa) -> None:
@@ -719,7 +794,7 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
     a = meta["opts"]["ampliacao"]
     item = imagens[0]
     localai.set_image_busy(True)
-    previa = previas_dir() / (Path(item["path"]).stem + ".png")
+    previa = previas_dir(_video(item["path"])) / (Path(item["path"]).stem + ".png")
     previa.parent.mkdir(parents=True, exist_ok=True)
     try:
         item.update(status="gerando", progress=0.0, com_previa=bool(a["modelo"]))
@@ -784,8 +859,9 @@ def reap() -> int:
     fechou no meio). Viram "interrompido", para a tela parar de esperar e oferecer "Continuar". A
     imagem que estava no meio perde os passos (o sd-cli não salva estado parcial); se o PNG chegou a
     ser gravado antes da queda, ela conta como pronta."""
-    shutil.rmtree(previas_dir(), ignore_errors=True)  # prévias de imagens que não terminaram
-    shutil.rmtree(imagegen.out_dir() / ".ampliando", ignore_errors=True)  # quadros de ampliações que caíram
+    for video in (False, True):
+        shutil.rmtree(previas_dir(video), ignore_errors=True)  # prévias de imagens que não terminaram
+        shutil.rmtree(imagegen.pasta(video) / ".ampliando", ignore_errors=True)  # quadros de ampliações que caíram
     with db.session() as s:
         presos = s.query(db.Message).filter(db.Message.role == "assistant", db.Message.status == "running").all()
         n = 0
@@ -871,7 +947,6 @@ def decidir(message_id: int, keep: list[str], apenas: list[str] | None = None) -
     imagens = [dict(i) for i in m["meta"]["images"]]
     manter = {str(p) for p in (keep or [])}
     so = {str(p) for p in apenas} if apenas else None
-    destino = descartadas_dir()
     for item in imagens:
         if item["status"] not in ("pronta", "mantida", "descartada"):
             continue
@@ -880,7 +955,7 @@ def decidir(message_id: int, keep: list[str], apenas: list[str] | None = None) -
         if item["path"] in manter:
             if item["status"] == "descartada":  # desfazer: volta para a pasta de saída
                 # slot volta para o caminho que o código aponta; variação, para a pasta de saída
-                alvo = Path(item["destino"]) if item.get("destino") else (imagegen.video_dir() if item["path"].endswith(".webm") else imagegen.out_dir()) / Path(item["path"]).name
+                alvo = Path(item["destino"]) if item.get("destino") else imagegen.pasta(_video(item["path"])) / Path(item["path"]).name
                 if Path(item["path"]).exists():
                     alvo.parent.mkdir(parents=True, exist_ok=True)
                     shutil.move(item["path"], alvo)
@@ -889,6 +964,7 @@ def decidir(message_id: int, keep: list[str], apenas: list[str] | None = None) -
         elif item["status"] != "descartada":
             origem = Path(item["path"])
             if origem.exists():
+                destino = descartadas_dir(_video(origem))
                 destino.mkdir(parents=True, exist_ok=True)
                 alvo = destino / origem.name
                 shutil.move(str(origem), str(alvo))
@@ -982,7 +1058,7 @@ def imagens_da_conversa(conv_id: int) -> list[Path]:
         caminhos = [i["path"] for m in msgs for i in (m.meta or {}).get("images") or [] if i.get("path")]
     achados: list[Path] = []
     for c in caminhos:
-        for f in (Path(c), descartadas_dir() / Path(c).name):  # o caminho do meta, ou já no descarte
+        for f in (Path(c), descartadas_dir(_video(c)) / Path(c).name):  # o caminho do meta, ou já no descarte
             f = f.resolve()
             if f.is_file() and pastas & set(f.parents) and f not in achados:
                 achados.append(f)
@@ -1008,16 +1084,14 @@ def limpar_descartadas(dias: int | None = None) -> int:
     `dias=None` usa o prazo do config, onde 0 significa guardar para sempre. Passar `dias<=0` na
     chamada é o "Esvaziar agora" do botão: leva tudo.
     """
-    pasta = descartadas_dir()
-    if not pasta.is_dir():
-        return 0
     if dias is None:
         dias = int(localai.read_config()["image"].get("descarte_dias") or 0)
         if dias <= 0:
             return 0
     limite = time.time() - dias * 86400 if dias > 0 else time.time() + 1
     apagados = 0
-    for f in [*pasta.glob("*.png"), *pasta.glob("*.webm")]:
+    pastas = {descartadas_dir(False).resolve(), descartadas_dir(True).resolve()}
+    for f in [f for p in pastas for f in (*p.glob("*.png"), *p.glob("*.webm"))]:
         try:
             if f.stat().st_mtime < limite:
                 f.unlink()

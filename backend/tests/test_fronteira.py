@@ -44,10 +44,28 @@ def test_token_exigido_quando_configurado(cliente, monkeypatch):
     assert cliente.get("/api/config", headers={"X-Forja-Token": "segredo"}).status_code == 200
 
 
-def test_subrecurso_dispensa_token(cliente, monkeypatch):
-    """<img src> e link de download não têm como mandar header; são leitura confinada."""
+@pytest.mark.parametrize("rota", ["/api/files?path=nao-existe.png", "/api/local/image/file?path=x.png",
+                                  "/api/conversations/999/export"])
+def test_subrecurso_leva_token_no_cookie_ou_na_query(cliente, monkeypatch, rota):
+    """<img src> e link de download não mandam header: sem token nenhum, qualquer processo da máquina lia
+    os arquivos da conversa. O token vem no cookie (a janela do app) ou em ?t= (o celular)."""
     monkeypatch.setattr(config, "API_TOKEN", "segredo")
-    assert cliente.get("/api/files?path=nao-existe.png").status_code != 403
-    assert cliente.get("/api/conversations/999/export").status_code != 403
+    assert cliente.get(rota).status_code == 403
+    cliente.cookies.set("forja_token", "errado")
+    assert cliente.get(rota).status_code == 403
+    cliente.cookies.set("forja_token", "segredo")
+    assert cliente.get(rota).status_code != 403
+    cliente.cookies.clear()
+    assert cliente.get(rota + ("&" if "?" in rota else "?") + "t=segredo").status_code != 403
+
+
+def test_cookie_nao_vale_para_o_resto_da_api(cliente, monkeypatch):
+    monkeypatch.setattr(config, "API_TOKEN", "segredo")
+    cliente.cookies.set("forja_token", "segredo")
+    assert cliente.get("/api/config").status_code == 403
+
+
+def test_relatorio_dispensa_token(cliente, monkeypatch):
+    monkeypatch.setattr(config, "API_TOKEN", "segredo")
     # O relatório da pesquisa abre no navegador do usuário (window.open), fora do fetch da interface.
     assert cliente.get("/api/pesquisa/999/relatorio").status_code != 403

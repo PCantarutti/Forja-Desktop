@@ -35,8 +35,14 @@ def out_dir() -> Path:
 
 
 def video_dir() -> Path:
-    """Vídeos da aba Vídeo (Configurações › Pastas). Prévias e descartados seguem na pasta de imagens."""
+    """Vídeos da aba Vídeo (Configurações › Pastas)."""
     return Path(localai.read_config()["video_dir"] or localai.VIDEOS)
+
+
+def pasta(video: bool = False) -> Path:
+    """Raiz da aba: a de imagens ou a de vídeos. As duas têm o mesmo desenho — os arquivos soltos na
+    raiz, e `referencias/`, `descartadas/` e `.previas/` dentro dela."""
+    return video_dir() if video else out_dir()
 
 
 def pastas_saida() -> set[Path]:

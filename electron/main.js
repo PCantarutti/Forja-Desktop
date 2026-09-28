@@ -161,11 +161,16 @@ async function cdpEndpoint() {
 
 function startBackend(cdp) {
   fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+  // O log só crescia: passou de 10 MB, vira backend.log.1 (o anterior .1 some) e este recomeça.
+  try {
+    if (fs.statSync(LOG_FILE).size > 10 * 1024 * 1024) fs.renameSync(LOG_FILE, LOG_FILE + ".1");
+  } catch {}
   const log = fs.openSync(LOG_FILE, "a");
   const env = {
     ...process.env,
     FORJA_DATA: USER_DATA,
     FORJA_TOKEN: token,
+    FORJA_PORT: String(port), // o servidor MCP grava este endereço em mcp_endpoint.json (sem ele, 8765)
     ...(cdp ? { FORJA_CDP: cdp } : {}), // sem CDP o backend cai no Chromium headless com espelho
     FORJA_WEB: process.env.FORJA_WEB ?? path.join(ROOT, "web"),
     PYTHONUNBUFFERED: "1",
@@ -177,7 +182,9 @@ function startBackend(cdp) {
     fs.existsSync(p),
   );
   if (browsers) env.PLAYWRIGHT_BROWSERS_PATH = browsers;
-  backend = spawn(pythonExe(), ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)], {
+  // Sem log de acesso: a URL de <img> do celular leva o token em ?t=, e cada caminho de arquivo aberto
+  // ficava gravado no backend.log.
+  backend = spawn(pythonExe(), ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port), "--no-access-log"], {
     cwd: backendDir(),
     env,
     stdio: ["ignore", log, log],
