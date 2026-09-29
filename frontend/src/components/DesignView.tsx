@@ -1281,7 +1281,7 @@ export default function DesignView(props: {
             </div>
           )}
           <input ref={arquivo} type="file" hidden aria-label="Anexar referência" onChange={(e) => { const f = e.target.files?.[0]; if (f) anexar(f); e.target.value = ""; }} />
-          <div onDragOver={(e) => { if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
+          <div className="@container/caixa" onDragOver={(e) => { if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
                onDrop={(e) => { if (soltarArquivos(e.dataTransfer.files)) e.preventDefault(); }}
                onPaste={(e) => { if (soltarArquivos([...e.clipboardData.files])) e.preventDefault(); }}>
           {rodando && <TodosBar tasks={tarefas} live />}
@@ -1360,9 +1360,9 @@ export default function DesignView(props: {
               </div>
               {!total && (
                 <button className={`${pilula} ${prefs.perguntar !== false ? "border-accent-line! bg-accent-soft! text-accent-text!" : ""}`}
-                        aria-pressed={prefs.perguntar !== false} onClick={() => setPrefs((x) => ({ ...x, perguntar: x.perguntar === false }))}
+                        aria-label="Perguntar antes" aria-pressed={prefs.perguntar !== false} onClick={() => setPrefs((x) => ({ ...x, perguntar: x.perguntar === false }))}
                         title="A IA faz 2 a 4 perguntas curtas antes de planejar">
-                  <Check className={`size-3.5 ${prefs.perguntar !== false ? "" : "opacity-30"}`} /> Perguntar antes
+                  <Check className={`size-3.5 ${prefs.perguntar !== false ? "" : "opacity-30"}`} /><span className="hidden @xl/caixa:inline">Perguntar antes</span>
                 </button>
               )}
               <ModeEffortMenu effort={prefs.esforco} onEffort={(esforco) => setPrefs((p) => ({ ...p, esforco }))} semExtremo />
@@ -1372,10 +1372,10 @@ export default function DesignView(props: {
                            models={[...new Set(statsFeitas.map((x) => x.model).filter(Boolean))]} />
               <Menu title="De onde vêm as imagens" items={FONTES_IMAGENS} value={prefs.imagens ?? "skill"}
                     onChange={(imagens) => setPrefs((p) => ({ ...p, imagens }))}
-                    button={(label) => (<><Image className="size-3.5" />{label.replace("Imagens: ", "")}</>)} />
+                    button={(label) => (<><Image className="size-3.5" /><span className="hidden @3xl/caixa:inline">{label.replace("Imagens: ", "")}</span></>)} />
               {!selecao && !!total && (
                 <Menu title="Rota do pedido" items={ROTAS} value={rota} onChange={setRota}
-                      button={(label) => (<><Split className="size-3.5" />{label}</>)} />
+                      button={(label) => (<><Split className="size-3.5" /><span className="hidden @3xl/caixa:inline">{label}</span></>)} />
               )}
               {!!selecao && (
                 <button className={pilula} disabled={!texto.trim()} onClick={comentar}
