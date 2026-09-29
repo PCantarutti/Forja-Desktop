@@ -26,7 +26,7 @@ type Comentario = {
 type Projeto = {
   conv_id: number; titulo: string; mensagens: Mensagem[]; total: number; atual: number; html: string;
   secoes: string[]; comentarios: Comentario[]; rodando: number | null;
-  imagens: { total: number; pendentes: number; nomes: string[]; conversa: number | null };
+  imagens: { total: number; pendentes: number; nomes: string[]; conversa: number | null; disponivel: boolean };
   sistema: string | null;
 };
 type Patch = { fid: string; html: string };
@@ -809,7 +809,7 @@ export default function DesignView(props: {
             </div>
           )}
           <span className="flex-1" />
-          {!!projeto?.imagens.total && (
+          {!!projeto?.imagens.total && projeto.imagens.disponivel && (
             <button onClick={gerarImagens} disabled={rodando}
                     title={projeto.imagens.pendentes ? `Slots sem imagem: ${projeto.imagens.nomes.join(", ")}` : "Abre a conversa de Imagens deste design"}
                     className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 disabled:opacity-40 ${projeto.imagens.pendentes

@@ -191,7 +191,7 @@ def projeto(conv_id: int) -> dict:
 def _imagens(conv_id: int, html: str) -> dict:
     sl = design_imagens.slots(html) if html else []
     pend = [x["nome"] for x in sl if x["status"] != "pronta"]
-    return {"total": len(sl), "pendentes": len(pend), "nomes": pend,
+    return {"total": len(sl), "pendentes": len(pend), "nomes": pend, "disponivel": design_imagens.DISPONIVEL,
             "conversa": design_imagens.conversa(conv_id) if sl else None}
 
 

@@ -18,8 +18,12 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
-from . import config, db, design_html
+from . import config, db, design_html, imagegen
 from .tools import ToolError
+
+# A fila de slots da skill (ferramenta imagens_pendentes + slots.py + lotes com slots_de) não existe em
+# toda versão do Forja: sem ela, os slots ficam como provisório e a tela esconde o botão.
+DISPONIVEL = hasattr(imagegen, "imagens_pendentes")
 
 _IMG = re.compile(r"<img\b[^>]*>", re.I)
 NOME = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")   # o mesmo NOME_SLOT do imagegen
@@ -128,9 +132,11 @@ def _estilo(html: str) -> str:
 def registrar(conv_id: int) -> dict:
     """"Gerar N imagens": registra os slots pendentes pela ferramenta da skill e devolve a conversa de
     Imagens do projeto (uma por projeto de design; cada registro novo entra nela)."""
-    from . import design, imagegen
+    from . import design
     from .agent import _save
 
+    if not DISPONIVEL:
+        raise ToolError("Esta versão do Forja ainda não tem a fila de imagens da skill gerar-imagens.")
     p = design.projeto(conv_id)
     pend = [s for s in slots(p["html"]) if s["status"] != "pronta"]
     if not pend:

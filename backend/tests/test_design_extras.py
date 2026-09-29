@@ -7,6 +7,8 @@ import pytest
 from app import db, design, design_export, design_html, design_imagens, design_sistema, lotes, mirror
 from app.tools import ToolError
 
+SKILL = pytest.mark.skipif(not design_imagens.DISPONIVEL, reason="sem a fila de slots da skill gerar-imagens")
+
 M = {k: {"provider": "ollama", "model": "m"} for k in ("plano", "geracao", "edicao")}
 DOC = """<!doctype html><html><head><title>x</title><style>
 :root { --cor-primaria: #c75b12; --esp-4: 1.5rem; --fonte-texto: Georgia, serif; }
@@ -64,9 +66,11 @@ def test_slots_ganham_provisorio_e_o_modelo_nao_ve_base64():
     assert all(s["src"].startswith("data:image/svg+xml") for s in sl)
     assert 'src=""' in design_imagens.enxugar(html) and "data:image" not in design_imagens.enxugar(html)
     p = design.projeto(conv)
-    assert p["imagens"] == {"total": 2, "pendentes": 2, "nomes": ["hero-paes-8027", "forno-1234"], "conversa": None}
+    assert p["imagens"] == {"total": 2, "pendentes": 2, "nomes": ["hero-paes-8027", "forno-1234"],
+                            "disponivel": design_imagens.DISPONIVEL, "conversa": None}
 
 
+@SKILL
 def test_gerar_imagens_registra_pela_ferramenta_da_skill_e_embute_no_fim():
     conv = _projeto()
     r = design_imagens.registrar(conv)
@@ -95,11 +99,15 @@ def test_gerar_imagens_registra_pela_ferramenta_da_skill_e_embute_no_fim():
     assert design_imagens.embutir(conv) is None                              # de novo: nada mudou
 
 
-def test_edicao_depois_da_imagem_nao_perde_a_foto(monkeypatch):
-    conv = _projeto()
-    raiz = design_imagens.pasta(conv)
-    _png(raiz / "img" / "hero-paes-8027.png")
-    design_imagens.embutir(conv)
+def _com_foto(tmp_path) -> int:
+    """Projeto com a foto do hero já pronta (o que o fim do lote faria), sem depender da fila."""
+    _png(tmp_path / "foto.png")
+    uri = design_imagens._data_uri(tmp_path / "foto.png")
+    return _projeto(DOC.replace('data-slot="hero-paes-8027"', f'data-slot="hero-paes-8027" src="{uri}" data-slot-status="pronta"'))
+
+
+def test_edicao_depois_da_imagem_nao_perde_a_foto(monkeypatch, tmp_path):
+    conv = _com_foto(tmp_path)
     html = design.projeto(conv)["html"]
     sec = re.search(r'<section data-section="hero" data-fid="(\w+)"', html).group(1)
     vistos = []
@@ -207,9 +215,7 @@ def test_plano_com_design_system_usa_os_tokens_dele(monkeypatch):
 # ------------------------------------------------------------------ 5. handoff para o Agente
 
 def test_handoff_grava_o_pacote_na_pasta_do_projeto(tmp_path):
-    conv = _projeto()
-    _png(design_imagens.pasta(conv) / "img" / "hero-paes-8027.png")
-    design_imagens.embutir(conv)
+    conv = _com_foto(tmp_path)
     p = design.projeto(conv)
     proj = tmp_path / "meu-site"
     proj.mkdir()
