@@ -239,7 +239,7 @@ def _tokens(html: str, tokens: dict) -> str:
     for nome, valor in tokens.items():
         nome, valor = str(nome).strip(), str(valor).strip().rstrip(";")
         nome = nome if nome.startswith("--") else f"--{nome}"
-        if not re.fullmatch(r"--[\w-]+", nome) or re.search(r"[;{}<>]", valor):
+        if not token_valido(nome, valor):
             raise ValueError(f"Token inválido: {nome}")
         linha = re.compile(rf"({re.escape(nome)}\s*:)[^;}}]*")
         corpo = linha.sub(lambda x: f"{x.group(1)} {valor}", corpo, count=1) if linha.search(corpo) \
@@ -308,3 +308,120 @@ def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
         if alvo and (f := _fid(alvo[-1])) and f not in mudou:
             mudou.append(f)
     return html, mudou
+
+
+# ------------------------------------------------------------------ seções e esqueleto (fase 3)
+
+_TOKEN_NOME = re.compile(r"--[\w-]+")
+
+
+def token_valido(nome: str, valor: str) -> bool:
+    return bool(_TOKEN_NOME.fullmatch(nome)) and not re.search(r"[;{}<>]", valor) and 0 < len(valor) <= 200
+
+
+def slug(texto: str) -> str:
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", t).strip("-")[:40]
+
+
+def _attr(txt: str, nome: str, valor: str | None) -> str:
+    """Tag de abertura com o atributo `nome` trocado (None = removido)."""
+    txt = re.sub(rf"""\s{re.escape(nome)}(\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?(?=[\s/>])""", "", txt, flags=re.I)
+    if valor is None:
+        return txt
+    corte = len(txt) - (2 if txt.endswith("/>") else 1)
+    return f'{txt[:corte].rstrip()} {nome}="{valor}"{txt[corte:]}'
+
+
+def secoes(html: str) -> list[dict]:
+    """Seções de topo: filhas diretas do <body> com data-section."""
+    els = indexar(html)
+    return [e for e in els if e["pai"] is not None and els[e["pai"]]["tag"] == "body"
+            and e["attrs"].get("data-section")]
+
+
+PLACEHOLDER_CSS = ("[data-placeholder]{padding:4rem 1.5rem;text-align:center;font:500 1rem system-ui,sans-serif;"
+                   "color:#8a8a8a;border:2px dashed #d4d4d4;margin:1rem;border-radius:12px}")
+_BASE_CSS = """*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;font-family:var(--fonte-texto, system-ui, sans-serif);color:var(--cor-texto, #222);background:var(--cor-fundo, #fff);line-height:1.6}
+h1,h2,h3,h4{font-family:var(--fonte-titulo, inherit);line-height:1.2;margin:0 0 .5em}
+img,svg{max-width:100%;display:block}
+.container{width:min(1120px,100% - 2*var(--esp-4, 1.5rem));margin-inline:auto}"""
+
+
+def _placeholder(nome: str) -> str:
+    return f'<section data-section="{nome}" data-placeholder="1">Gerando a seção “{nome}”…</section>'
+
+
+def esqueleto(plano: dict) -> str:
+    """HTML base do plano aprovado: tokens no :root, CSS base e um placeholder por seção."""
+    tokens = "\n".join(f"  {k}: {v};" for k, v in plano["tokens"].items())
+    corpo = "\n".join(_placeholder(s["nome"]) for s in plano["secoes"])
+    titulo = re.sub(r"[<>&]", "", plano["titulo"])
+    return (f'<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>{titulo}</title>\n'
+            f"<style>\n:root {{\n{tokens}\n}}\n{_BASE_CSS}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n</body>\n</html>\n")
+
+
+def placeholder(html: str, nome: str) -> str | None:
+    e = next((e for e in secoes(html) if e["attrs"].get("data-section") == nome and "data-placeholder" in e["attrs"]), None)
+    return _fid(e) if e else None
+
+
+def remover(html: str, fid: str) -> str:
+    e = por_fid(indexar(html), fid)
+    if not e:
+        return html
+    fim = e["fim"] + (html[e["fim"]:e["fim"] + 1] == "\n")   # leva a quebra de linha junto
+    return html[:e["ini"]] + html[fim:]
+
+
+def limpar_placeholders(html: str) -> str:
+    """Fim da geração em etapas (inclusive cancelada): some o que não foi gerado e a regra deles."""
+    for e in reversed([e for e in secoes(html) if "data-placeholder" in e["attrs"]]):
+        html = html[:e["ini"]] + html[e["fim"]:]
+    return html.replace(PLACEHOLDER_CSS + "\n", "").replace(PLACEHOLDER_CSS, "")
+
+
+def inserir_secao(html: str, nome: str) -> str:
+    """Placeholder novo antes do rodapé (se a última seção for rodapé) ou no fim do <body>."""
+    secs = secoes(html)
+    ultima = secs[-1] if secs else None
+    if ultima and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")):
+        pos = ultima["ini"]
+    else:
+        pos = html.lower().rfind("</body>")
+        if pos < 0:
+            raise ValueError("Documento sem </body>.")
+    return carimbar(html[:pos] + _placeholder(nome) + "\n" + html[pos:])
+
+
+def ler_secao(texto: str, nome: str) -> tuple[str, str]:
+    """Resposta da geração de uma seção → (<section> com data-section=nome, css). O <style> pode vir
+    depois da seção ou (modelo distraído) dentro dela: sai de lá e vai para o <head>."""
+    from .parsing import split_think
+    texto = split_think(texto)[1]
+    texto = re.sub(r"```\w*", "", texto)
+    css = "\n".join(m.group(1).strip() for m in re.finditer(r"<style[^>]*>(.*?)</style\s*>", texto, re.S | re.I))
+    sem_style = re.sub(r"<style[^>]*>.*?</style\s*>", "", texto, flags=re.S | re.I)
+    i = re.search(r"<section[\s>]", sem_style, re.I)
+    if not i:
+        raise ValueError("a resposta não trouxe um <section>")
+    trecho = sem_style[i.start():]
+    raiz = indexar(trecho)[0]
+    if raiz["fim"] >= len(trecho) and not trecho.rstrip().lower().endswith("</section>"):
+        raise ValueError("a seção veio incompleta (sem </section>)")
+    sec = trecho[:raiz["fim"]]
+    tag = _attr(_attr(raiz["txt"], "data-placeholder", None), "data-section", nome)
+    return tag + sec[len(raiz["txt"]):], css
+
+
+def cobertura(html: str, fids: list[str]) -> list[str]:
+    """Tira da lista quem está dentro de outro da lista: o patch do pai já cobre o filho."""
+    els = indexar(html)
+    alvos = [(f, por_fid(els, f)) for f in fids]
+    # o fid que sumiu fica na lista: quem chama (contexto) acusa o erro
+    return [f for f, e in alvos if not e or not any(o is not e and o["ini"] <= e["ini"] and e["fim"] <= o["fim"]
+                                                     for _, o in alvos if o)]

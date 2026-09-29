@@ -36,9 +36,12 @@ def _fake_llm(monkeypatch, resposta: str | Exception, vistos: list | None = None
     monkeypatch.setattr(design.llm, "chat_stream", chat_stream)
 
 
-def _gerar(conv: int, pedido: str) -> dict:
+M = {k: {"provider": "ollama", "model": "qwen3:8b"} for k in ("plano", "geracao", "edicao")}
+
+
+def _gerar(conv: int, pedido: str, rota: str = "documento") -> dict:
     async def main():
-        msg = design.start(conv, pedido, "ollama", "qwen3:8b")
+        msg = design.start(conv, pedido, M, rota=rota)
         await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
         return design.estado(msg["id"])
     return asyncio.run(main())
@@ -99,7 +102,7 @@ def test_cancelar_nao_cria_versao(monkeypatch):
     monkeypatch.setattr(design.llm, "chat_stream", lento)
 
     async def main():
-        msg = design.start(conv, "algo", "ollama", "m")
+        msg = design.start(conv, "algo", M, rota="documento")
         await asyncio.sleep(0.05)
         design.cancelar(msg["id"])
         await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
@@ -121,7 +124,7 @@ def test_projeto_de_outro_tipo_recusa():
 
 def _gerar_fids(conv: int, pedido: str, fids: list[str]) -> dict:
     async def main():
-        msg = design.start(conv, pedido, "ollama", "m", fids)
+        msg = design.start(conv, pedido, M, fids)
         await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
         return design.estado(msg["id"])
     return asyncio.run(main())
@@ -165,4 +168,4 @@ def test_fragmento_com_json_ruim_nao_cria_versao(monkeypatch):
     assert est["status"] == "erro" and "recusada" in est["texto"]
     assert design.projeto(conv)["total"] == 1
     with pytest.raises(ToolError):
-        design.start(conv, "muda", "ollama", "m", ["sumiu"])
+        design.start(conv, "muda", M, ["sumiu"])

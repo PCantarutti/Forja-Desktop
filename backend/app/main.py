@@ -1577,11 +1577,45 @@ def comparar_placar():
 
 # ------------------------------------------------------------------ design (chat + canvas)
 
-class DesignBody(BaseModel):
-    pedido: str = ""
+class DesignModelo(BaseModel):
     provider: str = ""
     model: str = ""
+
+
+class DesignBody(BaseModel):
+    pedido: str = ""
+    provider: str = ""     # modelo de reserva, para a etapa sem escolha própria
+    model: str = ""
+    modelos: dict[str, DesignModelo] = {}   # plano | geracao | edicao
     fids: list[str] = []   # elementos selecionados no canvas: edita só esses fragmentos
+    rota: str = "auto"     # auto | plano | tokens | secao | documento
+    secao: str = ""        # rota secao: qual (nova se não existir)
+    comentarios: list[int] = []   # aplicar estes comentários pendentes numa chamada só
+    esforco: str = "baixo"
+
+
+class DesignAprovarBody(BaseModel):
+    plano: dict
+    provider: str = ""
+    model: str = ""
+    modelos: dict[str, DesignModelo] = {}
+    esforco: str = "baixo"
+
+
+class DesignComentarioBody(BaseModel):
+    fids: list[str]
+    texto: str
+
+
+class DesignTextoBody(BaseModel):
+    fid: str
+    html: str
+
+
+def _design_modelos(body) -> dict:
+    reserva = {"provider": body.provider, "model": body.model}
+    return {k: (body.modelos[k].model_dump() if k in body.modelos and body.modelos[k].model else reserva)
+            for k in ("plano", "geracao", "edicao")}
 
 
 class DesignVersaoBody(BaseModel):
@@ -1617,10 +1651,45 @@ def design_projeto(conv_id: int):
 @app.post("/api/design/{conv_id}/gerar")
 async def design_gerar(conv_id: int, body: DesignBody):
     try:
-        msg = design.start(conv_id, body.pedido, body.provider, body.model, body.fids)
+        msg = design.start(conv_id, body.pedido, _design_modelos(body), body.fids, body.rota, body.secao,
+                           body.comentarios, body.esforco)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(msg["id"])
+
+
+@app.post("/api/design/{message_id}/aprovar")
+async def design_aprovar(message_id: int, body: DesignAprovarBody):
+    try:
+        design.aprovar(message_id, body.plano, _design_modelos(body), body.esforco)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_design(message_id)
+
+
+@app.post("/api/design/{conv_id}/comentarios")
+def design_comentar(conv_id: int, body: DesignComentarioBody):
+    try:
+        return design.comentar(conv_id, body.fids, body.texto)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/{conv_id}/comentarios/{comentario_id}/descartar")
+def design_descartar(conv_id: int, comentario_id: int):
+    try:
+        return design.descartar(conv_id, comentario_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/{conv_id}/texto")
+def design_texto(conv_id: int, body: DesignTextoBody):
+    """Edição inline no canvas (duplo clique): vai direto para a fonte, sem modelo."""
+    try:
+        return design.editar_texto(conv_id, body.fid, body.html)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
 
 
 @app.get("/api/design/{message_id}/stream")
