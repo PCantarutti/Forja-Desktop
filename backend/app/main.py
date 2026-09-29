@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                kvcache, localai, lotes, lsp, metricas,
-               mcp_client, memory, mirror, mobile, native, pesquisa, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, design, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -1575,6 +1575,79 @@ def comparar_placar():
     return comparar.placar()
 
 
+# ------------------------------------------------------------------ design (chat + canvas)
+
+class DesignBody(BaseModel):
+    pedido: str = ""
+    provider: str = ""
+    model: str = ""
+
+
+class DesignVersaoBody(BaseModel):
+    versao: int
+
+
+def _sse_design(message_id: int) -> StreamingResponse:
+    """Mesmo desenho da pesquisa: retrato inteiro (com o parcial) por tick."""
+    async def stream():
+        while True:
+            try:
+                estado = design.estado(message_id)
+            except ToolError as e:
+                yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+                return
+            yield f"data: {json.dumps(estado, ensure_ascii=False)}\n\n"
+            if estado["status"] != "rodando":
+                return
+            await asyncio.sleep(design.TICK)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/design/{conv_id}")
+def design_projeto(conv_id: int):
+    try:
+        return design.projeto(conv_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/design/{conv_id}/gerar")
+async def design_gerar(conv_id: int, body: DesignBody):
+    try:
+        msg = design.start(conv_id, body.pedido, body.provider, body.model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_design(msg["id"])
+
+
+@app.get("/api/design/{message_id}/stream")
+def design_stream(message_id: int):
+    return _sse_design(message_id)
+
+
+@app.post("/api/design/{message_id}/cancelar")
+def design_cancelar(message_id: int):
+    return design.cancelar(message_id)
+
+
+@app.post("/api/design/{conv_id}/ir")
+def design_ir(conv_id: int, body: DesignVersaoBody):
+    try:
+        return design.ir_para(conv_id, body.versao)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/{conv_id}/restaurar")
+def design_restaurar(conv_id: int, body: DesignVersaoBody):
+    try:
+        return design.restaurar(conv_id, body.versao)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 # ------------------------------------------------------------------ pesquisa profunda
 
 
@@ -1915,8 +1988,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar ou pesquisa")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa ou design")
     if not folder and kind in ("agent", "maestro"):
         folder = config.WORKSPACE_PADRAO  # None: a pasta é escolhida antes do 1º envio (start_run barra)
     with db.session() as s:

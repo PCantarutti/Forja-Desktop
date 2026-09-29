@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import CartaoEstado from "./CartaoEstado";
-import { Balanca, Bubble, Check, ChevronDown, Code, Film, Image, Search, Split } from "./icons";
+import { Balanca, Bubble, Check, ChevronDown, Code, Film, Image, Prancheta, Search, Split } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
 export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
 // "imagem" é o mesmo literal do `kind` da conversa no backend: a barra lateral interpola
 // a seção direto na query de /conversations.
-export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa";
+export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string }[] = [
   { id: "auto", label: "Automático", hint: "O Forja decide: edições passam, o resto pergunta" },
@@ -222,6 +222,7 @@ export const SECOES: { id: Section; label: string; title: string; icon: React.Re
   { id: "video", label: "Vídeo", title: "Vídeo (Wan)", icon: <Film className="size-[18px]" /> },
   { id: "comparar", label: "Comparar", title: "Comparar modelos", icon: <Balanca className="size-[18px]" /> },
   { id: "pesquisa", label: "Pesquisa", title: "Pesquisa profunda", icon: <Search className="size-[18px]" /> },
+  { id: "design", label: "Design", title: "Design (sites e apresentações)", icon: <Prancheta className="size-[18px]" /> },
 ];
 
 /** Trilho de seções à esquerda (60 px), sempre visível. Com a lista de conversas escondida, mostra o

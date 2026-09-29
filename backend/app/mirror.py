@@ -19,7 +19,8 @@ from . import config, db, workspace
 
 ROOT = config.DATA_DIR / "conversas"
 DIRS = {"agent": "forja-code", "chat": "forja-chat", "imagem": "forja-imagens", "video": "forja-videos",
-        "comparar": "forja-comparacoes", "pesquisa": "forja-pesquisas"}
+        "comparar": "forja-comparacoes", "pesquisa": "forja-pesquisas",
+        "design": "forja-designs"}
 
 # Proibidos em nome de arquivo no Windows, mais os de controle.
 _PROIBIDOS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

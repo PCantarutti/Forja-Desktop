@@ -9,6 +9,7 @@ import ImagensView from "./components/ImagensView";
 import VideoView from "./components/VideoView";
 import CompararView from "./components/CompararView";
 import PesquisaView from "./components/PesquisaView";
+import DesignView from "./components/DesignView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
@@ -479,7 +480,7 @@ export default function App() {
     return () => window.removeEventListener("forja-aparencia", h);
   }, []);
 
-  // Atalhos do shell: Ctrl 1–7 troca de seção, Ctrl , abre Configurações, Ctrl K vai para a busca.
+  // Atalhos do shell: Ctrl 1–8 troca de seção, Ctrl , abre Configurações, Ctrl K vai para a busca.
   const atalhos = useRef<(e: KeyboardEvent) => void>(() => {});
   atalhos.current = (e) => {
     // Esc sem diálogo aberto e fora de campo de texto: fecha o último tile (o Esc do composer limpa o texto).
@@ -2425,6 +2426,16 @@ export default function App() {
               notify(titulo, corpo, true);   // force: a pesquisa é longa, o aviso vale mesmo em foco
               if (currentId !== null) setUnread((u) => new Set(u).add(currentId));
             }}
+          />
+        ) : section === "design" ? (
+          <DesignView
+            conv={currentId}
+            carimbo={activity.lista}
+            ensureConversation={ensureConversation}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
           />
         ) : section === "comparar" ? (
           <CompararView
