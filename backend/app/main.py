@@ -18,7 +18,7 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from fastapi.staticfiles import StaticFiles
 
@@ -1599,6 +1599,7 @@ class DesignBody(BaseModel):
     respostas: list[dict] = []        # [{pergunta, resposta}] do card de perguntas
     referencias: list[dict] = []      # [{tipo: imagem|documento|pagina, nome, data|texto}]
     pagina: str = ""                  # site com páginas: seção nova vai para esta (nova: cria a página)
+    imagens: str = "skill"            # skill (slots, gera depois) | internet (o modelo põe links; o Forja baixa)
 
 
 class DesignAprovarBody(BaseModel):
@@ -1607,6 +1608,7 @@ class DesignAprovarBody(BaseModel):
     model: str = ""
     modelos: dict[str, DesignModelo] = {}
     esforco: str = "baixo"
+    imagens: str = "skill"
 
 
 class DesignComentarioBody(BaseModel):
@@ -1660,7 +1662,7 @@ async def design_gerar(conv_id: int, body: DesignBody):
     try:
         msg = design.start(conv_id, body.pedido, _design_modelos(body), body.fids, body.rota, body.secao,
                            body.comentarios, body.esforco, body.sistema, body.perguntar, body.respostas,
-                           body.referencias, body.pagina)
+                           body.referencias, body.pagina, body.imagens)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(msg["id"])
@@ -1669,7 +1671,7 @@ async def design_gerar(conv_id: int, body: DesignBody):
 @app.post("/api/design/{message_id}/aprovar")
 async def design_aprovar(message_id: int, body: DesignAprovarBody):
     try:
-        design.aprovar(message_id, body.plano, _design_modelos(body), body.esforco)
+        design.aprovar(message_id, body.plano, _design_modelos(body), body.esforco, body.imagens)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(message_id)
@@ -2377,12 +2379,15 @@ def _conv_dict(c: db.Conversation) -> dict:
 @app.get("/api/conversations")
 def list_conversations(kind: str | None = None, archived: bool = False, keep: int | None = None):
     """Sem `kind`, todas; com `kind`, só as da seção (chat ou agent). Fixadas primeiro; arquivadas à parte.
-    Conversa vazia (nasceu num anexo ou num envio que falhou) não aparece, salvo a aberta (`keep`)."""
+    Conversa vazia (nasceu num anexo ou num envio que falhou) não aparece, salvo a aberta (`keep`). A de
+    Imagens aberta pela IA (origem) também só aparece depois de gerar alguma coisa: antes disso é só a fila
+    de pedidos, que o botão do chat reabre."""
     with db.session() as s:
         q = select(db.Conversation).order_by(db.Conversation.pinned.desc(), db.Conversation.updated_at.desc())
         if not archived:  # arquivar foi escolha da pessoa: lá a vazia aparece
-            q = q.where(or_(db.Conversation.messages.any(), db.Conversation.title != "Nova conversa",
-                            db.Conversation.origem.isnot(None), db.Conversation.id == (keep or -1)))
+            q = q.where(or_(db.Conversation.messages.any(),
+                            and_(db.Conversation.title != "Nova conversa", db.Conversation.origem.is_(None)),
+                            db.Conversation.id == (keep or -1)))
         q = q.where(db.Conversation.archived.is_(True) if archived else db.Conversation.archived.isnot(True))
         if kind:
             q = q.where(db.Conversation.kind == kind)

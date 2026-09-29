@@ -980,7 +980,7 @@ def _referencias(refs: list[dict] | None) -> tuple[str, list[str], list[dict]]:
 def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = None, rota: str = "auto",
           secao: str = "", comentarios: list[int] | None = None, esforco: str = "baixo", ds_id: str = "",
           perguntar: bool = False, respostas: list[dict] | None = None, referencias: list[dict] | None = None,
-          pagina: str = "") -> dict:
+          pagina: str = "", imagens: str = "skill") -> dict:
     pedido = (pedido or "").strip()
     _repo(conv_id)
     if rota not in ROTAS:
@@ -1097,7 +1097,8 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
     user = design_imagens.enxugar(user)   # foto embutida é base64 de centenas de KB: não vai ao modelo
     conteudo = user if not imagens_ref else [{"type": "text", "text": user},
                                              *({"type": "image_url", "image_url": {"url": u}} for u in imagens_ref)]
-    mensagens = [{"role": "system", "content": prompt(sistema)}, {"role": "user", "content": conteudo}]
+    sis = prompt(sistema) + (design_imagens.INSTRUCAO_INTERNET if imagens == "internet" and sistema in _COM_IMAGEM else "")
+    mensagens = [{"role": "system", "content": sis}, {"role": "user", "content": conteudo}]
 
     rotulo = (f"{len(pend)} comentário(s)" if pend else pedido or
               {"tweaks": "criar ajustes", "variacoes": "3 variações"}.get(modo) or f"refazer a seção {extra.get('secao')}")
@@ -1110,9 +1111,20 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
     run = _novo_run(conv_id, msg.id, modo, spec, esforco, base=base, html_base=html_base,
                     entrada=len(user), descricao=_descricao(rotulo),
                     comentarios=[x["id"] for x in pend], ds_id=ds["id"] if ds and modo == "plano" else "",
-                    pedido=pedido, **extra)
+                    pedido=pedido, imagens=imagens, **extra)
     _dispara(_rodar(run, mensagens))
     return msg.to_dict()
+
+
+# prompts que escrevem HTML (e por isso imagens); os de plano/tokens/ajustes não
+_COM_IMAGEM = ("documento", "secao", "slide", "tela", "fragmento")
+
+
+async def _fotos(run: dict, html: str) -> tuple[str, list[str]]:
+    """Onde as imagens vêm de: internet (baixa os links do modelo) ou skill (link não entra: vira slot)."""
+    if run.get("imagens") == "internet":
+        return await design_imagens.fotos_da_internet(html)
+    return design_imagens.sem_links(html), []
 
 
 def _perguntas(d: dict) -> list[dict]:
@@ -1247,8 +1259,9 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                 if not html:
                     raise ValueError("a resposta não trouxe um documento HTML completo")
                 mensagem, sugs = design_html.rodape(texto.split("</html>")[-1])
+                html, passos_fotos = await _fotos(run, html)
                 _nova_versao(run["conv_id"], mid, html, run["descricao"], mensagem=mensagem, sugestoes=sugs,
-                             passos=["Reescreveu o documento inteiro"], **extra)
+                             passos=["Reescreveu o documento inteiro", *passos_fotos], **extra)
                 return
             mensagem, sugs, passos = "", [], []
             if modo in ("fragmento", "tweaks"):
@@ -1294,6 +1307,10 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                 if css.strip():
                     passos.append("Escreveu o CSS dela")
             html, mudou = design_html.aplicar(base_html, resp)
+            html, passos_fotos = await _fotos(run, html)
+            if passos_fotos:
+                passos += passos_fotos
+                mudou = []   # a foto entrou em nós que o patch não cobre: o canvas recarrega
             if run.get("pagina_nova"):
                 html, tem_menu = design_html.link_no_menu(html, run["pagina"], run["pagina"].replace("-", " ").capitalize())
                 passos.append(f"Pôs o link “#/{run['pagina']}” no menu do cabeçalho" if tem_menu
@@ -1316,7 +1333,7 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
         mirror.write(run["conv_id"])
 
 
-def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo") -> dict:
+def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo", imagens: str = "skill") -> dict:
     """Plano aprovado (talvez editado no card): esqueleto e depois uma seção por vez."""
     try:
         plano = validar_plano(plano)
@@ -1344,7 +1361,7 @@ def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo")
             pass   # o sistema foi apagado entre o plano e a aprovação: segue com os tokens do plano
     doc = design_html.carimbar(doc)
     run = _novo_run(conv_id, message_id, "etapas", spec, esforco if esforco in ESFORCOS else "baixo",
-                    base=base, plano=plano, doc=doc, n=0, entrada=0,
+                    base=base, plano=plano, doc=doc, n=0, entrada=0, imagens=imagens,
                     secoes=[{"nome": x["nome"], "status": "fila"} for x in plano["secoes"]])
     # o raciocínio/estatísticas do plano (já gravados) continuam na mensagem
     with db.session() as s:
@@ -1374,7 +1391,9 @@ async def _rodar_etapas(run: dict) -> None:
                     user += "\n\n" + design_sistema.para_prompt(ds)
                 user = design_imagens.enxugar(user)
                 run["entrada"] += len(user)
-                texto = await _chamar(run, [{"role": "system", "content": prompt("slide" if slides else "tela" if telas else "secao")},
+                sis = prompt("slide" if slides else "tela" if telas else "secao") + (
+                    design_imagens.INSTRUCAO_INTERNET if run.get("imagens") == "internet" else "")
+                texto = await _chamar(run, [{"role": "system", "content": sis},
                                             {"role": "user", "content": user}])
                 if run["cancelar"]:
                     run["secoes"][i]["status"] = "fila"
@@ -1391,6 +1410,8 @@ async def _rodar_etapas(run: dict) -> None:
         feitas, total = run["n"], len(plano["secoes"])
         doc = design_html.limpar_placeholders(run["doc"])
         if feitas and extrair_html(doc):
+            doc, passos_fotos = await _fotos(run, doc)
+            passos += passos_fotos
             sufixo = "" if feitas == total else f" ({feitas} de {total} seções{' — cancelado' if run['cancelar'] else ''})"
             fora = [x["nome"] for x in run["secoes"] if x["status"] != "ok"]
             mensagem = (f"Pronto: **{plano['titulo']}** com {feitas} {unidade if feitas == 1 else {'seção': 'seções', 'slide': 'slides', 'tela': 'telas'}[unidade]}."

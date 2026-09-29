@@ -132,7 +132,13 @@ const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
 type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean;
-                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean; chatFracao?: number; camadasLargura?: number };
+                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean; chatFracao?: number; camadasLargura?: number;
+                      imagens?: FonteImagens };
+type FonteImagens = "skill" | "internet";
+const FONTES_IMAGENS: { id: FonteImagens; label: string; hint: string }[] = [
+  { id: "skill", label: "Imagens: gerar", hint: "A IA marca onde vai cada foto e descreve; você gera na tela Imagens (modelo local) quando quiser" },
+  { id: "internet", label: "Imagens: da internet", hint: "A IA põe links de fotos reais (Unsplash, Pexels…); o Forja baixa e guarda no projeto. Link que falhar vira espaço para gerar. Confira os direitos de uso" },
+];
 
 function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
@@ -394,7 +400,7 @@ export default function DesignView(props: {
       await ouvir(`/design/${id}/gerar`, { method: "POST", body: JSON.stringify({
         pedido, fids, rota: extra.rota ?? rota, secao: extra.secao ?? "", comentarios: extra.comentarios ?? [],
         esforco: prefs.esforco, modelos: modelosDe(), sistema: prefs.sistema ?? "", ...prefs.modelos.geracao,
-        perguntar: prefs.perguntar !== false, respostas: extra.respostas ?? [], referencias: anexos,
+        perguntar: prefs.perguntar !== false, respostas: extra.respostas ?? [], referencias: anexos, imagens: prefs.imagens ?? "skill",
         // site com páginas: seção nova entra na página que está à vista
         pagina: extra.pagina ?? paginaDoPedido() }) }, id);
       props.onConversationChanged();
@@ -503,7 +509,7 @@ export default function DesignView(props: {
     setGeracao({ message_id: mid, status: "rodando", modo: "etapas", tokens: 0, segundos: 0 });
     ouvindo.current = mid;
     await ouvir(`/design/${mid}/aprovar`, { method: "POST", body: JSON.stringify({
-      plano, esforco: prefs.esforco, modelos: modelosDe(), ...prefs.modelos.geracao }) }, projeto.conv_id);
+      plano, esforco: prefs.esforco, modelos: modelosDe(), ...prefs.modelos.geracao, imagens: prefs.imagens ?? "skill" }) }, projeto.conv_id);
   }
 
   async function comentar() {
@@ -1318,6 +1324,9 @@ export default function DesignView(props: {
                 </button>
               )}
               <ModeEffortMenu effort={prefs.esforco} onEffort={(esforco) => setPrefs((p) => ({ ...p, esforco }))} semExtremo />
+              <Menu title="De onde vêm as imagens" items={FONTES_IMAGENS} value={prefs.imagens ?? "skill"}
+                    onChange={(imagens) => setPrefs((p) => ({ ...p, imagens }))}
+                    button={(label) => (<><Image className="size-3.5" />{label.replace("Imagens: ", "")}</>)} />
               {!selecao && !!total && (
                 <Menu title="Rota do pedido" items={ROTAS} value={rota} onChange={setRota}
                       button={(label) => (<><Split className="size-3.5" />{label}</>)} />
