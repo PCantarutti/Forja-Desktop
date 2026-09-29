@@ -7,7 +7,10 @@
 export type Rect = { x: number; y: number; w: number; h: number };
 export type NoCaminho = { fid: string; tag: string; cls: string; sec: string };   // sec = data-section
 export type Item = { fid: string; tag: string; cls: string };
-export type Modo = "view" | "inspect" | "comment" | "editText";   // comment: o clique escolhe o que comentar
+export type Modo = "view" | "inspect" | "comment" | "edit" | "editText";   // comment/edit: o clique escolhe o alvo
+/** Propriedades que o modo Editar mostra e mexe (as mesmas que o backend aceita em /estilo). */
+export const PROPS_EDITAVEIS = ["color", "background-color", "font-size", "font-weight", "font-family", "line-height", "letter-spacing",
+  "text-align", "padding", "margin", "border-radius", "border", "width", "height", "opacity", "gap"] as const;
 export type Pin = { fid: string; n: number };
 export type Problema = { fid: string | null; tipo: string; detalhe: string; gravidade: "erro" | "aviso"; rotulo: string };
 
@@ -15,7 +18,7 @@ export type Problema = { fid: string | null; tipo: string; detalhe: string; grav
 export type DoCanvas =
   | { type: "ready" }
   | { type: "hover"; fid: string | null; rect: Rect | null }
-  | { type: "select"; fid: string | null; rect: Rect | null; tag: string; path: NoCaminho[]; itens: Item[] }
+  | { type: "select"; fid: string | null; rect: Rect | null; tag: string; path: NoCaminho[]; itens: Item[]; estilo: Record<string, string> }
   | { type: "textEdited"; fid: string; html: string }
   | { type: "pin"; n: number }
   | { type: "slides"; atual: number; total: number }
@@ -35,6 +38,7 @@ export type ParaCanvas =
   | { type: "setMulti"; on: boolean }        // cada clique soma/tira da seleção (como Shift/Ctrl+clique)
   | { type: "semelhantes"; fid: string }
   | { type: "setTokens"; tokens: Record<string, string> }   // prévia dos sliders; {} limpa
+  | { type: "setEstilo"; fids: string[]; estilos: Record<string, string> }   // prévia do modo Editar ("" tira)
   | { type: "patch"; fid: string; html: string };
 
 const MARCA = "forja-design";
@@ -59,7 +63,9 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
     case "select":
       return (d.fid === null || eTexto(d.fid)) && eRect(d.rect) && eTexto(d.tag) && Array.isArray(d.path) &&
         d.path.every((n: any) => eItem(n) && eTexto(n.sec)) && Array.isArray(d.itens) && d.itens.every(eItem)
-        ? { type: "select", fid: d.fid, rect: d.rect, tag: d.tag, path: d.path, itens: d.itens } : null;
+        ? { type: "select", fid: d.fid, rect: d.rect, tag: d.tag, path: d.path, itens: d.itens,
+            estilo: Object.fromEntries(PROPS_EDITAVEIS.filter((k) => eTexto(d.estilo?.[k]) && d.estilo[k].length < 300).map((k) => [k, d.estilo[k]])) }
+        : null;
     case "textEdited":
       return eTexto(d.fid) && eTexto(d.html) && d.html.length < 200_000 ? { type: "textEdited", fid: d.fid, html: d.html } : null;
     case "pin":
@@ -95,7 +101,14 @@ function inspetor() {
   const filhos: string[] = [];   // seta para baixo volta por aqui
   let slide = 0;
   let multi = false;
-  const escolhendo = () => modo === "inspect" || modo === "comment";
+  const escolhendo = () => modo === "inspect" || modo === "comment" || modo === "edit";
+  // o que o painel do modo Editar mostra como valor atual (a lista é a PROPS_EDITAVEIS: aqui não dá para importar)
+  const PROPS = ["color", "background-color", "font-size", "font-weight", "font-family", "line-height", "letter-spacing",
+    "text-align", "padding", "margin", "border-radius", "border", "width", "height", "opacity", "gap"];
+  const estiloDe = (el: Element) => {
+    const c = getComputedStyle(el);
+    return Object.fromEntries(PROPS.map((k) => [k, c.getPropertyValue(k)]));
+  };
   let previa: string[] = [];   // tokens sobrescritos ao vivo pelo painel de ajustes
   const envia = (m: object) => parent.postMessage({ [MARCA]: 1, ...m }, "*");
   const porFid = (f: string) => document.querySelector(`[data-fid="${CSS.escape(f)}"]`);
@@ -207,8 +220,8 @@ function inspetor() {
     desenha();
     const itens = sel.map((f) => item(porFid(f)!));
     envia(el
-      ? { type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el), itens }
-      : { type: "select", fid: null, rect: null, tag: "", path: [], itens: [] });
+      ? { type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el), itens, estilo: estiloDe(el) }
+      : { type: "select", fid: null, rect: null, tag: "", path: [], itens: [], estilo: {} });
   };
 
   // ---- edição de texto (duplo clique): contenteditable no próprio elemento, sai para a fonte
@@ -307,7 +320,7 @@ function inspetor() {
       reposto = 0;
       const el = porFid(sel[sel.length - 1]);
       if (el) envia({ type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el),
-                      itens: sel.map((f) => item(porFid(f)!)) });
+                      itens: sel.map((f) => item(porFid(f)!)), estilo: estiloDe(el) });
     });
   }, true);
   addEventListener("resize", () => {
@@ -388,10 +401,10 @@ function inspetor() {
     const d = e.data;
     if (e.source !== parent || !d || d[MARCA] !== 1) return;
     if (d.type === "auditar") return auditar();
-    if (d.type === "setMode" && ["view", "inspect", "comment", "editText"].includes(d.mode)) {
+    if (d.type === "setMode" && ["view", "inspect", "comment", "edit", "editText"].includes(d.mode)) {
       modo = d.mode;
       hover = null;
-      document.documentElement.style.cursor = modo === "inspect" ? "crosshair" : modo === "comment" ? "cell" : "";
+      document.documentElement.style.cursor = modo === "inspect" || modo === "edit" ? "crosshair" : modo === "comment" ? "cell" : "";
       desenha();
     } else if (d.type === "setMulti") {
       multi = !!d.on;
@@ -424,6 +437,17 @@ function inspetor() {
       previa = Object.entries(d.tokens as Record<string, unknown>)
         .filter(([k, v]) => /^--[\w-]+$/.test(k) && typeof v === "string")
         .map(([k, v]) => (raiz.setProperty(k, v as string), k));
+      desenha();
+    } else if (d.type === "setEstilo" && Array.isArray(d.fids) && d.estilos && typeof d.estilos === "object") {
+      // prévia no style do próprio elemento; quem grava é o backend (o patch troca o nó depois)
+      for (const f of d.fids) {
+        const el = typeof f === "string" ? (porFid(f) as HTMLElement | null) : null;
+        if (!el) continue;
+        for (const [k, v] of Object.entries(d.estilos as Record<string, unknown>))
+          if (!PROPS.includes(k) || typeof v !== "string") continue;
+          else if (v) el.style.setProperty(k, v);
+          else el.style.removeProperty(k);
+      }
       desenha();
     } else if (d.type === "setTela" && typeof d.nome === "string") {
       (window as { forjaIrTela?: (n: string) => void }).forjaIrTela?.(d.nome);

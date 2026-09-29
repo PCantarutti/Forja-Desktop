@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                kvcache, localai, lotes, lsp, metricas,
-               mcp_client, memory, mirror, mobile, native, pesquisa, design, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, design, design_html, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -123,6 +123,7 @@ async def fronteira(request, call_next):
     if path.startswith(TOKEN_FORA_DO_HEADER) or path.endswith("/export"):
         token = token or request.cookies.get("forja_token") or request.query_params.get("t")
     if (config.API_TOKEN and path.startswith("/api/") and not path.endswith(SUFIXO_SEM_TOKEN)
+            and not path.startswith("/api/design-janela/")   # a chave do link é a autorização
             and token not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
@@ -1695,6 +1696,50 @@ def design_texto(conv_id: int, body: DesignTextoBody):
         return design.editar_texto(conv_id, body.fid, body.html)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+class DesignEstiloBody(BaseModel):
+    fids: list[str]
+    estilos: dict[str, str]
+
+
+@app.post("/api/design/{conv_id}/estilo")
+def design_estilo(conv_id: int, body: DesignEstiloBody):
+    """Modo Editar do canvas: propriedades no style="" dos elementos, sem modelo."""
+    try:
+        return design.editar_estilo(conv_id, body.fids, body.estilos)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+# "Apresentar › Nova janela": o navegador do usuário não tem o token nem o cookie do app, então a
+# página sai por um link com chave aleatória. A resposta vem com CSP `sandbox` (origem opaca: o
+# script do design não fala com a API) e sem rede, como no canvas.
+# ponytail: chave vale até o backend reiniciar; expirar por tempo se o link passar a sair da máquina.
+_JANELAS: dict[str, int] = {}
+CSP_JANELA = ("sandbox allow-scripts allow-modals; default-src 'none'; style-src 'unsafe-inline'; "
+              "script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:")
+
+
+@app.post("/api/design/{conv_id}/janela")
+def design_janela(conv_id: int):
+    chave = next((k for k, c in _JANELAS.items() if c == conv_id), None) or secrets.token_urlsafe(24)
+    _JANELAS[chave] = conv_id
+    return {"url": f"/api/design-janela/{chave}"}
+
+
+@app.get("/api/design-janela/{chave}")
+def design_janela_pagina(chave: str):
+    conv_id = next((c for k, c in _JANELAS.items() if secrets.compare_digest(k, chave)), None)
+    if conv_id is None:
+        raise HTTPException(404, "Link expirado: abra de novo pelo Forja.")
+    try:
+        html = design.projeto(conv_id)["html"]
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+    return HTMLResponse(design_html.limpar_export(html) if html else "<p>Sem documento.</p>",
+                        headers={"Content-Security-Policy": CSP_JANELA, "Cache-Control": "no-store",
+                                 "Referrer-Policy": "no-referrer"})
 
 
 class DesignTokensBody(BaseModel):

@@ -21,6 +21,7 @@ Toda versão sai carimbada: cada elemento tem um data-fid estável, que é o end
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import re
 import time
 from contextlib import aclosing
@@ -381,6 +382,50 @@ def _sem_ia(conv_id: int, faz, descricao: str, rota: str, passos: list[str] | No
     p = projeto(conv_id)
     return {"projeto": p, "fim": {"base": base, "status": "ok",
                                   "patches": [{"fid": f, "html": design_html.outer(p["html"], f) or ""} for f in mudou]}}
+
+
+# Modo Editar do canvas: o painel mexe só nestas propriedades, no style="" do próprio elemento.
+ESTILOS = ("color", "background-color", "font-size", "font-weight", "font-family", "line-height", "letter-spacing",
+           "text-align", "padding", "margin", "border-radius", "border", "width", "height", "opacity", "gap")
+
+
+def editar_estilo(conv_id: int, fids: list[str], estilos: dict) -> dict:
+    """Painel do modo Editar: as propriedades entram no style="" de cada elemento (valor vazio tira)."""
+    if not fids or not isinstance(estilos, dict) or not estilos:
+        raise ToolError("Nada para mudar.")
+    for k, v in estilos.items():
+        if k not in ESTILOS:
+            raise ToolError(f"Propriedade que o painel não edita: {k}")
+        # nada que feche a declaração, saia do atributo ou busque rede
+        if not isinstance(v, str) or len(v) > 200 or re.search(r"""[;{}<>"\\]|url\s*\(|expression|@import""", v, re.I):
+            raise ToolError(f"Valor inválido para {k}.")
+
+    def faz(html: str):
+        mudou = []
+        for fid in dict.fromkeys(fids):
+            e = design_html.por_fid(design_html.indexar(html), fid)
+            if not e or e["tag"] in design_html.SEM_FID | {"style"}:
+                raise ValueError("Elemento não encontrado na versão atual.")
+            abre = html[e["ini"]:e["fim_tag"]]
+            m = re.search(r"""\sstyle\s*=\s*("([^"]*)"|'([^']*)')""", abre, re.I)
+            decl = {}
+            atual = html_lib.unescape((m.group(2) or m.group(3) or "") if m else "").replace('"', "'")
+            for parte in atual.split(";"):
+                if ":" in parte:
+                    k, v = parte.split(":", 1)
+                    decl[k.strip().lower()] = v.strip()
+            for k, v in estilos.items():
+                if v.strip():
+                    decl[k] = v.strip()
+                else:
+                    decl.pop(k, None)
+            estilo = "; ".join(f"{k}: {v}" for k, v in decl.items()) or None
+            html = html[:e["ini"]] + design_html._attr(abre, "style", estilo) + html[e["fim_tag"]:]
+            mudou.append(fid)
+        return html, mudou
+    props = ", ".join(estilos)
+    return _sem_ia(conv_id, faz, f"edição: {_descricao(props, 48)}", "edicao",
+                   [f"{k}: {v or '(removido)'} em {len(fids)} elemento(s) (modo Editar, sem IA)" for k, v in estilos.items()])
 
 
 def ajustar_tokens(conv_id: int, tokens: dict) -> dict:

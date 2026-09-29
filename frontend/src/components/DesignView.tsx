@@ -6,12 +6,14 @@ import { type Effort, Menu, ModeEffortMenu } from "./Controls";
 import DesignAjustes, { type Sistema } from "./DesignAjustes";
 import DesignAcessibilidade from "./DesignAcessibilidade";
 import DesignAtividade from "./DesignAtividade";
+import DesignEditar from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
 import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
 import { type Item, type Modo, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
-import { ArrowLeft, ArrowRight, Bubble, Check, Code, Cube, Download, Globe, Image, Mira, Paperclip, Split, Undo, X } from "./icons";
+import { ArrowLeft, ArrowRight, Bubble, Check, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, Paperclip, Play, Plus,
+  Split, TelaCheia, Undo, X } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 
@@ -44,7 +46,9 @@ type Geracao = {
   segundos?: number; texto?: string; versao?: number | null; base?: number | null; patches?: Patch[];
   vivo?: Stats; secoes?: { nome: string; status: string }[]; n?: number; doc?: string;
 };
-type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null };
+type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
+                 estilo: Record<string, string> };
+const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
 type Rota = "auto" | "tokens" | "secao" | "documento" | "variacoes";
@@ -142,7 +146,10 @@ export default function DesignView(props: {
   const [multi, setMulti] = useState(false);                 // cada clique soma à seleção
   const [notaTexto, setNotaTexto] = useState("");            // caixa de comentário junto do elemento
   const areaCanvas = useRef<HTMLDivElement>(null);                // protótipo: o mapa das telas no lugar do canvas
-  const [apresentando, setApresentando] = useState(false);  // deck em tela cheia
+  const [apresentando, setApresentando] = useState<null | "janela" | "tela">(null);   // só a página, sem chat nem barras
+  const [abrirApresentar, setAbrirApresentar] = useState(false);
+  const [zoom, setZoom] = useState(1);                       // só da página gerada (o app não muda)
+  const [abrirZoom, setAbrirZoom] = useState(false);
   const [comparar, setComparar] = useState<number | null>(null);   // versão aberta ao lado da atual
   const [htmlVersoes, setHtmlVersoes] = useState<Record<number, string>>({});
   const palco = useRef<HTMLDivElement>(null);
@@ -507,6 +514,18 @@ export default function DesignView(props: {
     }
   }
 
+  /** Apresentar › Nova janela: link com chave (o navegador não tem o token do app). No Desktop o
+   *  window.open de http vai para o navegador padrão (setWindowOpenHandler); no Docker, aba nova. */
+  async function abrirNoNavegador() {
+    if (!projeto) return;
+    try {
+      const { url } = await api.post<{ url: string }>(`/design/${projeto.conv_id}/janela`);
+      window.open(new URL(url, location.href).href, "_blank", "noopener");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
   /** Mudança direta, sem modelo (sliders, design system): versão nova e patch no canvas. */
   async function semIA(caminho: string, corpo: unknown) {
     if (!projeto) return;
@@ -599,6 +618,7 @@ export default function DesignView(props: {
   };
   const alternarInspecao = () => setModo((m) => (m === "inspect" ? "view" : "inspect"));
   const alternarComentario = () => setModo((m) => (m === "comment" ? "view" : "comment"));
+  const alternarEdicao = () => setModo((m) => (m === "edit" ? "view" : "edit"));
 
   // Mensagens do canvas. Os handlers mudam a cada render; o ouvinte (fixo) chama o mais recente.
   const doCanvas = useRef<(e: MessageEvent) => void>(() => {});
@@ -613,7 +633,7 @@ export default function DesignView(props: {
       if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
-    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect } : null);
+    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect, estilo: m.estilo } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "tela") setTela(m.nome);
@@ -1023,16 +1043,43 @@ export default function DesignView(props: {
 
       {/* Canvas */}
       <div className="flex min-w-0 flex-1 flex-col bg-side">
-        <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-3 text-xs text-muted">
-          <button className={`${btn} ${modo === "inspect" ? "bg-accent-soft! text-accent-text!" : ""}`} aria-pressed={modo === "inspect"}
-                  title="Inspecionar elementos · Ctrl+Shift+C" disabled={!srcBase} onClick={alternarInspecao}>
-            <Mira />
-          </button>
-          <button className={`${btn} ${modo === "comment" ? "bg-amber-500/15! text-amber-300!" : ""}`} aria-pressed={modo === "comment"}
-                  title="Comentar: clique num elemento e escreva; o comentário entra na fila · Ctrl+Shift+M" disabled={!srcBase} onClick={alternarComentario}>
-            <Bubble className="size-4" />
-          </button>
-          {(modo === "inspect" || modo === "comment") && (
+        {/* sem espaço, a barra quebra em duas linhas (nunca no meio de um rótulo) em vez de cortar os menus */}
+        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1 border-b border-line px-3 py-1 text-xs whitespace-nowrap text-muted">
+          <div className="relative">
+            <button onClick={() => setAbrirZoom((v) => !v)} disabled={!srcBase} title="Zoom só da página gerada"
+                    className="rounded-lg px-1.5 py-1 font-mono text-fg hover:bg-raised disabled:opacity-40">
+              {Math.round(zoom * 100)}%
+            </button>
+            {abrirZoom && (
+              <div className="absolute top-full left-0 z-30 mt-1 w-40 rounded-xl border border-line bg-surface p-1 shadow-xl" role="menu" aria-label="Zoom"
+                   onMouseLeave={() => setAbrirZoom(false)}>
+                <div className="flex items-center gap-1 px-1 pb-1">
+                  <button className={btn} title="Diminuir" disabled={zoom <= ZOOMS[0]} onClick={() => setZoom((z) => ZOOMS.filter((x) => x < z).pop() ?? z)}><Minus className="size-3.5" /></button>
+                  <span className="flex-1 text-center font-mono text-fg">{Math.round(zoom * 100)}%</span>
+                  <button className={btn} title="Aumentar" disabled={zoom >= ZOOMS[ZOOMS.length - 1]} onClick={() => setZoom((z) => ZOOMS.find((x) => x > z) ?? z)}><Plus className="size-3.5" /></button>
+                </div>
+                {ZOOMS.map((z) => (
+                  <button key={z} role="menuitemradio" aria-checked={zoom === z} onClick={() => { setZoom(z); setAbrirZoom(false); }}
+                          className={`flex w-full items-center rounded-lg px-2.5 py-1 text-left font-mono ${zoom === z ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}>
+                    {Math.round(z * 100)}%{z === 1 && <span className="ml-auto font-sans text-faint">real</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-0.5 rounded-lg border border-line p-0.5" role="group" aria-label="Modo do canvas">
+            {([["inspect", "Inspecionar", Mira, "Inspecionar elementos · Ctrl+Shift+C", alternarInspecao],
+               ["comment", "Comentar", Bubble, "Comentar: clique num elemento e escreva; o comentário entra na fila · Ctrl+Shift+M", alternarComentario],
+               ["edit", "Editar", Edit, "Editar: clique num elemento e mude cor, fonte, espaçamento… direto, sem IA", alternarEdicao]] as const)
+              .map(([id, rotuloModo, Icone, dica, alterna]) => (
+                <button key={id} aria-pressed={modo === id} title={dica} disabled={!srcBase} onClick={alterna}
+                        className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 disabled:opacity-30 ${modo === id
+                          ? id === "comment" ? "bg-amber-500/15 text-amber-300" : "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}>
+                  <Icone className="size-3.5" /> {rotuloModo}
+                </button>
+              ))}
+          </div>
+          {(modo === "inspect" || modo === "comment" || modo === "edit") && (
             <button onClick={() => setMulti((v) => !v)} aria-pressed={multi}
                     title="Cada clique soma (ou tira) um elemento da seleção — o mesmo que Shift/Ctrl+clique"
                     className={`rounded-lg border px-2 py-1 ${multi ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:bg-raised"}`}>
@@ -1078,12 +1125,6 @@ export default function DesignView(props: {
               Fluxo
             </button>
           )}
-          {!!nSlides && (
-            <button onClick={() => setApresentando(true)} title="Tela cheia, ← → para passar"
-                    className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
-              Apresentar
-            </button>
-          )}
           {telas.length ? null : nSlides ? (
             // deck: navegação (← → também funcionam dentro do canvas)
             <>
@@ -1116,6 +1157,29 @@ export default function DesignView(props: {
               {projeto.imagens.pendentes ? `Gerar ${projeto.imagens.pendentes} ${projeto.imagens.pendentes === 1 ? "imagem" : "imagens"}` : "Ver imagens"}
             </button>
           )}
+          <div className="relative">
+            <button onClick={() => setAbrirApresentar((v) => !v)} disabled={!srcBase} aria-expanded={abrirApresentar}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">
+              Apresentar <ChevronDown className="size-3.5" />
+            </button>
+            {abrirApresentar && (
+              <div className="absolute top-full right-0 z-30 mt-1 w-60 rounded-xl border border-line bg-surface p-1 shadow-xl" role="menu" aria-label="Apresentar"
+                   onMouseLeave={() => setAbrirApresentar(false)}>
+                {([["janela", "Nesta janela", Play, "Só a página, ocupando o app inteiro"],
+                   ["tela", "Tela cheia", TelaCheia, "O app em tela cheia mostrando só a página"],
+                   ["navegador", "Nova janela", ExternalLink, "Abre no navegador do computador"]] as const).map(([id, rotuloAp, Icone, dica]) => (
+                  <button key={id} role="menuitem" onClick={() => { setAbrirApresentar(false); if (id === "navegador") abrirNoNavegador(); else setApresentando(id); }}
+                          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
+                    <Icone className="size-4 shrink-0 text-muted" />
+                    <span className="min-w-0">
+                      <span className="block text-[13px] text-fg">{rotuloAp}</span>
+                      <span className="block text-[11.5px] text-faint">{dica}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="relative">
             <button onClick={() => setAbrirExport((v) => !v)} disabled={!srcBase || !!exportando}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">
@@ -1163,19 +1227,24 @@ export default function DesignView(props: {
               {selecao.itens.length > 1 && <span className="ml-2 text-accent-text">+{selecao.itens.length - 1} selecionados</span>}
             </>
           ) : (
-            <span>{modo === "comment" ? "Modo comentário: clique no elemento e escreva na caixa que abre · Shift/Ctrl+clique (ou Múltipla) junta vários num comentário só"
+            <span>{modo === "edit" ? "Modo Editar: clique num elemento e mude as propriedades no painel · Shift/Ctrl+clique junta vários · duplo clique edita o texto"
+              : modo === "comment" ? "Modo comentário: clique no elemento e escreva na caixa que abre · Shift/Ctrl+clique (ou Múltipla) junta vários num comentário só"
               : modo === "inspect" ? "Clique num elemento · Shift/Ctrl+clique (ou Múltipla) junta vários · Semelhantes pega os iguais · Alt+clique ou ↑ sobe · ↓ volta · Esc limpa"
               : "Nenhum elemento selecionado · duplo clique num texto edita direto"}</span>
           )}
         </nav>
-        <div ref={areaCanvas} className="relative flex min-h-0 flex-1 justify-center overflow-hidden p-3">
+        <div className="flex min-h-0 flex-1">
+        <div ref={areaCanvas} className={`relative flex min-w-0 flex-1 p-3 ${zoom > 1 ? "overflow-auto" : "overflow-hidden"}`} style={{ justifyContent: "safe center" }}>
           {modo === "comment" && selecao?.rect && iframe.current && areaCanvas.current && (() => {
             // a caixa fica logo abaixo do elemento (ou acima, se não couber), dentro da área do canvas
             const f = iframe.current.getBoundingClientRect(), a = areaCanvas.current.getBoundingClientRect();
-            const r = selecao.rect, L = 300, A = 168;
-            const embaixo = f.top - a.top + r.y + r.h + 8;
-            const top = embaixo + A > a.height - 8 ? Math.max(8, f.top - a.top + r.y - A - 8) : embaixo;
-            const left = Math.min(Math.max(8, f.left - a.left + r.x), a.width - L - 8);
+            // o rect vem em px da página; com zoom, na tela ele é z vezes isso
+            const z = zoom, r = { x: selecao.rect.x * z, y: selecao.rect.y * z, w: selecao.rect.w * z, h: selecao.rect.h * z }, L = 300, A = 168;
+            const sy = areaCanvas.current.scrollTop, sx = areaCanvas.current.scrollLeft;
+            const oy = f.top - a.top + sy, ox = f.left - a.left + sx;
+            const embaixo = oy + r.y + r.h + 8;
+            const top = embaixo + A > a.height + sy - 8 ? Math.max(8, oy + r.y - A - 8) : embaixo;
+            const left = Math.min(Math.max(8, ox + r.x), a.width + sx - L - 8);
             return (
               <div className="absolute z-20 rounded-xl border border-amber-400/50 bg-surface p-2.5 shadow-2xl" style={{ top, left, width: L }}
                    role="dialog" aria-label="Comentário no elemento">
@@ -1220,18 +1289,35 @@ export default function DesignView(props: {
             <DesignFluxo html={projeto?.html ?? srcBase} atual={tela || telas[0]} onFechar={() => setFluxo(false)}
                          onIr={(t) => { setFluxo(false); setTimeout(() => paraIframe(janela(), { type: "setTela", nome: t }), 150); }} />
           ) : html ? (
-            <iframe key={chave} ref={iframe} title="Canvas do design" sandbox="allow-scripts" srcDoc={paraCanvas(html)}
-                    style={largura ? { width: largura } : undefined}
-                    className={`h-full max-w-full rounded-lg border border-line ${largura ? "" : "w-full"} ${nSlides ? "bg-[#3a3a3a]" : "bg-white"}`} />
+            // zoom: a caixa ocupa largura×z na tela e o iframe dentro tem largura/z, escalado de volta. Na
+            // largura do canvas isso é o zoom do navegador (a página refaz o layout); em Tablet/Celular, lupa.
+            <div className="relative h-full shrink-0" style={{ width: largura ? largura * zoom : "100%", maxWidth: zoom <= 1 ? "100%" : undefined }}>
+              <iframe key={chave} ref={iframe} title="Canvas do design" sandbox="allow-scripts" srcDoc={paraCanvas(html)}
+                      style={{ width: `${100 / zoom}%`, height: `${100 / zoom}%`, transform: zoom === 1 ? undefined : `scale(${zoom})`, transformOrigin: "0 0" }}
+                      className={`absolute top-0 left-0 rounded-lg border border-line ${nSlides ? "bg-[#3a3a3a]" : "bg-white"}`} />
+            </div>
           ) : (
             <div className="grid size-full place-items-center rounded-lg border border-dashed border-line text-sm text-faint">
               {rodando ? "Esperando o começo do documento…" : "O design aparece aqui."}
             </div>
           )}
         </div>
+        {modo === "edit" && (selecao ? (
+          <DesignEditar key={selecao.itens.map((i) => i.fid).join()} n={selecao.itens.length} estilo={selecao.estilo}
+                        rotulo={rotulo(selecao.itens[selecao.itens.length - 1] ?? { tag: selecao.tag, cls: "" })}
+                        onPrevia={(estilos) => paraIframe(janela(), { type: "setEstilo", fids: selecao.itens.map((i) => i.fid), estilos })}
+                        onSalvar={(estilos) => semIA("estilo", { fids: selecao.itens.map((i) => i.fid), estilos })}
+                        onFechar={() => setModo("view")} />
+        ) : (
+          <aside aria-label="Editar elemento" className="grid w-72 shrink-0 place-items-center border-l border-line bg-surface px-6 text-center text-[12.5px] text-faint">
+            Clique num elemento da página para editar cor, fonte, tamanho e espaçamento. Shift+clique ou Semelhantes edita vários juntos.
+          </aside>
+        ))}
+        </div>
         {apresentando && srcBase && (
-          <Apresentacao html={projeto?.html ?? srcBase} slide={slides.atual} total={slides.total || nSlides} palco={palco} iframe={telaCheia}
-                        onFim={(n) => { setApresentando(false); irSlide(n); }} />
+          <Apresentacao html={projeto?.html ?? srcBase} slide={slides.atual} total={nSlides ? slides.total || nSlides : 0} palco={palco} iframe={telaCheia}
+                        telaCheia={apresentando === "tela"} tela={tela}
+                        onFim={(n) => { setApresentando(null); if (nSlides) irSlide(n); }} />
         )}
         {!!miniaturas.length && (
           <div className="flex shrink-0 gap-2 overflow-x-auto border-t border-line px-3 py-2" aria-label="Slides">
@@ -1252,8 +1338,10 @@ export default function DesignView(props: {
   );
 }
 
-/** Deck em tela cheia: o mesmo canvas (escala e navegação do inspetor), sem barras; ← → e Esc. */
-function Apresentacao(props: { html: string; slide: number; total: number; palco: React.RefObject<HTMLDivElement | null>;
+/** Só a página, ocupando o app inteiro (sem chat nem gaveta), ou a tela toda com `telaCheia`. O mesmo
+ *  canvas (escala do deck, runtime do protótipo), no modo de visualização; num deck, ← → passam. Esc sai. */
+function Apresentacao(props: { html: string; slide: number; total: number; telaCheia: boolean; tela: string;
+                               palco: React.RefObject<HTMLDivElement | null>;
                                iframe: React.RefObject<HTMLIFrameElement | null>; onFim: (slide: number) => void }) {
   const [n, setN] = useState(props.slide);
   const fim = useRef(props.onFim);
@@ -1266,16 +1354,18 @@ function Apresentacao(props: { html: string; slide: number; total: number; palco
     paraIframe(props.iframe.current?.contentWindow, { type: "setSlide", n: alvo });
   };
   useEffect(() => {
-    props.palco.current?.requestFullscreen?.().catch(() => {});
-    const saiu = () => { if (!document.fullscreenElement) fim.current(nAtual.current); };
+    if (props.telaCheia) props.palco.current?.requestFullscreen?.().catch(() => {});
+    const saiu = () => { if (props.telaCheia && !document.fullscreenElement) fim.current(nAtual.current); };
     const tecla = (e: KeyboardEvent) => {
       if (e.key === "Escape") fim.current(nAtual.current);
+      else if (!props.total) return;   // página comum: as teclas são dela
       else if (["ArrowRight", "PageDown", " "].includes(e.key)) vai(nAtual.current + 1);
       else if (["ArrowLeft", "PageUp"].includes(e.key)) vai(nAtual.current - 1);
     };
     const doCanvas = (e: MessageEvent) => {
       const m = lerMensagem(e, props.iframe.current?.contentWindow);
-      if (m?.type === "ready") paraIframe(props.iframe.current?.contentWindow, { type: "setSlide", n: nAtual.current });
+      if (m?.type === "ready") paraIframe(props.iframe.current?.contentWindow,
+                                          props.total ? { type: "setSlide", n: nAtual.current } : { type: "setTela", nome: props.tela });
       else if (m?.type === "slides") setN(m.atual);
       else if (m?.type === "atalho" && m.acao === "sair") fim.current(nAtual.current);
     };
@@ -1290,14 +1380,18 @@ function Apresentacao(props: { html: string; slide: number; total: number; palco
     };
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div ref={props.palco} className="group fixed inset-0 z-50 bg-black">
+    <div ref={props.palco} role="dialog" aria-label="Apresentação" className={`group fixed inset-0 z-50 ${props.total ? "bg-black" : "bg-white"}`}>
       <iframe ref={props.iframe} title="Apresentação" sandbox="allow-scripts" srcDoc={paraCanvas(props.html)} className="size-full border-0"
               onLoad={() => props.iframe.current?.focus()} />
-      <div className="absolute inset-x-0 bottom-3 flex items-center justify-center gap-3 opacity-0 transition-opacity group-hover:opacity-100">
-        <button onClick={() => vai(n - 1)} className="rounded-full bg-white/15 px-3 py-1 text-sm text-white hover:bg-white/25">←</button>
-        <span className="font-mono text-sm text-white/80">{n} / {props.total}</span>
-        <button onClick={() => vai(n + 1)} className="rounded-full bg-white/15 px-3 py-1 text-sm text-white hover:bg-white/25">→</button>
-        <button onClick={() => props.onFim(n)} className="rounded-full bg-white/15 px-3 py-1 text-sm text-white hover:bg-white/25">Sair · Esc</button>
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 flex items-center justify-center gap-3 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        {!!props.total && (
+          <>
+            <button onClick={() => vai(n - 1)} className="pointer-events-auto rounded-full bg-black/60 px-3 py-1 text-sm text-white hover:bg-black/80">←</button>
+            <span className="rounded-full bg-black/60 px-2 py-0.5 font-mono text-sm text-white/80">{n} / {props.total}</span>
+            <button onClick={() => vai(n + 1)} className="pointer-events-auto rounded-full bg-black/60 px-3 py-1 text-sm text-white hover:bg-black/80">→</button>
+          </>
+        )}
+        <button onClick={() => props.onFim(n)} className="pointer-events-auto rounded-full bg-black/60 px-3 py-1 text-sm text-white hover:bg-black/80">Sair · Esc</button>
       </div>
     </div>
   );
