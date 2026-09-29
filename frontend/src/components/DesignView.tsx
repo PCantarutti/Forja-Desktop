@@ -824,6 +824,10 @@ export default function DesignView(props: {
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
       const emCampo = !!(e.target as HTMLElement).closest("input, textarea, select, [contenteditable]");
+      if (e.key === "Escape" && selecao && !emCampo && !e.defaultPrevented) {   // Esc limpa a seleção também fora do canvas
+        selecionar([]);
+        return;
+      }
       if (modo === "edit" && selecao && !emCampo && (e.key === "Delete" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d"))) {
         e.preventDefault();
         return operar(e.key === "Delete" ? "apagar" : "duplicar", selecao.itens.map((i) => i.fid));
@@ -1545,6 +1549,10 @@ export default function DesignView(props: {
                   </span>
                 ))}
                 {selecao.itens.length > 1 && <span className="ml-1.5 shrink-0 text-accent-text">+{selecao.itens.length - 1} selecionados</span>}
+                <button onClick={() => selecionar([])} aria-label="Limpar seleção" title="Limpar seleção · Esc"
+                        className="ml-1 grid size-6 shrink-0 place-items-center rounded-md text-muted hover:bg-raised hover:text-fg">
+                  <X className="size-3.5" />
+                </button>
               </>
             ) : (
               <span className="truncate">{rodando && geracao?.modo === "documento" ? "Gerando: o canvas mostra o documento parcial"
