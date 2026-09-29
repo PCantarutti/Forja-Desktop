@@ -11,6 +11,7 @@ import DesignCaptura, { type Bloco, type Paleta } from "./DesignCaptura";
 import DesignEditar from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
 import DesignRevisao, { type ProblemaVisual, type Revisao } from "./DesignRevisao";
+import DesignModelos, { type Modelo } from "./DesignModelos";
 import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
@@ -176,6 +177,7 @@ export default function DesignView(props: {
   const [abrirZoom, setAbrirZoom] = useState(false);
   const [abrirSalvar, setAbrirSalvar] = useState(false);
   const [camadas, setCamadas] = useState(false);
+  const [nomeModelo, setNomeModelo] = useState<string | null>(null);   // "Salvar como modelo" aberto
   const [paginaAtual, setPaginaAtual] = useState("");
   const [novaPagina, setNovaPagina] = useState<{ nome: string; desc: string } | null>(null);
   const [captura, setCaptura] = useState<Referencia | null>(null);   // janela dos blocos da página capturada
@@ -631,6 +633,28 @@ export default function DesignView(props: {
     setTimeout(() => { selecionar([p.fid]); paraIframe(janela(), { type: "scrollTo", fid: p.fid }); }, viewport !== p.largura ? 600 : 0);
   }
 
+  /** Projeto vazio a partir de um modelo guardado: vira a v1 na hora, sem IA. */
+  async function usarModelo(m: Modelo) {
+    try {
+      const id = await props.ensureConversation();
+      mostrar(await api.post<Projeto>(`/design/${id}/modelo/${m.id}`));
+      props.onConversationChanged();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  async function salvarModelo() {
+    const nome = (nomeModelo ?? "").trim();
+    if (!projeto || !nome) return;
+    try {
+      await api.post("/design-modelos", { conv_id: projeto.conv_id, nome });
+      setNomeModelo(null);
+      setAbrirExport(false);
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
   /** Modo Editar: apagar, duplicar, mover, trocar imagem e link (no rascunho, sem IA). */
   async function operar(op: "apagar" | "duplicar" | "mover" | "imagem" | "link", fids: string[], extra: { alvo?: string; onde?: string; valor?: string } = {}) {
     await semIA("operacao", { op, fids, ...extra });
@@ -902,6 +926,10 @@ export default function DesignView(props: {
                     (Shift+clique junta vários) e peça: só ele vai ao modelo. Duplo clique num texto edita direto,
                     sem IA. Mudança de estilo geral mexe só nos tokens.</p>
                 </div>
+              )}
+              {!mensagens.length && !rodando && (
+                <DesignModelos onPedido={(t) => { setTexto(t); requestAnimationFrame(() => campo.current?.focus()); }}
+                               onUsar={usarModelo} onErro={props.onError} />
               )}
               {mensagens.map((m, i) => {
                 if (m.role === "user") {
@@ -1472,6 +1500,19 @@ export default function DesignView(props: {
                     <span className="block text-[11.5px] text-faint">{x.hint}</span>
                   </button>
                 ))}
+                {nomeModelo === null ? (
+                  <button onClick={() => setNomeModelo(projeto?.titulo ?? "")} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
+                    <span className="block text-[13px] text-fg">Salvar como modelo…</span>
+                    <span className="block text-[11.5px] text-faint">Guarda o que está no canvas para começar outros projetos dele, sem IA</span>
+                  </button>
+                ) : (
+                  <form onSubmit={(e) => { e.preventDefault(); salvarModelo(); }} className="mt-1 flex items-center gap-1.5 border-t border-line px-2 pt-2 pb-1">
+                    <input autoFocus value={nomeModelo} onChange={(e) => setNomeModelo(e.target.value)} placeholder="Nome do modelo" aria-label="Nome do modelo" maxLength={80}
+                           onKeyDown={(e) => { if (e.key === "Escape") setNomeModelo(null); }}
+                           className="min-w-0 flex-1 rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
+                    <button type="submit" disabled={!nomeModelo.trim()} className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-accent-fg disabled:opacity-40">Salvar</button>
+                  </form>
+                )}
                 <button onClick={mandarParaAgente} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
                   <span className="flex items-center gap-1.5 text-[13px] text-fg"><Code className="size-3.5" /> Mandar para o Agente…</span>
                   <span className="block text-[11.5px] text-faint">Grava o pacote (HTML, tokens, imagens, README) na pasta do projeto e abre o Agente com o pedido pronto</span>

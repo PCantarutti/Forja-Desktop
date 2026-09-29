@@ -718,6 +718,22 @@ def operar(conv_id: int, op: str, fids: list[str], alvo: str = "", onde: str = "
     return _sem_ia(conv_id, faz, texto, op, [f"{texto} (modo Editar, sem IA)"])
 
 
+def usar_modelo(conv_id: int, modelo_id: str) -> dict:
+    """Projeto vazio começa de um modelo guardado: o HTML dele vira a v1, sem IA."""
+    from . import design_modelos
+    m = design_modelos.pegar(modelo_id)
+    with db.session() as s:
+        c = _conv(s, conv_id)
+        if _versoes(s, conv_id) or any(r["conv_id"] == conv_id for r in _RUNS.values()):
+            raise ToolError("O projeto já tem design: comece um projeto novo para usar o modelo.")
+        if c.title == "Nova conversa":
+            c.title = m["nome"]
+            s.commit()
+    _nova_versao(conv_id, None, m["html"], f"modelo: {m['nome']}", rota="modelo",
+                 passos=[f"Começou do modelo “{m['nome']}” (sem IA)"])
+    return projeto(conv_id)
+
+
 def inserir_captura(conv_id: int, captura_id: str, indices: list[int]) -> dict:
     """Blocos escolhidos da página capturada viram seções no fim da página (no rascunho, sem IA)."""
     from . import design_referencias

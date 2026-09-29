@@ -30,7 +30,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import design_revisao
+from . import design_modelos, design_revisao
 
 
 settings.apply()
@@ -1787,6 +1787,49 @@ def design_paleta(conv_id: int, body: DesignPaletaBody):
     """Cores e fontes da página capturada nos tokens do design (rascunho, sem IA)."""
     try:
         return design.aplicar_paleta(conv_id, body.paleta)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class DesignModeloBody(BaseModel):
+    conv_id: int
+    nome: str
+
+
+@app.get("/api/design-modelos")
+def design_modelos_listar():
+    return design_modelos.listar()
+
+
+@app.get("/api/design-modelos/{mid}")
+def design_modelos_pegar(mid: str):
+    try:
+        return design_modelos.pegar(mid)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/design-modelos")
+def design_modelos_salvar(body: DesignModeloBody):
+    """Guarda o que está no canvas do projeto (o rascunho, se houver) como modelo."""
+    try:
+        return design_modelos.salvar(body.nome, design.projeto(body.conv_id)["html"])
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/design-modelos/{mid}")
+def design_modelos_apagar(mid: str):
+    try:
+        return design_modelos.apagar(mid)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/{conv_id}/modelo/{mid}")
+def design_usar_modelo(conv_id: int, mid: str):
+    try:
+        return design.usar_modelo(conv_id, mid)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
