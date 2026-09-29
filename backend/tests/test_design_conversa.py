@@ -205,12 +205,12 @@ def test_pagina_de_referencia_capturada(tmp_path):
     srv = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
-        texto, foto = asyncio.run(design_referencias.pagina(f"http://127.0.0.1:{srv.server_port}/"))
+        texto, foto, celular = asyncio.run(design_referencias.pagina(f"http://127.0.0.1:{srv.server_port}/"))
     finally:
         srv.shutdown()
     assert texto["nome"] == "Café Aurora" and "rgb(16, 24, 32)" in texto["texto"] and "Georgia" in texto["texto"]
     assert "H1: Café da manhã" in texto["texto"] and "12px" in texto["texto"]
-    assert foto["tipo"] == "imagem" and foto["data"].startswith("data:image/jpeg;base64,")
+    assert foto["tipo"] == celular["tipo"] == "imagem" and foto["data"].startswith("data:image/jpeg;base64,")
     with pytest.raises(ToolError):
         asyncio.run(design_referencias.pagina("ftp://x"))
 
