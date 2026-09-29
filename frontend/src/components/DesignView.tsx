@@ -60,6 +60,7 @@ type Geracao = {
 };
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
                  estilo: Record<string, string>; href: string | null };
+const CAMADAS_PADRAO = 256;   // largura do painel Camadas (px); o divisor muda entre 200 e 520
 const ZOOMS = [0.25, 0.33, 0.5, 0.75, 1, 1.25, 1.5, 2];
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
@@ -131,7 +132,7 @@ const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
 type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean;
-                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean; chatFracao?: number };
+                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean; chatFracao?: number; camadasLargura?: number };
 
 function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
@@ -161,6 +162,7 @@ export default function DesignView(props: {
   const [projeto, setProjeto] = useState<Projeto | null>(null);
   const [git, setGit] = useState<StatusGit | null>(null);
   const raizTela = useRef<HTMLDivElement>(null);
+  const linhaArea = useRef<HTMLDivElement>(null);   // a linha Camadas | canvas | Editar
   const [arrastandoDivisor, setArrastandoDivisor] = useState(false);   // o iframe engoliria o movimento do ponteiro   // o Design guarda as versões com o git do sistema
   const [verificandoGit, setVerificandoGit] = useState(false);
   const [texto, setTexto] = useState("");
@@ -1667,13 +1669,23 @@ export default function DesignView(props: {
             )}
           </div>
         </div>
-        <div className="@container/area relative flex min-h-0 flex-1">
+        <div ref={linhaArea} className="@container/area relative flex min-h-0 flex-1">
         {camadas && (
           <DesignCamadas nos={nosCamadas} selecionados={selecao?.itens.map((i) => i.fid) ?? []}
                          onSelecionar={(fids) => { selecionar(fids); if (fids.length) paraIframe(janela(), { type: "scrollTo", fid: fids[fids.length - 1] }); }}
                          onRealce={(fid) => paraIframe(janela(), { type: "realce", fid })}
                          onMover={(fids, alvo, onde) => operar("mover", fids, { alvo, onde })}
-                         onFechar={() => setCamadas(false)} />
+                         onFechar={() => setCamadas(false)} largura={prefs.camadasLargura ?? CAMADAS_PADRAO} />
+        )}
+        {camadas && (
+          // quando o painel flutua (área estreita) não há borda para arrastar: o divisor some
+          <div onDoubleClick={() => setPrefs((p) => ({ ...p, camadasLargura: CAMADAS_PADRAO }))} onPointerDownCapture={() => setArrastandoDivisor(true)}
+               title="Arraste para mudar a largura das camadas · duplo clique volta ao padrão" className="flex border-r border-line @max-3xl/area:hidden">
+            <Divisor eixo="x" onFim={() => setArrastandoDivisor(false)} onArrasto={(e) => {
+              const esq = linhaArea.current?.getBoundingClientRect().left ?? 0;
+              setPrefs((p) => ({ ...p, camadasLargura: Math.round(Math.min(520, Math.max(200, e.clientX - esq))) }));
+            }} />
+          </div>
         )}
         <div ref={areaCanvas} className={`relative flex min-w-0 flex-1 p-3 ${zoom > 1 || ladoALado ? "overflow-auto" : "overflow-hidden"}`} style={{ justifyContent: "safe center" }}>
           {modo === "comment" && selecao?.rect && iframe.current && areaCanvas.current && (() => {

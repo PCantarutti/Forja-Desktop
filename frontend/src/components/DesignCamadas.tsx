@@ -16,6 +16,7 @@ export default function DesignCamadas(props: {
   onRealce: (fid: string | null) => void;
   onMover: (fids: string[], alvo: string, onde: Onde) => void;
   onFechar: () => void;
+  largura: number;   // px; o divisor à direita (no DesignView) muda
 }) {
   const [fechados, setFechados] = useState<Set<string>>(new Set());
   const [solta, setSolta] = useState<{ fid: string; onde: Onde } | null>(null);
@@ -53,7 +54,7 @@ export default function DesignCamadas(props: {
   const rotuloNo = (n: NoArvore) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 
   return (
-    <aside aria-label="Camadas" className={`flex w-64 shrink-0 flex-col overflow-hidden border-r border-line bg-surface text-[12px] ${PAINEL_FLUTUA_ESQ}`}>
+    <aside aria-label="Camadas" style={{ width: props.largura }} className={`flex shrink-0 flex-col overflow-hidden bg-surface text-[12px] ${PAINEL_FLUTUA_ESQ}`}>
       <div className="flex items-center gap-1.5 border-b border-line px-3 py-2 whitespace-nowrap">
         <span className="font-medium text-fg">Camadas</span>
         <span className="text-faint">{props.nos.length}</span>
