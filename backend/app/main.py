@@ -1917,6 +1917,25 @@ def design_restaurar(conv_id: int, body: DesignVersaoBody):
         raise HTTPException(400, str(e))
 
 
+class DesignSalvarBody(BaseModel):
+    descricao: str = ""
+
+
+@app.post("/api/design/{conv_id}/rascunho/{acao}")
+def design_rascunho(conv_id: int, acao: str, body: DesignSalvarBody | None = None):
+    """Ajustes à mão ficam no rascunho: salvar (vira versão), descartar, desfazer, refazer."""
+    try:
+        if acao == "salvar":
+            return design.salvar_versao(conv_id, (body or DesignSalvarBody()).descricao)
+        if acao == "descartar":
+            return design.descartar_rascunho(conv_id)
+        if acao in ("desfazer", "refazer"):
+            return design.rascunho_desfazer(conv_id, acao == "refazer")
+        raise HTTPException(404, "Ação desconhecida.")
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 # ------------------------------------------------------------------ pesquisa profunda
 
 

@@ -40,10 +40,56 @@ def test_editar_estilo_mescla_no_style_e_vira_versao():
     novo = r["projeto"]["html"]
     tag = re.search(r"<h1[^>]*>", novo).group(0)
     assert "font-size: 48px" in tag and "color" not in tag and "font-family: 'Segoe UI'" in tag
-    assert r["projeto"]["total"] == 2 and r["fim"]["patches"][0]["fid"] == h1
-    # vários de uma vez (Semelhantes): uma versão só
+    assert r["projeto"]["total"] == 1 and r["projeto"]["rascunho"]["mudancas"] == 2 and r["fim"]["patches"][0]["fid"] == h1
+    # vários de uma vez (Semelhantes): um passo só no rascunho
     r = design.editar_estilo(conv, [a1, a2], {"border-radius": "999px"})
-    assert r["projeto"]["html"].count("border-radius: 999px") == 2 and r["projeto"]["total"] == 3
+    assert r["projeto"]["html"].count("border-radius: 999px") == 2 and r["projeto"]["rascunho"]["mudancas"] == 3
+
+
+def test_rascunho_desfaz_refaz_salva_e_trava_troca_de_versao():
+    conv = _projeto()
+    h1 = _fid(design.projeto(conv)["html"], "h1")[0]
+    design.editar_estilo(conv, [h1], {"font-size": "10px"})
+    design.editar_estilo(conv, [h1], {"font-size": "20px"})
+    with pytest.raises(ToolError):
+        design.ir_para(conv, 1)   # com rascunho aberto, trocar de versão perderia os ajustes
+    p = design.rascunho_desfazer(conv)
+    assert "font-size: 10px" in p["html"] and p["edicao"]["refazer"]
+    p = design.rascunho_desfazer(conv)
+    assert p["rascunho"] is None and "font-size" not in re.search(r"<h1[^>]*>", p["html"]).group(0)
+    p = design.rascunho_desfazer(conv, refazer=True)
+    assert p["rascunho"]["mudancas"] == 1 and "font-size: 10px" in p["html"]
+    p = design.salvar_versao(conv, "título menor")
+    assert p["total"] == 2 and p["rascunho"] is None and p["mensagens"][-1]["content"] == "v2: título menor"
+    assert p["mensagens"][-1]["base"] == 1 and not p["edicao"]["desfazer"]
+    design.editar_estilo(conv, [h1], {"color": "#123456"})
+    p = design.descartar_rascunho(conv)
+    assert p["rascunho"] is None and "#123456" not in p["html"] and p["total"] == 2
+    with pytest.raises(ToolError):
+        design.salvar_versao(conv)
+
+
+def test_pedido_a_ia_parte_do_rascunho_e_absorve(monkeypatch):
+    conv = _projeto()
+    h1 = _fid(design.projeto(conv)["html"], "h1")[0]
+    design.editar_estilo(conv, [h1], {"font-size": "40px"})
+    vistos = []
+
+    async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        vistos.append(messages[1]["content"])
+        yield "content", '{"tokens": {"--cor": "#000000"}, "mensagem": "ok"}'
+        yield "done", {}
+    monkeypatch.setattr(design.llm, "chat_stream", chat_stream)
+
+    async def main():
+        design.start(conv, "cores mais escuras", {k: {"provider": "ollama", "model": "m"} for k in ("plano", "geracao", "edicao")}, rota="tokens")
+        import asyncio
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+    import asyncio
+    asyncio.run(main())
+    p = design.projeto(conv)
+    assert p["total"] == 2 and p["rascunho"] is None and "font-size: 40px" in p["html"] and "--cor: #000000" in p["html"]
+    assert p["mensagens"][-1]["passos"][0] == "Incluiu 1 ajuste(s) manual(is) do rascunho"
 
 
 @pytest.mark.parametrize("estilos", [{"position": "fixed"}, {"color": "red; display:none"},

@@ -3,12 +3,12 @@ import { ponte } from "./designCanvas";
 import { FolderOpen, Trash } from "./icons";
 
 // Aba Ajustes da tela Design: os tokens do :root viram controles (cor, slider, fonte) que mexem no
-// canvas ao vivo e salvam sozinhos, sem chamar modelo nenhum; e os design systems (tirados do código
+// canvas ao vivo e vão para o rascunho, sem chamar modelo nenhum; e os design systems (tirados do código
 // de um projeto) para aplicar aqui ou usar nos próximos planos.
 
 export type Sistema = { id: string; nome: string; pasta: string; tokens: Record<string, string>; css: string; notas: string; criado: string };
 
-const SALVAR_MS = 700;   // depois do último movimento: um ajuste vira uma versão, não uma por pixel
+const SALVAR_MS = 700;   // depois do último movimento: um passo no rascunho, não um por pixel
 const FONTES = [
   "system-ui, sans-serif", '"Segoe UI", system-ui, sans-serif', "Georgia, serif", '"Palatino Linotype", Palatino, serif',
   '"Times New Roman", serif', '"Trebuchet MS", sans-serif', "Verdana, sans-serif", "ui-monospace, monospace",
@@ -191,7 +191,7 @@ export default function DesignAjustes(props: {
           </section>
         ) : null;
       })}
-      <p className="text-[11.5px] text-faint">Mexe no canvas na hora e salva sozinho como uma versão nova — sem chamar o modelo.</p>
+      <p className="text-[11.5px] text-faint">Mexe no canvas na hora e vai para o rascunho (Salvar versão quando quiser) — sem chamar o modelo.</p>
 
       <section className="border-t border-line pt-3">
         <h3 className="mb-1.5 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Design systems</h3>

@@ -18,12 +18,13 @@ import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 
 // Tela Design: chat à esquerda (no feitio do chat do agente: bolhas, raciocínio colapsável e a linha
-// de métricas), canvas à direita. Cada pedido vai pela rota mais barata (o backend decide, você pode
-// forçar) e vira uma versão nova; desfazer/refazer só movem qual versão está à vista.
+// de métricas), canvas à direita. Cada pedido à IA vai pela rota mais barata (o backend decide, você
+// pode forçar) e vira uma versão nova. Ajuste à mão fica no rascunho até você salvar a versão. O
+// histórico é uma árvore: editar a partir de uma versão antiga abre um ramo, sem apagar nada.
 
 type Mensagem = {
   id: number; role: "user" | "assistant"; content: string; status: string | null; thinking: string;
-  versao: number | null; fids: string[]; entrada?: number | null; rota?: string | null; secao?: string | null;
+  versao: number | null; base?: number | null; fids: string[]; entrada?: number | null; rota?: string | null; secao?: string | null;
   stats: Stats[]; comentarios: number[]; plano: Plano | null;
   perguntas?: Pergunta[] | null; respostas?: { pergunta: string; resposta: string }[] | null;
   referencias?: Referencia[]; mensagem?: string; sugestoes?: string[]; passos?: string[]; mais?: number; menos?: number;
@@ -39,6 +40,8 @@ type Projeto = {
   secoes: string[]; comentarios: Comentario[]; rodando: number | null;
   imagens: { total: number; pendentes: number; nomes: string[]; conversa: number | null; disponivel: boolean };
   sistema: string | null;
+  rascunho: { base: number; rev: number; passos: string[]; mudancas: number } | null;
+  edicao: { desfazer: boolean; refazer: boolean };
 };
 type Patch = { fid: string; html: string };
 type Geracao = {
@@ -67,7 +70,7 @@ const ROTAS: { id: Rota; label: string; hint: string }[] = [
 ];
 const ROTULO_ROTA: Record<string, string> = {
   plano: "plano", etapas: "em etapas", fragmento: "fragmento", tokens: "só tokens", secao: "seção",
-  documento: "documento inteiro", texto: "texto · sem IA", restaurar: "restauração", variacoes: "variações",
+  documento: "documento inteiro", texto: "texto · sem IA", restaurar: "restauração", variacoes: "variações", manual: "ajustes à mão",
   variacao: "variação · sem IA", ajuste: "ajuste · sem IA", sistema: "design system · sem IA", tweaks: "ajustes da IA", imagens: "imagens",
 };
 const VIEWPORTS: { id: Viewport; label: string; largura: number | null }[] = [
@@ -99,6 +102,10 @@ const contaSlides = (html: string) => (html.match(/<section\b[^>]*\sdata-slide(?
 /** Telas do protótipo (seções de topo com data-tela), na ordem. */
 const nomesTelas = (html: string) =>
   [...html.matchAll(/<section\b[^>]*\sdata-tela(?=[\s=>])[^>]*>/gi)].map((m) => /data-section="([^"]+)"/.exec(m[0])?.[1] ?? "").filter(Boolean);
+/** Árvore do histórico: versão → de qual nasceu (as antigas, sem base, da anterior; 0 = raiz). */
+const paisDe = (ms: Mensagem[]) =>
+  new Map(ms.filter((m) => m.versao).map((m) => [m.versao!, m.base || (m.versao! > 1 ? m.versao! - 1 : 0)]));
+const filhoMaisNovo = (pais: Map<number, number>, v: number) => Math.max(0, ...[...pais].filter(([, b]) => b === v).map(([f]) => f));
 const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
@@ -150,6 +157,8 @@ export default function DesignView(props: {
   const [abrirApresentar, setAbrirApresentar] = useState(false);
   const [zoom, setZoom] = useState(1);                       // só da página gerada (o app não muda)
   const [abrirZoom, setAbrirZoom] = useState(false);
+  const [abrirSalvar, setAbrirSalvar] = useState(false);
+  const [nomeVersao, setNomeVersao] = useState("");
   const [comparar, setComparar] = useState<number | null>(null);   // versão aberta ao lado da atual
   const [htmlVersoes, setHtmlVersoes] = useState<Record<number, string>>({});
   const palco = useRef<HTMLDivElement>(null);
@@ -173,6 +182,7 @@ export default function DesignView(props: {
   const iframe = useRef<HTMLIFrameElement>(null);
   const campo = useRef<HTMLTextAreaElement>(null);
   const versaoNoCanvas = useRef(0);
+  const htmlNoCanvas = useRef("");   // com rascunho, a versão fica e o HTML muda: é ele que decide recarregar
   const temCanvas = useRef(false);
   const nVivo = useRef(-1);
   const corte = useRef<AbortController | null>(null);
@@ -190,12 +200,13 @@ export default function DesignView(props: {
     const patches = fim?.patches ?? [];
     if (p && patches.length && fim?.base === versaoNoCanvas.current && temCanvas.current) {
       patches.forEach((x) => paraIframe(janela(), { type: "patch", fid: x.fid, html: x.html }));
-    } else if (!(p && p.atual === versaoNoCanvas.current && temCanvas.current)) {
-      // mesma versão já no canvas (recarga pelo carimbo, patch já aplicado): não recarrega o iframe
+    } else if (!(p && p.html === htmlNoCanvas.current && temCanvas.current)) {
+      // mesmo HTML já no canvas (recarga pelo carimbo, patch já aplicado): não recarrega o iframe
       setSrcBase(p?.html ?? "");
       temCanvas.current = !!p?.html;
     }
     versaoNoCanvas.current = p?.atual ?? 0;
+    htmlNoCanvas.current = p?.html ?? "";
     setProjeto(p);
   }, []);
 
@@ -484,6 +495,32 @@ export default function DesignView(props: {
     if (geracao?.message_id) await api.post(`/design/${geracao.message_id}/cancelar`, {}).catch(() => {});
   }
 
+  /** Ctrl+Z: primeiro o rascunho (ajuste por ajuste); sem rascunho, volta para a versão de onde esta nasceu. */
+  function desfazer() {
+    if (!projeto || rodando) return;
+    if (projeto.edicao.desfazer) return acaoRascunho("desfazer");
+    if (projeto.rascunho) return props.onError("O rascunho não tem mais o que desfazer aqui (o backend reiniciou): salve ou descarte.");
+    const pai = paisDe(projeto.mensagens).get(projeto.atual);
+    if (pai) ir(pai);
+  }
+  /** Ctrl+Shift+Z: refaz no rascunho; sem rascunho, desce para o filho mais novo da versão atual. */
+  function refazer() {
+    if (!projeto || rodando) return;
+    if (projeto.edicao.refazer) return acaoRascunho("refazer");
+    const filho = filhoMaisNovo(paisDe(projeto.mensagens), projeto.atual);
+    if (!projeto.rascunho && filho) ir(filho);
+  }
+  async function acaoRascunho(acao: "desfazer" | "refazer" | "descartar" | "salvar", descricao = "") {
+    if (!projeto) return;
+    try {
+      mostrar(await api.post<Projeto>(`/design/${projeto.conv_id}/rascunho/${acao}`, { descricao }));
+      if (acao === "salvar") { setNomeVersao(""); setAbrirSalvar(false); }
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  const salvarVersao = () => { if (projeto?.rascunho) acaoRascunho("salvar", nomeVersao); };
+
   async function ir(versao: number) {
     if (!projeto || rodando || versao < 1 || versao > projeto.total || versao === projeto.atual) return;
     try {
@@ -502,7 +539,7 @@ export default function DesignView(props: {
     }
   }
 
-  /** Duplo clique no canvas: o texto vai direto para a fonte (versão nova), sem chamar o modelo. */
+  /** Duplo clique no canvas: o texto vai direto para a fonte (no rascunho), sem chamar o modelo. */
   async function salvarTexto(fid: string, html: string) {
     if (!projeto) return;
     try {
@@ -526,7 +563,7 @@ export default function DesignView(props: {
     }
   }
 
-  /** Mudança direta, sem modelo (sliders, design system): versão nova e patch no canvas. */
+  /** Mudança direta, sem modelo (sliders, design system): rascunho e patch no canvas. */
   async function semIA(caminho: string, corpo: unknown) {
     if (!projeto) return;
     try {
@@ -646,7 +683,8 @@ export default function DesignView(props: {
     } else if (m.type === "atalho") {
       if (m.acao === "inspect") alternarInspecao();
       else if (m.acao === "comentar") alternarComentario();
-      else if (m.acao !== "sair" && projeto) ir(projeto.atual + (m.acao === "undo" ? -1 : 1));
+      else if (m.acao === "undo") desfazer();
+      else if (m.acao === "redo") refazer();
     }
   };
   useEffect(() => {
@@ -663,9 +701,10 @@ export default function DesignView(props: {
       const k = e.key.toLowerCase();
       if (e.shiftKey && k === "c") alternarInspecao();
       else if (e.shiftKey && k === "m") alternarComentario();
+      else if (k === "s" && !e.shiftKey) salvarVersao();
       else if ((e.target as HTMLElement).closest("input, textarea, [contenteditable]")) return;
-      else if (k === "z" && !e.shiftKey) ir(projeto.atual - 1);
-      else if (k === "y" || (k === "z" && e.shiftKey)) ir(projeto.atual + 1);
+      else if (k === "z" && !e.shiftKey) desfazer();
+      else if (k === "y" || (k === "z" && e.shiftKey)) refazer();
       else return;
       e.preventDefault();
     };
@@ -689,6 +728,23 @@ export default function DesignView(props: {
   }, [fonteMini]);
   const mensagens = projeto?.mensagens ?? [];
   const versoes = mensagens.filter((m) => m.versao).reverse();
+  // árvore do histórico: a versão nasce de `base` (as antigas, sem base, da anterior)
+  const pais = paisDe(mensagens);
+  const paiDe = (v: number) => pais.get(v) ?? 0;
+  const filhoDe = (v: number) => filhoMaisNovo(pais, v);
+  const chaveArvore = versoes.map((m) => `${m.versao}:${m.base}`).join();
+  const arvore = useMemo(() => {
+    // em profundidade a partir das raízes; o primeiro filho segue na mesma coluna, os outros são ramos
+    const filhos = new Map<number, number[]>();
+    [...pais].sort((a, b) => a[0] - b[0]).forEach(([v, b]) => filhos.set(b, [...(filhos.get(b) ?? []), v]));
+    const out: { v: number; nivel: number; ramo: boolean }[] = [];
+    const anda = (v: number, nivel: number, ramo: boolean) => {
+      out.push({ v, nivel, ramo });
+      (filhos.get(v) ?? []).forEach((f, i) => anda(f, nivel + (i ? 1 : 0), i > 0));
+    };
+    (filhos.get(0) ?? []).forEach((r, i) => anda(r, i, i > 0));
+    return out;
+  }, [chaveArvore]);   // eslint-disable-line react-hooks/exhaustive-deps
   const btn = "grid size-8 place-items-center rounded-lg text-muted hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent";
   const abaBtn = (on: boolean) => `rounded-lg px-2.5 py-1 text-xs ${on ? "bg-raised text-fg" : "text-muted hover:text-fg"}`;
 
@@ -894,8 +950,27 @@ export default function DesignView(props: {
 
           {aba === "versoes" && (
             <div className="flex flex-col gap-1 py-2">
-              {versoes.map((m) => (
-                <div key={m.id} className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] ${m.versao === atual ? "bg-accent-soft text-accent-text" : "text-fg-2 hover:bg-raised"}`}>
+              <p className="px-2 pb-1 text-[11.5px] leading-snug text-faint">
+                Ajustes à mão ficam no rascunho até você salvar (Ctrl+S). Para abrir um ramo, vá até uma versão antiga e siga
+                editando: a próxima versão nasce dela, sem apagar as outras.
+              </p>
+              {projeto?.rascunho && (
+                <div className="rounded-lg border border-amber-400/40 bg-amber-500/5 px-2.5 py-2 text-[12.5px]">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-amber-300">Rascunho sobre a v{projeto.rascunho.base}</span>
+                    <span className="text-faint">{projeto.rascunho.mudancas} {projeto.rascunho.mudancas === 1 ? "ajuste" : "ajustes"}</span>
+                    <span className="flex-1" />
+                    <button onClick={() => setAbrirSalvar(true)} className="rounded border border-line px-1.5 text-[11px] hover:bg-raised">Salvar versão</button>
+                    <button onClick={() => acaoRascunho("descartar")} className="rounded border border-line px-1.5 text-[11px] hover:bg-raised">Descartar</button>
+                  </div>
+                  <ul className="mt-1 text-[11.5px] leading-snug text-faint">
+                    {projeto.rascunho.passos.slice(-6).map((x, i) => <li key={i} className="truncate">· {x}</li>)}
+                  </ul>
+                </div>
+              )}
+              {arvore.map((n) => versoes.find((x) => x.versao === n.v)!).map((m, i) => (
+                <div key={m.id} style={{ marginLeft: arvore[i].nivel * 14 }}
+                     className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] ${arvore[i].nivel ? "border-l border-line-strong" : ""} ${m.versao === atual ? "bg-accent-soft text-accent-text" : "text-fg-2 hover:bg-raised"}`}>
                   <button onClick={() => ir(m.versao!)} disabled={rodando} className="shrink-0" title="Mostrar esta versão">
                     {htmlVersoes[m.versao!] ? <Miniatura html={htmlVersoes[m.versao!]} titulo={`Miniatura da v${m.versao}`} />
                       : <div className="grid h-[163px] w-[243px] place-items-center rounded-lg border border-dashed border-line text-[11px] text-faint"
@@ -903,6 +978,7 @@ export default function DesignView(props: {
                   </button>
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <button onClick={() => ir(m.versao!)} disabled={rodando} className="truncate text-left">{m.content}</button>
+                    {arvore[i].ramo && <span className="self-start rounded bg-raised px-1.5 text-[10.5px] text-muted">ramo da v{paiDe(m.versao!)}</span>}
                     {m.versao !== atual && (
                       <button onClick={() => { setComparar(m.versao!); htmlDaVersao(m.versao!); }}
                               className={`self-start rounded border px-1.5 text-[11px] ${comparar === m.versao ? "border-accent-line text-accent-text" : "border-line hover:bg-raised"}`}>
@@ -1094,14 +1170,46 @@ export default function DesignView(props: {
             </button>
           )}
           <span className="mx-1 h-5 w-px bg-line" />
-          <button className={btn} title="Desfazer · Ctrl+Z" disabled={rodando || atual <= 1} onClick={() => ir(atual - 1)}>
+          <button className={btn} title={projeto?.rascunho ? "Desfazer o último ajuste do rascunho · Ctrl+Z" : "Voltar para a versão de onde esta nasceu · Ctrl+Z"}
+                  disabled={rodando || !(projeto?.edicao.desfazer || (!projeto?.rascunho && paiDe(atual)))} onClick={desfazer}>
             <Undo />
           </button>
-          <button className={btn} title="Refazer · Ctrl+Shift+Z" disabled={rodando || atual >= total} onClick={() => ir(atual + 1)}>
+          <button className={btn} title={projeto?.edicao.refazer ? "Refazer no rascunho · Ctrl+Shift+Z" : "Ir para a versão mais nova que nasceu desta · Ctrl+Shift+Z"}
+                  disabled={rodando || !(projeto?.edicao.refazer || (!projeto?.rascunho && filhoDe(atual)))} onClick={refazer}>
             <Undo className="size-4 -scale-x-100" />
           </button>
           <span className="ml-1.5">{total ? `v${atual} de ${total}` : "sem versões"}</span>
-          {atual > 0 && atual < total && !rodando && (
+          {projeto?.rascunho && (
+            <div className="relative flex items-center gap-1">
+              <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-amber-300" title={projeto.rascunho.passos.slice(-8).join("\n")}>
+                + rascunho · {projeto.rascunho.mudancas} {projeto.rascunho.mudancas === 1 ? "ajuste" : "ajustes"}
+              </span>
+              <button onClick={() => setAbrirSalvar((v) => !v)} disabled={rodando} title="Salvar o rascunho como versão nova · Ctrl+S"
+                      className="rounded-lg bg-accent px-2 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
+                Salvar versão
+              </button>
+              <button onClick={() => acaoRascunho("descartar")} disabled={rodando} title="Joga fora os ajustes do rascunho e volta para a versão"
+                      className="rounded-lg px-1.5 py-1 text-muted hover:bg-raised hover:text-fg disabled:opacity-40">
+                Descartar
+              </button>
+              {abrirSalvar && (
+                <div className="absolute top-full left-0 z-30 mt-1 w-72 rounded-xl border border-line bg-surface p-2 shadow-xl" role="dialog" aria-label="Salvar versão">
+                  <input autoFocus value={nomeVersao} onChange={(e) => setNomeVersao(e.target.value)} placeholder={`Nome da v${total + 1} (opcional)`}
+                         aria-label="Nome da versão" maxLength={80}
+                         onKeyDown={(e) => { if (e.key === "Enter") salvarVersao(); else if (e.key === "Escape") setAbrirSalvar(false); }}
+                         className="w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
+                  <ul className="mt-1.5 max-h-40 overflow-y-auto text-[11.5px] leading-snug text-faint">
+                    {projeto.rascunho.passos.slice(-8).map((x, i) => <li key={i} className="truncate">· {x}</li>)}
+                  </ul>
+                  <div className="mt-1.5 flex justify-end gap-1.5">
+                    <button onClick={() => setAbrirSalvar(false)} className="rounded-lg px-2 py-0.5 text-muted hover:text-fg">Cancelar</button>
+                    <button onClick={salvarVersao} className="rounded-lg bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110">Salvar v{total + 1}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {atual > 0 && atual < total && !rodando && !projeto?.rascunho && (
             <button onClick={() => restaurar(atual)} title="Copia esta versão para o topo do histórico"
                     className="ml-2 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
               Restaurar como v{total + 1}

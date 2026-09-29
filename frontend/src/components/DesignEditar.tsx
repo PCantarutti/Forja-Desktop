@@ -3,7 +3,7 @@ import { X } from "./icons";
 
 // Modo Editar da tela Design: o elemento clicado (ou todos os selecionados) ganha um painel de
 // propriedades. Cada mudança aparece na hora no canvas (prévia no style do nó) e, 700 ms depois do
-// último movimento, vira uma versão nova pelo backend — sem modelo nenhum.
+// último movimento, entra no rascunho pelo backend — sem modelo nenhum. Versão só quando você salvar.
 
 const SALVAR_MS = 700;
 const FONTES = ["system-ui, sans-serif", "'Segoe UI', system-ui, sans-serif", "Georgia, serif", "'Times New Roman', serif",
@@ -78,7 +78,7 @@ export default function DesignEditar(props: {
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2.5">
         <p className="text-[11.5px] leading-snug text-faint">
-          Muda na hora, sem IA; cada pausa vira uma versão (Ctrl+Z desfaz). Duplo clique no texto edita o conteúdo.
+          Muda na hora, sem IA, e vai para o rascunho (Ctrl+Z desfaz; Ctrl+S salva a versão). Duplo clique no texto edita o conteúdo.
           {props.n > 1 && " Vale para todos os selecionados."}
         </p>
         <div className="space-y-1.5">

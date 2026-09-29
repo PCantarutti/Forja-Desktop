@@ -134,7 +134,7 @@ def test_ajuste_de_tokens_sem_modelo(monkeypatch):
     antes = design.projeto(conv)["html"]
     r = design.ajustar_tokens(conv, {"--cor-primaria": "#1d4ed8", "--esp-4": "2rem"})
     depois = r["projeto"]["html"]
-    assert not chamou and r["projeto"]["mensagens"][-1]["rota"] == "ajuste"
+    assert not chamou and r["projeto"]["rascunho"]["mudancas"] == 2 and r["projeto"]["total"] == 1
     assert "--cor-primaria: #1d4ed8" in depois and "--esp-4: 2rem" in depois
     raiz = re.compile(r":root\s*\{[^}]*\}")
     assert raiz.sub("", antes) == raiz.sub("", depois)

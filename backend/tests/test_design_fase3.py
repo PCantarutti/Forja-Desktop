@@ -150,14 +150,14 @@ def test_texto_por_duplo_clique_nao_chama_modelo(monkeypatch):
     h1 = re.search(r'<h1 data-fid="(\w+)"', html).group(1)
     r = design.editar_texto(conv, h1, 'Padaria <b contenteditable="true">Sol</b>')
     assert chamadas == []
-    assert r["projeto"]["atual"] == 2 and "<h1 data-fid" in r["projeto"]["html"]
+    assert r["projeto"]["atual"] == 1 and r["projeto"]["rascunho"] and "<h1 data-fid" in r["projeto"]["html"]
     novo = design_html.outer(r["projeto"]["html"], h1)
     assert "Sol</b>" in novo and "contenteditable" not in novo and r["fim"]["patches"][0]["html"] == novo
     assert r["projeto"]["html"].replace(novo, "") == html.replace(design_html.outer(html, h1), "")
     for ruim in ("<script>x</script>", "abre <b>sem fechar", "</h1><h1>dois"):
         with pytest.raises(ToolError):
             design.editar_texto(conv, h1, ruim)
-    assert design.projeto(conv)["total"] == 2
+    assert design.projeto(conv)["rascunho"]["mudancas"] == 1   # as recusadas não entram
 
 
 # ------------------------------------------------------------------ plano → esqueleto → seções

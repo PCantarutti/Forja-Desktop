@@ -62,8 +62,9 @@ def test_variacoes_so_com_tokens_existentes_e_escolha_sem_ia(monkeypatch):
     monkeypatch.setattr(design.llm, "chat_stream", lambda *a, **k: (_ for _ in ()).throw(AssertionError("chamou o modelo")))
     r = design.escolher_variacao(conv, msg["id"], 1)
     p = r["projeto"]
-    assert p["atual"] == 2 and "--cor-fundo: #111111" in p["html"] and "--cor-primaria: #f2aa4c" in p["html"]
-    assert p["mensagens"][-1]["content"] == "v2: variação: Noite" and "Noite" in p["mensagens"][-1]["passos"][0]
+    assert p["atual"] == 1 and "--cor-fundo: #111111" in p["html"] and "--cor-primaria: #f2aa4c" in p["html"]
+    assert "Noite" in p["rascunho"]["passos"][0]
+    assert design.salvar_versao(conv)["mensagens"][-1]["content"].startswith("v2: Aplicou a variação “Noite”")
     assert [x for x in p["mensagens"] if x["id"] == msg["id"]][0]["escolhida"] == 1
     with pytest.raises(ToolError):
         design.escolher_variacao(conv, msg["id"], 9)
@@ -72,6 +73,7 @@ def test_variacoes_so_com_tokens_existentes_e_escolha_sem_ia(monkeypatch):
 def test_html_de_qualquer_versao():
     conv = _projeto()
     design.ajustar_tokens(conv, {"--cor-primaria": "#000000"})
+    design.salvar_versao(conv, "preto")
     v1, v2 = design.versao_html(conv, 1), design.versao_html(conv, 2)
     assert "#c75b12" in v1["html"] and "#000000" in v2["html"] and v1["descricao"] == "inicial"
     with pytest.raises(ToolError):

@@ -2,7 +2,7 @@ import { docEstatico } from "./designCanvas";
 import { Check } from "./icons";
 
 // Variações de tokens lado a lado: a página atual renderizada três vezes, cada uma com o :root da
-// variação por cima. Escolher aplica só os tokens (versão nova, sem IA).
+// variação por cima. Escolher aplica só os tokens (no rascunho, sem IA).
 
 export type Variacao = { nome: string; descricao: string; tokens: Record<string, string> };
 
