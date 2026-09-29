@@ -9,8 +9,12 @@ mudam essa marca; restaurar uma versão antiga cria uma nova, o histórico nunca
 Falha nunca altera o documento: resposta sem HTML válido, erro do modelo ou cancelamento fecham a
 mensagem sem versão, e a marca `atual` fica onde estava.
 
-ponytail: fase 1 regenera o documento inteiro a cada pedido. Edição por fragmento (data-fid),
-tokens e geração por seção entram nas próximas fases, que são justamente o que corta esse custo.
+Dois modos por pedido: com elementos selecionados (fids), vai ao modelo só o contexto do
+fragmento e volta um JSON de patches (design_html.aplicar); sem seleção, o documento inteiro.
+Toda versão sai carimbada: cada elemento tem um data-fid estável, que é o endereço dele.
+
+ponytail: sem seleção ainda regenera o documento inteiro; tokens e geração por seção (fase 3)
+são o que corta esse custo.
 """
 from __future__ import annotations
 
@@ -21,7 +25,7 @@ from contextlib import aclosing
 from html.parser import HTMLParser
 from pathlib import Path
 
-from . import config, db, llm, mirror
+from . import config, db, design_html, llm, mirror
 from .agent import _save
 from .parsing import split_think
 from .tools import ToolError
@@ -107,12 +111,24 @@ def projeto(conv_id: int) -> dict:
                 continue
             d = (m.meta or {}).get("design", {})
             mensagens.append({"id": m.id, "role": m.role, "content": m.content, "status": m.status,
-                              "versao": d.get("versao"), "created_at": m.created_at.isoformat()})
+                              "versao": d.get("versao"), "fids": d.get("fids") or [],
+                              "entrada": d.get("entrada"), "created_at": m.created_at.isoformat()})
         return {"conv_id": conv_id, "titulo": c.title, "mensagens": mensagens,
                 "total": len(_versoes(s, conv_id)),
                 "atual": atual.meta["design"]["versao"] if atual else 0,
-                "html": atual.meta["design"]["html"] if atual else "",
+                "html": _carimbada(s, atual) if atual else "",
                 "rodando": next((mid for mid, r in _RUNS.items() if r["conv_id"] == conv_id), None)}
+
+
+def _carimbada(s, m: db.Message) -> str:
+    """Versão de antes do carimbo (fase 1) ganha data-fid na primeira vez que é aberta — no próprio
+    registro, porque o id só é estável se estiver salvo."""
+    html = m.meta["design"]["html"]
+    novo = design_html.carimbar(html)
+    if novo != html:
+        m.meta = {**m.meta, "design": {**m.meta["design"], "html": novo}}
+        s.commit()
+    return novo
 
 
 def ir_para(conv_id: int, versao: int) -> dict:
@@ -138,12 +154,13 @@ def restaurar(conv_id: int, versao: int) -> dict:
     return projeto(conv_id)
 
 
-def _nova_versao(conv_id: int, message_id: int | None, html: str, descricao: str) -> int:
+def _nova_versao(conv_id: int, message_id: int | None, html: str, descricao: str, **extra) -> int:
     """Grava a versão (na mensagem da geração, ou numa nova ao restaurar) e a marca como atual."""
+    html = design_html.carimbar(html)
     with db.session() as s:
         n = max((m.meta["design"]["versao"] for m in _versoes(s, conv_id)), default=0) + 1
         texto = f"v{n}: {descricao}"
-        meta = {"design": {"versao": n, "html": html, "descricao": descricao}}
+        meta = {"design": {"versao": n, "html": html, "descricao": descricao, **extra}}
         if message_id is None:
             s.add(db.Message(conversation_id=conv_id, role="assistant", content=texto, status="ok", meta=meta))
         else:
@@ -170,7 +187,7 @@ def _descricao(pedido: str) -> str:
     return linha if len(linha) <= 60 else linha[:57].rstrip() + "…"
 
 
-def start(conv_id: int, pedido: str, provider: str, model: str) -> dict:
+def start(conv_id: int, pedido: str, provider: str, model: str, fids: list[str] | None = None) -> dict:
     pedido = (pedido or "").strip()
     if not pedido:
         raise ToolError("Descreva o design.")
@@ -186,17 +203,32 @@ def start(conv_id: int, pedido: str, provider: str, model: str) -> dict:
         base = (atual.meta["design"]["versao"], atual.meta["design"]["html"]) if atual else (0, "")
         s.commit()
 
-    if base[1]:
+    fids = [f for f in dict.fromkeys(fids or []) if f]
+    if fids:
+        if not base[1]:
+            raise ToolError("Não há documento para editar.")
+        try:
+            html_base = design_html.carimbar(base[1])
+            ctx = design_html.contexto(html_base, fids)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        user = f"{ctx}\n\nPedido: {pedido}"
+    elif base[1]:
         user = (f"Documento atual (v{base[0]}):\n\n{base[1]}\n\nPedido de mudança: {pedido}\n\n"
                 "Devolva o documento inteiro já com a mudança, mexendo só no que o pedido pede.")
     else:
         user = f"Pedido: {pedido}"
-    mensagens = [{"role": "system", "content": prompt("documento")}, {"role": "user", "content": user}]
+    mensagens = [{"role": "system", "content": prompt("fragmento" if fids else "documento")},
+                 {"role": "user", "content": user}]
 
-    _save(conv_id, role="user", content=pedido)
-    msg = _save(conv_id, role="assistant", content="", status="running", meta={"design": {"base": base[0]}})
+    # `entrada` fica no registro: é como se confere que só o fragmento foi ao modelo
+    _save(conv_id, role="user", content=pedido, meta={"design": {"fids": fids}} if fids else None)
+    msg = _save(conv_id, role="assistant", content="", status="running",
+                meta={"design": {"base": base[0], "fids": fids, "entrada": len(user)}})
     run = _RUNS[msg.id] = {"conv_id": conv_id, "message_id": msg.id, "parcial": "", "cancelar": False,
-                           "t0": time.monotonic(), "tokens": 0, "descricao": _descricao(pedido)}
+                           "t0": time.monotonic(), "tokens": 0, "descricao": _descricao(pedido),
+                           "modo": "fragmento" if fids else "documento", "base": base[0],
+                           "html_base": html_base if fids else "", "entrada": len(user)}
     t = asyncio.create_task(_rodar(run, provider, model, mensagens))
     _TAREFAS.add(t)
     t.add_done_callback(_TAREFAS.discard)
@@ -215,10 +247,20 @@ async def _rodar(run: dict, provider: str, model: str, mensagens: list[dict]) ->
                     run["tokens"] += 1
                 elif kind == "done":
                     run["tokens"] = (val or {}).get("completion_tokens") or run["tokens"]
+        extra = {"base": run["base"], "entrada": run["entrada"]}
         if run["cancelar"]:
             _fecha(mid, "cancelado", "Cancelado — o documento não mudou.")
+        elif run["modo"] == "fragmento":
+            try:
+                html, mudou = design_html.aplicar(run["html_base"], design_html.ler_json(split_think(run["parcial"])[1]))
+                if not extrair_html(html):
+                    raise ValueError("o documento ficaria inválido")
+            except ValueError as e:
+                _fecha(mid, "erro", f"Edição recusada: {e} — o documento não mudou.")
+            else:
+                _nova_versao(run["conv_id"], mid, html, run["descricao"], patches=mudou, **extra)
         elif html := extrair_html(run["parcial"]):
-            _nova_versao(run["conv_id"], mid, html, run["descricao"])
+            _nova_versao(run["conv_id"], mid, html, run["descricao"], **extra)
         else:
             _fecha(mid, "erro", "A resposta não trouxe um documento HTML completo — o documento não mudou.")
     except Exception as e:   # erro do modelo não pode deixar a mensagem em "running"
@@ -230,14 +272,18 @@ async def _rodar(run: dict, provider: str, model: str, mensagens: list[dict]) ->
 
 def estado(message_id: int) -> dict:
     if run := _RUNS.get(message_id):
-        return {"message_id": message_id, "status": "rodando", "parcial": run["parcial"],
+        return {"message_id": message_id, "status": "rodando", "modo": run["modo"],
+                "parcial": run["parcial"] if run["modo"] == "documento" else "",
                 "tokens": run["tokens"], "segundos": round(time.monotonic() - run["t0"], 1)}
     with db.session() as s:
         m = s.get(db.Message, message_id)
         if not m or "design" not in (m.meta or {}):
             raise ToolError("Geração não encontrada.")
+        d = m.meta["design"]
+        # patches com o outerHTML já carimbado: o canvas troca só esses nós, sem recarregar
+        patches = [{"fid": f, "html": design_html.outer(d["html"], f) or ""} for f in d.get("patches", [])]
         return {"message_id": message_id, "status": m.status or "ok", "texto": m.content,
-                "versao": m.meta["design"].get("versao")}
+                "versao": d.get("versao"), "base": d.get("base"), "entrada": d.get("entrada"), "patches": patches}
 
 
 def cancelar(message_id: int) -> dict:

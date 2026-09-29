@@ -69,6 +69,7 @@ export const Image = base(<><rect x="3" y="5" width="18" height="14" rx="2" /><c
 export const Recolher = base(<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />);
 export const Expandir = base(<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />);
 // Design: aba (prancheta com régua).
+export const Mira = base(<path d="M5 3l6 16 2.2-6.8L20 10z" />);   // inspecionar elemento
 export const Prancheta = base(<><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></>);
 // Vídeo: aba, player e composer.
 export const Film = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></>);

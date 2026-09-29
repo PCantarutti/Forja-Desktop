@@ -117,3 +117,52 @@ def test_projeto_de_outro_tipo_recusa():
         cid = c.id
     with pytest.raises(ToolError):
         design.projeto(cid)
+
+
+def _gerar_fids(conv: int, pedido: str, fids: list[str]) -> dict:
+    async def main():
+        msg = design.start(conv, pedido, "ollama", "m", fids)
+        await asyncio.gather(*[t for t in asyncio.all_tasks() if t is not asyncio.current_task()])
+        return design.estado(msg["id"])
+    return asyncio.run(main())
+
+
+def test_edicao_de_fragmento_manda_so_o_trecho_e_troca_so_ele(monkeypatch):
+    import json
+    import re
+    conv = _projeto()
+    grande = DOC.replace("{}", "<h1>Padaria</h1>" + "<p>texto longo de outra parte</p>" * 50 + "<a class='btn'>Comprar</a>")
+    _fake_llm(monkeypatch, grande)
+    _gerar(conv, "landing")
+    html = design.projeto(conv)["html"]
+    botao = re.search(r"<a class='btn' data-fid=\"(\w+)\"", html).group(1)
+    vistos: list = []
+    patch = {"patches": [{"fid": botao, "html": "<a class='btn verde'>Comprar</a>"}], "css": ".verde{background:green}"}
+    _fake_llm(monkeypatch, "```json\n" + json.dumps(patch) + "\n```", vistos)
+    est = _gerar_fids(conv, "deixa verde e maior", [botao])
+
+    enviado = vistos[0][1]["content"]
+    assert "Comprar" in enviado and "texto longo" not in enviado          # só o fragmento
+    assert est["entrada"] == len(enviado) < len(html) / 3
+    assert est["versao"] == 2 and est["base"] == 1
+    assert [p["fid"] for p in est["patches"]][0] == botao and "verde" in est["patches"][0]["html"]
+    novo = design.projeto(conv)["html"]
+    fids_antes = re.findall(r'data-fid="(\w+)"', html)
+    assert fids_antes == re.findall(r'data-fid="(\w+)"', novo)            # nenhum id mudou
+    from app import design_html
+    fora = lambda h: h.split("</style>")[1].replace(design_html.outer(h, botao), "")   # noqa: E731
+    assert fora(novo) == fora(html)                                     # o resto do corpo é idêntico
+
+
+def test_fragmento_com_json_ruim_nao_cria_versao(monkeypatch):
+    import re
+    conv = _projeto()
+    _fake_llm(monkeypatch, DOC.replace("{}", "<a>x</a>"))
+    _gerar(conv, "landing")
+    fid = re.search(r'<a data-fid="(\w+)"', design.projeto(conv)["html"]).group(1)
+    _fake_llm(monkeypatch, "não sei fazer JSON")
+    est = _gerar_fids(conv, "muda", [fid])
+    assert est["status"] == "erro" and "recusada" in est["texto"]
+    assert design.projeto(conv)["total"] == 1
+    with pytest.raises(ToolError):
+        design.start(conv, "muda", "ollama", "m", ["sumiu"])

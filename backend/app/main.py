@@ -1581,6 +1581,7 @@ class DesignBody(BaseModel):
     pedido: str = ""
     provider: str = ""
     model: str = ""
+    fids: list[str] = []   # elementos selecionados no canvas: edita só esses fragmentos
 
 
 class DesignVersaoBody(BaseModel):
@@ -1616,7 +1617,7 @@ def design_projeto(conv_id: int):
 @app.post("/api/design/{conv_id}/gerar")
 async def design_gerar(conv_id: int, body: DesignBody):
     try:
-        msg = design.start(conv_id, body.pedido, body.provider, body.model)
+        msg = design.start(conv_id, body.pedido, body.provider, body.model, body.fids)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(msg["id"])
