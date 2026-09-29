@@ -174,7 +174,7 @@ def test_plano_aprovado_gera_secao_por_secao(monkeypatch):
 
     plano = {**est["plano"], "secoes": est["plano"]["secoes"][:2]}   # o usuário tirou o rodapé no card
     _esperar(lambda: design.aprovar(msg["id"], plano, M))
-    assert [c[0] for c in chamadas] == ["plano", "secao", "secao"]
+    assert [c[0] for c in chamadas] == ["plano", "secao", "secao", "autorrevisao"]   # e olha a página pronta
     assert "Seção a escrever: data-section=\"sobre\"" in chamadas[2][1]
     p = design.projeto(conv)
     assert p["atual"] == 1 and p["secoes"] == ["hero", "sobre"]

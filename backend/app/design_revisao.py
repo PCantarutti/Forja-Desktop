@@ -155,3 +155,81 @@ async def revisar(html: str, provider: str = "", model: str = "", esforco: str =
 def _prompt() -> str:
     from .design import prompt
     return prompt("revisao")
+
+
+# ------------------------------------------------------------------ autorrevisão (depois de gerar)
+# Como o Agente, que abre a página e olha antes de entregar: cada seção vira uma captura e um resumo
+# da geometria (o que tem nela, onde, em quantas linhas). Modelo sem visão lê só a geometria — logo
+# quebrando em 2 linhas, números empilhados, carrossel com um item só aparecem nela também.
+SECOES = r"""
+() => {
+  const vivo = (el) => { const c = getComputedStyle(el), r = el.getBoundingClientRect();
+    return c.display !== "none" && c.visibility !== "hidden" && +c.opacity > 0.05 && r.width > 0 && r.height > 0; };
+  const rot = (el) => el.tagName.toLowerCase() + (el.classList[0] ? "." + [...el.classList].find((c) => !c.startsWith("fx-")) : "");
+  const proprio = (el) => [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim();
+  return [...document.querySelectorAll("body > [data-section]")].filter(vivo).map((sec) => {
+    const b = sec.getBoundingClientRect(), y0 = b.top + scrollY;
+    const itens = [...sec.querySelectorAll("*")].filter((el) => vivo(el) && (proprio(el) || el.matches("img, svg, button, a, input, details, [data-slot]")))
+      .slice(0, 36).map((el) => {
+        const r = el.getBoundingClientRect(), c = getComputedStyle(el);
+        const lh = parseFloat(c.lineHeight) || parseFloat(c.fontSize) * 1.3;
+        const miolo = r.height - parseFloat(c.paddingTop) - parseFloat(c.paddingBottom) - parseFloat(c.borderTopWidth) - parseFloat(c.borderBottomWidth);
+        const t = proprio(el), x = Math.round(r.left - b.left);
+        return { el: rot(el), texto: t.slice(0, 32), x, y: Math.round(r.top + scrollY - y0),
+                 w: Math.round(r.width), h: Math.round(r.height), linhas: t ? Math.max(1, Math.round(miolo / lh)) : 0,
+                 slot: el.hasAttribute("data-slot") || undefined, fora: (x > b.width || x + r.width < 0) || undefined };
+      });
+    return { nome: sec.getAttribute("data-section"), fid: sec.getAttribute("data-fid"),
+             altura: Math.round(b.height), largura: Math.round(b.width), itens };
+  });
+}
+"""
+LARGURAS_AUTO = {"desktop": 1440, "mobile": 375}
+
+
+async def por_secao(html: str, capturas: bool = True) -> dict:
+    """{desktop: [{nome, fid, altura, itens, captura?}], mobile: [...]}: a página pronta, seção por seção."""
+    from playwright.async_api import async_playwright
+    async with async_playwright() as pw:
+        try:
+            navegador = await pw.chromium.launch(headless=True)
+        except Exception as e:
+            raise ToolError(f"Não consegui abrir o Chromium para olhar a página ({e.__class__.__name__}).") from e
+        try:
+            out = {}
+            for nome, w in LARGURAS_AUTO.items():
+                pagina = await navegador.new_page(viewport={"width": w, "height": 900}, device_scale_factor=0.5 if nome == "desktop" else 1)
+                await pagina.route("**/*", lambda r: r.abort())
+                await pagina.set_content(html, wait_until="load")
+                # animação parada no começo: a captura mostra o layout, não um quadro qualquer do carrossel
+                await pagina.add_style_tag(content="*,*::before,*::after{animation-play-state:paused!important;animation-delay:0s!important;transition:none!important}")
+                secs = await pagina.evaluate(SECOES)
+                if capturas and nome == "desktop":
+                    for sec in secs[:12]:
+                        el = pagina.locator(f'[data-fid="{sec["fid"]}"]').first
+                        try:
+                            jpg = await el.screenshot(type="jpeg", quality=55, timeout=8000)
+                            sec["captura"] = "data:image/jpeg;base64," + base64.b64encode(jpg).decode()
+                        except Exception:
+                            pass
+                out[nome] = secs
+                await pagina.close()
+            return out
+        finally:
+            await navegador.close()
+
+
+def geometria(medido: dict) -> str:
+    """O resumo em texto que vai ao modelo (com ou sem as capturas)."""
+    linhas = []
+    for largura, secs in medido.items():
+        linhas.append(f"== {largura} ({LARGURAS_AUTO[largura]}px)")
+        for sec in secs:
+            linhas.append(f"[{sec['nome']}] {sec['largura']}×{sec['altura']}px")
+            for i in sec["itens"]:
+                extra = f' "{i["texto"]}"' if i["texto"] else ""
+                extra += f" {i['linhas']} linha(s)" if i["linhas"] > 1 else ""
+                extra += " (slot de imagem)" if i.get("slot") else ""
+                extra += " (FORA da área visível)" if i.get("fora") else ""
+                linhas.append(f"  {i['el']} x{i['x']} y{i['y']} {i['w']}×{i['h']}{extra}")
+    return "\n".join(linhas)

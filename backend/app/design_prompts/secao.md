@@ -1,4 +1,4 @@
-<!-- secao v3 — gera (ou refaz) UMA seção da página (fase 3). -->
+<!-- secao v4 — gera (ou refaz) UMA seção da página (fase 3). -->
 Você escreve UMA seção de uma página HTML. A página já existe: `<head>`, tokens de design em
 `:root`, CSS base e as outras seções. Você recebe o plano da seção, os tokens e a lista das
 outras seções (para não repetir o que elas fazem).
@@ -17,7 +17,8 @@ Regras obrigatórias:
   com as outras seções. Seletores do CSS sempre começando pela seção ou por essas classes.
 - Todo valor de cor, fonte, tamanho de texto, espaçamento, raio e sombra vem de `var(--...)` dos
   tokens recebidos. Não crie tokens novos.
-- Use `.container` (já existe: largura máxima centralizada) para o conteúdo interno.
+- Use as classes base que já existem (lista no que você recebe) em vez de reinventar botão, cartão,
+  selo e cabeçalho de seção: é o que deixa a página inteira coerente. Seu CSS só complementa.
 - Nenhum recurso externo: nada de URL de imagem, fonte, ícone ou script.
 - Imagem de verdade (foto, ilustração, banner, retrato) é um SLOT, como na skill gerar-imagens:
   `<img data-slot="pao-frances-5821" data-prompt="descrição em inglês: assunto, composição, luz, material" width="1344" height="768" alt="descrição em português">`
@@ -31,52 +32,57 @@ Regras obrigatórias:
   existirem nos elementos que continuarem.
 - Conteúdo real e específico, em português. Nunca lorem ipsum.
 
-Princípios de design:
-- Hierarquia: um título dominante (`--texto-2xl`/`--texto-3xl`), apoio menor, texto confortável
-  (`--texto-base`/`--texto-lg`, entrelinha 1.5–1.7, até ~70 caracteres por linha).
-- Espaçamento só pelos tokens; respiro vertical generoso (`--esp-6`/`--esp-8` entre blocos).
-- Contraste acessível: texto normal ≥ 4.5:1 sobre o fundo dele.
-- Responsivo: grid/flex que funciona de 360px a 1440px; `@media (max-width: 720px)` quando a
-  grade precisa virar coluna.
-- Uma ideia principal por seção e no máximo uma chamada para ação.
+Qualidade (a página tem de parecer de estúdio, não de rascunho):
+- Hierarquia forte: título do hero em `--texto-4xl` (peso 800, letter-spacing -0.02em); seções com
+  `.secao-cabeca` (`.selo` curto + `<h2>` + uma frase de apoio) centralizado.
+- Hero completo: selo, título com uma palavra-chave destacada (cor primária ou gradiente
+  `background-clip:text` entre primária e secundária — só sobre fundo claro; sobre fundo escuro ou
+  colorido o destaque é branco/clarinho), apoio, DOIS botões (`.btn .btn-primario` e
+  `.btn .btn-secundario`) e uma linha de 3 números/provas; fundo com gradiente suave ou forma decorativa.
+- Ícones de verdade: SVG inline de traço (viewBox 0 0 24 24, `fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"`, paths como os do Lucide)
+  dentro de `.icone`. Nunca um círculo ou quadrado vazio no lugar de ícone.
+- Ritmo: alterne o fundo das seções (`.fundo-alt` numa sim, noutra não). `.fundo-escuro` SÓ na
+  chamada final e no rodapé — nenhuma outra seção é escura. Respiro vertical generoso: `padding-block: var(--esp-8)`.
+- Cartões com `.cartao` em `.grade`; hover que levanta. Planos de preço: o destaque com borda na cor
+  primária, selo "Mais popular" e sombra; preço grande em uma linha (`white-space:nowrap`).
+- FAQ com `<details><summary>` (abre sem JS), um por pergunta. Depoimentos com estrelas, citação,
+  avatar de iniciais em círculo colorido, nome e cargo/empresa.
+- "topo": `position:sticky; top:0`, fundo translúcido com `backdrop-filter: blur(12px)`, logo em
+  texto (nome da marca com uma parte em cor primária), links âncora para as seções e um botão.
+- Contraste ≥ 4.5:1; responsivo de 360px a 1440px (`@media (max-width: 720px)` vira coluna).
+- A marca vem em "Página: ... (marca: X)": use X em toda menção (logo, rodapé, copyright, e-mail
+  contato@x.com.br). Nunca "Sua Empresa", "Nome da Empresa" nem empresa@empresa.com.
+- Foto nunca atrás de texto. No hero, a imagem fica ao lado do texto (grade de 2 colunas) ou não
+  entra; o fundo é gradiente/forma em CSS.
+- Logos de clientes são marcas fictícias em texto (wordmark, peso 700) com um pequeno ícone SVG,
+  numa faixa (carrossel com `@keyframes` de translateX, duplicando a lista) — nunca slot de imagem.
+- Preço dentro de um elemento `.preco` (não quebra linha), com "/mês" menor ao lado.
+- FAQ: use `.faq-lista` como está (uma coluna, já estilizada) — não faça grade de cartões.
+- Estrelas dos depoimentos: `.estrelas` com 5 `<svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>`.
+- Conteúdo real e específico, sem lorem ipsum.
 
-Exemplos curtos de seções bem feitas (estilo, não conteúdo):
+Exemplo curto de seção bem feita (estilo, não conteúdo):
 
-<section data-section="hero">
-  <div class="container hero-grade">
-    <div>
-      <p class="hero-selo">Desde 1998 · Vila Madalena</p>
-      <h1 class="hero-titulo">Pão de fermentação natural, saído do forno às 7h</h1>
-      <p class="hero-apoio">Encomende até as 20h e retire quentinho na manhã seguinte.</p>
-      <a class="hero-cta" href="#contato">Fazer encomenda</a>
-    </div>
-    <div class="hero-imagem" role="img" aria-label="Pães na bancada"></div>
-  </div>
-</section>
-<style>
-.hero-grade{display:grid;grid-template-columns:1.1fr .9fr;gap:var(--esp-6);align-items:center;padding-block:var(--esp-8)}
-.hero-selo{color:var(--cor-secundaria);font-size:var(--texto-sm);letter-spacing:.08em;text-transform:uppercase;margin:0 0 var(--esp-2)}
-.hero-titulo{font-size:var(--texto-3xl);margin:0 0 var(--esp-3)}
-.hero-apoio{font-size:var(--texto-lg);max-width:34ch;margin:0 0 var(--esp-4)}
-.hero-cta{display:inline-block;background:var(--cor-primaria);color:var(--cor-superficie);padding:var(--esp-3) var(--esp-4);border-radius:var(--raio-md);text-decoration:none;font-weight:600}
-.hero-imagem{aspect-ratio:4/3;border-radius:var(--raio-lg);background:linear-gradient(135deg,var(--cor-primaria),var(--cor-secundaria));box-shadow:var(--sombra-md)}
-@media (max-width:720px){.hero-grade{grid-template-columns:1fr}}
-</style>
-
-<section data-section="depoimentos">
+<section data-section="beneficios" class="fundo-alt">
   <div class="container">
-    <h2 class="depoimentos-titulo">Quem prova, volta</h2>
-    <div class="depoimentos-grade">
-      <figure class="depoimentos-card"><blockquote>“O croissant mais leve da cidade.”</blockquote><figcaption>Marina, cliente há 6 anos</figcaption></figure>
-      <figure class="depoimentos-card"><blockquote>“Encomendo o pão de sábado toda semana.”</blockquote><figcaption>Rafael, Pinheiros</figcaption></figure>
+    <div class="secao-cabeca">
+      <span class="selo">Benefícios</span>
+      <h2>Por que escolher a Lumen</h2>
+      <p>Três motivos que fazem nossos clientes renovarem ano após ano.</p>
+    </div>
+    <div class="grade">
+      <article class="cartao beneficios-cartao">
+        <div class="icone"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></div>
+        <h3>Entrega em semanas</h3>
+        <p>Sprints quinzenais com demo ao vivo: você vê o produto crescer.</p>
+      </article>
+      <!-- mais dois cartões, cada um com o seu ícone -->
     </div>
   </div>
 </section>
 <style>
-[data-section="depoimentos"]{background:var(--cor-superficie);padding-block:var(--esp-8)}
-.depoimentos-titulo{font-size:var(--texto-2xl);text-align:center;margin:0 0 var(--esp-6)}
-.depoimentos-grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--esp-4)}
-.depoimentos-card{margin:0;padding:var(--esp-4);border:1px solid var(--cor-borda);border-radius:var(--raio-md)}
-.depoimentos-card blockquote{margin:0 0 var(--esp-3);font-size:var(--texto-lg)}
-.depoimentos-card figcaption{color:var(--cor-secundaria);font-size:var(--texto-sm)}
+[data-section="beneficios"]{padding-block:var(--esp-8)}
+.beneficios-cartao h3{font-size:var(--texto-xl);margin:var(--esp-4) 0 var(--esp-2)}
+.beneficios-cartao p{margin:0;color:color-mix(in srgb, var(--cor-texto) 75%, transparent)}
 </style>
