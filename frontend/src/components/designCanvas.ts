@@ -9,6 +9,7 @@ export type NoCaminho = { fid: string; tag: string; cls: string; sec: string }; 
 export type Item = { fid: string; tag: string; cls: string };
 export type Modo = "view" | "inspect" | "editText";
 export type Pin = { fid: string; n: number };
+export type Problema = { fid: string | null; tipo: string; detalhe: string; gravidade: "erro" | "aviso"; rotulo: string };
 
 /** iframe → app. `select` traz o principal (último clicado) e a seleção inteira em `itens`. */
 export type DoCanvas =
@@ -19,7 +20,8 @@ export type DoCanvas =
   | { type: "pin"; n: number }
   | { type: "slides"; atual: number; total: number }
   | { type: "tela"; nome: string }                          // o runtime do protótipo trocou de tela
-  | { type: "atalho"; acao: "inspect" | "undo" | "redo" };
+  | { type: "auditoria"; itens: Problema[]; escopo: string }
+  | { type: "atalho"; acao: "inspect" | "undo" | "redo" | "sair" };
 
 /** app → iframe. `highlight` define a seleção (o iframe responde com `select`). */
 export type ParaCanvas =
@@ -29,6 +31,7 @@ export type ParaCanvas =
   | { type: "showPins"; pins: Pin[] }
   | { type: "setSlide"; n: number }
   | { type: "setTela"; nome: string }
+  | { type: "auditar" }
   | { type: "setTokens"; tokens: Record<string, string> }   // prévia dos sliders; {} limpa
   | { type: "patch"; fid: string; html: string };
 
@@ -59,12 +62,16 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
       return eTexto(d.fid) && eTexto(d.html) && d.html.length < 200_000 ? { type: "textEdited", fid: d.fid, html: d.html } : null;
     case "pin":
       return Number.isInteger(d.n) ? { type: "pin", n: d.n } : null;
+    case "auditoria":
+      return Array.isArray(d.itens) && d.itens.length <= 200 && d.itens.every((x: any) => x && (x.fid === null || eTexto(x.fid)) &&
+        eTexto(x.tipo) && eTexto(x.detalhe) && ["erro", "aviso"].includes(x.gravidade) && eTexto(x.rotulo))
+        ? { type: "auditoria", itens: d.itens, escopo: eTexto(d.escopo) ? d.escopo : "" } : null;
     case "tela":
       return eTexto(d.nome) && d.nome.length < 80 ? { type: "tela", nome: d.nome } : null;
     case "slides":
       return Number.isInteger(d.atual) && Number.isInteger(d.total) ? { type: "slides", atual: d.atual, total: d.total } : null;
     case "atalho":
-      return ["inspect", "undo", "redo"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
+      return ["inspect", "undo", "redo", "sair"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
   }
   return null;
 }
@@ -271,6 +278,8 @@ function inspetor() {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === "c") return envia({ type: "atalho", acao: "inspect" }), e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && (k === "y" || (k === "z" && e.shiftKey))) return envia({ type: "atalho", acao: "redo" }), e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && k === "z") return envia({ type: "atalho", acao: "undo" }), e.preventDefault();
+    // Esc sem nada para limpar: quem está fora (a apresentação em tela cheia) decide o que fazer
+    if (e.key === "Escape" && !(modo === "inspect" && sel.length)) return envia({ type: "atalho", acao: "sair" });
     if (modo !== "inspect" || !sel.length) return;
     const atual = porFid(sel[sel.length - 1]);
     if (e.key === "ArrowUp" && atual) {
@@ -290,9 +299,79 @@ function inspetor() {
     desenha();
   });
 
+  // ---- acessibilidade, sem IA: contraste pelas cores computadas (WCAG 2.1), alt, nome acessível, títulos
+  const lum = (c: number[]) => {
+    const [r, g, b] = c.map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const rgba = (t: string) => {
+    const m = /rgba?\(([^)]+)\)/.exec(t);
+    if (!m) return null;
+    const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+  };
+  const fundo = (el: Element): number[] | null => {   // compõe as camadas até achar uma opaca; gradiente/imagem = não dá para saber
+    const camadas: number[][] = [];
+    for (let e: Element | null = el; e; e = e.parentElement) {
+      const cs = getComputedStyle(e);
+      if (cs.backgroundImage && cs.backgroundImage !== "none") return null;
+      const cor = rgba(cs.backgroundColor);
+      if (cor && cor[3] > 0) { camadas.push(cor); if (cor[3] >= 1) break; }
+    }
+    return camadas.reverse().reduce((acc, c) => [0, 1, 2].map((i) => c[i] * c[3] + acc[i] * (1 - c[3])), [255, 255, 255]);
+  };
+  const auditar = () => {
+    const itens: object[] = [];
+    const vistos = new Set<string>();
+    const add = (el: Element | null, tipo: string, detalhe: string, gravidade: string) => {
+      const f = el ? alvo(el)?.getAttribute("data-fid") ?? null : null;
+      if (vistos.has(`${f}|${tipo}`) || itens.length >= 120) return;
+      vistos.add(`${f}|${tipo}`);
+      itens.push({ fid: f, tipo, detalhe, gravidade, rotulo: el ? item(alvo(el) || el).tag + ((el.getAttribute("class") || "").trim() ? "." + (el.getAttribute("class") || "").trim().split(/\s+/)[0] : "") : "documento" });
+    };
+    const visivel = (el: Element) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden"; };
+    if (!document.documentElement.getAttribute("lang")) add(null, "idioma", "O <html> não diz o idioma (lang=\"pt-BR\"): leitor de tela pronuncia errado.", "aviso");
+    for (const el of document.querySelectorAll("body *")) {
+      if (camada.contains(el) || !visivel(el)) continue;
+      const tag = el.tagName.toLowerCase();
+      const texto = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent || "").join("").trim();
+      if (texto) {
+        const cs = getComputedStyle(el);
+        const cor = rgba(cs.color), bg = fundo(el);
+        const px = parseFloat(cs.fontSize), grande = px >= 24 || (px >= 18.66 && +cs.fontWeight >= 700);
+        if (cor && bg) {
+          const c = [0, 1, 2].map((i) => cor[i] * cor[3] + bg[i] * (1 - cor[3]));
+          const [a, b] = [lum(c), lum(bg)].sort((x, y) => y - x);
+          const razao = (a + 0.05) / (b + 0.05), minimo = grande ? 3 : 4.5;
+          if (razao < minimo) add(el, "contraste", `Contraste ${razao.toFixed(2)}:1 (mínimo ${minimo}:1${grande ? ", texto grande" : ""}) em “${texto.slice(0, 40)}”`, razao < minimo - 1 ? "erro" : "aviso");
+        }
+        if (px < 12) add(el, "texto pequeno", `Texto de ${px}px em “${texto.slice(0, 40)}”: difícil de ler (use pelo menos 12–14px).`, "aviso");
+      }
+      if (tag === "img" && !el.hasAttribute("alt")) add(el, "sem alt", "Imagem sem alt: descreva o que ela mostra (ou alt=\"\" se for decorativa).", "erro");
+      if ((tag === "a" || tag === "button" || el.getAttribute("role") === "button") && !(el.textContent || "").trim()
+          && !el.getAttribute("aria-label") && !el.getAttribute("title") && !el.querySelector("img[alt]:not([alt=''])"))
+        add(el, "sem nome", `${tag === "a" ? "Link" : "Botão"} sem texto nem aria-label: o leitor de tela diz só “${tag === "a" ? "link" : "botão"}”.`, "erro");
+      if ((tag === "input" || tag === "select" || tag === "textarea") && el.getAttribute("type") !== "hidden" && !el.getAttribute("aria-label")
+          && !(el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) && !el.closest("label"))
+        add(el, "campo sem rótulo", "Campo sem <label> nem aria-label (o placeholder some ao digitar).", "aviso");
+    }
+    let anterior = 0;
+    for (const h of document.querySelectorAll("h1, h2, h3, h4, h5, h6")) {
+      if (!visivel(h)) continue;
+      const n = +h.tagName[1];
+      if (anterior && n > anterior + 1) add(h, "nível de título", `Pula de h${anterior} para h${n}: a estrutura fica confusa para quem navega por títulos.`, "aviso");
+      anterior = n;
+    }
+    if (!document.querySelector("h1")) add(null, "sem h1", "A página não tem nenhum <h1>.", "aviso");
+    const escopo = listaSlides().length ? `slide ${slide + 1}` : document.querySelector("body > [data-tela][data-tela-atual]")
+      ? `tela “${document.querySelector("body > [data-tela][data-tela-atual]")!.getAttribute("data-section")}”` : "página inteira";
+    envia({ type: "auditoria", itens, escopo });
+  };
+
   addEventListener("message", (e) => {
     const d = e.data;
     if (e.source !== parent || !d || d[MARCA] !== 1) return;
+    if (d.type === "auditar") return auditar();
     if (d.type === "setMode" && ["view", "inspect", "editText"].includes(d.mode)) {
       modo = d.mode;
       hover = null;
@@ -356,6 +435,14 @@ const miniatura = (k: number, largura: number) =>
   `<style>html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#fff!important}` +
   `body>*{display:none!important}body>[data-slide]:nth-child(${k} of [data-slide]){display:block!important;margin:0!important;` +
   `box-shadow:none!important;transform:scale(${largura / 1920})!important;transform-origin:0 0!important}</style>`;
+
+/** Documento estático para miniatura/comparação: CSP, nenhum script e, se vier, CSS por cima do do design
+ *  (as variações de tokens entram assim: um :root depois do :root do documento vence). */
+export function docEstatico(html: string, cssExtra = ""): string {
+  const i = html.search(/<head[^>]*>/i);
+  const comCsp = i < 0 ? CSP + html : html.slice(0, html.indexOf(">", i) + 1) + CSP + html.slice(html.indexOf(">", i) + 1);
+  return cssExtra ? comCsp.replace(/<\/head>/i, `<style>${cssExtra}</style></head>`) : comCsp;
+}
 
 /** O que vai para o srcdoc: CSP e inspetor (ou o CSS da miniatura) logo depois do <head>. Só na
  *  renderização — nada disso vai para a fonte. */

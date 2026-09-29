@@ -34,11 +34,11 @@ from .tools import ToolError
 
 PROMPTS = Path(__file__).parent / "design_prompts"
 TICK = 0.4   # segundos entre retratos do SSE
-ROTAS = ("auto", "plano", "tokens", "secao", "documento", "tweaks")
+ROTAS = ("auto", "plano", "tokens", "secao", "documento", "tweaks", "variacoes")
 ESFORCOS = ("baixo", "medio", "alto", "maximo")
 # qual dos três modelos da tela cada rota usa: plano, geração (seções/documento) ou edição
 ETAPA = {"plano": "plano", "perguntas": "plano", "etapas": "geracao", "secao": "geracao", "documento": "geracao",
-         "fragmento": "edicao", "tokens": "edicao", "tweaks": "edicao"}
+         "fragmento": "edicao", "tokens": "edicao", "tweaks": "edicao", "variacoes": "edicao"}
 MAX_COMENTARIO = 2000
 
 _RUNS: dict[int, dict] = {}   # message_id -> geração viva
@@ -178,6 +178,8 @@ def projeto(conv_id: int) -> dict:
                               "stats": d.get("stats") or [], "comentarios": d.get("comentarios") or [],
                               "plano": d.get("plano") if m.status == "plano" else None,
                               "perguntas": d.get("perguntas") if m.status == "perguntas" else None,
+                              "variacoes": d.get("variacoes") if m.status in ("variacoes", "ok") and d.get("variacoes") else None,
+                              "escolhida": d.get("escolhida"),
                               "respostas": d.get("respostas"), "referencias": d.get("referencias") or [],
                               "mensagem": d.get("mensagem") or "", "sugestoes": d.get("sugestoes") or [],
                               "passos": d.get("passos") or [], "mais": (d.get("diff") or {}).get("mais", 0),
@@ -397,6 +399,33 @@ def ajustar_tokens(conv_id: int, tokens: dict) -> dict:
                    [f"{k} → {v} (painel de ajustes, sem IA)" for k, v in tokens.items()])
 
 
+def escolher_variacao(conv_id: int, message_id: int, indice: int) -> dict:
+    """Variação escolhida no card: vira versão (só tokens, sem IA) e o card lembra qual foi."""
+    with db.session() as s:
+        m = s.get(db.Message, message_id)
+        vs = ((m.meta or {}).get("design") or {}).get("variacoes") if m and m.conversation_id == conv_id else None
+        if not vs or not 0 <= indice < len(vs):
+            raise ToolError("Variação não encontrada.")
+        v = vs[indice]
+        m.meta = {**m.meta, "design": {**m.meta["design"], "escolhida": indice}}
+        s.commit()
+
+    def faz(html: str):
+        return design_html.aplicar(html, {"tokens": v["tokens"]})
+    return _sem_ia(conv_id, faz, f"variação: {v['nome']}", "variacao",
+                   [f"Aplicou a variação “{v['nome']}”: " + ", ".join(f"{k} → {x}" for k, x in v["tokens"].items())])
+
+
+def versao_html(conv_id: int, versao: int) -> dict:
+    """HTML de uma versão qualquer (miniaturas do histórico e comparação lado a lado)."""
+    with db.session() as s:
+        _conv(s, conv_id)
+        m = next((x for x in _versoes(s, conv_id) if x.meta["design"]["versao"] == versao), None)
+        if not m:
+            raise ToolError(f"Versão {versao} não existe.")
+        return {"versao": versao, "html": _carimbada(s, m), "descricao": m.meta["design"].get("descricao", "")}
+
+
 def aplicar_sistema(conv_id: int, ds_id: str) -> dict:
     ds = design_sistema.pegar(ds_id)
 
@@ -521,7 +550,7 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
                     if x["id"] in comentarios and x["status"] == "pendente" and not x["orfao"]]
             if not pend:
                 raise ToolError("Nenhum comentário pendente aplicável (os órfãos ficam de fora).")
-        if not pedido and not pend and rota not in ("secao", "tweaks"):
+        if not pedido and not pend and rota not in ("secao", "tweaks", "variacoes"):
             raise ToolError("Descreva o design.")
         if c.title == "Nova conversa" and pedido:
             c.title = _descricao(pedido)
@@ -537,7 +566,7 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
         rota, alvo = rotear(pedido, bool(html_base), nomes, fids)
     else:   # rota forçada; na de seção, o nome ainda sai do texto se não veio
         alvo = rotear(pedido, bool(html_base), nomes)[1] if rota == "secao" else None
-    modo = "tweaks" if rota == "tweaks" else "fragmento" if fids else rota
+    modo = rota if rota in ("tweaks", "variacoes") else "fragmento" if fids else rota
     if modo == "plano" and perguntar and not respostas:   # Claude Design pergunta antes de desenhar
         modo = "perguntas"
     if modo not in ("plano", "perguntas", "documento") and not html_base:
@@ -552,6 +581,12 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
         except ValueError as e:
             raise ToolError(str(e)) from e
         sistema = "fragmento"
+    elif modo == "variacoes":
+        with db.session() as s:
+            titulo = s.get(db.Conversation, conv_id).title
+        user = (f"Projeto: {titulo}\nSeções: {', '.join(nomes)}\n\nBloco :root atual:\n{design_html.root_css(html_base)}\n\n"
+                f"Pedido: {pedido or 'Proponha 3 direções visuais diferentes para esta página.'}")
+        sistema = "variacoes"
     elif modo == "tweaks":
         foco = design_html.contexto(html_base, design_html.cobertura(html_base, fids)) if fids else (
             f"Tokens (bloco :root):\n{design_html.root_css(html_base)}\n\nSeções da página: {', '.join(nomes)}\n\n"
@@ -608,7 +643,7 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
     mensagens = [{"role": "system", "content": prompt(sistema)}, {"role": "user", "content": conteudo}]
 
     rotulo = (f"{len(pend)} comentário(s)" if pend else pedido or
-              ("criar ajustes" if modo == "tweaks" else f"refazer a seção {extra.get('secao')}"))
+              {"tweaks": "criar ajustes", "variacoes": "3 variações"}.get(modo) or f"refazer a seção {extra.get('secao')}")
     _save(conv_id, role="user", content=rotulo,
           meta={"design": {"fids": fids, "rota": modo, "comentarios": [x["id"] for x in pend],
                            "respostas": respostas or None, "referencias": refs_chat}})
@@ -708,6 +743,23 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
             return
         base_html = run["html_base"]
         try:
+            if modo == "variacoes":
+                d = design_html.ler_json(texto)
+                raiz = design_html.root_css(base_html)
+                variacoes = []
+                for v in d.get("variacoes") if isinstance(d.get("variacoes"), list) else []:
+                    toks = {k: str(x).strip().rstrip(";") for k, x in (v.get("tokens") or {}).items()
+                            if isinstance(k, str) and re.search(rf"{re.escape(k)}\s*:", raiz)
+                            and design_html.token_valido(k, str(x).strip().rstrip(";"))} if isinstance(v, dict) else {}
+                    if toks:
+                        variacoes.append({"nome": str(v.get("nome") or f"Variação {len(variacoes) + 1}")[:40],
+                                          "descricao": str(v.get("descricao") or "")[:200], "tokens": toks})
+                if not variacoes:
+                    raise ValueError("o modelo não propôs nenhuma variação com tokens existentes")
+                _guarda(mid, "variacoes", f"{len(variacoes)} variações para escolher", variacoes=variacoes[:4],
+                        mensagem=str(d.get("mensagem") or "")[:600], sugestoes=design_html.sugestoes(d.get("sugestoes")),
+                        passos=[f"Propôs “{v['nome']}” ({len(v['tokens'])} tokens)" for v in variacoes[:4]])
+                return
             if modo in ("plano", "perguntas"):
                 d = design_html.ler_json(texto)
                 conversa = {"mensagem": str(d.get("mensagem") or "")[:800], "sugestoes": design_html.sugestoes(d.get("sugestoes"))}

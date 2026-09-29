@@ -12,7 +12,7 @@ from pathlib import Path
 from . import design_html
 from .tools import ToolError
 
-FORMATOS = ("html", "pdf", "png")
+FORMATOS = ("html", "pdf", "png", "pptx")
 LARGURAS = {"desktop": 1440, "tablet": 768, "mobile": 375}
 
 
@@ -47,6 +47,10 @@ async def exportar(html: str, titulo: str, formato: str, com_fids: bool = False,
             pagina = await navegador.new_page(viewport={"width": largura, "height": 1080 if slides else 900})
             await pagina.route("**/*", lambda r: r.abort())
             await pagina.set_content(limpo, wait_until="load")
+            if formato == "pptx":
+                if not slides:
+                    raise ToolError("PPTX é para apresentação: este design é uma página (use PDF ou PNG).")
+                return await _pptx(pagina), "application/vnd.openxmlformats-officedocument.presentationml.presentation", _nome(titulo, "pptx")
             if formato == "pdf":
                 if slides:
                     dados = await pagina.pdf(width="1920px", height="1080px", print_background=True,
@@ -158,3 +162,29 @@ async def handoff(html: str, titulo: str, pasta: str) -> dict:
         f"Comece lendo `{rel_txt}/README.md`: ele diz os arquivos, a estrutura, os tokens e como implementar. "
         "Siga a stack e os padrões que este projeto já usa, traga os tokens para o tema do projeto e, no fim, "
         f"confira no navegador comparando com `{rel_txt}/preview.png`.")}
+
+
+async def _pptx(pagina) -> bytes:
+    """Um slide do PowerPoint por slide do deck: a imagem 1920×1080 ocupando tudo e o texto dele nas notas
+    (o apresentador lê; a busca do PowerPoint acha). ponytail: texto como imagem, não caixas editáveis —
+    refazer o layout em formas do PowerPoint é outro projeto."""
+    import io
+    from pptx import Presentation
+    from pptx.util import Emu
+
+    alvo = pagina.locator("body > [data-slide]")
+    n = await alvo.count()
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Emu(12192000), Emu(6858000)   # 16:9 (13,33 × 7,5 pol.)
+    vazio = prs.slide_layouts[6]
+    for i in range(n):
+        el = alvo.nth(i)
+        png = await el.screenshot()
+        texto = (await el.inner_text()).strip()
+        sl = prs.slides.add_slide(vazio)
+        sl.shapes.add_picture(io.BytesIO(png), 0, 0, prs.slide_width, prs.slide_height)
+        if texto:
+            sl.notes_slide.notes_text_frame.text = texto[:4000]
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()

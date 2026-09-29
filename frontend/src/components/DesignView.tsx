@@ -4,10 +4,13 @@ import type { Stats } from "../types";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula } from "./Composer";
 import { type Effort, Menu, ModeEffortMenu } from "./Controls";
 import DesignAjustes, { type Sistema } from "./DesignAjustes";
+import DesignAcessibilidade from "./DesignAcessibilidade";
 import DesignAtividade from "./DesignAtividade";
+import DesignFluxo from "./DesignFluxo";
 import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
-import { type Item, type Modo, type NoCaminho, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
+import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
+import { type Item, type Modo, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
 import { ArrowLeft, ArrowRight, Bubble, Check, Code, Cube, Download, Globe, Image, Mira, Paperclip, Split, Undo, X } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -22,6 +25,7 @@ type Mensagem = {
   stats: Stats[]; comentarios: number[]; plano: Plano | null;
   perguntas?: Pergunta[] | null; respostas?: { pergunta: string; resposta: string }[] | null;
   referencias?: Referencia[]; mensagem?: string; sugestoes?: string[]; passos?: string[]; mais?: number; menos?: number;
+  variacoes?: Variacao[] | null; escolhida?: number | null;
 };
 type Referencia = { tipo: "imagem" | "documento" | "pagina"; nome: string; data?: string; texto?: string };
 type Comentario = {
@@ -43,7 +47,7 @@ type Geracao = {
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[] };
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
-type Rota = "auto" | "tokens" | "secao" | "documento";
+type Rota = "auto" | "tokens" | "secao" | "documento" | "variacoes";
 type Viewport = "desktop" | "tablet" | "mobile";
 
 const KEY = "forja.design.preferencias";
@@ -55,21 +59,24 @@ const ROTAS: { id: Rota; label: string; hint: string }[] = [
   { id: "tokens", label: "Só tokens", hint: "Muda só o :root (cores, fontes, espaços): a página inteira acompanha" },
   { id: "secao", label: "Uma seção", hint: "Refaz ou cria só a seção citada" },
   { id: "documento", label: "Documento inteiro", hint: "Reescreve tudo — o mais caro num modelo local" },
+  { id: "variacoes", label: "3 variações", hint: "Três direções visuais só com tokens, para escolher lado a lado" },
 ];
 const ROTULO_ROTA: Record<string, string> = {
   plano: "plano", etapas: "em etapas", fragmento: "fragmento", tokens: "só tokens", secao: "seção",
-  documento: "documento inteiro", texto: "texto · sem IA", restaurar: "restauração",
+  documento: "documento inteiro", texto: "texto · sem IA", restaurar: "restauração", variacoes: "variações",
+  variacao: "variação · sem IA", ajuste: "ajuste · sem IA", sistema: "design system · sem IA", tweaks: "ajustes da IA", imagens: "imagens",
 };
 const VIEWPORTS: { id: Viewport; label: string; largura: number | null }[] = [
   { id: "desktop", label: "Desktop", largura: null },
   { id: "tablet", label: "Tablet", largura: 768 },
   { id: "mobile", label: "Celular", largura: 375 },
 ];
-const EXPORTS: { formato: "html" | "pdf" | "png"; fids?: boolean; label: string; hint: string }[] = [
+const EXPORTS: { formato: "html" | "pdf" | "png" | "pptx"; fids?: boolean; label: string; hint: string }[] = [
   { formato: "html", label: "HTML limpo", hint: "Um arquivo só, sem o script do canvas e sem data-fid" },
   { formato: "html", fids: true, label: "HTML com data-fid", hint: "Mantém os ids estáveis (para voltar a editar em outro lugar)" },
   { formato: "pdf", label: "PDF", hint: "Deck: um slide por página em 1920×1080. Site: A4" },
   { formato: "png", label: "PNG", hint: "Deck: o slide atual. Site: a página inteira na largura do viewport" },
+  { formato: "pptx", label: "PowerPoint (PPTX)", hint: "Deck: um slide por página, com o texto de cada um nas notas" },
 ];
 const MINI = 160;   // largura da miniatura de slide (px)
 const ETAPAS: { id: keyof Modelos; label: string; hint: string }[] = [
@@ -129,7 +136,14 @@ export default function DesignView(props: {
   const [chave, setChave] = useState(0);   // força recarregar o iframe (edição de texto recusada)
   const [modo, setModo] = useState<Modo>("view");
   const [selecao, setSelecao] = useState<Selecao | null>(null);
-  const [aba, setAba] = useState<"chat" | "comentarios" | "ajustes" | "versoes">("chat");
+  const [aba, setAba] = useState<"chat" | "comentarios" | "ajustes" | "versoes" | "acessibilidade">("chat");
+  const [auditoria, setAuditoria] = useState<{ itens: Problema[] | null; escopo: string }>({ itens: null, escopo: "" });
+  const [fluxo, setFluxo] = useState(false);                // protótipo: o mapa das telas no lugar do canvas
+  const [apresentando, setApresentando] = useState(false);  // deck em tela cheia
+  const [comparar, setComparar] = useState<number | null>(null);   // versão aberta ao lado da atual
+  const [htmlVersoes, setHtmlVersoes] = useState<Record<number, string>>({});
+  const palco = useRef<HTMLDivElement>(null);
+  const telaCheia = useRef<HTMLIFrameElement>(null);
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
   const [refs, setRefs] = useState<Referencia[]>([]);     // anexos que vão no próximo pedido
   const [anexando, setAnexando] = useState("");
@@ -223,6 +237,9 @@ export default function DesignView(props: {
       ouvindo.current = 0;
       setGeracao(null);
       setSelecao(null);
+      setComparar(null);
+      setHtmlVersoes({});
+      setFluxo(false);
     }
     carregar(props.conv);
   }, [props.conv, carregar]);
@@ -286,11 +303,11 @@ export default function DesignView(props: {
   const modelosDe = () => ({ ...prefs.modelos });
 
   async function pedir(extra: { rota?: string; secao?: string; comentarios?: number[]; pedido?: string;
-                                 respostas?: { pergunta: string; resposta: string }[] } = {}) {
+                                 respostas?: { pergunta: string; resposta: string }[]; fids?: string[] } = {}) {
     const pedido = (extra.pedido ?? texto).trim();
-    if (rodando || (!pedido && !extra.comentarios?.length && extra.rota !== "secao" && extra.rota !== "tweaks")) return;
+    if (rodando || (!pedido && !extra.comentarios?.length && !["secao", "tweaks", "variacoes"].includes(extra.rota ?? ""))) return;
     const anexos = refs;
-    const fids = extra.comentarios || extra.rota === "secao" ? [] : selecao?.itens.map((i) => i.fid) ?? [];
+    const fids = extra.fids ?? (extra.comentarios || extra.rota === "secao" || extra.rota === "variacoes" ? [] : selecao?.itens.map((i) => i.fid) ?? []);
     try {
       const id = await props.ensureConversation();
       if (extra.pedido === undefined) setTexto("");
@@ -364,6 +381,43 @@ export default function DesignView(props: {
     if (arquivo.current) {
       arquivo.current.accept = tipo === "imagem" ? "image/*" : ".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md";
       arquivo.current.click();
+    }
+  }
+
+  /** Imagem colada (print copiado) ou arrastada para o chat entra como referência. */
+  function soltarArquivos(lista: FileList | File[] | null | undefined) {
+    const arqs = [...(lista ?? [])];
+    for (const f of arqs) anexar(f);
+    return arqs.length > 0;
+  }
+
+  async function escolherVariacao(mid: number, indice: number) {
+    if (!projeto) return;
+    try {
+      const r = await api.post<{ projeto: Projeto; fim: Geracao | null }>(`/design/${projeto.conv_id}/variacao`, { message_id: mid, indice });
+      mostrar(r.projeto, r.fim);
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  const auditar = () => {
+    setAuditoria((a) => ({ ...a, itens: null }));
+    paraIframe(janela(), { type: "auditar" });
+  };
+
+  const buscandoVersao = useRef(new Set<string>());
+  async function htmlDaVersao(v: number) {
+    const chave = `${projeto?.conv_id}:${v}`;
+    if (!projeto || htmlVersoes[v] || buscandoVersao.current.has(chave)) return;
+    buscandoVersao.current.add(chave);
+    try {
+      const r = await api.get<{ html: string }>(`/design/${projeto.conv_id}/versao/${v}`);
+      setHtmlVersoes((m) => ({ ...m, [v]: r.html }));
+    } catch {
+      /* a miniatura fica vazia; o resto da tela segue */
+    } finally {
+      buscandoVersao.current.delete(chave);
     }
   }
 
@@ -496,7 +550,7 @@ export default function DesignView(props: {
   }
 
   /** Baixa a versão atual (o backend gera PDF/PNG num Chromium headless, sem rede). */
-  async function exportar(formato: "html" | "pdf" | "png", fids = false) {
+  async function exportar(formato: "html" | "pdf" | "png" | "pptx", fids = false) {
     if (!projeto) return;
     setAbrirExport(false);
     setExportando(formato);
@@ -537,12 +591,14 @@ export default function DesignView(props: {
       paraIframe(janela(), { type: "setMode", mode: modo });
       paraIframe(janela(), { type: "setSlide", n: slides.atual });
       if (tela) paraIframe(janela(), { type: "setTela", nome: tela });
+      if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
     } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "tela") setTela(m.nome);
+    else if (m.type === "auditoria") setAuditoria({ itens: m.itens, escopo: m.escopo });
     else if (m.type === "pin") {
       setAba("comentarios");
       setPinAtivo(m.n);
@@ -621,7 +677,12 @@ export default function DesignView(props: {
             Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{pendentes.length}</span>}
           </button>
           <button className={abaBtn(aba === "ajustes")} onClick={() => setAba("ajustes")}>Ajustes</button>
-          <button className={abaBtn(aba === "versoes")} onClick={() => setAba("versoes")}>Versões{!!total && <span className="ml-1 text-faint">{total}</span>}</button>
+          <button className={abaBtn(aba === "acessibilidade")} title="Acessibilidade (sem IA)"
+                  onClick={() => { setAba("acessibilidade"); auditar(); }}>
+            A11y{!!auditoria.itens?.filter((x) => x.gravidade === "erro").length && aba !== "acessibilidade" &&
+              <span className="ml-1 rounded-full bg-red-500/20 px-1.5 text-[10.5px] text-red-300">{auditoria.itens!.filter((x) => x.gravidade === "erro").length}</span>}
+          </button>
+          <button className={abaBtn(aba === "versoes")} onClick={() => { setAba("versoes"); versoes.slice(0, 12).forEach((m) => htmlDaVersao(m.versao!)); }}>Versões{!!total && <span className="ml-1 text-faint">{total}</span>}</button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
           {aba === "chat" && (
@@ -677,6 +738,9 @@ export default function DesignView(props: {
                     {m.perguntas?.length ? (
                       <DesignPerguntas perguntas={m.perguntas} desabilitado={rodando}
                                        onResponder={(respostas) => pedir({ pedido: mensagens[i - 1]?.content ?? "", respostas: respostas.length ? respostas : [{ pergunta: "Perguntas", resposta: "(sem respostas: siga o pedido)" }] })} />
+                    ) : m.variacoes?.length && projeto?.html ? (
+                      <DesignVariacoes html={projeto.html} variacoes={m.variacoes} escolhida={m.escolhida} desabilitado={rodando}
+                                       onEscolher={(idx) => escolherVariacao(m.id, idx)} />
                     ) : m.plano ? (
                       <DesignPlano plano={m.plano} desabilitado={rodando} onGerar={(p) => aprovar(m.id, p)} />
                     ) : m.versao ? (
@@ -775,14 +839,36 @@ export default function DesignView(props: {
               pastaPadrao={props.pastaPadrao}
               selecionados={selecao?.itens.length ?? 0}
               onCriarComIA={() => pedir({ rota: "tweaks" })}
+              onVariacoes={() => pedir({ rota: "variacoes" })}
             />
+          )}
+
+          {aba === "acessibilidade" && (
+            <DesignAcessibilidade itens={auditoria.itens} escopo={auditoria.escopo} desabilitado={rodando || !projeto?.html}
+                                  onVerificar={auditar}
+                                  onMostrar={(fid) => { selecionar([fid]); paraIframe(janela(), { type: "scrollTo", fid }); }}
+                                  onCorrigir={(itens) => pedir({ pedido: "Corrija estes problemas de acessibilidade sem mudar o visual além do necessário:\n"
+                                    + itens.map((x) => `- ${x.rotulo}: ${x.detalhe}`).join("\n"), fids: [...new Set(itens.map((x) => x.fid!))] })} />
           )}
 
           {aba === "versoes" && (
             <div className="flex flex-col gap-1 py-2">
               {versoes.map((m) => (
                 <div key={m.id} className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] ${m.versao === atual ? "bg-accent-soft text-accent-text" : "text-fg-2 hover:bg-raised"}`}>
-                  <button onClick={() => ir(m.versao!)} disabled={rodando} className="min-w-0 flex-1 truncate text-left">{m.content}</button>
+                  <button onClick={() => ir(m.versao!)} disabled={rodando} className="shrink-0" title="Mostrar esta versão">
+                    {htmlVersoes[m.versao!] ? <Miniatura html={htmlVersoes[m.versao!]} titulo={`Miniatura da v${m.versao}`} />
+                      : <div className="grid h-[163px] w-[243px] place-items-center rounded-lg border border-dashed border-line text-[11px] text-faint"
+                             ref={(el) => { if (el) htmlDaVersao(m.versao!); }}>v{m.versao}</div>}
+                  </button>
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <button onClick={() => ir(m.versao!)} disabled={rodando} className="truncate text-left">{m.content}</button>
+                    {m.versao !== atual && (
+                      <button onClick={() => { setComparar(m.versao!); htmlDaVersao(m.versao!); }}
+                              className={`self-start rounded border px-1.5 text-[11px] ${comparar === m.versao ? "border-accent-line text-accent-text" : "border-line hover:bg-raised"}`}>
+                        {comparar === m.versao ? "comparando" : `comparar com a v${atual}`}
+                      </button>
+                    )}
+                  </div>
                   <span className="shrink-0 font-mono text-[10.5px] text-faint">{m.rota ? ROTULO_ROTA[m.rota] ?? m.rota : ""}</span>
                   {m.versao !== atual && m.versao !== total && (
                     <button onClick={() => restaurar(m.versao!)} disabled={rodando} title="Copia esta versão para o topo do histórico"
@@ -810,6 +896,9 @@ export default function DesignView(props: {
             </div>
           )}
           <input ref={arquivo} type="file" hidden aria-label="Anexar referência" onChange={(e) => { const f = e.target.files?.[0]; if (f) anexar(f); e.target.value = ""; }} />
+          <div onDragOver={(e) => { if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
+               onDrop={(e) => { if (soltarArquivos(e.dataTransfer.files)) e.preventDefault(); }}
+               onPaste={(e) => { if (soltarArquivos([...e.clipboardData.files])) e.preventDefault(); }}>
           <CaixaPrompt>
             {(!!refs.length || !!anexando) && (
               <div className="mb-1.5 flex flex-wrap gap-1.5">
@@ -907,6 +996,7 @@ export default function DesignView(props: {
               </DireitaPrompt>
             </RodapePrompt>
           </CaixaPrompt>
+          </div>
         </div>
       </div>
 
@@ -943,6 +1033,18 @@ export default function DesignView(props: {
               ))}
             </div>
           ) : null}
+          {!!telas.length && (
+            <button onClick={() => setFluxo((v) => !v)} aria-pressed={fluxo} title="Mapa das telas e de quem leva a quem"
+                    className={`rounded-lg border px-2 py-1 ${fluxo ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:bg-raised"}`}>
+              Fluxo
+            </button>
+          )}
+          {!!nSlides && (
+            <button onClick={() => setApresentando(true)} title="Tela cheia, ← → para passar"
+                    className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
+              Apresentar
+            </button>
+          )}
           {telas.length ? null : nSlides ? (
             // deck: navegação (← → também funcionam dentro do canvas)
             <>
@@ -982,7 +1084,7 @@ export default function DesignView(props: {
             </button>
             {abrirExport && (
               <div className="absolute top-full right-0 z-30 mt-1 w-64 rounded-xl border border-line bg-surface p-1 shadow-xl">
-                {EXPORTS.map((x) => (
+                {EXPORTS.filter((x) => x.formato !== "pptx" || nSlides).map((x) => (
                   <button key={x.label} onClick={() => exportar(x.formato, x.fids)}
                           className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
                     <span className="block text-[13px] text-fg">{x.label}{x.formato === "png" && nSlides ? ` · slide ${slides.atual}` : ""}</span>
@@ -1026,7 +1128,23 @@ export default function DesignView(props: {
           )}
         </nav>
         <div className="flex min-h-0 flex-1 justify-center overflow-hidden p-3">
-          {html ? (
+          {comparar && htmlVersoes[comparar] && srcBase ? (
+            <div className="flex size-full gap-3">
+              {[[comparar, htmlVersoes[comparar]], [atual, srcBase]].map(([v, h]) => (
+                <div key={String(v)} className="flex min-w-0 flex-1 flex-col gap-1.5">
+                  <div className="flex items-center gap-2 text-xs text-muted">
+                    <span className="font-mono text-fg">v{v}</span>
+                    <span className="truncate">{versoes.find((m) => m.versao === v)?.content.replace(/^v\d+: /, "")}</span>
+                    {v === comparar && <button onClick={() => setComparar(null)} className="ml-auto rounded border border-line px-1.5 hover:bg-raised">fechar</button>}
+                  </div>
+                  <iframe title={`Versão ${v}`} sandbox="" srcDoc={docEstatico(h as string)} className="min-h-0 flex-1 rounded-lg border border-line bg-white" />
+                </div>
+              ))}
+            </div>
+          ) : fluxo && telas.length && srcBase ? (
+            <DesignFluxo html={projeto?.html ?? srcBase} atual={tela || telas[0]} onFechar={() => setFluxo(false)}
+                         onIr={(t) => { setFluxo(false); setTimeout(() => paraIframe(janela(), { type: "setTela", nome: t }), 150); }} />
+          ) : html ? (
             <iframe key={chave} ref={iframe} title="Canvas do design" sandbox="allow-scripts" srcDoc={paraCanvas(html)}
                     style={largura ? { width: largura } : undefined}
                     className={`h-full max-w-full rounded-lg border border-line ${largura ? "" : "w-full"} ${nSlides ? "bg-[#3a3a3a]" : "bg-white"}`} />
@@ -1036,6 +1154,10 @@ export default function DesignView(props: {
             </div>
           )}
         </div>
+        {apresentando && srcBase && (
+          <Apresentacao html={projeto?.html ?? srcBase} slide={slides.atual} total={slides.total || nSlides} palco={palco} iframe={telaCheia}
+                        onFim={(n) => { setApresentando(false); irSlide(n); }} />
+        )}
         {!!miniaturas.length && (
           <div className="flex shrink-0 gap-2 overflow-x-auto border-t border-line px-3 py-2" aria-label="Slides">
             {miniaturas.map((doc, i) => (
@@ -1050,6 +1172,57 @@ export default function DesignView(props: {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Deck em tela cheia: o mesmo canvas (escala e navegação do inspetor), sem barras; ← → e Esc. */
+function Apresentacao(props: { html: string; slide: number; total: number; palco: React.RefObject<HTMLDivElement | null>;
+                               iframe: React.RefObject<HTMLIFrameElement | null>; onFim: (slide: number) => void }) {
+  const [n, setN] = useState(props.slide);
+  const fim = useRef(props.onFim);
+  fim.current = props.onFim;
+  const nAtual = useRef(n);
+  nAtual.current = n;
+  const vai = (k: number) => {
+    const alvo = Math.max(1, Math.min(props.total, k));
+    setN(alvo);
+    paraIframe(props.iframe.current?.contentWindow, { type: "setSlide", n: alvo });
+  };
+  useEffect(() => {
+    props.palco.current?.requestFullscreen?.().catch(() => {});
+    const saiu = () => { if (!document.fullscreenElement) fim.current(nAtual.current); };
+    const tecla = (e: KeyboardEvent) => {
+      if (e.key === "Escape") fim.current(nAtual.current);
+      else if (["ArrowRight", "PageDown", " "].includes(e.key)) vai(nAtual.current + 1);
+      else if (["ArrowLeft", "PageUp"].includes(e.key)) vai(nAtual.current - 1);
+    };
+    const doCanvas = (e: MessageEvent) => {
+      const m = lerMensagem(e, props.iframe.current?.contentWindow);
+      if (m?.type === "ready") paraIframe(props.iframe.current?.contentWindow, { type: "setSlide", n: nAtual.current });
+      else if (m?.type === "slides") setN(m.atual);
+      else if (m?.type === "atalho" && m.acao === "sair") fim.current(nAtual.current);
+    };
+    document.addEventListener("fullscreenchange", saiu);
+    window.addEventListener("keydown", tecla);
+    window.addEventListener("message", doCanvas);
+    return () => {
+      document.removeEventListener("fullscreenchange", saiu);
+      window.removeEventListener("keydown", tecla);
+      window.removeEventListener("message", doCanvas);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div ref={props.palco} className="group fixed inset-0 z-50 bg-black">
+      <iframe ref={props.iframe} title="Apresentação" sandbox="allow-scripts" srcDoc={paraCanvas(props.html)} className="size-full border-0"
+              onLoad={() => props.iframe.current?.focus()} />
+      <div className="absolute inset-x-0 bottom-3 flex items-center justify-center gap-3 opacity-0 transition-opacity group-hover:opacity-100">
+        <button onClick={() => vai(n - 1)} className="rounded-full bg-white/15 px-3 py-1 text-sm text-white hover:bg-white/25">←</button>
+        <span className="font-mono text-sm text-white/80">{n} / {props.total}</span>
+        <button onClick={() => vai(n + 1)} className="rounded-full bg-white/15 px-3 py-1 text-sm text-white hover:bg-white/25">→</button>
+        <button onClick={() => props.onFim(n)} className="rounded-full bg-white/15 px-3 py-1 text-sm text-white hover:bg-white/25">Sair · Esc</button>
       </div>
     </div>
   );

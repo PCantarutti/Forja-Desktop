@@ -119,6 +119,7 @@ export default function DesignAjustes(props: {
   pastaPadrao: string;
   selecionados: number;          // elementos selecionados no canvas: os ajustes da IA focam neles
   onCriarComIA: () => void;
+  onVariacoes: () => void;
 }) {
   const originais = useMemo(() => lerTokens(props.html), [props.html]);
   const tweaks = useMemo(() => lerTweaks(props.html), [props.html]);
@@ -159,6 +160,11 @@ export default function DesignAjustes(props: {
         <div className="mb-1.5 flex items-center gap-2">
           <h3 className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Criados pela IA</h3>
           <span className="flex-1" />
+          <button disabled={props.desabilitado} onClick={props.onVariacoes}
+                  title="Três direções visuais (só tokens) para ver lado a lado no chat e escolher"
+                  className="rounded-md border border-line px-2 py-0.5 text-[11.5px] text-fg hover:bg-raised disabled:opacity-40">
+            Ver 3 variações
+          </button>
           <button disabled={props.desabilitado} onClick={props.onCriarComIA}
                   title="A IA cria sliders para esta página (ou para os elementos selecionados). O texto do campo, se houver, diz o foco."
                   className="rounded-md border border-line px-2 py-0.5 text-[11.5px] text-fg hover:bg-raised disabled:opacity-40">

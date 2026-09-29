@@ -1776,6 +1776,28 @@ def design_sistema_aplicar(conv_id: int, sid: str):
         raise HTTPException(400, str(e))
 
 
+class DesignVariacaoBody(BaseModel):
+    message_id: int
+    indice: int
+
+
+@app.post("/api/design/{conv_id}/variacao")
+def design_variacao(conv_id: int, body: DesignVariacaoBody):
+    """Uma das variações propostas vira versão (só tokens, sem IA)."""
+    try:
+        return design.escolher_variacao(conv_id, body.message_id, body.indice)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/design/{conv_id}/versao/{versao}")
+def design_versao(conv_id: int, versao: int):
+    try:
+        return design.versao_html(conv_id, versao)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
 @app.get("/api/design/{conv_id}/exportar")
 async def design_exportar(conv_id: int, formato: str = "html", fids: bool = False, slide: int = 1,
                           viewport: str = "desktop"):
