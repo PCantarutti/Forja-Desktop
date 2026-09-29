@@ -3,8 +3,13 @@ visivelmente errado e as seções apontadas são reescritas uma vez (como o Agen
 import json
 import re
 
+import pytest
+
 from app import design
 from tests.test_design_fase3 import M, PLANO, _esperar, _fake, _projeto, pastas  # noqa: F401
+from tests.test_design_revisao import _chromium
+
+pytestmark = pytest.mark.skipif(not _chromium(), reason="sem Chromium headless")
 
 
 def _secao(nome: str, conserto: bool = False) -> str:
