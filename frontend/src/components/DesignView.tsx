@@ -9,6 +9,7 @@ import DesignAtividade from "./DesignAtividade";
 import DesignCamadas from "./DesignCamadas";
 import DesignEditar from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
+import DesignRevisao, { type ProblemaVisual, type Revisao } from "./DesignRevisao";
 import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
@@ -118,13 +119,14 @@ const filhoMaisNovo = (pais: Map<number, number>, v: number) => Math.max(0, ...[
 const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
-type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean };
+type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean;
+                      revisarVisao?: boolean; revisarAuto?: boolean };
 
 function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (p?.modelos?.geracao?.model) return { modelos: { plano: par, edicao: par, ...p.modelos }, esforco: p.esforco ?? "baixo", sistema: p.sistema ?? "" };
+    if (p?.modelos?.geracao?.model) return { ...p, modelos: { plano: par, edicao: par, ...p.modelos }, esforco: p.esforco ?? "baixo", sistema: p.sistema ?? "" };
     const antigo = JSON.parse(localStorage.getItem("forja.design.modelo") ?? "null");   // fase 1: um modelo só
     if (antigo?.model) return { modelos: { plano: antigo, geracao: antigo, edicao: antigo }, esforco: "baixo" };
   } catch {
@@ -168,6 +170,9 @@ export default function DesignView(props: {
   const [abrirZoom, setAbrirZoom] = useState(false);
   const [abrirSalvar, setAbrirSalvar] = useState(false);
   const [camadas, setCamadas] = useState(false);
+  const [revisao, setRevisao] = useState<Revisao | null>(null);
+  const [revisando, setRevisando] = useState(false);
+  const depoisDeGerar = useRef<() => void>(() => {});
   // largura (px de CSS) em que a página está à vista: decide se a edição vale para Desktop, Tablet ou Celular
   const [vwCanvas, setVwCanvas] = useState(0);
   const [nosCamadas, setNosCamadas] = useState<NoArvore[]>([]);
@@ -259,6 +264,7 @@ export default function DesignView(props: {
         setDocVivo("");
         const fim = ultimoEvento.current as Geracao | null;   // escrito no callback do SSE
         carregar(conv, fim?.status === "ok" ? fim : null);
+        if (fim?.status === "ok" && fim.versao) depoisDeGerar.current();
       }
     }
   }, [carregar]);
@@ -578,6 +584,37 @@ export default function DesignView(props: {
     }
   }
 
+  /** Revisão visual (3 larguras, Chromium no backend); com `fila`, os achados já viram comentários. */
+  async function revisar(fila: boolean) {
+    if (!projeto || revisando) return;
+    setRevisando(true);
+    try {
+      const m = prefs.revisarVisao !== false ? prefs.modelos.edicao : { provider: "", model: "" };
+      const r = await api.post<Revisao>(`/design/${projeto.conv_id}/revisao`, { ...m, esforco: prefs.esforco, fila });
+      setRevisao(r);
+      if (r.na_fila) carregar(projeto.conv_id);
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setRevisando(false);
+    }
+  }
+  depoisDeGerar.current = () => { if (prefs.revisarAuto !== false) revisar(true); };
+  async function paraFila(ps: ProblemaVisual[]) {
+    if (!projeto) return;
+    try {
+      const r = await api.post<{ na_fila: number; projeto: Projeto }>(`/design/${projeto.conv_id}/revisao/fila`, { problemas: ps });
+      mostrar(r.projeto);
+      setRevisao((x) => (x ? { ...x, na_fila: x.na_fila + r.na_fila } : x));
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  function mostrarProblema(p: ProblemaVisual) {
+    if (viewport !== p.largura) escolherViewport(p.largura);
+    setTimeout(() => { selecionar([p.fid]); paraIframe(janela(), { type: "scrollTo", fid: p.fid }); }, viewport !== p.largura ? 600 : 0);
+  }
+
   /** Modo Editar: apagar, duplicar, mover, trocar imagem e link (no rascunho, sem IA). */
   async function operar(op: "apagar" | "duplicar" | "mover" | "imagem" | "link", fids: string[], extra: { alvo?: string; onde?: string; valor?: string } = {}) {
     await semIA("operacao", { op, fids, ...extra });
@@ -826,9 +863,11 @@ export default function DesignView(props: {
             Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{pendentes.length}</span>}
           </button>
           <button className={abaBtn(aba === "ajustes")} onClick={() => setAba("ajustes")}>Ajustes</button>
-          <button className={abaBtn(aba === "acessibilidade")} title="Acessibilidade (sem IA)"
+          <button className={abaBtn(aba === "acessibilidade")} title="Revisão visual nas 3 larguras e acessibilidade"
                   onClick={() => { setAba("acessibilidade"); auditar(); }}>
-            A11y{!!auditoria.itens?.filter((x) => x.gravidade === "erro").length && aba !== "acessibilidade" &&
+            Revisão{!!revisao?.problemas.length && aba !== "acessibilidade" &&
+              <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{revisao.problemas.length}</span>}
+            {!!auditoria.itens?.filter((x) => x.gravidade === "erro").length && aba !== "acessibilidade" &&
               <span className="ml-1 rounded-full bg-red-500/20 px-1.5 text-[10.5px] text-red-300">{auditoria.itens!.filter((x) => x.gravidade === "erro").length}</span>}
           </button>
           <button className={abaBtn(aba === "versoes")} onClick={() => { setAba("versoes"); versoes.slice(0, 12).forEach((m) => htmlDaVersao(m.versao!)); }}>Versões{!!total && <span className="ml-1 text-faint">{total}</span>}</button>
@@ -992,6 +1031,12 @@ export default function DesignView(props: {
             />
           )}
 
+          {aba === "acessibilidade" && (
+            <DesignRevisao revisao={revisao} rodando={revisando} desabilitado={rodando || !projeto?.html}
+                           modelo={prefs.modelos.edicao.model} comVisao={prefs.revisarVisao !== false} auto={prefs.revisarAuto !== false}
+                           onComVisao={(v) => setPrefs((p) => ({ ...p, revisarVisao: v }))} onAuto={(v) => setPrefs((p) => ({ ...p, revisarAuto: v }))}
+                           onRevisar={revisar} onMostrar={mostrarProblema} onFila={paraFila} />
+          )}
           {aba === "acessibilidade" && (
             <DesignAcessibilidade itens={auditoria.itens} escopo={auditoria.escopo} desabilitado={rodando || !projeto?.html}
                                   onVerificar={auditar}

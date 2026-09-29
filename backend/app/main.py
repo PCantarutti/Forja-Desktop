@@ -30,6 +30,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
+from . import design_revisao
 
 
 settings.apply()
@@ -1726,6 +1727,38 @@ def design_operacao(conv_id: int, body: DesignOperacaoBody):
     """Modo Editar: apagar, duplicar, mover, trocar imagem e link, sem modelo (vai para o rascunho)."""
     try:
         return design.operar(conv_id, body.op, body.fids, body.alvo, body.onde, body.valor)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class DesignRevisaoBody(BaseModel):
+    provider: str = ""
+    model: str = ""        # vazio: só a medição (sem modelo)
+    esforco: str = "baixo"
+    fila: bool = False     # manda os problemas para a fila de comentários
+
+
+@app.post("/api/design/{conv_id}/revisao")
+async def design_revisao_rota(conv_id: int, body: DesignRevisaoBody):
+    """Revisão visual: a página em 3 larguras num Chromium headless (medição) e, se o modelo lê imagem, o olhar dele."""
+    try:
+        r = await design_revisao.revisar(design.projeto(conv_id)["html"], body.provider, body.model, body.esforco)
+        r["na_fila"] = design.comentarios_da_revisao(conv_id, r["problemas"]) if body.fila else 0
+        return r
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class DesignFilaBody(BaseModel):
+    problemas: list[dict]
+
+
+@app.post("/api/design/{conv_id}/revisao/fila")
+def design_revisao_fila(conv_id: int, body: DesignFilaBody):
+    """Achados da revisão escolhidos na tela → comentários pendentes."""
+    try:
+        n = design.comentarios_da_revisao(conv_id, body.problemas[:20], maximo=20)
+        return {"na_fila": n, "projeto": design.projeto(conv_id)}
     except ToolError as e:
         raise HTTPException(400, str(e))
 

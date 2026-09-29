@@ -326,6 +326,28 @@ def comentar(conv_id: int, fids: list[str], texto: str) -> dict:
     return projeto(conv_id)
 
 
+NOME_LARGURA = {"desktop": "Desktop", "tablet": "Tablet", "mobile": "Celular"}
+
+
+def comentarios_da_revisao(conv_id: int, problemas: list[dict], maximo: int = 8) -> int:
+    """Revisão visual → fila de comentários (o que o modelo viu primeiro, depois o medido; sem repetir
+    comentário pendente igual). Devolve quantos entraram."""
+    with db.session() as s:
+        pendentes = {(tuple(x["fids"]), x["texto"]) for x in _comentarios(s, conv_id, _base(s, conv_id)[0]) if x["status"] == "pendente"}
+    n = 0
+    for p in sorted(problemas, key=lambda x: x.get("fonte") != "modelo"):
+        texto = f"Revisão visual ({NOME_LARGURA.get(p.get('largura'), 'Desktop')}): {p.get('detalhe', '')}".strip()[:MAX_COMENTARIO]
+        if n >= maximo or ((p.get("fid"),), texto) in pendentes or not p.get("fid"):
+            continue
+        try:
+            comentar(conv_id, [p["fid"]], texto)
+        except ToolError:
+            continue   # o elemento sumiu entre a revisão e agora
+        pendentes.add(((p["fid"],), texto))
+        n += 1
+    return n
+
+
 def descartar(conv_id: int, comentario_id: int) -> dict:
     with db.session() as s:
         _conv(s, conv_id)
