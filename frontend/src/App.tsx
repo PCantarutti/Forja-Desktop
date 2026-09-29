@@ -2333,6 +2333,18 @@ export default function App() {
               </button>
             </>
           )}
+          {section === "design" && currentId !== null && !!window.forja && (
+            <>
+              <button onClick={() => api.post(`/design/${currentId}/abrir`, { mode: "editor" }).catch((e) => setError(e.message))}
+                      title="Abrir a pasta do projeto no editor" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
+                <ExternalLink className="size-3.5" />
+              </button>
+              <button onClick={() => api.post(`/design/${currentId}/abrir`, { mode: "reveal" }).catch((e) => setError(e.message))}
+                      title="Abrir a pasta do projeto no Explorer" className="rounded-[7px] p-1.5 text-faint hover:bg-raised hover:text-fg">
+                <FolderOpen className="size-3.5" />
+              </button>
+            </>
+          )}
           {agentica && section !== "maestro" && currentId !== null && (
             <div className="ml-1 flex shrink-0 items-center rounded-[9px] border border-line p-0.5 text-xs" role="tablist" aria-label="Visão da conversa">
               {(["chat", "trajetoria"] as const).map((v) => (

@@ -1715,6 +1715,23 @@ def design_estilo(conv_id: int, body: DesignEstiloBody):
         raise HTTPException(400, str(e))
 
 
+class DesignAbrirBody(BaseModel):
+    mode: str = "reveal"   # reveal (Explorer) | editor (VS Code, senão o programa padrão)
+
+
+@app.post("/api/design/{conv_id}/abrir")
+async def design_abrir(conv_id: int, body: DesignAbrirBody):
+    """Botões do cabeçalho: a pasta do projeto no Explorer ou no editor."""
+    try:
+        design.projeto(conv_id)   # valida o projeto e garante a pasta (migra se for antigo)
+        pasta = str(design_repo.raiz(conv_id))
+        return {"opened": await asyncio.to_thread(native.open_path, pasta, "editor" if body.mode == "editor" else "reveal", None)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/design-git")
 def design_git():
     """O Design guarda as versões com o git do sistema: a tela avisa como instalar quando falta."""

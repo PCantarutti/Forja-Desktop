@@ -120,3 +120,16 @@ def test_separar_e_juntar_nao_mudam_o_documento():
     texto, fotos = design_repo.separar(DOC + pequeno)
     assert len(fotos) == 1 and pequeno in texto   # o que é pequeno fica no HTML
     assert design_repo.juntar(texto, fotos.get) == DOC + pequeno
+
+
+def test_botao_abrir_pasta_do_cabecalho(monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    conv = _conv()
+    design._nova_versao(conv, None, DOC, "inicial")
+    abertos = []
+    monkeypatch.setattr(main.native, "open_path", lambda p, modo, linha: abertos.append((p, modo)) or "revelado")
+    c = TestClient(main.app)
+    assert c.post(f"/api/design/{conv}/abrir", json={"mode": "reveal"}).status_code == 200
+    assert c.post(f"/api/design/{conv}/abrir", json={"mode": "editor"}).status_code == 200
+    assert abertos == [(str(design_repo.raiz(conv)), "reveal"), (str(design_repo.raiz(conv)), "editor")]
