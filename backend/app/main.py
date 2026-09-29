@@ -1701,13 +1701,14 @@ def design_texto(conv_id: int, body: DesignTextoBody):
 class DesignEstiloBody(BaseModel):
     fids: list[str]
     estilos: dict[str, str]
+    largura: str = "desktop"   # tablet/mobile: regra @media só daquela largura para baixo
 
 
 @app.post("/api/design/{conv_id}/estilo")
 def design_estilo(conv_id: int, body: DesignEstiloBody):
     """Modo Editar do canvas: propriedades no style="" dos elementos, sem modelo."""
     try:
-        return design.editar_estilo(conv_id, body.fids, body.estilos)
+        return design.editar_estilo(conv_id, body.fids, body.estilos, body.largura)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

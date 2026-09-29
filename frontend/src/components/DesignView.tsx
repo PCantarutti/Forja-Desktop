@@ -160,6 +160,8 @@ export default function DesignView(props: {
   const [abrirZoom, setAbrirZoom] = useState(false);
   const [abrirSalvar, setAbrirSalvar] = useState(false);
   const [camadas, setCamadas] = useState(false);
+  // largura (px de CSS) em que a página está à vista: decide se a edição vale para Desktop, Tablet ou Celular
+  const [vwCanvas, setVwCanvas] = useState(0);
   const [nosCamadas, setNosCamadas] = useState<NoArvore[]>([]);
   const [nomeVersao, setNomeVersao] = useState("");
   const [comparar, setComparar] = useState<number | null>(null);   // versão aberta ao lado da atual
@@ -666,6 +668,16 @@ export default function DesignView(props: {
   };
   const alternarInspecao = () => setModo((m) => (m === "inspect" ? "view" : "inspect"));
   const alternarComentario = () => setModo((m) => (m === "comment" ? "view" : "comment"));
+  const escopo: "desktop" | "tablet" | "mobile" = vwCanvas && vwCanvas <= 480 ? "mobile" : vwCanvas && vwCanvas <= 820 ? "tablet" : "desktop";
+  const escopoRef = useRef(escopo);
+  escopoRef.current = escopo;
+  useEffect(() => {
+    const el = iframe.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setVwCanvas(el.offsetWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [chave, srcBase, modo]);
   const alternarEdicao = () => setModo((m) => (m === "edit" ? "view" : "edit"));
 
   // Mensagens do canvas. Os handlers mudam a cada render; o ouvinte (fixo) chama o mais recente.
@@ -686,7 +698,7 @@ export default function DesignView(props: {
     else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect, estilo: m.estilo, href: m.href } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
     else if (m.type === "mover") operar("mover", m.fids, { alvo: m.alvo, onde: m.onde });
-    else if (m.type === "redimensionar") semIA("estilo", { fids: [m.fid], estilos: {
+    else if (m.type === "redimensionar") semIA("estilo", { fids: [m.fid], largura: escopoRef.current, estilos: {
       ...(m.w ? { width: `${m.w}px` } : {}), ...(m.h ? { height: `${m.h}px` } : {}) } });
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "tela") setTela(m.nome);
@@ -1447,7 +1459,8 @@ export default function DesignView(props: {
           <DesignEditar key={selecao.itens.map((i) => i.fid).join()} n={selecao.itens.length} estilo={selecao.estilo}
                         rotulo={rotulo(selecao.itens[selecao.itens.length - 1] ?? { tag: selecao.tag, cls: "" })}
                         onPrevia={(estilos) => paraIframe(janela(), { type: "setEstilo", fids: selecao.itens.map((i) => i.fid), estilos })}
-                        onSalvar={(estilos) => semIA("estilo", { fids: selecao.itens.map((i) => i.fid), estilos })}
+                        onSalvar={(estilos) => semIA("estilo", { fids: selecao.itens.map((i) => i.fid), estilos, largura: escopoRef.current })}
+                        escopo={escopo} larguraVista={vwCanvas}
                         tag={selecao.tag} href={selecao.href}
                         onOperar={(op, valor) => operar(op, selecao.itens.map((i) => i.fid), { valor })}
                         onFechar={() => setModo("view")} />

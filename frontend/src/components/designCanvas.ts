@@ -139,7 +139,9 @@ function inspetor() {
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, w: r.width, h: r.height };
   };
-  const item = (e: Element) => ({ fid: e.getAttribute("data-fid") || "", tag: e.tagName.toLowerCase(), cls: (e.getAttribute("class") || "").trim() });
+  // fx-<fid> é a classe que o modo Editar põe para as regras por largura: não é do design
+  const classes = (e: Element) => (e.getAttribute("class") || "").split(/\s+/).filter((c) => c && !c.startsWith("fx-"));
+  const item = (e: Element) => ({ fid: e.getAttribute("data-fid") || "", tag: e.tagName.toLowerCase(), cls: classes(e).join(" ") });
   const caminho = (el: Element) => {
     const out = [];
     for (let e: Element | null = el; e && e !== document.documentElement; e = e.parentElement)
@@ -528,11 +530,11 @@ function inspetor() {
       // tag dentro do mesmo tipo de pai
       const base = porFid(d.fid);
       if (base) {
-        const cls = (base.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).sort().join(" ");
+        const cls = classes(base).sort().join(" ");
         const paiCls = (base.parentElement?.getAttribute("class") || "").trim();
         const iguais = [...document.querySelectorAll(base.tagName)].filter((el) => {
           if (!el.hasAttribute("data-fid") || camada.contains(el)) return false;
-          const c = (el.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).sort().join(" ");
+          const c = classes(el).sort().join(" ");
           return cls ? c === cls : !c && (el.parentElement?.getAttribute("class") || "").trim() === paiCls;
         }).slice(0, 60).map((el) => el.getAttribute("data-fid")!);
         seleciona([d.fid, ...iguais.filter((f) => f !== d.fid)]);
@@ -581,7 +583,7 @@ function inspetor() {
         if (!el) continue;
         for (const [k, v] of Object.entries(d.estilos as Record<string, unknown>))
           if (!PROPS.includes(k) || typeof v !== "string") continue;
-          else if (v) el.style.setProperty(k, v);
+          else if (v) el.style.setProperty(k, v, "important");   // vence as regras @media já salvas
           else el.style.removeProperty(k);
       }
       desenha();

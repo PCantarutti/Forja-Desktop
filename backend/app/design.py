@@ -501,43 +501,103 @@ ESTILOS = ("color", "background-color", "font-size", "font-weight", "font-family
            "text-align", "padding", "margin", "border-radius", "border", "width", "height", "opacity", "gap")
 
 
-def editar_estilo(conv_id: int, fids: list[str], estilos: dict) -> dict:
-    """Painel do modo Editar: as propriedades entram no style="" de cada elemento (valor vazio tira)."""
+# Estilo por largura: Tablet e Celular não vão no style="" (valeria em todas as larguras), e sim num
+# bloco próprio com @media, por classe fx-<fid> (a classe sobrevive ao export; o data-fid não) e com
+# !important, para vencer o style="" do Desktop. A ordem do bloco (tablet antes) deixa o celular ganhar.
+LARGURAS = {"tablet": 820, "mobile": 480}
+_BLOCO_RESP = re.compile(r"<style data-forja-responsivo[^>]*>(.*?)</style>\s*", re.S)
+_MEDIA = re.compile(r"@media \(max-width: (\d+)px\) \{(.*?)\n\}", re.S)
+_REGRA = re.compile(r"\.fx-(\w+) \{([^}]*)\}")
+
+
+def _decl(texto: str) -> dict:
+    out = {}
+    for parte in html_lib.unescape(texto).replace('"', "'").split(";"):
+        if ":" in parte:
+            k, v = parte.split(":", 1)
+            out[k.strip().lower()] = v.replace("!important", "").strip()
+    return out
+
+
+def _responsivo(html: str) -> dict:
+    """{largura: {fid: {prop: valor}}} do bloco que o painel mantém."""
+    m = _BLOCO_RESP.search(html)
+    out: dict = {}
+    for media in _MEDIA.finditer(m.group(1) if m else ""):
+        out[int(media.group(1))] = {r.group(1): _decl(r.group(2)) for r in _REGRA.finditer(media.group(2))}
+    return out
+
+
+def _bloco(regras: dict, fid_bloco: str | None) -> str:
+    partes = []
+    for largura in sorted(regras, reverse=True):   # 820 antes de 480: o menor vem depois e ganha
+        linhas = [f"  .fx-{f} {{ " + " ".join(f"{k}: {v} !important;" for k, v in d.items()) + " }"
+                  for f, d in regras[largura].items() if d]
+        if linhas:
+            partes.append(f"@media (max-width: {largura}px) {{\n" + "\n".join(linhas) + "\n}")
+    if not partes:
+        return ""
+    fid = f' data-fid="{fid_bloco}"' if fid_bloco else ""
+    return f"<style data-forja-responsivo{fid}>\n/* estilos por largura (modo Editar do Forja) */\n" + "\n".join(partes) + "\n</style>\n"
+
+
+def editar_estilo(conv_id: int, fids: list[str], estilos: dict, largura: str = "desktop") -> dict:
+    """Painel do modo Editar: no Desktop as propriedades entram no style="" de cada elemento; em Tablet
+    e Celular, numa regra @media só daquela largura para baixo (valor vazio tira)."""
     if not fids or not isinstance(estilos, dict) or not estilos:
         raise ToolError("Nada para mudar.")
+    if largura not in ("desktop", *LARGURAS):
+        raise ToolError("largura deve ser desktop, tablet ou mobile.")
     for k, v in estilos.items():
         if k not in ESTILOS:
             raise ToolError(f"Propriedade que o painel não edita: {k}")
         # nada que feche a declaração, saia do atributo ou busque rede
-        if not isinstance(v, str) or len(v) > 200 or re.search(r"""[;{}<>"\\]|url\s*\(|expression|@import""", v, re.I):
+        if not isinstance(v, str) or len(v) > 200 or re.search(r"""[;{}<>"\\]|url\s*\(|expression|@import|!""", v, re.I):
             raise ToolError(f"Valor inválido para {k}.")
 
     def faz(html: str):
         mudou = []
+        if largura != "desktop":
+            regras = _responsivo(html)
+            por_fid = regras.setdefault(LARGURAS[largura], {})
         for fid in dict.fromkeys(fids):
             e = design_html.por_fid(design_html.indexar(html), fid)
             if not e or e["tag"] in design_html.SEM_FID | {"style"}:
                 raise ValueError("Elemento não encontrado na versão atual.")
             abre = html[e["ini"]:e["fim_tag"]]
-            m = re.search(r"""\sstyle\s*=\s*("([^"]*)"|'([^']*)')""", abre, re.I)
-            decl = {}
-            atual = html_lib.unescape((m.group(2) or m.group(3) or "") if m else "").replace('"', "'")
-            for parte in atual.split(";"):
-                if ":" in parte:
-                    k, v = parte.split(":", 1)
-                    decl[k.strip().lower()] = v.strip()
+            if largura == "desktop":
+                m = re.search(r"""\sstyle\s*=\s*("([^"]*)"|'([^']*)')""", abre, re.I)
+                decl = _decl((m.group(2) or m.group(3) or "") if m else "")
+                novo = abre
+            else:
+                decl = por_fid.setdefault(fid, {})
+                classes = (e["attrs"].get("class") or "").split()
+                novo = abre if f"fx-{fid}" in classes else design_html._attr(abre, "class", " ".join([*classes, f"fx-{fid}"]))
             for k, v in estilos.items():
                 if v.strip():
                     decl[k] = v.strip()
                 else:
                     decl.pop(k, None)
-            estilo = "; ".join(f"{k}: {v}" for k, v in decl.items()) or None
-            html = html[:e["ini"]] + design_html._attr(abre, "style", estilo) + html[e["fim_tag"]:]
+            if largura == "desktop":
+                novo = design_html._attr(abre, "style", "; ".join(f"{k}: {v}" for k, v in decl.items()) or None)
+            html = html[:e["ini"]] + novo + html[e["fim_tag"]:]
             mudou.append(fid)
+        if largura != "desktop":
+            m = _BLOCO_RESP.search(html)
+            fid_bloco = re.search(r'data-fid="(\w+)"', m.group(0)[:200]).group(1) if m and 'data-fid="' in m.group(0)[:200] else None
+            bloco = _bloco(regras, fid_bloco)
+            if m:
+                html = html[:m.start()] + bloco + html[m.end():]
+            else:
+                corte = html.lower().rfind("</head>")
+                html = html[:corte] + bloco + html[corte:] if corte >= 0 else bloco + html
+            # o <style> já existia (tem fid): troca por patch; o primeiro bloco obriga o canvas a recarregar
+            mudou = mudou + [fid_bloco] if fid_bloco and bloco else []
         return html, mudou
     props = ", ".join(estilos)
+    onde = {"desktop": "", "tablet": " só no Tablet e menores", "mobile": " só no Celular"}[largura]
     return _sem_ia(conv_id, faz, f"edição: {_descricao(props, 48)}", "edicao",
-                   [f"{k}: {v or '(removido)'} em {len(fids)} elemento(s) (modo Editar, sem IA)" for k, v in estilos.items()])
+                   [f"{k}: {v or '(removido)'} em {len(fids)} elemento(s){onde} (modo Editar, sem IA)" for k, v in estilos.items()])
 
 
 # Edição direta de estrutura no canvas (modo Editar): nada disso chama modelo.

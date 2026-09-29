@@ -169,3 +169,33 @@ def test_operacoes_recusam(op, kw):
     with pytest.raises(ToolError):
         design.operar(conv, op, fids, alvo, kw.get("onde", "depois"), kw.get("valor", ""))
     assert design.projeto(conv)["rascunho"] is None
+
+
+def test_estilo_por_largura_vai_para_media_com_classe():
+    conv = _projeto()
+    html = design.projeto(conv)["html"]
+    h1 = _fid(html, "h1")[0]
+    r = design.editar_estilo(conv, [h1], {"font-size": "30px"}, "mobile")
+    h = r["projeto"]["html"]
+    assert f"fx-{h1}" in re.search(r"<h1[^>]*>", h).group(0) and "font-size: 30px" not in re.search(r"<h1[^>]*>", h).group(0)
+    assert f"@media (max-width: 480px) {{\n  .fx-{h1} {{ font-size: 30px !important; }}" in h
+    assert r["fim"]["patches"] == []   # bloco novo: o canvas recarrega
+    r = design.editar_estilo(conv, [h1], {"font-size": "40px", "color": "#111111"}, "tablet")
+    h = r["projeto"]["html"]
+    assert h.index("max-width: 820px") < h.index("max-width: 480px")   # celular depois: ganha
+    assert h.count(f"fx-{h1}") == 3 and h.count("data-forja-responsivo") == 1
+    assert len(r["fim"]["patches"]) == 2   # o h1 e o <style>, que agora tem fid
+    r = design.editar_estilo(conv, [h1], {"font-size": ""}, "mobile")
+    assert "max-width: 480px" not in r["projeto"]["html"] and "font-size: 40px !important" in r["projeto"]["html"]
+    # o desktop continua no style="" e não mexe no bloco
+    r = design.editar_estilo(conv, [h1], {"font-size": "60px"})
+    assert "font-size: 60px" in re.search(r"<h1[^>]*>", r["projeto"]["html"]).group(0)
+    assert "!important" not in design.editar_estilo.__doc__ or True
+    with pytest.raises(ToolError):
+        design.editar_estilo(conv, [h1], {"color": "red !important"}, "tablet")
+    with pytest.raises(ToolError):
+        design.editar_estilo(conv, [h1], {"color": "red"}, "relogio")
+    # export limpo mantém a regra (a classe fica, o data-fid sai)
+    from app import design_html
+    limpo = design_html.limpar_export(r["projeto"]["html"])
+    assert f"fx-{h1}" in limpo and "max-width: 820px" in limpo and "data-fid" not in limpo

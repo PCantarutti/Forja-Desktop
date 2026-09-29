@@ -51,6 +51,8 @@ export default function DesignEditar(props: {
   onSalvar: (estilos: Record<string, string>) => void;
   tag: string;
   href: string | null;
+  escopo: "desktop" | "tablet" | "mobile";   // a largura à vista decide onde a edição grava
+  larguraVista: number;
   onOperar: (op: "apagar" | "duplicar" | "imagem" | "link", valor?: string) => void;
   onFechar: () => void;
 }) {
@@ -107,6 +109,13 @@ export default function DesignEditar(props: {
         <button onClick={props.onFechar} title="Sair do modo Editar" className="grid size-6 place-items-center rounded text-muted hover:bg-raised hover:text-fg">
           <X className="size-3.5" />
         </button>
+      </div>
+      <div className={`border-b px-3 py-1.5 text-[11.5px] leading-snug ${props.escopo === "desktop" ? "border-line text-muted" : "border-amber-400/40 bg-amber-500/10 text-amber-200"}`}
+           aria-label="Largura da edição">
+        {props.escopo === "desktop" ? "Vale para todas as larguras (Desktop)."
+          : props.escopo === "tablet" ? "Vale só para Tablet e menores (até 820px)."
+          : "Vale só para Celular (até 480px)."}
+        <span className="text-faint"> Vendo a {Math.round(props.larguraVista)}px; troque Desktop/Tablet/Celular no topo para editar outra largura.</span>
       </div>
       <div className="flex flex-wrap gap-1.5 border-b border-line px-3 py-2">
         <button onClick={() => props.onOperar("duplicar")} title="Duplicar · Ctrl+D" className={acao}>Duplicar</button>
