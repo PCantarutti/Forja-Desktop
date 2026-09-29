@@ -10,6 +10,7 @@ import DesignCamadas from "./DesignCamadas";
 import DesignCaptura, { type Bloco, type Paleta } from "./DesignCaptura";
 import DesignEditar, { PAINEL_FLUTUA_DIR } from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
+import { Divisor } from "./RightPanel";
 import DesignRevisao, { type ProblemaVisual, type Revisao } from "./DesignRevisao";
 import DesignModelos, { type Modelo } from "./DesignModelos";
 import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
@@ -130,7 +131,7 @@ const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
 type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean;
-                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean };
+                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean; chatFracao?: number };
 
 function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
@@ -158,7 +159,9 @@ export default function DesignView(props: {
   pastaPadrao: string;
 }) {
   const [projeto, setProjeto] = useState<Projeto | null>(null);
-  const [git, setGit] = useState<StatusGit | null>(null);   // o Design guarda as versões com o git do sistema
+  const [git, setGit] = useState<StatusGit | null>(null);
+  const raizTela = useRef<HTMLDivElement>(null);
+  const [arrastandoDivisor, setArrastandoDivisor] = useState(false);   // o iframe engoliria o movimento do ponteiro   // o Design guarda as versões com o git do sistema
   const [verificandoGit, setVerificandoGit] = useState(false);
   const [texto, setTexto] = useState("");
   const [geracao, setGeracao] = useState<Geracao | null>(null);
@@ -957,10 +960,19 @@ export default function DesignView(props: {
     );
   }
 
+  // divisor chat | canvas: a fração da largura fica nas preferências; chat ≥ 320px e canvas ≥ 360px
+  const redimensionar = (e: PointerEvent) => {
+    const caixa = raizTela.current?.getBoundingClientRect();
+    if (!caixa) return;
+    const fr = Math.min((caixa.width - 360) / caixa.width, Math.max(320 / caixa.width, (e.clientX - caixa.left) / caixa.width));
+    setPrefs((p) => ({ ...p, chatFracao: Math.round(fr * 1000) / 1000 }));
+  };
+
   return (
-    <div className="flex h-full min-h-0">
+    <div ref={raizTela} className={`flex h-full min-h-0 ${arrastandoDivisor ? "[&_iframe]:pointer-events-none" : ""}`}>
       {/* Esquerda: chat / comentários / versões + composer */}
-      <div className={`flex w-[35%] min-w-[320px] flex-col border-r border-line ${prefs.chatOculto ? "hidden" : ""}`}>
+      <div style={{ width: `${(prefs.chatFracao ?? 0.35) * 100}%` }}
+           className={`flex min-w-[320px] shrink-0 flex-col ${prefs.chatOculto ? "hidden" : ""}`}>
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-3">
           <button className={abaBtn(aba === "chat")} onClick={() => setAba("chat")}>Chat</button>
           <button className={abaBtn(aba === "comentarios")} onClick={() => setAba("comentarios")}>
@@ -1333,6 +1345,13 @@ export default function DesignView(props: {
         </div>
       </div>
 
+      {!prefs.chatOculto && (
+        <div onDoubleClick={() => setPrefs((p) => ({ ...p, chatFracao: 0.35 }))} title="Arraste para mudar a largura · duplo clique volta ao padrão"
+             onPointerDownCapture={() => setArrastandoDivisor(true)}
+             className="flex border-r border-line">
+          <Divisor eixo="x" onArrasto={redimensionar} onFim={() => setArrastandoDivisor(false)} />
+        </div>
+      )}
       {/* Canvas */}
       <div className="@container/canvas flex min-w-0 flex-1 flex-col bg-side">
         {/* Barra do canvas: quatro grupos que nunca quebram por dentro (sem espaço, quebra entre grupos).
