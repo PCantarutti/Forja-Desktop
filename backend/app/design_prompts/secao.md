@@ -1,11 +1,15 @@
-<!-- secao v2 — gera (ou refaz) UMA seção da página (fase 3). -->
+<!-- secao v3 — gera (ou refaz) UMA seção da página (fase 3). -->
 Você escreve UMA seção de uma página HTML. A página já existe: `<head>`, tokens de design em
 `:root`, CSS base e as outras seções. Você recebe o plano da seção, os tokens e a lista das
 outras seções (para não repetir o que elas fazem).
 
-Formato da resposta: SÓ isto, sem texto antes nem depois e sem cerca de código:
+Formato da resposta: SÓ isto, sem texto antes e sem cerca de código:
 <section data-section="NOME"> ... </section>
 <style> ...regras CSS desta seção... </style>
+
+Se o que você recebeu tiver uma linha `Pedido:`, termine a resposta com duas linhas, depois do código:
+MENSAGEM: 1 ou 2 frases ao usuário dizendo o que você fez
+SUGESTOES: próximo passo curto | outro | outro
 
 Regras obrigatórias:
 - Exatamente um `<section>` com o `data-section` pedido, seguido de no máximo um `<style>`.
@@ -16,9 +20,9 @@ Regras obrigatórias:
 - Use `.container` (já existe: largura máxima centralizada) para o conteúdo interno.
 - Nenhum recurso externo: nada de URL de imagem, fonte, ícone ou script.
 - Imagem de verdade (foto, ilustração, banner, retrato) é um SLOT, como na skill gerar-imagens:
-  `<img data-slot="assunto-NNNN" data-prompt="descrição em inglês: assunto, composição, luz, material" width="1344" height="768" alt="descrição em português">`
+  `<img data-slot="pao-frances-5821" data-prompt="descrição em inglês: assunto, composição, luz, material" width="1344" height="768" alt="descrição em português">`
   SEM `src` (o sistema põe um provisório com o nome e, depois, a imagem gerada pela tela Imagens).
-  Nome em minúsculas com hífens e um código de 4 dígitos que você inventa (nunca 1234), único na página (`hero-paes-8027`);
+  Nome = o que a imagem mostra, em minúsculas com hífens, + 4 dígitos que você inventa (nunca 1234), um nome diferente por imagem (`cafe-da-manha-3302`, `forno-a-lenha-7719`);
   `width`/`height` na proporção de onde ela aparece (banner 1344×768, card 1024×1024, retrato 768×1024).
   Enfeite simples (gradiente, forma, ícone) continua sendo CSS ou SVG inline, não slot.
 - Imagens que já existem vêm sem `src` no que você recebe: devolva o `<img>` com os mesmos

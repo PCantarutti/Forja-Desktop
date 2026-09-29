@@ -352,24 +352,26 @@ img,svg{max-width:100%;display:block}
 .container{width:min(1120px,100% - 2*var(--esp-4, 1.5rem));margin-inline:auto}"""
 
 
-def _placeholder(nome: str, slide: bool = False) -> str:
-    extra = " data-slide" if slide else ""
-    return f'<section data-section="{nome}"{extra} data-placeholder="1">Gerando {"o slide" if slide else "a seção"} “{nome}”…</section>'
+def _placeholder(nome: str, slide: bool = False, tela: bool = False) -> str:
+    extra = " data-slide" if slide else " data-tela" if tela else ""
+    o_que = "o slide" if slide else "a tela" if tela else "a seção"
+    return f'<section data-section="{nome}"{extra} data-placeholder="1">Gerando {o_que} “{nome}”…</section>'
 
 
 def esqueleto(plano: dict) -> str:
     """HTML base do plano aprovado: tokens no :root, CSS base e um placeholder por seção."""
     tokens = "\n".join(f"  {k}: {v};" for k, v in plano["tokens"].items())
     slides = plano.get("tipo") == "slides"   # deck: cada seção é um slide 1920x1080
-    corpo = "\n".join(_placeholder(s["nome"], slides) for s in plano["secoes"])
+    tela = plano.get("tipo") == "prototipo"   # protótipo: cada seção é uma tela, uma por vez
+    corpo = "\n".join(_placeholder(s["nome"], slides, tela) for s in plano["secoes"])
     titulo = re.sub(r"[<>&]", "", plano["titulo"])
-    base = _BASE_CSS + ("\n" + SLIDES_CSS if slides else "")
+    base = _BASE_CSS + ("\n" + SLIDES_CSS if slides else "") + ("\n" + PROTOTIPO_CSS if tela else "")
     # estilo comum das fotos (skill gerar-imagens): vai junto com o documento para o registro dos slots
     estilo = re.sub(r'["<>&]', "", plano.get("estilo_imagens") or "")
     meta_estilo = f'<meta name="forja-estilo-imagens" content="{estilo}">\n' if estilo else ""
     return (f'<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>{titulo}</title>\n{meta_estilo}'
-            f"<style>\n:root {{\n{tokens}\n}}\n{base}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n</body>\n</html>\n")
+            f"<style>\n:root {{\n{tokens}\n}}\n{base}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n{PROTOTIPO_JS if tela else ""}\n</body>\n</html>\n")
 
 
 def placeholder(html: str, nome: str) -> str | None:
@@ -397,16 +399,19 @@ def inserir_secao(html: str, nome: str) -> str:
     secs = secoes(html)
     ultima = secs[-1] if secs else None
     slide = e_slides(html)   # num deck o slide novo vai para o fim
-    if ultima and not slide and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")):
+    tela = e_prototipo(html)
+    if ultima and not slide and not tela and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")):
         pos = ultima["ini"]
     else:
         pos = html.lower().rfind("</body>")
         if pos < 0:
             raise ValueError("Documento sem </body>.")
-    return carimbar(html[:pos] + _placeholder(nome, slide) + "\n" + html[pos:])
+        if tela and (js := html.find("<script data-forja-prototipo")) >= 0:
+            pos = min(pos, js)   # tela nova antes do runtime do protótipo
+    return carimbar(html[:pos] + _placeholder(nome, slide, tela) + "\n" + html[pos:])
 
 
-def ler_secao(texto: str, nome: str, slide: bool = False) -> tuple[str, str]:
+def ler_secao(texto: str, nome: str, slide: bool = False, tela: bool = False) -> tuple[str, str]:
     """Resposta da geração de uma seção → (<section> com data-section=nome, css). O <style> pode vir
     depois da seção ou (modelo distraído) dentro dela: sai de lá e vai para o <head>."""
     from .parsing import split_think
@@ -425,6 +430,8 @@ def ler_secao(texto: str, nome: str, slide: bool = False) -> tuple[str, str]:
     tag = _attr(_attr(raiz["txt"], "data-placeholder", None), "data-section", nome)
     if slide:   # num deck, toda seção de topo é um slide, diga o modelo o que disser
         tag = _attr(tag, "data-slide", "")
+    if tela:    # no protótipo, toda seção de topo é uma tela
+        tag = _attr(tag, "data-tela", "")
     return tag + sec[len(raiz["txt"]):], css
 
 
@@ -461,3 +468,107 @@ def limpar_export(html: str, com_fids: bool = False) -> str:
     # os atributos de trabalho saem junto (o data-slot fica: diz de onde veio cada imagem)
     html = re.sub(r"""\s(data-prompt|data-slot-status)\s*=\s*("[^"]*"|'[^']*')""", "", html)
     return _ATTR_FID.sub("", html)
+
+
+# ------------------------------------------------------------------ conversa e atividade
+
+def diff(antes: str, depois: str, limite: int = 1500) -> dict:
+    """Diff unificado do documento (sem os data URIs das imagens), para a atividade no chat."""
+    import difflib
+    from .design_imagens import enxugar
+
+    a, b = enxugar(antes).splitlines(), enxugar(depois).splitlines()
+    linhas = list(difflib.unified_diff(a, b, "antes", "depois", n=2, lineterm=""))
+    mais = sum(1 for l in linhas if l.startswith("+") and not l.startswith("+++"))
+    menos = sum(1 for l in linhas if l.startswith("-") and not l.startswith("---"))
+    texto = "\n".join(l if len(l) <= 400 else l[:400] + " …" for l in linhas[:limite])
+    if len(linhas) > limite:
+        texto += f"\n… (+{len(linhas) - limite} linhas)"
+    return {"texto": texto, "mais": mais, "menos": menos}
+
+
+_SUG = re.compile(r"^\s*(?:\*\*)?SUGEST(?:OES|ÕES)(?:\*\*)?\s*:\s*(.+)$", re.I | re.M)
+_MSG = re.compile(r"^\s*(?:\*\*)?MENSAGEM(?:\*\*)?\s*:\s*(.+)$", re.I | re.M)
+
+
+def sugestoes(bruto) -> list[str]:
+    itens = bruto if isinstance(bruto, list) else re.split(r"\s*[|;]\s*", str(bruto or ""))
+    return [str(x).strip(" -•")[:140] for x in itens if str(x).strip(" -•")][:4]
+
+
+def rodape(texto: str) -> tuple[str, list[str]]:
+    """Resposta em HTML: o modelo fecha com `MENSAGEM: ...` e `SUGESTOES: a | b | c`."""
+    m, s = _MSG.search(texto or ""), _SUG.search(texto or "")
+    return (m.group(1).strip()[:600] if m else ""), (sugestoes(s.group(1)) if s else [])
+
+
+def tweaks_validos(bruto) -> list[dict]:
+    """Controles que a IA cria (Claude Design: "custom sliders"): variável nova + faixa + rótulo."""
+    out = []
+    for t in bruto if isinstance(bruto, list) else []:
+        if not isinstance(t, dict):
+            continue
+        nome = str(t.get("nome") or "").strip()
+        nome = nome if nome.startswith("--") else f"--{nome}"
+        un = re.sub(r"[^a-z%]", "", str(t.get("unidade") or ""))[:4]
+        try:
+            mn, mx, passo = float(t.get("min", 0)), float(t.get("max", 100)), float(t.get("passo") or 1)
+            valor = float(re.sub(r"[^\d.-]", "", str(t.get("valor"))) or mn)
+        except (TypeError, ValueError):
+            continue
+        rotulo = re.sub(r"[|*/;{}<>]", "", str(t.get("rotulo") or nome))[:40].strip()
+        if not _TOKEN_NOME.fullmatch(nome) or mx <= mn or not mn <= valor <= mx:
+            continue
+        out.append({"nome": nome, "rotulo": rotulo, "min": mn, "max": mx, "passo": passo, "unidade": un,
+                    "valor": f"{valor:g}{un}"})
+    return out[:8]
+
+
+def por_tweaks(html: str, tweaks: list[dict]) -> str:
+    """Cada tweak vira um token no :root com o rótulo e a faixa num comentário da mesma linha — é de lá
+    que o painel de Ajustes tira o slider, e a informação viaja com o documento."""
+    m = re.search(r":root\s*\{([^}]*)\}", html)
+    if not m:
+        raise ValueError("O documento não tem bloco :root para receber os ajustes.")
+    corpo = m.group(1)
+    for t in tweaks:
+        linha = f"{t['nome']}: {t['valor']}; /* ajuste: {t['rotulo']} | {t['min']:g}..{t['max']:g} {t['unidade']} | {t['passo']:g} */"
+        velha = re.compile(rf"[ \t]*{re.escape(t['nome'])}\s*:[^;}}]*;?(?:[ \t]*/\*[^*]*\*/)?")
+        corpo = velha.sub(lambda _: "  " + linha, corpo, count=1) if velha.search(corpo) else corpo.rstrip() + f"\n  {linha}\n"
+    return html[:m.start(1)] + corpo + html[m.end(1):]
+
+
+# ------------------------------------------------------------------ protótipo interativo
+
+PROTOTIPO_CSS = """body>[data-tela]{display:none;min-height:100vh}
+body>[data-tela][data-tela-atual]{display:block}
+@media print{body>[data-tela]{display:block!important}body>[data-tela]:not(:last-child){break-after:page}}"""
+# Vai no documento (e no export): troca de tela por data-ir, abre/fecha por data-alterna, #hash direto.
+PROTOTIPO_JS = """<script data-forja-prototipo>
+(function () {
+  var telas = function () { return [].slice.call(document.querySelectorAll("body > [data-tela]")); };
+  function ir(nome) {
+    var ts = telas(), alvo = ts.filter(function (t) { return t.getAttribute("data-section") === nome; })[0] || ts[0];
+    if (!alvo) return;
+    ts.forEach(function (t) { if (t === alvo) t.setAttribute("data-tela-atual", ""); else t.removeAttribute("data-tela-atual"); });
+    window.scrollTo(0, 0);
+    try { parent.postMessage({ "forja-design": 1, type: "tela", nome: alvo.getAttribute("data-section") }, "*"); } catch (e) {}
+  }
+  document.addEventListener("click", function (e) {
+    var x = e.target.closest && e.target.closest("[data-ir], [data-alterna]");
+    if (!x) return;
+    e.preventDefault();
+    if (x.hasAttribute("data-ir")) return ir(x.getAttribute("data-ir"));
+    var alvo = document.querySelector(x.getAttribute("data-alterna"));
+    if (alvo) alvo.hidden = !alvo.hidden;
+  });
+  window.forjaIrTela = ir;
+  window.addEventListener("hashchange", function () { ir(location.hash.slice(1)); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { ir(location.hash.slice(1)); });
+  else ir(location.hash.slice(1));
+})();
+</script>"""
+
+
+def e_prototipo(html: str) -> bool:
+    return any("data-tela" in e["attrs"] for e in secoes(html))

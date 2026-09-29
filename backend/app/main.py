@@ -1593,6 +1593,9 @@ class DesignBody(BaseModel):
     comentarios: list[int] = []   # aplicar estes comentários pendentes numa chamada só
     esforco: str = "baixo"
     sistema: str = ""      # design system escolhido para o plano (id)
+    perguntar: bool = False           # projeto vazio: perguntas curtas antes do plano
+    respostas: list[dict] = []        # [{pergunta, resposta}] do card de perguntas
+    referencias: list[dict] = []      # [{tipo: imagem|documento|pagina, nome, data|texto}]
 
 
 class DesignAprovarBody(BaseModel):
@@ -1653,7 +1656,8 @@ def design_projeto(conv_id: int):
 async def design_gerar(conv_id: int, body: DesignBody):
     try:
         msg = design.start(conv_id, body.pedido, _design_modelos(body), body.fids, body.rota, body.secao,
-                           body.comentarios, body.esforco, body.sistema)
+                           body.comentarios, body.esforco, body.sistema, body.perguntar, body.respostas,
+                           body.referencias)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(msg["id"])
@@ -1785,6 +1789,39 @@ async def design_exportar(conv_id: int, formato: str = "html", fids: bool = Fals
         raise HTTPException(400, str(e))
     return Response(dados, media_type=tipo,
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"})
+
+
+class DesignUrlBody(BaseModel):
+    url: str
+
+
+@app.post("/api/design/referencias/documento")
+async def design_ref_documento(file: UploadFile = File(...)):
+    """Documento de referência (PDF, DOCX, PPTX, XLSX, CSV, TXT, MD): o texto volta para ir no pedido."""
+    from . import design_referencias
+    dados = await file.read()
+    if len(dados) > 25_000_000:
+        raise HTTPException(413, "Documento maior que 25 MB.")
+    try:
+        return await asyncio.to_thread(design_referencias.documento, file.filename or "documento", dados)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/referencias/pagina")
+async def design_ref_pagina(body: DesignUrlBody):
+    """Página da web como referência: estrutura, cores/fontes computadas e um screenshot."""
+    from . import design_referencias
+    try:
+        return await design_referencias.pagina(body.url)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/design/atividade/{message_id}")
+def design_atividade(message_id: int):
+    """Passos e diff do código de uma versão (a atividade colapsável do chat)."""
+    return design.atividade(message_id)
 
 
 @app.get("/api/design/{message_id}/stream")

@@ -4,10 +4,12 @@ import type { Stats } from "../types";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula } from "./Composer";
 import { type Effort, Menu, ModeEffortMenu } from "./Controls";
 import DesignAjustes, { type Sistema } from "./DesignAjustes";
+import DesignAtividade from "./DesignAtividade";
+import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import { type Item, type Modo, type NoCaminho, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
-import { ArrowLeft, ArrowRight, Bubble, Check, Code, Cube, Download, Image, Mira, Split, Undo, X } from "./icons";
-import { PromptRow, StatsRow, Thinking, aggregate } from "./MessageView";
+import { ArrowLeft, ArrowRight, Bubble, Check, Code, Cube, Download, Globe, Image, Mira, Paperclip, Split, Undo, X } from "./icons";
+import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 
 // Tela Design: chat à esquerda (no feitio do chat do agente: bolhas, raciocínio colapsável e a linha
@@ -18,7 +20,10 @@ type Mensagem = {
   id: number; role: "user" | "assistant"; content: string; status: string | null; thinking: string;
   versao: number | null; fids: string[]; entrada?: number | null; rota?: string | null; secao?: string | null;
   stats: Stats[]; comentarios: number[]; plano: Plano | null;
+  perguntas?: Pergunta[] | null; respostas?: { pergunta: string; resposta: string }[] | null;
+  referencias?: Referencia[]; mensagem?: string; sugestoes?: string[]; passos?: string[]; mais?: number; menos?: number;
 };
+type Referencia = { tipo: "imagem" | "documento" | "pagina"; nome: string; data?: string; texto?: string };
 type Comentario = {
   id: number; texto: string; fids: string[]; status: "pendente" | "aplicado" | "descartado"; orfao: boolean;
   versao_criada: number; versao_aplicada: number | null;
@@ -80,10 +85,13 @@ const parcialDoc = (t: string) => {
 };
 /** Quantos slides o documento tem (seções de topo com data-slide); 0 = site. */
 const contaSlides = (html: string) => (html.match(/<section\b[^>]*\sdata-slide(?=[\s=>])/gi) ?? []).length;
+/** Telas do protótipo (seções de topo com data-tela), na ordem. */
+const nomesTelas = (html: string) =>
+  [...html.matchAll(/<section\b[^>]*\sdata-tela(?=[\s=>])[^>]*>/gi)].map((m) => /data-section="([^"]+)"/.exec(m[0])?.[1] ?? "").filter(Boolean);
 const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
-type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string };
+type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean };
 
 function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
@@ -123,6 +131,13 @@ export default function DesignView(props: {
   const [selecao, setSelecao] = useState<Selecao | null>(null);
   const [aba, setAba] = useState<"chat" | "comentarios" | "ajustes" | "versoes">("chat");
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
+  const [refs, setRefs] = useState<Referencia[]>([]);     // anexos que vão no próximo pedido
+  const [anexando, setAnexando] = useState("");
+  const [abrirAnexo, setAbrirAnexo] = useState(false);
+  const [urlRef, setUrlRef] = useState("");   // o Electron não tem window.prompt: o endereço vai num campo
+  const [tela, setTela] = useState("");                     // protótipo: a tela que o canvas mostra
+  const arquivo = useRef<HTMLInputElement>(null);
+  const tipoArquivo = useRef<"imagem" | "documento">("imagem");
   const [pinAtivo, setPinAtivo] = useState<number | null>(null);
   const [rota, setRota] = useState<Rota>("auto");
   const [prefs, setPrefs] = useState(() => lerPreferencias(props.provider, props.model));
@@ -270,28 +285,91 @@ export default function DesignView(props: {
 
   const modelosDe = () => ({ ...prefs.modelos });
 
-  async function pedir(extra: { rota?: string; secao?: string; comentarios?: number[] } = {}) {
-    const pedido = texto.trim();
-    if (rodando || (!pedido && !extra.comentarios?.length && extra.rota !== "secao")) return;
+  async function pedir(extra: { rota?: string; secao?: string; comentarios?: number[]; pedido?: string;
+                                 respostas?: { pergunta: string; resposta: string }[] } = {}) {
+    const pedido = (extra.pedido ?? texto).trim();
+    if (rodando || (!pedido && !extra.comentarios?.length && extra.rota !== "secao" && extra.rota !== "tweaks")) return;
+    const anexos = refs;
     const fids = extra.comentarios || extra.rota === "secao" ? [] : selecao?.itens.map((i) => i.fid) ?? [];
     try {
       const id = await props.ensureConversation();
-      setTexto("");
+      if (extra.pedido === undefined) setTexto("");
+      setRefs([]);
       setParcialDesenhado("");
       setAba("chat");
       // o pedido aparece já no chat, antes do primeiro retrato do SSE
       setProjeto((p) => p && { ...p, mensagens: [...p.mensagens, {
         id: -1, role: "user", content: pedido || (extra.comentarios ? `${extra.comentarios.length} comentário(s)` : `refazer a seção ${extra.secao}`),
-        status: null, thinking: "", versao: null, fids, stats: [], comentarios: extra.comentarios ?? [], plano: null }] });
+        status: null, thinking: "", versao: null, fids, stats: [], comentarios: extra.comentarios ?? [], plano: null,
+        respostas: extra.respostas ?? null, referencias: anexos.map((r) => ({ ...r, texto: undefined })) }] });
       setGeracao({ message_id: 0, status: "rodando", modo: fids.length || extra.comentarios ? "fragmento" : "", tokens: 0, segundos: 0 });
       ouvindo.current = -1;
       await ouvir(`/design/${id}/gerar`, { method: "POST", body: JSON.stringify({
         pedido, fids, rota: extra.rota ?? rota, secao: extra.secao ?? "", comentarios: extra.comentarios ?? [],
-        esforco: prefs.esforco, modelos: modelosDe(), sistema: prefs.sistema ?? "", ...prefs.modelos.geracao }) }, id);
+        esforco: prefs.esforco, modelos: modelosDe(), sistema: prefs.sistema ?? "", ...prefs.modelos.geracao,
+        perguntar: prefs.perguntar !== false, respostas: extra.respostas ?? [], referencias: anexos }) }, id);
       props.onConversationChanged();
     } catch (e: any) {
       props.onError(e.message);
     }
+  }
+
+  /** Imagem: reduzida aqui (lado ≤ 1280, JPEG) para caber no pedido. Documento: o backend tira o texto. */
+  async function anexar(f: File) {
+    setAnexando(f.name);
+    try {
+      if (f.type.startsWith("image/")) {   // pelo arquivo, não pelo item do menu (arrastar/colar também servem)
+        const bmp = await createImageBitmap(f);
+        const k = Math.min(1, 1280 / Math.max(bmp.width, bmp.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(bmp.width * k);
+        c.height = Math.round(bmp.height * k);
+        c.getContext("2d")!.drawImage(bmp, 0, 0, c.width, c.height);
+        setRefs((r) => [...r, { tipo: "imagem", nome: f.name, data: c.toDataURL("image/jpeg", 0.82) }]);
+      } else {
+        const form = new FormData();
+        form.append("file", f);
+        const r = await fetch("/api/design/referencias/documento", { method: "POST", body: form,
+          headers: ponte()?.token ? { "X-Forja-Token": ponte()!.token! } : {} });
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+        const doc = (await r.json()) as Referencia;
+        setRefs((x) => [...x, doc]);
+      }
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setAnexando("");
+    }
+  }
+
+  async function capturarPagina() {
+    const url = urlRef.trim();
+    if (!url) return;
+    setAbrirAnexo(false);
+    setUrlRef("");
+    setAnexando(url);
+    try {
+      const r = await api.post<Referencia[]>("/design/referencias/pagina", { url });
+      setRefs((x) => [...x, ...r]);
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setAnexando("");
+    }
+  }
+
+  function escolherArquivo(tipo: "imagem" | "documento") {
+    setAbrirAnexo(false);
+    tipoArquivo.current = tipo;
+    if (arquivo.current) {
+      arquivo.current.accept = tipo === "imagem" ? "image/*" : ".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md";
+      arquivo.current.click();
+    }
+  }
+
+  function usarSugestao(sug: string) {
+    setTexto(sug);
+    setTimeout(() => campo.current?.focus(), 0);
   }
 
   async function aprovar(mid: number, plano: Plano) {
@@ -375,8 +453,7 @@ export default function DesignView(props: {
   async function extrairSistema(pasta: string, nome: string) {
     try {
       const s = await api.post<Sistema>("/design-sistemas/extrair", { pasta, nome, esforco: prefs.esforco, ...prefs.modelos.edicao });
-      setSistemas((l) => [...l, s]);
-      setPrefs((p) => ({ ...p, sistema: p.sistema || s.id }));
+      setSistemas((l) => [...l, s]);   // usar nos próximos planos é escolha explícita, no seletor
     } catch (e: any) {
       props.onError(e.message);
     }
@@ -459,11 +536,13 @@ export default function DesignView(props: {
     if (m.type === "ready") {   // iframe (re)carregou: devolve modo, slide, seleção e pins (os fids são estáveis)
       paraIframe(janela(), { type: "setMode", mode: modo });
       paraIframe(janela(), { type: "setSlide", n: slides.atual });
+      if (tela) paraIframe(janela(), { type: "setTela", nome: tela });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
     } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
+    else if (m.type === "tela") setTela(m.nome);
     else if (m.type === "pin") {
       setAba("comentarios");
       setPinAtivo(m.n);
@@ -503,6 +582,7 @@ export default function DesignView(props: {
     : rodando && geracao?.modo === "documento" && parcialDesenhado ? parcialDesenhado : srcBase;
   const secaoSel = selecao?.path.find((n) => n.sec)?.sec;
   const nSlides = contaSlides(html);
+  const telas = nomesTelas(html);
   const largura = nSlides ? null : VIEWPORTS.find((v) => v.id === viewport)!.largura;
   // miniaturas pela fonte mais nova (o iframe principal pode estar na versão antiga + patches)
   const fonteMini = rodando && docVivo ? docVivo : projeto?.html ?? "";
@@ -516,23 +596,16 @@ export default function DesignView(props: {
   const abaBtn = (on: boolean) => `rounded-lg px-2.5 py-1 text-xs ${on ? "bg-raised text-fg" : "text-muted hover:text-fg"}`;
 
   /** Bloco da resposta em andamento: raciocínio ao vivo, progresso e a linha de métricas ao vivo. */
+  const ROTULO_VIVO: Record<string, string> = {
+    fragmento: "Editando o fragmento…", tokens: "Ajustando os tokens…", secao: "Escrevendo a seção…",
+    plano: "Planejando…", perguntas: "Pensando no que perguntar…", tweaks: "Criando os ajustes…", etapas: "Escrevendo…",
+  };
   const aoVivo = rodando && geracao && (
     <div className="my-4">
-      <Thinking text={geracao.raciocinio ?? ""} live={!geracao.parcial && !geracao.n} />
-      {geracao.modo === "etapas" && geracao.secoes ? (
-        <ol className="mb-2 space-y-0.5 text-[13px]">
-          {geracao.secoes.map((s) => (
-            <li key={s.nome} className={s.status === "ok" ? "text-muted" : s.status === "gerando" ? "text-accent-text" : s.status === "erro" ? "text-red-300" : "text-faint"}>
-              <span className="mr-1.5 inline-block w-3">{s.status === "ok" ? "✓" : s.status === "gerando" ? "›" : s.status === "erro" ? "×" : "·"}</span>
-              {s.nome}{s.status === "gerando" && <span className="animate-pulse"> — escrevendo…</span>}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <div className="mb-2 animate-pulse text-sm text-muted">
-          {geracao.modo === "fragmento" ? "Editando o fragmento…" : geracao.modo === "tokens" ? "Ajustando os tokens…"
-            : geracao.modo === "secao" ? "Escrevendo a seção…" : geracao.modo === "plano" ? "Planejando…" : "Gerando…"}
-        </div>
+      <DesignAtividade ao_vivo raciocinio={geracao.raciocinio ?? ""} passos={[]} passosVivos={geracao.modo === "etapas" ? geracao.secoes : undefined}
+                       rotulo={ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"} />
+      {!geracao.raciocinio && geracao.modo !== "etapas" && (
+        <div className="mb-2 animate-pulse text-sm text-muted">{ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"}</div>
       )}
       {geracao.vivo && <StatsRow s={aggregate([geracao.vivo])} live />}
     </div>
@@ -574,7 +647,23 @@ export default function DesignView(props: {
                           </span>
                         )}
                         {m.content}
+                        {!!m.respostas?.length && (
+                          <ul className="mt-1.5 space-y-0.5 text-[13px] text-fg-2">
+                            {m.respostas.map((r) => <li key={r.pergunta}><span className="text-faint">{r.pergunta}</span> {r.resposta}</li>)}
+                          </ul>
+                        )}
                       </div>
+                      {!!m.referencias?.length && (
+                        <div className="mt-1.5 flex max-w-[85%] flex-wrap justify-end gap-1.5">
+                          {m.referencias.map((r, k) => r.tipo === "imagem" && r.data ? (
+                            <img key={k} src={r.data} alt={r.nome} title={r.nome} className="h-14 rounded-lg border border-line object-cover" />
+                          ) : (
+                            <span key={k} className="rounded-lg border border-line px-2 py-0.5 text-[11.5px] text-muted">
+                              {r.tipo === "pagina" ? "🌐" : r.tipo === "imagem" ? "🖼" : "📄"} {r.nome}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       {pp && pp.tokens > 0 && <PromptRow p={pp} />}
                     </div>
                   );
@@ -583,8 +672,12 @@ export default function DesignView(props: {
                 if (m.status === "running" || (rodando && m.id === geracao?.message_id)) return null;
                 return (
                   <div key={m.id} className="my-4">
-                    <Thinking text={m.thinking} />
-                    {m.plano ? (
+                    <DesignAtividade messageId={m.id} raciocinio={m.thinking} passos={m.passos ?? []} mais={m.mais} menos={m.menos} />
+                    {!!m.mensagem && <div className="mb-2"><Markdown text={m.mensagem} /></div>}
+                    {m.perguntas?.length ? (
+                      <DesignPerguntas perguntas={m.perguntas} desabilitado={rodando}
+                                       onResponder={(respostas) => pedir({ pedido: mensagens[i - 1]?.content ?? "", respostas: respostas.length ? respostas : [{ pergunta: "Perguntas", resposta: "(sem respostas: siga o pedido)" }] })} />
+                    ) : m.plano ? (
                       <DesignPlano plano={m.plano} desabilitado={rodando} onGerar={(p) => aprovar(m.id, p)} />
                     ) : m.versao ? (
                       <button onClick={() => ir(m.versao!)} disabled={rodando}
@@ -600,6 +693,16 @@ export default function DesignView(props: {
                       <div className="mt-1.5 font-mono text-[11px] text-faint">
                         {m.rota && (ROTULO_ROTA[m.rota] ?? m.rota) + (m.rota === "secao" && m.secao ? ` ${m.secao}` : "")}
                         {!!m.entrada && ` · ${milhar(m.entrada)} caracteres enviados`}
+                      </div>
+                    )}
+                    {!!m.sugestoes?.length && i === mensagens.length - 1 && !rodando && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {m.sugestoes.map((sug) => (
+                          <button key={sug} onClick={() => usarSugestao(sug)} title="Põe no campo para você ajustar e enviar"
+                                  className="rounded-full border border-line px-2.5 py-0.5 text-left text-[12.5px] text-fg-2 hover:border-accent-line hover:bg-accent-soft hover:text-accent-text">
+                            {sug}
+                          </button>
+                        ))}
                       </div>
                     )}
                     {!!m.stats?.length && <div className="mt-3"><StatsRow s={aggregate(m.stats)} /></div>}
@@ -670,6 +773,8 @@ export default function DesignView(props: {
               onExtrair={extrairSistema}
               onApagar={apagarSistema}
               pastaPadrao={props.pastaPadrao}
+              selecionados={selecao?.itens.length ?? 0}
+              onCriarComIA={() => pedir({ rota: "tweaks" })}
             />
           )}
 
@@ -704,7 +809,20 @@ export default function DesignView(props: {
               ))}
             </div>
           )}
+          <input ref={arquivo} type="file" hidden aria-label="Anexar referência" onChange={(e) => { const f = e.target.files?.[0]; if (f) anexar(f); e.target.value = ""; }} />
           <CaixaPrompt>
+            {(!!refs.length || !!anexando) && (
+              <div className="mb-1.5 flex flex-wrap gap-1.5">
+                {refs.map((r, k) => (
+                  <span key={k} className="inline-flex items-center gap-1 rounded-lg border border-line py-0.5 pr-1 pl-1 text-[11.5px] text-fg-2">
+                    {r.tipo === "imagem" && r.data ? <img src={r.data} alt="" className="size-5 rounded object-cover" /> : <span>{r.tipo === "pagina" ? "🌐" : "📄"}</span>}
+                    <span className="max-w-40 truncate" title={r.nome}>{r.nome}</span>
+                    <button onClick={() => setRefs((x) => x.filter((_, j) => j !== k))} title="Tirar" className="rounded p-0.5 hover:bg-raised"><X className="size-3" /></button>
+                  </span>
+                ))}
+                {anexando && <span className="animate-pulse text-[11.5px] text-faint">lendo {anexando}…</span>}
+              </div>
+            )}
             {!!selecao?.itens.length && (
               <div className="mb-1.5 flex flex-wrap gap-1.5">
                 {selecao.itens.map((it) => (
@@ -735,6 +853,34 @@ export default function DesignView(props: {
               className={campoPrompt}
             />
             <RodapePrompt>
+              <div className="relative">
+                <button className={pilula} onClick={() => setAbrirAnexo((v) => !v)} title="Referência: imagem, documento ou página da web">
+                  <Paperclip className="size-3.5" />
+                </button>
+                {abrirAnexo && (
+                  <div className="absolute bottom-full left-0 z-30 mb-1 w-60 rounded-xl border border-line bg-surface p-1 shadow-xl">
+                    <button onClick={() => escolherArquivo("imagem")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-raised">
+                      <Image className="size-3.5" /> Imagem <span className="ml-auto text-[11px] text-faint">modelo com visão</span>
+                    </button>
+                    <button onClick={() => escolherArquivo("documento")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-raised">
+                      <Paperclip className="size-3.5" /> Documento <span className="ml-auto text-[11px] text-faint">PDF, DOCX, PPTX…</span>
+                    </button>
+                    <form onSubmit={(e) => { e.preventDefault(); capturarPagina(); }} className="flex items-center gap-1.5 border-t border-line px-2 pt-1.5 pb-1">
+                      <Globe className="size-3.5 shrink-0 text-muted" />
+                      <input value={urlRef} onChange={(e) => setUrlRef(e.target.value)} placeholder="Página da web (URL)" aria-label="Página da web de referência"
+                             className="min-w-0 flex-1 rounded-md border border-line bg-raised px-1.5 py-0.5 text-[12px] text-fg focus:border-focus focus:outline-none" />
+                      <button type="submit" disabled={!urlRef.trim()} className="rounded-md bg-accent px-1.5 py-0.5 text-[11px] font-medium text-accent-fg disabled:opacity-40">Capturar</button>
+                    </form>
+                  </div>
+                )}
+              </div>
+              {!total && (
+                <button className={`${pilula} ${prefs.perguntar !== false ? "border-accent-line! bg-accent-soft! text-accent-text!" : ""}`}
+                        aria-pressed={prefs.perguntar !== false} onClick={() => setPrefs((x) => ({ ...x, perguntar: x.perguntar === false }))}
+                        title="A IA faz 2 a 4 perguntas curtas antes de planejar">
+                  <Check className={`size-3.5 ${prefs.perguntar !== false ? "" : "opacity-30"}`} /> Perguntar antes
+                </button>
+              )}
               <ModeEffortMenu effort={prefs.esforco} onEffort={(esforco) => setPrefs((p) => ({ ...p, esforco }))} semExtremo />
               {!selecao && !!total && (
                 <Menu title="Rota do pedido" items={ROTAS} value={rota} onChange={setRota}
@@ -786,7 +932,18 @@ export default function DesignView(props: {
             </button>
           )}
           <span className="mx-1 h-5 w-px bg-line" />
-          {nSlides ? (
+          {telas.length ? (
+            // protótipo: uma tela por vez; no modo de visualização, os botões navegam de verdade
+            <div className="flex max-w-[40%] items-center gap-0.5 overflow-x-auto rounded-lg border border-line p-0.5" role="tablist" aria-label="Telas">
+              {telas.map((t) => (
+                <button key={t} role="tab" aria-selected={(tela || telas[0]) === t} onClick={() => paraIframe(janela(), { type: "setTela", nome: t })}
+                        className={`shrink-0 rounded-md px-2 py-0.5 font-mono text-[11.5px] ${(tela || telas[0]) === t ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {telas.length ? null : nSlides ? (
             // deck: navegação (← → também funcionam dentro do canvas)
             <>
               <button className={btn} title="Slide anterior · ←" disabled={slides.atual <= 1} onClick={() => irSlide(slides.atual - 1)}>

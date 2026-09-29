@@ -18,6 +18,7 @@ export type DoCanvas =
   | { type: "textEdited"; fid: string; html: string }
   | { type: "pin"; n: number }
   | { type: "slides"; atual: number; total: number }
+  | { type: "tela"; nome: string }                          // o runtime do protótipo trocou de tela
   | { type: "atalho"; acao: "inspect" | "undo" | "redo" };
 
 /** app → iframe. `highlight` define a seleção (o iframe responde com `select`). */
@@ -27,6 +28,7 @@ export type ParaCanvas =
   | { type: "scrollTo"; fid: string }
   | { type: "showPins"; pins: Pin[] }
   | { type: "setSlide"; n: number }
+  | { type: "setTela"; nome: string }
   | { type: "setTokens"; tokens: Record<string, string> }   // prévia dos sliders; {} limpa
   | { type: "patch"; fid: string; html: string };
 
@@ -57,6 +59,8 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
       return eTexto(d.fid) && eTexto(d.html) && d.html.length < 200_000 ? { type: "textEdited", fid: d.fid, html: d.html } : null;
     case "pin":
       return Number.isInteger(d.n) ? { type: "pin", n: d.n } : null;
+    case "tela":
+      return eTexto(d.nome) && d.nome.length < 80 ? { type: "tela", nome: d.nome } : null;
     case "slides":
       return Number.isInteger(d.atual) && Number.isInteger(d.total) ? { type: "slides", atual: d.atual, total: d.total } : null;
     case "atalho":
@@ -186,6 +190,9 @@ function inspetor() {
     const el = sel.length ? porFid(sel[sel.length - 1]) : null;
     const i = slideDe(el);   // elemento de outro slide (comentário, breadcrumb): vai até ele
     if (i >= 0 && i !== slide) irSlide(i);
+    const t = el?.closest("body > [data-tela]");   // protótipo: idem com a tela
+    const irTela = (window as { forjaIrTela?: (n: string) => void }).forjaIrTela;
+    if (t && !t.hasAttribute("data-tela-atual") && irTela) irTela(t.getAttribute("data-section") || "");
     desenha();
     const itens = sel.map((f) => item(porFid(f)!));
     envia(el
@@ -306,6 +313,9 @@ function inspetor() {
       previa = Object.entries(d.tokens as Record<string, unknown>)
         .filter(([k, v]) => /^--[\w-]+$/.test(k) && typeof v === "string")
         .map(([k, v]) => (raiz.setProperty(k, v as string), k));
+      desenha();
+    } else if (d.type === "setTela" && typeof d.nome === "string") {
+      (window as { forjaIrTela?: (n: string) => void }).forjaIrTela?.(d.nome);
       desenha();
     } else if (d.type === "setSlide" && Number.isInteger(d.n)) {
       irSlide(d.n - 1);

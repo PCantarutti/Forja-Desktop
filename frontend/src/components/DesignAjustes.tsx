@@ -23,10 +23,21 @@ const GRUPOS: { titulo: string; casa: RegExp }[] = [
 ];
 const campo = "min-w-0 rounded-md border border-line bg-raised px-1.5 py-0.5 font-mono text-[11.5px] text-fg focus:border-focus focus:outline-none";
 
+/** Ajuste criado pela IA: o rótulo e a faixa moram num comentário na mesma linha do token. */
+export type Tweak = { rotulo: string; min: number; max: number; unidade: string; passo: number };
+
 /** Tokens do primeiro :root do documento, na ordem em que aparecem. */
 export function lerTokens(html: string): [string, string][] {
   const bloco = /:root\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
   return [...bloco.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/(--[\w-]+)\s*:\s*([^;]+);?/g)].map((m) => [m[1], m[2].trim()]);
+}
+
+export function lerTweaks(html: string): Record<string, Tweak> {
+  const bloco = /:root\s*\{([^}]*)\}/.exec(html)?.[1] ?? "";
+  const out: Record<string, Tweak> = {};
+  for (const m of bloco.matchAll(/(--[\w-]+)\s*:[^;]*;\s*\/\*\s*ajuste:\s*([^|*]+)\|\s*(-?[\d.]+)\.\.(-?[\d.]+)\s*([a-z%]*)\s*\|\s*([\d.]+)\s*\*\//g))
+    out[m[1]] = { rotulo: m[2].trim(), min: +m[3], max: +m[4], unidade: m[5], passo: +m[6] || 1 };
+  return out;
 }
 
 const hex6 = (v: string) => {
@@ -39,8 +50,19 @@ const numero = (v: string) => {
   return m ? { n: Number(m[1]), u: m[2] ?? "" } : null;
 };
 
-function Controle(props: { nome: string; valor: string; onChange: (v: string) => void }) {
-  const { nome, valor } = props;
+function Controle(props: { nome: string; valor: string; onChange: (v: string) => void; tweak?: Tweak }) {
+  const { nome, valor, tweak } = props;
+  if (tweak) {
+    const n = parseFloat(valor);
+    return (
+      <label className="flex items-center gap-2" title={nome}>
+        <span className="w-24 shrink-0 truncate text-[12px] text-fg-2">{tweak.rotulo}</span>
+        <input type="range" min={tweak.min} max={tweak.max} step={tweak.passo} value={Number.isFinite(n) ? n : tweak.min}
+               onChange={(e) => props.onChange(`${+Number(e.target.value).toFixed(3)}${tweak.unidade}`)} className="min-w-0 flex-1 accent-[var(--accent)]" />
+        <span className="w-14 shrink-0 text-right font-mono text-[11px] text-fg-2">{valor}</span>
+      </label>
+    );
+  }
   const cor = hex6(valor);
   const num = numero(valor);
   const rotulo = <span className="w-24 shrink-0 truncate font-mono text-[11px] text-muted" title={nome}>{nome.replace(/^--/, "")}</span>;
@@ -95,8 +117,11 @@ export default function DesignAjustes(props: {
   onExtrair: (pasta: string, nome: string) => Promise<void>;
   onApagar: (id: string) => void;
   pastaPadrao: string;
+  selecionados: number;          // elementos selecionados no canvas: os ajustes da IA focam neles
+  onCriarComIA: () => void;
 }) {
   const originais = useMemo(() => lerTokens(props.html), [props.html]);
+  const tweaks = useMemo(() => lerTweaks(props.html), [props.html]);
   const [valores, setValores] = useState<Record<string, string>>({});
   const [pasta, setPasta] = useState(props.pastaPadrao);
   const [nome, setNome] = useState("");
@@ -125,10 +150,29 @@ export default function DesignAjustes(props: {
     if (p) setPasta(p);
   }
 
-  const vistos = new Set<string>();
+  const vistos = new Set<string>(Object.keys(tweaks));
+  const daIA = originais.filter(([n]) => tweaks[n]);
   return (
     <div className="flex flex-col gap-4 py-2 text-[13px]">
       {!originais.length && <p className="text-xs text-muted">Este documento não tem tokens no :root ainda.</p>}
+      <section>
+        <div className="mb-1.5 flex items-center gap-2">
+          <h3 className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Criados pela IA</h3>
+          <span className="flex-1" />
+          <button disabled={props.desabilitado} onClick={props.onCriarComIA}
+                  title="A IA cria sliders para esta página (ou para os elementos selecionados). O texto do campo, se houver, diz o foco."
+                  className="rounded-md border border-line px-2 py-0.5 text-[11.5px] text-fg hover:bg-raised disabled:opacity-40">
+            {props.selecionados ? `Criar ajustes para ${props.selecionados === 1 ? "o elemento" : `${props.selecionados} elementos`}` : "Criar ajustes com a IA"}
+          </button>
+        </div>
+        {daIA.length ? (
+          <div className={`flex flex-col gap-1.5 ${props.desabilitado ? "pointer-events-none opacity-50" : ""}`}>
+            {daIA.map(([n, v]) => <Controle key={n} nome={n} valor={valores[n] ?? v} tweak={tweaks[n]} onChange={(x) => mexe(n, x)} />)}
+          </div>
+        ) : (
+          <p className="text-[11.5px] text-faint">Controles sob medida para este design (altura do hero, colunas, respiro...), criados numa chamada e depois ajustados sem IA.</p>
+        )}
+      </section>
       {GRUPOS.map((g) => {
         const itens = originais.filter(([n]) => !vistos.has(n) && g.casa.test(n));
         itens.forEach(([n]) => vistos.add(n));

@@ -84,12 +84,20 @@ def preencher(html: str, anterior: str = "") -> str:
     """Toda versão passa por aqui antes de salvar: slot sem imagem ganha o provisório, e o que o modelo
     devolveu sem `src` (o contexto vai enxuto, sem os data URIs) recupera a imagem que já estava pronta."""
     prontas = {s["nome"]: s["src"] for s in slots(anterior) if s["status"] == "pronta" and s["src"].startswith("data:")}
+    vistos: set[str] = set()
 
     def um(m: re.Match) -> str:
         tag = m.group(0)
         nome = (_attr(tag, "data-slot") or "").strip()
         if not NOME.match(nome):
             return tag
+        if nome in vistos:   # o modelo repetiu o nome: a segunda imagem ganha outro (senão dividiriam o arquivo)
+            k = 2
+            while f"{nome}-{k}" in vistos:
+                k += 1
+            nome = f"{nome}-{k}"
+            tag = design_html._attr(tag, "data-slot", nome)
+        vistos.add(nome)
         src = _attr(tag, "src") or ""
         if src.startswith("data:") and _attr(tag, "data-slot-status"):
             return tag
@@ -213,4 +221,5 @@ def embutir(conv_id: int) -> int | None:
     html = _IMG.sub(um, p["html"])
     n = len(novas)
     return design._nova_versao(conv_id, None, html, f"{n} {'imagem gerada' if n == 1 else 'imagens geradas'}",
-                               base=p["atual"], rota="imagens")
+                               base=p["atual"], rota="imagens",
+                               passos=[f"Embutiu {nome} (gerada na tela Imagens)" for nome in novas])
