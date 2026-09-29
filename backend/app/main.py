@@ -1763,6 +1763,33 @@ def design_revisao_fila(conv_id: int, body: DesignFilaBody):
         raise HTTPException(400, str(e))
 
 
+class DesignCapturaBody(BaseModel):
+    captura_id: str
+    blocos: list[int]
+
+
+@app.post("/api/design/{conv_id}/captura")
+def design_captura(conv_id: int, body: DesignCapturaBody):
+    """Blocos escolhidos da página de referência entram como seções (rascunho, sem IA)."""
+    try:
+        return design.inserir_captura(conv_id, body.captura_id, body.blocos)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class DesignPaletaBody(BaseModel):
+    paleta: dict[str, str]
+
+
+@app.post("/api/design/{conv_id}/paleta")
+def design_paleta(conv_id: int, body: DesignPaletaBody):
+    """Cores e fontes da página capturada nos tokens do design (rascunho, sem IA)."""
+    try:
+        return design.aplicar_paleta(conv_id, body.paleta)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 # "Apresentar › Nova janela": o navegador do usuário não tem o token nem o cookie do app, então a
 # página sai por um link com chave aleatória. A resposta vem com CSP `sandbox` (origem opaca: o
 # script do design não fala com a API) e sem rede, como no canvas.

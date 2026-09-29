@@ -7,6 +7,7 @@ import DesignAjustes, { type Sistema } from "./DesignAjustes";
 import DesignAcessibilidade from "./DesignAcessibilidade";
 import DesignAtividade from "./DesignAtividade";
 import DesignCamadas from "./DesignCamadas";
+import DesignCaptura, { type Bloco, type Paleta } from "./DesignCaptura";
 import DesignEditar from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
 import DesignRevisao, { type ProblemaVisual, type Revisao } from "./DesignRevisao";
@@ -32,7 +33,8 @@ type Mensagem = {
   referencias?: Referencia[]; mensagem?: string; sugestoes?: string[]; passos?: string[]; mais?: number; menos?: number;
   variacoes?: Variacao[] | null; escolhida?: number | null;
 };
-type Referencia = { tipo: "imagem" | "documento" | "pagina"; nome: string; data?: string; texto?: string };
+type Referencia = { tipo: "imagem" | "documento" | "pagina"; nome: string; data?: string; texto?: string;
+                    captura_id?: string; blocos?: Bloco[]; paleta?: Paleta; largura?: number };
 type Comentario = {
   id: number; texto: string; fids: string[]; status: "pendente" | "aplicado" | "descartado"; orfao: boolean;
   versao_criada: number; versao_aplicada: number | null;
@@ -170,6 +172,7 @@ export default function DesignView(props: {
   const [abrirZoom, setAbrirZoom] = useState(false);
   const [abrirSalvar, setAbrirSalvar] = useState(false);
   const [camadas, setCamadas] = useState(false);
+  const [captura, setCaptura] = useState<Referencia | null>(null);   // janela dos blocos da página capturada
   const [revisao, setRevisao] = useState<Revisao | null>(null);
   const [revisando, setRevisando] = useState(false);
   const depoisDeGerar = useRef<() => void>(() => {});
@@ -1120,6 +1123,11 @@ export default function DesignView(props: {
                   <span key={k} className="inline-flex items-center gap-1 rounded-lg border border-line py-0.5 pr-1 pl-1 text-[11.5px] text-fg-2">
                     {r.tipo === "imagem" && r.data ? <img src={r.data} alt="" className="size-5 rounded object-cover" /> : <span>{r.tipo === "pagina" ? "🌐" : "📄"}</span>}
                     <span className="max-w-40 truncate" title={r.nome}>{r.nome}</span>
+                    {r.tipo === "pagina" && !!r.blocos && (
+                      <button onClick={() => setCaptura(r)} disabled={!projeto?.html || rodando}
+                              title={projeto?.html ? "Escolher blocos do site para trazer e usar a paleta dele" : "Gere o design primeiro; depois dá para trazer blocos"}
+                              className="rounded border border-line px-1 text-[10.5px] hover:bg-raised disabled:opacity-40">blocos</button>
+                    )}
                     <button onClick={() => setRefs((x) => x.filter((_, j) => j !== k))} title="Tirar" className="rounded p-0.5 hover:bg-raised"><X className="size-3" /></button>
                   </span>
                 ))}
@@ -1554,6 +1562,14 @@ export default function DesignView(props: {
           </aside>
         ))}
         </div>
+        {captura && (
+          <DesignCaptura nome={captura.nome} largura={captura.largura ?? 1440} blocos={captura.blocos ?? []}
+                         paleta={captura.paleta ?? { fundo: "", texto: "", destaque: "", fonte_texto: "", fonte_titulo: "" }}
+                         foto={refs.find((x) => x.tipo === "imagem" && x.captura_id === captura.captura_id)?.data ?? ""}
+                         onTrazer={async (indices) => { await semIA("captura", { captura_id: captura.captura_id, blocos: indices }); setCaptura(null); }}
+                         onPaleta={async () => { await semIA("paleta", { paleta: captura.paleta }); setCaptura(null); }}
+                         onFechar={() => setCaptura(null)} />
+        )}
         {apresentando && srcBase && (
           <Apresentacao html={projeto?.html ?? srcBase} slide={slides.atual} total={nSlides ? slides.total || nSlides : 0} palco={palco} iframe={telaCheia}
                         telaCheia={apresentando === "tela"} tela={tela}

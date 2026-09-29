@@ -718,6 +718,43 @@ def operar(conv_id: int, op: str, fids: list[str], alvo: str = "", onde: str = "
     return _sem_ia(conv_id, faz, texto, op, [f"{texto} (modo Editar, sem IA)"])
 
 
+def inserir_captura(conv_id: int, captura_id: str, indices: list[int]) -> dict:
+    """Blocos escolhidos da página capturada viram seções no fim da página (no rascunho, sem IA)."""
+    from . import design_referencias
+    html_blocos, nomes = design_referencias.blocos(captura_id, indices)
+
+    def faz(html: str):
+        corte = html.lower().rfind("</body>")
+        if corte < 0:
+            raise ValueError("O documento não tem </body>.")
+        return design_imagens.preencher(html[:corte] + html_blocos + "\n" + html[corte:]), []   # seção nova: recarrega
+    return _sem_ia(conv_id, faz, f"{len(nomes)} bloco(s) da captura", "captura",
+                   [f"Trouxe o bloco {n} da página capturada (sem IA)" for n in nomes])
+
+
+# token do :root → qual cor/fonte da paleta capturada ele recebe (pelo nome, em português ou inglês)
+_PAPEL = [("fundo", r"--(cor-)?(fundo|bg|background|superficie-base)$"), ("texto", r"--(cor-)?(texto|text|fg|foreground)$"),
+          ("destaque", r"--(cor-)?(primaria|primary|destaque|accent|marca|brand)$"),
+          ("fonte_titulo", r"--(fonte|font)-(titulo|heading|display|titulos)$"), ("fonte_texto", r"--(fonte|font)-(texto|body|corpo|base)$")]
+
+
+def aplicar_paleta(conv_id: int, paleta: dict) -> dict:
+    """Cores e fontes da página capturada nos tokens que o design já tem (sem IA, no rascunho)."""
+    with db.session() as s:
+        html = _base(s, conv_id)[0]
+    raiz = design_html.root_css(html)
+    nomes = re.findall(r"(--[\w-]+)\s*:", raiz)
+    tokens = {}
+    for papel, padrao in _PAPEL:
+        v = str((paleta or {}).get(papel) or "").strip().replace('"', "'")
+        alvo = next((n for n in nomes if re.search(padrao, n)), None)
+        if v and alvo and design_html.token_valido(alvo, v) and not re.search(r"[;{}<>]", v):
+            tokens[alvo] = v
+    if not tokens:
+        raise ToolError("O design não tem tokens de fundo, texto, destaque ou fonte com nome reconhecível para receber a paleta.")
+    return ajustar_tokens(conv_id, tokens)
+
+
 def ajustar_tokens(conv_id: int, tokens: dict) -> dict:
     """Painel de ajustes: só tokens que já existem no :root; o resto da página acompanha sozinho."""
     if not isinstance(tokens, dict) or not tokens:
