@@ -971,6 +971,10 @@ def _referencias(refs: list[dict] | None) -> tuple[str, list[str], list[dict]]:
         elif tipo in ("documento", "pagina") and r.get("texto"):
             textos.append(f"--- {'Página' if tipo == 'pagina' else 'Documento'} de referência: {nome} ---\n{str(r['texto'])[:12_000]}")
             chat.append({"tipo": tipo, "nome": nome})
+        elif tipo == "pasta" and r.get("texto"):   # o programa do usuário: base do pedido, não só inspiração
+            textos.append(f"--- Projeto do usuário (pasta {nome}): o pedido é sobre ESTE programa — mantenha a estrutura, "
+                          f"o conteúdo e a identidade dele e melhore em cima ---\n{str(r['texto'])[:32_000]}")
+            chat.append({"tipo": tipo, "nome": nome})
     bloco = ("Referências que o usuário anexou (use como base de conteúdo e estilo):\n" + "\n\n".join(textos)) if textos else ""
     if imagens:
         bloco += ("\n\n" if bloco else "") + f"{len(imagens)} imagem(ns) de referência anexada(s): siga o estilo visual delas."
@@ -1149,9 +1153,71 @@ def _guarda(message_id: int, status: str, texto: str, **design_extra) -> None:
         s.commit()
 
 
+class JanelaCheia(ValueError):   # ValueError: na geração em etapas, só aquela seção falha
+    """O pedido não cabe na janela de contexto do modelo (a mensagem já diz o que fazer)."""
+
+
+def _estimar(mensagens: list[dict]) -> int:
+    """Tokens aproximados do pedido: ~3 caracteres por token em HTML/código, ~800 por imagem."""
+    total = 0
+    for m in mensagens:
+        c = m["content"]
+        partes = c if isinstance(c, list) else [{"type": "text", "text": c}]
+        total += sum(len(x.get("text", "")) // 3 if x.get("type") == "text" else 800 for x in partes)
+    return total
+
+
+def _caber(run: dict, mensagens: list[dict], ctx_max: int | None) -> list[dict]:
+    """Cada chamada do Design é independente (não leva o histórico do chat, então não há o que
+    compactar); o que pode estourar é um pedido só — documento inteiro, referência grande. Sobra espaço
+    para a resposta; se não couber, corta as referências anexadas; se ainda não couber, recusa."""
+    if not ctx_max:
+        return mensagens
+    limite = ctx_max - min(8192, int(ctx_max * 0.3))   # a resposta também ocupa a janela
+    est = _estimar(mensagens)
+    if est <= limite:
+        return mensagens
+    c = mensagens[1]["content"]
+    texto = c if isinstance(c, str) else next((x["text"] for x in c if x.get("type") == "text"), "")
+    i = texto.find("Referências que o usuário anexou")
+    if i >= 0:
+        sobra = len(texto[i:]) - (est - limite) * 3 - 300
+        if sobra > 400:
+            novo = texto[:i] + texto[i:i + sobra] + "\n[… o resto das referências foi cortado para caber na janela de contexto do modelo]"
+            conteudo = novo if isinstance(c, str) else [{**x, "text": novo} if x.get("type") == "text" else x for x in c]
+            mensagens = [mensagens[0], {**mensagens[1], "content": conteudo}, *mensagens[2:]]
+            if _estimar(mensagens) <= limite:
+                run.setdefault("passos_extra", []).append(
+                    f"Cortou parte das referências para caber na janela de contexto de {run['spec']['model']} ({ctx_max:,} tokens)".replace(",", "."))
+                return mensagens
+    raise JanelaCheia(
+        f"O pedido não cabe na janela de contexto de {run['spec']['model']} (≈{est:,} tokens de {ctx_max:,}, deixando espaço para a resposta). "
+        "Peça por uma seção ou por elementos selecionados em vez do documento inteiro, anexe menos referências, "
+        "ou use um modelo com janela maior — o documento não mudou.".replace(",", "."))
+
+
+_JANELA: dict[tuple[str, str], tuple[int | None, float]] = {}
+
+
+async def _janela(provider: str, model: str) -> int | None:
+    """Janela de contexto do modelo, com cache de 5 min (a geração em etapas chama várias vezes seguidas)
+    e 3 s de teto: não saber a janela nunca pode segurar nem derrubar o pedido."""
+    chave = (provider, model)
+    if (c := _JANELA.get(chave)) and time.monotonic() - c[1] < 300:
+        return c[0]
+    try:
+        n = await asyncio.wait_for(llm.context_limit(provider, model, config.NUM_CTX), 3)
+    except Exception:
+        n = None
+    _JANELA[chave] = (n, time.monotonic())
+    return n
+
+
 async def _chamar(run: dict, mensagens: list[dict]) -> str:
     """Uma chamada ao modelo, em streaming. Guarda raciocínio e estatísticas no run (formato do agente)."""
     spec = run["spec"]
+    ctx_max = await _janela(spec["provider"], spec["model"])
+    mensagens = _caber(run, mensagens, ctx_max)
     content, reasoning, done, t0, t_first = "", "", {}, time.monotonic(), 0.0
     run["parcial"] = ""
     async with aclosing(llm.chat_stream(spec["provider"], spec["model"], mensagens, None, config.NUM_CTX,
@@ -1175,7 +1241,7 @@ async def _chamar(run: dict, mensagens: list[dict]) -> str:
     if pensou:
         run["raciocinio"] += pensou
     run["raciocinio"] += "\n\n"
-    run["stats"].append(_stats(mensagens, None, content, reasoning, done, t0, t_first, None, spec["model"]))
+    run["stats"].append(_stats(mensagens, None, content, reasoning, done, t0, t_first, ctx_max, spec["model"]))
     return texto
 
 
@@ -1325,6 +1391,8 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                          mensagem=mensagem, sugestoes=sugs, passos=passos, **extra)
         if run.get("comentarios"):
             _marca_comentarios(run["conv_id"], run["comentarios"], n)
+    except JanelaCheia as e:
+        _fecha(mid, "erro", str(e))
     except Exception as e:   # erro do modelo não pode deixar a mensagem em "running"
         _fecha(mid, "erro", f"Erro do modelo: {e} — o documento não mudou.")
     finally:
@@ -1441,6 +1509,7 @@ def estado(message_id: int) -> dict:
     if run := _RUNS.get(message_id):
         out = {"message_id": message_id, "status": "rodando", "modo": run["modo"],
                "parcial": run["parcial"] if run["modo"] == "documento" else "",
+               "escrevendo": bool(run["parcial"]),   # já saiu texto da chamada atual (senão ainda está pensando)
                "raciocinio": run["raciocinio"], "tokens": run["vivos"],
                "segundos": round(time.monotonic() - run["t0"], 1), "vivo": _stats_vivo(run)}
         if run["modo"] == "etapas":

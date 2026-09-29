@@ -8,7 +8,8 @@ import { FolderOpen, Trash } from "./icons";
 
 export type Sistema = { id: string; nome: string; pasta: string; tokens: Record<string, string>; css: string; notas: string; criado: string };
 
-const SALVAR_MS = 700;   // depois do último movimento: um passo no rascunho, não um por pixel
+const SALVAR_MS = 700;
+const CHAVE_PASTA = "forja.design.pasta-sistema";   // depois do último movimento: um passo no rascunho, não um por pixel
 const FONTES = [
   "system-ui, sans-serif", '"Segoe UI", system-ui, sans-serif', "Georgia, serif", '"Palatino Linotype", Palatino, serif',
   '"Times New Roman", serif', '"Trebuchet MS", sans-serif', "Verdana, sans-serif", "ui-monospace, monospace",
@@ -124,7 +125,9 @@ export default function DesignAjustes(props: {
   const originais = useMemo(() => lerTokens(props.html), [props.html]);
   const tweaks = useMemo(() => lerTweaks(props.html), [props.html]);
   const [valores, setValores] = useState<Record<string, string>>({});
-  const [pasta, setPasta] = useState(props.pastaPadrao);
+  // a última pasta escolhida fica guardada (sem isso, sair da aba voltava o campo para a padrão)
+  const [pasta, setPastaEstado] = useState(() => { try { return localStorage.getItem(CHAVE_PASTA) || props.pastaPadrao; } catch { return props.pastaPadrao; } });
+  const setPasta = (p: string) => { setPastaEstado(p); try { localStorage.setItem(CHAVE_PASTA, p); } catch { /* sem storage: só nesta aba */ } };
   const [nome, setNome] = useState("");
   const [extraindo, setExtraindo] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -253,7 +256,7 @@ export default function DesignAjustes(props: {
               {extraindo ? "Lendo o código…" : "Criar do código"}
             </button>
           </div>
-          <p className="text-[11px] text-faint">Lê o CSS da pasta e resume; o modelo de edição só vê esse resumo.</p>
+          <p className="text-[11px] text-faint">Lê a pasta de um projeto (CSS, Tailwind, componentes) ou de um design system pronto (DESIGN.md, tokens em JSON, fontes) e resume; o modelo de edição só vê esse resumo.</p>
         </div>
       </section>
     </div>

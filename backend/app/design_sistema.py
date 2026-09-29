@@ -28,6 +28,10 @@ PROMPT = Path(__file__).parent / "design_prompts" / "sistema.md"
 EXTENSOES = {".css", ".scss", ".sass", ".less", ".tsx", ".jsx", ".vue", ".svelte", ".html", ".astro", ".ts", ".js"}
 IGNORAR = {"node_modules", ".git", "dist", "build", ".next", ".nuxt", "__pycache__", ".venv", "vendor", "coverage", ".forja"}
 MAX_ARQUIVOS, MAX_BYTES = 600, 300_000
+FONTES_ARQ = {".woff", ".woff2", ".ttf", ".otf"}
+# texto de design system (DESIGN.md do Claude, README, guias): vira notas de estilo que a IA segue
+_TEXTO_PRIORIDADE = ("design.md", "design-system.md", "readme.md", "guidelines.md", "tokens.md", "brand.md", "style.md")
+MAX_TEXTO = 7000
 _COR = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\([^)]*\)|hsla?\([^)]*\)|oklch\([^)]*\)")
 
 
@@ -57,10 +61,32 @@ def apagar(sid: str) -> list[dict]:
     return lista
 
 
+def _tokens_json(dado, caminho: list[str], out: dict) -> None:
+    """Tokens em JSON (W3C/DTCG `$value`, Style Dictionary `value`, ou valor solto): o caminho vira o nome."""
+    if len(out) >= 200:
+        return
+    if isinstance(dado, dict):
+        v = dado.get("$value", dado.get("value"))
+        if isinstance(v, (str, int, float)) and not isinstance(v, bool):
+            out["--" + "-".join(caminho)] = str(v)
+            return
+        for k, x in dado.items():
+            if not str(k).startswith("$"):
+                _tokens_json(x, [*caminho, re.sub(r"[^\w-]+", "-", str(k)).strip("-").lower()], out)
+    elif isinstance(dado, (str, int, float)) and not isinstance(dado, bool) and caminho:
+        t = str(dado)
+        if _COR.fullmatch(t) or re.fullmatch(r"-?[\d.]+(px|rem|em|%)?", t) or "," in t or " " in t:
+            out["--" + "-".join(caminho)] = t
+
+
 def resumo(pasta: Path) -> str:
-    """O que se repete no código da pasta, em poucas linhas (é isso que vai ao modelo)."""
+    """O que se repete no código da pasta, em poucas linhas (é isso que vai ao modelo). Lê também
+    design system em forma de documento (DESIGN.md, README), tokens em JSON e as fontes da pasta."""
     vars_, cores, fontes, tamanhos, raios, sombras, comps = Counter(), Counter(), Counter(), Counter(), Counter(), Counter(), Counter()
     tailwind, lidos = "", 0
+    tokens_json: dict[str, str] = {}
+    textos: list[tuple[int, str, str]] = []   # (prioridade, arquivo, texto)
+    arquivos_fonte: set[str] = set()
     for atual, pastas, arquivos in os.walk(pasta):
         pastas[:] = [p for p in pastas if p not in IGNORAR and not p.startswith(".")]
         for nome in arquivos:
@@ -70,7 +96,29 @@ def resumo(pasta: Path) -> str:
             if nome.startswith("tailwind.config"):
                 tailwind = f.read_text("utf-8", "ignore")[:4000]
                 continue
-            if f.suffix.lower() not in EXTENSOES:
+            ext = f.suffix.lower()
+            if ext in FONTES_ARQ:
+                arquivos_fonte.add(re.sub(r"[-_ ]?(regular|bold|italic|medium|semibold|light|black|thin|variable|vf|\d{3})+$", "", f.stem, flags=re.I))
+                continue
+            if ext in (".md", ".mdx", ".json"):
+                try:
+                    if f.stat().st_size > MAX_BYTES or nome in ("package.json", "package-lock.json", "tsconfig.json"):
+                        continue
+                    t = f.read_text("utf-8", "ignore")
+                except OSError:
+                    continue
+                lidos += 1
+                cores.update(c.lower() for c in _COR.findall(t))
+                if ext == ".json":
+                    try:
+                        _tokens_json(json.loads(t), [], tokens_json)
+                    except ValueError:
+                        pass
+                else:
+                    prio = next((i for i, n in enumerate(_TEXTO_PRIORIDADE) if nome.lower() == n), len(_TEXTO_PRIORIDADE))
+                    textos.append((prio, str(f.relative_to(pasta)), t))
+                continue
+            if ext not in EXTENSOES:
                 continue
             try:
                 if f.stat().st_size > MAX_BYTES:
@@ -88,7 +136,7 @@ def resumo(pasta: Path) -> str:
             comps.update(m.lower() for m in re.findall(
                 r"\.((?:btn|button|card|input|field|badge|tag|chip|nav|navbar|header|footer|modal|alert|tab|hero)[\w-]*)", t))
     if not lidos and not tailwind:
-        raise ToolError(f"Não achei CSS nem componentes em {pasta}.")
+        raise ToolError(f"Não achei CSS, componentes, tokens nem documento de design system em {pasta}.")
 
     def top(c: Counter, n: int) -> str:
         return "\n".join(f"  {k}  (×{v})" for k, v in c.most_common(n)) or "  (nada)"
@@ -102,6 +150,18 @@ def resumo(pasta: Path) -> str:
               f"Classes de componente:\n{top(comps, 30)}"]
     if tailwind:
         partes.append(f"tailwind.config (início):\n{tailwind}")
+    if tokens_json:
+        partes.append("Tokens em JSON:\n" + "\n".join(f"  {k}: {v}" for k, v in list(tokens_json.items())[:150]))
+    if arquivos_fonte:
+        partes.append("Arquivos de fonte na pasta: " + ", ".join(sorted(arquivos_fonte)[:12]))
+    if textos:   # o guia do sistema, na íntegra até o limite: é daí que saem as regras de uso
+        resto, blocos = MAX_TEXTO, []
+        for _, arq, t in sorted(textos)[:6]:
+            if resto <= 200:
+                break
+            blocos.append(f"--- {arq} ---\n{t[:resto]}")
+            resto -= min(len(t), resto)
+        partes.append("Documentação do design system:\n" + "\n\n".join(blocos))
     return "\n\n".join(partes)
 
 
@@ -118,7 +178,7 @@ def _validar(d: dict, nome: str, pasta: str) -> dict:
     if "</" in css or "<" in css:
         css = ""
     return {"id": f"ds{int(time.time() * 1000):x}", "nome": (str(d.get("nome") or "") or nome)[:80],
-            "pasta": pasta, "tokens": tokens, "css": css[:8000], "notas": str(d.get("notas") or "")[:1500],
+            "pasta": pasta, "tokens": tokens, "css": css[:8000], "notas": str(d.get("notas") or "")[:4000],
             "criado": time.strftime("%Y-%m-%d %H:%M")}
 
 

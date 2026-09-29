@@ -2022,6 +2022,20 @@ async def design_ref_documento(file: UploadFile = File(...)):
         raise HTTPException(400, str(e))
 
 
+class DesignPastaRefBody(BaseModel):
+    pasta: str
+
+
+@app.post("/api/design/referencias/pasta")
+def design_ref_pasta(body: DesignPastaRefBody):
+    """Pasta de um programa do usuário como referência: árvore e código da interface (até um orçamento)."""
+    from . import design_referencias
+    try:
+        return design_referencias.pasta_projeto(body.pasta)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/design/referencias/pagina")
 async def design_ref_pagina(body: DesignUrlBody):
     """Página da web como referência: estrutura, cores/fontes computadas e um screenshot."""

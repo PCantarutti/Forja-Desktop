@@ -21,6 +21,8 @@ import { ArrowLeft, ArrowRight, Bubble, Camadas as CamadasIcone, Celular, Check,
   Split, TelaCheia, Undo, X } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
+import ContextRing from "./ContextRing";
+import TodosBar from "./TodosBar";
 
 // Tela Design: chat à esquerda (no feitio do chat do agente: bolhas, raciocínio colapsável e a linha
 // de métricas), canvas à direita. Cada pedido à IA vai pela rota mais barata (o backend decide, você
@@ -35,7 +37,7 @@ type Mensagem = {
   referencias?: Referencia[]; mensagem?: string; sugestoes?: string[]; passos?: string[]; mais?: number; menos?: number;
   variacoes?: Variacao[] | null; escolhida?: number | null;
 };
-type Referencia = { tipo: "imagem" | "documento" | "pagina"; nome: string; data?: string; texto?: string;
+type Referencia = { tipo: "imagem" | "documento" | "pagina" | "pasta"; nome: string; data?: string; texto?: string;
                     captura_id?: string; blocos?: Bloco[]; paleta?: Paleta; largura?: number };
 type Comentario = {
   id: number; texto: string; fids: string[]; status: "pendente" | "aplicado" | "descartado"; orfao: boolean;
@@ -55,7 +57,7 @@ const COMANDO_GIT = "winget install --id Git.Git -e";
 type Patch = { fid: string; html: string };
 type Geracao = {
   message_id: number; status: string; modo?: string; parcial?: string; raciocinio?: string; tokens?: number;
-  segundos?: number; texto?: string; versao?: number | null; base?: number | null; patches?: Patch[];
+  segundos?: number; escrevendo?: boolean; texto?: string; versao?: number | null; base?: number | null; patches?: Patch[];
   vivo?: Stats; secoes?: { nome: string; status: string }[]; n?: number; doc?: string;
 };
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
@@ -446,6 +448,23 @@ export default function DesignView(props: {
     try {
       const r = await api.post<Referencia[]>("/design/referencias/pagina", { url });
       setRefs((x) => [...x, ...r]);
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setAnexando("");
+    }
+  }
+
+  /** A pasta de um programa seu: a IA lê a estrutura e o código da interface e faz o pedido em cima dele. */
+  async function anexarPasta() {
+    setAbrirAnexo(false);
+    const escolher = ponte()?.pickFolder;
+    const pasta = escolher ? await escolher(props.pastaPadrao) : window.prompt("Pasta do seu projeto:", props.pastaPadrao);
+    if (!pasta) return;
+    setAnexando(pasta.split(/[\\/]/).filter(Boolean).pop() ?? pasta);
+    try {
+      const r = await api.post<Referencia>("/design/referencias/pasta", { pasta });
+      setRefs((x) => [...x, r]);
     } catch (e: any) {
       props.onError(e.message);
     } finally {
@@ -927,16 +946,34 @@ export default function DesignView(props: {
     fragmento: "Editando o fragmento…", tokens: "Ajustando os tokens…", secao: "Escrevendo a seção…",
     plano: "Planejando…", perguntas: "Pensando no que perguntar…", tweaks: "Criando os ajustes…", etapas: "Escrevendo…",
   };
+  const FASE: Record<string, string> = {
+    fragmento: "editando os elementos", tokens: "ajustando os tokens", secao: "escrevendo a seção", plano: "montando o plano",
+    perguntas: "pensando no que perguntar", tweaks: "criando os ajustes", variacoes: "criando as variações",
+  };
+  const secoesVivas = geracao?.modo === "etapas" ? geracao.secoes ?? [] : [];
+  const tarefas = secoesVivas.map((x) => ({
+    text: x.status === "erro" ? `${x.nome} (falhou)` : x.nome,
+    status: (x.status === "gerando" ? "doing" : x.status === "fila" ? "pending" : "done") as "pending" | "doing" | "done",
+  }));
+  const fase = (() => {
+    if (!geracao) return "";
+    const i = secoesVivas.findIndex((x) => x.status === "gerando");
+    if (i >= 0 && !geracao.escrevendo && geracao.raciocinio) return `pensando em “${secoesVivas[i].nome}” (${i + 1} de ${secoesVivas.length})`;
+    if (i >= 0) return `escrevendo “${secoesVivas[i].nome}” (${i + 1} de ${secoesVivas.length})`;
+    if (!geracao.tokens && !geracao.raciocinio && !geracao.parcial) return "aguardando o modelo";
+    if (geracao.raciocinio && !geracao.escrevendo) return "pensando";
+    return FASE[geracao.modo ?? ""] ?? "escrevendo o documento";
+  })();
   const aoVivo = rodando && geracao && (
     <div className="my-4">
-      <DesignAtividade ao_vivo raciocinio={geracao.raciocinio ?? ""} passos={[]} passosVivos={geracao.modo === "etapas" ? geracao.secoes : undefined}
-                       rotulo={ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"} />
-      {!geracao.raciocinio && geracao.modo !== "etapas" && (
-        <div className="mb-2 animate-pulse text-sm text-muted">{ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"}</div>
-      )}
-      {geracao.vivo && <StatsRow s={aggregate([geracao.vivo])} live />}
+      <DesignAtividade ao_vivo raciocinio={geracao.raciocinio ?? ""} passos={[]} rotulo={ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"} />
+      <StatsRow s={geracao.vivo ? aggregate([geracao.vivo]) : { model: prefs.modelos.geracao.model, tokens: 0, seconds: 0, tps: null, estimated: false }}
+                live phase={fase} />
     </div>
   );
+  // Anel de contexto: cada chamada do Design é independente (sem histórico), então o que conta é a última
+  const statsFeitas = (projeto?.mensagens ?? []).flatMap((m) => (m.role === "assistant" ? m.stats : []));
+  const ultStats = statsFeitas[statsFeitas.length - 1];
 
   if (git && !git.ok) {
     return (
@@ -1036,7 +1073,7 @@ export default function DesignView(props: {
                             <img key={k} src={r.data} alt={r.nome} title={r.nome} className="h-14 rounded-lg border border-line object-cover" />
                           ) : (
                             <span key={k} className="rounded-lg border border-line px-2 py-0.5 text-[11.5px] text-muted">
-                              {r.tipo === "pagina" ? <Globe className="size-3.5" /> : r.tipo === "imagem" ? <Image className="size-3.5" /> : <Paperclip className="size-3.5" />} {r.nome}
+                              {r.tipo === "pagina" ? <Globe className="size-3.5" /> : r.tipo === "imagem" ? <Image className="size-3.5" /> : r.tipo === "pasta" ? <FolderOpen className="size-3.5" /> : <Paperclip className="size-3.5" />} {r.nome}
                             </span>
                           ))}
                         </div>
@@ -1247,12 +1284,13 @@ export default function DesignView(props: {
           <div onDragOver={(e) => { if ([...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
                onDrop={(e) => { if (soltarArquivos(e.dataTransfer.files)) e.preventDefault(); }}
                onPaste={(e) => { if (soltarArquivos([...e.clipboardData.files])) e.preventDefault(); }}>
+          {rodando && <TodosBar tasks={tarefas} live />}
           <CaixaPrompt>
             {(!!refs.length || !!anexando) && (
               <div className="mb-1.5 flex flex-wrap gap-1.5">
                 {refs.map((r, k) => (
                   <span key={k} className="inline-flex items-center gap-1 rounded-lg border border-line py-0.5 pr-1 pl-1 text-[11.5px] text-fg-2">
-                    {r.tipo === "imagem" && r.data ? <img src={r.data} alt="" className="size-5 rounded object-cover" /> : <span className="text-muted">{r.tipo === "pagina" ? <Globe className="size-3.5" /> : <Paperclip className="size-3.5" />}</span>}
+                    {r.tipo === "imagem" && r.data ? <img src={r.data} alt="" className="size-5 rounded object-cover" /> : <span className="text-muted">{r.tipo === "pagina" ? <Globe className="size-3.5" /> : r.tipo === "pasta" ? <FolderOpen className="size-3.5" /> : <Paperclip className="size-3.5" />}</span>}
                     <span className="max-w-40 truncate" title={r.nome}>{r.nome}</span>
                     {r.tipo === "pagina" && !!r.blocos && (
                       <button onClick={() => setCaptura(r)} disabled={!projeto?.html || rodando}
@@ -1296,7 +1334,7 @@ export default function DesignView(props: {
             />
             <RodapePrompt>
               <div className="relative">
-                <button className={pilula} onClick={() => setAbrirAnexo((v) => !v)} title="Referência: imagem, documento ou página da web">
+                <button className={pilula} onClick={() => setAbrirAnexo((v) => !v)} title="Referência: imagem, documento, pasta do seu projeto ou página da web">
                   <Paperclip className="size-3.5" />
                 </button>
                 {abrirAnexo && (
@@ -1306,6 +1344,10 @@ export default function DesignView(props: {
                     </button>
                     <button onClick={() => escolherArquivo("documento")} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-raised">
                       <Paperclip className="size-3.5" /> Documento <span className="ml-auto text-[11px] text-faint">PDF, DOCX, PPTX…</span>
+                    </button>
+                    <button onClick={anexarPasta} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] hover:bg-raised"
+                            title="A IA lê a estrutura e o código da interface da pasta e faz o pedido em cima do seu programa">
+                      <FolderOpen className="size-3.5" /> Pasta do seu projeto <span className="ml-auto text-[11px] text-faint">melhorar em cima</span>
                     </button>
                     <form onSubmit={(e) => { e.preventDefault(); capturarPagina(); }} className="flex items-center gap-1.5 border-t border-line px-2 pt-1.5 pb-1">
                       <Globe className="size-3.5 shrink-0 text-muted" />
@@ -1324,6 +1366,10 @@ export default function DesignView(props: {
                 </button>
               )}
               <ModeEffortMenu effort={prefs.esforco} onEffort={(esforco) => setPrefs((p) => ({ ...p, esforco }))} semExtremo />
+              <ContextRing used={ultStats ? ultStats.prompt_tokens + ultStats.tokens : null} max={ultStats?.ctx_max ?? null}
+                           out={ultStats?.tokens ?? null} avg={statsFeitas.length ? aggregate(statsFeitas).tps : null}
+                           canCompact={false} onCompact={() => {}} provider={prefs.modelos.geracao.provider}
+                           models={[...new Set(statsFeitas.map((x) => x.model).filter(Boolean))]} />
               <Menu title="De onde vêm as imagens" items={FONTES_IMAGENS} value={prefs.imagens ?? "skill"}
                     onChange={(imagens) => setPrefs((p) => ({ ...p, imagens }))}
                     button={(label) => (<><Image className="size-3.5" />{label.replace("Imagens: ", "")}</>)} />

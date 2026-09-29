@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import tempfile
 from pathlib import Path
+import os
 import re
 import secrets
 from urllib.parse import urlparse
@@ -215,3 +216,81 @@ def blocos(captura_id: str, indices: list[int]) -> tuple[str, list[str]]:
         partes.append(f'<section data-section="{nome}">\n{html}\n</section>')
         nomes.append(nome)
     return "\n".join(partes), nomes
+
+
+# ------------------------------------------------------------------ pasta de um projeto seu
+# "Anexar › Pasta": a IA lê o programa que já existe (telas, componentes, estilo) e faz o pedido em
+# cima dele. Não vai o projeto inteiro: a árvore e os arquivos que mais dizem sobre a interface, até
+# um orçamento — o resto do contexto é do pedido e da página.
+
+ORCAMENTO_PASTA = 30_000
+MAX_POR_ARQUIVO = 6_000
+_EXT_UI = {".html", ".htm", ".css", ".scss", ".sass", ".less", ".tsx", ".jsx", ".vue", ".svelte", ".astro", ".ts", ".js", ".md", ".json"}
+_IGNORAR = {"node_modules", ".git", "dist", "build", ".next", ".nuxt", "__pycache__", ".venv", "venv", "vendor", "coverage",
+            "out", ".forja", "target", "bin", "obj", ".turbo", ".cache"}
+
+
+def _peso(rel: str) -> int:
+    """Quanto um arquivo diz sobre a interface (maior = entra antes)."""
+    nome, low = rel.rsplit("/", 1)[-1].lower(), rel.lower()
+    if nome in ("design.md", "design-system.md"):
+        return 100
+    if nome in ("index.html", "tailwind.config.js", "tailwind.config.ts", "globals.css", "index.css", "app.css", "styles.css", "global.css"):
+        return 90
+    if re.match(r"(app|main|layout|root)\.(tsx|jsx|vue|svelte|astro|ts|js)$", nome):
+        return 80
+    if nome.endswith((".html", ".htm")):
+        return 70
+    if nome.endswith((".css", ".scss", ".sass", ".less")):
+        return 65
+    if re.search(r"/(pages|routes|views|screens|app)/", "/" + low):
+        return 60
+    if re.search(r"/(components|ui|layouts?)/", "/" + low) and nome.endswith((".tsx", ".jsx", ".vue", ".svelte", ".astro")):
+        return 50
+    if nome == "readme.md":
+        return 40
+    if nome.endswith((".tsx", ".jsx", ".vue", ".svelte", ".astro")):
+        return 30
+    return 0   # .ts/.js/.json soltos: só na árvore
+
+
+def pasta_projeto(pasta: str) -> dict:
+    """Referência de texto com a árvore e o código da interface de uma pasta do computador."""
+    from . import design_sistema, workspace
+    try:
+        raiz = workspace.resolve(pasta)
+    except workspace.WorkspaceError as e:
+        raise ToolError(f"Não achei a pasta: {e}") from e
+    if not raiz.is_dir():
+        raise ToolError(f"Não é uma pasta: {pasta}")
+    arquivos: list[str] = []
+    for atual, pastas, nomes in os.walk(raiz):
+        pastas[:] = sorted(p for p in pastas if p not in _IGNORAR and not p.startswith("."))
+        for n in sorted(nomes):
+            if Path(n).suffix.lower() in _EXT_UI and n not in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
+                arquivos.append(str((Path(atual) / n).relative_to(raiz)).replace("\\", "/"))
+        if len(arquivos) > 3000:
+            break
+    if not arquivos:
+        raise ToolError(f"Não achei arquivos de interface (HTML, CSS, componentes) em {raiz}.")
+    partes = [f"Pasta: {raiz.name} ({len(arquivos)} arquivos de interface)",
+              "Árvore (parcial):\n" + "\n".join(f"  {a}" for a in arquivos[:150])]
+    try:
+        partes.append("Estilo que se repete no código:\n" + design_sistema.resumo(raiz)[:3500])
+    except ToolError:
+        pass
+    resto = ORCAMENTO_PASTA - sum(len(p) for p in partes)
+    lidos = []
+    for rel in sorted((a for a in arquivos if _peso(a) > 0), key=lambda a: (-_peso(a), a.count("/"), a)):
+        if resto < 800:
+            break
+        try:
+            t = (raiz / rel).read_text("utf-8", "ignore")
+        except OSError:
+            continue
+        t = re.sub(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=]{200,}", "data:…", t)   # foto embutida não ajuda o modelo
+        trecho = t[:min(MAX_POR_ARQUIVO, resto)]
+        partes.append(f"--- {rel}{' (início)' if len(t) > len(trecho) else ''} ---\n{trecho}")
+        lidos.append(rel)
+        resto -= len(trecho) + len(rel) + 12
+    return {"tipo": "pasta", "nome": raiz.name, "texto": "\n\n".join(partes), "arquivos": lidos, "pasta": str(raiz)}
