@@ -112,3 +112,60 @@ def test_link_da_nova_janela_sem_token_e_com_sandbox(monkeypatch):
     assert r.status_code == 200 and "Padaria" in r.text and "data-fid" not in r.text
     assert r.headers["content-security-policy"].startswith("sandbox allow-scripts")
     assert c.get("/api/design-janela/chave-inventada").status_code == 404
+
+
+DOC2 = """<!doctype html><html><head></head><body><section data-section="a"><ul class="lista">
+<li class="i">Um</li><li class="i">Dois</li><li class="i">Três</li></ul>
+<a class="cta" href="#x">Ir</a><img data-slot="foto-1" data-slot-status="provisoria" src="data:image/png;base64,AAAA" alt="f"></section></body></html>"""
+
+
+def _proj2() -> int:
+    with db.session() as s:
+        c = db.Conversation(kind="design", title="Lista")
+        s.add(c)
+        s.commit()
+        cid = c.id
+    design._nova_versao(cid, None, DOC2, "inicial")
+    return cid
+
+
+def test_operacoes_de_estrutura_no_rascunho():
+    conv = _proj2()
+    html = design.projeto(conv)["html"]
+    um, dois, tres = _fid(html, 'li class="i"')
+    ul = _fid(html, "ul")[0]
+    # mover o Três para antes do Um: o patch é o <ul> (pai comum), não a página toda
+    r = design.operar(conv, "mover", [tres], um, "antes")
+    textos = re.findall(r"<li[^>]*>(\w+)</li>", r["projeto"]["html"])
+    assert textos == ["Três", "Um", "Dois"] and [x["fid"] for x in r["fim"]["patches"]] == [ul]
+    # duplicar: a cópia ganha fid novo
+    r = design.operar(conv, "duplicar", [um])
+    h = r["projeto"]["html"]
+    assert re.findall(r"<li[^>]*>(\w+)</li>", h) == ["Três", "Um", "Um", "Dois"] and len(set(_fid(h, 'li class="i"'))) == 4
+    # apagar dois de uma vez
+    r = design.operar(conv, "apagar", [tres, dois])
+    assert re.findall(r"<li[^>]*>(\w+)</li>", r["projeto"]["html"]) == ["Um", "Um"]
+    # link e imagem
+    a = _fid(h, 'a class="cta"')[0]
+    img = _fid(h, "img")[0]
+    r = design.operar(conv, "link", [a], valor="https://padaria.com/cardapio")
+    assert 'href="https://padaria.com/cardapio"' in r["projeto"]["html"]
+    r = design.operar(conv, "imagem", [img], valor="data:image/png;base64,QkJCQg==")
+    tag = re.search(r"<img[^>]*>", r["projeto"]["html"]).group(0)
+    assert "QkJCQg==" in tag and 'data-slot-status="pronta"' in tag
+    p = design.projeto(conv)
+    assert p["total"] == 1 and p["rascunho"]["mudancas"] == 5
+
+
+@pytest.mark.parametrize("op,kw", [("link", {"valor": "javascript:alert(1)"}), ("imagem", {"valor": "https://x/y.png"}),
+                                   ("mover", {"alvo": "SELF", "onde": "dentro"}), ("apagar", {"fids": ["BODY"]})])
+def test_operacoes_recusam(op, kw):
+    conv = _proj2()
+    html = design.projeto(conv)["html"]
+    li = _fid(html, 'li class="i"')[0]
+    body = _fid(html, "body")[0]
+    fids = [body] if kw.get("fids") == ["BODY"] else [li]
+    alvo = li if kw.get("alvo") == "SELF" else ""
+    with pytest.raises(ToolError):
+        design.operar(conv, op, fids, alvo, kw.get("onde", "depois"), kw.get("valor", ""))
+    assert design.projeto(conv)["rascunho"] is None

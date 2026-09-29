@@ -540,6 +540,102 @@ def editar_estilo(conv_id: int, fids: list[str], estilos: dict) -> dict:
                    [f"{k}: {v or '(removido)'} em {len(fids)} elemento(s) (modo Editar, sem IA)" for k, v in estilos.items()])
 
 
+# Edição direta de estrutura no canvas (modo Editar): nada disso chama modelo.
+OPERACOES = ("apagar", "duplicar", "mover", "imagem", "link")
+_IMAGEM_OK = re.compile(r"^data:image/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$")
+_LINK_OK = re.compile(r"^(https?://|mailto:|tel:|#|/|\./|\.\./|[\w-]+\.html?\b)", re.I)
+INTOCAVEIS = design_html.SEM_FID | {"style", "body"}
+
+
+def _patch_de(html: str, fids: list[str]) -> list[str]:
+    """O menor ancestral comum que dá para trocar por patch; [] = o canvas recarrega (era o body)."""
+    els = design_html.indexar(html)
+    cadeias = []
+    for f in fids:
+        e = design_html.por_fid(els, f)
+        cadeia = []
+        while e is not None:
+            cadeia.append(e)
+            e = els[e["pai"]] if e["pai"] is not None else None
+        cadeias.append(cadeia)
+    comum = next((e for e in cadeias[0] if all(e in c for c in cadeias[1:])), None) if cadeias else None
+    f = design_html._fid(comum) if comum else None
+    return [f] if f and comum["tag"] not in ("body", "html") else []
+
+
+def operar(conv_id: int, op: str, fids: list[str], alvo: str = "", onde: str = "depois", valor: str = "") -> dict:
+    """Apagar, duplicar, mover (antes/depois/dentro de `alvo`), trocar imagem (<img>) e link (<a>)."""
+    if op not in OPERACOES:
+        raise ToolError(f"Operação desconhecida: {op}")
+    fids = [f for f in dict.fromkeys(fids or []) if f]
+    if not fids or len(fids) > 60:
+        raise ToolError("Selecione de 1 a 60 elementos.")
+    if op == "imagem" and (len(valor) > 12_000_000 or not _IMAGEM_OK.match(valor)):
+        raise ToolError("A imagem tem de vir como data URL (PNG, JPEG, WebP, GIF ou SVG) de até ~9 MB.")
+    if op == "link" and valor and (len(valor) > 2000 or not _LINK_OK.match(valor) or re.search(r'[\s"<>]', valor)):
+        raise ToolError("Link inválido: use http(s)://, mailto:, tel:, #âncora ou um caminho.")
+    if op == "mover" and onde not in ("antes", "depois", "dentro"):
+        raise ToolError("onde deve ser antes, depois ou dentro.")
+    info: dict = {}
+
+    def faz(html: str):
+        els = design_html.indexar(html)
+        alvos = [design_html.por_fid(els, f) for f in fids]
+        if None in alvos:
+            raise ValueError("Um dos elementos não existe mais no documento.")
+        if any(e["tag"] in INTOCAVEIS for e in alvos):
+            raise ValueError("Esse elemento não pode ser mexido assim.")
+        # de trás para frente: cortar um trecho não desloca os que vêm antes
+        ordem = sorted(alvos, key=lambda e: e["ini"], reverse=True)
+        if op == "apagar":
+            pais = _patch_de(html, fids)
+            pai_fids = [design_html._fid(els[e["pai"]]) for e in alvos if e["pai"] is not None]
+            for e in ordem:
+                html = design_html.remover(html, design_html._fid(e))
+            vivos = [f for f in pai_fids if f and design_html.outer(html, f)]
+            return html, _patch_de(html, vivos) if vivos else pais
+        if op == "duplicar":
+            for e in ordem:   # a cópia logo depois do original; o carimbo dá ids novos à cópia
+                html = html[:e["fim"]] + "\n" + html[e["ini"]:e["fim"]] + html[e["fim"]:]
+            return html, _patch_de(design_html.carimbar(html), fids)
+        if op == "mover":
+            a = design_html.por_fid(els, alvo)
+            if not a or a["tag"] in {"html", "head"} | design_html.SEM_FID:
+                raise ValueError("Destino inválido.")
+            if onde == "dentro" and (a["tag"] in design_html.VOID or a["fim"] == a["fim_tag"]):
+                raise ValueError("Esse destino não aceita filhos.")
+            if any(e["ini"] <= a["ini"] < e["fim"] for e in alvos):
+                raise ValueError("Não dá para mover um elemento para dentro dele mesmo.")
+            trechos = [html[e["ini"]:e["fim"]] for e in sorted(alvos, key=lambda e: e["ini"])]
+            de_onde = [f for e in alvos if e["pai"] is not None and (f := design_html._fid(els[e["pai"]]))]
+            for e in ordem:
+                html = design_html.remover(html, design_html._fid(e))
+            a = design_html.por_fid(design_html.indexar(html), alvo)
+            pos = a["ini"] if onde == "antes" else a["fim"] if onde == "depois" else html.rfind("<", a["fim_tag"], a["fim"])
+            html = html[:pos] + "\n".join(trechos) + ("\n" if onde == "antes" else "") + html[pos:]
+            return html, _patch_de(html, [*fids, alvo, *de_onde])   # o pai antigo também mudou
+        if op == "imagem":
+            e = alvos[0]
+            if e["tag"] != "img":
+                raise ValueError("Troca de imagem só em <img>.")
+            tag = design_html._attr(design_html._attr(e["txt"], "srcset", None), "src", valor)
+            if "data-slot" in e["attrs"]:
+                tag = design_html._attr(tag, "data-slot-status", "pronta")   # "Gerar imagens" não passa por cima
+            return html[:e["ini"]] + tag + html[e["fim_tag"]:], fids[:1]
+        # link
+        e = alvos[0]
+        if e["tag"] != "a":
+            raise ValueError("Link só em <a>.")
+        info["antes"] = e["attrs"].get("href") or ""
+        return html[:e["ini"]] + design_html._attr(e["txt"], "href", valor or None) + html[e["fim_tag"]:], fids[:1]
+
+    n = len(fids)
+    texto = {"apagar": f"Apagou {n} elemento(s)", "duplicar": f"Duplicou {n} elemento(s)",
+             "mover": f"Moveu {n} elemento(s) para {onde} de {alvo}", "imagem": "Trocou a imagem",
+             "link": f"Link: {valor or '(removido)'}"}[op]
+    return _sem_ia(conv_id, faz, texto, op, [f"{texto} (modo Editar, sem IA)"])
+
+
 def ajustar_tokens(conv_id: int, tokens: dict) -> dict:
     """Painel de ajustes: só tokens que já existem no :root; o resto da página acompanha sozinho."""
     if not isinstance(tokens, dict) or not tokens:

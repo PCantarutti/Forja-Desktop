@@ -1712,6 +1712,23 @@ def design_estilo(conv_id: int, body: DesignEstiloBody):
         raise HTTPException(400, str(e))
 
 
+class DesignOperacaoBody(BaseModel):
+    op: str
+    fids: list[str]
+    alvo: str = ""
+    onde: str = "depois"
+    valor: str = ""
+
+
+@app.post("/api/design/{conv_id}/operacao")
+def design_operacao(conv_id: int, body: DesignOperacaoBody):
+    """Modo Editar: apagar, duplicar, mover, trocar imagem e link, sem modelo (vai para o rascunho)."""
+    try:
+        return design.operar(conv_id, body.op, body.fids, body.alvo, body.onde, body.valor)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 # "Apresentar › Nova janela": o navegador do usuário não tem o token nem o cookie do app, então a
 # página sai por um link com chave aleatória. A resposta vem com CSP `sandbox` (origem opaca: o
 # script do design não fala com a API) e sem rede, como no canvas.

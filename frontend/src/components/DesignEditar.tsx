@@ -10,6 +10,29 @@ const FONTES = ["system-ui, sans-serif", "'Segoe UI', system-ui, sans-serif", "G
   "'Trebuchet MS', sans-serif", "Verdana, sans-serif", "ui-monospace, monospace"];
 const PESOS = ["300", "400", "500", "600", "700", "800", "900"];
 const ALINHA = [["left", "Esq."], ["center", "Centro"], ["right", "Dir."], ["justify", "Just."]];
+const acao = "rounded-lg border border-line px-2 py-0.5 text-[12px] text-fg hover:bg-raised";
+const LADO_MAX = 1600;   // foto maior que isso só pesa no HTML (o backend guarda tudo como data URL)
+
+/** Arquivo → data URL; foto grande vira WebP de no máximo LADO_MAX px (SVG e GIF vão como estão). */
+async function paraDataUrl(f: File): Promise<string> {
+  const bruto = await new Promise<string>((ok, erro) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result));
+    r.onerror = () => erro(r.error);
+    r.readAsDataURL(f);
+  });
+  if (/svg|gif/.test(f.type)) return bruto;
+  const img = new Image();
+  img.src = bruto;
+  await img.decode();
+  const k = Math.min(1, LADO_MAX / Math.max(img.width, img.height));
+  if (k === 1 && f.size < 400_000) return bruto;
+  const c = document.createElement("canvas");
+  c.width = Math.round(img.width * k);
+  c.height = Math.round(img.height * k);
+  c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL("image/webp", 0.85);
+}
 const campo = "min-w-0 flex-1 rounded-md border border-line bg-raised px-1.5 py-1 font-mono text-[11.5px] text-fg focus:border-focus focus:outline-none";
 
 /** rgb(a) do getComputedStyle → #rrggbb para o <input type=color>; transparente → "". */
@@ -26,8 +49,17 @@ export default function DesignEditar(props: {
   estilo: Record<string, string>;              // valores atuais (computados) do principal
   onPrevia: (estilos: Record<string, string>) => void;
   onSalvar: (estilos: Record<string, string>) => void;
+  tag: string;
+  href: string | null;
+  onOperar: (op: "apagar" | "duplicar" | "imagem" | "link", valor?: string) => void;
   onFechar: () => void;
 }) {
+  const [link, setLink] = useState(props.href ?? "");
+  const arquivo = useRef<HTMLInputElement>(null);
+  const trocarImagem = async (f: File | undefined) => {
+    if (!f) return;
+    props.onOperar("imagem", await paraDataUrl(f));
+  };
   const [vals, setVals] = useState(props.estilo);
   const pendente = useRef<Record<string, string>>({});
   const timer = useRef<number | undefined>(undefined);
@@ -76,6 +108,27 @@ export default function DesignEditar(props: {
           <X className="size-3.5" />
         </button>
       </div>
+      <div className="flex flex-wrap gap-1.5 border-b border-line px-3 py-2">
+        <button onClick={() => props.onOperar("duplicar")} title="Duplicar · Ctrl+D" className={acao}>Duplicar</button>
+        <button onClick={() => props.onOperar("apagar")} title="Apagar · Delete" className={`${acao} hover:border-err hover:text-err`}>Apagar</button>
+        {props.tag === "img" && props.n === 1 && (
+          <>
+            <button onClick={() => arquivo.current?.click()} className={acao}>Trocar imagem…</button>
+            <input ref={arquivo} type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden
+                   onChange={(e) => { trocarImagem(e.target.files?.[0]); e.target.value = ""; }} />
+          </>
+        )}
+        <span className="w-full text-[11px] text-faint">Arraste a seleção para mudar de lugar; puxe as alças para redimensionar.</span>
+      </div>
+      {props.tag === "a" && props.n === 1 && (
+        <label className="flex items-center gap-2 border-b border-line px-3 py-2">
+          <span className="w-24 shrink-0 text-muted">Link</span>
+          <input className={campo} value={link} aria-label="Link" spellCheck={false} placeholder="https://…"
+                 onChange={(e) => setLink(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter" && link !== (props.href ?? "")) props.onOperar("link", link.trim()); }}
+                 onBlur={() => { if (link !== (props.href ?? "")) props.onOperar("link", link.trim()); }} />
+        </label>
+      )}
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-2.5">
         <p className="text-[11.5px] leading-snug text-faint">
           Muda na hora, sem IA, e vai para o rascunho (Ctrl+Z desfaz; Ctrl+S salva a versão). Duplo clique no texto edita o conteúdo.

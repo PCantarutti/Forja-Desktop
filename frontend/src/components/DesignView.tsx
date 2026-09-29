@@ -50,7 +50,7 @@ type Geracao = {
   vivo?: Stats; secoes?: { nome: string; status: string }[]; n?: number; doc?: string;
 };
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
-                 estilo: Record<string, string> };
+                 estilo: Record<string, string>; href: string | null };
 const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
@@ -563,6 +563,12 @@ export default function DesignView(props: {
     }
   }
 
+  /** Modo Editar: apagar, duplicar, mover, trocar imagem e link (no rascunho, sem IA). */
+  async function operar(op: "apagar" | "duplicar" | "mover" | "imagem" | "link", fids: string[], extra: { alvo?: string; onde?: string; valor?: string } = {}) {
+    await semIA("operacao", { op, fids, ...extra });
+    if (op === "apagar") selecionar([]);
+  }
+
   /** Mudança direta, sem modelo (sliders, design system): rascunho e patch no canvas. */
   async function semIA(caminho: string, corpo: unknown) {
     if (!projeto) return;
@@ -670,8 +676,11 @@ export default function DesignView(props: {
       if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
-    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect, estilo: m.estilo } : null);
+    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect, estilo: m.estilo, href: m.href } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
+    else if (m.type === "mover") operar("mover", m.fids, { alvo: m.alvo, onde: m.onde });
+    else if (m.type === "redimensionar") semIA("estilo", { fids: [m.fid], estilos: {
+      ...(m.w ? { width: `${m.w}px` } : {}), ...(m.h ? { height: `${m.h}px` } : {}) } });
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "tela") setTela(m.nome);
     else if (m.type === "auditoria") setAuditoria({ itens: m.itens, escopo: m.escopo });
@@ -685,6 +694,7 @@ export default function DesignView(props: {
       else if (m.acao === "comentar") alternarComentario();
       else if (m.acao === "undo") desfazer();
       else if (m.acao === "redo") refazer();
+      else if ((m.acao === "apagar" || m.acao === "duplicar") && selecao) operar(m.acao, selecao.itens.map((i) => i.fid));
     }
   };
   useEffect(() => {
@@ -697,6 +707,11 @@ export default function DesignView(props: {
   // Ctrl+Shift+C (inspecionar, como no navegador). Campos de texto ficam com o Ctrl+Z deles.
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
+      const emCampo = !!(e.target as HTMLElement).closest("input, textarea, select, [contenteditable]");
+      if (modo === "edit" && selecao && !emCampo && (e.key === "Delete" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d"))) {
+        e.preventDefault();
+        return operar(e.key === "Delete" ? "apagar" : "duplicar", selecao.itens.map((i) => i.fid));
+      }
       if (!(e.ctrlKey || e.metaKey) || !projeto) return;
       const k = e.key.toLowerCase();
       if (e.shiftKey && k === "c") alternarInspecao();
@@ -1415,6 +1430,8 @@ export default function DesignView(props: {
                         rotulo={rotulo(selecao.itens[selecao.itens.length - 1] ?? { tag: selecao.tag, cls: "" })}
                         onPrevia={(estilos) => paraIframe(janela(), { type: "setEstilo", fids: selecao.itens.map((i) => i.fid), estilos })}
                         onSalvar={(estilos) => semIA("estilo", { fids: selecao.itens.map((i) => i.fid), estilos })}
+                        tag={selecao.tag} href={selecao.href}
+                        onOperar={(op, valor) => operar(op, selecao.itens.map((i) => i.fid), { valor })}
                         onFechar={() => setModo("view")} />
         ) : (
           <aside aria-label="Editar elemento" className="grid w-72 shrink-0 place-items-center border-l border-line bg-surface px-6 text-center text-[12.5px] text-faint">

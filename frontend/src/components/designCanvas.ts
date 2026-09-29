@@ -18,13 +18,16 @@ export type Problema = { fid: string | null; tipo: string; detalhe: string; grav
 export type DoCanvas =
   | { type: "ready" }
   | { type: "hover"; fid: string | null; rect: Rect | null }
-  | { type: "select"; fid: string | null; rect: Rect | null; tag: string; path: NoCaminho[]; itens: Item[]; estilo: Record<string, string> }
+  | { type: "select"; fid: string | null; rect: Rect | null; tag: string; path: NoCaminho[]; itens: Item[]; estilo: Record<string, string>;
+      href: string | null }
+  | { type: "mover"; fids: string[]; alvo: string; onde: "antes" | "depois" }     // arrastou no modo Editar
+  | { type: "redimensionar"; fid: string; w: number | null; h: number | null }   // puxou uma alça
   | { type: "textEdited"; fid: string; html: string }
   | { type: "pin"; n: number }
   | { type: "slides"; atual: number; total: number }
   | { type: "tela"; nome: string }                          // o runtime do protótipo trocou de tela
   | { type: "auditoria"; itens: Problema[]; escopo: string }
-  | { type: "atalho"; acao: "inspect" | "comentar" | "undo" | "redo" | "sair" };
+  | { type: "atalho"; acao: "inspect" | "comentar" | "undo" | "redo" | "sair" | "apagar" | "duplicar" };
 
 /** app → iframe. `highlight` define a seleção (o iframe responde com `select`). */
 export type ParaCanvas =
@@ -64,8 +67,16 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
       return (d.fid === null || eTexto(d.fid)) && eRect(d.rect) && eTexto(d.tag) && Array.isArray(d.path) &&
         d.path.every((n: any) => eItem(n) && eTexto(n.sec)) && Array.isArray(d.itens) && d.itens.every(eItem)
         ? { type: "select", fid: d.fid, rect: d.rect, tag: d.tag, path: d.path, itens: d.itens,
-            estilo: Object.fromEntries(PROPS_EDITAVEIS.filter((k) => eTexto(d.estilo?.[k]) && d.estilo[k].length < 300).map((k) => [k, d.estilo[k]])) }
+            estilo: Object.fromEntries(PROPS_EDITAVEIS.filter((k) => eTexto(d.estilo?.[k]) && d.estilo[k].length < 300).map((k) => [k, d.estilo[k]])),
+            href: eTexto(d.href) && d.href.length < 3000 ? d.href : null }
         : null;
+    case "mover":
+      return Array.isArray(d.fids) && d.fids.length <= 60 && d.fids.every(eTexto) && eTexto(d.alvo) && ["antes", "depois"].includes(d.onde)
+        ? { type: "mover", fids: d.fids, alvo: d.alvo, onde: d.onde } : null;
+    case "redimensionar": {
+      const n = (v: any) => v === null || (typeof v === "number" && v > 0 && v < 20000);
+      return eTexto(d.fid) && n(d.w) && n(d.h) ? { type: "redimensionar", fid: d.fid, w: d.w, h: d.h } : null;
+    }
     case "textEdited":
       return eTexto(d.fid) && eTexto(d.html) && d.html.length < 200_000 ? { type: "textEdited", fid: d.fid, html: d.html } : null;
     case "pin":
@@ -79,7 +90,7 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
     case "slides":
       return Number.isInteger(d.atual) && Number.isInteger(d.total) ? { type: "slides", atual: d.atual, total: d.total } : null;
     case "atalho":
-      return ["inspect", "comentar", "undo", "redo", "sair"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
+      return ["inspect", "comentar", "undo", "redo", "sair", "apagar", "duplicar"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
   }
   return null;
 }
@@ -169,6 +180,13 @@ function inspetor() {
   etiqueta.style.cssText = `position:fixed;display:none;font:11px/1.6 ui-monospace,monospace;color:#fff;background:${AZUL};padding:0 5px;border-radius:3px;white-space:nowrap`;
   camada.appendChild(etiqueta);
   let temporarios: HTMLElement[] = [];
+  // modo Editar: puxando uma alça, ou arrastando a seleção para outro lugar
+  let redim: { el: HTMLElement; dir: string; x0: number; y0: number; w0: number; h0: number; w: number | null; h: number | null } | null = null;
+  let arrasto: { x0: number; y0: number; ativo: boolean; alvo: Element | null; onde: "antes" | "depois" } | null = null;
+  let engoleClique = false;
+  const linha = document.createElement("div");
+  linha.style.cssText = `position:fixed;display:none;background:${AZUL};border-radius:2px;box-shadow:0 0 0 1px #fff`;
+  camada.appendChild(linha);
 
   const posiciona = (d: HTMLElement, el: Element | null) => {
     if (!el) return void (d.style.display = "none");
@@ -202,6 +220,24 @@ function inspetor() {
       temporarios.push(b);
     }
     const primeiro = sel.length ? porFid(sel[sel.length - 1]) : null;
+    if (modo === "edit" && sel.length === 1 && primeiro && !editando && !arrasto) {
+      const r = primeiro.getBoundingClientRect();
+      for (const [dir, x, y, cursor] of [["e", r.right, r.top + r.height / 2, "ew-resize"], ["s", r.left + r.width / 2, r.bottom, "ns-resize"],
+                                         ["se", r.right, r.bottom, "nwse-resize"]] as const) {
+        const h = document.createElement("div");
+        h.setAttribute("data-alca", dir);
+        h.style.cssText = `position:fixed;left:${x - 5}px;top:${y - 5}px;width:10px;height:10px;background:#fff;border:2px solid ${AZUL};` +
+          `border-radius:2px;box-sizing:border-box;pointer-events:auto;cursor:${cursor}`;
+        h.onmousedown = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const b = primeiro.getBoundingClientRect();
+          redim = { el: primeiro as HTMLElement, dir, x0: e.clientX, y0: e.clientY, w0: b.width, h0: b.height, w: null, h: null };
+        };
+        camada.appendChild(h);
+        temporarios.push(h);
+      }
+    }
     if (primeiro && !editando) {
       const r = primeiro.getBoundingClientRect();
       const n = item(primeiro);
@@ -220,8 +256,9 @@ function inspetor() {
     desenha();
     const itens = sel.map((f) => item(porFid(f)!));
     envia(el
-      ? { type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el), itens, estilo: estiloDe(el) }
-      : { type: "select", fid: null, rect: null, tag: "", path: [], itens: [], estilo: {} });
+      ? { type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el), itens, estilo: estiloDe(el),
+          href: el.getAttribute("href") }
+      : { type: "select", fid: null, rect: null, tag: "", path: [], itens: [], estilo: {}, href: null });
   };
 
   // ---- edição de texto (duplo clique): contenteditable no próprio elemento, sai para a fonte
@@ -260,7 +297,73 @@ function inspetor() {
     hover = null;
     desenha();
   });
+  document.addEventListener("mousedown", (e) => {
+    if (modo !== "edit" || editando || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = alvo(e.target as Element);
+    if (el && sel.some((f) => porFid(f)?.contains(el))) {
+      arrasto = { x0: e.clientX, y0: e.clientY, ativo: false, alvo: null, onde: "depois" };
+    }
+  }, true);
+  document.addEventListener("dragstart", (e) => { if (modo === "edit") e.preventDefault(); }, true);   // <img>/<a> nativos
+  document.addEventListener("mousemove", (e) => {
+    if ((redim || arrasto) && e.buttons === 0) return solta(false);   // soltou fora da página e voltou
+    if (redim) {
+      const { el, dir, x0, y0, w0, h0 } = redim;
+      if (dir !== "s") el.style.setProperty("width", `${(redim.w = Math.max(8, Math.round(w0 + e.clientX - x0)))}px`, "important");
+      if (dir !== "e") el.style.setProperty("height", `${(redim.h = Math.max(8, Math.round(h0 + e.clientY - y0)))}px`, "important");
+      return desenha();
+    }
+    if (!arrasto) return;
+    if (!arrasto.ativo && Math.hypot(e.clientX - arrasto.x0, e.clientY - arrasto.y0) < 6) return;
+    if (!arrasto.ativo) {
+      arrasto.ativo = true;
+      document.documentElement.style.userSelect = "none";
+      getSelection()?.removeAllRanges();
+    }
+    let t = alvo(document.elementFromPoint(e.clientX, e.clientY));
+    // o destino natural é um irmão do que está sendo arrastado (reordenar); fora do pai, o elemento sob o mouse
+    const origem = porFid(sel[sel.length - 1]);
+    for (let u: Element | null = t; u && u !== document.body; u = u.parentElement)
+      if (u.parentElement === origem?.parentElement && u.hasAttribute("data-fid")) { t = u; break; }
+    const valido = t && t !== document.body && !sel.some((f) => porFid(f)?.contains(t));
+    arrasto.alvo = valido ? t : null;
+    if (!valido || !t) return void (linha.style.display = "none");
+    const r = t.getBoundingClientRect();
+    const pai = t.parentElement ? getComputedStyle(t.parentElement) : null;
+    const lado = !!pai && ((pai.display.includes("flex") && !pai.flexDirection.startsWith("column")) || pai.display.includes("grid"));
+    arrasto.onde = (lado ? e.clientX < r.left + r.width / 2 : e.clientY < r.top + r.height / 2) ? "antes" : "depois";
+    Object.assign(linha.style, lado
+      ? { display: "block", left: `${(arrasto.onde === "antes" ? r.left : r.right) - 2}px`, top: `${r.top}px`, width: "4px", height: `${r.height}px` }
+      : { display: "block", left: `${r.left}px`, top: `${(arrasto.onde === "antes" ? r.top : r.bottom) - 2}px`, width: `${r.width}px`, height: "4px" });
+    desenha();
+  }, true);
+  document.addEventListener("mouseup", () => solta(true), true);
+  // soltar: a alça sempre aplica; o arrasto só se o botão foi solto dentro da página (fora, cancela)
+  const solta = (dentro: boolean) => {
+    document.documentElement.style.userSelect = "";
+    if (redim) {
+      const { el, w, h } = redim;
+      redim = null;
+      engoleClique = true;
+      if (w !== null || h !== null) envia({ type: "redimensionar", fid: el.getAttribute("data-fid"), w, h });
+    } else if (arrasto) {
+      const a = arrasto;
+      arrasto = null;
+      linha.style.display = "none";
+      if (a.ativo) {
+        engoleClique = dentro;
+        if (a.alvo && dentro) envia({ type: "mover", fids: sel, alvo: a.alvo.getAttribute("data-fid"), onde: a.onde });
+      }
+      desenha();
+    }
+  };
   document.addEventListener("click", (e) => {
+    if (engoleClique) {   // o clique que fecha um arrasto não é seleção
+      engoleClique = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (editando && editando.el.contains(e.target as Node)) return;   // clique dentro do texto: é o cursor
     if (escolhendo()) {
       e.preventDefault();
@@ -300,6 +403,8 @@ function inspetor() {
     // Esc sem nada para limpar: quem está fora (a apresentação em tela cheia) decide o que fazer
     if (e.key === "Escape" && !(escolhendo() && sel.length)) return envia({ type: "atalho", acao: "sair" });
     if (!escolhendo() || !sel.length) return;
+    if (modo === "edit" && (e.key === "Delete" || e.key === "Backspace")) return envia({ type: "atalho", acao: "apagar" }), e.preventDefault();
+    if (modo === "edit" && (e.ctrlKey || e.metaKey) && k === "d") return envia({ type: "atalho", acao: "duplicar" }), e.preventDefault();
     const atual = porFid(sel[sel.length - 1]);
     if (e.key === "ArrowUp" && atual) {
       const pai = alvo(atual.parentElement);
@@ -320,7 +425,7 @@ function inspetor() {
       reposto = 0;
       const el = porFid(sel[sel.length - 1]);
       if (el) envia({ type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el),
-                      itens: sel.map((f) => item(porFid(f)!)), estilo: estiloDe(el) });
+                      itens: sel.map((f) => item(porFid(f)!)), estilo: estiloDe(el), href: el.getAttribute("href") });
     });
   }, true);
   addEventListener("resize", () => {
