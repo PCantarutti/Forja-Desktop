@@ -7,7 +7,7 @@
 export type Rect = { x: number; y: number; w: number; h: number };
 export type NoCaminho = { fid: string; tag: string; cls: string; sec: string };   // sec = data-section
 export type Item = { fid: string; tag: string; cls: string };
-export type Modo = "view" | "inspect" | "editText";
+export type Modo = "view" | "inspect" | "comment" | "editText";   // comment: o clique escolhe o que comentar
 export type Pin = { fid: string; n: number };
 export type Problema = { fid: string | null; tipo: string; detalhe: string; gravidade: "erro" | "aviso"; rotulo: string };
 
@@ -21,7 +21,7 @@ export type DoCanvas =
   | { type: "slides"; atual: number; total: number }
   | { type: "tela"; nome: string }                          // o runtime do protótipo trocou de tela
   | { type: "auditoria"; itens: Problema[]; escopo: string }
-  | { type: "atalho"; acao: "inspect" | "undo" | "redo" | "sair" };
+  | { type: "atalho"; acao: "inspect" | "comentar" | "undo" | "redo" | "sair" };
 
 /** app → iframe. `highlight` define a seleção (o iframe responde com `select`). */
 export type ParaCanvas =
@@ -32,6 +32,8 @@ export type ParaCanvas =
   | { type: "setSlide"; n: number }
   | { type: "setTela"; nome: string }
   | { type: "auditar" }
+  | { type: "setMulti"; on: boolean }        // cada clique soma/tira da seleção (como Shift/Ctrl+clique)
+  | { type: "semelhantes"; fid: string }
   | { type: "setTokens"; tokens: Record<string, string> }   // prévia dos sliders; {} limpa
   | { type: "patch"; fid: string; html: string };
 
@@ -71,7 +73,7 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
     case "slides":
       return Number.isInteger(d.atual) && Number.isInteger(d.total) ? { type: "slides", atual: d.atual, total: d.total } : null;
     case "atalho":
-      return ["inspect", "undo", "redo", "sair"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
+      return ["inspect", "comentar", "undo", "redo", "sair"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
   }
   return null;
 }
@@ -92,6 +94,8 @@ function inspetor() {
   let editando: { el: HTMLElement; antes: string } | null = null;
   const filhos: string[] = [];   // seta para baixo volta por aqui
   let slide = 0;
+  let multi = false;
+  const escolhendo = () => modo === "inspect" || modo === "comment";
   let previa: string[] = [];   // tokens sobrescritos ao vivo pelo painel de ajustes
   const envia = (m: object) => parent.postMessage({ [MARCA]: 1, ...m }, "*");
   const porFid = (f: string) => document.querySelector(`[data-fid="${CSS.escape(f)}"]`);
@@ -159,7 +163,7 @@ function inspetor() {
     Object.assign(d.style, { display: "block", left: `${r.x}px`, top: `${r.y}px`, width: `${r.width}px`, height: `${r.height}px` });
   };
   const desenha = () => {
-    posiciona(caixaHover, modo === "inspect" && hover && !editando && !sel.includes(hover.getAttribute("data-fid") || "") ? hover : null);
+    posiciona(caixaHover, escolhendo() && hover && !editando && !sel.includes(hover.getAttribute("data-fid") || "") ? hover : null);
     temporarios.forEach((d) => d.remove());
     temporarios = sel.map((f) => {
       const d = caixa("solid");
@@ -234,7 +238,7 @@ function inspetor() {
   }, true);
 
   document.addEventListener("mouseover", (e) => {
-    if (modo !== "inspect") return;
+    if (!escolhendo()) return;
     hover = alvo(e.target as Element);
     desenha();
     envia({ type: "hover", fid: hover?.getAttribute("data-fid") ?? null, rect: hover ? retangulo(hover) : null });
@@ -245,7 +249,7 @@ function inspetor() {
   });
   document.addEventListener("click", (e) => {
     if (editando && editando.el.contains(e.target as Node)) return;   // clique dentro do texto: é o cursor
-    if (modo === "inspect") {
+    if (escolhendo()) {
       e.preventDefault();
       e.stopPropagation();
       let el = alvo(e.target as Element);
@@ -253,8 +257,9 @@ function inspetor() {
       filhos.length = 0;
       if (!el) return;
       const f = el.getAttribute("data-fid")!;
-      // Shift+clique: entra ou sai da seleção; clique simples: só ele
-      seleciona(e.shiftKey ? (sel.includes(f) ? sel.filter((x) => x !== f) : [...sel, f]) : [f]);
+      // Shift/Ctrl+clique (ou o modo múltipla ligado): entra ou sai da seleção; clique simples: só ele
+      const junta = e.shiftKey || e.ctrlKey || e.metaKey || multi;
+      seleciona(junta ? (sel.includes(f) ? sel.filter((x) => x !== f) : [...sel, f]) : [f]);
       return;
     }
     // modo view: link para fora do documento não tira o canvas do lugar
@@ -276,11 +281,12 @@ function inspetor() {
       return e.preventDefault();
     }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === "c") return envia({ type: "atalho", acao: "inspect" }), e.preventDefault();
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === "m") return envia({ type: "atalho", acao: "comentar" }), e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && (k === "y" || (k === "z" && e.shiftKey))) return envia({ type: "atalho", acao: "redo" }), e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && k === "z") return envia({ type: "atalho", acao: "undo" }), e.preventDefault();
     // Esc sem nada para limpar: quem está fora (a apresentação em tela cheia) decide o que fazer
-    if (e.key === "Escape" && !(modo === "inspect" && sel.length)) return envia({ type: "atalho", acao: "sair" });
-    if (modo !== "inspect" || !sel.length) return;
+    if (e.key === "Escape" && !(escolhendo() && sel.length)) return envia({ type: "atalho", acao: "sair" });
+    if (!escolhendo() || !sel.length) return;
     const atual = porFid(sel[sel.length - 1]);
     if (e.key === "ArrowUp" && atual) {
       const pai = alvo(atual.parentElement);
@@ -293,7 +299,17 @@ function inspetor() {
     else return;
     e.preventDefault();
   });
-  addEventListener("scroll", desenha, true);
+  let reposto = 0;
+  addEventListener("scroll", () => {
+    desenha();
+    if (modo !== "comment" || !sel.length || reposto) return;
+    reposto = requestAnimationFrame(() => {
+      reposto = 0;
+      const el = porFid(sel[sel.length - 1]);
+      if (el) envia({ type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el),
+                      itens: sel.map((f) => item(porFid(f)!)) });
+    });
+  }, true);
   addEventListener("resize", () => {
     layout();
     desenha();
@@ -372,11 +388,27 @@ function inspetor() {
     const d = e.data;
     if (e.source !== parent || !d || d[MARCA] !== 1) return;
     if (d.type === "auditar") return auditar();
-    if (d.type === "setMode" && ["view", "inspect", "editText"].includes(d.mode)) {
+    if (d.type === "setMode" && ["view", "inspect", "comment", "editText"].includes(d.mode)) {
       modo = d.mode;
       hover = null;
-      document.documentElement.style.cursor = modo === "inspect" ? "crosshair" : "";
+      document.documentElement.style.cursor = modo === "inspect" ? "crosshair" : modo === "comment" ? "cell" : "";
       desenha();
+    } else if (d.type === "setMulti") {
+      multi = !!d.on;
+    } else if (d.type === "semelhantes" && typeof d.fid === "string") {
+      // mesma tag e mesmas classes (os 3 botões dos cards, todos os títulos de seção...); sem classe, mesma
+      // tag dentro do mesmo tipo de pai
+      const base = porFid(d.fid);
+      if (base) {
+        const cls = (base.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).sort().join(" ");
+        const paiCls = (base.parentElement?.getAttribute("class") || "").trim();
+        const iguais = [...document.querySelectorAll(base.tagName)].filter((el) => {
+          if (!el.hasAttribute("data-fid") || camada.contains(el)) return false;
+          const c = (el.getAttribute("class") || "").trim().split(/\s+/).filter(Boolean).sort().join(" ");
+          return cls ? c === cls : !c && (el.parentElement?.getAttribute("class") || "").trim() === paiCls;
+        }).slice(0, 60).map((el) => el.getAttribute("data-fid")!);
+        seleciona([d.fid, ...iguais.filter((f) => f !== d.fid)]);
+      }
     } else if (d.type === "highlight" && Array.isArray(d.fids)) {
       filhos.length = 0;
       seleciona(d.fids.filter((f: unknown) => typeof f === "string"));

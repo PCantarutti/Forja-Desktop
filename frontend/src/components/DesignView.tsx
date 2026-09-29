@@ -44,7 +44,7 @@ type Geracao = {
   segundos?: number; texto?: string; versao?: number | null; base?: number | null; patches?: Patch[];
   vivo?: Stats; secoes?: { nome: string; status: string }[]; n?: number; doc?: string;
 };
-type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[] };
+type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null };
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
 type Rota = "auto" | "tokens" | "secao" | "documento" | "variacoes";
@@ -138,7 +138,10 @@ export default function DesignView(props: {
   const [selecao, setSelecao] = useState<Selecao | null>(null);
   const [aba, setAba] = useState<"chat" | "comentarios" | "ajustes" | "versoes" | "acessibilidade">("chat");
   const [auditoria, setAuditoria] = useState<{ itens: Problema[] | null; escopo: string }>({ itens: null, escopo: "" });
-  const [fluxo, setFluxo] = useState(false);                // protótipo: o mapa das telas no lugar do canvas
+  const [fluxo, setFluxo] = useState(false);
+  const [multi, setMulti] = useState(false);                 // cada clique soma à seleção
+  const [notaTexto, setNotaTexto] = useState("");            // caixa de comentário junto do elemento
+  const areaCanvas = useRef<HTMLDivElement>(null);                // protótipo: o mapa das telas no lugar do canvas
   const [apresentando, setApresentando] = useState(false);  // deck em tela cheia
   const [comparar, setComparar] = useState<number | null>(null);   // versão aberta ao lado da atual
   const [htmlVersoes, setHtmlVersoes] = useState<Record<number, string>>({});
@@ -265,6 +268,7 @@ export default function DesignView(props: {
   useEffect(() => localStorage.setItem(KEY, JSON.stringify(prefs)), [prefs]);
   useEffect(() => fimChat.current?.scrollIntoView({ block: "end" }), [projeto?.mensagens.length, rodando, aba]);
   useEffect(() => paraIframe(janela(), { type: "setMode", mode: modo }), [modo]);
+  useEffect(() => paraIframe(janela(), { type: "setMulti", on: multi }), [multi]);
 
   // Campo que cresce com o texto até CAMPO_MAX, como o do agente.
   useEffect(() => {
@@ -447,6 +451,19 @@ export default function DesignView(props: {
     }
   }
 
+  /** A caixa que abre embaixo do elemento clicado no modo comentário: vai para a fila (pin no canvas). */
+  async function comentarNaCaixa() {
+    const t = notaTexto.trim();
+    if (!t || !selecao || !projeto) return;
+    try {
+      mostrar(await api.post<Projeto>(`/design/${projeto.conv_id}/comentarios`, { fids: selecao.itens.map((i) => i.fid), texto: t }));
+      setNotaTexto("");
+      selecionar([]);
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
   async function descartar(id: number) {
     if (!projeto) return;
     try {
@@ -581,6 +598,7 @@ export default function DesignView(props: {
     paraIframe(janela(), { type: "scrollTo", fid: c.fids[0] });
   };
   const alternarInspecao = () => setModo((m) => (m === "inspect" ? "view" : "inspect"));
+  const alternarComentario = () => setModo((m) => (m === "comment" ? "view" : "comment"));
 
   // Mensagens do canvas. Os handlers mudam a cada render; o ouvinte (fixo) chama o mais recente.
   const doCanvas = useRef<(e: MessageEvent) => void>(() => {});
@@ -589,12 +607,13 @@ export default function DesignView(props: {
     if (!m) return;
     if (m.type === "ready") {   // iframe (re)carregou: devolve modo, slide, seleção e pins (os fids são estáveis)
       paraIframe(janela(), { type: "setMode", mode: modo });
+      paraIframe(janela(), { type: "setMulti", on: multi });
       paraIframe(janela(), { type: "setSlide", n: slides.atual });
       if (tela) paraIframe(janela(), { type: "setTela", nome: tela });
       if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
-    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens } : null);
+    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "tela") setTela(m.nome);
@@ -606,7 +625,8 @@ export default function DesignView(props: {
       if (c) selecionar(c.fids);
     } else if (m.type === "atalho") {
       if (m.acao === "inspect") alternarInspecao();
-      else if (projeto) ir(projeto.atual + (m.acao === "undo" ? -1 : 1));
+      else if (m.acao === "comentar") alternarComentario();
+      else if (m.acao !== "sair" && projeto) ir(projeto.atual + (m.acao === "undo" ? -1 : 1));
     }
   };
   useEffect(() => {
@@ -622,6 +642,7 @@ export default function DesignView(props: {
       if (!(e.ctrlKey || e.metaKey) || !projeto) return;
       const k = e.key.toLowerCase();
       if (e.shiftKey && k === "c") alternarInspecao();
+      else if (e.shiftKey && k === "m") alternarComentario();
       else if ((e.target as HTMLElement).closest("input, textarea, [contenteditable]")) return;
       else if (k === "z" && !e.shiftKey) ir(projeto.atual - 1);
       else if (k === "y" || (k === "z" && e.shiftKey)) ir(projeto.atual + 1);
@@ -1007,6 +1028,24 @@ export default function DesignView(props: {
                   title="Inspecionar elementos · Ctrl+Shift+C" disabled={!srcBase} onClick={alternarInspecao}>
             <Mira />
           </button>
+          <button className={`${btn} ${modo === "comment" ? "bg-amber-500/15! text-amber-300!" : ""}`} aria-pressed={modo === "comment"}
+                  title="Comentar: clique num elemento e escreva; o comentário entra na fila · Ctrl+Shift+M" disabled={!srcBase} onClick={alternarComentario}>
+            <Bubble className="size-4" />
+          </button>
+          {(modo === "inspect" || modo === "comment") && (
+            <button onClick={() => setMulti((v) => !v)} aria-pressed={multi}
+                    title="Cada clique soma (ou tira) um elemento da seleção — o mesmo que Shift/Ctrl+clique"
+                    className={`rounded-lg border px-2 py-1 ${multi ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:bg-raised"}`}>
+              Múltipla
+            </button>
+          )}
+          {!!selecao && (
+            <button onClick={() => paraIframe(janela(), { type: "semelhantes", fid: selecao.fid })}
+                    title={`Seleciona todos os ${rotulo(selecao.itens[selecao.itens.length - 1] ?? { tag: selecao.tag, cls: "" })} iguais a este (mesma tag e classes)`}
+                    className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
+              Semelhantes{selecao.itens.length > 1 ? ` · ${selecao.itens.length}` : ""}
+            </button>
+          )}
           <span className="mx-1 h-5 w-px bg-line" />
           <button className={btn} title="Desfazer · Ctrl+Z" disabled={rodando || atual <= 1} onClick={() => ir(atual - 1)}>
             <Undo />
@@ -1124,10 +1163,46 @@ export default function DesignView(props: {
               {selecao.itens.length > 1 && <span className="ml-2 text-accent-text">+{selecao.itens.length - 1} selecionados</span>}
             </>
           ) : (
-            <span>{modo === "inspect" ? "Clique num elemento · Shift+clique junta · Alt+clique ou ↑ sobe · ↓ volta · Esc limpa · duplo clique edita o texto" : "Nenhum elemento selecionado · duplo clique num texto edita direto"}</span>
+            <span>{modo === "comment" ? "Modo comentário: clique no elemento e escreva na caixa que abre · Shift/Ctrl+clique (ou Múltipla) junta vários num comentário só"
+              : modo === "inspect" ? "Clique num elemento · Shift/Ctrl+clique (ou Múltipla) junta vários · Semelhantes pega os iguais · Alt+clique ou ↑ sobe · ↓ volta · Esc limpa"
+              : "Nenhum elemento selecionado · duplo clique num texto edita direto"}</span>
           )}
         </nav>
-        <div className="flex min-h-0 flex-1 justify-center overflow-hidden p-3">
+        <div ref={areaCanvas} className="relative flex min-h-0 flex-1 justify-center overflow-hidden p-3">
+          {modo === "comment" && selecao?.rect && iframe.current && areaCanvas.current && (() => {
+            // a caixa fica logo abaixo do elemento (ou acima, se não couber), dentro da área do canvas
+            const f = iframe.current.getBoundingClientRect(), a = areaCanvas.current.getBoundingClientRect();
+            const r = selecao.rect, L = 300, A = 168;
+            const embaixo = f.top - a.top + r.y + r.h + 8;
+            const top = embaixo + A > a.height - 8 ? Math.max(8, f.top - a.top + r.y - A - 8) : embaixo;
+            const left = Math.min(Math.max(8, f.left - a.left + r.x), a.width - L - 8);
+            return (
+              <div className="absolute z-20 rounded-xl border border-amber-400/50 bg-surface p-2.5 shadow-2xl" style={{ top, left, width: L }}
+                   role="dialog" aria-label="Comentário no elemento">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-muted">
+                  <Bubble className="size-3.5 text-amber-300" />
+                  {selecao.itens.length === 1 ? <span className="font-mono">{rotulo(selecao.itens[0])}</span> : <span>{selecao.itens.length} elementos</span>}
+                  <span className="ml-auto text-faint">Shift+clique junta mais</span>
+                </div>
+                <textarea autoFocus rows={3} value={notaTexto} onChange={(e) => setNotaTexto(e.target.value)} placeholder="O que mudar aqui?"
+                          aria-label="Texto do comentário"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); comentarNaCaixa(); }
+                            else if (e.key === "Escape") { setNotaTexto(""); selecionar([]); }
+                          }}
+                          className="w-full resize-none rounded-lg border border-line bg-raised px-2 py-1.5 text-[13px] text-fg focus:border-focus focus:outline-none" />
+                <div className="mt-1.5 flex items-center gap-2">
+                  <span className="text-[11px] text-faint">{pendentes.length} na fila</span>
+                  <span className="flex-1" />
+                  <button onClick={() => { setNotaTexto(""); selecionar([]); }} className="rounded-lg px-2 py-0.5 text-xs text-muted hover:text-fg">Cancelar</button>
+                  <button disabled={!notaTexto.trim()} onClick={comentarNaCaixa}
+                          className="rounded-lg bg-amber-500 px-2.5 py-0.5 text-xs font-medium text-black hover:brightness-110 disabled:opacity-40">
+                    Pôr na fila
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
           {comparar && htmlVersoes[comparar] && srcBase ? (
             <div className="flex size-full gap-3">
               {[[comparar, htmlVersoes[comparar]], [atual, srcBase]].map(([v, h]) => (
