@@ -462,8 +462,9 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
             titulo = s.get(db.Conversation, conv_id).title
         user = _ctx_secao(titulo, html_base, nomes, {"nome": nome}, atual_sec,
                           pedido or f"Refaça a seção {nome} com um design melhor.")
-        sistema = "secao"
-        extra = {"secao": nome, "alvo": alvo_fid, "nova": nova}
+        slide = design_html.e_slides(html_base)
+        sistema = "slide" if slide else "secao"
+        extra = {"secao": nome, "alvo": alvo_fid, "nova": nova, "slide": slide}
     elif modo == "documento" and not html_base:   # forçado num projeto vazio: tudo de uma vez
         user = f"Pedido: {pedido}"
         sistema = "documento"
@@ -553,7 +554,7 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                     raise ValueError("nenhum token existente foi alterado")
                 resp = {"tokens": tokens}   # só :root, venha o que vier
             else:  # secao
-                sec, css = design_html.ler_secao(texto, run["secao"])
+                sec, css = design_html.ler_secao(texto, run["secao"], run.get("slide", False))
                 resp = {"patches": [{"fid": run["alvo"], "html": sec}], "css": css}
             html, mudou = design_html.aplicar(run["html_base"], resp)
             if not extrair_html(html):
@@ -609,6 +610,7 @@ def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo")
 async def _rodar_etapas(run: dict) -> None:
     mid, plano = run["message_id"], run["plano"]
     nomes = [x["nome"] for x in plano["secoes"]]
+    slides = plano.get("tipo") == "slides"
     erros = []
     try:
         for i, sec in enumerate(plano["secoes"]):
@@ -619,12 +621,12 @@ async def _rodar_etapas(run: dict) -> None:
                 alvo = design_html.placeholder(run["doc"], sec["nome"])
                 user = _ctx_secao(plano["titulo"], run["doc"], nomes, sec, None, None)
                 run["entrada"] += len(user)
-                texto = await _chamar(run, [{"role": "system", "content": prompt("secao")},
+                texto = await _chamar(run, [{"role": "system", "content": prompt("slide" if slides else "secao")},
                                             {"role": "user", "content": user}])
                 if run["cancelar"]:
                     run["secoes"][i]["status"] = "fila"
                     break
-                html_sec, css = design_html.ler_secao(texto, sec["nome"])
+                html_sec, css = design_html.ler_secao(texto, sec["nome"], slides)
                 run["doc"], _ = design_html.aplicar(run["doc"], {"patches": [{"fid": alvo, "html": html_sec}], "css": css})
                 run["secoes"][i]["status"] = "ok"
                 run["n"] += 1

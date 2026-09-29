@@ -17,6 +17,7 @@ export type DoCanvas =
   | { type: "select"; fid: string | null; rect: Rect | null; tag: string; path: NoCaminho[]; itens: Item[] }
   | { type: "textEdited"; fid: string; html: string }
   | { type: "pin"; n: number }
+  | { type: "slides"; atual: number; total: number }
   | { type: "atalho"; acao: "inspect" | "undo" | "redo" };
 
 /** app → iframe. `highlight` define a seleção (o iframe responde com `select`). */
@@ -25,6 +26,7 @@ export type ParaCanvas =
   | { type: "highlight"; fids: string[] }
   | { type: "scrollTo"; fid: string }
   | { type: "showPins"; pins: Pin[] }
+  | { type: "setSlide"; n: number }
   | { type: "patch"; fid: string; html: string };
 
 const MARCA = "forja-design";
@@ -50,6 +52,8 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
       return eTexto(d.fid) && eTexto(d.html) && d.html.length < 200_000 ? { type: "textEdited", fid: d.fid, html: d.html } : null;
     case "pin":
       return Number.isInteger(d.n) ? { type: "pin", n: d.n } : null;
+    case "slides":
+      return Number.isInteger(d.atual) && Number.isInteger(d.total) ? { type: "slides", atual: d.atual, total: d.total } : null;
     case "atalho":
       return ["inspect", "undo", "redo"].includes(d.acao) ? { type: "atalho", acao: d.acao } : null;
   }
@@ -71,6 +75,7 @@ function inspetor() {
   let hover: Element | null = null;
   let editando: { el: HTMLElement; antes: string } | null = null;
   const filhos: string[] = [];   // seta para baixo volta por aqui
+  let slide = 0;
   const envia = (m: object) => parent.postMessage({ [MARCA]: 1, ...m }, "*");
   const porFid = (f: string) => document.querySelector(`[data-fid="${CSS.escape(f)}"]`);
   const alvo = (el: Element | null) => {
@@ -92,6 +97,30 @@ function inspetor() {
   const deTexto = (el: Element) => !!el.textContent?.trim() &&
     [...el.querySelectorAll("*")].every((f) => INLINE.has(f.tagName.toLowerCase())) &&
     !["html", "body", "section", "style", "script"].includes(el.tagName.toLowerCase());
+
+  // ---- deck: um slide por vez, 1920x1080 escalado para caber (só na tela; a fonte não muda)
+  const listaSlides = () => [...document.querySelectorAll("body > [data-slide]")];
+  const estiloSlides = document.createElement("style");
+  const layout = () => {
+    const ss = listaSlides();
+    if (!ss.length) return void (estiloSlides.textContent = "");
+    slide = Math.max(0, Math.min(slide, ss.length - 1));
+    const e = Math.min(innerWidth / 1920, innerHeight / 1080);
+    estiloSlides.textContent = "html,body{margin:0!important;overflow:hidden!important;background:#3a3a3a!important}" +
+      "body>[data-slide]{display:none!important}" +
+      `body>[data-slide][data-forja-atual]{display:block!important;position:fixed!important;margin:0!important;` +
+      `left:${(innerWidth - 1920 * e) / 2}px!important;top:${(innerHeight - 1080 * e) / 2}px!important;` +
+      `transform:scale(${e})!important;transform-origin:0 0!important}`;
+    ss.forEach((el, i) => (i === slide ? el.setAttribute("data-forja-atual", "") : el.removeAttribute("data-forja-atual")));
+  };
+  const irSlide = (n: number) => {
+    const ss = listaSlides();
+    if (!ss.length) return;
+    slide = n;
+    layout();
+    envia({ type: "slides", atual: slide + 1, total: ss.length });
+  };
+  const slideDe = (el: Element | null) => listaSlides().findIndex((s) => s.contains(el));
 
   const camada = document.createElement("div");
   camada.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647";
@@ -148,8 +177,10 @@ function inspetor() {
   };
   const seleciona = (fids: string[]) => {
     sel = fids.filter((f, i) => porFid(f) && fids.indexOf(f) === i);
-    desenha();
     const el = sel.length ? porFid(sel[sel.length - 1]) : null;
+    const i = slideDe(el);   // elemento de outro slide (comentário, breadcrumb): vai até ele
+    if (i >= 0 && i !== slide) irSlide(i);
+    desenha();
     const itens = sel.map((f) => item(porFid(f)!));
     envia(el
       ? { type: "select", fid: sel[sel.length - 1], rect: retangulo(el), tag: el.tagName.toLowerCase(), path: caminho(el), itens }
@@ -219,6 +250,11 @@ function inspetor() {
       return;   // o resto (Ctrl+Z inclusive) é do texto
     }
     const k = e.key.toLowerCase();
+    if (listaSlides().length && ["ArrowLeft", "ArrowRight", "PageUp", "PageDown"].includes(e.key)) {
+      irSlide(slide + (e.key === "ArrowLeft" || e.key === "PageUp" ? -1 : 1));
+      desenha();
+      return e.preventDefault();
+    }
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && k === "c") return envia({ type: "atalho", acao: "inspect" }), e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && (k === "y" || (k === "z" && e.shiftKey))) return envia({ type: "atalho", acao: "redo" }), e.preventDefault();
     if ((e.ctrlKey || e.metaKey) && k === "z") return envia({ type: "atalho", acao: "undo" }), e.preventDefault();
@@ -236,7 +272,10 @@ function inspetor() {
     e.preventDefault();
   });
   addEventListener("scroll", desenha, true);
-  addEventListener("resize", desenha);
+  addEventListener("resize", () => {
+    layout();
+    desenha();
+  });
 
   addEventListener("message", (e) => {
     const d = e.data;
@@ -250,7 +289,13 @@ function inspetor() {
       filhos.length = 0;
       seleciona(d.fids.filter((f: unknown) => typeof f === "string"));
     } else if (d.type === "scrollTo" && typeof d.fid === "string") {
-      porFid(d.fid)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      const el = porFid(d.fid);
+      if (listaSlides().length) irSlide(Math.max(0, slideDe(el)));
+      else el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      desenha();
+    } else if (d.type === "setSlide" && Number.isInteger(d.n)) {
+      irSlide(d.n - 1);
+      desenha();
     } else if (d.type === "showPins" && Array.isArray(d.pins)) {
       pins = d.pins.filter((p: any) => p && typeof p.fid === "string" && Number.isInteger(p.n));
       desenha();
@@ -262,13 +307,16 @@ function inspetor() {
       t.innerHTML = d.html;
       const novo = t.content.firstElementChild;
       if (el && novo) el.replaceWith(document.importNode(novo, true));
+      layout();   // se o nó trocado era um slide, a marca do slide atual foi junto
       desenha();
     }
   });
 
   const pronto = () => {
     document.documentElement.appendChild(camada);
+    document.head.appendChild(estiloSlides);
     envia({ type: "ready" });
+    irSlide(slide);
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", pronto);
   else pronto();
@@ -279,11 +327,20 @@ function inspetor() {
 const CSP = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:">`;
 const SCRIPT = `<script>(${inspetor.toString()})()</script>`;
 
-/** O que vai para o srcdoc: CSP e inspetor logo depois do <head>. Só na renderização. */
-export function paraCanvas(html: string, inspecao = true): string {
-  const extra = CSP + (inspecao ? SCRIPT : "");
+/** Miniatura do slide k (1-based), numa caixa de `largura` px: só CSS, iframe sem script. */
+const miniatura = (k: number, largura: number) =>
+  `<style>html,body{margin:0!important;padding:0!important;overflow:hidden!important;background:#fff!important}` +
+  `body>*{display:none!important}body>[data-slide]:nth-child(${k} of [data-slide]){display:block!important;margin:0!important;` +
+  `box-shadow:none!important;transform:scale(${largura / 1920})!important;transform-origin:0 0!important}</style>`;
+
+/** O que vai para o srcdoc: CSP e inspetor (ou o CSS da miniatura) logo depois do <head>. Só na
+ *  renderização — nada disso vai para a fonte. */
+export function paraCanvas(html: string, inspecao = true, mini?: { slide: number; largura: number }): string {
+  const extra = CSP + (mini ? "" : inspecao ? SCRIPT : "");
   const i = html.search(/<head[^>]*>/i);
   if (i < 0) return extra + html;
   const fim = html.indexOf(">", i) + 1;
-  return html.slice(0, fim) + extra + html.slice(fim);
+  // o CSS da miniatura vai no fim do <head>, depois do CSS do próprio deck
+  const doc = html.slice(0, fim) + extra + html.slice(fim);
+  return mini ? doc.replace(/<\/head>/i, miniatura(mini.slide, mini.largura) + "</head>") : doc;
 }

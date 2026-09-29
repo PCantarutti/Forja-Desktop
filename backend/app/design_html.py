@@ -342,7 +342,8 @@ def secoes(html: str) -> list[dict]:
 
 
 PLACEHOLDER_CSS = ("[data-placeholder]{padding:4rem 1.5rem;text-align:center;font:500 1rem system-ui,sans-serif;"
-                   "color:#8a8a8a;border:2px dashed #d4d4d4;margin:1rem;border-radius:12px}")
+                   "color:#8a8a8a;border:2px dashed #d4d4d4;margin:1rem;border-radius:12px}"
+                   "body>[data-slide][data-placeholder]{display:grid;place-items:center;font-size:3rem;margin:0 auto 48px}")
 _BASE_CSS = """*,*::before,*::after{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{margin:0;font-family:var(--fonte-texto, system-ui, sans-serif);color:var(--cor-texto, #222);background:var(--cor-fundo, #fff);line-height:1.6}
@@ -351,18 +352,21 @@ img,svg{max-width:100%;display:block}
 .container{width:min(1120px,100% - 2*var(--esp-4, 1.5rem));margin-inline:auto}"""
 
 
-def _placeholder(nome: str) -> str:
-    return f'<section data-section="{nome}" data-placeholder="1">Gerando a seção “{nome}”…</section>'
+def _placeholder(nome: str, slide: bool = False) -> str:
+    extra = " data-slide" if slide else ""
+    return f'<section data-section="{nome}"{extra} data-placeholder="1">Gerando {"o slide" if slide else "a seção"} “{nome}”…</section>'
 
 
 def esqueleto(plano: dict) -> str:
     """HTML base do plano aprovado: tokens no :root, CSS base e um placeholder por seção."""
     tokens = "\n".join(f"  {k}: {v};" for k, v in plano["tokens"].items())
-    corpo = "\n".join(_placeholder(s["nome"]) for s in plano["secoes"])
+    slides = plano.get("tipo") == "slides"   # deck: cada seção é um slide 1920x1080
+    corpo = "\n".join(_placeholder(s["nome"], slides) for s in plano["secoes"])
     titulo = re.sub(r"[<>&]", "", plano["titulo"])
+    base = _BASE_CSS + ("\n" + SLIDES_CSS if slides else "")
     return (f'<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>{titulo}</title>\n'
-            f"<style>\n:root {{\n{tokens}\n}}\n{_BASE_CSS}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n</body>\n</html>\n")
+            f"<style>\n:root {{\n{tokens}\n}}\n{base}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n</body>\n</html>\n")
 
 
 def placeholder(html: str, nome: str) -> str | None:
@@ -389,16 +393,17 @@ def inserir_secao(html: str, nome: str) -> str:
     """Placeholder novo antes do rodapé (se a última seção for rodapé) ou no fim do <body>."""
     secs = secoes(html)
     ultima = secs[-1] if secs else None
-    if ultima and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")):
+    slide = e_slides(html)   # num deck o slide novo vai para o fim
+    if ultima and not slide and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")):
         pos = ultima["ini"]
     else:
         pos = html.lower().rfind("</body>")
         if pos < 0:
             raise ValueError("Documento sem </body>.")
-    return carimbar(html[:pos] + _placeholder(nome) + "\n" + html[pos:])
+    return carimbar(html[:pos] + _placeholder(nome, slide) + "\n" + html[pos:])
 
 
-def ler_secao(texto: str, nome: str) -> tuple[str, str]:
+def ler_secao(texto: str, nome: str, slide: bool = False) -> tuple[str, str]:
     """Resposta da geração de uma seção → (<section> com data-section=nome, css). O <style> pode vir
     depois da seção ou (modelo distraído) dentro dela: sai de lá e vai para o <head>."""
     from .parsing import split_think
@@ -415,6 +420,8 @@ def ler_secao(texto: str, nome: str) -> tuple[str, str]:
         raise ValueError("a seção veio incompleta (sem </section>)")
     sec = trecho[:raiz["fim"]]
     tag = _attr(_attr(raiz["txt"], "data-placeholder", None), "data-section", nome)
+    if slide:   # num deck, toda seção de topo é um slide, diga o modelo o que disser
+        tag = _attr(tag, "data-slide", "")
     return tag + sec[len(raiz["txt"]):], css
 
 
@@ -425,3 +432,25 @@ def cobertura(html: str, fids: list[str]) -> list[str]:
     # o fid que sumiu fica na lista: quem chama (contexto) acusa o erro
     return [f for f, e in alvos if not e or not any(o is not e and o["ini"] <= e["ini"] and e["fim"] <= o["fim"]
                                                      for _, o in alvos if o)]
+
+
+# ------------------------------------------------------------------ slides e export (fase 4)
+
+SLIDES_CSS = """body{background:#e5e5e5}
+body>[data-slide]{width:1920px;height:1080px;overflow:hidden;position:relative;margin:0 auto 48px;background:var(--cor-fundo, #fff);box-shadow:0 8px 32px #0003}
+@media print{@page{size:1920px 1080px;margin:0}body{background:none}body>[data-slide]{margin:0;box-shadow:none}body>[data-slide]:not(:last-child){break-after:page}}"""
+# no PDF o documento pode ter mexido nisso: o export impõe de novo, por último
+IMPRESSAO_SLIDES = ("<style>@page{size:1920px 1080px;margin:0}html,body{margin:0!important;padding:0!important;background:none!important}"
+                    "body>[data-slide]{margin:0!important;box-shadow:none!important}"
+                    "body>[data-slide]:not(:last-child){break-after:page!important}</style>")
+
+
+def e_slides(html: str) -> bool:
+    return any("data-slide" in e["attrs"] for e in secoes(html))
+
+
+def limpar_export(html: str, com_fids: bool = False) -> str:
+    """HTML para levar embora: sem placeholder e (por padrão) sem data-fid. O inspetor e o CSP nunca
+    estão na fonte — são injetados só no canvas —, então não há o que tirar deles."""
+    html = limpar_placeholders(html)
+    return html if com_fids else _ATTR_FID.sub("", html)

@@ -1692,6 +1692,21 @@ def design_texto(conv_id: int, body: DesignTextoBody):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/design/{conv_id}/exportar")
+async def design_exportar(conv_id: int, formato: str = "html", fids: bool = False, slide: int = 1,
+                          viewport: str = "desktop"):
+    """Baixa a versão atual: html (limpo, data-fid opcional), pdf (um slide por página) ou png."""
+    from urllib.parse import quote
+    from . import design_export
+    try:
+        p = design.projeto(conv_id)
+        dados, tipo, nome = await design_export.exportar(p["html"], p["titulo"], formato, fids, slide, viewport)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return Response(dados, media_type=tipo,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(nome)}"})
+
+
 @app.get("/api/design/{message_id}/stream")
 def design_stream(message_id: int):
     return _sse_design(message_id)

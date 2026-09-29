@@ -28,8 +28,18 @@ export default function DesignPlano(props: { plano: Plano; onGerar: (p: Plano) =
   return (
     <div className="w-full rounded-2xl border border-line bg-surface p-3.5">
       <div className="mb-2 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Plano · aprove ou ajuste</div>
-      <input value={p.titulo} onChange={(e) => setP({ ...p, titulo: e.target.value })} aria-label="Título"
-             className={`${campo} mb-3 text-sm font-medium`} />
+      <div className="mb-3 flex items-center gap-2">
+        <input value={p.titulo} onChange={(e) => setP({ ...p, titulo: e.target.value })} aria-label="Título"
+               className={`${campo} text-sm font-medium`} />
+        <div className="flex shrink-0 rounded-lg border border-line p-0.5 text-xs" role="radiogroup" aria-label="Tipo">
+          {(["site", "slides"] as const).map((t) => (
+            <button key={t} role="radio" aria-checked={p.tipo === t} onClick={() => setP({ ...p, tipo: t })}
+                    className={`rounded-md px-2 py-0.5 ${p.tipo === t ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+              {t === "site" ? "Site" : "Slides"}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="mb-1 text-xs text-muted">Cores</div>
       <div className="mb-2 flex flex-wrap gap-1.5">
@@ -55,7 +65,7 @@ export default function DesignPlano(props: { plano: Plano; onGerar: (p: Plano) =
         </details>
       )}
 
-      <div className="mb-1 text-xs text-muted">Seções, na ordem</div>
+      <div className="mb-1 text-xs text-muted">{p.tipo === "slides" ? "Slides, na ordem (uma ideia por slide)" : "Seções, na ordem"}</div>
       <ol className="flex flex-col gap-2">
         {p.secoes.map((s, i) => (
           <li key={i} className="rounded-xl border border-line p-2">
@@ -83,7 +93,7 @@ export default function DesignPlano(props: { plano: Plano; onGerar: (p: Plano) =
         <button disabled={props.desabilitado || !valido}
                 onClick={() => props.onGerar({ ...p, secoes: p.secoes.map((s) => ({ ...s, nome: slug(s.nome) })) })}
                 className="rounded-[9px] bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-          Gerar {p.secoes.length} seções
+          Gerar {p.secoes.length} {p.tipo === "slides" ? "slides" : "seções"}
         </button>
       </div>
     </div>

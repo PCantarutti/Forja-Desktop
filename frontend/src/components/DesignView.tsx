@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import type { Stats } from "../types";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula } from "./Composer";
 import { type Effort, Menu, ModeEffortMenu } from "./Controls";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import { type Item, type Modo, type NoCaminho, enviar as paraIframe, lerMensagem, paraCanvas } from "./designCanvas";
-import { Bubble, Check, Cube, Mira, Split, Undo, X } from "./icons";
+import { ArrowLeft, ArrowRight, Bubble, Check, Cube, Download, Mira, Split, Undo, X } from "./icons";
 import { PromptRow, StatsRow, Thinking, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 
@@ -36,6 +36,7 @@ type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[] };
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
 type Rota = "auto" | "tokens" | "secao" | "documento";
+type Viewport = "desktop" | "tablet" | "mobile";
 
 const KEY = "forja.design.preferencias";
 const REDESENHO_MS = 1500;   // canvas durante a geração do documento: re-renderiza o parcial nesse ritmo
@@ -51,6 +52,18 @@ const ROTULO_ROTA: Record<string, string> = {
   plano: "plano", etapas: "em etapas", fragmento: "fragmento", tokens: "só tokens", secao: "seção",
   documento: "documento inteiro", texto: "texto · sem IA", restaurar: "restauração",
 };
+const VIEWPORTS: { id: Viewport; label: string; largura: number | null }[] = [
+  { id: "desktop", label: "Desktop", largura: null },
+  { id: "tablet", label: "Tablet", largura: 768 },
+  { id: "mobile", label: "Celular", largura: 375 },
+];
+const EXPORTS: { formato: "html" | "pdf" | "png"; fids?: boolean; label: string; hint: string }[] = [
+  { formato: "html", label: "HTML limpo", hint: "Um arquivo só, sem o script do canvas e sem data-fid" },
+  { formato: "html", fids: true, label: "HTML com data-fid", hint: "Mantém os ids estáveis (para voltar a editar em outro lugar)" },
+  { formato: "pdf", label: "PDF", hint: "Deck: um slide por página em 1920×1080. Site: A4" },
+  { formato: "png", label: "PNG", hint: "Deck: o slide atual. Site: a página inteira na largura do viewport" },
+];
+const MINI = 160;   // largura da miniatura de slide (px)
 const ETAPAS: { id: keyof Modelos; label: string; hint: string }[] = [
   { id: "plano", label: "Plano", hint: "Propõe tokens e seções (uma chamada curta)" },
   { id: "geracao", label: "Geração", hint: "Escreve as seções e o documento inteiro — onde um modelo forte rende mais" },
@@ -62,6 +75,8 @@ const parcialDoc = (t: string) => {
   const i = t.search(/<!doctype html|<html[\s>]/i);
   return i < 0 ? "" : t.slice(i);
 };
+/** Quantos slides o documento tem (seções de topo com data-slide); 0 = site. */
+const contaSlides = (html: string) => (html.match(/<section\b[^>]*\sdata-slide(?=[\s=>])/gi) ?? []).length;
 const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
@@ -103,6 +118,10 @@ export default function DesignView(props: {
   const [rota, setRota] = useState<Rota>("auto");
   const [prefs, setPrefs] = useState(() => lerPreferencias(props.provider, props.model));
   const [abrirModelos, setAbrirModelos] = useState(false);
+  const [viewport, setViewport] = useState<Viewport>("desktop");
+  const [slides, setSlides] = useState({ atual: 1, total: 0 });
+  const [abrirExport, setAbrirExport] = useState(false);
+  const [exportando, setExportando] = useState("");
   const iframe = useRef<HTMLIFrameElement>(null);
   const campo = useRef<HTMLTextAreaElement>(null);
   const versaoNoCanvas = useRef(0);
@@ -327,6 +346,32 @@ export default function DesignView(props: {
     }
   }
 
+  /** Baixa a versão atual (o backend gera PDF/PNG num Chromium headless, sem rede). */
+  async function exportar(formato: "html" | "pdf" | "png", fids = false) {
+    if (!projeto) return;
+    setAbrirExport(false);
+    setExportando(formato);
+    try {
+      const q = new URLSearchParams({ formato, fids: String(fids), slide: String(slides.atual), viewport });
+      const r = await fetch(`/api/design/${projeto.conv_id}/exportar?${q}`,
+                            { headers: window.forja?.token ? { "X-Forja-Token": window.forja.token } : {} });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+      const disp = r.headers.get("content-disposition") ?? "";
+      const nome = decodeURIComponent(disp.split("''")[1] ?? `design.${formato}`);
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = nome;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setExportando("");
+    }
+  }
+
+  const irSlide = (n: number) => paraIframe(janela(), { type: "setSlide", n });
   const selecionar = (fids: string[]) => paraIframe(janela(), { type: "highlight", fids });
   const mostrarComentario = (c: Comentario) => {
     selecionar(c.fids);
@@ -339,12 +384,14 @@ export default function DesignView(props: {
   doCanvas.current = (e) => {
     const m = lerMensagem(e, janela());
     if (!m) return;
-    if (m.type === "ready") {   // iframe (re)carregou: devolve modo, seleção e pins (os fids são estáveis)
+    if (m.type === "ready") {   // iframe (re)carregou: devolve modo, slide, seleção e pins (os fids são estáveis)
       paraIframe(janela(), { type: "setMode", mode: modo });
+      paraIframe(janela(), { type: "setSlide", n: slides.atual });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
     } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
+    else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "pin") {
       setAba("comentarios");
       setPinAtivo(m.n);
@@ -383,6 +430,14 @@ export default function DesignView(props: {
   const html = rodando && geracao?.modo === "etapas" && docVivo ? docVivo
     : rodando && geracao?.modo === "documento" && parcialDesenhado ? parcialDesenhado : srcBase;
   const secaoSel = selecao?.path.find((n) => n.sec)?.sec;
+  const nSlides = contaSlides(html);
+  const largura = nSlides ? null : VIEWPORTS.find((v) => v.id === viewport)!.largura;
+  // miniaturas pela fonte mais nova (o iframe principal pode estar na versão antiga + patches)
+  const fonteMini = rodando && docVivo ? docVivo : projeto?.html ?? "";
+  const miniaturas = useMemo(() => {
+    const n = contaSlides(fonteMini);
+    return Array.from({ length: n }, (_, i) => paraCanvas(fonteMini, false, { slide: i + 1, largura: MINI }));
+  }, [fonteMini]);
   const mensagens = projeto?.mensagens ?? [];
   const versoes = mensagens.filter((m) => m.versao).reverse();
   const btn = "grid size-8 place-items-center rounded-lg text-muted hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent";
@@ -640,7 +695,47 @@ export default function DesignView(props: {
               Restaurar como v{total + 1}
             </button>
           )}
+          <span className="mx-1 h-5 w-px bg-line" />
+          {nSlides ? (
+            // deck: navegação (← → também funcionam dentro do canvas)
+            <>
+              <button className={btn} title="Slide anterior · ←" disabled={slides.atual <= 1} onClick={() => irSlide(slides.atual - 1)}>
+                <ArrowLeft className="size-4" />
+              </button>
+              <span className="font-mono">{slides.atual} / {slides.total || nSlides}</span>
+              <button className={btn} title="Próximo slide · →" disabled={slides.atual >= (slides.total || nSlides)} onClick={() => irSlide(slides.atual + 1)}>
+                <ArrowRight className="size-4" />
+              </button>
+            </>
+          ) : (
+            <div className="flex rounded-lg border border-line p-0.5" role="radiogroup" aria-label="Viewport">
+              {VIEWPORTS.map((v) => (
+                <button key={v.id} role="radio" aria-checked={viewport === v.id} onClick={() => setViewport(v.id)}
+                        title={v.largura ? `${v.largura} px de largura` : "Largura do canvas"}
+                        className={`rounded-md px-2 py-0.5 ${viewport === v.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                  {v.label}
+                </button>
+              ))}
+            </div>
+          )}
           <span className="flex-1" />
+          <div className="relative">
+            <button onClick={() => setAbrirExport((v) => !v)} disabled={!srcBase || !!exportando}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">
+              <Download className="size-3.5" /> {exportando ? `Exportando ${exportando.toUpperCase()}…` : "Exportar"}
+            </button>
+            {abrirExport && (
+              <div className="absolute top-full right-0 z-30 mt-1 w-64 rounded-xl border border-line bg-surface p-1 shadow-xl">
+                {EXPORTS.map((x) => (
+                  <button key={x.label} onClick={() => exportar(x.formato, x.fids)}
+                          className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
+                    <span className="block text-[13px] text-fg">{x.label}{x.formato === "png" && nSlides ? ` · slide ${slides.atual}` : ""}</span>
+                    <span className="block text-[11.5px] text-faint">{x.hint}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           {secaoSel && !rodando && (
             <button onClick={() => pedir({ rota: "secao", secao: secaoSel })}
                     title={`Gera de novo só a seção ${secaoSel} (o texto do campo, se houver, vai como pedido)`}
@@ -670,16 +765,31 @@ export default function DesignView(props: {
             <span>{modo === "inspect" ? "Clique num elemento · Shift+clique junta · Alt+clique ou ↑ sobe · ↓ volta · Esc limpa · duplo clique edita o texto" : "Nenhum elemento selecionado · duplo clique num texto edita direto"}</span>
           )}
         </nav>
-        <div className="min-h-0 flex-1 p-3">
+        <div className="flex min-h-0 flex-1 justify-center overflow-hidden p-3">
           {html ? (
             <iframe key={chave} ref={iframe} title="Canvas do design" sandbox="allow-scripts" srcDoc={paraCanvas(html)}
-                    className="size-full rounded-lg border border-line bg-white" />
+                    style={largura ? { width: largura } : undefined}
+                    className={`h-full max-w-full rounded-lg border border-line ${largura ? "" : "w-full"} ${nSlides ? "bg-[#3a3a3a]" : "bg-white"}`} />
           ) : (
             <div className="grid size-full place-items-center rounded-lg border border-dashed border-line text-sm text-faint">
               {rodando ? "Esperando o começo do documento…" : "O design aparece aqui."}
             </div>
           )}
         </div>
+        {!!miniaturas.length && (
+          <div className="flex shrink-0 gap-2 overflow-x-auto border-t border-line px-3 py-2" aria-label="Slides">
+            {miniaturas.map((doc, i) => (
+              <button key={i} onClick={() => irSlide(i + 1)} title={`Slide ${i + 1}`}
+                      style={{ width: MINI + 4, height: (MINI * 9) / 16 + 4 }}
+                      className={`relative shrink-0 overflow-hidden rounded-md border-2 bg-white ${
+                        slides.atual === i + 1 ? "border-accent" : "border-transparent hover:border-line-strong"}`}>
+                <iframe title={`Miniatura do slide ${i + 1}`} sandbox="" srcDoc={doc} tabIndex={-1}
+                        style={{ width: MINI, height: (MINI * 9) / 16 }} className="pointer-events-none block" />
+                <span className="absolute bottom-0.5 left-1 rounded bg-black/60 px-1 font-mono text-[10px] text-white">{i + 1}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
