@@ -12,6 +12,8 @@ export type Modo = "view" | "inspect" | "comment" | "edit" | "editText";   // co
 export const PROPS_EDITAVEIS = ["color", "background-color", "font-size", "font-weight", "font-family", "line-height", "letter-spacing",
   "text-align", "padding", "margin", "border-radius", "border", "width", "height", "opacity", "gap"] as const;
 export type Pin = { fid: string; n: number };
+/** Um nó do painel Camadas: em ordem de documento, com a profundidade. */
+export type NoArvore = { fid: string; tag: string; cls: string; sec: string; texto: string; nivel: number; oculto: boolean };
 export type Problema = { fid: string | null; tipo: string; detalhe: string; gravidade: "erro" | "aviso"; rotulo: string };
 
 /** iframe → app. `select` traz o principal (último clicado) e a seleção inteira em `itens`. */
@@ -27,7 +29,8 @@ export type DoCanvas =
   | { type: "slides"; atual: number; total: number }
   | { type: "tela"; nome: string }                          // o runtime do protótipo trocou de tela
   | { type: "auditoria"; itens: Problema[]; escopo: string }
-  | { type: "atalho"; acao: "inspect" | "comentar" | "undo" | "redo" | "sair" | "apagar" | "duplicar" };
+  | { type: "atalho"; acao: "inspect" | "comentar" | "undo" | "redo" | "sair" | "apagar" | "duplicar" }
+  | { type: "arvore"; nos: NoArvore[] };
 
 /** app → iframe. `highlight` define a seleção (o iframe responde com `select`). */
 export type ParaCanvas =
@@ -40,6 +43,8 @@ export type ParaCanvas =
   | { type: "auditar" }
   | { type: "setMulti"; on: boolean }        // cada clique soma/tira da seleção (como Shift/Ctrl+clique)
   | { type: "semelhantes"; fid: string }
+  | { type: "arvore" }                        // pede os nós para o painel Camadas
+  | { type: "realce"; fid: string | null }    // hover vindo de fora (linha do painel)
   | { type: "setTokens"; tokens: Record<string, string> }   // prévia dos sliders; {} limpa
   | { type: "setEstilo"; fids: string[]; estilos: Record<string, string> }   // prévia do modo Editar ("" tira)
   | { type: "patch"; fid: string; html: string };
@@ -85,6 +90,9 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
       return Array.isArray(d.itens) && d.itens.length <= 200 && d.itens.every((x: any) => x && (x.fid === null || eTexto(x.fid)) &&
         eTexto(x.tipo) && eTexto(x.detalhe) && ["erro", "aviso"].includes(x.gravidade) && eTexto(x.rotulo))
         ? { type: "auditoria", itens: d.itens, escopo: eTexto(d.escopo) ? d.escopo : "" } : null;
+    case "arvore":
+      return Array.isArray(d.nos) && d.nos.length <= 3000 && d.nos.every((n: any) => eItem(n) && eTexto(n.sec) && eTexto(n.texto)
+        && Number.isInteger(n.nivel) && typeof n.oculto === "boolean") ? { type: "arvore", nos: d.nos } : null;
     case "tela":
       return eTexto(d.nome) && d.nome.length < 80 ? { type: "tela", nome: d.nome } : null;
     case "slides":
@@ -180,6 +188,7 @@ function inspetor() {
   etiqueta.style.cssText = `position:fixed;display:none;font:11px/1.6 ui-monospace,monospace;color:#fff;background:${AZUL};padding:0 5px;border-radius:3px;white-space:nowrap`;
   camada.appendChild(etiqueta);
   let temporarios: HTMLElement[] = [];
+  let realceFora = false;   // hover pedido pelo painel Camadas (vale em qualquer modo)
   // modo Editar: puxando uma alça, ou arrastando a seleção para outro lugar
   let redim: { el: HTMLElement; dir: string; x0: number; y0: number; w0: number; h0: number; w: number | null; h: number | null } | null = null;
   let arrasto: { x0: number; y0: number; ativo: boolean; alvo: Element | null; onde: "antes" | "depois" } | null = null;
@@ -194,7 +203,7 @@ function inspetor() {
     Object.assign(d.style, { display: "block", left: `${r.x}px`, top: `${r.y}px`, width: `${r.width}px`, height: `${r.height}px` });
   };
   const desenha = () => {
-    posiciona(caixaHover, escolhendo() && hover && !editando && !sel.includes(hover.getAttribute("data-fid") || "") ? hover : null);
+    posiciona(caixaHover, (escolhendo() || realceFora) && hover && !editando && !sel.includes(hover.getAttribute("data-fid") || "") ? hover : null);
     temporarios.forEach((d) => d.remove());
     temporarios = sel.map((f) => {
       const d = caixa("solid");
@@ -288,6 +297,7 @@ function inspetor() {
   }, true);
 
   document.addEventListener("mouseover", (e) => {
+    realceFora = false;
     if (!escolhendo()) return;
     hover = alvo(e.target as Element);
     desenha();
@@ -527,6 +537,27 @@ function inspetor() {
         }).slice(0, 60).map((el) => el.getAttribute("data-fid")!);
         seleciona([d.fid, ...iguais.filter((f) => f !== d.fid)]);
       }
+    } else if (d.type === "arvore") {
+      const nos: object[] = [];
+      const anda = (el: Element, nivel: number) => {
+        for (const f of el.children) {
+          if (f === camada || nos.length >= 3000) continue;
+          const tem = f.hasAttribute("data-fid");
+          if (tem) {
+            const direto = [...f.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim().replace(/\s+/g, " ");
+            const c = getComputedStyle(f);
+            nos.push({ ...item(f), sec: f.getAttribute("data-section") || "", texto: (direto || (f.children.length ? "" : f.textContent || "")).trim().slice(0, 48),
+                       nivel, oculto: c.display === "none" || c.visibility === "hidden" });
+          }
+          anda(f, tem ? nivel + 1 : nivel);
+        }
+      };
+      if (document.body) anda(document.body, 0);
+      envia({ type: "arvore", nos });
+    } else if (d.type === "realce") {
+      hover = typeof d.fid === "string" ? porFid(d.fid) : null;
+      realceFora = !!hover;
+      desenha();
     } else if (d.type === "highlight" && Array.isArray(d.fids)) {
       filhos.length = 0;
       seleciona(d.fids.filter((f: unknown) => typeof f === "string"));

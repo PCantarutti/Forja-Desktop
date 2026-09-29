@@ -6,12 +6,13 @@ import { type Effort, Menu, ModeEffortMenu } from "./Controls";
 import DesignAjustes, { type Sistema } from "./DesignAjustes";
 import DesignAcessibilidade from "./DesignAcessibilidade";
 import DesignAtividade from "./DesignAtividade";
+import DesignCamadas from "./DesignCamadas";
 import DesignEditar from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
 import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
-import { type Item, type Modo, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
+import { type Item, type Modo, type NoArvore, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
 import { ArrowLeft, ArrowRight, Bubble, Check, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, Paperclip, Play, Plus,
   Split, TelaCheia, Undo, X } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
@@ -158,6 +159,8 @@ export default function DesignView(props: {
   const [zoom, setZoom] = useState(1);                       // só da página gerada (o app não muda)
   const [abrirZoom, setAbrirZoom] = useState(false);
   const [abrirSalvar, setAbrirSalvar] = useState(false);
+  const [camadas, setCamadas] = useState(false);
+  const [nosCamadas, setNosCamadas] = useState<NoArvore[]>([]);
   const [nomeVersao, setNomeVersao] = useState("");
   const [comparar, setComparar] = useState<number | null>(null);   // versão aberta ao lado da atual
   const [htmlVersoes, setHtmlVersoes] = useState<Record<number, string>>({});
@@ -287,6 +290,8 @@ export default function DesignView(props: {
   useEffect(() => fimChat.current?.scrollIntoView({ block: "end" }), [projeto?.mensagens.length, rodando, aba]);
   useEffect(() => paraIframe(janela(), { type: "setMode", mode: modo }), [modo]);
   useEffect(() => paraIframe(janela(), { type: "setMulti", on: multi }), [multi]);
+  // Camadas aberto: a árvore acompanha cada mudança (o patch vai antes pela mesma fila de mensagens)
+  useEffect(() => { if (camadas) paraIframe(janela(), { type: "arvore" }); }, [camadas, projeto?.html]);
 
   // Campo que cresce com o texto até CAMPO_MAX, como o do agente.
   useEffect(() => {
@@ -676,7 +681,9 @@ export default function DesignView(props: {
       if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
-    } else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect, estilo: m.estilo, href: m.href } : null);
+      if (camadas) paraIframe(janela(), { type: "arvore" });
+    } else if (m.type === "arvore") setNosCamadas(m.nos);
+    else if (m.type === "select") setSelecao(m.fid ? { fid: m.fid, tag: m.tag, path: m.path, itens: m.itens, rect: m.rect, estilo: m.estilo, href: m.href } : null);
     else if (m.type === "textEdited") salvarTexto(m.fid, m.html);
     else if (m.type === "mover") operar("mover", m.fids, { alvo: m.alvo, onde: m.onde });
     else if (m.type === "redimensionar") semIA("estilo", { fids: [m.fid], estilos: {
@@ -1136,6 +1143,10 @@ export default function DesignView(props: {
       <div className="flex min-w-0 flex-1 flex-col bg-side">
         {/* sem espaço, a barra quebra em duas linhas (nunca no meio de um rótulo) em vez de cortar os menus */}
         <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1 border-b border-line px-3 py-1 text-xs whitespace-nowrap text-muted">
+          <button onClick={() => setCamadas((v) => !v)} aria-pressed={camadas} disabled={!srcBase} title="Árvore de elementos da página"
+                  className={`rounded-lg px-2 py-1 disabled:opacity-30 ${camadas ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}>
+            Camadas
+          </button>
           <div className="relative">
             <button onClick={() => setAbrirZoom((v) => !v)} disabled={!srcBase} title="Zoom só da página gerada"
                     className="rounded-lg px-1.5 py-1 font-mono text-fg hover:bg-raised disabled:opacity-40">
@@ -1357,6 +1368,13 @@ export default function DesignView(props: {
           )}
         </nav>
         <div className="flex min-h-0 flex-1">
+        {camadas && (
+          <DesignCamadas nos={nosCamadas} selecionados={selecao?.itens.map((i) => i.fid) ?? []}
+                         onSelecionar={(fids) => { selecionar(fids); if (fids.length) paraIframe(janela(), { type: "scrollTo", fid: fids[fids.length - 1] }); }}
+                         onRealce={(fid) => paraIframe(janela(), { type: "realce", fid })}
+                         onMover={(fids, alvo, onde) => operar("mover", fids, { alvo, onde })}
+                         onFechar={() => setCamadas(false)} />
+        )}
         <div ref={areaCanvas} className={`relative flex min-w-0 flex-1 p-3 ${zoom > 1 ? "overflow-auto" : "overflow-hidden"}`} style={{ justifyContent: "safe center" }}>
           {modo === "comment" && selecao?.rect && iframe.current && areaCanvas.current && (() => {
             // a caixa fica logo abaixo do elemento (ou acima, se não couber), dentro da área do canvas
