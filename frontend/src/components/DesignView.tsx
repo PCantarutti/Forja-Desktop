@@ -16,7 +16,7 @@ import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
 import { type Item, type Modo, type NoArvore, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
-import { ArrowLeft, ArrowRight, Bubble, Camadas as CamadasIcone, Celular, Check, LadoALado, Monitor, Tablet, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, PanelLeft, Paperclip, Play, Plus,
+import { ArrowLeft, ArrowRight, Bubble, Camadas as CamadasIcone, Celular, Check, FolderOpen, LadoALado, Monitor, Tablet, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, PanelLeft, Paperclip, Play, Plus,
   Split, TelaCheia, Undo, X } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -47,7 +47,10 @@ type Projeto = {
   sistema: string | null;
   rascunho: { base: number; rev: number; passos: string[]; mudancas: number } | null;
   edicao: { desfazer: boolean; refazer: boolean };
+  pasta: string;   // DATA_DIR/designs/<id>-<nome>: o repositório git do projeto
 };
+type StatusGit = { ok: boolean; aviso?: string; baixar?: string; versao?: string };
+const COMANDO_GIT = "winget install --id Git.Git -e";
 type Patch = { fid: string; html: string };
 type Geracao = {
   message_id: number; status: string; modo?: string; parcial?: string; raciocinio?: string; tokens?: number;
@@ -155,6 +158,8 @@ export default function DesignView(props: {
   pastaPadrao: string;
 }) {
   const [projeto, setProjeto] = useState<Projeto | null>(null);
+  const [git, setGit] = useState<StatusGit | null>(null);   // o Design guarda as versões com o git do sistema
+  const [verificandoGit, setVerificandoGit] = useState(false);
   const [texto, setTexto] = useState("");
   const [geracao, setGeracao] = useState<Geracao | null>(null);
   const [parcialDesenhado, setParcialDesenhado] = useState("");
@@ -314,6 +319,7 @@ export default function DesignView(props: {
     api.get<Sistema[]>("/design-sistemas").then(setSistemas).catch(() => {});
   }, []);
   useEffect(() => localStorage.setItem(KEY, JSON.stringify(prefs)), [prefs]);
+  useEffect(() => { verificarGit(); }, []);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => fimChat.current?.scrollIntoView({ block: "end" }), [projeto?.mensagens.length, rodando, aba]);
   useEffect(() => paraIframe(janela(), { type: "setMode", mode: modo }), [modo]);
   useEffect(() => paraIframe(janela(), { type: "setMulti", on: multi }), [multi]);
@@ -634,6 +640,20 @@ export default function DesignView(props: {
   }
 
   /** Projeto vazio a partir de um modelo guardado: vira a v1 na hora, sem IA. */
+  async function verificarGit() {
+    setVerificandoGit(true);
+    try {
+      setGit(await api.get<StatusGit>("/design-git"));
+    } catch {
+      setGit({ ok: true });   // backend antigo, sem a rota: deixa a tela seguir
+    } finally {
+      setVerificandoGit(false);
+    }
+  }
+  const abrirPasta = () => {
+    if (projeto?.pasta) api.post("/open", { path: projeto.pasta, mode: "reveal" }).catch((e) => props.onError(e.message));
+  };
+
   async function usarModelo(m: Modelo) {
     try {
       const id = await props.ensureConversation();
@@ -907,6 +927,36 @@ export default function DesignView(props: {
     </div>
   );
 
+  if (git && !git.ok) {
+    return (
+      <div className="grid h-full place-items-center p-6">
+        <section aria-label="Git necessário" className="w-[min(560px,100%)] rounded-2xl border border-line bg-surface p-6">
+          <h2 className="text-[17px] font-semibold text-fg">O Design precisa do Git</h2>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-fg-2">
+            Cada projeto do Design é uma pasta com histórico de versões feito pelo Git, e ele não foi encontrado neste
+            computador. Instale e volte aqui — não precisa reiniciar o Forja.
+          </p>
+          <div className="mt-4 text-[12px] text-muted">No PowerShell ou no Terminal do Windows:</div>
+          <div className="mt-1.5 flex items-center gap-2 rounded-lg border border-line bg-code px-3 py-2">
+            <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-fg">{COMANDO_GIT}</code>
+            <button onClick={() => navigator.clipboard?.writeText(COMANDO_GIT).catch(() => {})} title="Copiar o comando"
+                    className="rounded-md px-2 py-0.5 text-[12px] text-muted hover:bg-raised hover:text-fg">Copiar</button>
+          </div>
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            <button onClick={() => window.open(git.baixar ?? "https://git-scm.com/download/win", "_blank", "noopener")}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-3 text-[13px] font-medium text-accent-fg hover:brightness-110">
+              <ExternalLink className="size-3.5" /> Baixar o Git
+            </button>
+            <button onClick={verificarGit} disabled={verificandoGit}
+                    className="inline-flex h-8 items-center rounded-lg border border-line px-3 text-[13px] text-fg hover:bg-raised disabled:opacity-40">
+              {verificandoGit ? "Verificando…" : "Já instalei — verificar de novo"}
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0">
       {/* Esquerda: chat / comentários / versões + composer */}
@@ -1107,8 +1157,14 @@ export default function DesignView(props: {
             <div className="flex flex-col gap-1 py-2">
               <p className="px-2 pb-1 text-[11.5px] leading-snug text-faint">
                 Ajustes à mão ficam no rascunho até você salvar (Ctrl+S). Para abrir um ramo, vá até uma versão antiga e siga
-                editando: a próxima versão nasce dela, sem apagar as outras.
+                editando: a próxima versão nasce dela, sem apagar as outras. Cada versão é um commit do Git na pasta do projeto.
               </p>
+              {!!projeto?.pasta && !!ponte()?.token && (
+                <button onClick={abrirPasta} title={projeto.pasta}
+                        className="mx-2 mb-1 inline-flex items-center gap-1.5 self-start rounded-lg border border-line px-2 py-1 text-[12px] text-fg hover:bg-raised">
+                  <FolderOpen className="size-3.5" /> Abrir pasta do projeto
+                </button>
+              )}
               {projeto?.rascunho && (
                 <div className="rounded-lg border border-amber-400/40 bg-amber-500/5 px-2.5 py-2 text-[12.5px]">
                   <div className="flex items-center gap-2">
@@ -1450,6 +1506,12 @@ export default function DesignView(props: {
                              onKeyDown={(e) => { if (e.key === "Escape") setNomeModelo(null); }} className={`${campoPop} min-w-0 flex-1`} />
                       <button type="submit" disabled={!nomeModelo.trim()} className="inline-flex h-7 items-center rounded-lg bg-accent px-2.5 text-xs font-medium text-accent-fg disabled:opacity-40">Salvar</button>
                     </form>
+                  )}
+                  {!!projeto?.pasta && !!ponte()?.token && (
+                    <button onClick={() => { setAbrirExport(false); abrirPasta(); }} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
+                      <span className="flex items-center gap-1.5 text-[13px] text-fg"><FolderOpen className="size-3.5" /> Abrir pasta do projeto</span>
+                      <span className="block truncate text-[11.5px] text-faint" title={projeto.pasta}>{projeto.pasta}</span>
+                    </button>
                   )}
                   <button onClick={mandarParaAgente} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
                     <span className="flex items-center gap-1.5 text-[13px] text-fg"><Code className="size-3.5" /> Mandar para o Agente…</span>

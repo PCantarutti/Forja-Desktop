@@ -44,10 +44,10 @@ def _int(v: str | None) -> int | None:
 
 
 def pasta(conv_id: int) -> Path:
-    """Onde os slots moram de verdade (PNG/WebP), com um index.html que aponta para eles."""
-    p = config.DATA_DIR / "design" / str(conv_id)
-    (p / "img").mkdir(parents=True, exist_ok=True)
-    return p
+    """Onde os slots moram de verdade (PNG/WebP), com um index.html que aponta para eles: a pasta
+    geradas/ dentro da pasta do projeto (design_repo), fora do git."""
+    from . import design_repo
+    return design_repo.geradas(conv_id)
 
 
 def provisorio(nome: str, w: int | None, h: int | None) -> str:

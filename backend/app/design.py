@@ -3,13 +3,14 @@ seguinte vira uma versão nova.
 
 Nada de tabela nova, como na pesquisa: um projeto é uma Conversation(kind="design"). Cada pedido
 são duas mensagens — a do usuário e a do assistente, cujo meta["design"] guarda a versão:
-{versao, html, descricao, atual, rota, stats}. `atual` marca a versão que o canvas mostra
-(desfazer/refazer só mudam essa marca; restaurar cria uma nova, o histórico nunca é apagado).
+{versao, commit, descricao, atual, base, rota, stats}. O HTML mora na pasta do projeto, que é um
+repositório git (design_repo): cada versão é um commit, e `atual` marca a que está no canvas (ir
+até outra é um checkout; restaurar cria uma nova; o histórico nunca é apagado).
 Comentários são mensagens role="event" com meta["design_comentario"].
 
 Mudança feita à mão (Editar, texto, ajustes, variação, design system, arrastar...) não vira versão:
-entra no rascunho — uma mensagem role="event" com meta["design_rascunho"] = {base, html, passos, rev},
-em cima da versão atual — até o usuário salvar. O pedido à IA parte do rascunho e a versão que ela
+entra no rascunho — o index.html da pasta modificado e não commitado, mais uma mensagem role="event"
+com meta["design_rascunho"] = {base, passos, rev} — até o usuário salvar. O pedido à IA parte do rascunho e a versão que ela
 cria o absorve; com rascunho aberto, trocar de versão é recusado (salve ou descarte antes).
 
 Falha nunca altera o documento: resposta inválida, erro do modelo ou cancelamento fecham a
@@ -33,7 +34,7 @@ from contextlib import aclosing
 from html.parser import HTMLParser
 from pathlib import Path
 
-from . import config, db, design_html, design_imagens, design_sistema, llm, mirror
+from . import config, db, design_html, design_imagens, design_repo, design_sistema, llm, mirror
 from .agent import _save, _stats
 from .parsing import split_think
 from .tools import ToolError
@@ -144,15 +145,48 @@ def _conv(s, conv_id: int) -> db.Conversation:
     return c
 
 
-def _carimbada(s, m: db.Message) -> str:
-    """Versão de antes do carimbo (fase 1) ganha data-fid na primeira vez que é aberta — no próprio
-    registro, porque o id só é estável se estiver salvo."""
-    html = m.meta["design"]["html"]
-    novo = design_html.carimbar(html)
-    if novo != html:
-        m.meta = {**m.meta, "design": {**m.meta["design"], "html": novo}}
+def _repo(conv_id: int) -> None:
+    """Pasta e repositório do projeto (migra o projeto antigo na primeira vez). Chamado antes de abrir
+    transação: a migração escreve no banco e não pode rodar dentro de outra escrita."""
+    with db.session() as s:
+        _conv(s, conv_id)
+    design_repo.garantir(conv_id)
+
+
+def _migrar_para_git(conv_id: int, raiz) -> None:
+    """Projeto de antes da pasta: cada versão guardada no banco vira um commit, com a mesma base (o
+    mesmo ramo), e o rascunho vai para o index.html. O HTML só sai do banco depois de conferido."""
+    with db.session() as s:
+        vs = sorted(((m.id, dict(m.meta["design"])) for m in _versoes(s, conv_id)), key=lambda x: x[1]["versao"])
+        r = _rascunho(s, conv_id)
+        rasc_html = (r.meta["design_rascunho"].get("html") if r else None)
+        atual = _atual(s, conv_id)
+        atual_n = atual.meta["design"]["versao"] if atual else 0
+    feitas: dict[int, tuple[str, str]] = {}   # versão -> (sha, html gravado)
+    for _, d in vs:
+        if "html" not in d:
+            continue
+        n = d["versao"]
+        base = d.get("base") or (n - 1 if n > 1 else 0)
+        if base and base not in feitas:   # pai sem HTML (não deveria): pendura na anterior que existe
+            base = max((v for v in feitas if v < n), default=0)
+        html = design_html.carimbar(d["html"])
+        feitas[n] = (design_repo.commitar(conv_id, html, n, d.get("descricao") or "", base), html)
+    if not feitas:
+        return
+    design_repo.ir(conv_id, atual_n if atual_n in feitas else max(feitas))
+    if rasc_html:
+        design_repo.gravar(conv_id, rasc_html)
+    conferidas = {n for n, (_, html) in feitas.items() if design_repo.versao(conv_id, n) == html}
+    with db.session() as s:
+        for m in _versoes(s, conv_id):
+            d = m.meta["design"]
+            if d["versao"] in conferidas:
+                m.meta = {**m.meta, "design": {**{k: v for k, v in d.items() if k != "html"}, "commit": feitas[d["versao"]][0]}}
+        r = _rascunho(s, conv_id)
+        if r and rasc_html:
+            r.meta = {**r.meta, "design_rascunho": {k: v for k, v in r.meta["design_rascunho"].items() if k != "html"}}
         s.commit()
-    return novo
 
 
 def _comentarios(s, conv_id: int, html: str) -> list[dict]:
@@ -169,6 +203,7 @@ def _comentarios(s, conv_id: int, html: str) -> list[dict]:
 
 def projeto(conv_id: int) -> dict:
     """Tudo que a tela precisa: chat (sem o HTML de cada versão), comentários, versão atual e o HTML."""
+    _repo(conv_id)
     with db.session() as s:
         c = _conv(s, conv_id)
         html, _, r = _base(s, conv_id)
@@ -192,7 +227,7 @@ def projeto(conv_id: int) -> dict:
                               "passos": d.get("passos") or [], "mais": (d.get("diff") or {}).get("mais", 0),
                               "menos": (d.get("diff") or {}).get("menos", 0),
                               "created_at": m.created_at.isoformat()})
-        return {"conv_id": conv_id, "titulo": c.title, "mensagens": mensagens,
+        return {"conv_id": conv_id, "titulo": c.title, "mensagens": mensagens, "pasta": str(design_repo.raiz(conv_id) or ""),
                 "total": len(_versoes(s, conv_id)),
                 "atual": atual.meta["design"]["versao"] if atual else 0, "html": html,
                 "rascunho": {"base": r.meta["design_rascunho"]["base"], "rev": r.meta["design_rascunho"]["rev"],
@@ -215,12 +250,14 @@ def _imagens(conv_id: int, html: str) -> dict:
 
 
 def ir_para(conv_id: int, versao: int) -> dict:
-    """Desfazer/refazer/abrir do histórico: só move a marca."""
+    """Desfazer/refazer/abrir do histórico: checkout daquela versão e a marca vai junto."""
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         _sem_rascunho(s, conv_id)
         if not any(m.meta["design"]["versao"] == versao for m in _versoes(s, conv_id)):
             raise ToolError(f"Versão {versao} não existe.")
+        design_repo.ir(conv_id, versao)
         _marca_atual(s, conv_id, versao)
         s.commit()
     return projeto(conv_id)
@@ -228,13 +265,13 @@ def ir_para(conv_id: int, versao: int) -> dict:
 
 def restaurar(conv_id: int, versao: int) -> dict:
     """Versão antiga volta como uma versão nova, no topo do histórico."""
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         _sem_rascunho(s, conv_id)
-        velha = next((m for m in _versoes(s, conv_id) if m.meta["design"]["versao"] == versao), None)
-        if not velha:
+        if not any(m.meta["design"]["versao"] == versao for m in _versoes(s, conv_id)):
             raise ToolError(f"Versão {versao} não existe.")
-        html = velha.meta["design"]["html"]
+    html = design_repo.versao(conv_id, versao)
     _nova_versao(conv_id, None, html, f"restaurada da v{versao}", rota="restaurar", base=versao,
                  passos=[f"Copiou a v{versao} para o topo do histórico"])
     return projeto(conv_id)
@@ -243,26 +280,31 @@ def restaurar(conv_id: int, versao: int) -> dict:
 def _nova_versao(conv_id: int, message_id: int | None, html: str, descricao: str, **extra) -> int:
     """Grava a versão (na mensagem da geração, ou numa nova) e a marca como atual. Os slots de imagem
     saem preenchidos: provisório onde falta, a imagem pronta de antes onde o modelo devolveu sem src."""
+    _repo(conv_id)
     with db.session() as s:
-        anterior = _atual(s, conv_id)
-        anterior = anterior.meta["design"]["html"] if anterior else ""
+        atual = _atual(s, conv_id)
+        atual_n = atual.meta["design"]["versao"] if atual else 0
         r = _rascunho(s, conv_id)
         if r and extra.get("rota") != "manual":   # a IA (ou as imagens) partiu do rascunho: ele vai junto
             n_r = len(r.meta["design_rascunho"]["passos"])
             extra["passos"] = [f"Incluiu {n_r} ajuste(s) manual(is) do rascunho", *(extra.get("passos") or [])]
+    anterior = design_repo.versao(conv_id, atual_n) if atual_n else ""
     html = design_html.carimbar(design_imagens.preencher(html, anterior))
     extra["diff"] = design_html.diff(anterior, html)   # "código alterado" da atividade no chat
+    extra.setdefault("base", atual_n)
     with db.session() as s:
         n = max((m.meta["design"]["versao"] for m in _versoes(s, conv_id)), default=0) + 1
+    sha = design_repo.commitar(conv_id, html, n, descricao, extra["base"])
+    with db.session() as s:
         texto = f"v{n}: {descricao}"
         if message_id is None:
             s.add(db.Message(conversation_id=conv_id, role="assistant", content=texto, status="ok",
-                             meta={"design": {"versao": n, "html": html, "descricao": descricao, **extra}}))
+                             meta={"design": {"versao": n, "commit": sha, "descricao": descricao, **extra}}))
         else:
             m = s.get(db.Message, message_id)
             antes = (m.meta or {}).get("design", {})
             m.content, m.status = texto, "ok"
-            m.meta = {**(m.meta or {}), "design": {**antes, "versao": n, "html": html, "descricao": descricao, **extra}}
+            m.meta = {**(m.meta or {}), "design": {**antes, "versao": n, "commit": sha, "descricao": descricao, **extra}}
         s.get(db.Conversation, conv_id).updated_at = db._now()
         s.flush()
         _marca_atual(s, conv_id, n)
@@ -309,6 +351,7 @@ def comentar(conv_id: int, fids: list[str], texto: str) -> dict:
         raise ToolError(f"Comentário vazio ou com mais de {MAX_COMENTARIO} caracteres.")
     if not 1 <= len(fids) <= 20:
         raise ToolError("Selecione de 1 a 20 elementos para comentar.")
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         atual = _atual(s, conv_id)
@@ -332,6 +375,7 @@ NOME_LARGURA = {"desktop": "Desktop", "tablet": "Tablet", "mobile": "Celular"}
 def comentarios_da_revisao(conv_id: int, problemas: list[dict], maximo: int = 8) -> int:
     """Revisão visual → fila de comentários (o que o modelo viu primeiro, depois o medido; sem repetir
     comentário pendente igual). Devolve quantos entraram."""
+    _repo(conv_id)
     with db.session() as s:
         pendentes = {(tuple(x["fids"]), x["texto"]) for x in _comentarios(s, conv_id, _base(s, conv_id)[0]) if x["status"] == "pendente"}
     n = 0
@@ -414,10 +458,11 @@ def _rascunho(s, conv_id: int) -> db.Message | None:
 def _base(s, conv_id: int) -> tuple[str, int, db.Message | None]:
     """(html, versão de base, rascunho): onde a próxima mudança entra e o que o canvas mostra."""
     r = _rascunho(s, conv_id)
+    html = design_repo.ler(conv_id)   # o index.html da pasta: a versão atual, com o rascunho por cima
     if r:
-        return r.meta["design_rascunho"]["html"], r.meta["design_rascunho"]["base"], r
+        return html, r.meta["design_rascunho"]["base"], r
     atual = _atual(s, conv_id)
-    return (_carimbada(s, atual), atual.meta["design"]["versao"], None) if atual else ("", 0, None)
+    return (html, atual.meta["design"]["versao"], None) if atual else ("", 0, None)
 
 
 def _sem_rascunho(s, conv_id: int) -> None:
@@ -427,28 +472,32 @@ def _sem_rascunho(s, conv_id: int) -> None:
 
 def _estado(s, conv_id: int) -> dict | None:
     r = _rascunho(s, conv_id)
-    return {"html": r.meta["design_rascunho"]["html"], "passos": r.meta["design_rascunho"]["passos"]} if r else None
+    return {"html": design_repo.ler(conv_id), "passos": r.meta["design_rascunho"]["passos"]} if r else None
 
 
 def _por_estado(s, conv_id: int, estado: dict | None) -> None:
     """Deixa o rascunho igual a `estado` (None = sem rascunho: o canvas volta à versão atual)."""
     r = _rascunho(s, conv_id)
+    atual = _atual(s, conv_id)
     if estado is None:
         if r:
             s.delete(r)
-    elif r:
-        d = r.meta["design_rascunho"]
-        r.meta = {**r.meta, "design_rascunho": {**d, **estado, "rev": d["rev"] + 1}}
+        design_repo.ir(conv_id, atual.meta["design"]["versao"])   # o index.html volta ao da versão
     else:
-        atual = _atual(s, conv_id)
-        s.add(db.Message(conversation_id=conv_id, role="event", content="rascunho",
-                         meta={"design_rascunho": {"base": atual.meta["design"]["versao"], "rev": 1, **estado}}))
+        design_repo.gravar(conv_id, estado["html"])
+        if r:
+            d = r.meta["design_rascunho"]
+            r.meta = {**r.meta, "design_rascunho": {**d, "passos": estado["passos"], "rev": d["rev"] + 1}}
+        else:
+            s.add(db.Message(conversation_id=conv_id, role="event", content="rascunho",
+                             meta={"design_rascunho": {"base": atual.meta["design"]["versao"], "rev": 1, "passos": estado["passos"]}}))
     s.get(db.Conversation, conv_id).updated_at = db._now()   # o celular recarrega pelo carimbo
 
 
 def _sem_ia(conv_id: int, faz, descricao: str, rota: str, passos=None) -> dict:
     """Mudança direta, sem modelo: entra no rascunho (não cria versão) e volta com patch para o canvas.
     `passos` pode ser uma função, para quando o texto só se sabe depois de `faz`."""
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         if any(r["conv_id"] == conv_id for r in _RUNS.values()):
@@ -477,6 +526,7 @@ def _sem_ia(conv_id: int, faz, descricao: str, rota: str, passos=None) -> dict:
 
 def rascunho_desfazer(conv_id: int, refazer: bool = False) -> dict:
     """Ctrl+Z / Ctrl+Shift+Z dentro do rascunho (o canvas recarrega: pode ter mudado qualquer coisa)."""
+    _repo(conv_id)
     pilha = _PILHAS.get(conv_id) or {"desfazer": [], "refazer": []}
     de, para = ("refazer", "desfazer") if refazer else ("desfazer", "refazer")
     if not pilha[de]:
@@ -493,6 +543,7 @@ def rascunho_desfazer(conv_id: int, refazer: bool = False) -> dict:
 
 def salvar_versao(conv_id: int, descricao: str = "") -> dict:
     """O usuário decide: o rascunho vira a próxima versão (com os passos dele na atividade)."""
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         r = _rascunho(s, conv_id)
@@ -502,16 +553,20 @@ def salvar_versao(conv_id: int, descricao: str = "") -> dict:
     passos = d["passos"]
     descricao = _descricao(descricao.strip(), 80) if descricao.strip() else (
         _descricao(passos[0], 60) if len(passos) == 1 else f"{len(passos)} ajustes manuais")
-    _nova_versao(conv_id, None, d["html"], descricao, base=d["base"], rota="manual", passos=passos)
+    _nova_versao(conv_id, None, design_repo.ler(conv_id), descricao, base=d["base"], rota="manual", passos=passos)
     return projeto(conv_id)
 
 
 def descartar_rascunho(conv_id: int) -> dict:
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         r = _rascunho(s, conv_id)
         if r:
             s.delete(r)
+            atual = _atual(s, conv_id)
+            if atual:
+                design_repo.ir(conv_id, atual.meta["design"]["versao"])
             s.get(db.Conversation, conv_id).updated_at = db._now()
             s.commit()
     _PILHAS.pop(conv_id, None)
@@ -722,6 +777,7 @@ def usar_modelo(conv_id: int, modelo_id: str) -> dict:
     """Projeto vazio começa de um modelo guardado: o HTML dele vira a v1, sem IA."""
     from . import design_modelos
     m = design_modelos.pegar(modelo_id)
+    _repo(conv_id)
     with db.session() as s:
         c = _conv(s, conv_id)
         if _versoes(s, conv_id) or any(r["conv_id"] == conv_id for r in _RUNS.values()):
@@ -756,6 +812,7 @@ _PAPEL = [("fundo", r"--(cor-)?(fundo|bg|background|superficie-base)$"), ("texto
 
 def aplicar_paleta(conv_id: int, paleta: dict) -> dict:
     """Cores e fontes da página capturada nos tokens que o design já tem (sem IA, no rascunho)."""
+    _repo(conv_id)
     with db.session() as s:
         html = _base(s, conv_id)[0]
     raiz = design_html.root_css(html)
@@ -806,12 +863,14 @@ def escolher_variacao(conv_id: int, message_id: int, indice: int) -> dict:
 
 def versao_html(conv_id: int, versao: int) -> dict:
     """HTML de uma versão qualquer (miniaturas do histórico e comparação lado a lado)."""
+    _repo(conv_id)
     with db.session() as s:
         _conv(s, conv_id)
         m = next((x for x in _versoes(s, conv_id) if x.meta["design"]["versao"] == versao), None)
         if not m:
             raise ToolError(f"Versão {versao} não existe.")
-        return {"versao": versao, "html": _carimbada(s, m), "descricao": m.meta["design"].get("descricao", "")}
+        descricao = m.meta["design"].get("descricao", "")
+    return {"versao": versao, "html": design_repo.versao(conv_id, versao), "descricao": descricao}
 
 
 def aplicar_sistema(conv_id: int, ds_id: str) -> dict:
@@ -923,6 +982,7 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
           perguntar: bool = False, respostas: list[dict] | None = None, referencias: list[dict] | None = None,
           pagina: str = "") -> dict:
     pedido = (pedido or "").strip()
+    _repo(conv_id)
     if rota not in ROTAS:
         raise ToolError(f"rota deve ser {', '.join(ROTAS)}.")
     esforco = esforco if esforco in ESFORCOS else "baixo"
@@ -1370,8 +1430,12 @@ def estado(message_id: int) -> dict:
         if not m or "design" not in (m.meta or {}):
             raise ToolError("Geração não encontrada.")
         d = m.meta["design"]
-        # patches com o outerHTML já carimbado: o canvas troca só esses nós, sem recarregar
-        patches = [{"fid": f, "html": design_html.outer(d["html"], f) or ""} for f in d.get("patches", [])]
+        conv_id = m.conversation_id
+    # patches com o outerHTML já carimbado: o canvas troca só esses nós, sem recarregar
+    html_v = design_repo.versao(conv_id, d["versao"]) if d.get("patches") and d.get("versao") else ""
+    patches = [{"fid": f, "html": design_html.outer(html_v, f) or ""} for f in d.get("patches", [])] if html_v else []
+    with db.session() as s:
+        m = s.get(db.Message, message_id)
         return {"message_id": message_id, "status": m.status or "ok", "texto": m.content, "rota": d.get("rota"),
                 "versao": d.get("versao"), "base": d.get("base"), "entrada": d.get("entrada"), "patches": patches,
                 "plano": d.get("plano") if m.status == "plano" else None}

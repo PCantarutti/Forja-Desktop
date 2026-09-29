@@ -30,7 +30,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import design_modelos, design_revisao
+from . import design_modelos, design_repo, design_revisao
 
 
 settings.apply()
@@ -1715,6 +1715,12 @@ def design_estilo(conv_id: int, body: DesignEstiloBody):
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/design-git")
+def design_git():
+    """O Design guarda as versões com o git do sistema: a tela avisa como instalar quando falta."""
+    return design_repo.status_git()
+
+
 class DesignOperacaoBody(BaseModel):
     op: str
     fids: list[str]
@@ -2824,6 +2830,7 @@ def _limpar_disco(conv_id: int, pasta: str | None):
     def depois() -> None:
         lotes.apagar_referencias(refs, conv_id)  # só as que outra conversa não usa
         mirror.remove(conv_id)  # o .md espelhado
+        design_repo.apagar(conv_id)  # projeto de design: a pasta dele (repositório, fotos, imagens da skill)
         kvcache.apagar_conversa(conv_id)  # E4: o cache do prompt em disco
         shutil.rmtree(SPILL_DIR / str(conv_id), ignore_errors=True)  # saídas grandes das ferramentas
     return depois
