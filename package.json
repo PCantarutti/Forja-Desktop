@@ -1,7 +1,7 @@
 {
   "name": "forja-desktop",
   "productName": "Forja",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "description": "Forja",
   "author": "DRUVE",
   "main": "electron/main.js",
