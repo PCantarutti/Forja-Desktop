@@ -373,9 +373,17 @@ def _avisar(conv_id: int, texto: str) -> None:
     with db.session() as s:
         c = s.get(db.Conversation, conv_id)
         chat_id = (c.origem or {}).get("conv_id") if c else None
-        if not chat_id or not s.get(db.Conversation, chat_id):
+        chat = s.get(db.Conversation, chat_id) if chat_id else None
+        if not chat:
             return
+        do_design = chat.kind == "design"
     _save(chat_id, role="event", content=texto, meta={"kind": "imagens", "to_model": True})
+    if do_design:   # tela Design: as imagens entram no HTML como data URI (versão nova), sem IA
+        try:
+            from . import design_imagens
+            design_imagens.embutir(chat_id)
+        except Exception as e:   # o lote já terminou bem; falhar aqui não pode derrubá-lo
+            print(f"Forja: não consegui embutir as imagens no design {chat_id}: {e}", flush=True)
 
 
 def _web(conv_id: int) -> bool:

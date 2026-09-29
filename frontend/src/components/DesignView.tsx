@@ -3,9 +3,10 @@ import { api, streamSSE } from "../api";
 import type { Stats } from "../types";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula } from "./Composer";
 import { type Effort, Menu, ModeEffortMenu } from "./Controls";
+import DesignAjustes, { type Sistema } from "./DesignAjustes";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import { type Item, type Modo, type NoCaminho, enviar as paraIframe, lerMensagem, paraCanvas } from "./designCanvas";
-import { ArrowLeft, ArrowRight, Bubble, Check, Cube, Download, Mira, Split, Undo, X } from "./icons";
+import { ArrowLeft, ArrowRight, Bubble, Check, Code, Cube, Download, Image, Mira, Split, Undo, X } from "./icons";
 import { PromptRow, StatsRow, Thinking, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 
@@ -25,6 +26,8 @@ type Comentario = {
 type Projeto = {
   conv_id: number; titulo: string; mensagens: Mensagem[]; total: number; atual: number; html: string;
   secoes: string[]; comentarios: Comentario[]; rodando: number | null;
+  imagens: { total: number; pendentes: number; nomes: string[]; conversa: number | null };
+  sistema: string | null;
 };
 type Patch = { fid: string; html: string };
 type Geracao = {
@@ -80,11 +83,13 @@ const contaSlides = (html: string) => (html.match(/<section\b[^>]*\sdata-slide(?
 const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
-function lerPreferencias(provider: string, model: string): { modelos: Modelos; esforco: Effort } {
+type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string };
+
+function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
   try {
     const p = JSON.parse(localStorage.getItem(KEY) ?? "null");
-    if (p?.modelos?.geracao?.model) return { modelos: { plano: par, edicao: par, ...p.modelos }, esforco: p.esforco ?? "baixo" };
+    if (p?.modelos?.geracao?.model) return { modelos: { plano: par, edicao: par, ...p.modelos }, esforco: p.esforco ?? "baixo", sistema: p.sistema ?? "" };
     const antigo = JSON.parse(localStorage.getItem("forja.design.modelo") ?? "null");   // fase 1: um modelo só
     if (antigo?.model) return { modelos: { plano: antigo, geracao: antigo, edicao: antigo }, esforco: "baixo" };
   } catch {
@@ -101,6 +106,9 @@ export default function DesignView(props: {
   model: string;
   onError: (e: string) => void;
   onConversationChanged: () => void;
+  onAbrirConversa: (id: number, kind: "imagem") => void;          // fila das imagens na tela Imagens
+  onMandarParaAgente: (pasta: string, texto: string) => void;     // handoff: Agente com o pedido no campo
+  pastaPadrao: string;
 }) {
   const [projeto, setProjeto] = useState<Projeto | null>(null);
   const [texto, setTexto] = useState("");
@@ -113,7 +121,8 @@ export default function DesignView(props: {
   const [chave, setChave] = useState(0);   // força recarregar o iframe (edição de texto recusada)
   const [modo, setModo] = useState<Modo>("view");
   const [selecao, setSelecao] = useState<Selecao | null>(null);
-  const [aba, setAba] = useState<"chat" | "comentarios" | "versoes">("chat");
+  const [aba, setAba] = useState<"chat" | "comentarios" | "ajustes" | "versoes">("chat");
+  const [sistemas, setSistemas] = useState<Sistema[]>([]);
   const [pinAtivo, setPinAtivo] = useState<number | null>(null);
   const [rota, setRota] = useState<Rota>("auto");
   const [prefs, setPrefs] = useState(() => lerPreferencias(props.provider, props.model));
@@ -218,6 +227,9 @@ export default function DesignView(props: {
   }, [projeto?.rodando, props.conv, ouvir]);
 
   useEffect(() => () => corte.current?.abort(), []);
+  useEffect(() => {
+    api.get<Sistema[]>("/design-sistemas").then(setSistemas).catch(() => {});
+  }, []);
   useEffect(() => localStorage.setItem(KEY, JSON.stringify(prefs)), [prefs]);
   useEffect(() => fimChat.current?.scrollIntoView({ block: "end" }), [projeto?.mensagens.length, rodando, aba]);
   useEffect(() => paraIframe(janela(), { type: "setMode", mode: modo }), [modo]);
@@ -275,7 +287,7 @@ export default function DesignView(props: {
       ouvindo.current = -1;
       await ouvir(`/design/${id}/gerar`, { method: "POST", body: JSON.stringify({
         pedido, fids, rota: extra.rota ?? rota, secao: extra.secao ?? "", comentarios: extra.comentarios ?? [],
-        esforco: prefs.esforco, modelos: modelosDe(), ...prefs.modelos.geracao }) }, id);
+        esforco: prefs.esforco, modelos: modelosDe(), sistema: prefs.sistema ?? "", ...prefs.modelos.geracao }) }, id);
       props.onConversationChanged();
     } catch (e: any) {
       props.onError(e.message);
@@ -343,6 +355,66 @@ export default function DesignView(props: {
     } catch (e: any) {
       props.onError(e.message);
       setChave((k) => k + 1);   // o DOM ficou com o texto recusado: volta para a fonte
+    }
+  }
+
+  /** Mudança direta, sem modelo (sliders, design system): versão nova e patch no canvas. */
+  async function semIA(caminho: string, corpo: unknown) {
+    if (!projeto) return;
+    try {
+      const r = await api.post<{ projeto: Projeto; fim: Geracao | null }>(`/design/${projeto.conv_id}/${caminho}`, corpo);
+      mostrar(r.projeto, r.fim);
+    } catch (e: any) {
+      props.onError(e.message);
+      setChave((k) => k + 1);
+    } finally {
+      paraIframe(janela(), { type: "setTokens", tokens: {} });   // a prévia sai: o <style> novo já tem os valores
+    }
+  }
+
+  async function extrairSistema(pasta: string, nome: string) {
+    try {
+      const s = await api.post<Sistema>("/design-sistemas/extrair", { pasta, nome, esforco: prefs.esforco, ...prefs.modelos.edicao });
+      setSistemas((l) => [...l, s]);
+      setPrefs((p) => ({ ...p, sistema: p.sistema || s.id }));
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function apagarSistema(id: string) {
+    try {
+      setSistemas(await api.del<Sistema[]>(`/design-sistemas/${id}`));
+      setPrefs((p) => ({ ...p, sistema: p.sistema === id ? "" : p.sistema }));
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  /** Slots de imagem -> fila na tela Imagens (a ferramenta da skill gerar-imagens registra). */
+  async function gerarImagens() {
+    if (!projeto) return;
+    try {
+      if (!projeto.imagens.pendentes && projeto.imagens.conversa) return props.onAbrirConversa(projeto.imagens.conversa, "imagem");
+      const r = await api.post<{ id: number }>(`/design/${projeto.conv_id}/imagens`, {});
+      props.onAbrirConversa(r.id, "imagem");
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  /** Handoff: pacote na pasta do projeto e o Agente aberto com o pedido pronto (você revisa e envia). */
+  async function mandarParaAgente() {
+    if (!projeto) return;
+    setAbrirExport(false);
+    const pasta = window.forja ? await window.forja.pickFolder(props.pastaPadrao)
+      : window.prompt("Pasta do projeto onde implementar:", props.pastaPadrao);
+    if (!pasta) return;
+    try {
+      const r = await api.post<{ pasta: string; prompt: string }>(`/design/${projeto.conv_id}/handoff`, { pasta });
+      props.onMandarParaAgente(r.pasta, r.prompt);
+    } catch (e: any) {
+      props.onError(e.message);
     }
   }
 
@@ -475,6 +547,7 @@ export default function DesignView(props: {
           <button className={abaBtn(aba === "comentarios")} onClick={() => setAba("comentarios")}>
             Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{pendentes.length}</span>}
           </button>
+          <button className={abaBtn(aba === "ajustes")} onClick={() => setAba("ajustes")}>Ajustes</button>
           <button className={abaBtn(aba === "versoes")} onClick={() => setAba("versoes")}>Versões{!!total && <span className="ml-1 text-faint">{total}</span>}</button>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
@@ -581,6 +654,23 @@ export default function DesignView(props: {
                 );
               })}
             </div>
+          )}
+
+          {aba === "ajustes" && (
+            <DesignAjustes
+              html={projeto?.html ?? ""}
+              desabilitado={rodando || !projeto?.html}
+              onPrevia={(tokens) => paraIframe(janela(), { type: "setTokens", tokens })}
+              onSalvar={(tokens) => semIA("tokens", { tokens })}
+              sistemas={sistemas}
+              sistemaDoDoc={projeto?.sistema ?? null}
+              sistemaNovos={prefs.sistema ?? ""}
+              onSistemaNovos={(id) => setPrefs((p) => ({ ...p, sistema: id }))}
+              onAplicarSistema={(id) => semIA(`sistema/${id}`, {})}
+              onExtrair={extrairSistema}
+              onApagar={apagarSistema}
+              pastaPadrao={props.pastaPadrao}
+            />
           )}
 
           {aba === "versoes" && (
@@ -719,6 +809,15 @@ export default function DesignView(props: {
             </div>
           )}
           <span className="flex-1" />
+          {!!projeto?.imagens.total && (
+            <button onClick={gerarImagens} disabled={rodando}
+                    title={projeto.imagens.pendentes ? `Slots sem imagem: ${projeto.imagens.nomes.join(", ")}` : "Abre a conversa de Imagens deste design"}
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 disabled:opacity-40 ${projeto.imagens.pendentes
+                      ? "bg-accent font-medium text-accent-fg hover:brightness-110" : "border border-line text-fg hover:bg-raised"}`}>
+              <Image className="size-3.5" />
+              {projeto.imagens.pendentes ? `Gerar ${projeto.imagens.pendentes} ${projeto.imagens.pendentes === 1 ? "imagem" : "imagens"}` : "Ver imagens"}
+            </button>
+          )}
           <div className="relative">
             <button onClick={() => setAbrirExport((v) => !v)} disabled={!srcBase || !!exportando}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">
@@ -733,6 +832,10 @@ export default function DesignView(props: {
                     <span className="block text-[11.5px] text-faint">{x.hint}</span>
                   </button>
                 ))}
+                <button onClick={mandarParaAgente} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
+                  <span className="flex items-center gap-1.5 text-[13px] text-fg"><Code className="size-3.5" /> Mandar para o Agente…</span>
+                  <span className="block text-[11.5px] text-faint">Grava o pacote (HTML, tokens, imagens, README) na pasta do projeto e abre o Agente com o pedido pronto</span>
+                </button>
               </div>
             )}
           </div>

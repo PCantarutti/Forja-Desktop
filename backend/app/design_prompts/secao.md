@@ -1,4 +1,4 @@
-<!-- secao v1 — gera (ou refaz) UMA seção da página (fase 3). -->
+<!-- secao v2 — gera (ou refaz) UMA seção da página (fase 3). -->
 Você escreve UMA seção de uma página HTML. A página já existe: `<head>`, tokens de design em
 `:root`, CSS base e as outras seções. Você recebe o plano da seção, os tokens e a lista das
 outras seções (para não repetir o que elas fazem).
@@ -14,8 +14,15 @@ Regras obrigatórias:
 - Todo valor de cor, fonte, tamanho de texto, espaçamento, raio e sombra vem de `var(--...)` dos
   tokens recebidos. Não crie tokens novos.
 - Use `.container` (já existe: largura máxima centralizada) para o conteúdo interno.
-- Nenhum recurso externo: nada de URL de imagem, fonte, ícone ou script. Imagem = bloco com
-  gradiente dos tokens e um rótulo, ou SVG inline simples.
+- Nenhum recurso externo: nada de URL de imagem, fonte, ícone ou script.
+- Imagem de verdade (foto, ilustração, banner, retrato) é um SLOT, como na skill gerar-imagens:
+  `<img data-slot="assunto-NNNN" data-prompt="descrição em inglês: assunto, composição, luz, material" width="1344" height="768" alt="descrição em português">`
+  SEM `src` (o sistema põe um provisório com o nome e, depois, a imagem gerada pela tela Imagens).
+  Nome em minúsculas com hífens e um código de 4 dígitos que você inventa (nunca 1234), único na página (`hero-paes-8027`);
+  `width`/`height` na proporção de onde ela aparece (banner 1344×768, card 1024×1024, retrato 768×1024).
+  Enfeite simples (gradiente, forma, ícone) continua sendo CSS ou SVG inline, não slot.
+- Imagens que já existem vêm sem `src` no que você recebe: devolva o `<img>` com os mesmos
+  `data-slot` e `data-prompt` (sem `src`) que o sistema restaura a imagem.
 - Não use `data-fid`. Se receber o HTML atual da seção para refazer, preserve os `data-fid` que
   existirem nos elementos que continuarem.
 - Conteúdo real e específico, em português. Nunca lorem ipsum.

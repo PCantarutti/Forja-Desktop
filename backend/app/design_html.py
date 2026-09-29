@@ -364,8 +364,11 @@ def esqueleto(plano: dict) -> str:
     corpo = "\n".join(_placeholder(s["nome"], slides) for s in plano["secoes"])
     titulo = re.sub(r"[<>&]", "", plano["titulo"])
     base = _BASE_CSS + ("\n" + SLIDES_CSS if slides else "")
+    # estilo comum das fotos (skill gerar-imagens): vai junto com o documento para o registro dos slots
+    estilo = re.sub(r'["<>&]', "", plano.get("estilo_imagens") or "")
+    meta_estilo = f'<meta name="forja-estilo-imagens" content="{estilo}">\n' if estilo else ""
     return (f'<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n'
-            f'<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>{titulo}</title>\n'
+            f'<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>{titulo}</title>\n{meta_estilo}'
             f"<style>\n:root {{\n{tokens}\n}}\n{base}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n</body>\n</html>\n")
 
 
@@ -453,4 +456,8 @@ def limpar_export(html: str, com_fids: bool = False) -> str:
     """HTML para levar embora: sem placeholder e (por padrão) sem data-fid. O inspetor e o CSP nunca
     estão na fonte — são injetados só no canvas —, então não há o que tirar deles."""
     html = limpar_placeholders(html)
-    return html if com_fids else _ATTR_FID.sub("", html)
+    if com_fids:
+        return html
+    # os atributos de trabalho saem junto (o data-slot fica: diz de onde veio cada imagem)
+    html = re.sub(r"""\s(data-prompt|data-slot-status)\s*=\s*("[^"]*"|'[^']*')""", "", html)
+    return _ATTR_FID.sub("", html)

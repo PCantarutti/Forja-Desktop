@@ -7,6 +7,7 @@ navegador integrado é headed e `page.pdf()` só existe headless). O documento e
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from . import design_html
 from .tools import ToolError
@@ -67,3 +68,93 @@ async def exportar(html: str, titulo: str, formato: str, com_fids: bool = False,
             return dados, "image/png", _nome(titulo, "png", f"-{viewport}")
         finally:
             await navegador.close()
+
+
+# ------------------------------------------------------------------ handoff para o Agente
+
+README = """# Handoff de design — {titulo}
+
+Gerado pela tela Design do Forja em {quando}. Este pacote é a referência visual; a implementação
+é na stack DESTE projeto.
+
+## Arquivos
+- `index.html` — o design inteiro, autocontido (abra no navegador para ver).
+- `preview.png` — como ele fica em 1440px (ou o deck, slide a slide, no index.html).
+- `tokens.css` — os design tokens (cores, fontes, tamanhos, espaços, raios, sombras).
+- `img/` — as imagens do design ({n_img} arquivo(s)).
+
+## Estrutura
+{estrutura}
+
+## Tokens
+```css
+{tokens}
+```
+
+## Como implementar
+1. Leia o projeto antes (framework, pasta de componentes, como o tema/estilos são definidos) e siga o
+   padrão que já existe. Não cole o HTML cru se o projeto usa componentes.
+2. Traga os tokens para o sistema de tema do projeto (variáveis CSS, tema do Tailwind, theme.ts...),
+   com os mesmos nomes ou o equivalente mais próximo, e use-os em vez de valores soltos.
+3. Um componente por {unidade} (a lista acima), reaproveitando o que o projeto já tiver.
+4. Copie as imagens de `img/` para a pasta de assets do projeto e aponte para elas.
+5. Responsivo como no design (confira em 375, 768 e 1440 px) e acessível: contraste, `alt`, foco.
+6. No fim, abra a página no navegador e compare com `preview.png` / `index.html`.
+"""
+
+
+def _imagens_em_arquivo(html: str, destino: Path) -> tuple[str, int]:
+    import base64
+
+    (destino / "img").mkdir(parents=True, exist_ok=True)
+    n = 0
+
+    def um(m: re.Match) -> str:
+        nonlocal n
+        tag = m.group(0)
+        src = re.search(r'\ssrc="data:image/(\w+);base64,([^"]+)"', tag)
+        nome = re.search(r'\sdata-slot="([a-z0-9-]+)"', tag)
+        if not src:
+            return tag
+        ext = {"jpeg": "jpg", "svg+xml": "svg"}.get(src.group(1), src.group(1))
+        arquivo = f"img/{nome.group(1) if nome else f'imagem-{n + 1}'}.{ext}"
+        (destino / arquivo).write_bytes(base64.b64decode(src.group(2)))
+        n += 1
+        return tag.replace(src.group(0), f' src="{arquivo}"')
+    return re.sub(r"<img\b[^>]*>", um, html), n
+
+
+async def handoff(html: str, titulo: str, pasta: str) -> dict:
+    """Pacote para o Agente implementar o design no projeto: <pasta>/design-handoff/<slug>/."""
+    from datetime import datetime
+    from . import workspace
+
+    if not html:
+        raise ToolError("Não há documento para mandar.")
+    raiz = workspace.resolve(pasta)
+    rel = Path("design-handoff") / (design_html.slug(titulo) or "design")
+    destino = raiz / rel
+    destino.mkdir(parents=True, exist_ok=True)
+    limpo = design_html.limpar_export(html)
+    com_arquivos, n_img = _imagens_em_arquivo(limpo, destino)
+    (destino / "index.html").write_text(limpo, "utf-8")   # autocontido: abre sozinho
+    (destino / "tokens.css").write_text(design_html.root_css(html) + "\n", "utf-8")
+    slides = design_html.e_slides(html)
+    secs = [e["attrs"]["data-section"] for e in design_html.secoes(html)]
+    try:   # a prévia ajuda o Agente a comparar; sem Chromium o pacote sai sem ela
+        png, _, _ = await exportar(html, titulo, "png", slide=1)
+        (destino / "preview.png").write_bytes(png)
+    except ToolError:
+        pass
+    (destino / "README.md").write_text(README.format(
+        titulo=titulo, quando=datetime.now().strftime("%d/%m/%Y %H:%M"), n_img=n_img,
+        estrutura="\n".join(f"{i}. `{s}`" for i, s in enumerate(secs, 1)) or "(sem seções marcadas)",
+        tokens=design_html.root_css(html), unidade="slide" if slides else "seção"), "utf-8")
+    if n_img:   # versão com as imagens em arquivo, para quem preferir não ter base64 no HTML
+        (destino / "index.arquivos.html").write_text(com_arquivos, "utf-8")
+    rel_txt = rel.as_posix()
+    return {"pasta": workspace.to_host(raiz), "rel": rel_txt, "prompt": (
+        f"Implemente neste projeto o design que está em `{rel_txt}/` (gerado na tela Design). "
+        f"Comece lendo `{rel_txt}/README.md`: ele diz os arquivos, a estrutura, os tokens e como implementar. "
+        "Siga a stack e os padrões que este projeto já usa, traga os tokens para o tema do projeto e, no fim, "
+        f"confira no navegador comparando com `{rel_txt}/preview.png`.")}

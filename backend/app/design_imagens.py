@@ -1,0 +1,210 @@
+"""Imagens do Design pela skill gerar-imagens (a mesma do modo agente).
+
+O modelo não gera imagem nenhuma: cada foto/ilustração do design vira um SLOT no HTML,
+`<img data-slot="hero-paes-4821" data-prompt="..." width height>`. Até sair a imagem, o canvas mostra
+um provisório (SVG com o nome do slot). O botão "Gerar N imagens" registra os slots com a própria
+ferramenta `imagens_pendentes` (mesma mensagem de ferramenta, mesmos PNGs provisórios, mesma conferência
+do código) numa pasta do projeto de design, e abre a fila na tela Imagens. Quando o lote termina, o
+aviso "Imagens do site geradas" (lotes._avisar) chama `embutir`: cada PNG/WebP entra no HTML como data
+URI WebP e vira uma versão nova — o documento continua autocontido.
+
+`data-slot-status` diz o estado: "pendente" (provisório) ou "pronta" (imagem de verdade embutida).
+"""
+from __future__ import annotations
+
+import base64
+import io
+import re
+from pathlib import Path
+from urllib.parse import quote
+
+from . import config, db, design_html
+from .tools import ToolError
+
+_IMG = re.compile(r"<img\b[^>]*>", re.I)
+NOME = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")   # o mesmo NOME_SLOT do imagegen
+LADO_MAX_WEB = 1600    # a imagem embutida não precisa ser maior que isso numa página
+QUALIDADE = 80
+
+
+def _attr(tag: str, nome: str) -> str | None:
+    m = re.search(rf"""\s{re.escape(nome)}\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))""", tag, re.I)
+    return None if not m else next(g for g in m.groups()[1:] if g is not None)
+
+
+def _int(v: str | None) -> int | None:
+    try:
+        return int(float(v)) if v else None
+    except ValueError:
+        return None
+
+
+def pasta(conv_id: int) -> Path:
+    """Onde os slots moram de verdade (PNG/WebP), com um index.html que aponta para eles."""
+    p = config.DATA_DIR / "design" / str(conv_id)
+    (p / "img").mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def provisorio(nome: str, w: int | None, h: int | None) -> str:
+    w, h = w or 1024, h or 768
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+           f'<rect width="100%" height="100%" fill="#d9d4cc"/>'
+           f'<text x="50%" y="48%" text-anchor="middle" font-family="system-ui,sans-serif" '
+           f'font-size="{max(14, min(w, h) // 14)}" fill="#6b645a">{nome}</text>'
+           f'<text x="50%" y="58%" text-anchor="middle" font-family="system-ui,sans-serif" '
+           f'font-size="{max(11, min(w, h) // 22)}" fill="#8f877b">imagem ainda não gerada</text></svg>')
+    return "data:image/svg+xml;charset=utf-8," + quote(svg)
+
+
+def slots(html: str) -> list[dict]:
+    out, vistos = [], set()
+    for m in _IMG.finditer(html):
+        tag = m.group(0)
+        nome = (_attr(tag, "data-slot") or "").strip()
+        if not NOME.match(nome) or nome in vistos:
+            continue
+        vistos.add(nome)
+        out.append({"nome": nome, "prompt": (_attr(tag, "data-prompt") or "").strip(),
+                    "largura": _int(_attr(tag, "width")), "altura": _int(_attr(tag, "height")),
+                    "status": _attr(tag, "data-slot-status") or "pendente", "src": _attr(tag, "src") or ""})
+    return out
+
+
+def _troca(tag: str, src: str, status: str) -> str:
+    tag = design_html._attr(tag, "src", src)
+    return design_html._attr(tag, "data-slot-status", status)
+
+
+def preencher(html: str, anterior: str = "") -> str:
+    """Toda versão passa por aqui antes de salvar: slot sem imagem ganha o provisório, e o que o modelo
+    devolveu sem `src` (o contexto vai enxuto, sem os data URIs) recupera a imagem que já estava pronta."""
+    prontas = {s["nome"]: s["src"] for s in slots(anterior) if s["status"] == "pronta" and s["src"].startswith("data:")}
+
+    def um(m: re.Match) -> str:
+        tag = m.group(0)
+        nome = (_attr(tag, "data-slot") or "").strip()
+        if not NOME.match(nome):
+            return tag
+        src = _attr(tag, "src") or ""
+        if src.startswith("data:") and _attr(tag, "data-slot-status"):
+            return tag
+        if nome in prontas:
+            return _troca(tag, prontas[nome], "pronta")
+        return _troca(tag, provisorio(nome, _int(_attr(tag, "width")), _int(_attr(tag, "height"))), "pendente")
+    return _IMG.sub(um, html)
+
+
+def enxugar(texto: str) -> str:
+    """O que vai ao modelo, sem os data URIs (uma foto embutida são centenas de KB de base64)."""
+    texto = re.sub(r"""(\ssrc\s*=\s*)("data:[^"]*"|'data:[^']*')""", r'\1""', texto)
+    return re.sub(r"url\(\s*(['\"]?)data:[^)]*\1\s*\)", "url()", texto)
+
+
+def _tamanho(w: int | None, h: int | None) -> tuple[int | None, int | None]:
+    """A proporção de onde a imagem aparece, no tamanho que o modelo de imagem gera bem."""
+    if not (w and h):
+        return 1024, 768
+    r = w / h
+    lw = 1344 if r >= 1.5 else 1024 if r >= 0.75 else 768
+    return lw, max(256, min(2048, round(lw / r)))
+
+
+def _site(root: Path, html: str) -> None:
+    """index.html com os slots apontando para img/<slot>.png: é o "código" que a conferência lê e o que
+    a tela Imagens mostra como projeto."""
+    def um(m: re.Match) -> str:
+        tag = m.group(0)
+        nome = _attr(tag, "data-slot") or ""
+        return design_html._attr(tag, "src", f"img/{nome}.png") if NOME.match(nome) else tag
+    (root / "index.html").write_text(_IMG.sub(um, html), "utf-8")
+
+
+def _estilo(html: str) -> str:
+    m = re.search(r'<meta\s+name="forja-estilo-imagens"\s+content="([^"]*)"', html)
+    return m.group(1) if m else ""
+
+
+def registrar(conv_id: int) -> dict:
+    """"Gerar N imagens": registra os slots pendentes pela ferramenta da skill e devolve a conversa de
+    Imagens do projeto (uma por projeto de design; cada registro novo entra nela)."""
+    from . import design, imagegen
+    from .agent import _save
+
+    p = design.projeto(conv_id)
+    pend = [s for s in slots(p["html"]) if s["status"] != "pronta"]
+    if not pend:
+        raise ToolError("Não há imagem pendente neste design.")
+    sem_prompt = [s["nome"] for s in pend if not s["prompt"]]
+    if sem_prompt:
+        raise ToolError(f"Slot sem descrição (data-prompt): {', '.join(sem_prompt)}. Peça ao modelo para descrevê-lo.")
+    root = pasta(conv_id)
+    _site(root, p["html"])
+    args = {"estilo": _estilo(p["html"]), "slots": [
+        {"nome": s["nome"], "caminho": f"img/{s['nome']}.png", "prompt": s["prompt"],
+         **dict(zip(("largura", "altura"), _tamanho(s["largura"], s["altura"])))} for s in pend]}
+    res = imagegen.imagens_pendentes(root, args)
+    msg = _save(conv_id, role="tool", name="imagens_pendentes", content=res["text"],
+                meta={"imagens_pendentes": res["imagens_pendentes"]})
+    with db.session() as s:
+        imagem = next((c for c in s.query(db.Conversation).filter(db.Conversation.kind == "imagem",
+                                                                   db.Conversation.origem.isnot(None))
+                       if (c.origem or {}).get("conv_id") == conv_id and not c.archived), None)
+        if imagem:
+            ids = list(imagem.origem.get("message_ids") or [imagem.origem.get("message_id")])
+            imagem.origem = {**imagem.origem, "message_ids": [*ids, msg.id]}
+        else:
+            imagem = db.Conversation(kind="imagem", title=f"Imagens · {p['titulo']}"[:200], workspace=str(root),
+                                     origem={"conv_id": conv_id, "message_id": msg.id, "message_ids": [msg.id]})
+            s.add(imagem)
+        s.commit()
+        return {"id": imagem.id, "kind": "imagem"}
+
+
+def conversa(conv_id: int) -> int | None:
+    with db.session() as s:
+        return next((c.id for c in s.query(db.Conversation).filter(db.Conversation.kind == "imagem",
+                                                                   db.Conversation.origem.isnot(None))
+                     if (c.origem or {}).get("conv_id") == conv_id and not c.archived), None)
+
+
+def _data_uri(arquivo: Path) -> str:
+    from PIL import Image
+
+    with Image.open(arquivo) as img:
+        img = img.convert("RGBA" if img.mode in ("RGBA", "LA", "P") else "RGB")
+        img.thumbnail((LADO_MAX_WEB, LADO_MAX_WEB))
+        buf = io.BytesIO()
+        img.save(buf, "WEBP", quality=QUALIDADE, method=5)
+    return "data:image/webp;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def embutir(conv_id: int) -> int | None:
+    """Fim do lote: o que já saiu (PNG ou o WebP da versão web) entra no HTML. Devolve a versão nova ou
+    None se nada mudou. Provisório (PNG marcado pela skill) não conta."""
+    from . import design, slots as projeto
+
+    p = design.projeto(conv_id)
+    if not p["html"] or p["rodando"]:
+        return None
+    root = pasta(conv_id)
+    novas = {}
+    for sl in slots(p["html"]):
+        for ext in (".webp", ".png"):
+            f = root / "img" / f"{sl['nome']}{ext}"
+            if f.is_file() and not projeto.eh_placeholder(f):
+                uri = _data_uri(f)
+                if uri != sl["src"]:
+                    novas[sl["nome"]] = uri
+                break
+    if not novas:
+        return None
+
+    def um(m: re.Match) -> str:
+        tag = m.group(0)
+        nome = _attr(tag, "data-slot") or ""
+        return _troca(tag, novas[nome], "pronta") if nome in novas else tag
+    html = _IMG.sub(um, p["html"])
+    n = len(novas)
+    return design._nova_versao(conv_id, None, html, f"{n} {'imagem gerada' if n == 1 else 'imagens geradas'}",
+                               base=p["atual"], rota="imagens")

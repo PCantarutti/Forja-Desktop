@@ -1,4 +1,4 @@
-<!-- slide v1 — gera (ou refaz) UM slide de uma apresentação (fase 4). -->
+<!-- slide v2 — gera (ou refaz) UM slide de uma apresentação (fase 4). -->
 Você escreve UM slide de uma apresentação em HTML. O deck já existe: `<head>`, tokens de design em
 `:root`, CSS base e os outros slides. Cada slide é um `<section data-slide>` de tamanho FIXO
 1920×1080 px (o canvas escala para caber na tela; na exportação cada slide vira uma página).
@@ -15,7 +15,15 @@ Regras obrigatórias:
 - Classes com o nome do slide como prefixo (`.s3-titulo`) e seletores começando por elas.
 - Cores, fontes, raios e sombras vêm de `var(--...)` dos tokens. Tamanhos de texto em px, grandes:
   título 96–140px, subtítulo 48–64px, corpo 32–40px. Nunca texto abaixo de 28px.
-- Nenhum recurso externo. Imagem = bloco com gradiente dos tokens ou SVG inline simples.
+- Nenhum recurso externo (nada de URL).
+- Imagem de verdade (foto, ilustração, banner, retrato) é um SLOT, como na skill gerar-imagens:
+  `<img data-slot="assunto-NNNN" data-prompt="descrição em inglês: assunto, composição, luz, material" width="1344" height="768" alt="descrição em português">`
+  SEM `src` (o sistema põe um provisório com o nome e, depois, a imagem gerada pela tela Imagens).
+  Nome em minúsculas com hífens e um código de 4 dígitos que você inventa (nunca 1234), único na página (`hero-paes-8027`);
+  `width`/`height` na proporção de onde ela aparece (banner 1344×768, card 1024×1024, retrato 768×1024).
+  Enfeite simples (gradiente, forma, ícone) continua sendo CSS ou SVG inline, não slot.
+- Imagens que já existem vêm sem `src` no que você recebe: devolva o `<img>` com os mesmos
+  `data-slot` e `data-prompt` (sem `src`) que o sistema restaura a imagem.
 - Não use `data-fid`. Se receber o HTML atual do slide para refazer, preserve os `data-fid` dos
   elementos que continuarem.
 

@@ -27,7 +27,7 @@ from contextlib import aclosing
 from html.parser import HTMLParser
 from pathlib import Path
 
-from . import config, db, design_html, llm, mirror
+from . import config, db, design_html, design_imagens, design_sistema, llm, mirror
 from .agent import _save, _stats
 from .parsing import split_think
 from .tools import ToolError
@@ -183,7 +183,16 @@ def projeto(conv_id: int) -> dict:
                 "atual": atual.meta["design"]["versao"] if atual else 0, "html": html,
                 "secoes": [e["attrs"]["data-section"] for e in design_html.secoes(html)] if html else [],
                 "comentarios": _comentarios(s, conv_id, html),
+                "imagens": _imagens(conv_id, html),
+                "sistema": (design_sistema.do_documento(html) or {}).get("id") if html else None,
                 "rodando": next((mid for mid, r in _RUNS.items() if r["conv_id"] == conv_id), None)}
+
+
+def _imagens(conv_id: int, html: str) -> dict:
+    sl = design_imagens.slots(html) if html else []
+    pend = [x["nome"] for x in sl if x["status"] != "pronta"]
+    return {"total": len(sl), "pendentes": len(pend), "nomes": pend,
+            "conversa": design_imagens.conversa(conv_id) if sl else None}
 
 
 def ir_para(conv_id: int, versao: int) -> dict:
@@ -210,8 +219,12 @@ def restaurar(conv_id: int, versao: int) -> dict:
 
 
 def _nova_versao(conv_id: int, message_id: int | None, html: str, descricao: str, **extra) -> int:
-    """Grava a versão (na mensagem da geração, ou numa nova) e a marca como atual."""
-    html = design_html.carimbar(html)
+    """Grava a versão (na mensagem da geração, ou numa nova) e a marca como atual. Os slots de imagem
+    saem preenchidos: provisório onde falta, a imagem pronta de antes onde o modelo devolveu sem src."""
+    with db.session() as s:
+        anterior = _atual(s, conv_id)
+        anterior = anterior.meta["design"]["html"] if anterior else ""
+    html = design_html.carimbar(design_imagens.preencher(html, anterior))
     with db.session() as s:
         n = max((m.meta["design"]["versao"] for m in _versoes(s, conv_id)), default=0) + 1
         texto = f"v{n}: {descricao}"
@@ -329,6 +342,53 @@ def editar_texto(conv_id: int, fid: str, interno: str) -> dict:
     return {"projeto": p, "fim": {"base": base, "patches": [{"fid": fid, "html": design_html.outer(p["html"], fid) or ""}]}}
 
 
+def _sem_ia(conv_id: int, faz, descricao: str, rota: str) -> dict:
+    """Mudança direta no documento (sliders, design system): versão nova, sem modelo, com patch."""
+    with db.session() as s:
+        _conv(s, conv_id)
+        if any(r["conv_id"] == conv_id for r in _RUNS.values()):
+            raise ToolError("Espere a geração em andamento terminar.")
+        atual = _atual(s, conv_id)
+        if not atual:
+            raise ToolError("Não há documento.")
+        html = _carimbada(s, atual)
+        base = atual.meta["design"]["versao"]
+    try:
+        novo, mudou = faz(html)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    if novo == html:
+        return {"projeto": projeto(conv_id), "fim": None}
+    _nova_versao(conv_id, None, novo, descricao, base=base, patches=mudou, rota=rota)
+    p = projeto(conv_id)
+    return {"projeto": p, "fim": {"base": base, "status": "ok",
+                                  "patches": [{"fid": f, "html": design_html.outer(p["html"], f) or ""} for f in mudou]}}
+
+
+def ajustar_tokens(conv_id: int, tokens: dict) -> dict:
+    """Painel de ajustes: só tokens que já existem no :root; o resto da página acompanha sozinho."""
+    if not isinstance(tokens, dict) or not tokens:
+        raise ToolError("Nenhum token para ajustar.")
+
+    def faz(html: str):
+        raiz = design_html.root_css(html)
+        desconhecidos = [k for k in tokens if not re.search(rf"{re.escape(k)}\s*:", raiz)]
+        if desconhecidos:
+            raise ValueError(f"Token que não existe no :root: {', '.join(desconhecidos)}")
+        return design_html.aplicar(html, {"tokens": tokens})
+    nomes = ", ".join(k.removeprefix("--") for k in tokens)
+    return _sem_ia(conv_id, faz, f"ajuste: {_descricao(nomes, 48)}", "ajuste")
+
+
+def aplicar_sistema(conv_id: int, ds_id: str) -> dict:
+    ds = design_sistema.pegar(ds_id)
+
+    def faz(html: str):
+        novo = design_sistema.aplicar(html, ds)
+        return novo, []   # tokens, CSS e <meta>: o canvas recarrega
+    return _sem_ia(conv_id, faz, f"design system: {ds['nome']}", "sistema")
+
+
 # ------------------------------------------------------------------ geração
 
 def _descricao(pedido: str, n: int = 60) -> str:
@@ -365,7 +425,9 @@ def validar_plano(d: dict) -> dict:
     if len(secoes) > 12:
         raise ValueError("o plano tem seções demais (máximo 12)")
     return {"tipo": "slides" if d.get("tipo") == "slides" else "site",
-            "titulo": str(d.get("titulo") or "Sem título").strip()[:120], "tokens": tokens, "secoes": secoes}
+            "titulo": str(d.get("titulo") or "Sem título").strip()[:120], "tokens": tokens, "secoes": secoes,
+            "estilo_imagens": re.sub(r'["<>]', "", str(d.get("estilo_imagens") or ""))[:300],
+            "sistema": str(d.get("sistema") or "")[:40]}
 
 
 def _ctx_secao(titulo: str, html: str, nomes: list[str], sec: dict, atual: str | None, pedido: str | None) -> str:
@@ -399,7 +461,7 @@ def _dispara(coro) -> None:
 
 
 def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = None, rota: str = "auto",
-          secao: str = "", comentarios: list[int] | None = None, esforco: str = "baixo") -> dict:
+          secao: str = "", comentarios: list[int] | None = None, esforco: str = "baixo", ds_id: str = "") -> dict:
     pedido = (pedido or "").strip()
     if rota not in ROTAS:
         raise ToolError(f"rota deve ser {', '.join(ROTAS)}.")
@@ -475,6 +537,15 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
     else:  # plano
         user = f"Pedido: {pedido}"
         sistema = "plano"
+    # design system: o escolhido na tela vale para o plano; depois, o que o documento carrega
+    ds = None
+    if modo == "plano" and ds_id:
+        ds = design_sistema.pegar(ds_id)
+    elif html_base and modo in ("secao", "documento"):
+        ds = design_sistema.do_documento(html_base)
+    if ds:
+        user += "\n\n" + design_sistema.para_prompt(ds)
+    user = design_imagens.enxugar(user)   # foto embutida é base64 de centenas de KB: não vai ao modelo
     mensagens = [{"role": "system", "content": prompt(sistema)}, {"role": "user", "content": user}]
 
     rotulo = f"{len(pend)} comentário(s)" if pend else pedido or f"refazer a seção {extra.get('secao')}"
@@ -485,7 +556,7 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
                                  "secao": extra.get("secao"), "comentarios": [x["id"] for x in pend]}})
     run = _novo_run(conv_id, msg.id, modo, spec, esforco, base=base, html_base=html_base,
                     entrada=len(user), descricao=_descricao(rotulo),
-                    comentarios=[x["id"] for x in pend], **extra)
+                    comentarios=[x["id"] for x in pend], ds_id=ds["id"] if ds and modo == "plano" else "", **extra)
     _dispara(_rodar(run, mensagens))
     return msg.to_dict()
 
@@ -531,6 +602,9 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
         try:
             if modo == "plano":
                 plano = validar_plano(design_html.ler_json(texto))
+                if run.get("ds_id"):   # o sistema manda: tokens dele por cima dos que o modelo inventou
+                    plano = {**plano, "tokens": {**plano["tokens"], **design_sistema.pegar(run["ds_id"])["tokens"]},
+                             "sistema": run["ds_id"]}
                 with db.session() as s:
                     m = s.get(db.Message, mid)
                     m.status, m.content = "plano", f"Plano: {plano['titulo']} · {len(plano['secoes'])} seções"
@@ -594,7 +668,13 @@ def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo")
         m.status, m.content = "running", ""
         m.meta = {**m.meta, "design": {**m.meta["design"], "plano": plano, "rota": "etapas", "base": base}}
         s.commit()
-    doc = design_html.carimbar(design_html.esqueleto(plano))
+    doc = design_html.esqueleto(plano)
+    if plano.get("sistema"):
+        try:
+            doc = design_sistema.aplicar(doc, design_sistema.pegar(plano["sistema"]))
+        except ToolError:
+            pass   # o sistema foi apagado entre o plano e a aprovação: segue com os tokens do plano
+    doc = design_html.carimbar(doc)
     run = _novo_run(conv_id, message_id, "etapas", spec, esforco if esforco in ESFORCOS else "baixo",
                     base=base, plano=plano, doc=doc, n=0, entrada=0,
                     secoes=[{"nome": x["nome"], "status": "fila"} for x in plano["secoes"]])
@@ -620,6 +700,9 @@ async def _rodar_etapas(run: dict) -> None:
             try:
                 alvo = design_html.placeholder(run["doc"], sec["nome"])
                 user = _ctx_secao(plano["titulo"], run["doc"], nomes, sec, None, None)
+                if ds := design_sistema.do_documento(run["doc"]):
+                    user += "\n\n" + design_sistema.para_prompt(ds)
+                user = design_imagens.enxugar(user)
                 run["entrada"] += len(user)
                 texto = await _chamar(run, [{"role": "system", "content": prompt("slide" if slides else "secao")},
                                             {"role": "user", "content": user}])

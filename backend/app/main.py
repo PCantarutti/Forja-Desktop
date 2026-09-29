@@ -1592,6 +1592,7 @@ class DesignBody(BaseModel):
     secao: str = ""        # rota secao: qual (nova se não existir)
     comentarios: list[int] = []   # aplicar estes comentários pendentes numa chamada só
     esforco: str = "baixo"
+    sistema: str = ""      # design system escolhido para o plano (id)
 
 
 class DesignAprovarBody(BaseModel):
@@ -1652,7 +1653,7 @@ def design_projeto(conv_id: int):
 async def design_gerar(conv_id: int, body: DesignBody):
     try:
         msg = design.start(conv_id, body.pedido, _design_modelos(body), body.fids, body.rota, body.secao,
-                           body.comentarios, body.esforco)
+                           body.comentarios, body.esforco, body.sistema)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(msg["id"])
@@ -1688,6 +1689,85 @@ def design_texto(conv_id: int, body: DesignTextoBody):
     """Edição inline no canvas (duplo clique): vai direto para a fonte, sem modelo."""
     try:
         return design.editar_texto(conv_id, body.fid, body.html)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+class DesignTokensBody(BaseModel):
+    tokens: dict[str, str]
+
+
+class DesignPastaBody(BaseModel):
+    pasta: str = ""
+
+
+class DesignSistemaBody(BaseModel):
+    pasta: str = ""
+    nome: str = ""
+    provider: str = ""
+    model: str = ""
+    esforco: str = "baixo"
+
+
+@app.post("/api/design/{conv_id}/tokens")
+def design_tokens(conv_id: int, body: DesignTokensBody):
+    """Painel de ajustes (sliders): só o :root, sem modelo."""
+    try:
+        return design.ajustar_tokens(conv_id, body.tokens)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/{conv_id}/imagens")
+def design_imagens_gerar(conv_id: int):
+    """Registra os slots pendentes pela ferramenta da skill gerar-imagens; devolve a conversa de Imagens."""
+    from . import design_imagens
+    try:
+        return design_imagens.registrar(conv_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/design/{conv_id}/handoff")
+async def design_handoff(conv_id: int, body: DesignPastaBody):
+    """Pacote na pasta do projeto para o Agente implementar; devolve o pedido pronto para ele."""
+    from . import design_export
+    try:
+        p = design.projeto(conv_id)
+        return await design_export.handoff(p["html"], p["titulo"], body.pasta)
+    except (ToolError, workspace.WorkspaceError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/design-sistemas")
+def design_sistemas():
+    from . import design_sistema
+    return design_sistema.listar()
+
+
+@app.post("/api/design-sistemas/extrair")
+async def design_sistema_extrair(body: DesignSistemaBody):
+    from . import design_sistema
+    try:
+        return await design_sistema.extrair(body.pasta, body.nome, {"provider": body.provider, "model": body.model},
+                                            body.esforco)
+    except (ToolError, workspace.WorkspaceError) as e:
+        raise HTTPException(400, str(e))
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.delete("/api/design-sistemas/{sid}")
+def design_sistema_apagar(sid: str):
+    from . import design_sistema
+    return design_sistema.apagar(sid)
+
+
+@app.post("/api/design/{conv_id}/sistema/{sid}")
+def design_sistema_aplicar(conv_id: int, sid: str):
+    """Aplica um design system num design que já existe: tokens, CSS dos componentes e a marca."""
+    try:
+        return design.aplicar_sistema(conv_id, sid)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

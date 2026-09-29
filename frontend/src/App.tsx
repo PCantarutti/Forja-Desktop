@@ -2436,6 +2436,14 @@ export default function App() {
             model={settings.model}
             onError={setError}
             onConversationChanged={refreshConversations}
+            onAbrirConversa={irParaConversa}
+            onMandarParaAgente={(pasta, texto) => {
+              // conversa nova do Agente, na pasta do projeto, com o pedido no campo para revisar e enviar
+              changeSection("agent");
+              setPendingWs(pasta);
+              setInput(texto);
+            }}
+            pastaPadrao={config.workspace_padrao ?? config.default_workspace ?? ""}
           />
         ) : section === "comparar" ? (
           <CompararView

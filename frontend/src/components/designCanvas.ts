@@ -27,6 +27,7 @@ export type ParaCanvas =
   | { type: "scrollTo"; fid: string }
   | { type: "showPins"; pins: Pin[] }
   | { type: "setSlide"; n: number }
+  | { type: "setTokens"; tokens: Record<string, string> }   // prévia dos sliders; {} limpa
   | { type: "patch"; fid: string; html: string };
 
 const MARCA = "forja-design";
@@ -76,6 +77,7 @@ function inspetor() {
   let editando: { el: HTMLElement; antes: string } | null = null;
   const filhos: string[] = [];   // seta para baixo volta por aqui
   let slide = 0;
+  let previa: string[] = [];   // tokens sobrescritos ao vivo pelo painel de ajustes
   const envia = (m: object) => parent.postMessage({ [MARCA]: 1, ...m }, "*");
   const porFid = (f: string) => document.querySelector(`[data-fid="${CSS.escape(f)}"]`);
   const alvo = (el: Element | null) => {
@@ -292,6 +294,14 @@ function inspetor() {
       const el = porFid(d.fid);
       if (listaSlides().length) irSlide(Math.max(0, slideDe(el)));
       else el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      desenha();
+    } else if (d.type === "setTokens" && d.tokens && typeof d.tokens === "object") {
+      // inline no <html> vence o :root; nada disso vai para a fonte (quem salva é o backend)
+      const raiz = document.documentElement.style;
+      previa.forEach((k) => raiz.removeProperty(k));
+      previa = Object.entries(d.tokens as Record<string, unknown>)
+        .filter(([k, v]) => /^--[\w-]+$/.test(k) && typeof v === "string")
+        .map(([k, v]) => (raiz.setProperty(k, v as string), k));
       desenha();
     } else if (d.type === "setSlide" && Number.isInteger(d.n)) {
       irSlide(d.n - 1);
