@@ -52,11 +52,11 @@ type Geracao = {
 };
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
                  estilo: Record<string, string>; href: string | null };
-const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const ZOOMS = [0.25, 0.33, 0.5, 0.75, 1, 1.25, 1.5, 2];
 type Par = { provider: string; model: string };
 type Modelos = { plano: Par; geracao: Par; edicao: Par };
 type Rota = "auto" | "tokens" | "secao" | "documento" | "variacoes";
-type Viewport = "desktop" | "tablet" | "mobile";
+type Viewport = "desktop" | "tablet" | "mobile" | "lado";
 
 const KEY = "forja.design.preferencias";
 const REDESENHO_MS = 1500;   // canvas durante a geração do documento: re-renderiza o parcial nesse ritmo
@@ -78,7 +78,15 @@ const VIEWPORTS: { id: Viewport; label: string; largura: number | null }[] = [
   { id: "desktop", label: "Desktop", largura: null },
   { id: "tablet", label: "Tablet", largura: 768 },
   { id: "mobile", label: "Celular", largura: 375 },
+  { id: "lado", label: "Lado a lado", largura: null },
 ];
+// "Lado a lado": as três larguras juntas num quadro (só visualização; clicar no nome abre aquela largura)
+const QUADROS: { id: Viewport; label: string; w: number; h: number }[] = [
+  { id: "desktop", label: "Desktop", w: 1440, h: 900 },
+  { id: "tablet", label: "Tablet", w: 768, h: 1024 },
+  { id: "mobile", label: "Celular", w: 375, h: 812 },
+];
+const VAO = 48;   // espaço entre os quadros (px na escala 1)
 const EXPORTS: { formato: "html" | "pdf" | "png" | "pptx"; fids?: boolean; label: string; hint: string }[] = [
   { formato: "html", label: "HTML limpo", hint: "Um arquivo só, sem o script do canvas e sem data-fid" },
   { formato: "html", fids: true, label: "HTML com data-fid", hint: "Mantém os ids estáveis (para voltar a editar em outro lugar)" },
@@ -678,6 +686,15 @@ export default function DesignView(props: {
     ro.observe(el);
     return () => ro.disconnect();
   }, [chave, srcBase, modo]);
+  /** Lado a lado entra já no zoom que cabe as três larguras; ao sair, volta ao tamanho real. */
+  const escolherViewport = (v: Viewport) => {
+    if (v === "lado" && areaCanvas.current) {
+      const cabe = (areaCanvas.current.clientWidth - 40) / (QUADROS.reduce((t, q) => t + q.w, 0) + VAO * 2);
+      setZoom(ZOOMS.filter((z) => z <= cabe).pop() ?? ZOOMS[0]);
+      setModo("view");
+    } else if (viewport === "lado") setZoom(1);
+    setViewport(v);
+  };
   const alternarEdicao = () => setModo((m) => (m === "edit" ? "view" : "edit"));
 
   // Mensagens do canvas. Os handlers mudam a cada render; o ouvinte (fixo) chama o mais recente.
@@ -753,6 +770,7 @@ export default function DesignView(props: {
   const secaoSel = selecao?.path.find((n) => n.sec)?.sec;
   const nSlides = contaSlides(html);
   const telas = nomesTelas(html);
+  const ladoALado = viewport === "lado" && !nSlides;
   const largura = nSlides ? null : VIEWPORTS.find((v) => v.id === viewport)!.largura;
   // miniaturas pela fonte mais nova (o iframe principal pode estar na versão antiga + patches)
   const fonteMini = rodando && docVivo ? docVivo : projeto?.html ?? "";
@@ -1186,7 +1204,8 @@ export default function DesignView(props: {
                ["comment", "Comentar", Bubble, "Comentar: clique num elemento e escreva; o comentário entra na fila · Ctrl+Shift+M", alternarComentario],
                ["edit", "Editar", Edit, "Editar: clique num elemento e mude cor, fonte, espaçamento… direto, sem IA", alternarEdicao]] as const)
               .map(([id, rotuloModo, Icone, dica, alterna]) => (
-                <button key={id} aria-pressed={modo === id} title={dica} disabled={!srcBase} onClick={alterna}
+                <button key={id} aria-pressed={modo === id} title={ladoALado ? "No lado a lado é só visualização: abra uma largura para editar" : dica}
+                        disabled={!srcBase || ladoALado} onClick={alterna}
                         className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 disabled:opacity-30 ${modo === id
                           ? id === "comment" ? "bg-amber-500/15 text-amber-300" : "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}>
                   <Icone className="size-3.5" /> {rotuloModo}
@@ -1285,7 +1304,7 @@ export default function DesignView(props: {
           ) : (
             <div className="flex rounded-lg border border-line p-0.5" role="radiogroup" aria-label="Viewport">
               {VIEWPORTS.map((v) => (
-                <button key={v.id} role="radio" aria-checked={viewport === v.id} onClick={() => setViewport(v.id)}
+                <button key={v.id} role="radio" aria-checked={viewport === v.id} onClick={() => escolherViewport(v.id)}
                         title={v.largura ? `${v.largura} px de largura` : "Largura do canvas"}
                         className={`rounded-md px-2 py-0.5 ${viewport === v.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
                   {v.label}
@@ -1387,7 +1406,7 @@ export default function DesignView(props: {
                          onMover={(fids, alvo, onde) => operar("mover", fids, { alvo, onde })}
                          onFechar={() => setCamadas(false)} />
         )}
-        <div ref={areaCanvas} className={`relative flex min-w-0 flex-1 p-3 ${zoom > 1 ? "overflow-auto" : "overflow-hidden"}`} style={{ justifyContent: "safe center" }}>
+        <div ref={areaCanvas} className={`relative flex min-w-0 flex-1 p-3 ${zoom > 1 || ladoALado ? "overflow-auto" : "overflow-hidden"}`} style={{ justifyContent: "safe center" }}>
           {modo === "comment" && selecao?.rect && iframe.current && areaCanvas.current && (() => {
             // a caixa fica logo abaixo do elemento (ou acima, se não couber), dentro da área do canvas
             const f = iframe.current.getBoundingClientRect(), a = areaCanvas.current.getBoundingClientRect();
@@ -1441,6 +1460,26 @@ export default function DesignView(props: {
           ) : fluxo && telas.length && srcBase ? (
             <DesignFluxo html={projeto?.html ?? srcBase} atual={tela || telas[0]} onFechar={() => setFluxo(false)}
                          onIr={(t) => { setFluxo(false); setTimeout(() => paraIframe(janela(), { type: "setTela", nome: t }), 150); }} />
+          ) : ladoALado && html ? (
+            <div aria-label="Três larguras lado a lado" className="flex items-start" style={{ gap: VAO * zoom }}
+                 onWheel={(e) => {   // Ctrl+roda no quadro: zoom (sobre um quadro, a roda rola a página dele)
+                   if (!e.ctrlKey) return;
+                   setZoom((z) => (e.deltaY < 0 ? ZOOMS.find((x) => x > z) ?? z : ZOOMS.filter((x) => x < z).pop() ?? z));
+                 }}>
+              {QUADROS.map((q) => (
+                <figure key={q.id} className="m-0 shrink-0">
+                  <figcaption className="mb-1.5 flex items-center gap-2 text-xs text-muted">
+                    <button onClick={() => escolherViewport(q.id)} title={`Abrir a ${q.label.toLowerCase()} sozinha, para editar`}
+                            className="rounded px-1 font-medium text-fg hover:bg-raised">{q.label}</button>
+                    <span className="font-mono text-faint">{q.w}px</span>
+                  </figcaption>
+                  <div className="relative overflow-hidden rounded-lg border border-line bg-white" style={{ width: q.w * zoom, height: q.h * zoom }}>
+                    <iframe title={`Quadro ${q.label}`} sandbox="allow-scripts" srcDoc={paraCanvas(html, false)}
+                            style={{ width: q.w, height: q.h, transform: `scale(${zoom})`, transformOrigin: "0 0" }} className="absolute top-0 left-0 border-0" />
+                  </div>
+                </figure>
+              ))}
+            </div>
           ) : html ? (
             // zoom: a caixa ocupa largura×z na tela e o iframe dentro tem largura/z, escalado de volta. Na
             // largura do canvas isso é o zoom do navegador (a página refaz o layout); em Tablet/Celular, lupa.
