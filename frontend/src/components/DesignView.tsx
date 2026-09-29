@@ -118,6 +118,10 @@ const nomesTelas = (html: string) =>
 const paisDe = (ms: Mensagem[]) =>
   new Map(ms.filter((m) => m.versao).map((m) => [m.versao!, m.base || (m.versao! > 1 ? m.versao! - 1 : 0)]));
 const filhoMaisNovo = (pais: Map<number, number>, v: number) => Math.max(0, ...[...pais].filter(([, b]) => b === v).map(([f]) => f));
+/** Páginas do site (seções de topo com data-pagina; "*" = comum a todas), na ordem. */
+const nomesPaginas = (html: string) =>
+  [...new Set([...html.matchAll(/<(?:section|header|footer|nav|main|div)\b[^>]*\sdata-pagina="([^"*]+)"/gi)].map((m) => m[1]))];
+const slugPagina = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
@@ -172,6 +176,8 @@ export default function DesignView(props: {
   const [abrirZoom, setAbrirZoom] = useState(false);
   const [abrirSalvar, setAbrirSalvar] = useState(false);
   const [camadas, setCamadas] = useState(false);
+  const [paginaAtual, setPaginaAtual] = useState("");
+  const [novaPagina, setNovaPagina] = useState<{ nome: string; desc: string } | null>(null);
   const [captura, setCaptura] = useState<Referencia | null>(null);   // janela dos blocos da página capturada
   const [revisao, setRevisao] = useState<Revisao | null>(null);
   const [revisando, setRevisando] = useState(false);
@@ -348,8 +354,13 @@ export default function DesignView(props: {
 
   const modelosDe = () => ({ ...prefs.modelos });
 
+  const paginaDoPedido = () => {
+    const h = projeto?.html ?? "";
+    const ps = nomesTelas(h).length ? [] : nomesPaginas(h);
+    return ps.length ? (ps.includes(paginaAtual) ? paginaAtual : ps[0]) : "";
+  };
   async function pedir(extra: { rota?: string; secao?: string; comentarios?: number[]; pedido?: string;
-                                 respostas?: { pergunta: string; resposta: string }[]; fids?: string[] } = {}) {
+                                 respostas?: { pergunta: string; resposta: string }[]; fids?: string[]; pagina?: string } = {}) {
     const pedido = (extra.pedido ?? texto).trim();
     if (rodando || (!pedido && !extra.comentarios?.length && !["secao", "tweaks", "variacoes"].includes(extra.rota ?? ""))) return;
     const anexos = refs;
@@ -370,7 +381,9 @@ export default function DesignView(props: {
       await ouvir(`/design/${id}/gerar`, { method: "POST", body: JSON.stringify({
         pedido, fids, rota: extra.rota ?? rota, secao: extra.secao ?? "", comentarios: extra.comentarios ?? [],
         esforco: prefs.esforco, modelos: modelosDe(), sistema: prefs.sistema ?? "", ...prefs.modelos.geracao,
-        perguntar: prefs.perguntar !== false, respostas: extra.respostas ?? [], referencias: anexos }) }, id);
+        perguntar: prefs.perguntar !== false, respostas: extra.respostas ?? [], referencias: anexos,
+        // site com páginas: seção nova entra na página que está à vista
+        pagina: extra.pagina ?? paginaDoPedido() }) }, id);
       props.onConversationChanged();
     } catch (e: any) {
       props.onError(e.message);
@@ -747,6 +760,7 @@ export default function DesignView(props: {
       paraIframe(janela(), { type: "setMulti", on: multi });
       paraIframe(janela(), { type: "setSlide", n: slides.atual });
       if (tela) paraIframe(janela(), { type: "setTela", nome: tela });
+      if (paginaAtual) paraIframe(janela(), { type: "setPagina", nome: paginaAtual });
       if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
       paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
@@ -759,6 +773,7 @@ export default function DesignView(props: {
       ...(m.w ? { width: `${m.w}px` } : {}), ...(m.h ? { height: `${m.h}px` } : {}) } });
     else if (m.type === "slides") setSlides({ atual: m.atual, total: m.total });
     else if (m.type === "tela") setTela(m.nome);
+    else if (m.type === "pagina") setPaginaAtual(m.nome);
     else if (m.type === "auditoria") setAuditoria({ itens: m.itens, escopo: m.escopo });
     else if (m.type === "pin") {
       setAba("comentarios");
@@ -810,6 +825,7 @@ export default function DesignView(props: {
   const secaoSel = selecao?.path.find((n) => n.sec)?.sec;
   const nSlides = contaSlides(html);
   const telas = nomesTelas(html);
+  const paginas = telas.length ? [] : nomesPaginas(html);
   const ladoALado = viewport === "lado" && !nSlides;
   const largura = nSlides ? null : VIEWPORTS.find((v) => v.id === viewport)!.largura;
   // miniaturas pela fonte mais nova (o iframe principal pode estar na versão antiga + patches)
@@ -1337,6 +1353,50 @@ export default function DesignView(props: {
               ))}
             </div>
           ) : null}
+          {!telas.length && !nSlides && !!srcBase && (
+            <div className="relative flex items-center gap-0.5">
+              {paginas.length > 0 && (
+                <div className="flex max-w-72 shrink-0 items-center gap-0.5 overflow-x-auto rounded-lg border border-line p-0.5" role="tablist" aria-label="Páginas">
+                  {paginas.map((p) => (
+                    <button key={p} role="tab" aria-selected={(paginaAtual || paginas[0]) === p} onClick={() => paraIframe(janela(), { type: "setPagina", nome: p })}
+                            className={`shrink-0 rounded-md px-2 py-0.5 text-[11.5px] ${(paginaAtual || paginas[0]) === p ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                      /{p}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button onClick={() => setNovaPagina((v) => (v ? null : { nome: "", desc: "" }))} disabled={rodando}
+                      title={paginas.length ? "Nova página no site (a IA escreve; o link vai para o menu)" : "Transformar em site com várias páginas: esta vira “inicio” e a IA cria a nova"}
+                      className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">+ Página</button>
+              {novaPagina && (
+                <form role="dialog" aria-label="Nova página" onSubmit={(e) => {
+                        e.preventDefault();
+                        const nome = slugPagina(novaPagina.nome);
+                        if (!nome) return;
+                        setNovaPagina(null);
+                        setPaginaAtual(nome);   // o canvas recarrega com a página nova e abre nela
+                        pedir({ rota: "secao", secao: nome, pagina: nome,
+                                pedido: `Crie a página “${novaPagina.nome.trim()}” do site${novaPagina.desc.trim() ? `: ${novaPagina.desc.trim()}` : "."}` });
+                      }}
+                      className="absolute top-full left-0 z-30 mt-1 w-80 rounded-xl border border-line bg-surface p-2.5 shadow-xl">
+                  <input autoFocus value={novaPagina.nome} onChange={(e) => setNovaPagina({ ...novaPagina, nome: e.target.value })}
+                         placeholder="Nome da página (ex.: Sobre, Contato)" aria-label="Nome da página" maxLength={40}
+                         className="w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
+                  <textarea value={novaPagina.desc} onChange={(e) => setNovaPagina({ ...novaPagina, desc: e.target.value })} rows={3}
+                            placeholder="O que tem nela (opcional)" aria-label="O que tem na página"
+                            className="mt-1.5 w-full resize-none rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
+                  <p className="mt-1 text-[11px] leading-snug text-faint">
+                    {paginas.length ? "Cabeçalho e rodapé aparecem em todas." : "A página de agora vira /inicio; cabeçalho e rodapé passam a valer para todas."}
+                    {" "}O link “#/{slugPagina(novaPagina.nome) || "nome"}” entra no menu.
+                  </p>
+                  <div className="mt-1.5 flex justify-end gap-1.5">
+                    <button type="button" onClick={() => setNovaPagina(null)} className="rounded-lg px-2 py-0.5 text-muted hover:text-fg">Cancelar</button>
+                    <button type="submit" disabled={!slugPagina(novaPagina.nome)} className="rounded-lg bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">Criar página</button>
+                  </div>
+                </form>
+              )}
+            </div>
+          )}
           {!!telas.length && (
             <button onClick={() => setFluxo((v) => !v)} aria-pressed={fluxo} title="Mapa das telas e de quem leva a quem"
                     className={`rounded-lg border px-2 py-1 ${fluxo ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:bg-raised"}`}>

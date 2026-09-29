@@ -28,6 +28,7 @@ export type DoCanvas =
   | { type: "pin"; n: number }
   | { type: "slides"; atual: number; total: number }
   | { type: "tela"; nome: string }                          // o runtime do protótipo trocou de tela
+  | { type: "pagina"; nome: string }                        // o runtime do site com páginas trocou de página
   | { type: "auditoria"; itens: Problema[]; escopo: string }
   | { type: "atalho"; acao: "inspect" | "comentar" | "undo" | "redo" | "sair" | "apagar" | "duplicar" }
   | { type: "arvore"; nos: NoArvore[] };
@@ -40,6 +41,7 @@ export type ParaCanvas =
   | { type: "showPins"; pins: Pin[] }
   | { type: "setSlide"; n: number }
   | { type: "setTela"; nome: string }
+  | { type: "setPagina"; nome: string }
   | { type: "auditar" }
   | { type: "setMulti"; on: boolean }        // cada clique soma/tira da seleção (como Shift/Ctrl+clique)
   | { type: "semelhantes"; fid: string }
@@ -95,6 +97,8 @@ export function lerMensagem(e: MessageEvent, janela: Window | null | undefined):
         && Number.isInteger(n.nivel) && typeof n.oculto === "boolean") ? { type: "arvore", nos: d.nos } : null;
     case "tela":
       return eTexto(d.nome) && d.nome.length < 80 ? { type: "tela", nome: d.nome } : null;
+    case "pagina":
+      return eTexto(d.nome) && d.nome.length < 80 ? { type: "pagina", nome: d.nome } : null;
     case "slides":
       return Number.isInteger(d.atual) && Number.isInteger(d.total) ? { type: "slides", atual: d.atual, total: d.total } : null;
     case "atalho":
@@ -264,6 +268,10 @@ function inspetor() {
     const t = el?.closest("body > [data-tela]");   // protótipo: idem com a tela
     const irTela = (window as { forjaIrTela?: (n: string) => void }).forjaIrTela;
     if (t && !t.hasAttribute("data-tela-atual") && irTela) irTela(t.getAttribute("data-section") || "");
+    // site com páginas: elemento de outra página (breadcrumb, comentário, camadas) leva até ela
+    const pg = el?.closest("body > [data-pagina]")?.getAttribute("data-pagina");
+    const irPagina = (window as { forjaIrPagina?: (n: string) => void }).forjaIrPagina;
+    if (pg && pg !== "*" && pg !== document.documentElement.getAttribute("data-pagina-atual") && irPagina) irPagina(pg);
     desenha();
     const itens = sel.map((f) => item(porFid(f)!));
     envia(el
@@ -586,6 +594,9 @@ function inspetor() {
           else if (v) el.style.setProperty(k, v, "important");   // vence as regras @media já salvas
           else el.style.removeProperty(k);
       }
+      desenha();
+    } else if (d.type === "setPagina" && typeof d.nome === "string") {
+      (window as { forjaIrPagina?: (n: string) => void }).forjaIrPagina?.(d.nome);
       desenha();
     } else if (d.type === "setTela" && typeof d.nome === "string") {
       (window as { forjaIrTela?: (n: string) => void }).forjaIrTela?.(d.nome);

@@ -352,8 +352,9 @@ img,svg{max-width:100%;display:block}
 .container{width:min(1120px,100% - 2*var(--esp-4, 1.5rem));margin-inline:auto}"""
 
 
-def _placeholder(nome: str, slide: bool = False, tela: bool = False) -> str:
+def _placeholder(nome: str, slide: bool = False, tela: bool = False, pagina: str = "") -> str:
     extra = " data-slide" if slide else " data-tela" if tela else ""
+    extra += f' data-pagina="{pagina}"' if pagina else ""
     o_que = "o slide" if slide else "a tela" if tela else "a seção"
     return f'<section data-section="{nome}"{extra} data-placeholder="1">Gerando {o_que} “{nome}”…</section>'
 
@@ -394,24 +395,26 @@ def limpar_placeholders(html: str) -> str:
     return html.replace(PLACEHOLDER_CSS + "\n", "").replace(PLACEHOLDER_CSS, "")
 
 
-def inserir_secao(html: str, nome: str) -> str:
+def inserir_secao(html: str, nome: str, pagina: str = "") -> str:
     """Placeholder novo antes do rodapé (se a última seção for rodapé) ou no fim do <body>."""
     secs = secoes(html)
     ultima = secs[-1] if secs else None
     slide = e_slides(html)   # num deck o slide novo vai para o fim
     tela = e_prototipo(html)
-    if ultima and not slide and not tela and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")):
+    if ultima and not slide and not tela and (ultima["tag"] == "footer" or slug(ultima["attrs"].get("data-section")) in ("rodape", "footer")
+                                             or ultima["attrs"].get("data-pagina") == "*"):
         pos = ultima["ini"]
     else:
         pos = html.lower().rfind("</body>")
         if pos < 0:
             raise ValueError("Documento sem </body>.")
-        if tela and (js := html.find("<script data-forja-prototipo")) >= 0:
-            pos = min(pos, js)   # tela nova antes do runtime do protótipo
-    return carimbar(html[:pos] + _placeholder(nome, slide, tela) + "\n" + html[pos:])
+        for marca in ("<script data-forja-prototipo", "<script data-forja-paginas"):
+            if (js := html.find(marca)) >= 0:
+                pos = min(pos, js)   # antes do runtime (protótipo ou páginas)
+    return carimbar(html[:pos] + _placeholder(nome, slide, tela, pagina) + "\n" + html[pos:])
 
 
-def ler_secao(texto: str, nome: str, slide: bool = False, tela: bool = False) -> tuple[str, str]:
+def ler_secao(texto: str, nome: str, slide: bool = False, tela: bool = False, pagina: str = "") -> tuple[str, str]:
     """Resposta da geração de uma seção → (<section> com data-section=nome, css). O <style> pode vir
     depois da seção ou (modelo distraído) dentro dela: sai de lá e vai para o <head>."""
     from .parsing import split_think
@@ -432,6 +435,8 @@ def ler_secao(texto: str, nome: str, slide: bool = False, tela: bool = False) ->
         tag = _attr(tag, "data-slide", "")
     if tela:    # no protótipo, toda seção de topo é uma tela
         tag = _attr(tag, "data-tela", "")
+    if pagina:  # site com páginas: a seção fica na página em que foi pedida
+        tag = _attr(tag, "data-pagina", pagina)
     return tag + sec[len(raiz["txt"]):], css
 
 
@@ -568,6 +573,106 @@ PROTOTIPO_JS = """<script data-forja-prototipo>
   else ir(location.hash.slice(1));
 })();
 </script>"""
+
+
+# ------------------------------------------------------------------ site com várias páginas
+# Um documento só: cada seção de topo diz a que página pertence (data-pagina="sobre"; "*" = em todas,
+# o cabeçalho e o rodapé). As seções continuam no topo, então tudo que é de seção vale igual. Links
+# "#/sobre" trocam de página; o runtime vai no documento (e no export) e esconde as outras por CSS
+# gerado na hora (não mexe nos nós: sobrevive ao patch do canvas).
+PAGINA_COMUM = {"topo", "header", "cabecalho", "menu", "nav", "navegacao", "rodape", "footer"}
+PAGINAS_JS = """<script data-forja-paginas>
+(function () {
+  var css = document.createElement("style");
+  function paginas() {
+    var vistos = [];
+    [].forEach.call(document.querySelectorAll("body > [data-pagina]"), function (s) {
+      var p = s.getAttribute("data-pagina");
+      if (p !== "*" && vistos.indexOf(p) < 0) vistos.push(p);
+    });
+    return vistos;
+  }
+  function ir(nome) {
+    var ps = paginas(), p = ps.indexOf(nome) >= 0 ? nome : ps[0];
+    if (!p) return;
+    css.textContent = 'body > [data-pagina]:not([data-pagina="*"]):not([data-pagina="' + p.replace(/"/g, "") + '"]){display:none!important}';
+    if (!css.parentNode) document.head.appendChild(css);
+    document.documentElement.setAttribute("data-pagina-atual", p);
+    window.scrollTo(0, 0);
+    try { parent.postMessage({ "forja-design": 1, type: "pagina", nome: p }, "*"); } catch (e) {}
+  }
+  document.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest('a[href^="#/"]');
+    if (!a) return;
+    e.preventDefault();
+    var p = decodeURIComponent(a.getAttribute("href").slice(2));
+    try { history.replaceState(null, "", "#/" + p); } catch (x) {}
+    ir(p);
+  });
+  window.forjaIrPagina = ir;
+  var hash = function () { return decodeURIComponent(location.hash.replace(/^#[/]?/, "")); };
+  window.addEventListener("hashchange", function () { ir(hash()); });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { ir(hash()); });
+  else ir(hash());
+})();
+</script>"""
+
+
+def paginas(html: str) -> list[str]:
+    """Páginas do site, na ordem em que aparecem ([] = página única)."""
+    out = []
+    for e in secoes(html):
+        p = e["attrs"].get("data-pagina")
+        if p and p != "*" and p not in out:
+            out.append(p)
+    return out
+
+
+def paginar(html: str) -> str:
+    """Página única → site com páginas: o que é cabeçalho/rodapé vai para todas ("*"), o resto é a
+    página "inicio"; o runtime entra antes do </body>. Idempotente."""
+    for e in reversed(secoes(html)):
+        if "data-pagina" in e["attrs"]:
+            continue
+        comum = e["tag"] in ("header", "footer", "nav") or slug(e["attrs"].get("data-section") or "") in PAGINA_COMUM
+        html = html[:e["ini"]] + _attr(e["txt"], "data-pagina", "*" if comum else "inicio") + html[e["fim_tag"]:]
+    if "data-forja-paginas" not in html:
+        corte = html.lower().rfind("</body>")
+        html = html[:corte] + PAGINAS_JS + "\n" + html[corte:] if corte >= 0 else html + PAGINAS_JS
+    return html
+
+
+def link_no_menu(html: str, pagina: str, rotulo: str) -> tuple[str, bool]:
+    """Link "#/pagina" no fim do <nav> do cabeçalho comum, copiando a classe do último link dele."""
+    if f'href="#/{pagina}"' in html:
+        return html, True
+    els = indexar(html)
+    comuns = [e for e in secoes(html) if e["attrs"].get("data-pagina") == "*"]
+    for c in comuns:
+        nav = next((e for e in els if e["tag"] == "nav" and c["ini"] <= e["ini"] < c["fim"]), None)
+        if not nav:
+            continue
+        links = [e for e in els if e["tag"] == "a" and nav["ini"] <= e["ini"] < nav["fim"]]
+        cls = links[-1]["attrs"].get("class") if links else None
+        a = f'<a{f" class={chr(34)}{cls}{chr(34)}" if cls else ""} href="#/{pagina}">{re.sub(r"[<>&]", "", rotulo)}</a>'
+        pos = links[-1]["fim"] if links else html.rfind("<", nav["fim_tag"], nav["fim"])
+        # o link pode estar dentro de <li>: entra um <li> novo depois do último
+        li = next((e for e in els if e["tag"] == "li" and links and e["ini"] <= links[-1]["ini"] < e["fim"]), None)
+        if li:
+            li_cls = li["attrs"].get("class")
+            a, pos = f'<li{f" class={chr(34)}{li_cls}{chr(34)}" if li_cls else ""}>{a}</li>', li["fim"]
+        return carimbar(html[:pos] + a + html[pos:]), True
+    # sem menu nenhum: um cabeçalho simples, comum a todas, com um link por página (tokens do design)
+    corpo = re.search(r"<body[^>]*>", html, re.I)
+    if not corpo:
+        return html, False
+    rot = lambda p: re.sub(r"[<>&]", "", p.replace("-", " ").capitalize())   # noqa: E731
+    links = "".join(f'<a href="#/{p}" style="color:inherit;text-decoration:none;font-weight:600">{rot(p) if p != pagina else re.sub(r"[<>&]", "", rotulo)}</a>'
+                    for p in [*paginas(html), *([pagina] if pagina not in paginas(html) else [])])
+    menu = (f'\n<header data-section="menu" data-pagina="*" style="background:var(--cor-fundo, #fff);'
+            f'border-bottom:1px solid color-mix(in srgb, currentColor 15%, transparent)">'
+            f'<nav class="container" style="display:flex;gap:1.5rem;flex-wrap:wrap;padding:1rem 0">{links}</nav></header>')
+    return carimbar(html[:corpo.end()] + menu + html[corpo.end():]), True
 
 
 def e_prototipo(html: str) -> bool:

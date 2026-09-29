@@ -1598,6 +1598,7 @@ class DesignBody(BaseModel):
     perguntar: bool = False           # projeto vazio: perguntas curtas antes do plano
     respostas: list[dict] = []        # [{pergunta, resposta}] do card de perguntas
     referencias: list[dict] = []      # [{tipo: imagem|documento|pagina, nome, data|texto}]
+    pagina: str = ""                  # site com páginas: seção nova vai para esta (nova: cria a página)
 
 
 class DesignAprovarBody(BaseModel):
@@ -1659,7 +1660,7 @@ async def design_gerar(conv_id: int, body: DesignBody):
     try:
         msg = design.start(conv_id, body.pedido, _design_modelos(body), body.fids, body.rota, body.secao,
                            body.comentarios, body.esforco, body.sistema, body.perguntar, body.respostas,
-                           body.referencias)
+                           body.referencias, body.pagina)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_design(msg["id"])

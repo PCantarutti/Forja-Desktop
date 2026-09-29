@@ -904,7 +904,8 @@ def _referencias(refs: list[dict] | None) -> tuple[str, list[str], list[dict]]:
 
 def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = None, rota: str = "auto",
           secao: str = "", comentarios: list[int] | None = None, esforco: str = "baixo", ds_id: str = "",
-          perguntar: bool = False, respostas: list[dict] | None = None, referencias: list[dict] | None = None) -> dict:
+          perguntar: bool = False, respostas: list[dict] | None = None, referencias: list[dict] | None = None,
+          pagina: str = "") -> dict:
     pedido = (pedido or "").strip()
     if rota not in ROTAS:
         raise ToolError(f"rota deve ser {', '.join(ROTAS)}.")
@@ -970,8 +971,14 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
         nome = design_html.slug(secao or alvo or "") or "nova"
         existente = next((e for e in design_html.secoes(html_base) if e["attrs"]["data-section"] == nome), None)
         nova = existente is None
+        pagina = design_html.slug(pagina) if nova else ""
+        pagina_nova = bool(pagina) and pagina not in design_html.paginas(html_base)
+        if pagina and not (design_html.e_slides(html_base) or design_html.e_prototipo(html_base)):
+            html_base = design_html.paginar(html_base)   # primeira página nova: o site passa a ter páginas
+        else:
+            pagina = ""
         if nova:
-            html_base = design_html.inserir_secao(html_base, nome)
+            html_base = design_html.inserir_secao(html_base, nome, pagina)
             nomes = [e["attrs"]["data-section"] for e in design_html.secoes(html_base)]
         alvo_fid = design_html.placeholder(html_base, nome) if nova else existente["attrs"]["data-fid"]
         atual_sec = None if nova else design_html.outer(html_base, alvo_fid)
@@ -981,7 +988,11 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
                           pedido or f"Refaça a seção {nome} com um design melhor.")
         slide, tela = design_html.e_slides(html_base), design_html.e_prototipo(html_base)
         sistema = "slide" if slide else "tela" if tela else "secao"
-        extra = {"secao": nome, "alvo": alvo_fid, "nova": nova, "slide": slide, "tela": tela}
+        extra = {"secao": nome, "alvo": alvo_fid, "nova": nova, "slide": slide, "tela": tela,
+                 "pagina": pagina, "pagina_nova": pagina_nova and bool(pagina)}
+        if extra["pagina_nova"]:
+            user += (f"\n\nEsta seção é uma PÁGINA NOVA do site (“{pagina}”): ela aparece sozinha, entre o cabeçalho "
+                     "e o rodapé que já existem. Escreva o conteúdo completo da página dentro desta <section>.")
     elif modo == "documento" and not html_base:   # forçado num projeto vazio: tudo de uma vez
         user = f"Pedido: {pedido}"
         sistema = "documento"
@@ -1200,13 +1211,17 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                 antes = dict(re.findall(r"(--[\w-]+)\s*:\s*([^;}]+)", raiz))
                 passos = [f"{k}: {antes.get(k, '').strip()} → {v}" for k, v in tokens.items()]
             else:  # secao
-                sec, css = design_html.ler_secao(texto, run["secao"], run.get("slide", False), run.get("tela", False))
+                sec, css = design_html.ler_secao(texto, run["secao"], run.get("slide", False), run.get("tela", False), run.get("pagina", ""))
                 mensagem, sugs = design_html.rodape(texto.rsplit("</style>", 1)[-1] if "</style>" in texto else texto)
                 resp = {"patches": [{"fid": run["alvo"], "html": sec}], "css": css}
                 passos = [f"{'Criou' if run.get('nova') else 'Refez'} a seção “{run['secao']}”"]
                 if css.strip():
                     passos.append("Escreveu o CSS dela")
             html, mudou = design_html.aplicar(base_html, resp)
+            if run.get("pagina_nova"):
+                html, tem_menu = design_html.link_no_menu(html, run["pagina"], run["pagina"].replace("-", " ").capitalize())
+                passos.append(f"Pôs o link “#/{run['pagina']}” no menu do cabeçalho" if tem_menu
+                              else "Não achei um <nav> no cabeçalho comum para pôr o link da página")
             if not extrair_html(html):
                 raise ValueError("o documento ficaria inválido")
         except ValueError as e:
