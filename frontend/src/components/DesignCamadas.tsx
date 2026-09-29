@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { NoArvore } from "./designCanvas";
+import { PAINEL_FLUTUA_ESQ } from "./DesignEditar";
 import { ChevronDown, EyeOff, X } from "./icons";
 
 // Painel Camadas da tela Design: a árvore de elementos da página (os que têm data-fid), para achar e
@@ -52,7 +53,7 @@ export default function DesignCamadas(props: {
   const rotuloNo = (n: NoArvore) => n.tag + (n.cls ? "." + n.cls.split(/\s+/)[0] : "");
 
   return (
-    <aside aria-label="Camadas" className="flex w-64 shrink-0 flex-col border-r border-line bg-surface text-[12px]">
+    <aside aria-label="Camadas" className={`flex w-64 shrink-0 flex-col overflow-hidden border-r border-line bg-surface text-[12px] ${PAINEL_FLUTUA_ESQ}`}>
       <div className="flex items-center gap-1.5 border-b border-line px-3 py-2 whitespace-nowrap">
         <span className="font-medium text-fg">Camadas</span>
         <span className="text-faint">{props.nos.length}</span>

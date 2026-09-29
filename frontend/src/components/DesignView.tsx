@@ -8,7 +8,7 @@ import DesignAcessibilidade from "./DesignAcessibilidade";
 import DesignAtividade from "./DesignAtividade";
 import DesignCamadas from "./DesignCamadas";
 import DesignCaptura, { type Bloco, type Paleta } from "./DesignCaptura";
-import DesignEditar from "./DesignEditar";
+import DesignEditar, { PAINEL_FLUTUA_DIR } from "./DesignEditar";
 import DesignFluxo from "./DesignFluxo";
 import DesignRevisao, { type ProblemaVisual, type Revisao } from "./DesignRevisao";
 import DesignModelos, { type Modelo } from "./DesignModelos";
@@ -16,7 +16,7 @@ import DesignPerguntas, { type Pergunta } from "./DesignPerguntas";
 import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
 import { type Item, type Modo, type NoArvore, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
-import { ArrowLeft, ArrowRight, Bubble, Check, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, Paperclip, Play, Plus,
+import { ArrowLeft, ArrowRight, Bubble, Camadas as CamadasIcone, Celular, Check, LadoALado, Monitor, Tablet, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, PanelLeft, Paperclip, Play, Plus,
   Split, TelaCheia, Undo, X } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -78,11 +78,11 @@ const ROTULO_ROTA: Record<string, string> = {
   documento: "documento inteiro", texto: "texto · sem IA", restaurar: "restauração", variacoes: "variações", manual: "ajustes à mão",
   variacao: "variação · sem IA", ajuste: "ajuste · sem IA", sistema: "design system · sem IA", tweaks: "ajustes da IA", imagens: "imagens",
 };
-const VIEWPORTS: { id: Viewport; label: string; largura: number | null }[] = [
-  { id: "desktop", label: "Desktop", largura: null },
-  { id: "tablet", label: "Tablet", largura: 768 },
-  { id: "mobile", label: "Celular", largura: 375 },
-  { id: "lado", label: "Lado a lado", largura: null },
+const VIEWPORTS: { id: Viewport; label: string; largura: number | null; Icone: typeof Monitor }[] = [
+  { id: "desktop", label: "Desktop", largura: null, Icone: Monitor },
+  { id: "tablet", label: "Tablet", largura: 768, Icone: Tablet },
+  { id: "mobile", label: "Celular", largura: 375, Icone: Celular },
+  { id: "lado", label: "Lado a lado", largura: null, Icone: LadoALado },
 ];
 // "Lado a lado": as três larguras juntas num quadro (só visualização; clicar no nome abre aquela largura)
 const QUADROS: { id: Viewport; label: string; w: number; h: number }[] = [
@@ -127,7 +127,7 @@ const rotulo = (n: { tag: string; cls: string }) => n.tag + (n.cls ? "." + n.cls
 const milhar = (n: number) => (n >= 1000 ? `${(n / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil` : String(n));
 
 type Preferencias = { modelos: Modelos; esforco: Effort; sistema?: string; perguntar?: boolean;
-                      revisarVisao?: boolean; revisarAuto?: boolean };
+                      revisarVisao?: boolean; revisarAuto?: boolean; chatOculto?: boolean };
 
 function lerPreferencias(provider: string, model: string): Preferencias {
   const par = { provider, model };
@@ -753,7 +753,8 @@ export default function DesignView(props: {
   };
   const alternarInspecao = () => setModo((m) => (m === "inspect" ? "view" : "inspect"));
   const alternarComentario = () => setModo((m) => (m === "comment" ? "view" : "comment"));
-  const escopo: "desktop" | "tablet" | "mobile" = vwCanvas && vwCanvas <= 480 ? "mobile" : vwCanvas && vwCanvas <= 820 ? "tablet" : "desktop";
+  // a largura escolhida no topo decide onde a edição grava (o canvas estreito continua sendo o "Desktop")
+  const escopo: "desktop" | "tablet" | "mobile" = viewport === "tablet" ? "tablet" : viewport === "mobile" ? "mobile" : "desktop";
   const escopoRef = useRef(escopo);
   escopoRef.current = escopo;
   useEffect(() => {
@@ -878,6 +879,12 @@ export default function DesignView(props: {
     return out;
   }, [chaveArvore]);   // eslint-disable-line react-hooks/exhaustive-deps
   const btn = "grid size-8 place-items-center rounded-lg text-muted hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent";
+  // barra do canvas: um tamanho só (h-7), o mesmo segmentado da tela Imagem
+  const tb = "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted hover:bg-raised hover:text-fg disabled:opacity-35 disabled:hover:bg-transparent";
+  const ico = "grid size-7 place-items-center rounded-lg text-muted hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent";
+  const seg = "flex items-center gap-0.5 rounded-lg border border-line bg-surface p-0.5";
+  const segBtn = (on: boolean) => `inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] disabled:opacity-35 ${on ? "bg-raised text-fg" : "text-faint hover:text-fg"}`;
+  const campoPop = "w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none";
   const abaBtn = (on: boolean) => `rounded-lg px-2.5 py-1 text-xs ${on ? "bg-raised text-fg" : "text-muted hover:text-fg"}`;
 
   /** Bloco da resposta em andamento: raciocínio ao vivo, progresso e a linha de métricas ao vivo. */
@@ -899,7 +906,7 @@ export default function DesignView(props: {
   return (
     <div className="flex h-full min-h-0">
       {/* Esquerda: chat / comentários / versões + composer */}
-      <div className="flex w-[35%] min-w-[320px] flex-col border-r border-line">
+      <div className={`flex w-[35%] min-w-[320px] flex-col border-r border-line ${prefs.chatOculto ? "hidden" : ""}`}>
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-3">
           <button className={abaBtn(aba === "chat")} onClick={() => setAba("chat")}>Chat</button>
           <button className={abaBtn(aba === "comentarios")} onClick={() => setAba("comentarios")}>
@@ -955,7 +962,7 @@ export default function DesignView(props: {
                             <img key={k} src={r.data} alt={r.nome} title={r.nome} className="h-14 rounded-lg border border-line object-cover" />
                           ) : (
                             <span key={k} className="rounded-lg border border-line px-2 py-0.5 text-[11.5px] text-muted">
-                              {r.tipo === "pagina" ? "🌐" : r.tipo === "imagem" ? "🖼" : "📄"} {r.nome}
+                              {r.tipo === "pagina" ? <Globe className="size-3.5" /> : r.tipo === "imagem" ? <Image className="size-3.5" /> : <Paperclip className="size-3.5" />} {r.nome}
                             </span>
                           ))}
                         </div>
@@ -1165,7 +1172,7 @@ export default function DesignView(props: {
               <div className="mb-1.5 flex flex-wrap gap-1.5">
                 {refs.map((r, k) => (
                   <span key={k} className="inline-flex items-center gap-1 rounded-lg border border-line py-0.5 pr-1 pl-1 text-[11.5px] text-fg-2">
-                    {r.tipo === "imagem" && r.data ? <img src={r.data} alt="" className="size-5 rounded object-cover" /> : <span>{r.tipo === "pagina" ? "🌐" : "📄"}</span>}
+                    {r.tipo === "imagem" && r.data ? <img src={r.data} alt="" className="size-5 rounded object-cover" /> : <span className="text-muted">{r.tipo === "pagina" ? <Globe className="size-3.5" /> : <Paperclip className="size-3.5" />}</span>}
                     <span className="max-w-40 truncate" title={r.nome}>{r.nome}</span>
                     {r.tipo === "pagina" && !!r.blocos && (
                       <button onClick={() => setCaptura(r)} disabled={!projeto?.html || rodando}
@@ -1267,127 +1274,226 @@ export default function DesignView(props: {
       </div>
 
       {/* Canvas */}
-      <div className="flex min-w-0 flex-1 flex-col bg-side">
-        {/* sem espaço, a barra quebra em duas linhas (nunca no meio de um rótulo) em vez de cortar os menus */}
-        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-1 border-b border-line px-3 py-1 text-xs whitespace-nowrap text-muted">
-          <button onClick={() => setCamadas((v) => !v)} aria-pressed={camadas} disabled={!srcBase} title="Árvore de elementos da página"
-                  className={`rounded-lg px-2 py-1 disabled:opacity-30 ${camadas ? "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}>
-            Camadas
-          </button>
-          <div className="relative">
-            <button onClick={() => setAbrirZoom((v) => !v)} disabled={!srcBase} title="Zoom só da página gerada"
-                    className="rounded-lg px-1.5 py-1 font-mono text-fg hover:bg-raised disabled:opacity-40">
-              {Math.round(zoom * 100)}%
+      <div className="@container/canvas flex min-w-0 flex-1 flex-col bg-side">
+        {/* Barra do canvas: quatro grupos que nunca quebram por dentro (sem espaço, quebra entre grupos).
+            Ferramentas | histórico | visualização | saída. O que depende do documento ou da seleção fica
+            na barra de contexto logo abaixo. */}
+        <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-line px-3 py-1.5 text-[12.5px] whitespace-nowrap text-muted">
+          <div className="flex shrink-0 items-center gap-1">
+            <button onClick={() => setPrefs((p) => ({ ...p, chatOculto: !p.chatOculto }))} aria-pressed={!prefs.chatOculto}
+                    aria-label={prefs.chatOculto ? "Mostrar o chat" : "Esconder o chat"} title={prefs.chatOculto ? "Mostrar o chat" : "Esconder o chat (o canvas fica com a largura toda)"}
+                    className={`${ico} ${prefs.chatOculto ? "" : "bg-raised! text-fg!"}`}>
+              <PanelLeft className="size-4" />
             </button>
-            {abrirZoom && (
-              <div className="absolute top-full left-0 z-30 mt-1 w-40 rounded-xl border border-line bg-surface p-1 shadow-xl" role="menu" aria-label="Zoom"
-                   onMouseLeave={() => setAbrirZoom(false)}>
-                <div className="flex items-center gap-1 px-1 pb-1">
-                  <button className={btn} title="Diminuir" disabled={zoom <= ZOOMS[0]} onClick={() => setZoom((z) => ZOOMS.filter((x) => x < z).pop() ?? z)}><Minus className="size-3.5" /></button>
-                  <span className="flex-1 text-center font-mono text-fg">{Math.round(zoom * 100)}%</span>
-                  <button className={btn} title="Aumentar" disabled={zoom >= ZOOMS[ZOOMS.length - 1]} onClick={() => setZoom((z) => ZOOMS.find((x) => x > z) ?? z)}><Plus className="size-3.5" /></button>
-                </div>
-                {ZOOMS.map((z) => (
-                  <button key={z} role="menuitemradio" aria-checked={zoom === z} onClick={() => { setZoom(z); setAbrirZoom(false); }}
-                          className={`flex w-full items-center rounded-lg px-2.5 py-1 text-left font-mono ${zoom === z ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}>
-                    {Math.round(z * 100)}%{z === 1 && <span className="ml-auto font-sans text-faint">real</span>}
+            <div className={seg} role="group" aria-label="Modo do canvas">
+              {([["inspect", "Inspecionar", Mira, "Inspecionar: clique para selecionar e pedir mudanças à IA · Ctrl+Shift+C", alternarInspecao],
+                 ["comment", "Comentar", Bubble, "Comentar: clique num elemento e escreva; o comentário entra na fila · Ctrl+Shift+M", alternarComentario],
+                 ["edit", "Editar", Edit, "Editar: mude cor, fonte, espaçamento e posição direto, sem IA", alternarEdicao]] as const)
+                .map(([id, rotuloModo, Icone, dica, alterna]) => (
+                  <button key={id} aria-pressed={modo === id} title={ladoALado ? "No lado a lado é só visualização: abra uma largura para editar" : dica}
+                          aria-label={rotuloModo} disabled={!srcBase || ladoALado} onClick={alterna} className={segBtn(modo === id)}>
+                    <Icone className={`size-3.5 ${modo === id ? (id === "comment" ? "text-amber-300" : "text-accent-text") : ""}`} />
+                    <span className="hidden @2xl/canvas:inline">{rotuloModo}</span>
+                  </button>
+                ))}
+            </div>
+            <button onClick={() => setCamadas((v) => !v)} aria-pressed={camadas} disabled={!srcBase || ladoALado} title="Camadas: a árvore de elementos da página"
+                    aria-label="Camadas" className={`${ico} ${camadas ? "bg-raised! text-fg!" : ""}`}>
+              <CamadasIcone className="size-4" />
+            </button>
+          </div>
+          <span className="h-5 w-px shrink-0 bg-line" />
+          <div className="relative flex shrink-0 items-center gap-1">
+            <button className={ico} aria-label="Desfazer" title={projeto?.rascunho ? "Desfazer o último ajuste do rascunho · Ctrl+Z" : "Voltar para a versão de onde esta nasceu · Ctrl+Z"}
+                    disabled={rodando || !(projeto?.edicao.desfazer || (!projeto?.rascunho && paiDe(atual)))} onClick={desfazer}>
+              <Undo />
+            </button>
+            <button className={ico} aria-label="Refazer" title={projeto?.edicao.refazer ? "Refazer no rascunho · Ctrl+Shift+Z" : "Ir para a versão mais nova que nasceu desta · Ctrl+Shift+Z"}
+                    disabled={rodando || !(projeto?.edicao.refazer || (!projeto?.rascunho && filhoDe(atual)))} onClick={refazer}>
+              <Undo className="size-4 -scale-x-100" />
+            </button>
+            <button onClick={() => { setAba("versoes"); versoes.slice(0, 12).forEach((m) => htmlDaVersao(m.versao!)); }} disabled={!total}
+                    title="Abrir o histórico de versões" className={`${tb} font-mono text-[12px]`}>
+              {total ? `v${atual}/${total}` : "sem versões"}
+            </button>
+            {projeto?.rascunho ? (
+              <>
+                <span className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 text-[12px] text-amber-200"
+                      title={projeto.rascunho.passos.slice(-8).join("\n")}>
+                  <span className="size-1.5 rounded-full bg-amber-400" aria-hidden />
+                  Rascunho · {projeto.rascunho.mudancas}
+                </span>
+                <button onClick={() => setAbrirSalvar((v) => !v)} disabled={rodando} title="Salvar o rascunho como versão nova · Ctrl+S"
+                        className="inline-flex h-7 items-center rounded-lg bg-accent px-2.5 text-[12.5px] font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
+                  Salvar versão
+                </button>
+                <button onClick={() => acaoRascunho("descartar")} disabled={rodando} title="Joga fora os ajustes do rascunho e volta para a versão" className={tb}>
+                  Descartar
+                </button>
+                {abrirSalvar && (
+                  <div className="absolute top-full left-0 z-30 mt-1.5 w-72 rounded-xl border border-line bg-surface p-2.5 shadow-popover" role="dialog" aria-label="Salvar versão">
+                    <input autoFocus value={nomeVersao} onChange={(e) => setNomeVersao(e.target.value)} placeholder={`Nome da v${total + 1} (opcional)`}
+                           aria-label="Nome da versão" maxLength={80}
+                           onKeyDown={(e) => { if (e.key === "Enter") salvarVersao(); else if (e.key === "Escape") setAbrirSalvar(false); }}
+                           className={campoPop} />
+                    <ul className="mt-2 max-h-40 space-y-0.5 overflow-y-auto text-[11.5px] leading-snug text-faint">
+                      {projeto.rascunho.passos.slice(-8).map((x, i) => <li key={i} className="truncate">{x}</li>)}
+                    </ul>
+                    <div className="mt-2 flex justify-end gap-1.5">
+                      <button onClick={() => setAbrirSalvar(false)} className={tb}>Cancelar</button>
+                      <button onClick={salvarVersao} className="inline-flex h-7 items-center rounded-lg bg-accent px-2.5 font-medium text-accent-fg hover:brightness-110">Salvar v{total + 1}</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : atual > 0 && atual < total && !rodando ? (
+              <button onClick={() => restaurar(atual)} title="Copia esta versão para o topo do histórico" className={tb}>
+                Restaurar como v{total + 1}
+              </button>
+            ) : null}
+          </div>
+          <span className="min-w-2 flex-1" />
+          <div className="flex shrink-0 items-center gap-1">
+            {!nSlides && (
+              <div className={seg} role="radiogroup" aria-label="Largura">
+                {VIEWPORTS.map((v) => (
+                  <button key={v.id} role="radio" aria-checked={viewport === v.id} onClick={() => escolherViewport(v.id)} aria-label={v.label}
+                          title={v.largura ? `${v.label} · ${v.largura}px` : v.id === "lado" ? "Lado a lado · as três larguras juntas (só visualização)" : "Desktop · a largura do canvas"}
+                          className={`${segBtn(viewport === v.id)} px-1.5!`}>
+                    <v.Icone className="size-4" />
                   </button>
                 ))}
               </div>
             )}
-          </div>
-          <div className="flex items-center gap-0.5 rounded-lg border border-line p-0.5" role="group" aria-label="Modo do canvas">
-            {([["inspect", "Inspecionar", Mira, "Inspecionar elementos · Ctrl+Shift+C", alternarInspecao],
-               ["comment", "Comentar", Bubble, "Comentar: clique num elemento e escreva; o comentário entra na fila · Ctrl+Shift+M", alternarComentario],
-               ["edit", "Editar", Edit, "Editar: clique num elemento e mude cor, fonte, espaçamento… direto, sem IA", alternarEdicao]] as const)
-              .map(([id, rotuloModo, Icone, dica, alterna]) => (
-                <button key={id} aria-pressed={modo === id} title={ladoALado ? "No lado a lado é só visualização: abra uma largura para editar" : dica}
-                        disabled={!srcBase || ladoALado} onClick={alterna}
-                        className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 disabled:opacity-30 ${modo === id
-                          ? id === "comment" ? "bg-amber-500/15 text-amber-300" : "bg-accent-soft text-accent-text" : "text-muted hover:bg-raised hover:text-fg"}`}>
-                  <Icone className="size-3.5" /> {rotuloModo}
-                </button>
-              ))}
-          </div>
-          {(modo === "inspect" || modo === "comment" || modo === "edit") && (
-            <button onClick={() => setMulti((v) => !v)} aria-pressed={multi}
-                    title="Cada clique soma (ou tira) um elemento da seleção — o mesmo que Shift/Ctrl+clique"
-                    className={`rounded-lg border px-2 py-1 ${multi ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:bg-raised"}`}>
-              Múltipla
-            </button>
-          )}
-          {!!selecao && (
-            <button onClick={() => paraIframe(janela(), { type: "semelhantes", fid: selecao.fid })}
-                    title={`Seleciona todos os ${rotulo(selecao.itens[selecao.itens.length - 1] ?? { tag: selecao.tag, cls: "" })} iguais a este (mesma tag e classes)`}
-                    className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
-              Semelhantes{selecao.itens.length > 1 ? ` · ${selecao.itens.length}` : ""}
-            </button>
-          )}
-          <span className="mx-1 h-5 w-px bg-line" />
-          <button className={btn} title={projeto?.rascunho ? "Desfazer o último ajuste do rascunho · Ctrl+Z" : "Voltar para a versão de onde esta nasceu · Ctrl+Z"}
-                  disabled={rodando || !(projeto?.edicao.desfazer || (!projeto?.rascunho && paiDe(atual)))} onClick={desfazer}>
-            <Undo />
-          </button>
-          <button className={btn} title={projeto?.edicao.refazer ? "Refazer no rascunho · Ctrl+Shift+Z" : "Ir para a versão mais nova que nasceu desta · Ctrl+Shift+Z"}
-                  disabled={rodando || !(projeto?.edicao.refazer || (!projeto?.rascunho && filhoDe(atual)))} onClick={refazer}>
-            <Undo className="size-4 -scale-x-100" />
-          </button>
-          <span className="ml-1.5">{total ? `v${atual} de ${total}` : "sem versões"}</span>
-          {projeto?.rascunho && (
-            <div className="relative flex items-center gap-1">
-              <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-amber-300" title={projeto.rascunho.passos.slice(-8).join("\n")}>
-                + rascunho · {projeto.rascunho.mudancas} {projeto.rascunho.mudancas === 1 ? "ajuste" : "ajustes"}
-              </span>
-              <button onClick={() => setAbrirSalvar((v) => !v)} disabled={rodando} title="Salvar o rascunho como versão nova · Ctrl+S"
-                      className="rounded-lg bg-accent px-2 py-1 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-                Salvar versão
+            <div className="relative">
+              <button onClick={() => setAbrirZoom((v) => !v)} disabled={!srcBase} title="Zoom só da página gerada" aria-expanded={abrirZoom}
+                      className={`${tb} w-14 justify-center font-mono text-[12px]`}>
+                {Math.round(zoom * 100)}%
               </button>
-              <button onClick={() => acaoRascunho("descartar")} disabled={rodando} title="Joga fora os ajustes do rascunho e volta para a versão"
-                      className="rounded-lg px-1.5 py-1 text-muted hover:bg-raised hover:text-fg disabled:opacity-40">
-                Descartar
-              </button>
-              {abrirSalvar && (
-                <div className="absolute top-full left-0 z-30 mt-1 w-72 rounded-xl border border-line bg-surface p-2 shadow-xl" role="dialog" aria-label="Salvar versão">
-                  <input autoFocus value={nomeVersao} onChange={(e) => setNomeVersao(e.target.value)} placeholder={`Nome da v${total + 1} (opcional)`}
-                         aria-label="Nome da versão" maxLength={80}
-                         onKeyDown={(e) => { if (e.key === "Enter") salvarVersao(); else if (e.key === "Escape") setAbrirSalvar(false); }}
-                         className="w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
-                  <ul className="mt-1.5 max-h-40 overflow-y-auto text-[11.5px] leading-snug text-faint">
-                    {projeto.rascunho.passos.slice(-8).map((x, i) => <li key={i} className="truncate">· {x}</li>)}
-                  </ul>
-                  <div className="mt-1.5 flex justify-end gap-1.5">
-                    <button onClick={() => setAbrirSalvar(false)} className="rounded-lg px-2 py-0.5 text-muted hover:text-fg">Cancelar</button>
-                    <button onClick={salvarVersao} className="rounded-lg bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110">Salvar v{total + 1}</button>
+              {abrirZoom && (
+                <div className="absolute top-full right-0 z-30 mt-1.5 w-40 rounded-xl border border-line bg-surface p-1 shadow-popover" role="menu" aria-label="Zoom"
+                     onMouseLeave={() => setAbrirZoom(false)}>
+                  <div className="flex items-center gap-1 px-1 pb-1">
+                    <button className={ico} aria-label="Diminuir" disabled={zoom <= ZOOMS[0]} onClick={() => setZoom((z) => ZOOMS.filter((x) => x < z).pop() ?? z)}><Minus className="size-3.5" /></button>
+                    <span className="flex-1 text-center font-mono text-fg">{Math.round(zoom * 100)}%</span>
+                    <button className={ico} aria-label="Aumentar" disabled={zoom >= ZOOMS[ZOOMS.length - 1]} onClick={() => setZoom((z) => ZOOMS.find((x) => x > z) ?? z)}><Plus className="size-3.5" /></button>
                   </div>
+                  {ZOOMS.map((z) => (
+                    <button key={z} role="menuitemradio" aria-checked={zoom === z} onClick={() => { setZoom(z); setAbrirZoom(false); }}
+                            className={`flex w-full items-center rounded-lg px-2.5 py-1 text-left font-mono ${zoom === z ? "bg-raised text-fg" : "text-muted hover:bg-raised hover:text-fg"}`}>
+                      {Math.round(z * 100)}%{z === 1 && <span className="ml-auto font-sans text-faint">real</span>}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-          )}
-          {atual > 0 && atual < total && !rodando && !projeto?.rascunho && (
-            <button onClick={() => restaurar(atual)} title="Copia esta versão para o topo do histórico"
-                    className="ml-2 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
-              Restaurar como v{total + 1}
-            </button>
-          )}
-          <span className="mx-1 h-5 w-px bg-line" />
-          {telas.length ? (
-            // protótipo: uma tela por vez; no modo de visualização, os botões navegam de verdade
-            <div className="flex max-w-[40%] items-center gap-0.5 overflow-x-auto rounded-lg border border-line p-0.5" role="tablist" aria-label="Telas">
-              {telas.map((t) => (
-                <button key={t} role="tab" aria-selected={(tela || telas[0]) === t} onClick={() => paraIframe(janela(), { type: "setTela", nome: t })}
-                        className={`shrink-0 rounded-md px-2 py-0.5 font-mono text-[11.5px] ${(tela || telas[0]) === t ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                  {t}
-                </button>
-              ))}
+          </div>
+          <span className="h-5 w-px shrink-0 bg-line" />
+          <div className="flex shrink-0 items-center gap-1">
+            {!!projeto?.imagens.total && projeto.imagens.disponivel && (
+              <button onClick={gerarImagens} disabled={rodando} aria-label="Gerar imagens"
+                      title={projeto.imagens.pendentes ? `Espaços de imagem ainda vazios: ${projeto.imagens.nomes.join(", ")}` : "Abre a conversa de Imagens deste design"}
+                      className={tb}>
+                <Image className="size-3.5" />
+                {projeto.imagens.pendentes ? (
+                  <><span className="hidden @6xl/canvas:inline">Gerar imagens</span> <span className="rounded-full bg-accent-soft px-1.5 text-[11px] leading-5 text-accent-text">{projeto.imagens.pendentes}</span></>
+                ) : <span className="hidden @6xl/canvas:inline">Imagens</span>}
+              </button>
+            )}
+            <div className="relative">
+              <button onClick={() => setAbrirApresentar((v) => !v)} disabled={!srcBase} aria-expanded={abrirApresentar} aria-label="Apresentar" title="Apresentar" className={tb}>
+                <Play className="size-3.5" /> <span className="hidden @5xl/canvas:inline">Apresentar</span> <ChevronDown className="size-3" />
+              </button>
+              {abrirApresentar && (
+                <div className="absolute top-full right-0 z-30 mt-1.5 w-60 rounded-xl border border-line bg-surface p-1 shadow-popover" role="menu" aria-label="Apresentar"
+                     onMouseLeave={() => setAbrirApresentar(false)}>
+                  {([["janela", "Nesta janela", Play, "Só a página, ocupando o app inteiro"],
+                     ["tela", "Tela cheia", TelaCheia, "O app em tela cheia mostrando só a página"],
+                     ["navegador", "Nova janela", ExternalLink, "Abre no navegador do computador"]] as const).map(([id, rotuloAp, Icone, dica]) => (
+                    <button key={id} role="menuitem" onClick={() => { setAbrirApresentar(false); if (id === "navegador") abrirNoNavegador(); else setApresentando(id); }}
+                            className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
+                      <Icone className="size-4 shrink-0 text-muted" />
+                      <span className="min-w-0">
+                        <span className="block text-[13px] text-fg">{rotuloAp}</span>
+                        <span className="block text-[11.5px] text-faint">{dica}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          ) : null}
+            <div className="relative">
+              <button onClick={() => setAbrirExport((v) => !v)} disabled={!srcBase || !!exportando} aria-expanded={abrirExport} aria-label="Exportar" title="Exportar" className={tb}>
+                <Download className="size-3.5" /> <span className={exportando ? "" : "hidden @5xl/canvas:inline"}>{exportando ? `Exportando ${exportando.toUpperCase()}…` : "Exportar"}</span> {!exportando && <ChevronDown className="size-3" />}
+              </button>
+              {abrirExport && (
+                <div className="absolute top-full right-0 z-30 mt-1.5 w-64 rounded-xl border border-line bg-surface p-1 shadow-popover">
+                  {EXPORTS.filter((x) => x.formato !== "pptx" || nSlides).map((x) => (
+                    <button key={x.label} onClick={() => exportar(x.formato, x.fids)}
+                            className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
+                      <span className="block text-[13px] text-fg">{x.label}{x.formato === "png" && nSlides ? ` · slide ${slides.atual}` : ""}</span>
+                      <span className="block text-[11.5px] text-faint">{x.hint}</span>
+                    </button>
+                  ))}
+                  {nomeModelo === null ? (
+                    <button onClick={() => setNomeModelo(projeto?.titulo ?? "")} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
+                      <span className="block text-[13px] text-fg">Salvar como modelo…</span>
+                      <span className="block text-[11.5px] text-faint">Guarda o que está no canvas para começar outros projetos dele, sem IA</span>
+                    </button>
+                  ) : (
+                    <form onSubmit={(e) => { e.preventDefault(); salvarModelo(); }} className="mt-1 flex items-center gap-1.5 border-t border-line px-2 pt-2 pb-1">
+                      <input autoFocus value={nomeModelo} onChange={(e) => setNomeModelo(e.target.value)} placeholder="Nome do modelo" aria-label="Nome do modelo" maxLength={80}
+                             onKeyDown={(e) => { if (e.key === "Escape") setNomeModelo(null); }} className={`${campoPop} min-w-0 flex-1`} />
+                      <button type="submit" disabled={!nomeModelo.trim()} className="inline-flex h-7 items-center rounded-lg bg-accent px-2.5 text-xs font-medium text-accent-fg disabled:opacity-40">Salvar</button>
+                    </form>
+                  )}
+                  <button onClick={mandarParaAgente} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
+                    <span className="flex items-center gap-1.5 text-[13px] text-fg"><Code className="size-3.5" /> Mandar para o Agente…</span>
+                    <span className="block text-[11.5px] text-faint">Grava o pacote (HTML, tokens, imagens, README) na pasta do projeto e abre o Agente com o pedido pronto</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Barra de contexto: à esquerda, onde você está no documento (páginas, telas, slides); no meio,
+            o caminho da seleção (clicar sobe para aquele ancestral) ou a dica do modo; à direita, o que
+            dá para fazer com a seleção. */}
+        <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-line px-3 py-1 text-[12px] whitespace-nowrap text-faint">
+          {!!telas.length && (
+            <div className="flex shrink-0 items-center gap-1">
+              <div className={`${seg} max-w-80 overflow-x-auto [scrollbar-width:none]`} role="tablist" aria-label="Telas">
+                {telas.map((t) => (
+                  <button key={t} role="tab" aria-selected={(tela || telas[0]) === t} onClick={() => paraIframe(janela(), { type: "setTela", nome: t })}
+                          className={segBtn((tela || telas[0]) === t)}>
+                    {t}
+                  </button>
+                ))}
+              </div>
+              <button onClick={() => setFluxo((v) => !v)} aria-pressed={fluxo} title="Mapa das telas e de quem leva a quem" className={`${tb} ${fluxo ? "bg-raised! text-fg!" : ""}`}>
+                Fluxo
+              </button>
+            </div>
+          )}
+          {!!nSlides && (
+            <div className="flex shrink-0 items-center gap-1" aria-label="Slides">
+              <button className={ico} aria-label="Slide anterior" title="Slide anterior · ←" disabled={slides.atual <= 1} onClick={() => irSlide(slides.atual - 1)}>
+                <ArrowLeft className="size-4" />
+              </button>
+              <span className="font-mono text-muted">{slides.atual} / {slides.total || nSlides}</span>
+              <button className={ico} aria-label="Próximo slide" title="Próximo slide · →" disabled={slides.atual >= (slides.total || nSlides)} onClick={() => irSlide(slides.atual + 1)}>
+                <ArrowRight className="size-4" />
+              </button>
+            </div>
+          )}
           {!telas.length && !nSlides && !!srcBase && (
-            <div className="relative flex items-center gap-0.5">
+            <div className="relative flex shrink-0 items-center gap-1">
               {paginas.length > 0 && (
-                <div className="flex max-w-72 shrink-0 items-center gap-0.5 overflow-x-auto rounded-lg border border-line p-0.5" role="tablist" aria-label="Páginas">
+                <div className={`${seg} max-w-80 overflow-x-auto [scrollbar-width:none]`} role="tablist" aria-label="Páginas">
                   {paginas.map((p) => (
                     <button key={p} role="tab" aria-selected={(paginaAtual || paginas[0]) === p} onClick={() => paraIframe(janela(), { type: "setPagina", nome: p })}
-                            className={`shrink-0 rounded-md px-2 py-0.5 text-[11.5px] ${(paginaAtual || paginas[0]) === p ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                            className={segBtn((paginaAtual || paginas[0]) === p)}>
                       /{p}
                     </button>
                   ))}
@@ -1395,7 +1501,9 @@ export default function DesignView(props: {
               )}
               <button onClick={() => setNovaPagina((v) => (v ? null : { nome: "", desc: "" }))} disabled={rodando}
                       title={paginas.length ? "Nova página no site (a IA escreve; o link vai para o menu)" : "Transformar em site com várias páginas: esta vira “inicio” e a IA cria a nova"}
-                      className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">+ Página</button>
+                      className={tb}>
+                <Plus className="size-3.5" /> Página
+              </button>
               {novaPagina && (
                 <form role="dialog" aria-label="Nova página" onSubmit={(e) => {
                         e.preventDefault();
@@ -1406,153 +1514,71 @@ export default function DesignView(props: {
                         pedir({ rota: "secao", secao: nome, pagina: nome,
                                 pedido: `Crie a página “${novaPagina.nome.trim()}” do site${novaPagina.desc.trim() ? `: ${novaPagina.desc.trim()}` : "."}` });
                       }}
-                      className="absolute top-full left-0 z-30 mt-1 w-80 rounded-xl border border-line bg-surface p-2.5 shadow-xl">
+                      className="absolute top-full left-0 z-30 mt-1.5 w-80 rounded-xl border border-line bg-surface p-2.5 whitespace-normal shadow-popover">
                   <input autoFocus value={novaPagina.nome} onChange={(e) => setNovaPagina({ ...novaPagina, nome: e.target.value })}
-                         placeholder="Nome da página (ex.: Sobre, Contato)" aria-label="Nome da página" maxLength={40}
-                         className="w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
+                         placeholder="Nome da página (ex.: Sobre, Contato)" aria-label="Nome da página" maxLength={40} className={campoPop} />
                   <textarea value={novaPagina.desc} onChange={(e) => setNovaPagina({ ...novaPagina, desc: e.target.value })} rows={3}
-                            placeholder="O que tem nela (opcional)" aria-label="O que tem na página"
-                            className="mt-1.5 w-full resize-none rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
-                  <p className="mt-1 text-[11px] leading-snug text-faint">
+                            placeholder="O que tem nela (opcional)" aria-label="O que tem na página" className={`${campoPop} mt-1.5 resize-none`} />
+                  <p className="mt-1.5 text-[11.5px] leading-snug text-faint">
                     {paginas.length ? "Cabeçalho e rodapé aparecem em todas." : "A página de agora vira /inicio; cabeçalho e rodapé passam a valer para todas."}
                     {" "}O link “#/{slugPagina(novaPagina.nome) || "nome"}” entra no menu.
                   </p>
-                  <div className="mt-1.5 flex justify-end gap-1.5">
-                    <button type="button" onClick={() => setNovaPagina(null)} className="rounded-lg px-2 py-0.5 text-muted hover:text-fg">Cancelar</button>
-                    <button type="submit" disabled={!slugPagina(novaPagina.nome)} className="rounded-lg bg-accent px-2.5 py-0.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">Criar página</button>
+                  <div className="mt-2 flex justify-end gap-1.5">
+                    <button type="button" onClick={() => setNovaPagina(null)} className={tb}>Cancelar</button>
+                    <button type="submit" disabled={!slugPagina(novaPagina.nome)} className="inline-flex h-7 items-center rounded-lg bg-accent px-2.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">Criar página</button>
                   </div>
                 </form>
               )}
             </div>
           )}
-          {!!telas.length && (
-            <button onClick={() => setFluxo((v) => !v)} aria-pressed={fluxo} title="Mapa das telas e de quem leva a quem"
-                    className={`rounded-lg border px-2 py-1 ${fluxo ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:bg-raised"}`}>
-              Fluxo
-            </button>
-          )}
-          {telas.length ? null : nSlides ? (
-            // deck: navegação (← → também funcionam dentro do canvas)
-            <>
-              <button className={btn} title="Slide anterior · ←" disabled={slides.atual <= 1} onClick={() => irSlide(slides.atual - 1)}>
-                <ArrowLeft className="size-4" />
-              </button>
-              <span className="font-mono">{slides.atual} / {slides.total || nSlides}</span>
-              <button className={btn} title="Próximo slide · →" disabled={slides.atual >= (slides.total || nSlides)} onClick={() => irSlide(slides.atual + 1)}>
-                <ArrowRight className="size-4" />
-              </button>
-            </>
-          ) : (
-            <div className="flex rounded-lg border border-line p-0.5" role="radiogroup" aria-label="Viewport">
-              {VIEWPORTS.map((v) => (
-                <button key={v.id} role="radio" aria-checked={viewport === v.id} onClick={() => escolherViewport(v.id)}
-                        title={v.largura ? `${v.largura} px de largura` : "Largura do canvas"}
-                        className={`rounded-md px-2 py-0.5 ${viewport === v.id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <span className="flex-1" />
-          {!!projeto?.imagens.total && projeto.imagens.disponivel && (
-            <button onClick={gerarImagens} disabled={rodando}
-                    title={projeto.imagens.pendentes ? `Slots sem imagem: ${projeto.imagens.nomes.join(", ")}` : "Abre a conversa de Imagens deste design"}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 disabled:opacity-40 ${projeto.imagens.pendentes
-                      ? "bg-accent font-medium text-accent-fg hover:brightness-110" : "border border-line text-fg hover:bg-raised"}`}>
-              <Image className="size-3.5" />
-              {projeto.imagens.pendentes ? `Gerar ${projeto.imagens.pendentes} ${projeto.imagens.pendentes === 1 ? "imagem" : "imagens"}` : "Ver imagens"}
-            </button>
-          )}
-          <div className="relative">
-            <button onClick={() => setAbrirApresentar((v) => !v)} disabled={!srcBase} aria-expanded={abrirApresentar}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">
-              Apresentar <ChevronDown className="size-3.5" />
-            </button>
-            {abrirApresentar && (
-              <div className="absolute top-full right-0 z-30 mt-1 w-60 rounded-xl border border-line bg-surface p-1 shadow-xl" role="menu" aria-label="Apresentar"
-                   onMouseLeave={() => setAbrirApresentar(false)}>
-                {([["janela", "Nesta janela", Play, "Só a página, ocupando o app inteiro"],
-                   ["tela", "Tela cheia", TelaCheia, "O app em tela cheia mostrando só a página"],
-                   ["navegador", "Nova janela", ExternalLink, "Abre no navegador do computador"]] as const).map(([id, rotuloAp, Icone, dica]) => (
-                  <button key={id} role="menuitem" onClick={() => { setAbrirApresentar(false); if (id === "navegador") abrirNoNavegador(); else setApresentando(id); }}
-                          className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
-                    <Icone className="size-4 shrink-0 text-muted" />
-                    <span className="min-w-0">
-                      <span className="block text-[13px] text-fg">{rotuloAp}</span>
-                      <span className="block text-[11.5px] text-faint">{dica}</span>
-                    </span>
-                  </button>
+          {(!!telas.length || !!nSlides || !!srcBase) && <span className="h-4 w-px shrink-0 bg-line" />}
+          <nav aria-label="Caminho do elemento" className="flex min-w-48 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]">
+            {selecao ? (
+              <>
+                {selecao.path.map((n, i) => (
+                  <span key={n.fid} className="flex shrink-0 items-center gap-0.5">
+                    {i > 0 && <span className="text-line-strong">›</span>}
+                    <button onClick={() => selecionar([n.fid])} title={`data-fid=${n.fid}`}
+                            className={`rounded px-1 py-0.5 font-mono text-[11.5px] hover:bg-raised hover:text-fg ${n.fid === selecao.fid ? "text-accent-text" : ""}`}>
+                      {rotulo(n)}
+                    </button>
+                  </span>
                 ))}
-              </div>
+                {selecao.itens.length > 1 && <span className="ml-1.5 shrink-0 text-accent-text">+{selecao.itens.length - 1} selecionados</span>}
+              </>
+            ) : (
+              <span className="truncate">{rodando && geracao?.modo === "documento" ? "Gerando: o canvas mostra o documento parcial"
+                : rodando && geracao?.modo === "etapas" ? `Gerando seções: ${geracao.n ?? 0} de ${geracao.secoes?.length ?? "?"}`
+                : modo === "edit" ? "Clique num elemento para editar · arraste para mover · alças redimensionam · duplo clique edita o texto"
+                : modo === "comment" ? "Clique num elemento e escreva o comentário · Shift+clique junta vários"
+                : modo === "inspect" ? "Clique para selecionar e pedir à IA · Shift+clique junta · Alt+clique sobe ao pai · Esc limpa"
+                : srcBase ? "Escolha Inspecionar, Comentar ou Editar para mexer nos elementos · duplo clique edita um texto" : ""}</span>
+            )}
+          </nav>
+          <div className="flex shrink-0 items-center gap-1">
+            {(modo === "inspect" || modo === "comment" || modo === "edit") && (
+              <button onClick={() => setMulti((v) => !v)} aria-pressed={multi}
+                      title="Cada clique soma (ou tira) um elemento da seleção — o mesmo que Shift/Ctrl+clique"
+                      className={`${tb} ${multi ? "bg-raised! text-fg!" : ""}`}>
+                Seleção múltipla
+              </button>
+            )}
+            {!!selecao && (
+              <button onClick={() => paraIframe(janela(), { type: "semelhantes", fid: selecao.fid })}
+                      title={`Seleciona todos os ${rotulo(selecao.itens[selecao.itens.length - 1] ?? { tag: selecao.tag, cls: "" })} iguais a este (mesma tag e classes)`}
+                      className={tb}>
+                Semelhantes{selecao.itens.length > 1 ? ` · ${selecao.itens.length}` : ""}
+              </button>
+            )}
+            {secaoSel && !rodando && (
+              <button onClick={() => pedir({ rota: "secao", secao: secaoSel })}
+                      title={`Gera de novo só a seção ${secaoSel} (o texto do campo, se houver, vai como pedido)`} className={tb}>
+                Refazer seção “{secaoSel}”
+              </button>
             )}
           </div>
-          <div className="relative">
-            <button onClick={() => setAbrirExport((v) => !v)} disabled={!srcBase || !!exportando}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised disabled:opacity-40">
-              <Download className="size-3.5" /> {exportando ? `Exportando ${exportando.toUpperCase()}…` : "Exportar"}
-            </button>
-            {abrirExport && (
-              <div className="absolute top-full right-0 z-30 mt-1 w-64 rounded-xl border border-line bg-surface p-1 shadow-xl">
-                {EXPORTS.filter((x) => x.formato !== "pptx" || nSlides).map((x) => (
-                  <button key={x.label} onClick={() => exportar(x.formato, x.fids)}
-                          className="block w-full rounded-lg px-2.5 py-1.5 text-left hover:bg-raised">
-                    <span className="block text-[13px] text-fg">{x.label}{x.formato === "png" && nSlides ? ` · slide ${slides.atual}` : ""}</span>
-                    <span className="block text-[11.5px] text-faint">{x.hint}</span>
-                  </button>
-                ))}
-                {nomeModelo === null ? (
-                  <button onClick={() => setNomeModelo(projeto?.titulo ?? "")} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
-                    <span className="block text-[13px] text-fg">Salvar como modelo…</span>
-                    <span className="block text-[11.5px] text-faint">Guarda o que está no canvas para começar outros projetos dele, sem IA</span>
-                  </button>
-                ) : (
-                  <form onSubmit={(e) => { e.preventDefault(); salvarModelo(); }} className="mt-1 flex items-center gap-1.5 border-t border-line px-2 pt-2 pb-1">
-                    <input autoFocus value={nomeModelo} onChange={(e) => setNomeModelo(e.target.value)} placeholder="Nome do modelo" aria-label="Nome do modelo" maxLength={80}
-                           onKeyDown={(e) => { if (e.key === "Escape") setNomeModelo(null); }}
-                           className="min-w-0 flex-1 rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none" />
-                    <button type="submit" disabled={!nomeModelo.trim()} className="rounded-lg bg-accent px-2 py-1 text-xs font-medium text-accent-fg disabled:opacity-40">Salvar</button>
-                  </form>
-                )}
-                <button onClick={mandarParaAgente} className="mt-1 block w-full rounded-lg border-t border-line px-2.5 pt-2 pb-1.5 text-left hover:bg-raised">
-                  <span className="flex items-center gap-1.5 text-[13px] text-fg"><Code className="size-3.5" /> Mandar para o Agente…</span>
-                  <span className="block text-[11.5px] text-faint">Grava o pacote (HTML, tokens, imagens, README) na pasta do projeto e abre o Agente com o pedido pronto</span>
-                </button>
-              </div>
-            )}
-          </div>
-          {secaoSel && !rodando && (
-            <button onClick={() => pedir({ rota: "secao", secao: secaoSel })}
-                    title={`Gera de novo só a seção ${secaoSel} (o texto do campo, se houver, vai como pedido)`}
-                    className="rounded-lg border border-line px-2 py-1 text-fg hover:bg-raised">
-              Refazer seção “{secaoSel}”
-            </button>
-          )}
-          {rodando && geracao?.modo === "documento" && <span className="text-faint">o canvas mostra o parcial enquanto gera</span>}
-          {rodando && geracao?.modo === "etapas" && <span className="text-faint">{geracao.n ?? 0} de {geracao.secoes?.length ?? "?"} seções</span>}
         </div>
-        {/* Breadcrumb da seleção: clicar sobe direto para aquele ancestral */}
-        <nav aria-label="Caminho do elemento" className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-3 font-mono text-[11.5px] whitespace-nowrap text-faint">
-          {selecao ? (
-            <>
-              {selecao.path.map((n, i) => (
-                <span key={n.fid} className="flex items-center gap-1">
-                  {i > 0 && <span>›</span>}
-                  <button onClick={() => selecionar([n.fid])} title={`data-fid=${n.fid}`}
-                          className={`rounded px-1 hover:bg-raised hover:text-fg ${n.fid === selecao.fid ? "text-accent-text" : ""}`}>
-                    {rotulo(n)}
-                  </button>
-                </span>
-              ))}
-              {selecao.itens.length > 1 && <span className="ml-2 text-accent-text">+{selecao.itens.length - 1} selecionados</span>}
-            </>
-          ) : (
-            <span>{modo === "edit" ? "Modo Editar: clique num elemento e mude as propriedades no painel · Shift/Ctrl+clique junta vários · duplo clique edita o texto"
-              : modo === "comment" ? "Modo comentário: clique no elemento e escreva na caixa que abre · Shift/Ctrl+clique (ou Múltipla) junta vários num comentário só"
-              : modo === "inspect" ? "Clique num elemento · Shift/Ctrl+clique (ou Múltipla) junta vários · Semelhantes pega os iguais · Alt+clique ou ↑ sobe · ↓ volta · Esc limpa"
-              : "Nenhum elemento selecionado · duplo clique num texto edita direto"}</span>
-          )}
-        </nav>
-        <div className="flex min-h-0 flex-1">
+        <div className="@container/area relative flex min-h-0 flex-1">
         {camadas && (
           <DesignCamadas nos={nosCamadas} selecionados={selecao?.itens.map((i) => i.fid) ?? []}
                          onSelecionar={(fids) => { selecionar(fids); if (fids.length) paraIframe(janela(), { type: "scrollTo", fid: fids[fids.length - 1] }); }}
@@ -1658,7 +1684,7 @@ export default function DesignView(props: {
                         onOperar={(op, valor) => operar(op, selecao.itens.map((i) => i.fid), { valor })}
                         onFechar={() => setModo("view")} />
         ) : (
-          <aside aria-label="Editar elemento" className="grid w-72 shrink-0 place-items-center border-l border-line bg-surface px-6 text-center text-[12.5px] text-faint">
+          <aside aria-label="Editar elemento" className={`grid w-72 shrink-0 place-items-center border-l border-line bg-surface px-6 text-center text-[12.5px] text-faint ${PAINEL_FLUTUA_DIR}`}>
             Clique num elemento da página para editar cor, fonte, tamanho e espaçamento. Shift+clique ou Semelhantes edita vários juntos.
           </aside>
         ))}

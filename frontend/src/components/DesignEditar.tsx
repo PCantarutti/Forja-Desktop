@@ -5,6 +5,9 @@ import { X } from "./icons";
 // propriedades. Cada mudança aparece na hora no canvas (prévia no style do nó) e, 700 ms depois do
 // último movimento, entra no rascunho pelo backend — sem modelo nenhum. Versão só quando você salvar.
 
+// abaixo de ~720px de área, os painéis laterais (Camadas, Editar) flutuam sobre o canvas em vez de espremê-lo
+export const PAINEL_FLUTUA_DIR = "@max-3xl/area:absolute @max-3xl/area:inset-y-2 @max-3xl/area:right-2 @max-3xl/area:z-20 @max-3xl/area:rounded-xl @max-3xl/area:border @max-3xl/area:shadow-popover";
+export const PAINEL_FLUTUA_ESQ = "@max-3xl/area:absolute @max-3xl/area:inset-y-2 @max-3xl/area:left-2 @max-3xl/area:z-20 @max-3xl/area:rounded-xl @max-3xl/area:border @max-3xl/area:shadow-popover";
 const SALVAR_MS = 700;
 const FONTES = ["system-ui, sans-serif", "'Segoe UI', system-ui, sans-serif", "Georgia, serif", "'Times New Roman', serif",
   "'Trebuchet MS', sans-serif", "Verdana, sans-serif", "ui-monospace, monospace"];
@@ -103,7 +106,7 @@ export default function DesignEditar(props: {
   const titulo = "font-mono text-[10.5px] tracking-[.08em] text-faint uppercase";
 
   return (
-    <aside aria-label="Editar elemento" className="flex w-72 shrink-0 flex-col border-l border-line bg-surface text-[12px]">
+    <aside aria-label="Editar elemento" className={`flex w-72 shrink-0 flex-col overflow-hidden border-l border-line bg-surface text-[12px] ${PAINEL_FLUTUA_DIR}`}>
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
         <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-fg">{props.n > 1 ? `${props.n} elementos` : props.rotulo}</span>
         <button onClick={props.onFechar} title="Sair do modo Editar" className="grid size-6 place-items-center rounded text-muted hover:bg-raised hover:text-fg">
@@ -115,7 +118,7 @@ export default function DesignEditar(props: {
         {props.escopo === "desktop" ? "Vale para todas as larguras (Desktop)."
           : props.escopo === "tablet" ? "Vale só para Tablet e menores (até 820px)."
           : "Vale só para Celular (até 480px)."}
-        <span className="text-faint"> Vendo a {Math.round(props.larguraVista)}px; troque Desktop/Tablet/Celular no topo para editar outra largura.</span>
+        <span className="text-faint"> Troque Desktop/Tablet/Celular no topo para editar outra largura.</span>
       </div>
       <div className="flex flex-wrap gap-1.5 border-b border-line px-3 py-2">
         <button onClick={() => props.onOperar("duplicar")} title="Duplicar · Ctrl+D" className={acao}>Duplicar</button>

@@ -58,6 +58,12 @@ export const Undo = base(<><path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 
 export const Split = base(<><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 8v2a4 4 0 0 0 4 4h0a2 2 0 0 1 2 2v1M18 8v2a4 4 0 0 1-4 4" /></>);
 export const Bubble = base(<><rect x="3" y="4" width="18" height="13" rx="3.5" /><path d="M8.5 17v3.5L13 17" /></>);
 export const Code = base(<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 5l-4 14" />);
+// larguras do canvas da tela Design
+export const Monitor = base(<><rect x="3" y="4" width="18" height="12" rx="1.5" /><path d="M9 20h6M12 16v4" /></>);
+export const Tablet = base(<><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M11 18h2" /></>);
+export const Celular = base(<><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M11 18h2" /></>);
+export const LadoALado = base(<><rect x="2" y="6" width="9" height="10" rx="1" /><rect x="13" y="5" width="5" height="12" rx="1" /><rect x="20" y="8" width="2" height="7" rx=".5" /></>);
+export const Camadas = base(<><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 13 9 5 9-5" /></>);   // painel Camadas do Design
 export const PanelLeft = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>);
 export const Sliders = base(<><path d="M4 8h10M18 8h2M4 16h4M12 16h8" /><circle cx="16" cy="8" r="2" /><circle cx="10" cy="16" r="2" /></>);
 export const Quadro = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16M15 4v16" /><path d="M5.5 8h1.5M11 8h2M11 11h2M17 8h1.5" /></>);
