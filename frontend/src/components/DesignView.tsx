@@ -5,7 +5,7 @@ import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pil
 import { type Effort, Menu, ModeEffortMenu } from "./Controls";
 import DesignAjustes, { type Sistema } from "./DesignAjustes";
 import DesignPlano, { type Plano } from "./DesignPlano";
-import { type Item, type Modo, type NoCaminho, enviar as paraIframe, lerMensagem, paraCanvas } from "./designCanvas";
+import { type Item, type Modo, type NoCaminho, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
 import { ArrowLeft, ArrowRight, Bubble, Check, Code, Cube, Download, Image, Mira, Split, Undo, X } from "./icons";
 import { PromptRow, StatsRow, Thinking, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
@@ -407,8 +407,8 @@ export default function DesignView(props: {
   async function mandarParaAgente() {
     if (!projeto) return;
     setAbrirExport(false);
-    const pasta = window.forja ? await window.forja.pickFolder(props.pastaPadrao)
-      : window.prompt("Pasta do projeto onde implementar:", props.pastaPadrao);
+    const escolher = ponte()?.pickFolder;
+    const pasta = escolher ? await escolher(props.pastaPadrao) : window.prompt("Pasta do projeto onde implementar:", props.pastaPadrao);
     if (!pasta) return;
     try {
       const r = await api.post<{ pasta: string; prompt: string }>(`/design/${projeto.conv_id}/handoff`, { pasta });
@@ -426,7 +426,7 @@ export default function DesignView(props: {
     try {
       const q = new URLSearchParams({ formato, fids: String(fids), slide: String(slides.atual), viewport });
       const r = await fetch(`/api/design/${projeto.conv_id}/exportar?${q}`,
-                            { headers: window.forja?.token ? { "X-Forja-Token": window.forja.token } : {} });
+                            { headers: ponte()?.token ? { "X-Forja-Token": ponte()!.token! } : {} });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
       const disp = r.headers.get("content-disposition") ?? "";
       const nome = decodeURIComponent(disp.split("''")[1] ?? `design.${formato}`);

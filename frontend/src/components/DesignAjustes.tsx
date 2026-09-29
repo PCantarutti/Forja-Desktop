@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ponte } from "./designCanvas";
 import { FolderOpen, Trash } from "./icons";
 
 // Aba Ajustes da tela Design: os tokens do :root viram controles (cor, slider, fonte) que mexem no
@@ -120,7 +121,7 @@ export default function DesignAjustes(props: {
   }
 
   async function escolherPasta() {
-    const p = await window.forja?.pickFolder(pasta || props.pastaPadrao);
+    const p = await ponte()?.pickFolder?.(pasta || props.pastaPadrao);
     if (p) setPasta(p);
   }
 
@@ -180,7 +181,7 @@ export default function DesignAjustes(props: {
         <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-dashed border-line p-2">
           <div className="flex items-center gap-1.5">
             <input value={pasta} onChange={(e) => setPasta(e.target.value)} placeholder="Pasta do projeto" className={`${campo} flex-1`} />
-            {window.forja && (
+            {ponte()?.pickFolder && (
               <button onClick={escolherPasta} title="Escolher pasta" className="rounded p-1 text-muted hover:bg-raised hover:text-fg">
                 <FolderOpen className="size-4" />
               </button>

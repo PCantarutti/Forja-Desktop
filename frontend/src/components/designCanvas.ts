@@ -32,6 +32,10 @@ export type ParaCanvas =
 
 const MARCA = "forja-design";
 
+/** A ponte do Electron (só no Desktop; no Docker não existe). Tipada aqui para os dois repos. */
+export const ponte = () =>
+  (window as { forja?: { token?: string; pickFolder?: (inicio?: string) => Promise<string | null> } }).forja;
+
 const eRect = (r: any) => r === null || (r && ["x", "y", "w", "h"].every((k) => typeof r[k] === "number"));
 const eTexto = (v: any) => typeof v === "string";
 const eItem = (n: any) => n && eTexto(n.fid) && eTexto(n.tag) && eTexto(n.cls);

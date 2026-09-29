@@ -136,7 +136,7 @@ async def extrair(pasta: str, nome: str, spec: dict, esforco: str = "baixo") -> 
         d = design_html.ler_json(split_think(texto)[1])
     except ValueError as e:
         raise ToolError(f"O modelo não devolveu o design system em JSON ({e}).") from e
-    sistema = _validar(d, nome or raiz.name, workspace.to_host(raiz))
+    sistema = _validar(d, nome or raiz.name, workspace.to_host(raiz) or pasta)
     _gravar([*listar(), sistema])
     return sistema
 

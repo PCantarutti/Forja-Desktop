@@ -153,7 +153,7 @@ async def handoff(html: str, titulo: str, pasta: str) -> dict:
     if n_img:   # versão com as imagens em arquivo, para quem preferir não ter base64 no HTML
         (destino / "index.arquivos.html").write_text(com_arquivos, "utf-8")
     rel_txt = rel.as_posix()
-    return {"pasta": workspace.to_host(raiz), "rel": rel_txt, "prompt": (
+    return {"pasta": workspace.to_host(raiz) or pasta, "rel": rel_txt, "prompt": (
         f"Implemente neste projeto o design que está em `{rel_txt}/` (gerado na tela Design). "
         f"Comece lendo `{rel_txt}/README.md`: ele diz os arquivos, a estrutura, os tokens e como implementar. "
         "Siga a stack e os padrões que este projeto já usa, traga os tokens para o tema do projeto e, no fim, "
