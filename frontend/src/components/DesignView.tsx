@@ -1095,7 +1095,7 @@ export default function DesignView(props: {
       <div style={{ width: `${(prefs.chatFracao ?? 0.35) * 100}%` }}
            className={`flex min-w-[320px] shrink-0 flex-col ${prefs.chatOculto ? "hidden" : ""}`}>
         <div role="tablist" aria-label="Seções do projeto" onKeyDown={teclaNasAbas}
-             className="@container/abas flex h-11 shrink-0 items-center gap-0.5 border-b border-line px-2">
+             className="@container/abas flex h-11 min-w-0 shrink-0 items-center gap-0.5 overflow-x-auto border-b border-line px-2 [scrollbar-width:none]">
           {abas.map((t) => {
             const on = aba === t.id;
             return (
@@ -1106,7 +1106,7 @@ export default function DesignView(props: {
                         focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-focus
                         ${on ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`}>
                 <span className={`shrink-0 ${on ? "text-accent-text" : "text-faint group-hover:text-muted"}`}>{t.icone}</span>
-                <span className={on ? "inline" : "hidden @[26rem]/abas:inline"}>{t.rotulo}</span>
+                <span className={on ? "inline" : "hidden @[32rem]/abas:inline"}>{t.rotulo}</span>
                 {t.selo}
               </button>
             );
