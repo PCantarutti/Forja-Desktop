@@ -595,6 +595,8 @@ def test_celular_recebe_aviso_de_fim_sem_o_prompt(monkeypatch):
     monkeypatch.setattr(mobile, "devices", lambda: ["ExponentPushToken[x]"])
     monkeypatch.setattr(mobile, "avisa", lambda titulo, texto, conv_id=None: avisos.append((titulo, texto, conv_id)))
     _fake_sd(monkeypatch, falhar=("ruim.gguf",))
+    from app import ampliar
+    monkeypatch.setattr(ampliar, "recodificar", lambda e, s_, j="": Path(s_).write_bytes(b"mp4"))
     conv = _conversa("video")
     _esperar(lotes.start(conv, "a secret prompt", models=["wan.gguf"], count=1)["id"])
     _esperar(lotes.start(conv, "a secret prompt", models=["ruim.gguf"], count=1)["id"])
@@ -618,3 +620,23 @@ def test_video_do_celular_sobe_em_pedacos_e_fica_servivel():
         assert p.is_file() and p.stat().st_size == 3_000_000 and p.name.endswith("-ferias.mp4")
         assert lotes.eh_referencia(str(p))  # a rota de arquivo serve, e a ampliação compara com ele
         assert c.post("/api/imagens/video", files={"file": ("x.txt", b"oi", "text/plain")}).status_code == 400
+
+
+
+def test_video_gerado_sai_no_formato_escolhido(monkeypatch):
+    """O sd-cli só grava webm: com MP4 escolhido nos Parâmetros, o gerado é recodificado e o item aponta para o .mp4."""
+    from app import ampliar
+    _fake_sd(monkeypatch)
+    feitos = []
+
+    def recodificar(entrada, saida, job_id=""):
+        feitos.append((Path(entrada).suffix, Path(saida).suffix))
+        Path(saida).write_bytes(b"mp4")
+    monkeypatch.setattr(ampliar, "recodificar", recodificar)
+    localai.set_video({"formato": "mp4-av1"})
+    m = _esperar(lotes.start(_conversa("video"), "a fox", models=["wan.gguf"], count=1)["id"])
+    p = Path(m["meta"]["images"][0]["path"])
+    assert feitos == [(".webm", ".mp4")] and p.suffix == ".mp4" and p.is_file() and not p.with_suffix(".webm").exists()
+    localai.set_video({"formato": "webm-vp9"})  # webm: sem recodificar
+    m = _esperar(lotes.start(_conversa("video"), "a fox", models=["wan.gguf"], count=1)["id"])
+    assert Path(m["meta"]["images"][0]["path"]).suffix == ".webm" and len(feitos) == 1

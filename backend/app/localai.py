@@ -173,6 +173,9 @@ DEFAULT_IMAGE = {
     "taesd": "",
     # Vídeo (Wan, -M vid_gen). Quadros = 4k+1: o VAE do Wan comprime 4 quadros em 1 no tempo.
     "frames": 33, "fps": 16,
+    # Arquivo dos vídeos (gerados e ampliados): "mp4-av1" (AV1 pelo Quick Sync da GPU, ou SVT-AV1 na CPU),
+    # "mp4-h264" (toca em tudo) ou "webm-vp9" (o de antes). O sd-cli só grava webm: o gerado é recodificado.
+    "formato": "mp4-av1",
     "flow_shift": 0.0,       # 0 = o automático do sd.cpp
     "clip_vision": "",       # Wan2.1 I2V/FLF2V
     "high_noise_model": "",  # Wan2.2 A14B: o par HighNoise do modelo LowNoise
@@ -1572,7 +1575,7 @@ def set_video(patch: dict) -> dict:
     with _cfg_lock:
         data = read_config()
         data["video"] = {**(data.get("video") or {}),
-                         **{k: v for k, v in _image_valores(patch).items() if k in ("model", "negative")}}
+                         **{k: v for k, v in _image_valores(patch).items() if k in ("model", "negative", "formato")}}
         write_config(data)
     return data["video"]
 

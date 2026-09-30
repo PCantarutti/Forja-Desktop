@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { createPortal } from "react-dom";
 import { api, uploadReferencia } from "../api";
@@ -32,6 +32,21 @@ const MODOS: { id: ModoVideo; rotulo: string; curto: string; dica: string; exemp
 ];
 
 const segundosDe = (frames: number, fps: number) => (fps ? frames / fps : 0);
+
+/** Visível ou a até `margem` da tela. O feed com dezenas de tomadas tinha um <video> carregado por cartão (21 na
+ *  medição, 1 fps): fora da tela o cartão fica sem o elemento, e o decodificador não existe. */
+function useNaTela<T extends Element>(margem = "400px") {
+  const ref = useRef<T>(null);
+  const [naTela, setNaTela] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([e]) => setNaTela(e.isIntersecting), { rootMargin: margem });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [margem]);
+  return [ref, naTela] as const;
+}
 // Item acrescentado pelo Reaproveitar (ou ampliação com outro método) traz os próprios ajustes e quadros.
 const optsDo = (meta: LoteMeta, i?: LoteImagem) => ({ ...meta.opts, ...(i?.opts ?? {}) });
 const refsDo = (pm: PedidoMeta | null, i?: LoteImagem) => i?.refs ?? pm?.refs ?? [];
@@ -491,6 +506,10 @@ export default function VideoView(props: {
     }
   }
 
+  // o feed memoizado (Tomada) guarda os callbacks do render em que foi desenhado: eles chamam a versão atual por aqui
+  const vivo = useRef({ reaproveitar, usarQuadro, abrirArquivo, carregarConversa, mostrarErro });
+  vivo.current = { reaproveitar, usarQuadro, abrirArquivo, carregarConversa, mostrarErro };
+
   if (!st || !o) return <div className="grid h-full place-items-center text-sm text-faint">Carregando…</div>;
 
   const semRuntime = !st.runtimes.sd.installed;
@@ -584,12 +603,12 @@ export default function VideoView(props: {
               pedido={pedido}
               resposta={resposta}
               onAbrir={(item) => setFoco({ lote: iLote, item })}
-              onContinuar={(path) => quadroDe(urlDa(path), "fim").then((b) => usarQuadro(b, "inicio"))}
-              onPasta={(p) => abrirArquivo(p, "reveal")}
-              onError={mostrarErro}
-              onMudou={carregarConversa}
-              onReaproveitar={(semente, item) => reaproveitar(resposta.meta as LoteMeta, pedido, semente,
-                                                             { id: resposta.id, letra: String.fromCharCode(65 + (iLote % 26)) }, item)}
+              onContinuar={(path) => quadroDe(urlDa(path), "fim").then((b) => vivo.current.usarQuadro(b, "inicio"))}
+              onPasta={(p) => vivo.current.abrirArquivo(p, "reveal")}
+              onError={(e) => vivo.current.mostrarErro(e)}
+              onMudou={() => vivo.current.carregarConversa()}
+              onReaproveitar={(semente, item) => vivo.current.reaproveitar(resposta.meta as LoteMeta, pedido, semente,
+                                                                          { id: resposta.id, letra: String.fromCharCode(65 + (iLote % 26)) }, item)}
             />
           ))}
           <div ref={fim} />
@@ -1327,6 +1346,15 @@ function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
   const { st } = props;
   const [dias, setDias] = useState(st.image.descarte_dias ?? 0);
   const [pasta, setPasta] = useState(st.video_dir);
+  const [formato, setFormato] = useState(st.video?.formato || "mp4-av1");
+  async function mudaFormato(f: string) {
+    setFormato(f);
+    try {
+      await api.put("/local/video/defaults", { formato: f });
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
   // a pasta dos vídeos é uma das pastas padrão (Configurações › Pastas): grava pela mesma rota
   async function gravarPasta(nova: string) {
     const alvo = nova.trim();
@@ -1371,6 +1399,16 @@ function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
           <FolderOpen className="size-3.5" />
         </button>
       </div>
+      <label className="flex items-center gap-1.5"
+             title="Vale para os vídeos gerados e os ampliados. AV1 sai pelo Quick Sync da GPU (ou na CPU, se ele falhar): arquivo pequeno. H.264 toca em qualquer lugar.">
+        <span className="shrink-0">Formato</span>
+        <select value={formato} onChange={(e) => mudaFormato(e.target.value)} aria-label="Formato do arquivo de vídeo"
+                className="min-w-0 flex-1 rounded-[6px] border border-line bg-surface px-1.5 py-0.5 text-fg-2 outline-none focus:border-focus">
+          <option value="mp4-av1">MP4 · AV1</option>
+          <option value="mp4-h264">MP4 · H.264</option>
+          <option value="webm-vp9">WebM · VP9</option>
+        </select>
+      </label>
       <label className="flex items-center gap-1.5" title="0 = guardar para sempre. Vale para imagens e vídeos descartados.">
         Descartadas somem em
 <label data-arrasta data-passo={1} className="rounded-[8px] border border-line bg-surface px-2 py-0.5 focus-within:border-focus">
@@ -1391,7 +1429,7 @@ function RodapeVideo(props: { st: LocalState; onError: (e: string) => void }) {
 
 // ---------------------------------------------------------------- tomada (um lote)
 
-function Tomada(props: {
+function TomadaBruta(props: {
   pedido: Message;
   resposta: Message;
   onAbrir: (item: number) => void;
@@ -1579,6 +1617,13 @@ function Tomada(props: {
 
 /** Cartão do feed: parado mostra o primeiro quadro; passar o mouse toca mudo, e mexer na horizontal faz
  *  scrub (o ponto do mouse é o ponto do vídeo). Arrastar leva o quadro da vez para um slot do composer. */
+/** A consulta traz objetos novos a cada 1,5 s: sem isto, todos os lotes redesenhavam (e os cartões com eles). Os
+ *  callbacks ficam de fora da comparação de propósito: quem usa o lote passa funções que leem a versão atual. */
+const Tomada = memo(TomadaBruta, (a, b) =>
+  a.resposta.id === b.resposta.id && a.resposta.status === b.resposta.status && a.pedido.id === b.pedido.id
+  && a.letra === b.letra && a.ultimo === b.ultimo && a.filtro === b.filtro && a.reaproveitando === b.reaproveitando
+  && JSON.stringify(a.resposta.meta) === JSON.stringify(b.resposta.meta));
+
 function CartaoVideo(props: {
   item: LoteImagem;
   aspecto: number;
@@ -1595,6 +1640,7 @@ function CartaoVideo(props: {
 }) {
   const { item } = props;
   const v = useRef<HTMLVideoElement>(null);
+  const [caixa, naTela] = useNaTela<HTMLElement>();
   const [pos, setPos] = useState(0);
   const ultimoX = useRef<number | null>(null);
   const temArquivo = ["pronta", "mantida", "descartada"].includes(item.status);
@@ -1636,6 +1682,7 @@ function CartaoVideo(props: {
 
   return (
     <figure
+      ref={caixa}
       onPointerEnter={() => setSobre(true)}
       onPointerLeave={() => setSobre(false)}
       className={`group relative overflow-hidden rounded-[10px] border transition-colors ${
@@ -1675,16 +1722,18 @@ function CartaoVideo(props: {
           title="Clique para abrir no player · arraste para usar o quadro como imagem inicial"
           className="relative cursor-pointer bg-black outline-none focus-visible:ring-2 focus-visible:ring-sky-400/70"
         >
-          <video
-            ref={v}
-            src={urlDa(item.path)}
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            onTimeUpdate={(e) => setPos(e.currentTarget.duration ? e.currentTarget.currentTime / e.currentTarget.duration : 0)}
-            className={`size-full object-cover ${item.status === "descartada" ? "opacity-40 grayscale" : ""}`}
-          />
+          {naTela ? (
+            <video
+              ref={v}
+              src={urlDa(item.path)}
+              muted
+              loop
+              playsInline
+              preload="metadata"
+              onTimeUpdate={(e) => setPos(e.currentTarget.duration ? e.currentTarget.currentTime / e.currentTarget.duration : 0)}
+              className={`size-full object-cover ${item.status === "descartada" ? "opacity-40 grayscale" : ""}`}
+            />
+          ) : <div className="size-full bg-black" />}
           <span className="pointer-events-none absolute right-2 top-2 rounded-[5px] bg-black/55 px-1.5 py-px font-mono text-[10.5px] tabular-nums text-fg">
             {fmtS(props.segundos)}
           </span>
@@ -1891,7 +1940,7 @@ function Foco(props: {
     const b = await player.current?.capturar();
     if (!b) return props.onError("Não deu para tirar o quadro deste vídeo.");
     try {
-      const base = atual.path.split(/[\\/]/).pop()?.replace(/\.webm$/, "") ?? "video";
+      const base = atual.path.split(/[\\/]/).pop()?.replace(/\.(webm|mp4)$/, "") ?? "video";
       setSalvo(await subirQuadro(b, `${base}-quadro.png`));
     } catch (e: any) {
       props.onError(e.message);

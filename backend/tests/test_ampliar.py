@@ -81,7 +81,7 @@ def _esperar(message_id, timeout=5.0):
 def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeypatch):
     feitas = []
 
-    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza=""):
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza="", limpar_original=False):
         feitas.append((entrada, Path(saida).name, fator, suavizar))
         if len(feitas) == 1:
             raise ampliar.ToolError("ffmpeg falhou")
@@ -109,8 +109,9 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     assert (o["width"], o["height"], o["fps"], o["frames"]) == (1664, 960, 32, 65)  # 2× e o dobro de quadros
     lotes.continuar(nova["id"])  # "Gerar as que faltaram" refaz a ampliação, não uma geração
     m = _esperar(nova["id"])
-    assert m["status"] == "pronto" and Path(m["meta"]["images"][0]["path"]).name == "a-00-s7-2x-suave (Lanczos).webm"
-    assert feitas[-1] == (str(origem), "a-00-s7-2x-suave (Lanczos).webm", 2, True)
+    # sai no formato dos Parâmetros (padrão MP4 AV1), não mais sempre webm
+    assert m["status"] == "pronto" and Path(m["meta"]["images"][0]["path"]).name == "a-00-s7-2x-suave (Lanczos).mp4"
+    assert feitas[-1] == (str(origem), "a-00-s7-2x-suave (Lanczos).mp4", 2, True)
     assert m["meta"]["opts"]["frames"] == 63  # o que saiu, não a conta de antes
     with pytest.raises(lotes.ToolError, match="2× ou 4×"):
         lotes.ampliar(msg.id, str(origem), 3)
@@ -124,7 +125,7 @@ def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeyp
     m = _esperar(nova["id"])
     assert m["status"] == "pronto" and feitas[-1][0] == str(fora)
     saida = Path(m["meta"]["images"][0]["path"])
-    assert saida.parent == isolado / "videos" and saida.name.endswith("-ferias-2x (Lanczos).webm")
+    assert saida.parent == isolado / "videos" and saida.name.endswith("-ferias-2x (Lanczos).mp4")
     with db.session() as s:
         assert s.get(db.Message, nova["id"] - 1).content == "ferias.mp4"  # o pedido é o nome do arquivo
     with pytest.raises(lotes.ToolError, match="não existe"):
@@ -470,7 +471,7 @@ def test_video_pelo_comfyui_quadro_a_quadro_com_previa(isolado, monkeypatch):
     lotes._validar_ampliacao(2, seed, video=True)  # não recusa mais
     with pytest.raises(lotes.ToolError, match="redesenho amplia só imagem"):
         lotes._validar_ampliacao(2, ck, video=True)
-    monkeypatch.setattr(ampliar, "codificador", lambda ff: "libvpx-vp9")
+    monkeypatch.setattr(ampliar, "codificadores", lambda ff, f: [("libvpx-vp9", ["-crf", "24"])])
     monkeypatch.setattr(ampliar, "sondar", lambda v: {"w": 4, "h": 2, "fps": 24.0, "taxa": "24/1", "quadros": 3, "audio": False})
     comandos = []
 
@@ -533,7 +534,7 @@ def test_varios_metodos_no_mesmo_lote_e_reaproveitar_amplia_o_original(isolado, 
     a partir do vídeo original (não do ampliado)."""
     feitas = []
 
-    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza=""):
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza="", limpar_original=False):
         feitas.append((entrada, fator, Path(modelo).stem if modelo else ""))
         Path(saida).write_bytes(b"webm")
         return {"w": 100 * fator, "h": 50 * fator, "fps": 16.0, "quadros": 33}
@@ -570,9 +571,10 @@ def test_varios_metodos_no_mesmo_lote_e_reaproveitar_amplia_o_original(isolado, 
         lotes.ampliar_mais(m["id"], 2, [""])
 
 
-def test_limpar_ruido_antes_da_ia_e_temporal_depois():
-    pre, pos = ampliar.LIMPEZA["leve"]
-    # Lanczos (sem IA): as duas limpezas no final, a temporal antes da interpolação
+def test_limpar_ruido_depois_da_ia_e_o_original_a_parte():
+    pos, pre = ampliar.LIMPEZA["leve"], ampliar.ORIGINAL
+    assert "fftdnoiz" not in pos  # limpar antes tirava o detalhe que a IA amplia: leve/forte são só depois
+    # Lanczos (sem IA): o original limpo antes, a temporal depois, e a interpolação por último
     assert ampliar.filtros(832, 480, 2, True, 16, pre, pos) == f"{pre},scale=1664:960:flags=lanczos,{pos},minterpolate=fps=32:mi_mode=mci:mc_mode=aobmc:vsbmc=1"
     assert ampliar.filtros(832, 480, 2, False, 16) == "scale=1664:960:flags=lanczos"  # sem limpeza, como antes
 
@@ -590,7 +592,7 @@ def test_ampliar_de_novo_sem_limpeza_nao_herda_a_do_lote(isolado, monkeypatch):
     """Lote criado com limpeza forte; "Ampliar de novo" sem limpeza tem que ir sem (herdava a do 1º item)."""
     feitas = []
 
-    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza=""):
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza="", limpar_original=False):
         feitas.append(limpeza)
         Path(saida).write_bytes(b"webm")
         return {"w": 200, "h": 100, "fps": 16.0, "quadros": 33}
@@ -609,3 +611,21 @@ def test_ampliar_de_novo_sem_limpeza_nao_herda_a_do_lote(isolado, monkeypatch):
     m = _esperar(lotes.ampliar_arquivo(conv, str(fora), 2, limpeza="forte")["id"])
     _esperar(lotes.ampliar_mais(m["id"], 2, [""])["ok"] and m["id"])
     assert feitas == ["forte", ""]
+
+
+def test_encoder_de_gpu_que_falha_cai_no_de_cpu(isolado, monkeypatch):
+    """av1_qsv primeiro (Quick Sync); se o driver recusar, o SVT-AV1 na CPU grava o mesmo MP4."""
+    monkeypatch.setattr(ampliar, "codificadores", lambda ff, f: ampliar.FORMATOS[f][1])
+    usados = []
+
+    def rodar(argv, job_id="", linha=None):
+        c = argv[argv.index("-c:v") + 1]
+        usados.append(c)
+        if c == "av1_qsv":
+            raise ampliar.ToolError("MFX session: unsupported")
+        Path(argv[-1]).write_bytes(b"mp4")
+        return ""
+    monkeypatch.setattr(ampliar, "_rodar", rodar)
+    saida = isolado / "x.mp4"
+    ampliar.codificar("ffmpeg", ["-i", "a.webm"], None, saida, "mp4-av1")
+    assert usados == ["av1_qsv", "libsvtav1"] and saida.read_bytes() == b"mp4"

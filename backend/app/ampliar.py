@@ -432,22 +432,74 @@ def sondar(video: str) -> dict:
             "audio": any(x.get("codec_type") == "audio" for x in streams)}
 
 
-@functools.lru_cache(maxsize=4)
-def codificador(ffmpeg: str) -> str:
-    """O primeiro encoder de webm que este ffmpeg tem (VP9 de preferência; AV1 também toca no Electron)."""
+# Formato do arquivo final: extensão, encoders na ordem de preferência (com os parâmetros de qualidade de cada um) e o
+# áudio. O de hardware vem primeiro (a B580 codifica AV1 no Quick Sync: rápido e sem tocar na VRAM da IA); se ele não
+# existir ou falhar (outra GPU, driver), cai no de CPU. O av1_qsv IGNORA -global_quality (sai sempre ~195 KB em 5 s de
+# 540x960, e a nitidez caía de 331 para 288): só -q:v (qualidade constante) funciona. Medido na B580, UltraSharpV2 5 s:
+# av1_qsv -q:v 30 ≈ 1,3 MB e nitidez 321; SVT-AV1 crf 24 950 KB e 316; VP9 crf 24 1,1 MB e 324; h264_qsv -q:v 22 900 KB.
+FORMATOS = {
+    "mp4-av1": (".mp4", [("av1_qsv", ["-q:v", "30", "-preset", "slower"]),
+                         ("libsvtav1", ["-crf", "30", "-preset", "6"]),
+                         ("libaom-av1", ["-crf", "30", "-b:v", "0", "-cpu-used", "6", "-row-mt", "1"])], ["-c:a", "aac", "-b:a", "160k"]),
+    "mp4-h264": (".mp4", [("h264_qsv", ["-q:v", "22", "-preset", "slower"]),
+                          ("libopenh264", ["-b:v", "8M"])], ["-c:a", "aac", "-b:a", "160k"]),
+    "webm-vp9": (".webm", [("libvpx-vp9", ["-b:v", "0", "-crf", "24", "-row-mt", "1"])], ["-c:a", "libopus", "-b:a", "128k"]),
+}
+
+
+def formato_video() -> str:
+    """O formato escolhido nos Parâmetros da aba Vídeo (vale para gerados e ampliados)."""
+    from . import localai
+    f = (localai.read_config().get("video") or {}).get("formato") or "mp4-av1"
+    return f if f in FORMATOS else "mp4-av1"
+
+
+def ext_video() -> str:
+    return FORMATOS[formato_video()][0]
+
+
+@functools.lru_cache(maxsize=8)
+def codificadores(ffmpeg: str, formato: str) -> list[tuple[str, list[str]]]:
+    """Os encoders do formato que este ffmpeg tem, na ordem de preferência."""
     enc = _rodar([ffmpeg, "-hide_banner", "-encoders"])
-    for c in ("libvpx-vp9", "libsvtav1", "libaom-av1", "libvpx"):
-        if re.search(rf"\s{re.escape(c)}\s", enc):
-            return c
-    raise ToolError("Este ffmpeg não tem encoder de WebM (VP9/AV1).")
+    lista = [(c, a) for c, a in FORMATOS[formato][1] if re.search(rf"\s{re.escape(c)}\s", enc)]
+    if not lista:
+        raise ToolError(f"Este ffmpeg não tem encoder para {formato}.")
+    return lista
+
+
+def codificar(ffmpeg: str, entrada: list[str], vf: str | None, saida: Path, formato: str, job_id: str = "", andou=None) -> None:
+    """Grava `saida` no `formato`, tentando os encoders em ordem: o de GPU que falha (sem Quick Sync, driver) cai no de CPU."""
+    audio = FORMATOS[formato][2]
+    erro = None
+    for c, args in codificadores(ffmpeg, formato):
+        try:
+            _rodar([ffmpeg, "-v", "error", "-nostats", "-progress", "pipe:1", "-y", *entrada, *(["-vf", vf] if vf else []),
+                    "-c:v", c, *args, "-pix_fmt", "yuv420p", *audio,
+                    *(["-movflags", "+faststart"] if saida.suffix == ".mp4" else []), str(saida)], job_id, andou)
+            return
+        except ToolError as e:
+            if downloads.cancelled(job_id):
+                raise
+            erro = e
+            saida.unlink(missing_ok=True)
+    raise erro  # type: ignore[misc]
+
+
+def recodificar(entrada: Path, saida: Path, job_id: str = "") -> None:
+    """O webm que o sd-cli gravou no formato escolhido (o gerado sai no mesmo arquivo que o ampliado)."""
+    codificar(str(_ffmpeg()), ["-i", str(entrada)], None, saida, formato_video(), job_id)
 
 
 # Limpar ruído (ffmpeg, CPU): antes da IA, o fftdnoiz (3D, espaço e tempo) tira o ruído de compressão do original que
 # ela realçaria; depois, o atadenoise (média temporal adaptativa) apaga o tremor de textura entre quadros. O hqdn3d
 # seria o óbvio, mas é GPL e não vem no ffmpeg LGPL que o Forja baixa. Medido na B580 (SeedVR2 3B, 9 quadros 270x480
 # -> 2x): tremor 1,33 -> 0,96 (leve) -> 0,64 (forte), com a nitidez quase igual (499 -> 496 -> 487).
-LIMPEZA = {"leve": ("fftdnoiz=sigma=3:prev=1:next=1", "atadenoise=s=5"),
-           "forte": ("fftdnoiz=sigma=6:prev=1:next=1", "atadenoise=0a=0.04:0b=0.08:1a=0.04:1b=0.08:2a=0.04:2b=0.08:s=9")}
+# Depois só (30/09, 4x-UltraSharpV2, 5 s): limpar antes da IA tirava o detalhe fino que ela amplia (nitidez 328 -> 323,
+# e o Pedro viu); só depois deu tremor 0,20 -> -0,40 com nitidez 331. O original é uma opção à parte (ORIGINAL), para
+# vídeo com muito ruído de compressão ou gravado no escuro.
+LIMPEZA = {"leve": "atadenoise=s=5", "forte": "atadenoise=0a=0.04:0b=0.08:1a=0.04:1b=0.08:2a=0.04:2b=0.08:s=9"}
+ORIGINAL = "fftdnoiz=sigma=4:prev=1:next=1"
 
 
 def filtros(w: int, h: int, fator: int, suavizar: bool, fps: float, pre: str = "", pos: str = "") -> str:
@@ -590,15 +642,16 @@ def _comfy_quadros(trabalho: Path, fator: int, modelo: str, tipo: str, total: in
 
 
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: bool = False, job_id: str = "",
-            progresso=None, previa: Path | None = None, limpeza: str = "") -> dict:
+            progresso=None, previa: Path | None = None, limpeza: str = "", limpar_original: bool = False) -> dict:
     """Amplia `entrada` em `fator` (2 ou 4) e grava `saida` (.webm). `modelo` vazio = Lanczos, sem IA; ESRGAN pelo
     sd-cli; SeedVR2 e DAT/HAT/SwinIR pelo ComfyUI (o tipo sai do arquivo, tipo_local).
     `progresso(feitos, total, s_por_quadro)`; `previa` recebe o último quadro ampliado. Devolve a sondagem
     do resultado (tamanho, fps, quadros)."""
     ff = str(_ffmpeg())
-    enc = codificador(ff)  # antes dos quadros: sem encoder, falha já, não depois de minutos de ESRGAN
+    formato = "webm-vp9" if saida.suffix == ".webm" else formato_video()
+    codificadores(ff, formato)  # antes dos quadros: sem encoder, falha já, não depois de minutos de ESRGAN
     info = sondar(entrada)
-    pre, pos = LIMPEZA.get(limpeza, ("", ""))
+    pre, pos = ORIGINAL if limpar_original else "", LIMPEZA.get(limpeza, "")
     trabalho = saida.parent / ".ampliando" / saida.stem
     shutil.rmtree(trabalho, ignore_errors=True)
     (trabalho / "in").mkdir(parents=True)
@@ -636,10 +689,8 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
             if progresso and not modelo and l.startswith("frame="):
                 feitos = int(l[6:] or 0)
                 progresso(min(feitos, total), total, (time.monotonic() - comeco) / max(1, feitos))
-        _rodar([ff, "-v", "error", "-nostats", "-progress", "pipe:1", "-y", *entrada_final,
-                "-vf", filtros(info["w"], info["h"], fator, suavizar, info["fps"], "" if modelo else pre, pos),
-                "-c:v", enc, "-b:v", "0", "-crf", "24", "-pix_fmt", "yuv420p", *(["-row-mt", "1"] if "vpx" in enc else []),
-                "-c:a", "libopus", "-b:a", "128k", str(saida)], job_id, andou)
+        codificar(ff, entrada_final, filtros(info["w"], info["h"], fator, suavizar, info["fps"], "" if modelo else pre, pos),
+                  saida, formato, job_id, andou)
         if progresso and not modelo:
             progresso(total, total, (time.monotonic() - comeco) / total)
         return sondar(str(saida))

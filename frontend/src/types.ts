@@ -467,6 +467,7 @@ export type VideoKit = {
 
 export type ImageOpts = {
   model: string;
+  formato?: string; // vídeo: "mp4-av1" | "mp4-h264" | "webm-vp9" (gerados e ampliados)
   out_dir: string; // vazio = %APPDATA%/Forja/imagens
   vae: string;
   clip_l: string;

@@ -50,7 +50,7 @@ def markdown(c) -> str:
             linhas += [f"## Imagens ({m.status or 'pendente'})", ""]
             for img in m.meta["images"]:
                 etiqueta = f"semente {img['seed']} · {img.get('model_name') or '?'} · {img['status']}"
-                marca = "" if img["path"].endswith(".webm") else "!"  # vídeo vira link: Markdown não toca webm
+                marca = "" if img["path"].lower().endswith((".webm", ".mp4")) else "!"  # vídeo vira link: Markdown não toca webm
                 linhas += [f"- {etiqueta}", f"  {marca}[{etiqueta}]({img['path']})"]
             linhas.append("")
         elif m.role == "assistant" and (m.meta or {}).get("pesquisa"):  # pesquisa profunda

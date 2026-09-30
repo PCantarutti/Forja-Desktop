@@ -76,7 +76,7 @@ def _consumir() -> None:
 
 
 def _video(path: str | Path) -> bool:
-    return str(path).endswith(".webm")
+    return str(path).lower().endswith((".webm", ".mp4"))
 
 
 def descartadas_dir(video: bool = False) -> Path:
@@ -641,6 +641,13 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts_lote: dict, job_
                     shutil.move(str(saida), str(arquivo))
                     if web:
                         projeto.webp(arquivo)
+                if _video(arquivo) and arquivo.suffix == ".webm":
+                    from . import ampliar as amp
+                    if amp.ext_video() != ".webm":  # MP4 (AV1/H.264) escolhido nos Parâmetros: o gerado sai igual ao ampliado
+                        final = arquivo.with_suffix(amp.ext_video())
+                        amp.recodificar(arquivo, final, job_id)
+                        arquivo.unlink(missing_ok=True)
+                        item["path"] = str(final)
                 item["status"] = "pronta"
                 if opts.get("hires"):  # o tamanho final é o do sd-cli (escala arredondada por ele): o do arquivo
                     from PIL import Image
@@ -726,7 +733,7 @@ def _opts_ampliadas(opts: dict, fator: int, suavizar: bool) -> dict:
 
 def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, fator: int, modelos: list[str],
                      suavizar: bool, prompt: str = "", forca: float | None = None,
-                     tomados: set[str] | None = None, limpeza: str = "") -> list[dict]:
+                     tomados: set[str] | None = None, limpeza: str = "", limpar_original: bool = False) -> list[dict]:
     """Um item por método, na ordem escolhida (a fila faz um depois do outro). Cada um leva a própria ampliação e o
     próprio tamanho: um lote pode misturar métodos e fatores (Reaproveitar acrescenta outro método no mesmo lote)."""
     tomados = set(tomados or ())
@@ -735,14 +742,15 @@ def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, 
         amp_i = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar),
                  **_redesenho(modelo, prompt, forca),
                  # sempre, mesmo vazia: sem ela o item herdava a do lote (o 1º item) e "sem limpeza" saía limpo
-                 "limpeza": limpeza}
+                 "limpeza": limpeza, "limpar_original": bool(limpar_original)}
         saida = _saida_ao_lado(lugar, fator, modelo, ext, suavizar, tomados)
         tomados.add(str(saida))
         nome = Path(modelo).stem if modelo else "Lanczos"
         item = {"path": str(saida), "seed": seed, "model": modelo,
-                "model_name": f"{nome} · {fator}×{' · suavizado' if suavizar else ''}{f' · ruído {limpeza}' if limpeza else ''}",
+                "model_name": f"{nome} · {fator}×{' · suavizado' if suavizar else ''}{f' · ruído {limpeza}' if limpeza else ''}"
+                              f"{' · original limpo' if limpar_original else ''}",
                 "status": "pendente", "error": "", "ampliacao": amp_i, "opts": _opts_ampliadas(opts, fator, suavizar)}
-        if ext == ".webm":  # vídeo: o reap apaga o webm pela metade; o PNG da imagem só aparece pronto
+        if ext != ".png":  # vídeo: o reap apaga o vídeo pela metade; o PNG da imagem só aparece pronto
             item["unidade"] = "quadro"
         itens.append(item)
     return itens
@@ -750,11 +758,11 @@ def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, 
 
 def _nova_ampliacao(conv_id: int, origem: str, lugar: Path, ext: str, pedido: str, opts: dict, seed: int,
                     fator: int, modelos: list[str], suavizar: bool, prompt: str = "", forca: float | None = None,
-                    limpeza: str = "") -> dict:
+                    limpeza: str = "", limpar_original: bool = False) -> dict:
     """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem.
     `modelos`: um item por método, feitos em sequência no mesmo lote."""
     imagens = _itens_ampliacao(origem, lugar, ext, opts, seed, fator, modelos, suavizar, prompt, forca,
-                               limpeza=limpeza if ext == ".webm" else "")
+                               limpeza=limpeza if ext != ".png" else "", limpar_original=limpar_original and ext != ".png")
     amp_meta = imagens[0]["ampliacao"]  # o do lote: o 1º método (as telas antigas leem daqui)
     opts = {**opts, **imagens[0]["opts"], "ampliacao": amp_meta}
     _save(conv_id, role="user", content=pedido, meta={"refs": [], "models": list(dict.fromkeys(modelos)), "ampliacao": amp_meta})
@@ -802,7 +810,8 @@ def _redesenho(modelo: str, prompt: str, forca: float | None) -> dict:
 
 
 def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False,
-            prompt_novo: str = "", forca: float | None = None, modelos: list[str] | None = None, limpeza: str = "") -> dict:
+            prompt_novo: str = "", forca: float | None = None, modelos: list[str] | None = None, limpeza: str = "",
+            limpar_original: bool = False) -> dict:
     """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
     progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
     msg = _mensagem(message_id)
@@ -821,13 +830,14 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
         base = prompt_da_imagem(pedido.content, pedido.meta) if pedido else ""
     # redesenhar: sem prompt na tela, vale o prompt que gerou a imagem
     opts = {**(msg["meta"].get("opts") or {}), **(item.get("opts") or {})}  # a tomada pode ter tamanho próprio
-    return _nova_ampliacao(msg["conversation_id"], path, Path(path), ".png" if imagem else ".webm", prompt, opts,
-                           item["seed"], fator, modelos, suavizar and not imagem, prompt_novo or base, forca, limpeza)
+    return _nova_ampliacao(msg["conversation_id"], path, Path(path), ".png" if imagem else amp.ext_video(), prompt, opts,
+                           item["seed"], fator, modelos, suavizar and not imagem, prompt_novo or base, forca, limpeza,
+                           limpar_original)
 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False,
                     confirm: bool = False, prompt: str = "", forca: float | None = None,
-                    modelos: list[str] | None = None, limpeza: str = "") -> dict:
+                    modelos: list[str] | None = None, limpeza: str = "", limpar_original: bool = False) -> dict:
     """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
     para a pasta de vídeos; o original não é tocado."""
     from . import ampliar as amp
@@ -857,8 +867,9 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
     registrar_origem(path)  # o player compara a ampliação com o original
     pasta = imagegen.video_dir()
     pasta.mkdir(parents=True, exist_ok=True)
-    return _nova_ampliacao(conv_id, path, pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", ".webm",
-                           Path(path).name, _dims_video(path), 0, fator, modelos, suavizar, limpeza=limpeza)
+    return _nova_ampliacao(conv_id, path, pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", amp.ext_video(),
+                           Path(path).name, _dims_video(path), 0, fator, modelos, suavizar, limpeza=limpeza,
+                           limpar_original=limpar_original)
 
 
 def _dims_video(path: str) -> dict:
@@ -868,7 +879,7 @@ def _dims_video(path: str) -> dict:
 
 
 def ampliar_mais(message_id: int, fator: int, modelos: list[str], suavizar: bool = False, confirm: bool = False,
-                 prompt: str = "", forca: float | None = None, limpeza: str = "") -> dict:
+                 prompt: str = "", forca: float | None = None, limpeza: str = "", limpar_original: bool = False) -> dict:
     """"Reaproveitar" numa ampliação: o MESMO original ampliado por outros métodos (ou outro fator), no mesmo lote,
     um depois do outro. O original é o do lote, não a tomada ampliada."""
     from . import ampliar as amp
@@ -899,9 +910,9 @@ def ampliar_mais(message_id: int, fator: int, modelos: list[str], suavizar: bool
     pasta = imagegen.out_dir() if imagem else imagegen.video_dir()
     lugar = origem if origem.parent in (imagegen.out_dir(), imagegen.video_dir()) \
         else pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{origem.name}"
-    imagens += _itens_ampliacao(str(origem), lugar, ".png" if imagem else ".webm", opts, imagens[0]["seed"], fator,
+    imagens += _itens_ampliacao(str(origem), lugar, ".png" if imagem else amp.ext_video(), opts, imagens[0]["seed"], fator,
                                 modelos, suavizar and not imagem, prompt or a.get("prompt", ""), forca,
-                                {i["path"] for i in imagens}, "" if imagem else limpeza)
+                                {i["path"] for i in imagens}, "" if imagem else limpeza, limpar_original and not imagem)
     job = downloads.create("lote", f"ampliar {origem.name}")
     _patch(message_id, status="running", meta={"job": job["id"], "count": len(imagens), "images": imagens})
     with db.session() as s:  # a conversa sobe na barra lateral, como num lote novo
@@ -979,7 +990,7 @@ def _ampliar_um(message_id: int, meta: dict, imagens: list[dict], item: dict, jo
             r = None  # o tamanho já está nas opts (origem × fator)
         else:
             r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa,
-                            a.get("limpeza", ""))
+                            a.get("limpeza", ""), bool(a.get("limpar_original")))
         # o que saiu de fato (o minterpolate não inventa quadro depois do último): o player conta com isso
         if r:
             item["opts"] = {**(item.get("opts") or {}), "width": r["w"], "height": r["h"], "fps": round(r["fps"]),
@@ -1106,7 +1117,7 @@ def mais(message_id: int, count: int, models: list[str] | None = None, confirm: 
     opts = {**(meta.get("opts") or {}), **novos}
     count = max(1, min(int(count or 1), MAX_VARIACOES))
     escolhidos = _distribuir(list(models or pm.get("models") or dict.fromkeys(i["model"] for i in imagens)), count)
-    ext = Path(imagens[0]["path"]).suffix or ".png"
+    ext = ".webm" if _video(imagens[0]["path"]) else (Path(imagens[0]["path"]).suffix or ".png")
     exe = imagegen._exe()
     for m in dict.fromkeys(escolhidos):  # valida runtime e modelo antes de descarregar o LLM por nada
         imagegen.argv(exe, prompt, imagegen.OUT_DIR / f"x{ext}", imagegen._opts({**opts, "model": m}), refs)
@@ -1298,7 +1309,7 @@ def limpar_descartadas(dias: int | None = None) -> int:
     limite = time.time() - dias * 86400 if dias > 0 else time.time() + 1
     apagados = 0
     pastas = {descartadas_dir(False).resolve(), descartadas_dir(True).resolve()}
-    for f in [f for p in pastas for f in (*p.glob("*.png"), *p.glob("*.webm"))]:
+    for f in [f for p in pastas for f in (*p.glob("*.png"), *p.glob("*.webm"), *p.glob("*.mp4"))]:
         try:
             if f.stat().st_mtime < limite:
                 f.unlink()
