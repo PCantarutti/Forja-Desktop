@@ -81,7 +81,7 @@ def _esperar(message_id, timeout=5.0):
 def test_ampliar_vira_tomada_nova_e_continuar_refaz_a_ampliacao(isolado, monkeypatch):
     feitas = []
 
-    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None):
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza=""):
         feitas.append((entrada, Path(saida).name, fator, suavizar))
         if len(feitas) == 1:
             raise ampliar.ToolError("ffmpeg falhou")
@@ -533,7 +533,7 @@ def test_varios_metodos_no_mesmo_lote_e_reaproveitar_amplia_o_original(isolado, 
     a partir do vídeo original (não do ampliado)."""
     feitas = []
 
-    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None):
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza=""):
         feitas.append((entrada, fator, Path(modelo).stem if modelo else ""))
         Path(saida).write_bytes(b"webm")
         return {"w": 100 * fator, "h": 50 * fator, "fps": 16.0, "quadros": 33}
@@ -568,3 +568,19 @@ def test_varios_metodos_no_mesmo_lote_e_reaproveitar_amplia_o_original(isolado, 
     fora.unlink()
     with pytest.raises(lotes.ToolError, match="não está mais no disco"):
         lotes.ampliar_mais(m["id"], 2, [""])
+
+
+def test_limpar_ruido_antes_da_ia_e_temporal_depois():
+    pre, pos = ampliar.LIMPEZA["leve"]
+    # Lanczos (sem IA): as duas limpezas no final, a temporal antes da interpolação
+    assert ampliar.filtros(832, 480, 2, True, 16, pre, pos) == f"{pre},scale=1664:960:flags=lanczos,{pos},minterpolate=fps=32:mi_mode=mci:mc_mode=aobmc:vsbmc=1"
+    assert ampliar.filtros(832, 480, 2, False, 16) == "scale=1664:960:flags=lanczos"  # sem limpeza, como antes
+
+
+def test_seedvr2_em_video_vai_como_um_video_em_blocos_temporais():
+    from app import comfy_job
+    g = comfy_job.fluxo_seedvr2_video(["a.png", "b.png", "c.png"], 2, "m.safetensors", "vae.safetensors", 7, 9, 1)
+    tipos = [n["class_type"] for n in g.values()]
+    assert tipos.count("LoadImage") == 3 and tipos.count("ImageBatch") == 2  # um lote só: o modelo vê os vizinhos
+    assert g["12"]["inputs"]["chunking_mode.frames_per_chunk"] == 9 and g["12"]["inputs"]["temporal_overlap"] == 1
+    assert g["8"]["inputs"]["latent_image"] == ["12", 0] and g["13"]["inputs"]["temporal_overlap"] == ["12", 1]

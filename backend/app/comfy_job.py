@@ -79,6 +79,47 @@ def fluxo_seedvr2(img: str, fator: int, modelo: str, vae: str, semente: int) -> 
     }
 
 
+def fluxo_seedvr2_video(nomes: list[str], fator: int, modelo: str, vae: str, semente: int, por_bloco: int,
+                        sobra: int) -> dict:
+    """O blueprint "Upscale Video (SeedVR2)" do ComfyUI: os quadros entram como UM vídeo (o modelo olha os vizinhos e
+    a textura inventada fica a mesma de um quadro para o outro). O Split corta o latente em blocos de `por_bloco`
+    quadros (4n+1) que cabem na VRAM, com `sobra` quadros latentes em comum, e o Merge junta com crossfade.
+    Quadro a quadro, cada um ganhava uma textura própria: tocando, virava chiado."""
+    # o VAE também vai em pedaços no tempo: 64 quadros de uma vez enchiam os 12 GB da B580
+    tiles = {"tile_size": 512, "overlap": 128, "temporal_size": 16, "temporal_overlap": 4}
+    g: dict = {}
+    for i, nome in enumerate(nomes):
+        g[f"q{i}"] = {"class_type": "LoadImage", "inputs": {"image": nome}}
+    lote = "q0"
+    for i in range(1, len(nomes)):  # ImageBatch em cadeia: o lote vira a sequência (frames, H, W, C) que o SeedVR2 lê como vídeo
+        g[f"b{i}"] = {"class_type": "ImageBatch", "inputs": {"image1": [lote, 0], "image2": [f"q{i}", 0]}}
+        lote = f"b{i}"
+    g.update({
+        "2": {"class_type": "ResizeImageMaskNode", "inputs": {"input": [lote, 0], "resize_type": "scale by multiplier",
+                                                              "resize_type.multiplier": float(fator), "scale_method": "lanczos"}},
+        "3": {"class_type": "SeedVR2Preprocess", "inputs": {"resized_images": ["2", 0]}},
+        "4": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "5": {"class_type": "UNETLoader", "inputs": {"unet_name": modelo, "weight_dtype": "default"}},
+        "6": {"class_type": "VAEEncodeTiled", "inputs": {"pixels": ["3", 0], "vae": ["4", 0], **tiles}},
+        "12": {"class_type": "SeedVR2TemporalChunk", "inputs": {"latent": ["6", 0], "temporal_overlap": sobra,
+                                                                "chunking_mode": "manual", "chunking_mode.frames_per_chunk": por_bloco}},
+        "7": {"class_type": "SeedVR2Conditioning", "inputs": {"model": ["5", 0], "vae_conditioning": ["12", 0]}},
+        "8": {"class_type": "KSampler", "inputs": {"model": ["5", 0], "positive": ["7", 0], "negative": ["7", 1],
+                                                   "latent_image": ["12", 0], "seed": semente, "steps": 1, "cfg": 1.0,
+                                                   "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "13": {"class_type": "SeedVR2TemporalMerge", "inputs": {"latents": ["8", 0], "temporal_overlap": ["12", 1]}},
+        # decodificar é a parte pesada (o VAE 3D do SeedVR2): pedaços menores que os da codificação, senão os 12 GB
+        # da B580 enchiam e o ComfyUI ficava minutos trocando memória (o modelo em si leva ~1 s por bloco)
+        "9": {"class_type": "VAEDecodeTiled", "inputs": {"samples": ["13", 0], "vae": ["4", 0], "tile_size": 256, "overlap": 64,
+                                                        "temporal_size": 8, "temporal_overlap": 4}},
+        # sem correção de cor, como no blueprint de vídeo (a "lab" roda na CPU e leva segundos por quadro)
+        "10": {"class_type": "SeedVR2PostProcessing", "inputs": {"images": ["9", 0], "original_resized_images": ["2", 0],
+                                                                 "color_correction_method": "none"}},
+        "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "forja"}},
+    })
+    return g
+
+
 def fluxo_redesenhar(img: str, ckpt: str, prompt: str, negativo: str, forca: float, semente: int, passos: int) -> dict:
     """Imagem-para-imagem de um bloco: o checkpoint redesenha com o prompt; `forca` (denoise) é quanto pode mudar."""
     return {
@@ -193,6 +234,12 @@ def main() -> int:
     a.add_argument("--fator", type=int, default=2)
     a.add_argument("--semente", type=int, default=42)
     a.add_argument("--quadros", action="store_true", help="vídeo: --entrada e --saida são pastas de quadros PNG")
+    # SeedVR2 em vídeo: quadros por trecho mandado ao ComfyUI, quadros de contexto de cada lado, quadros por bloco
+    # temporal dentro dele (4n+1) e latentes em comum entre blocos
+    a.add_argument("--trecho", type=int, default=49)
+    a.add_argument("--contexto", type=int, default=4)
+    a.add_argument("--por-bloco", type=int, default=5)  # 4n+1; medido na B580 12 GB: 5 cabe até 1440x960 no 7B fp8 (pico 11,4 GB)
+    a.add_argument("--sobra", type=int, default=1)
     o = a.parse_args()
     raiz, modelo = Path(o.comfy), Path(o.modelo)
     trabalho = Path(tempfile.mkdtemp(prefix="forja-comfy-"))
@@ -231,8 +278,8 @@ def main() -> int:
     cid = uuid.uuid4().hex
     parar = threading.Event()
 
-    def rodar(g: dict) -> Path:
-        """Um fluxo até o fim; devolve a imagem que ele gravou em out/."""
+    def rodar(g: dict, todas: bool = False):
+        """Um fluxo até o fim; devolve a imagem que ele gravou em out/ (com `todas`, a lista, na ordem)."""
         try:
             pid = pede("/prompt", {"prompt": g, "client_id": cid})["prompt_id"]
         except urllib.error.HTTPError as e:
@@ -264,7 +311,7 @@ def main() -> int:
         arquivos = [i["filename"] for s in h[pid]["outputs"].values() for i in s.get("images", [])]
         if not arquivos:
             raise Falha("O ComfyUI terminou sem gravar a imagem.")
-        return trabalho / "out" / arquivos[0]
+        return [trabalho / "out" / a for a in arquivos] if todas else trabalho / "out" / arquivos[0]
 
     def video(escala: list) -> tuple[int, int]:
         """Os quadros de --entrada, ampliados em --saida com os mesmos nomes e o tamanho pedido."""
@@ -282,6 +329,9 @@ def main() -> int:
             return im if im.size == alvo else im.resize(alvo, Image.LANCZOS)
 
         n, passadas = len(nomes), 0  # passadas do spandrel, medidas no 1º quadro: um 2× pedido como 4× roda duas vezes
+        if o.modo == "seedvr2":
+            seedvr2_em_trechos(nomes, destino, alvo, no_alvo, escala)
+            return alvo
         for i, nome in enumerate(nomes):
             diz("FASE", f"ampliando o quadro {i + 1} de {n}")
             escala[0], escala[1] = i / n, 1 / n
@@ -303,6 +353,46 @@ def main() -> int:
                 no_alvo(im).save(destino / nome)
             saiu.unlink(missing_ok=True)  # out/ não acumula milhares de quadros
         return alvo
+
+    def seedvr2_em_trechos(nomes: list[str], destino: Path, alvo, no_alvo, escala: list) -> None:
+        """O vídeo em trechos de --trecho quadros (a RAM não comporta milhares de quadros num lote). Cada trecho leva
+        --contexto quadros a mais de cada lado, para o começo e o fim dele não saírem sem vizinhos; os de contexto que
+        caem dentro do trecho seguinte se misturam com ele (crossfade), e a emenda não pula."""
+        import numpy as np
+        from PIL import Image
+        n, T, C = len(nomes), max(1, o.trecho), max(0, o.contexto)
+        inicios = list(range(0, n, T))
+        cauda: list = []  # os quadros de contexto do fim do trecho anterior (já no alvo), para o crossfade
+        for k, ini in enumerate(inicios):
+            fim = min(n, ini + T)
+            a, b = max(0, ini - C), min(n, fim + C)
+            diz("FASE", f"ampliando os quadros {ini + 1} a {fim} de {n}")
+            escala[0], escala[1] = k / len(inicios), 1 / len(inicios)
+            for f in (trabalho / "in").glob("t*.png"):
+                f.unlink()
+            locais = []
+            for j, nome in enumerate(nomes[a:b]):
+                local = f"t{j:05d}.png"
+                shutil.copyfile(Path(o.entrada) / nome, trabalho / "in" / local)
+                locais.append(local)
+            saidas = rodar(fluxo_seedvr2_video(locais, o.fator, modelo.name, Path(o.vae).name, o.semente,
+                                               o.por_bloco, o.sobra), todas=True)
+            if len(saidas) < b - a:
+                raise Falha(f"O ComfyUI devolveu {len(saidas)} de {b - a} quadros do trecho.")
+            imgs = []
+            for s in saidas[: b - a]:
+                with Image.open(s) as im:
+                    imgs.append(no_alvo(im))
+                s.unlink(missing_ok=True)
+            miolo = imgs[ini - a: ini - a + (fim - ini)]
+            # crossfade: os primeiros quadros do miolo também saíram como contexto do fim do trecho anterior
+            for j, anterior in enumerate(cauda[: len(miolo)]):
+                w = (j + 1) / (len(cauda) + 1)
+                miolo[j] = Image.fromarray((np.asarray(anterior, np.float32) * (1 - w)
+                                            + np.asarray(miolo[j], np.float32) * w).round().astype(np.uint8))
+            for j, im in enumerate(miolo):
+                im.save(destino / nomes[ini + j])
+            cauda = imgs[ini - a + (fim - ini):]
 
     def redesenhar(alvo: tuple[int, int], escala: list) -> Path:
         """Lanczos até o tamanho final (arredondado a 8 px), um fluxo por bloco e a costura com as máscaras."""

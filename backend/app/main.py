@@ -1127,6 +1127,7 @@ class AmpliarBody(BaseModel):
     path: str = ""
     fator: int = 2
     modelos: list[str] = []  # vários métodos: um item por método, em sequência no mesmo lote (vazio = `modelo`)
+    limpeza: str = ""  # vídeo: "", "leve" ou "forte" (ampliar.LIMPEZA)
     modelo: str = ""  # vazio = Lanczos, sem IA
     suavizar: bool = False
     confirm: bool = False  # SeedVR2 com LLM na VRAM: a tela perguntou e pode descarregar
@@ -1138,7 +1139,7 @@ class AmpliarBody(BaseModel):
 async def imagens_ampliar(message_id: int, body: AmpliarBody):
     try:
         return await asyncio.to_thread(lotes.ampliar, message_id, body.path, body.fator, body.modelo, body.suavizar,
-                                       body.confirm, body.prompt, body.forca, body.modelos or None)
+                                       body.confirm, body.prompt, body.forca, body.modelos or None, body.limpeza)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:
@@ -1150,7 +1151,7 @@ async def imagens_ampliar_arquivo(conv_id: int, body: AmpliarBody):
     """Um vídeo qualquer do disco (não uma tomada): vira uma tomada ampliada nesta conversa."""
     try:
         return await asyncio.to_thread(lotes.ampliar_arquivo, conv_id, body.path, body.fator, body.modelo, body.suavizar,
-                                       body.confirm, body.prompt, body.forca, body.modelos or None)
+                                       body.confirm, body.prompt, body.forca, body.modelos or None, body.limpeza)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:
@@ -1162,7 +1163,7 @@ async def imagens_ampliar_mais(message_id: int, body: AmpliarBody):
     """Reaproveitar numa ampliação: o original do lote, por outros métodos, no mesmo lote."""
     try:
         return await asyncio.to_thread(lotes.ampliar_mais, message_id, body.fator, body.modelos or [body.modelo],
-                                       body.suavizar, body.confirm, body.prompt, body.forca)
+                                       body.suavizar, body.confirm, body.prompt, body.forca, body.limpeza)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:

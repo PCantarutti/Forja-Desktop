@@ -442,11 +442,20 @@ def codificador(ffmpeg: str) -> str:
     raise ToolError("Este ffmpeg não tem encoder de WebM (VP9/AV1).")
 
 
-def filtros(w: int, h: int, fator: int, suavizar: bool, fps: float) -> str:
-    """O -vf do final: Lanczos até o tamanho pedido (múltiplo de 2, que o yuv420p exige) e, se pedido, o
-    dobro de quadros por interpolação de movimento."""
+# Limpar ruído (ffmpeg, CPU): antes da IA, o fftdnoiz (3D, espaço e tempo) tira o ruído de compressão do original que
+# ela realçaria; depois, o atadenoise (média temporal adaptativa) apaga o tremor de textura entre quadros. O hqdn3d
+# seria o óbvio, mas é GPL e não vem no ffmpeg LGPL que o Forja baixa. Medido na B580 (SeedVR2 3B, 9 quadros 270x480
+# -> 2x): tremor 1,33 -> 0,96 (leve) -> 0,64 (forte), com a nitidez quase igual (499 -> 496 -> 487).
+LIMPEZA = {"leve": ("fftdnoiz=sigma=3:prev=1:next=1", "atadenoise=s=5"),
+           "forte": ("fftdnoiz=sigma=6:prev=1:next=1", "atadenoise=0a=0.04:0b=0.08:1a=0.04:1b=0.08:2a=0.04:2b=0.08:s=9")}
+
+
+def filtros(w: int, h: int, fator: int, suavizar: bool, fps: float, pre: str = "", pos: str = "") -> str:
+    """O -vf do final: `pre` (limpeza antes, só no Lanczos: com IA ela já foi na extração dos quadros), Lanczos até
+    o tamanho pedido (múltiplo de 2, que o yuv420p exige), `pos` (limpeza temporal depois) e, se pedido, o dobro de
+    quadros por interpolação de movimento (depois da limpeza: interpolar o chiado espalharia ele)."""
     alvo_w, alvo_h = (w * fator) // 2 * 2, (h * fator) // 2 * 2
-    vf = [f"scale={alvo_w}:{alvo_h}:flags=lanczos"]
+    vf = [x for x in (pre, f"scale={alvo_w}:{alvo_h}:flags=lanczos", pos) if x]
     if suavizar:
         vf.append(f"minterpolate=fps={fps * 2:g}:mi_mode=mci:mc_mode=aobmc:vsbmc=1")
     return ",".join(vf)
@@ -581,7 +590,7 @@ def _comfy_quadros(trabalho: Path, fator: int, modelo: str, tipo: str, total: in
 
 
 def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: bool = False, job_id: str = "",
-            progresso=None, previa: Path | None = None) -> dict:
+            progresso=None, previa: Path | None = None, limpeza: str = "") -> dict:
     """Amplia `entrada` em `fator` (2 ou 4) e grava `saida` (.webm). `modelo` vazio = Lanczos, sem IA; ESRGAN pelo
     sd-cli; SeedVR2 e DAT/HAT/SwinIR pelo ComfyUI (o tipo sai do arquivo, tipo_local).
     `progresso(feitos, total, s_por_quadro)`; `previa` recebe o último quadro ampliado. Devolve a sondagem
@@ -589,6 +598,7 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
     ff = str(_ffmpeg())
     enc = codificador(ff)  # antes dos quadros: sem encoder, falha já, não depois de minutos de ESRGAN
     info = sondar(entrada)
+    pre, pos = LIMPEZA.get(limpeza, ("", ""))
     trabalho = saida.parent / ".ampliando" / saida.stem
     shutil.rmtree(trabalho, ignore_errors=True)
     (trabalho / "in").mkdir(parents=True)
@@ -598,7 +608,8 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
         if modelo:
             # fps constante: vídeo de celular vem com fps variável, e contar quadros "como vieram" tirava o
             # vídeo do tempo do áudio
-            _rodar([ff, "-v", "error", "-i", entrada, "-fps_mode", "cfr", "-r", info["taxa"], str(trabalho / "in" / "%05d.png")], job_id)
+            _rodar([ff, "-v", "error", "-i", entrada, "-fps_mode", "cfr", "-r", info["taxa"], *(["-vf", pre] if pre else []),
+                    str(trabalho / "in" / "%05d.png")], job_id)
             quadros = sorted((trabalho / "in").glob("*.png"))
             tipo = tipo_local(modelo)
             if tipo in ("seedvr2", "spandrel"):
@@ -626,7 +637,7 @@ def ampliar(entrada: str, saida: Path, fator: int, modelo: str = "", suavizar: b
                 feitos = int(l[6:] or 0)
                 progresso(min(feitos, total), total, (time.monotonic() - comeco) / max(1, feitos))
         _rodar([ff, "-v", "error", "-nostats", "-progress", "pipe:1", "-y", *entrada_final,
-                "-vf", filtros(info["w"], info["h"], fator, suavizar, info["fps"]),
+                "-vf", filtros(info["w"], info["h"], fator, suavizar, info["fps"], "" if modelo else pre, pos),
                 "-c:v", enc, "-b:v", "0", "-crf", "24", "-pix_fmt", "yuv420p", *(["-row-mt", "1"] if "vpx" in enc else []),
                 "-c:a", "libopus", "-b:a", "128k", str(saida)], job_id, andou)
         if progresso and not modelo:

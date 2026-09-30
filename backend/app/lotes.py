@@ -726,19 +726,19 @@ def _opts_ampliadas(opts: dict, fator: int, suavizar: bool) -> dict:
 
 def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, fator: int, modelos: list[str],
                      suavizar: bool, prompt: str = "", forca: float | None = None,
-                     tomados: set[str] | None = None) -> list[dict]:
+                     tomados: set[str] | None = None, limpeza: str = "") -> list[dict]:
     """Um item por método, na ordem escolhida (a fila faz um depois do outro). Cada um leva a própria ampliação e o
     próprio tamanho: um lote pode misturar métodos e fatores (Reaproveitar acrescenta outro método no mesmo lote)."""
     tomados = set(tomados or ())
     itens = []
     for modelo in dict.fromkeys(modelos):
         amp_i = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar),
-                 **_redesenho(modelo, prompt, forca)}
+                 **_redesenho(modelo, prompt, forca), **({"limpeza": limpeza} if limpeza else {})}
         saida = _saida_ao_lado(lugar, fator, modelo, ext, suavizar, tomados)
         tomados.add(str(saida))
         nome = Path(modelo).stem if modelo else "Lanczos"
         item = {"path": str(saida), "seed": seed, "model": modelo,
-                "model_name": f"{nome} · {fator}×{' · suavizado' if suavizar else ''}",
+                "model_name": f"{nome} · {fator}×{' · suavizado' if suavizar else ''}{f' · ruído {limpeza}' if limpeza else ''}",
                 "status": "pendente", "error": "", "ampliacao": amp_i, "opts": _opts_ampliadas(opts, fator, suavizar)}
         if ext == ".webm":  # vídeo: o reap apaga o webm pela metade; o PNG da imagem só aparece pronto
             item["unidade"] = "quadro"
@@ -747,10 +747,12 @@ def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, 
 
 
 def _nova_ampliacao(conv_id: int, origem: str, lugar: Path, ext: str, pedido: str, opts: dict, seed: int,
-                    fator: int, modelos: list[str], suavizar: bool, prompt: str = "", forca: float | None = None) -> dict:
+                    fator: int, modelos: list[str], suavizar: bool, prompt: str = "", forca: float | None = None,
+                    limpeza: str = "") -> dict:
     """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem.
     `modelos`: um item por método, feitos em sequência no mesmo lote."""
-    imagens = _itens_ampliacao(origem, lugar, ext, opts, seed, fator, modelos, suavizar, prompt, forca)
+    imagens = _itens_ampliacao(origem, lugar, ext, opts, seed, fator, modelos, suavizar, prompt, forca,
+                               limpeza=limpeza if ext == ".webm" else "")
     amp_meta = imagens[0]["ampliacao"]  # o do lote: o 1º método (as telas antigas leem daqui)
     opts = {**opts, **imagens[0]["opts"], "ampliacao": amp_meta}
     _save(conv_id, role="user", content=pedido, meta={"refs": [], "models": list(dict.fromkeys(modelos)), "ampliacao": amp_meta})
@@ -798,7 +800,7 @@ def _redesenho(modelo: str, prompt: str, forca: float | None) -> dict:
 
 
 def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False,
-            prompt_novo: str = "", forca: float | None = None, modelos: list[str] | None = None) -> dict:
+            prompt_novo: str = "", forca: float | None = None, modelos: list[str] | None = None, limpeza: str = "") -> dict:
     """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
     progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
     msg = _mensagem(message_id)
@@ -818,12 +820,12 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
     # redesenhar: sem prompt na tela, vale o prompt que gerou a imagem
     opts = {**(msg["meta"].get("opts") or {}), **(item.get("opts") or {})}  # a tomada pode ter tamanho próprio
     return _nova_ampliacao(msg["conversation_id"], path, Path(path), ".png" if imagem else ".webm", prompt, opts,
-                           item["seed"], fator, modelos, suavizar and not imagem, prompt_novo or base, forca)
+                           item["seed"], fator, modelos, suavizar and not imagem, prompt_novo or base, forca, limpeza)
 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False,
                     confirm: bool = False, prompt: str = "", forca: float | None = None,
-                    modelos: list[str] | None = None) -> dict:
+                    modelos: list[str] | None = None, limpeza: str = "") -> dict:
     """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
     para a pasta de vídeos; o original não é tocado."""
     from . import ampliar as amp
@@ -854,7 +856,7 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
     pasta = imagegen.video_dir()
     pasta.mkdir(parents=True, exist_ok=True)
     return _nova_ampliacao(conv_id, path, pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", ".webm",
-                           Path(path).name, _dims_video(path), 0, fator, modelos, suavizar)
+                           Path(path).name, _dims_video(path), 0, fator, modelos, suavizar, limpeza=limpeza)
 
 
 def _dims_video(path: str) -> dict:
@@ -864,7 +866,7 @@ def _dims_video(path: str) -> dict:
 
 
 def ampliar_mais(message_id: int, fator: int, modelos: list[str], suavizar: bool = False, confirm: bool = False,
-                 prompt: str = "", forca: float | None = None) -> dict:
+                 prompt: str = "", forca: float | None = None, limpeza: str = "") -> dict:
     """"Reaproveitar" numa ampliação: o MESMO original ampliado por outros métodos (ou outro fator), no mesmo lote,
     um depois do outro. O original é o do lote, não a tomada ampliada."""
     from . import ampliar as amp
@@ -897,7 +899,7 @@ def ampliar_mais(message_id: int, fator: int, modelos: list[str], suavizar: bool
         else pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{origem.name}"
     imagens += _itens_ampliacao(str(origem), lugar, ".png" if imagem else ".webm", opts, imagens[0]["seed"], fator,
                                 modelos, suavizar and not imagem, prompt or a.get("prompt", ""), forca,
-                                {i["path"] for i in imagens})
+                                {i["path"] for i in imagens}, "" if imagem else limpeza)
     job = downloads.create("lote", f"ampliar {origem.name}")
     _patch(message_id, status="running", meta={"job": job["id"], "count": len(imagens), "images": imagens})
     with db.session() as s:  # a conversa sobe na barra lateral, como num lote novo
@@ -974,7 +976,8 @@ def _ampliar_um(message_id: int, meta: dict, imagens: list[dict], item: dict, jo
                                a.get("prompt", ""), a.get("forca", amp.FORCA_PADRAO))
             r = None  # o tamanho já está nas opts (origem × fator)
         else:
-            r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
+            r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa,
+                            a.get("limpeza", ""))
         # o que saiu de fato (o minterpolate não inventa quadro depois do último): o player conta com isso
         if r:
             item["opts"] = {**(item.get("opts") or {}), "width": r["w"], "height": r["h"], "fps": round(r["fps"]),

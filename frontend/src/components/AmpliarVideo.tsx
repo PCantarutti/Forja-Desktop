@@ -112,7 +112,8 @@ export function PainelAmpliar(props: {
   imagem?: boolean;
   prompt?: string; // redesenhar: começa com o prompt que gerou a imagem
   varios?: boolean;
-  enviar: (corpo: { fator: number; modelo: string; modelos: string[]; suavizar: boolean; confirm?: boolean; prompt?: string; forca?: number }) => Promise<void>;
+  enviar: (corpo: { fator: number; modelo: string; modelos: string[]; suavizar: boolean; confirm?: boolean; prompt?: string; forca?: number;
+                     limpeza?: string }) => Promise<void>;
   onError: (e: string) => void;
 }) {
   const estado = useCatalogo(props.onError);
@@ -120,6 +121,7 @@ export function PainelAmpliar(props: {
   const [marcados, setMarcados] = useState<string[] | null>(null); // null = ainda não escolheu; a ordem é a da fila
   const [fator, setFator] = useState<2 | 4>(2);
   const [suavizar, setSuavizar] = useState(false);
+  const [limpeza, setLimpeza] = useState<"" | "leve" | "forte">(""); // vídeo: denoise do ffmpeg antes e depois da IA
   const [enviando, setEnviando] = useState(false);
   const [vram, setVram] = useState(""); // a mensagem do 409: tem modelo de texto carregado
   const [prompt, setPrompt] = useState(props.prompt ?? "");
@@ -146,6 +148,7 @@ export function PainelAmpliar(props: {
     setEnviando(true);
     try {
       await props.enviar({ fator, modelo: escolhido, modelos: escolhidos, suavizar: suavizar && !props.imagem, ...(confirm ? { confirm } : {}),
+                           ...(!props.imagem && limpeza ? { limpeza } : {}),
                            ...(redesenha ? { prompt, forca } : {}) });
       setVram("");
     } catch (e: any) {
@@ -203,6 +206,15 @@ export function PainelAmpliar(props: {
           </button>
         ))}
       </div>
+      {!props.imagem && (
+        <div className="flex flex-wrap items-center gap-1.5"
+             title="Denoise do ffmpeg: antes da IA tira o ruído de compressão do original; depois, o tremor de textura entre quadros (o chiado)">
+          <span className="mr-1 text-faint">Limpar ruído</span>
+          {([["", "Não"], ["leve", "Leve"], ["forte", "Forte"]] as const).map(([id, rot]) => (
+            <button key={id || "nao"} className={opcao(limpeza === id)} aria-pressed={limpeza === id} onClick={() => setLimpeza(id)}>{rot}</button>
+          ))}
+        </div>
+      )}
       {!props.imagem && (
         <label className="flex items-center gap-2 text-muted" title="Interpolação de movimento do ffmpeg: o dobro de quadros, sem gerar de novo">
           <input type="checkbox" checked={suavizar} onChange={(e) => setSuavizar(e.target.checked)} />
