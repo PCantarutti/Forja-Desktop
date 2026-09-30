@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import html as html_lib
 import json
+import logging
 import re
 import time
 from contextlib import aclosing
@@ -39,6 +40,8 @@ from . import config, db, design_html, design_imagens, design_repo, design_revis
 from .agent import _save, _stats
 from .parsing import split_think
 from .tools import ToolError
+
+log = logging.getLogger("forja.design")
 
 PROMPTS = Path(__file__).parent / "design_prompts"
 TICK = 0.4   # segundos entre retratos do SSE
@@ -1327,6 +1330,19 @@ def _sem_imagens(mensagens: list[dict]) -> list[dict] | None:
                                                           "este modelo não lê imagem. Use só o texto acima.)"}]
 
 
+async def _json_ou_reparo(run: dict, mensagens: list[dict], texto: str) -> dict:
+    """JSON da resposta; se veio quebrado (modelo local escorrega: vírgula, aspas, texto no meio), uma
+    segunda chance como no Agente — o modelo vê o que mandou e o erro, e devolve só o objeto corrigido."""
+    try:
+        return design_html.ler_json(texto)
+    except ValueError as e:
+        log.warning("design: JSON inválido do modelo (%s), pedindo correção: %r", e, texto[-400:])
+        conserto = mensagens[:2] + [{"role": "assistant", "content": texto[-12000:]},
+                                    {"role": "user", "content": f"Essa resposta não é um JSON válido ({e}). Devolva SÓ o objeto "
+                                                                "JSON completo e corrigido, sem texto antes nem depois e sem cerca de código."}]
+        return design_html.ler_json(await _chamar(run, conserto))
+
+
 async def _chamar_com_referencias(run: dict, mensagens: list[dict]) -> str:
     """Modelo sem visão recusa a imagem de referência (HTTP 400): refaz só com o texto e avisa."""
     try:
@@ -1368,7 +1384,7 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                         passos=[f"Propôs “{v['nome']}” ({len(v['tokens'])} tokens)" for v in variacoes[:4]])
                 return
             if modo in ("plano", "perguntas"):
-                d = design_html.ler_json(texto)
+                d = await _json_ou_reparo(run, mensagens, texto)
                 conversa = {"mensagem": str(d.get("mensagem") or "")[:800], "sugestoes": design_html.sugestoes(d.get("sugestoes"))}
                 if modo == "perguntas":
                     perguntas = _perguntas(d)
@@ -1378,11 +1394,12 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                         return
                     # o pedido já diz tudo: segue direto para o plano, na mesma mensagem e sem outro clique
                     run["modo"] = modo = "plano"
-                    texto = await _chamar(run, [{"role": "system", "content": prompt("plano")}, mensagens[1]])
+                    mensagens = [{"role": "system", "content": prompt("plano")}, mensagens[1]]
+                    texto = await _chamar(run, mensagens)
                     if run["cancelar"]:
                         _fecha(mid, "cancelado", "Cancelado — o documento não mudou.")
                         return
-                    d = design_html.ler_json(texto)
+                    d = await _json_ou_reparo(run, mensagens, texto)
                     conversa = {"mensagem": str(d.get("mensagem") or "")[:800], "sugestoes": design_html.sugestoes(d.get("sugestoes"))}
                 plano = validar_plano(d)
                 if run.get("ds_id"):   # o sistema manda: tokens dele por cima dos que o modelo inventou

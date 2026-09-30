@@ -31,3 +31,11 @@ def test_resposta_as_perguntas_nao_vira_ajuste(monkeypatch):
     _esperar(lambda: design.start(conv, "landing de padaria", M, perguntar=True, respostas=respostas))
     tipo, user = vistos[-1]
     assert user.startswith("Pedido: landing de padaria") and "sóbrio" in user
+
+
+def test_json_quebrado_ganha_segunda_chance(monkeypatch):
+    conv, vistos = _projeto(html=None), []
+    respostas = iter(['{"tipo": "site", "titulo": "Nova", "secoes": [ {"nome": "hero"} "faltou vírgula" ]', json.dumps(PLANO)])
+    _fake(monkeypatch, lambda tipo, user: next(respostas), vistos)
+    _esperar(lambda: design.start(conv, "landing com hero e FAQ", M))
+    assert _ultima(conv)["status"] == "plano" and len(vistos) == 2
