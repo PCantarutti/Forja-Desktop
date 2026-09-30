@@ -6,6 +6,36 @@ import { FolderOpen, Trash } from "./icons";
 // canvas ao vivo e vão para o rascunho, sem chamar modelo nenhum; e os design systems (tirados do código
 // de um projeto) para aplicar aqui ou usar nos próximos planos.
 
+/** Design system sendo criado agora (mora no DesignView: sobrevive à troca de aba). */
+export type CriandoSistema = { pasta: string; nome: string; modelo: string; desde: number };
+
+function Criando({ c }: { c: CriandoSistema }) {
+  const [agora, setAgora] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setAgora(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.max(0, Math.round((agora - c.desde) / 1000));
+  const pasta = c.pasta.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+  return (
+    <div role="status" aria-live="polite" className="overflow-hidden rounded-lg border border-accent-line bg-accent-soft/40">
+      <div className="flex items-center gap-2.5 p-2.5">
+        <span className="size-4 shrink-0 animate-spin rounded-full border-2 border-accent/25 border-t-accent" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[13px] text-fg">Criando “{c.nome || pasta}”…</div>
+          <div className="truncate text-[11.5px] text-muted">
+            Lendo <span className="font-mono text-[11px]">{pasta}</span> e resumindo com {c.modelo}
+          </div>
+        </div>
+        <span className="shrink-0 font-mono text-[11px] text-faint tabular-nums">{Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}</span>
+      </div>
+      <div className="h-0.5 overflow-hidden bg-accent/10">
+        <div className="corre h-full w-2/5 rounded-full bg-gradient-to-r from-transparent via-accent to-transparent" />
+      </div>
+    </div>
+  );
+}
+
 export type Sistema = { id: string; nome: string; pasta: string; tokens: Record<string, string>; css: string; notas: string; criado: string };
 
 const SALVAR_MS = 700;
@@ -116,6 +146,7 @@ export default function DesignAjustes(props: {
   onSistemaNovos: (id: string) => void;
   onAplicarSistema: (id: string) => void;
   onExtrair: (pasta: string, nome: string) => Promise<void>;
+  criando?: CriandoSistema | null;   // design system sendo criado (spinner na lista)
   onApagar: (id: string) => void;
   pastaPadrao: string;
   selecionados: number;          // elementos selecionados no canvas: os ajustes da IA focam neles
@@ -129,7 +160,7 @@ export default function DesignAjustes(props: {
   const [pasta, setPastaEstado] = useState(() => { try { return localStorage.getItem(CHAVE_PASTA) || props.pastaPadrao; } catch { return props.pastaPadrao; } });
   const setPasta = (p: string) => { setPastaEstado(p); try { localStorage.setItem(CHAVE_PASTA, p); } catch { /* sem storage: só nesta aba */ } };
   const [nome, setNome] = useState("");
-  const [extraindo, setExtraindo] = useState(false);
+  const extraindo = !!props.criando;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const salvar = useRef(props.onSalvar);
   salvar.current = props.onSalvar;
@@ -208,6 +239,7 @@ export default function DesignAjustes(props: {
           </select>
         </label>
         <div className="flex flex-col gap-1.5">
+          {props.criando && <Criando c={props.criando} />}
           {props.sistemas.map((s) => (
             <div key={s.id} className={`rounded-lg border p-2 ${props.sistemaDoDoc === s.id ? "border-accent-line bg-accent-soft/40" : "border-line"}`}>
               <div className="flex items-center gap-2">
@@ -244,16 +276,11 @@ export default function DesignAjustes(props: {
             <input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome (opcional)" className={`${campo} flex-1 font-sans`} />
             <button disabled={!pasta.trim() || extraindo}
                     onClick={async () => {
-                      setExtraindo(true);
-                      try {
-                        await props.onExtrair(pasta.trim(), nome.trim());
-                        setNome("");
-                      } finally {
-                        setExtraindo(false);
-                      }
+                      await props.onExtrair(pasta.trim(), nome.trim());
+                      setNome("");
                     }}
                     className="rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-              {extraindo ? "Lendo o código…" : "Criar do código"}
+              {extraindo ? "Criando…" : "Criar do código"}
             </button>
           </div>
           <p className="text-[11px] text-faint">Lê a pasta de um projeto (CSS, Tailwind, componentes) ou de um design system pronto (DESIGN.md, tokens em JSON, fontes) e resume; o modelo de edição só vê esse resumo.</p>

@@ -243,6 +243,10 @@ select option, select optgroup { background: var(--color-surface); color: var(--
 @keyframes onda { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 .onda { animation: onda 2.4s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .onda { animation: none; } }
+/* Trabalho sem progresso medível (ex.: criar design system): um trecho de luz que corre na trilha. */
+@keyframes corre { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.corre { animation: corre 1.6s cubic-bezier(.45,.05,.55,.95) infinite; }
+@media (prefers-reduced-motion: reduce) { .corre { animation: none; transform: none; width: 100% !important; opacity: .5; } }
 /* Janela sem barra de título (Electron, titleBarOverlay): a faixa de cima arrasta a janela, o que é
    clicável dentro dela não; e o espaço dos botões nativos (minimizar/maximizar/fechar) fica livre. As
    variáveis titlebar-area-* só existem com a sobreposição ativa: no navegador comum vira padding 0. */

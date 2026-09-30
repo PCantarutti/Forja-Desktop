@@ -3,7 +3,7 @@ import { api, streamSSE } from "../api";
 import type { Stats } from "../types";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula } from "./Composer";
 import { type Effort, Menu, ModeEffortMenu } from "./Controls";
-import DesignAjustes, { type Sistema } from "./DesignAjustes";
+import DesignAjustes, { type CriandoSistema, type Sistema } from "./DesignAjustes";
 import DesignAcessibilidade from "./DesignAcessibilidade";
 import DesignAtividade from "./DesignAtividade";
 import DesignCamadas from "./DesignCamadas";
@@ -213,7 +213,8 @@ export default function DesignView(props: {
   const palco = useRef<HTMLDivElement>(null);
   const telaCheia = useRef<HTMLIFrameElement>(null);
   const [sistemas, setSistemas] = useState<Sistema[]>([]);
-  const [refs, setRefs] = useState<Referencia[]>([]);     // anexos que vão no próximo pedido
+  const [refs, setRefs] = useState<Referencia[]>([]);
+  const [criandoSistema, setCriandoSistema] = useState<CriandoSistema | null>(null);   // aqui, não na aba: sobrevive à troca     // anexos que vão no próximo pedido
   const [anexando, setAnexando] = useState("");
   const [abrirAnexo, setAbrirAnexo] = useState(false);
   const [urlRef, setUrlRef] = useState("");   // o Electron não tem window.prompt: o endereço vai num campo
@@ -728,11 +729,14 @@ export default function DesignView(props: {
   }
 
   async function extrairSistema(pasta: string, nome: string) {
+    setCriandoSistema({ pasta, nome, modelo: prefs.modelos.edicao.model || "o modelo", desde: Date.now() });
     try {
       const s = await api.post<Sistema>("/design-sistemas/extrair", { pasta, nome, esforco: prefs.esforco, ...prefs.modelos.edicao });
       setSistemas((l) => [...l, s]);   // usar nos próximos planos é escolha explícita, no seletor
     } catch (e: any) {
       props.onError(e.message);
+    } finally {
+      setCriandoSistema(null);
     }
   }
 
@@ -1041,7 +1045,11 @@ export default function DesignView(props: {
           <button className={abaBtn(aba === "comentarios")} onClick={() => setAba("comentarios")}>
             Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{pendentes.length}</span>}
           </button>
-          <button className={abaBtn(aba === "ajustes")} onClick={() => setAba("ajustes")}>Ajustes</button>
+          <button className={`${abaBtn(aba === "ajustes")} inline-flex items-center gap-1.5`} onClick={() => setAba("ajustes")}
+                  title={criandoSistema ? "Criando um design system…" : undefined}>
+            Ajustes
+            {criandoSistema && <span className="size-2.5 animate-spin rounded-full border border-accent/30 border-t-accent" aria-label="criando design system" />}
+          </button>
           <button className={abaBtn(aba === "acessibilidade")} title="Revisão visual nas 3 larguras e acessibilidade"
                   onClick={() => { setAba("acessibilidade"); auditar(); }}>
             Revisão{!!revisao?.problemas.length && aba !== "acessibilidade" &&
@@ -1205,7 +1213,7 @@ export default function DesignView(props: {
               sistemaNovos={prefs.sistema ?? ""}
               onSistemaNovos={(id) => setPrefs((p) => ({ ...p, sistema: id }))}
               onAplicarSistema={(id) => semIA(`sistema/${id}`, {})}
-              onExtrair={extrairSistema}
+              onExtrair={extrairSistema} criando={criandoSistema}
               onApagar={apagarSistema}
               pastaPadrao={props.pastaPadrao}
               selecionados={selecao?.itens.length ?? 0}
