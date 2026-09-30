@@ -57,7 +57,7 @@ async function fetchGithub(url, opcoes) {
   try {
     return await fetch(url, opcoes);
   } catch (e) {
-    if (!["UND_ERR_SOCKET", "ECONNRESET"].includes(e.cause?.code)) throw e;
+    if (!["UND_ERR_SOCKET", "ECONNRESET", "ECONNABORTED"].includes(e.cause?.code)) throw e;   // ECONNABORTED: a descrição da 0.8.3 caiu nele
     return fetch(url, opcoes);
   }
 }
