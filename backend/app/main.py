@@ -24,7 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                kvcache, localai, lotes, lsp, metricas,
-               mcp_client, memory, mirror, mobile, native, pesquisa, design, design_html, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, design, estudos, design_html, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -47,6 +47,7 @@ async def lifespan(_app):
               "python.org ou do uv para desenvolver.", flush=True)
     localai.reap_orphan()
     taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
+    estudos.reap()  # resumo de estudo que ficou rodando numa queda anterior
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     lotes.limpar_referencias()  # cópias coladas que nenhuma mensagem cita (nunca usadas, ou de versão antiga)
@@ -421,6 +422,8 @@ async def get_activity():
     for r in list(design._RUNS.values()):   # geração do Design também acende a bolinha da conversa
         entrada(r["conv_id"])["running"] = True
     for r in list(comparar._RUNS.values()):  # comparação e lote de imagem/vídeo também
+        entrada(r["conv_id"])["running"] = True
+    for r in list(estudos._RUNS.values()):   # e o resumo da tela Estudos
         entrada(r["conv_id"])["running"] = True
     for c in lotes.pendentes():
         entrada(c)["running"] = True
@@ -2211,6 +2214,111 @@ def pesquisa_discutir(message_id: int):
         raise HTTPException(400, str(e))
 
 
+# ------------------------------------------------------------------ estudos
+
+
+class EstudosBody(BaseModel):
+    tema: str = ""
+    preferencias: dict = {}         # nivel, objetivo, tom, tamanho, extras[], observacoes
+    web: bool = True                # completar o material com pesquisa na web
+    profundidade: str = "normal"    # rapida | normal | funda (a da pesquisa)
+    provider: str = ""              # "claude-mcp" = o pedido fica para o Claude via MCP
+    model: str = ""
+    ex_provider: str = ""           # quem lê o material e as páginas; vazio = slot "rapido"
+    ex_model: str = ""
+
+
+class MaterialTextoBody(BaseModel):
+    nome: str = ""
+    texto: str = ""
+
+
+class MaterialUsoBody(BaseModel):
+    uso: str                        # conteudo | prova
+
+
+def _sse_estudos(message_id: int) -> StreamingResponse:
+    """Retrato inteiro por tick, como a pesquisa."""
+    async def stream():
+        while True:
+            try:
+                est = estudos.estado(message_id)
+            except ToolError as e:
+                yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+                return
+            yield f"data: {json.dumps(est, ensure_ascii=False, default=str)}\n\n"
+            if est["status"] != "rodando":
+                return
+            await asyncio.sleep(estudos.TICK)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/estudos/{conv_id}")
+def estudos_projeto(conv_id: int):
+    try:
+        return estudos.projeto(conv_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/material")
+async def estudos_material(conv_id: int, file: UploadFile = File(...)):
+    """PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, HTML ou foto. PDF escaneado e foto passam pelo OCR (demora)."""
+    dados = await file.read()
+    if len(dados) > config.MAX_DOC_BYTES:
+        raise HTTPException(413, f"Arquivo maior que {config.MAX_DOC_BYTES // 1_000_000} MB.")
+    try:
+        return await asyncio.to_thread(estudos.adicionar_material, conv_id, file.filename or "material", dados)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/material/texto")
+def estudos_material_texto(conv_id: int, body: MaterialTextoBody):
+    try:
+        return estudos.adicionar_material(conv_id, body.nome or "texto colado.txt", texto=body.texto)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/estudos/material/{material_id}")
+def estudos_material_uso(material_id: int, body: MaterialUsoBody):
+    try:
+        return estudos.alterar_material(material_id, body.uso)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/estudos/material/{material_id}")
+def estudos_material_remover(material_id: int):
+    try:
+        return estudos.remover_material(material_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/estudar")
+async def estudos_estudar(conv_id: int, body: EstudosBody):
+    try:
+        msg = estudos.start(conv_id, body.tema, body.preferencias, body.web, body.profundidade,
+                            body.provider, body.model, body.ex_provider, body.ex_model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
+@app.get("/api/estudos/resumo/{message_id}/stream")
+def estudos_stream(message_id: int):
+    return _sse_estudos(message_id)
+
+
+@app.post("/api/estudos/resumo/{message_id}/cancelar")
+def estudos_cancelar(message_id: int):
+    return estudos.cancelar(message_id)
+
+
 # ------------------------------------------------------------------ navegador integrado
 # Uma sessão por conversa: `conv` é o id da conversa ("0" = rascunho da tela inicial).
 
@@ -2464,8 +2572,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa ou design")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudos"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design ou estudos")
     if not folder and kind in ("agent", "maestro"):
         folder = config.WORKSPACE_PADRAO  # None: a pasta é escolhida antes do 1º envio (start_run barra)
     with db.session() as s:
@@ -2863,7 +2971,7 @@ async def delete_conversation(conv_id: int):
     # A execução em andamento continua salvando mensagem nesta conversa: sem a guarda, o próximo
     # `_save` acha `None` no lugar dela e a execução morre com AttributeError. O caminho em lote
     # já recusava; este não.
-    if active_run(conv_id):
+    if active_run(conv_id) or estudos.rodando(conv_id):
         raise HTTPException(409, "Esta conversa tem uma execução em andamento. Pare antes de apagar.")
     with db.session() as s:
         c = _get_conv(s, conv_id)
@@ -2891,6 +2999,7 @@ def _limpar_disco(conv_id: int, pasta: str | None):
         lotes.apagar_referencias(refs, conv_id)  # só as que outra conversa não usa
         mirror.remove(conv_id)  # o .md espelhado
         design_repo.apagar(conv_id)  # projeto de design: a pasta dele (repositório, fotos, imagens da skill)
+        estudos.apagar(conv_id)  # estudo: o material anexado e o texto extraído
         kvcache.apagar_conversa(conv_id)  # E4: o cache do prompt em disco
         shutil.rmtree(SPILL_DIR / str(conv_id), ignore_errors=True)  # saídas grandes das ferramentas
     return depois

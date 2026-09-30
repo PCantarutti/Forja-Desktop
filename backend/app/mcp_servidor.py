@@ -418,7 +418,10 @@ INSTRUCOES = (
     "validate_feature encerra a funcionalidade. Achou um bug ou "
     "melhoria? issue_create com arquivo, linha e trecho real. Use forja_note para contar o progresso ao usuário "
     "no painel do Forja em cada etapa. Se um resultado trouxer '[Mensagem do usuário…]', ela vale como pedido "
-    "dele: leve em conta antes de seguir.")
+    "dele: leve em conta antes de seguir. "
+    "Tela Estudos (não precisa de `path`): ferramentas estudos_* — crie a matéria, anexe material, leia por "
+    "páginas, pesquise com a sua própria busca e grave o resumo; estudos_pedidos traz o que o usuário pediu na "
+    "tela com o motor \"Claude (MCP)\".")
 
 
 def _servidor():
@@ -536,6 +539,51 @@ def _servidor():
             return "ERRO: o controle pelo Claude está desligado no Forja (Configurações › MCP)."
         conv, _ = espelho(path)
         return "\n---\n".join(caixa(conv)) or "Nenhuma mensagem nova do usuário."
+
+    # Tela Estudos: o Claude pensa e escreve, o Forja guarda e mostra ao vivo (PC e celular). Chamam o
+    # estudos.py direto, sem Run do agente: nada aqui mexe em arquivo do usuário.
+    from . import estudos
+
+    @mcp.tool()
+    async def estudos_listar() -> str:
+        """Os estudos (matérias) da tela Estudos do Forja, mais recentes primeiro."""
+        return estudos.mcp_listar()
+
+    @mcp.tool()
+    async def estudos_criar(tema: str) -> str:
+        """Cria um estudo novo na tela Estudos e devolve o id dele."""
+        return estudos.mcp_criar(tema)
+
+    @mcp.tool()
+    async def estudos_abrir(estudo_id: int) -> str:
+        """Material anexado, último resumo, preferências do aluno e o formato que a tela espera."""
+        return estudos.mcp_abrir(estudo_id)
+
+    @mcp.tool()
+    async def estudos_ler_material(material_id: int, inicio: int = 1, fim: int = 0) -> str:
+        """Texto de um material: páginas inicio..fim (ou a parte `inicio`, se não tiver páginas). Até 40 mil
+        caracteres por chamada; o fim do resultado diz de onde continuar."""
+        return estudos.mcp_ler_material(material_id, inicio, fim)
+
+    @mcp.tool()
+    async def estudos_anexar(estudo_id: int, caminho: str = "", texto: str = "", nome: str = "") -> str:
+        """Anexa material ao estudo: um arquivo do disco (`caminho` absoluto: PDF, DOCX, PPTX, TXT, MD, imagem...)
+        ou um `texto`. O Forja extrai o texto (com OCR se preciso) e mostra na tela."""
+        return await asyncio.to_thread(estudos.mcp_anexar, estudo_id, caminho, texto, nome)
+
+    @mcp.tool()
+    async def estudos_salvar_resumo(markdown: str, estudo_id: int = 0, pedido_id: int = 0, tema: str = "",
+                                    fontes: list[dict] | None = None, modelo: str = "") -> str:
+        """Grava o resumo em Markdown (formato em estudos_abrir). Com `pedido_id` atende um pedido da tela;
+        sem ele, cria um resumo novo no `estudo_id`. `fontes` = [{titulo, url}] das páginas da web usadas;
+        `modelo` = o seu nome (aparece na tela)."""
+        return estudos.mcp_salvar_resumo(markdown, estudo_id, pedido_id, tema, fontes, modelo)
+
+    @mcp.tool()
+    async def estudos_pedidos(espera: int = 60) -> str:
+        """Pedidos que o usuário fez na tela Estudos com o motor "Claude (MCP)", com tudo o que é preciso para
+        atendê-los. Sem pedido, espera até `espera` segundos (máx. 100) por um novo."""
+        return await estudos.mcp_pedidos(espera)
 
     return mcp
 
