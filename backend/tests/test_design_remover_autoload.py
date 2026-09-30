@@ -37,3 +37,11 @@ def test_ia_local_sem_modelo_carrega_o_escolhido(monkeypatch):
     monkeypatch.setattr(localai, "status", lambda: {"running": True})
     asyncio.run(design._garantir_local(run))
     assert len(carregados) == 1
+
+
+def test_nome_comum_da_parte_vai_para_a_secao_certa():
+    secoes = ["topo", "hero", "produtos", "precos", "faq", "rodape"]
+    assert design.rotear("e quanto ao menu hamburguer?", True, secoes) == ("secao", "topo")
+    assert design.rotear("o footer está muito alto", True, secoes) == ("secao", "rodape")
+    assert design.rotear("acrescente uma pergunta sobre prazo", True, secoes) == ("secao", "faq")
+    assert design.rotear("refaça o site inteiro do zero", True, secoes)[0] == "documento"

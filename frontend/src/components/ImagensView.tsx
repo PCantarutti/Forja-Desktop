@@ -705,7 +705,10 @@ export default function ImagensView(props: {
                 <button className={btn} onClick={() => setAbrirAjustes(true)}>
                   {models.length ? `${models.length} modelo${models.length > 1 ? "s" : ""} · ajustes` : "Escolher modelo"}
                 </button>
-                {st.image_busy || ocupado ? <span className="text-faint">Já tem imagem sendo gerada.</span> : null}
+                {/* botão apagado sempre diz o porquê (antes só o "ocupado" dizia) */}
+                {semRuntime ? <span className="text-warn">O stable-diffusion.cpp ainda não está instalado — baixe o runtime em IA local › Imagem.</span>
+                  : !models.length ? <span className="text-warn">Escolha um modelo de imagem em “Escolher modelo”.</span>
+                    : st.image_busy || ocupado ? <span className="text-faint">Já tem imagem sendo gerada.</span> : null}
               </div>
             </div>
           )}

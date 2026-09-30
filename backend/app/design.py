@@ -102,6 +102,16 @@ _TOKENS = re.compile(r"\b(cor|cores|paleta|fonte|fontes|tipografi\w*|espacament\
                      r"tema|escur\w*|clar[oa]|contraste|tons?)\b")
 
 
+_SINONIMOS = [
+    (r"\b(menu|hamburg\w*|navega\w*|nav|navbar|cabecalho|header|logo|topo)\b", ("topo", "cabecalho", "header", "nav", "navbar", "menu")),
+    (r"\b(rodape|footer)\b", ("rodape", "footer")),
+    (r"\b(precos?|planos?|pricing|assinatura)\b", ("precos", "planos", "pricing")),
+    (r"\b(faq|perguntas?|duvidas?)\b", ("faq", "perguntas", "duvidas")),
+    (r"\b(contato|formulario|fale conosco)\b", ("contato", "fale-conosco")),
+    (r"\b(depoimentos?|avaliac\w*|clientes dizem)\b", ("depoimentos", "avaliacoes", "prova-social")),
+]
+
+
 def rotear(pedido: str, tem_doc: bool, secoes: list[str], fids: list[str] | None = None) -> tuple[str, str | None]:
     """Heurística simples; o usuário pode forçar outra rota na tela. (rota, seção alvo)."""
     if fids:
@@ -116,6 +126,10 @@ def rotear(pedido: str, tem_doc: bool, secoes: list[str], fids: list[str] | None
         return "secao", design_html.slug(m.group(1)) if m else "nova"
     if citada := next((s for s in secoes if re.search(rf"\b{re.escape(s.replace('-', ' '))}\b", t)), None):
         return "secao", citada
+    # o nome comum da parte ("menu hamburguer" → topo): sem isto caía no documento inteiro, o caminho mais caro
+    for palavras, nomes in _SINONIMOS:
+        if re.search(palavras, t) and (sec := next((s for s in secoes if s in nomes), None)):
+            return "secao", sec
     if _TOKENS.search(t):
         return "tokens", None
     return "documento", None
