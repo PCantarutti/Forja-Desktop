@@ -75,6 +75,12 @@ const KEY = "forja.design.preferencias";
 const REDESENHO_MS = 1500;   // canvas durante a geração do documento: re-renderiza o parcial nesse ritmo
 const CAMPO_MAX = 320;        // o campo cresce até aqui e depois rola, como no agente
 
+/** Accent do tema do Forja (o iframe não enxerga as variáveis do app): pins de comentário na mesma cor. */
+function corDoTema(): { cor?: string; corTexto?: string } {
+  const css = getComputedStyle(document.documentElement);
+  return { cor: css.getPropertyValue("--accent").trim() || undefined, corTexto: css.getPropertyValue("--accent-fg").trim() || undefined };
+}
+
 const ROTAS: { id: Rota; label: string; hint: string }[] = [
   { id: "auto", label: "Rota automática", hint: "O Forja escolhe o caminho mais barato pelo pedido" },
   { id: "tokens", label: "Só tokens", hint: "Muda só o :root (cores, fontes, espaços): a página inteira acompanha" },
@@ -374,7 +380,7 @@ export default function DesignView(props: {
   const pendentes = (projeto?.comentarios ?? []).filter((c) => c.status === "pendente" && !c.orfao);
   const numero = (id: number) => pendentes.findIndex((c) => c.id === id) + 1;
   const pinsAtuais = () => pendentes.map((c, i) => ({ fid: c.fids[0], n: i + 1 }));
-  useEffect(() => paraIframe(janela(), { type: "showPins", pins: pinsAtuais() }), [projeto?.comentarios]);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => paraIframe(janela(), { type: "showPins", pins: pinsAtuais(), ...corDoTema() }), [projeto?.comentarios]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const modelosDe = () => ({ ...prefs.modelos });
 
@@ -843,7 +849,7 @@ export default function DesignView(props: {
       if (tela) paraIframe(janela(), { type: "setTela", nome: tela });
       if (paginaAtual) paraIframe(janela(), { type: "setPagina", nome: paginaAtual });
       if (aba === "acessibilidade") paraIframe(janela(), { type: "auditar" });
-      paraIframe(janela(), { type: "showPins", pins: pinsAtuais() });
+      paraIframe(janela(), { type: "showPins", pins: pinsAtuais(), ...corDoTema() });
       if (selecao) selecionar(selecao.itens.map((i) => i.fid));
       if (camadas) paraIframe(janela(), { type: "arvore" });
     } else if (m.type === "arvore") setNosCamadas(m.nos);
@@ -1043,7 +1049,7 @@ export default function DesignView(props: {
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-3">
           <button className={abaBtn(aba === "chat")} onClick={() => setAba("chat")}>Chat</button>
           <button className={abaBtn(aba === "comentarios")} onClick={() => setAba("comentarios")}>
-            Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{pendentes.length}</span>}
+            Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-accent-soft px-1.5 text-[10.5px] text-accent-text">{pendentes.length}</span>}
           </button>
           <button className={`${abaBtn(aba === "ajustes")} inline-flex items-center gap-1.5`} onClick={() => setAba("ajustes")}
                   title={criandoSistema ? "Criando um design system…" : undefined}>
@@ -1172,10 +1178,10 @@ export default function DesignView(props: {
                 const n = numero(c.id);
                 return (
                   <div key={c.id} onClick={() => mostrarComentario(c)}
-                       className={`cursor-pointer rounded-xl border p-2.5 text-[13px] ${n && n === pinAtivo ? "border-amber-400/60 bg-amber-500/5" : "border-line hover:bg-raised/50"} ${c.status !== "pendente" ? "opacity-60" : ""}`}>
+                       className={`cursor-pointer rounded-xl border p-2.5 text-[13px] ${n && n === pinAtivo ? "border-accent-line bg-accent-soft" : "border-line hover:bg-raised/50"} ${c.status !== "pendente" ? "opacity-60" : ""}`}>
                     <div className="flex items-start gap-2">
                       {n > 0 ? (
-                        <span className="grid size-5 shrink-0 place-items-center rounded-full bg-amber-500 font-mono text-[10.5px] font-bold text-black">{n}</span>
+                        <span className="grid size-5 shrink-0 place-items-center rounded-full bg-accent font-mono text-[10.5px] font-bold text-accent-fg">{n}</span>
                       ) : c.status === "aplicado" ? <Check className="mt-0.5 size-4 shrink-0 text-emerald-300" /> : <span className="size-5 shrink-0" />}
                       <div className="min-w-0 flex-1">
                         <p className="whitespace-pre-wrap text-fg">{c.texto}</p>
@@ -1454,7 +1460,7 @@ export default function DesignView(props: {
                 .map(([id, rotuloModo, Icone, dica, alterna]) => (
                   <button key={id} aria-pressed={modo === id} title={ladoALado ? "No lado a lado é só visualização: abra uma largura para editar" : dica}
                           aria-label={rotuloModo} disabled={!srcBase || ladoALado} onClick={alterna} className={segBtn(modo === id)}>
-                    <Icone className={`size-3.5 ${modo === id ? (id === "comment" ? "text-amber-300" : "text-accent-text") : ""}`} />
+                    <Icone className={`size-3.5 ${modo === id ? "text-accent-text" : ""}`} />
                     <span className="hidden @2xl/canvas:inline">{rotuloModo}</span>
                   </button>
                 ))}
@@ -1780,10 +1786,10 @@ export default function DesignView(props: {
             const top = embaixo + A > a.height + sy - 8 ? Math.max(8, oy + r.y - A - 8) : embaixo;
             const left = Math.min(Math.max(8, ox + r.x), a.width + sx - L - 8);
             return (
-              <div className="absolute z-20 rounded-xl border border-amber-400/50 bg-surface p-2.5 shadow-2xl" style={{ top, left, width: L }}
+              <div className="absolute z-20 rounded-xl border border-accent-line bg-surface p-2.5 shadow-2xl" style={{ top, left, width: L }}
                    role="dialog" aria-label="Comentário no elemento">
                 <div className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-muted">
-                  <Bubble className="size-3.5 text-amber-300" />
+                  <Bubble className="size-3.5 text-accent-text" />
                   {selecao.itens.length === 1 ? <span className="font-mono">{rotulo(selecao.itens[0])}</span> : <span>{selecao.itens.length} elementos</span>}
                   <span className="ml-auto text-faint">Shift+clique junta mais</span>
                 </div>
@@ -1799,7 +1805,7 @@ export default function DesignView(props: {
                   <span className="flex-1" />
                   <button onClick={() => { setNotaTexto(""); selecionar([]); }} className="rounded-lg px-2 py-0.5 text-xs text-muted hover:text-fg">Cancelar</button>
                   <button disabled={!notaTexto.trim()} onClick={comentarNaCaixa}
-                          className="rounded-lg bg-amber-500 px-2.5 py-0.5 text-xs font-medium text-black hover:brightness-110 disabled:opacity-40">
+                          className="rounded-lg bg-accent px-2.5 py-0.5 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
                     Pôr na fila
                   </button>
                 </div>

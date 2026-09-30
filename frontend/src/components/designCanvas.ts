@@ -38,7 +38,7 @@ export type ParaCanvas =
   | { type: "setMode"; mode: Modo }
   | { type: "highlight"; fids: string[] }
   | { type: "scrollTo"; fid: string }
-  | { type: "showPins"; pins: Pin[] }
+  | { type: "showPins"; pins: Pin[]; cor?: string; corTexto?: string }   // cor: accent do tema do Forja
   | { type: "setSlide"; n: number }
   | { type: "setTela"; nome: string }
   | { type: "setPagina"; nome: string }
@@ -119,6 +119,7 @@ function inspetor() {
   let modo = "view";
   let sel: string[] = [];
   let pins: { fid: string; n: number }[] = [];
+  let corPin = "#f59e0b", textoPin = "#111";   // o app manda o accent do tema junto com os pins
   let hover: Element | null = null;
   let editando: { el: HTMLElement; antes: string } | null = null;
   const filhos: string[] = [];   // seta para baixo volta por aqui
@@ -225,7 +226,7 @@ function inspetor() {
       b.textContent = String(p.n);
       b.title = `Comentário ${p.n}`;
       b.style.cssText = `position:fixed;left:${Math.min(innerWidth - 24, r.right - 11)}px;top:${Math.max(2, r.top - 11)}px;` +
-        `width:22px;height:22px;border-radius:11px 11px 11px 2px;border:2px solid #fff;background:#f59e0b;color:#111;` +
+        `width:22px;height:22px;border-radius:11px 11px 11px 2px;border:2px solid #fff;background:${corPin};color:${textoPin};` +
         "font:700 11px/18px system-ui,sans-serif;text-align:center;padding:0;cursor:pointer;pointer-events:auto;box-shadow:0 1px 4px #0006";
       b.onclick = (e) => {
         e.stopPropagation();
@@ -606,6 +607,9 @@ function inspetor() {
       desenha();
     } else if (d.type === "showPins" && Array.isArray(d.pins)) {
       pins = d.pins.filter((p: any) => p && typeof p.fid === "string" && Number.isInteger(p.n));
+      const cor = (v: unknown) => typeof v === "string" && /^(#[0-9a-f]{3,8}|rgba?\([\d\s.,%]+\))$/i.test(v.trim()) ? v.trim() : "";
+      corPin = cor(d.cor) || corPin;
+      textoPin = cor(d.corTexto) || textoPin;
       desenha();
     } else if (d.type === "patch" && typeof d.fid === "string" && typeof d.html === "string") {
       // <template> em vez de outerHTML: o parse não depende do pai (head, tr...) e o nó novo entra
