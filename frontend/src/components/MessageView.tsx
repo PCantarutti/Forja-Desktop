@@ -31,13 +31,13 @@ function CodeBlock(props: React.ComponentProps<"pre">) {
   return (
     <div className="group relative">
       <BotaoDeCanto>
-        <span className="inline-flex items-center gap-1">
+        <span className="inline-flex items-stretch gap-1">
           {testar && testavel && (
             <button
               title="Testar este código: HTML abre no navegador, Python e JavaScript rodam no terminal"
               onClick={() => testar(ref.current?.textContent ?? "", lang)}
-              // mesma altura e moldura do copiar (ícone 16px + p-1.5 + borda = 30px), lado a lado
-              className="flex h-[30px] items-center gap-1 rounded-md border border-line bg-surface/90 px-2 text-[11.5px] text-muted backdrop-blur hover:bg-raised hover:text-fg"
+              // estica até a altura do copiar (items-stretch) e usa a mesma moldura: os dois lado a lado
+              className="flex items-center gap-1 rounded-md border border-line bg-surface/90 px-2 text-[11.5px] text-muted backdrop-blur hover:bg-raised hover:text-fg"
             >
               <Play className="size-3" /> Testar
             </button>
@@ -63,7 +63,7 @@ function CodeBlock(props: React.ComponentProps<"pre">) {
 function BotaoDeCanto({ children }: { children: React.ReactNode }) {
   return (
     <div className="pointer-events-none sticky top-1.5 z-10 h-0 text-right">
-      <div className="pointer-events-auto mr-1.5 inline-block opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+      <div className="pointer-events-auto mt-2 mr-2 inline-block opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
         {children}
       </div>
     </div>
