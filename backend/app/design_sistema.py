@@ -12,6 +12,7 @@ são poucos sistemas por pessoa. Tabela se um dia forem centenas ou compartilhad
 from __future__ import annotations
 
 import json
+import html as html_lib
 import os
 import re
 import time
@@ -236,15 +237,33 @@ def logos(s: dict) -> dict[str, str]:
     return out
 
 
+def _so_letras(t: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", re.sub(r"<[^>]+>", "", t).lower())
+
+
 def aplicar_logos(html: str, s: dict) -> str:
-    """Onde o modelo marcou `<span data-logo="nome">`, entra o SVG oficial (a cor segue o `color`)."""
-    marcas = logos(s) if 'data-logo="' in html else {}
+    """A logo oficial entra (a cor segue o `color`): onde o modelo marcou `<span data-logo="nome">` e,
+    sem depender dele, em todo elemento de classe logo/marca/brand cujo texto é só o nome da marca
+    (o modelo escreveu "DRUVE" no topo em vez de usar a logo)."""
+    marcas = logos(s)
     if not marcas:
         return html
-    def troca(m: re.Match) -> str:
-        svg = marcas.get(m.group(3)) or next(iter(marcas.values()))
+    principal = next(iter(marcas))
+
+    def marcado(m: re.Match) -> str:
+        svg = marcas.get(m.group(3)) or marcas[principal]
         return f"<{m.group(1)}{m.group(2)}>{svg}</{m.group(1)}>"
-    return re.sub(r'<(span|div|a|i)(\s[^>]*\bdata-logo="([\w-]+)"[^>]*)>(.*?)</\1>', troca, html, flags=re.S)
+    html = re.sub(r'<(span|div|a|i)(\s[^>]*\bdata-logo="([\w-]+)"[^>]*)>(.*?)</\1>', marcado, html, flags=re.S)
+
+    nome = _so_letras(s.get("nome") or "")
+    def em_texto(m: re.Match) -> str:
+        miolo = m.group(4)
+        if "<svg" in miolo or "<img" in miolo or "data-logo" in m.group(2) or not nome or _so_letras(miolo) != nome:
+            return m.group(0)
+        return (f"<{m.group(1)}{m.group(2)}><span class=\"logo\" data-logo=\"{principal}\" role=\"img\" "
+                f"aria-label=\"{html_lib.escape(s.get('nome') or '')}\">{marcas[principal]}</span></{m.group(1)}>")
+    return re.sub(r'<(a|span|div|strong|p|h1|h2)(\s[^>]*\bclass="[^"]*(logo|marca|brand)[^"]*"[^>]*)>(.*?)</\1>',
+                  em_texto, html, flags=re.S | re.I)
 
 
 def para_prompt(s: dict) -> str:
@@ -281,5 +300,6 @@ def aplicar(html: str, s: dict) -> str:
     html, _ = design_html.aplicar(html, {"tokens": s["tokens"]})
     if s.get("css") and f"/* design system: {s['nome']} */" not in html:
         html, _ = design_html.aplicar(html, {"css": css_bloco(s)})
+    html = aplicar_logos(html, s)   # "Aplicar aqui": a logo oficial também entra no design que já existe
     html = re.sub(r'<meta\s+name="forja-sistema"[^>]*>\s*', "", html)
     return re.sub(r"</head>", f'<meta name="forja-sistema" content="{s["id"]}">\n</head>', html, count=1, flags=re.I)

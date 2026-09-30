@@ -393,6 +393,7 @@ img,svg{max-width:100%;display:block}
 .estrelas{display:inline-flex;gap:2px;color:#f59e0b}
 .estrelas svg{width:18px;height:18px;fill:currentColor}
 [data-logo]{display:inline-flex;align-items:center;line-height:0}
+a:has([data-logo]){color:inherit;text-decoration:none}
 [data-logo] svg{height:1.25em;width:auto;fill:currentColor}
 .grade{display:grid;gap:var(--esp-4, 1.5rem);grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .fundo-alt{background:var(--cor-fundo-alt, color-mix(in srgb, var(--cor-texto) 3%, var(--cor-fundo)))}
