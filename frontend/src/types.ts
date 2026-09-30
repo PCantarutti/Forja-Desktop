@@ -56,7 +56,7 @@ export type Conversation = {
   id: number;
   title: string;
   updated_at: string;
-  kind?: "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design";
+  kind?: "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudos";
   workspace?: string | null;
   workspace_label?: string;
   pinned?: boolean;
@@ -262,6 +262,53 @@ export type PesquisaEstado = {
 
 export type PesquisaFormato = "auto" | "produto" | "comparar" | "guia" | "checagem";
 export type PesquisaProfundidade = "rapida" | "normal" | "funda" | "personalizado";
+
+// ------------------------------------------------------------------ estudos
+
+export type EstudosPreferencias = {
+  nivel: "iniciante" | "intermediario" | "avancado";
+  objetivo: "vestibular" | "concurso" | "faculdade" | "entender";
+  tom: "direto" | "didatico" | "formal";
+  tamanho: "curto" | "medio" | "completo";
+  extras: ("exemplos" | "mnemonicos" | "pegadinhas" | "quadro")[];
+  observacoes: string;
+};
+
+export type EstudosMaterial = {
+  id: number; n: number; nome: string; arquivo: string; chars: number; paginas: number; ocr: boolean;
+  uso: "conteudo" | "prova";   // prova = simulado: vira o perfil do que cai, não conteúdo do resumo
+};
+
+export type EstudosTopico = { titulo: string; objetivo: string; pontos: string[]; status: "fila" | "escrevendo" | "pronto" | "erro" };
+
+export type EstudosEstado = {
+  message_id: number;
+  tema: string;
+  preferencias: EstudosPreferencias;
+  web: boolean;
+  profundidade: "rapida" | "normal" | "funda";
+  motor: "forja" | "claude";   // claude = o pedido fica para o Claude via MCP
+  status: "rodando" | "aguardando" | "pronto" | "erro" | "cancelado";
+  etapa: "material" | "web" | "plano" | "escrita" | "pronto";
+  aviso: string;
+  titulo: string;
+  perfil: { banca?: string; formato?: string; estilo?: string; topicos?: string[]; questoes?: number };
+  materiais: { id: number; nome: string; uso: string; pedacos: number; feitos: number }[];
+  rodada: number;
+  fontes: PesquisaFonte[];
+  topicos: EstudosTopico[];
+  texto: string;   // o resumo em Markdown (cresce seção a seção)
+  stats: PesquisaEstado["stats"];
+};
+
+export type EstudosProjeto = {
+  id: number;
+  titulo: string;
+  materiais: EstudosMaterial[];
+  resumos: { message_id: number; titulo: string; status: string; criado: string }[];
+  resumo: EstudosEstado | null;
+  rodando: number | null;
+};
 
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)
 

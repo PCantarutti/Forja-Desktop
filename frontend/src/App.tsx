@@ -9,6 +9,7 @@ import ImagensView from "./components/ImagensView";
 import VideoView from "./components/VideoView";
 import CompararView from "./components/CompararView";
 import PesquisaView from "./components/PesquisaView";
+import EstudosView from "./components/EstudosView";
 import DesignView from "./components/DesignView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
@@ -665,7 +666,8 @@ export default function App() {
       const fim = ({ imagem: ["Lote de imagens concluído", "As imagens estão prontas."],
                      video: ["Geração de vídeo concluída", "O vídeo está pronto."],
                      comparar: ["Comparação terminou", conv(id)?.title ?? "Comparação"],
-                     design: ["Design terminou", conv(id)?.title ?? "Design"] } as Record<string, string[]>)[c.kind ?? ""];
+                     design: ["Design terminou", conv(id)?.title ?? "Design"],
+                     estudos: ["Estudo pronto", conv(id)?.title ?? "Estudos"] } as Record<string, string[]>)[c.kind ?? ""];
       if (fim) notify(fim[0], fim[1], id !== currentId, id);
       if (c.kind !== "maestro") continue;
       api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {
@@ -2474,6 +2476,16 @@ export default function App() {
               notify(titulo, corpo, true, currentId);   // force: a pesquisa é longa, o aviso vale mesmo em foco
               if (currentId !== null) setUnread((u) => new Set(u).add(currentId));
             }}
+          />
+        ) : section === "estudos" ? (
+          <EstudosView
+            conv={currentId}
+            carimbo={activity.lista}
+            ensureConversation={ensureConversation}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
           />
         ) : section === "design" ? (
           <DesignView

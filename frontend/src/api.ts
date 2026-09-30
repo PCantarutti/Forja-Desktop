@@ -48,6 +48,15 @@ export async function uploadReferencia(file: File, video = false): Promise<strin
   return (await r.json()).path;
 }
 
+/** Arquivo para uma rota que recebe multipart `file` (o material da tela Estudos). */
+export async function enviarArquivo<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  const r = await fetch(`/api${path}`, { method: "POST", body: form, headers: auth() });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+  return r.json();
+}
+
 /** Lê um SSE via fetch (EventSource não faz POST nem aceita AbortSignal). Chama onEvent a cada `data:`. */
 export async function streamSSE(path: string, init: RequestInit, onEvent: (ev: any) => void) {
   const r = await fetch(`/api${path}`, { ...init, headers: { "Content-Type": "application/json", ...auth(), ...init.headers } });

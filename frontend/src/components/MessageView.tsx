@@ -3,6 +3,8 @@ import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import { Lightbox } from "./Lightbox";
 import type { Approval, AskQuestion, Attachment, Message, Preview, SlotImagem, SlotsPendentes, Task, ToolCall, Stats } from "../types";
 import { SourceChip, SourceList } from "./Sources";
@@ -136,10 +138,15 @@ const MD_COMPONENTS = { pre: CodeBlock, table: Table, a: Link, img: Imagem };
  * por segundo, numa lista que só cresce — era o custo dominante de uma resposta longa. Com o texto
  * igual, o trabalho não se repete.
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+const COM_MATEMATICA = { remark: [remarkGfm, remarkMath], rehype: [rehypeKatex, rehypeHighlight] };
+const SEM_MATEMATICA = { remark: [remarkGfm], rehype: [rehypeHighlight] };
+
+// `math`: $...$ vira fórmula (KaTeX). Só onde se pede (Estudos): no chat, "R$ 10 e R$ 20" viraria fórmula.
+export const Markdown = memo(function Markdown({ text, math }: { text: string; math?: boolean }) {
+  const p = math ? COM_MATEMATICA : SEM_MATEMATICA;
   return (
     <div className="md text-[14.5px] text-fg">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={MD_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={p.remark} rehypePlugins={p.rehype} components={MD_COMPONENTS}>
         {text}
       </ReactMarkdown>
     </div>
