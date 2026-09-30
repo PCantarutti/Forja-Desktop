@@ -1452,14 +1452,17 @@ function Tomada(props: {
         <span className="shrink-0 font-mono text-[11px] text-faint">
           {viva ? `gerando ${prontas + 1} de ${itens.length} · `
             : props.resposta.status === "interrompido" ? `interrompida: ${itens.length - faltam} de ${itens.length} · ` : ""}
-          {modoLote} · {w}×{h} · {fmtS(segundosDe(frames, fps))}
-          {meta.opts.steps !== undefined && ` · ${acelLote ? "⚡" : ""}${meta.opts.steps} passos`}
-          {" · "}
-          <button onClick={() => props.onReaproveitar(itens[0].seed, itens[0])}
-                  title={`${rotuloSementes(itens.map((i) => i.seed), meta.seed_mode)}\nClique para refazer com ${itens[0].seed}`}
-                  className="hover:text-fg">
-            {itens[0].seed}{itens.length > 1 ? "+" : ""}
-          </button>
+          {/* ampliação: modo, passos e semente são do vídeo de origem, não dizem nada aqui */}
+          {!meta.opts.ampliacao && `${modoLote} · `}{w}×{h} · {fmtS(segundosDe(frames, fps))}
+          {!meta.opts.ampliacao && meta.opts.steps !== undefined && ` · ${acelLote ? "⚡" : ""}${meta.opts.steps} passos`}
+          {!meta.opts.ampliacao && <>
+            {" · "}
+            <button onClick={() => props.onReaproveitar(itens[0].seed, itens[0])}
+                    title={`${rotuloSementes(itens.map((i) => i.seed), meta.seed_mode)}\nClique para refazer com ${itens[0].seed}`}
+                    className="hover:text-fg">
+              {itens[0].seed}{itens.length > 1 ? "+" : ""}
+            </button>
+          </>}
         </span>
         {viva ? (
           <button onClick={() => chamar("cancelar")} className="shrink-0 rounded-[7px] border border-line px-2 py-0.5 text-xs text-muted hover:bg-raised hover:text-fg">
@@ -1682,7 +1685,7 @@ function CartaoVideo(props: {
           <span className="pointer-events-none absolute right-2 top-2 rounded-[5px] bg-black/55 px-1.5 py-px font-mono text-[10.5px] tabular-nums text-fg">
             {fmtS(props.segundos)}
           </span>
-          <span className="pointer-events-none absolute bottom-2 left-2.5 max-w-[85%] truncate font-mono text-[10.5px] text-white/60 transition-opacity group-hover:opacity-0">
+          <span className="pointer-events-none absolute bottom-2 left-2 max-w-[85%] truncate rounded-[5px] bg-black/55 px-1.5 py-px font-mono text-[10.5px] text-white/75 transition-opacity group-hover:opacity-0">
             {props.rotulo || `seed ${item.seed}`}
           </span>
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-black/15 opacity-0 transition-opacity group-hover:opacity-100" />
