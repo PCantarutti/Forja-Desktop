@@ -73,10 +73,13 @@ import MaestroView, { ABAS_MAESTRO, SO_MAESTRO } from "./components/MaestroView"
 import Saudacao from "./components/Saudacao";
 import AberturaSobreposta, { useAbertura } from "./components/AberturaSobreposta";
 
+/** Clique numa notificação: o App troca para a seção da conversa e a abre (reatribuído a cada render). */
+let abrirNotificada: (conv: number) => void = () => {};
+
 /** Notificação do sistema quando o Forja não está em foco (execução terminou, aprovação pendente).
  * "Sem foco", não "minimizada": com a janela só atrás de outro programa, document.hidden é falso e o
- * aviso não saía. Clicar traz a janela para a frente e, com `abrir`, abre a conversa. */
-function notify(title: string, body: string, force = false, abrir?: () => void) {
+ * aviso não saía. Clicar traz a janela para a frente e abre a conversa `conv`. */
+function notify(title: string, body: string, force = false, conv?: number | null) {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   if (document.hasFocus() && !force) return;
   try {
@@ -84,7 +87,7 @@ function notify(title: string, body: string, force = false, abrir?: () => void) 
     n.onclick = () => {
       (window as any).forja?.focus?.();
       window.focus();
-      abrir?.();
+      if (conv != null) abrirNotificada(conv);
       n.close();
     };
   } catch {
@@ -625,17 +628,16 @@ export default function App() {
     if (!antes) return;
     if (activity.lista && antes.lista && activity.lista !== antes.lista) refreshConversations();
     const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
-    const abrir = (id: number) => () => openConversation(id);
     const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
     for (const c of activity.conversations) {
       const eram = rodandoAntes.get(c.id)?.waiting ?? 0;
       const alertasAntes = rodandoAntes.get(c.id)?.alertas ?? 0;
       if ((c.alertas ?? 0) > alertasAntes && c.id !== currentId)
-        notify("Maestro pode estar travada", `${conv(c.id)?.title ?? "Conversa"}: confira e pare se precisar`, true, abrir(c.id));
+        notify("Maestro pode estar travada", `${conv(c.id)?.title ?? "Conversa"}: confira e pare se precisar`, true, c.id);
       if ((c.waiting ?? 0) > eram && c.id !== currentId) {
         const maestro = conv(c.id)?.kind === "maestro";
         notify(maestro ? "Maestro pede aprovação" : "Forja pede aprovação",
-               `${conv(c.id)?.title ?? "Conversa"}: ${c.waiting} esperando você`, true, abrir(c.id));
+               `${conv(c.id)?.title ?? "Conversa"}: ${c.waiting} esperando você`, true, c.id);
       }
     }
     // "IA local" com outro nome no seletor (o modelo foi trocado pelo celular ou pela API): o llama-server só
@@ -656,13 +658,20 @@ export default function App() {
         refreshConversations();
       }
     }
-    for (const id of rodandoAntes.keys()) {
-      if (agora.has(id) || conv(id)?.kind !== "maestro") continue;
+    for (const [id, c] of rodandoAntes) {
+      if (agora.has(id)) continue;
+      // Lote de imagem/vídeo, comparação e design: só "terminou", sem o prompt (o título do lote é o prompt)
+      const fim = ({ imagem: ["Lote de imagens concluído", "As imagens estão prontas."],
+                     video: ["Geração de vídeo concluída", "O vídeo está pronto."],
+                     comparar: ["Comparação terminou", conv(id)?.title ?? "Comparação"],
+                     design: ["Design terminou", conv(id)?.title ?? "Design"] } as Record<string, string[]>)[c.kind ?? ""];
+      if (fim) notify(fim[0], fim[1], id !== currentId, id);
+      if (c.kind !== "maestro") continue;
       api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {
         const humano = b.counts?.needs_human ?? 0;
         notify("Maestro terminou",
                `${conv(id)?.title ?? "Maestro"}: ${b.done}/${b.total} tarefas concluídas`
-               + (humano ? ` · ${humano} precisa(m) de você` : ""), true, abrir(id));
+               + (humano ? ` · ${humano} precisa(m) de você` : ""), true, id);
       }).catch(() => {});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -732,7 +741,7 @@ export default function App() {
       setUnread((u) => new Set(u).add(id));
       // Maestro tem aviso próprio (vigia da atividade, com o resumo das tarefas)
       if (conversationsRef.current.find((c) => c.id === id)?.kind !== "maestro")
-        notify("Forja terminou", conversationsRef.current.find((c) => c.id === id)?.title ?? "Conversa em segundo plano", true);
+        notify("Forja terminou", conversationsRef.current.find((c) => c.id === id)?.title ?? "Conversa em segundo plano", true, id);
       refreshConversations();
     };
     setTimeout(tick, 4000);
@@ -812,7 +821,7 @@ export default function App() {
         loadChangesCount(convId);
         setChangesKey((k) => k + 1);
         if (conversationsRef.current.find((c) => c.id === convId)?.kind !== "maestro")
-          notify("Forja terminou", conversationsRef.current.find((c) => c.id === convId)?.title ?? "Resposta pronta");
+          notify("Forja terminou", conversationsRef.current.find((c) => c.id === convId)?.title ?? "Resposta pronta", false, convId);
       }
     }
   }
@@ -946,7 +955,7 @@ export default function App() {
         setLiveOutput((o) => ({ ...o, [ev.call_id]: ((o[ev.call_id] ?? "") + ev.text).slice(-20_000) }));
       if (ev.type === "approval_request") {
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, nota: ev.nota, tool: ev.call.name } }));
-        notify("Worker pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true);
+        notify("Worker pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true, abertaRef.current);
       }
       if (ev.type === "tool_call" && typeof ev.call?.name === "string" && ev.call.name.startsWith("browser_")) {
         setBrowserOpen(true);
@@ -984,7 +993,7 @@ export default function App() {
         setPausado(!!ev.paused);
         break;
       case "alerta":  // "a Maestro pode estar travada": o sistema não para sozinho, avisa você
-        notify("Maestro pode estar travada", ev.text, true);
+        notify("Maestro pode estar travada", ev.text, true, abertaRef.current);
         break;
       case "task_update":
         // Só marca que mudou; o board inteiro vem no evento "board" ou no próximo polling.
@@ -1057,15 +1066,15 @@ export default function App() {
         break;
       case "approval_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, nota: ev.nota, tool: ev.call.name } }));
-        notify("Forja pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true);
+        notify("Forja pede aprovação", `${ev.call.name}: ${String(ev.call.arguments?.command ?? ev.call.arguments?.path ?? "")}`, true, abertaRef.current);
         break;
       case "plan_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "exit_plan_mode", plan: ev.plan } }));
-        notify("Forja propôs um plano", "Abra a conversa para aprovar ou pedir ajustes.", true);
+        notify("Forja propôs um plano", "Abra a conversa para aprovar ou pedir ajustes.", true, abertaRef.current);
         break;
       case "question_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: null, tool: "ask_user", questions: ev.questions } }));
-        notify("Forja tem uma pergunta", String(ev.question ?? ""), true);
+        notify("Forja tem uma pergunta", String(ev.question ?? ""), true, abertaRef.current);
         break;
       case "context":
         setCtx(ev);
@@ -1455,6 +1464,13 @@ export default function App() {
     openConversation(id);
     refreshConversations(kind);
   }
+
+  abrirNotificada = async (id) => {
+    // a lista na tela é só da seção atual: conversa de outra seção vem do servidor
+    const kind = conversationsRef.current.find((c) => c.id === id)?.kind
+      ?? (await api.get<{ kind?: string }>(`/conversations/${id}`).catch(() => null))?.kind;
+    irParaConversa(id, (kind as Section) || "agent");
+  };
 
   function changeSection(next: Section) {
     secaoEscolhida.current = true;
@@ -2435,7 +2451,7 @@ export default function App() {
               refreshConversations();
             }}
             onTerminou={(titulo, corpo) => {
-              notify(titulo, corpo, true);   // force: a pesquisa é longa, o aviso vale mesmo em foco
+              notify(titulo, corpo, true, currentId);   // force: a pesquisa é longa, o aviso vale mesmo em foco
               if (currentId !== null) setUnread((u) => new Set(u).add(currentId));
             }}
           />

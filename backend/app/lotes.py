@@ -37,10 +37,20 @@ SEED_MAX = 2**31 - 1
 _FILA: queue.Queue = queue.Queue()
 _trabalhador: threading.Thread | None = None
 _fila_lock = threading.Lock()
+# Conversas com trabalho na fila ou rodando (conv_id -> quantos): o /api/activity acende a bolinha e a
+# interface avisa quando zera. Todo alvo da fila recebe o conv_id como 1º argumento.
+_PENDENTES: dict[int, int] = {}
+
+
+def pendentes() -> list[int]:
+    with _fila_lock:
+        return [c for c, n in _PENDENTES.items() if n > 0]
 
 
 def _enfileirar(alvo, *args) -> None:
     global _trabalhador
+    with _fila_lock:
+        _PENDENTES[args[0]] = _PENDENTES.get(args[0], 0) + 1
     _FILA.put((alvo, args))
     with _fila_lock:
         if _trabalhador is None or not _trabalhador.is_alive():
@@ -57,6 +67,12 @@ def _consumir() -> None:
             alvo(*args)
         except Exception:  # um lote que estoura não pode parar a fila dos outros
             logging.exception("lote da fila falhou")
+        finally:
+            with _fila_lock:
+                if _PENDENTES.get(args[0], 0) <= 1:
+                    _PENDENTES.pop(args[0], None)
+                else:
+                    _PENDENTES[args[0]] -= 1
 
 
 def _video(path: str | Path) -> bool:
