@@ -101,6 +101,7 @@ export function BaixarAmpliacao(props: {
 const fmtFps = (f: number) => (Number.isInteger(f) ? String(f) : f.toFixed(2).replace(".", ","));
 
 /** Método, fator e suavizar. `enviar` cria a tomada (de uma tomada do feed ou de um arquivo do PC).
+ *  `varios`: marca mais de um método, feitos um depois do outro no mesmo lote (vai em `modelos`, na ordem marcada).
  *  `imagem`: sem suavizar e sem ffmpeg, e com o SeedVR2 (difusão, pelo ComfyUI) entre os métodos. Com um modelo
  *  de texto na VRAM, o SeedVR2 volta 409 e o painel pergunta antes de descarregar (enviar de novo com confirm). */
 export function PainelAmpliar(props: {
@@ -110,12 +111,13 @@ export function PainelAmpliar(props: {
   quadros?: number;
   imagem?: boolean;
   prompt?: string; // redesenhar: começa com o prompt que gerou a imagem
-  enviar: (corpo: { fator: number; modelo: string; suavizar: boolean; confirm?: boolean; prompt?: string; forca?: number }) => Promise<void>;
+  varios?: boolean;
+  enviar: (corpo: { fator: number; modelo: string; modelos: string[]; suavizar: boolean; confirm?: boolean; prompt?: string; forca?: number }) => Promise<void>;
   onError: (e: string) => void;
 }) {
   const estado = useCatalogo(props.onError);
   const { cat } = estado;
-  const [modelo, setModelo] = useState<string | null>(null); // null = ainda não escolheu
+  const [marcados, setMarcados] = useState<string[] | null>(null); // null = ainda não escolheu; a ordem é a da fila
   const [fator, setFator] = useState<2 | 4>(2);
   const [suavizar, setSuavizar] = useState(false);
   const [enviando, setEnviando] = useState(false);
@@ -126,17 +128,24 @@ export function PainelAmpliar(props: {
   const esrgans = metodos.filter((m) => m.tipo === "esrgan");
   // sem escolha: o ESRGAN do mesmo fator (um 4× para 2× faz o dobro do trabalho e o Lanczos joga fora); o
   // SeedVR2 nunca é o padrão, leva minutos
-  const escolhido = modelo ?? (esrgans.find((m) => new RegExp(`x${fator}(?!\\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? "";
-  const tipo = metodos.find((m) => m.path === escolhido)?.tipo;
-  const pesado = tipo === "seedvr2" || tipo === "redesenhar";
+  const escolhidos = marcados ?? [(esrgans.find((m) => new RegExp(`x${fator}(?!\\d)`, "i").test(m.name)) ?? esrgans[0])?.path ?? ""];
+  const escolhido = escolhidos[0] ?? "";
+  const info = (p: string) => metodos.find((m) => m.path === p);
+  // vários: o aviso mais pesado vale (um SeedVR2 no meio pede a VRAM; um do ComfyUI sem ComfyUI trava o lote)
+  const tipo = escolhidos.some((p) => info(p)?.tipo === "seedvr2") ? "seedvr2" : info(escolhido)?.tipo;
   const redesenha = tipo === "redesenhar";
-  const motor = metodos.find((m) => m.path === escolhido)?.motor;
-  const semComfy = !!tipo && tipo !== "esrgan" && motor !== "sd" && !cat?.comfy.instalado; // redesenho pelo sd-cli não precisa
+  const motor = info(escolhido)?.motor;
+  const semComfy = !cat?.comfy.instalado && escolhidos.some((p) => { // redesenho pelo sd-cli não precisa
+    const m = info(p);
+    return !!m && m.tipo !== "esrgan" && m.motor !== "sd";
+  });
+  const alternar = (p: string) =>
+    setMarcados(escolhidos.includes(p) ? escolhidos.filter((x) => x !== p) : [...escolhidos, p]);
 
   async function ampliar(confirm = false) {
     setEnviando(true);
     try {
-      await props.enviar({ fator, modelo: escolhido, suavizar: suavizar && !props.imagem, ...(confirm ? { confirm } : {}),
+      await props.enviar({ fator, modelo: escolhido, modelos: escolhidos, suavizar: suavizar && !props.imagem, ...(confirm ? { confirm } : {}),
                            ...(redesenha ? { prompt, forca } : {}) });
       setVram("");
     } catch (e: any) {
@@ -154,23 +163,38 @@ export function PainelAmpliar(props: {
     `rounded-md border px-2 py-1 text-xs ${ligada ? "border-sky-500/60 bg-sky-500/10 text-sky-200" : "border-line text-muted hover:bg-raised hover:text-fg"}`;
   return (
     <div className="flex flex-col gap-2.5 px-1 text-xs">
+      {props.varios ? (
+        <fieldset className="flex flex-col gap-0.5">
+          <legend className="mb-1 text-faint">Métodos <span className="text-faint/80">· marque vários para testar em sequência</span></legend>
+          {[...metodos.map((m) => ({ path: m.path, nome: m.name, dica: rotuloTipo(m.tipo, props.imagem) })),
+            { path: "", nome: "Lanczos", dica: "rápido, sem IA" }].map((m) => {
+            const ordem = escolhidos.indexOf(m.path);
+            return (
+              <label key={m.path || "lanczos"} className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-0.5 hover:bg-raised">
+                <input type="checkbox" checked={ordem >= 0} onChange={() => alternar(m.path)} />
+                <span className="min-w-0 flex-1 truncate text-fg" title={m.path || "Lanczos"}>{m.nome} <span className="text-faint">({m.dica})</span></span>
+                {escolhidos.length > 1 && ordem >= 0 && <span className="font-mono text-[10.5px] text-faint">{ordem + 1}º</span>}
+              </label>
+            );
+          })}
+        </fieldset>
+      ) : (
       <label className="flex flex-col gap-1">
         <span className="text-faint">Método</span>
         <select
           className="rounded-md border border-line bg-raised px-2 py-1 text-fg"
           value={escolhido}
-          onChange={(e) => setModelo(e.target.value)}
+          onChange={(e) => setMarcados([e.target.value])}
         >
           {metodos.map((m) => (
             <option key={m.path} value={m.path}>
-              {m.tipo === "redesenhar" ? `Redesenhar com ${m.name}` : m.name} ({m.tipo === "seedvr2" ? "IA pesada, leva minutos"
-                : m.tipo === "redesenhar" ? "refaz a imagem, leva minutos" : m.tipo === "spandrel" ? "IA, pelo ComfyUI"
-                : props.imagem ? "IA" : "IA, quadro a quadro"})
+              {m.tipo === "redesenhar" ? `Redesenhar com ${m.name}` : m.name} ({rotuloTipo(m.tipo, props.imagem)})
             </option>
           ))}
           <option value="">Rápido, sem IA (Lanczos)</option>
         </select>
       </label>
+      )}
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="mr-1 text-faint">Fator</span>
         {([2, 4] as const).map((f) => (
@@ -217,8 +241,8 @@ export function PainelAmpliar(props: {
         </>
       )}
       {semComfy && <p className="text-amber-400">{tipo === "seedvr2" ? "O SeedVR2" : redesenha ? "O redesenho" : "Este modelo"} roda no ComfyUI portátil: baixe em "Baixar o que falta".</p>}
-      <button className={btnPrimary} disabled={semFfmpeg || semComfy || enviando} onClick={() => ampliar()}>
-        {enviando ? "Começando…" : `Ampliar ${fator}×`}
+      <button className={btnPrimary} disabled={semFfmpeg || semComfy || enviando || !escolhidos.length} onClick={() => ampliar()}>
+        {enviando ? "Começando…" : !escolhidos.length ? "Marque um método" : `Ampliar ${fator}×${escolhidos.length > 1 ? ` · ${escolhidos.length} métodos` : ""}`}
       </button>
       {vram && (
         <div className="flex flex-col gap-1.5 rounded-lg border border-amber-800/70 bg-amber-950/30 p-2 text-amber-200">
@@ -244,12 +268,18 @@ export function PainelAmpliar(props: {
   );
 }
 
+function rotuloTipo(tipo: Tipo, imagem?: boolean) {
+  return tipo === "seedvr2" ? "IA pesada, leva minutos" : tipo === "redesenhar" ? "refaz a imagem, leva minutos"
+    : tipo === "spandrel" ? "IA, pelo ComfyUI" : imagem ? "IA" : "IA, quadro a quadro";
+}
+
 type Sondagem = { w: number; h: number; fps: number; quadros: number; audio: boolean };
 
 /** Um vídeo (ou, com `imagem`, uma imagem) qualquer do PC: escolher ou soltar, ver o que ele é e ampliar.
  *  O original não é tocado; o resultado entra no feed como tomada. */
 export function AmpliarArquivo(props: {
   imagem?: boolean;
+  varios?: boolean;
   ensureConversation: () => Promise<number>;
   onPronto: (conv: number) => void;
   onError: (e: string) => void;
@@ -394,6 +424,7 @@ export function AmpliarArquivo(props: {
             fps={info.fps}
             quadros={info.quadros}
             imagem={props.imagem}
+            varios={props.varios}
             onError={props.onError}
             enviar={async (c) => {
               const conv = await props.ensureConversation();

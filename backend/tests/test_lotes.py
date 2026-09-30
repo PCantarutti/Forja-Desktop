@@ -559,3 +559,15 @@ def test_segundo_lote_entra_na_fila_em_vez_de_ser_recusado(monkeypatch):
     ma, mb = _esperar(a["id"]), _esperar(b["id"])
     assert ma["status"] == mb["status"] == "pronto", (ma["meta"]["images"], mb["meta"]["images"])
     assert ordem == ["primeiro", "segundo"]
+
+
+def test_mais_de_video_troca_os_quadros_no_mesmo_lote(monkeypatch):
+    """Texto → vídeo reaproveitado como imagem → vídeo: o vídeo novo leva os quadros dele, e entra no mesmo lote."""
+    chamadas = _fake_sd(monkeypatch)
+    msg = lotes.start(_conversa("video"), "a fox", models=["wan.gguf"], count=1, seed=5)
+    _esperar(msg["id"])
+    lotes.mais(msg["id"], 1, refs=["C:/r/inicio.png"])
+    imagens = _esperar(msg["id"])["meta"]["images"]
+    assert [c["refs"] for c in chamadas] == [[], ["C:/r/inicio.png"]]
+    assert "refs" not in imagens[0] and imagens[1]["refs"] == ["C:/r/inicio.png"]
+    assert all(i["path"].endswith(".webm") for i in imagens)

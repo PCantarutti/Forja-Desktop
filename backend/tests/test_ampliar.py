@@ -526,3 +526,44 @@ def test_redesenhar_pelo_sd_cli_com_qualquer_modelo_de_imagem(isolado, monkeypat
     localai.set_image({"model": "C:/m/sd15.safetensors"})
     a = imagegen.argv(Path("sd.exe"), "x", isolado / "o.png", imagegen._opts({"_init": "C:/i.png", "_strength": 0.5}))
     assert a[a.index("-i") + 1] == "C:/i.png" and a[a.index("--strength") + 1] == "0.5"
+
+
+def test_varios_metodos_no_mesmo_lote_e_reaproveitar_amplia_o_original(isolado, monkeypatch):
+    """Vários métodos: um item por método, um depois do outro. Reaproveitar acrescenta outro método no MESMO lote,
+    a partir do vídeo original (não do ampliado)."""
+    feitas = []
+
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None):
+        feitas.append((entrada, fator, Path(modelo).stem if modelo else ""))
+        Path(saida).write_bytes(b"webm")
+        return {"w": 100 * fator, "h": 50 * fator, "fps": 16.0, "quadros": 33}
+    monkeypatch.setattr(ampliar, "ampliar", falso)
+    monkeypatch.setattr(ampliar, "_ffmpeg", lambda: Path("ffmpeg.exe"))
+    monkeypatch.setattr(ampliar, "sondar", lambda v: {"w": 100, "h": 50, "fps": 16, "quadros": 33, "audio": False})
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    esrgan = pth(isolado / "modelos", "4x-Sharp.pth", b"conv_first rdb1")
+    with db.session() as s:
+        c = db.Conversation(kind="video")
+        s.add(c)
+        s.commit()
+        conv = c.id
+    fora = isolado / "de-fora" / "ferias.mp4"
+    fora.parent.mkdir()
+    fora.write_bytes(b"mp4")
+
+    m = _esperar(lotes.ampliar_arquivo(conv, str(fora), 2, modelos=[esrgan, ""])["id"])
+    assert m["status"] == "pronto" and [i["model_name"] for i in m["meta"]["images"]] == ["4x-Sharp · 2×", "Lanczos · 2×"]
+    assert feitas == [(str(fora), 2, "4x-Sharp"), (str(fora), 2, "")]
+
+    lotes.ampliar_mais(m["id"], 4, [""])
+    m = _esperar(m["id"])
+    imagens = m["meta"]["images"]
+    assert len(imagens) == 3 and feitas[-1] == (str(fora), 4, "")  # o original, não o ampliado
+    assert imagens[2]["model_name"] == "Lanczos · 4×" and imagens[2]["opts"]["width"] == 400
+    assert len({i["path"] for i in imagens}) == 3 and m["meta"]["count"] == 3
+    with db.session() as s:  # continua um lote só
+        assert [x.role for x in s.get(db.Conversation, conv).messages] == ["user", "assistant"]
+
+    fora.unlink()
+    with pytest.raises(lotes.ToolError, match="não está mais no disco"):
+        lotes.ampliar_mais(m["id"], 2, [""])

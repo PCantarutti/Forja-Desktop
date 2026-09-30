@@ -605,7 +605,7 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts_lote: dict, job_
                 medido: dict = {}
                 imagegen.generate(item.get("prompt") or prompt, saida,
                                   {**opts, **tamanho, "model": item["model"], "seed": item["seed"]},
-                                  job_id, refs or [], progresso, previa, medido)
+                                  job_id, item.get("refs", refs) or [], progresso, previa, medido)
                 if saida != arquivo:
                     # a versão anterior do site vai para descartadas/; o PNG provisório só some
                     if arquivo.is_file() and not projeto.eh_placeholder(arquivo):
@@ -685,35 +685,62 @@ def _validar_ampliacao(fator: int, modelo: str, video: bool = True, confirm: boo
         amp._ffmpeg()  # sem ffmpeg, avisa antes de criar a tomada (imagem não precisa: é sd-cli ou Pillow)
 
 
-def _nova_ampliacao(conv_id: int, origem: str, saida: Path, prompt: str, opts: dict, seed: int,
-                    fator: int, modelo: str, suavizar: bool, redesenho: dict | None = None) -> dict:
-    """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem."""
-    nome = Path(modelo).stem if modelo else "Lanczos"
-    amp_meta = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar), **(redesenho or {})}
-    opts = {**opts, "width": int(opts.get("width") or 0) * int(fator), "height": int(opts.get("height") or 0) * int(fator),
-            "ampliacao": amp_meta}
-    if suavizar and opts.get("fps"):
-        opts.update(fps=int(opts["fps"]) * 2, frames=int(opts.get("frames") or 0) * 2 - 1)
-    imagens = [{"path": str(saida), "seed": seed, "model": modelo, "model_name": f"{nome} · {fator}×",
-                "status": "pendente", "error": ""}]
-    if saida.suffix == ".webm":  # vídeo: o reap apaga o webm pela metade; o PNG da imagem só aparece pronto
-        imagens[0]["unidade"] = "quadro"
-    _save(conv_id, role="user", content=prompt, meta={"refs": [], "models": [modelo], "ampliacao": amp_meta})
+def _opts_ampliadas(opts: dict, fator: int, suavizar: bool) -> dict:
+    """Tamanho (e, suavizado, fps e quadros) do que sai: a origem × fator."""
+    o = {"width": int(opts.get("width") or 0) * int(fator), "height": int(opts.get("height") or 0) * int(fator)}
+    if opts.get("fps"):
+        o.update(fps=int(opts["fps"]), frames=int(opts.get("frames") or 0))
+        if suavizar:
+            o.update(fps=o["fps"] * 2, frames=o["frames"] * 2 - 1)
+    return o
+
+
+def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, fator: int, modelos: list[str],
+                     suavizar: bool, prompt: str = "", forca: float | None = None,
+                     tomados: set[str] | None = None) -> list[dict]:
+    """Um item por método, na ordem escolhida (a fila faz um depois do outro). Cada um leva a própria ampliação e o
+    próprio tamanho: um lote pode misturar métodos e fatores (Reaproveitar acrescenta outro método no mesmo lote)."""
+    tomados = set(tomados or ())
+    itens = []
+    for modelo in dict.fromkeys(modelos):
+        amp_i = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar),
+                 **_redesenho(modelo, prompt, forca)}
+        saida = _saida_ao_lado(lugar, fator, modelo, ext, suavizar, tomados)
+        tomados.add(str(saida))
+        nome = Path(modelo).stem if modelo else "Lanczos"
+        item = {"path": str(saida), "seed": seed, "model": modelo,
+                "model_name": f"{nome} · {fator}×{' · suavizado' if suavizar else ''}",
+                "status": "pendente", "error": "", "ampliacao": amp_i, "opts": _opts_ampliadas(opts, fator, suavizar)}
+        if ext == ".webm":  # vídeo: o reap apaga o webm pela metade; o PNG da imagem só aparece pronto
+            item["unidade"] = "quadro"
+        itens.append(item)
+    return itens
+
+
+def _nova_ampliacao(conv_id: int, origem: str, lugar: Path, ext: str, pedido: str, opts: dict, seed: int,
+                    fator: int, modelos: list[str], suavizar: bool, prompt: str = "", forca: float | None = None) -> dict:
+    """A tomada nova (pedido + resposta) e a thread que amplia. `opts`: largura, altura, fps e quadros da origem.
+    `modelos`: um item por método, feitos em sequência no mesmo lote."""
+    imagens = _itens_ampliacao(origem, lugar, ext, opts, seed, fator, modelos, suavizar, prompt, forca)
+    amp_meta = imagens[0]["ampliacao"]  # o do lote: o 1º método (as telas antigas leem daqui)
+    opts = {**opts, **imagens[0]["opts"], "ampliacao": amp_meta}
+    _save(conv_id, role="user", content=pedido, meta={"refs": [], "models": list(dict.fromkeys(modelos)), "ampliacao": amp_meta})
     job = downloads.create("lote", f"ampliar {Path(origem).name}")
     nova = _save(conv_id, role="assistant", content="", status="running",
-                 meta={"job": job["id"], "count": 1, "seed_mode": "fixa", "opts": opts, "images": imagens})
+                 meta={"job": job["id"], "count": len(imagens), "seed_mode": "fixa", "opts": opts, "images": imagens})
     _enfileirar(_ampliar_trabalho, conv_id, nova.id, job["id"])
     return nova.to_dict()
 
 
-def _saida_ao_lado(origem: Path, fator: int, modelo: str, ext: str, suave: bool = False) -> Path:
+def _saida_ao_lado(origem: Path, fator: int, modelo: str, ext: str, suave: bool = False,
+                   tomados: set[str] | frozenset = frozenset()) -> Path:
     """Arquivo novo ao lado da origem, com o fator e, no fim entre parênteses, o método: "cafe-2x (4x-UltraSharp).png",
     "cafe-2x (Lanczos).png". A mesma imagem ampliada 2× por dois métodos não cai no mesmo arquivo (o segundo apagava o
     primeiro); já existe: "cafe-2x (Lanczos) 2.png", 3…"""
     metodo = re.sub(r"[^\w.-]+", "", Path(modelo).stem)[:40] if modelo else "Lanczos"
     base = f"{origem.stem}-{fator}x{'-suave' if suave else ''} ({metodo})"
     saida, n = origem.with_name(base + ext), 2
-    while saida.exists():
+    while saida.exists() or str(saida) in tomados:  # tomados: do mesmo lote, ainda na fila (sem arquivo)
         saida, n = origem.with_name(f"{base} {n}{ext}"), n + 1
     return saida
 
@@ -742,7 +769,7 @@ def _redesenho(modelo: str, prompt: str, forca: float | None) -> dict:
 
 
 def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False, confirm: bool = False,
-            prompt_novo: str = "", forca: float | None = None) -> dict:
+            prompt_novo: str = "", forca: float | None = None, modelos: list[str] | None = None) -> dict:
     """Amplia uma tomada pronta num vídeo novo, que entra na mesma conversa como uma tomada à parte (com
     progresso por quadro, prévia, cancelar e manter/descartar como qualquer outra)."""
     msg = _mensagem(message_id)
@@ -751,27 +778,32 @@ def ampliar(message_id: int, path: str, fator: int, modelo: str = "", suavizar: 
         raise ToolError("Essa tomada não está pronta (ou o arquivo sumiu).")
     from . import ampliar as amp
     imagem = amp.eh_imagem(path)
-    _validar_ampliacao(fator, modelo, not imagem, confirm)
-    saida = _saida_ao_lado(Path(path), fator, modelo, ".png" if imagem else ".webm", suavizar and not imagem)
+    modelos = list(modelos or [modelo])
+    for m in dict.fromkeys(modelos):
+        _validar_ampliacao(fator, m, not imagem, confirm)
     with db.session() as s:
         pedido = (s.query(db.Message).filter(db.Message.conversation_id == msg["conversation_id"], db.Message.role == "user",
                                              db.Message.id < message_id).order_by(db.Message.id.desc()).first())
         prompt = pedido.content if pedido else ""
         base = prompt_da_imagem(pedido.content, pedido.meta) if pedido else ""
     # redesenhar: sem prompt na tela, vale o prompt que gerou a imagem
-    return _nova_ampliacao(msg["conversation_id"], path, saida, prompt, dict(msg["meta"].get("opts") or {}), item["seed"],
-                           fator, modelo, suavizar and not imagem, _redesenho(modelo, prompt_novo or base, forca))
+    opts = {**(msg["meta"].get("opts") or {}), **(item.get("opts") or {})}  # a tomada pode ter tamanho próprio
+    return _nova_ampliacao(msg["conversation_id"], path, Path(path), ".png" if imagem else ".webm", prompt, opts,
+                           item["seed"], fator, modelos, suavizar and not imagem, prompt_novo or base, forca)
 
 
 def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavizar: bool = False,
-                    confirm: bool = False, prompt: str = "", forca: float | None = None) -> dict:
+                    confirm: bool = False, prompt: str = "", forca: float | None = None,
+                    modelos: list[str] | None = None) -> dict:
     """Amplia um vídeo qualquer do disco (mp4, mov, mkv, webm…): vira uma tomada na conversa, e o resultado vai
     para a pasta de vídeos; o original não é tocado."""
     from . import ampliar as amp
     if not Path(path).is_file():
         raise ToolError("Esse arquivo não existe (ou não está acessível).")
+    modelos = list(modelos or [modelo])
     if amp.eh_imagem(path):
-        _validar_ampliacao(fator, modelo, False, confirm)
+        for m in dict.fromkeys(modelos):
+            _validar_ampliacao(fator, m, False, confirm)
         from PIL import Image
         try:
             with Image.open(path) as im:
@@ -785,25 +817,95 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
         pasta = imagegen.out_dir()
         pasta.mkdir(parents=True, exist_ok=True)
         nome = re.sub(r"^[0-9a-f]{16}-", "", Path(path).name)  # a do celular chega em referencias/ com o sha na frente
-        saida = _saida_ao_lado(pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{nome}", fator, modelo, ".png")
-        return _nova_ampliacao(conv_id, path, saida, nome, {"width": w, "height": h}, 0, fator, modelo, False,
-                               _redesenho(modelo, prompt, forca))
-    _validar_ampliacao(fator, modelo)
-    info = amp.sondar(path)
+        return _nova_ampliacao(conv_id, path, pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{nome}", ".png", nome,
+                               {"width": w, "height": h}, 0, fator, modelos, False, prompt, forca)
+    for m in dict.fromkeys(modelos):
+        _validar_ampliacao(fator, m, True, confirm)
     pasta = imagegen.video_dir()
     pasta.mkdir(parents=True, exist_ok=True)
-    saida = _saida_ao_lado(pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", fator, modelo, ".webm", suavizar)
-    opts = {"width": info["w"], "height": info["h"], "fps": round(info["fps"]), "frames": info["quadros"]}
-    return _nova_ampliacao(conv_id, path, saida, Path(path).name, opts, 0, fator, modelo, suavizar)
+    return _nova_ampliacao(conv_id, path, pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", ".webm",
+                           Path(path).name, _dims_video(path), 0, fator, modelos, suavizar)
+
+
+def _dims_video(path: str) -> dict:
+    from . import ampliar as amp
+    info = amp.sondar(path)
+    return {"width": info["w"], "height": info["h"], "fps": round(info["fps"]), "frames": info["quadros"]}
+
+
+def ampliar_mais(message_id: int, fator: int, modelos: list[str], suavizar: bool = False, confirm: bool = False,
+                 prompt: str = "", forca: float | None = None) -> dict:
+    """"Reaproveitar" numa ampliação: o MESMO original ampliado por outros métodos (ou outro fator), no mesmo lote,
+    um depois do outro. O original é o do lote, não a tomada ampliada."""
+    from . import ampliar as amp
+    msg = _mensagem(message_id)
+    meta = msg["meta"]
+    a = (meta.get("opts") or {}).get("ampliacao")
+    if not a:
+        raise ToolError("Este lote não é uma ampliação.")
+    if msg["status"] == "running":  # a thread grava a lista inteira: acrescentar agora se perderia
+        raise ToolError("A ampliação ainda está rodando: espere terminar para ampliar de novo neste lote.")
+    if not modelos:
+        raise ToolError("Escolha ao menos um método.")
+    origem = Path(a["origem"])
+    if not origem.is_file():
+        raise ToolError(f"O original ({origem.name}) não está mais no disco: não dá para ampliar de novo.")
+    imagem = amp.eh_imagem(str(origem))
+    for m in dict.fromkeys(modelos):
+        _validar_ampliacao(fator, m, not imagem, confirm)
+    if imagem:
+        from PIL import Image
+        with Image.open(origem) as im:
+            opts = {"width": im.size[0], "height": im.size[1]}
+    else:
+        opts = _dims_video(str(origem))
+    imagens = list(meta["images"])
+    # como na 1ª vez: ao lado da tomada do Forja; arquivo de fora, na pasta de saída com a marca de hora
+    pasta = imagegen.out_dir() if imagem else imagegen.video_dir()
+    lugar = origem if origem.parent in (imagegen.out_dir(), imagegen.video_dir()) \
+        else pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{origem.name}"
+    imagens += _itens_ampliacao(str(origem), lugar, ".png" if imagem else ".webm", opts, imagens[0]["seed"], fator,
+                                modelos, suavizar and not imagem, prompt or a.get("prompt", ""), forca,
+                                {i["path"] for i in imagens})
+    job = downloads.create("lote", f"ampliar {origem.name}")
+    _patch(message_id, status="running", meta={"job": job["id"], "count": len(imagens), "images": imagens})
+    with db.session() as s:  # a conversa sobe na barra lateral, como num lote novo
+        conv = s.get(db.Conversation, msg["conversation_id"])
+        if conv:
+            conv.updated_at = db._now()
+            s.commit()
+    _enfileirar(_ampliar_trabalho, msg["conversation_id"], message_id, job["id"])
+    return {"ok": True}
 
 
 def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
-    from . import ampliar as amp
+    """Amplia, um depois do outro, os itens pendentes do lote (cada um com o seu método)."""
     meta = _mensagem(message_id)["meta"]
     imagens = list(meta["images"])
-    a = meta["opts"]["ampliacao"]
-    item = imagens[0]
     localai.set_image_busy(True)
+    try:
+        for i, item in enumerate(imagens):
+            if item["status"] != "pendente":  # "Continuar" e "mais": o que já saiu fica como está
+                continue
+            if downloads.cancelled(job_id):
+                for resto in imagens[i:]:
+                    if resto["status"] == "pendente":
+                        resto["status"] = "cancelada"
+                break
+            _ampliar_um(message_id, meta, imagens, item, job_id)
+    finally:
+        localai.set_image_busy(False)
+    pronta = any(i["status"] in ("pronta", "mantida", "descartada") for i in imagens)
+    erro = next((i["error"] for i in imagens if i.get("error")), "")
+    downloads.finish(job_id, error="" if pronta else erro)
+    mirror.write(conv_id)
+    _patch(message_id, status="pronto" if pronta else ("cancelado" if any(i["status"] == "cancelada" for i in imagens)
+                                                       else "erro"), meta={"images": imagens})
+
+
+def _ampliar_um(message_id: int, meta: dict, imagens: list[dict], item: dict, job_id: str) -> None:
+    from . import ampliar as amp
+    a = {**meta["opts"]["ampliacao"], **(item.get("ampliacao") or {})}  # lote antigo: a ampliação só no do lote
     localai.set_gerando(a["modelo"], "ampliação")  # sem modelo é Lanczos: o nome vira "ampliação"
     previa = previas_dir(_video(item["path"])) / (Path(item["path"]).stem + ".png")
     previa.parent.mkdir(parents=True, exist_ok=True)
@@ -842,23 +944,21 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
             r = amp.ampliar(a["origem"], Path(item["path"]), a["fator"], a["modelo"], a["suavizar"], job_id, progresso, previa)
         # o que saiu de fato (o minterpolate não inventa quadro depois do último): o player conta com isso
         if r:
-            _patch(message_id, meta={"opts": {**meta["opts"], "width": r["w"], "height": r["h"], "fps": round(r["fps"]),
-                                              "frames": r["quadros"] or meta["opts"].get("frames")}})
+            item["opts"] = {**(item.get("opts") or {}), "width": r["w"], "height": r["h"], "fps": round(r["fps"]),
+                            "frames": r["quadros"] or (item.get("opts") or meta["opts"]).get("frames")}
+            if len(imagens) == 1:  # lote de um só: o do lote também (o que as telas antigas leem)
+                meta["opts"] = {**meta["opts"], **item["opts"]}
+                _patch(message_id, meta={"opts": meta["opts"]})
         item["status"] = "pronta"
     except Exception as e:
         cancelada = downloads.cancelled(job_id)
         item["status"] = "cancelada" if cancelada else "erro"
         item["error"] = "" if cancelada else str(e)
     finally:
-        localai.set_image_busy(False)
         for k in ("preview", "com_previa", "fase", "restante"):
             item.pop(k, None)
         previa.unlink(missing_ok=True)
-    pronta = item["status"] == "pronta"
-    downloads.finish(job_id, error="" if pronta else item["error"])
-    mirror.write(conv_id)
-    _patch(message_id, status="pronto" if pronta else ("cancelado" if item["status"] == "cancelada" else "erro"),
-           meta={"images": imagens})
+    _patch(message_id, meta={"images": imagens})
 
 
 # O que o lote ainda não entregou e "Continuar" gera de novo.
@@ -914,7 +1014,8 @@ def continuar(message_id: int, confirm: bool = False) -> dict:
         if not localai.image_busy():
             _liberar_vram(confirm)
         for i in imagens:
-            i.update(status="pendente", error="")
+            if i["status"] in A_REFAZER:
+                i.update(status="pendente", error="")
         job = downloads.create("lote", f"ampliar {Path(imagens[0]['path']).name}")
         _patch(message_id, status="running", meta={"job": job["id"], "images": imagens})
         _enfileirar(_ampliar_trabalho, msg["conversation_id"], message_id, job["id"])
@@ -947,7 +1048,7 @@ def _pedido(msg: dict) -> tuple[str, list[str], dict]:
 
 
 def mais(message_id: int, count: int, models: list[str] | None = None, confirm: bool = False,
-         opts: dict | None = None, seed: int = 0, seed_mode: str = "") -> dict:
+         opts: dict | None = None, seed: int = 0, seed_mode: str = "", refs: list[str] | None = None) -> dict:
     """"Reaproveitar" sem mexer no prompt: mais `count` imagens (ou tomadas) NO MESMO lote, com o prompt e as
     referências dele. Reaproveita-se o prompt, não os ajustes: `opts`, `models` e `seed_mode` são os da tela
     agora, e ficam em cada imagem nova (o "Continuar" e o tamanho do card usam os dela). Sem `opts`, os do lote.
@@ -960,7 +1061,9 @@ def mais(message_id: int, count: int, models: list[str] | None = None, confirm: 
     imagens = list(meta["images"])
     if (meta.get("opts") or {}).get("ampliacao") or meta.get("variacao_de") or any(i.get("destino") or i.get("slot") for i in imagens):
         raise ToolError("Gerar mais no mesmo lote é só para lotes comuns (não ampliação nem imagens do site).")
-    prompt, refs, pm = _pedido(msg)
+    prompt, refs_lote, pm = _pedido(msg)
+    # vídeo: os quadros da tela agora (texto, imagem → vídeo, início → fim) ficam no item; sem eles, os do lote
+    refs = refs_lote if refs is None else [str(r) for r in refs]
     novos = {k: v for k, v in (opts or {}).items() if v not in (None, "")}
     opts = {**(meta.get("opts") or {}), **novos}
     count = max(1, min(int(count or 1), MAX_VARIACOES))
@@ -982,7 +1085,7 @@ def mais(message_id: int, count: int, models: list[str] | None = None, confirm: 
     tamanho = {k: novos[k] for k in ("width", "height") if novos.get(k)}  # o card desenha na proporção dela
     imagens += [{"path": str(pasta / f"{marca}-{n + i:02d}-s{s}{ext}"), "seed": s, "model": m,
                  "model_name": _nome(m), "status": "pendente", "error": "", **tamanho,
-                 **({"opts": novos} if novos else {})}
+                 **({"opts": novos} if novos else {}), **({"refs": refs} if refs != refs_lote else {})}
                 for i, (m, s) in enumerate(zip(escolhidos, sementes))]
     job = downloads.create("lote", prompt[:60])
     downloads.update(job["id"], done=0, total=count)
@@ -992,7 +1095,7 @@ def mais(message_id: int, count: int, models: list[str] | None = None, confirm: 
         if conv:
             conv.updated_at = db._now()
             s.commit()
-    _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, meta.get("opts") or {}, job["id"], refs)
+    _enfileirar(_trabalhar, msg["conversation_id"], message_id, prompt, meta.get("opts") or {}, job["id"], refs_lote)
     return {"ok": True}
 
 

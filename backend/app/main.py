@@ -1116,8 +1116,9 @@ async def local_video_ampliador(body: AmpliadorBody):
 
 
 class AmpliarBody(BaseModel):
-    path: str
+    path: str = ""
     fator: int = 2
+    modelos: list[str] = []  # vários métodos: um item por método, em sequência no mesmo lote (vazio = `modelo`)
     modelo: str = ""  # vazio = Lanczos, sem IA
     suavizar: bool = False
     confirm: bool = False  # SeedVR2 com LLM na VRAM: a tela perguntou e pode descarregar
@@ -1129,7 +1130,7 @@ class AmpliarBody(BaseModel):
 async def imagens_ampliar(message_id: int, body: AmpliarBody):
     try:
         return await asyncio.to_thread(lotes.ampliar, message_id, body.path, body.fator, body.modelo, body.suavizar,
-                                       body.confirm, body.prompt, body.forca)
+                                       body.confirm, body.prompt, body.forca, body.modelos or None)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:
@@ -1141,7 +1142,19 @@ async def imagens_ampliar_arquivo(conv_id: int, body: AmpliarBody):
     """Um vídeo qualquer do disco (não uma tomada): vira uma tomada ampliada nesta conversa."""
     try:
         return await asyncio.to_thread(lotes.ampliar_arquivo, conv_id, body.path, body.fator, body.modelo, body.suavizar,
-                                       body.confirm, body.prompt, body.forca)
+                                       body.confirm, body.prompt, body.forca, body.modelos or None)
+    except imagegen.ModeloCarregado as e:
+        raise HTTPException(409, str(e))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/imagens/{message_id}/ampliar-mais")
+async def imagens_ampliar_mais(message_id: int, body: AmpliarBody):
+    """Reaproveitar numa ampliação: o original do lote, por outros métodos, no mesmo lote."""
+    try:
+        return await asyncio.to_thread(lotes.ampliar_mais, message_id, body.fator, body.modelos or [body.modelo],
+                                       body.suavizar, body.confirm, body.prompt, body.forca)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:
@@ -1347,6 +1360,7 @@ class MaisBody(BaseModel):
     opts: dict = {}  # os ajustes da tela agora: reaproveitar é o prompt, não os parâmetros do lote
     seed: int = 0
     seed_mode: str = ""
+    refs: list[str] | None = None  # vídeo: os quadros da tela agora (None = os do lote)
 
 
 @app.post("/api/imagens/{message_id}/mais")
@@ -1354,7 +1368,7 @@ async def imagens_mais(message_id: int, body: MaisBody):
     """"Reaproveitar" com o campo vazio: mais imagens no mesmo lote, com o prompt dele e os ajustes da tela."""
     try:
         return await asyncio.to_thread(lotes.mais, message_id, body.count, body.models or None, body.confirm,
-                                       body.opts, body.seed, body.seed_mode)
+                                       body.opts, body.seed, body.seed_mode, body.refs)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))
     except ToolError as e:

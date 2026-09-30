@@ -32,6 +32,14 @@ const MODOS: { id: ModoVideo; rotulo: string; curto: string; dica: string; exemp
 ];
 
 const segundosDe = (frames: number, fps: number) => (fps ? frames / fps : 0);
+// Item acrescentado pelo Reaproveitar (ou ampliação com outro método) traz os próprios ajustes e quadros.
+const optsDo = (meta: LoteMeta, i?: LoteImagem) => ({ ...meta.opts, ...(i?.opts ?? {}) });
+const refsDo = (pm: PedidoMeta | null, i?: LoteImagem) => i?.refs ?? pm?.refs ?? [];
+const modoDe = (refs: string[]): ModoVideo => (refs.length === 2 ? "flf2v" : refs.length === 1 ? "i2v" : "t2v");
+/** O método que fez o vídeo: modo e modelo na geração; método e fator na ampliação. */
+const metodoDo = (meta: LoteMeta, pm: PedidoMeta | null, i: LoteImagem) =>
+  meta.opts.ampliacao || i.ampliacao ? `ampliado com ${i.model_name}`
+    : `${MODOS.find((m) => m.id === modoDe(refsDo(pm, i)))?.curto} · ${i.model_name}`;
 const fmtS = (s: number) => `${s.toFixed(1).replace(".", ",")} s`;
 const rodando = (m: Message) => m.role === "assistant" && m.status === "running";
 
@@ -135,7 +143,13 @@ export default function VideoView(props: {
   // Digitar anula e vira uma tomada nova; Tab traz o texto para editar.
   // Reaproveita-se o prompt, não os parâmetros: o que está no painel agora vale para as tomadas novas.
   const [reuso, setReuso] = useState<{ lote: number; letra: string; prompt: string; refs: string[] } | null>(null);
-  useEffect(() => setReuso(null), [props.conv]);
+  // Reaproveitar numa ampliação: o vídeo ORIGINAL volta, para ampliar por outros métodos no mesmo lote.
+  const [reusoAmp, setReusoAmp] = useState<{ lote: number; letra: string; origem: string;
+    info: { w: number; h: number; fps: number; quadros: number } | null } | null>(null);
+  useEffect(() => {
+    setReuso(null);
+    setReusoAmp(null);
+  }, [props.conv]);
   const mostrarErro = useCallback((e: string) => setErro(e), []);
 
   useEffect(() => {
@@ -352,9 +366,14 @@ export default function VideoView(props: {
 
   async function gerarMais(confirm = false) {
     if (!reuso || !modelo || !o) return;
+    if (refs.length < precisaQuadros) {
+      mostrarErro(precisaQuadros === 1 ? "Escolha a imagem que vai ser animada." : "Escolha o quadro inicial e o final.");
+      return;
+    }
     try {
+      // os quadros e o modo da tela agora: texto, imagem → vídeo ou início → fim, tudo no mesmo lote
       await api.post(`/imagens/${reuso.lote}/mais`, {
-        count, models: [modelo], confirm, opts: optsDaTela(), seed: o.seed, seed_mode: seedMode,
+        count, models: [modelo], confirm, opts: optsDaTela(), seed: o.seed, seed_mode: seedMode, refs,
       });
       setPerguntando(false);
       setErro("");
@@ -423,25 +442,40 @@ export default function VideoView(props: {
 
   // Com semente é "refazer com esta semente": prompt, quadros e ajustes da tomada vão para o campo. Sem, é o
   // Reaproveitar: só o prompt, e o Enter gera mais na mesma tomada com os ajustes que estão no painel.
-  function reaproveitar(meta: LoteMeta, pedido: Message, semente?: number, lote?: { id: number; letra: string }) {
+  function reaproveitar(meta: LoteMeta, pedido: Message, semente?: number, lote?: { id: number; letra: string },
+                        item?: LoteImagem) {
     const pm = pedido.meta as PedidoMeta | null;
     if (!semente && lote) {
-      if (meta.opts.ampliacao) { // ampliação não ganha "mais": o prompt vai para o campo
-        setPrompt(pedido.content);
+      if (meta.opts.ampliacao) { // ampliação: o original de novo, para escolher outro método
+        const origem = meta.opts.ampliacao.origem;
         setReuso(null);
-      } else {
-        setPrompt("");
-        setReuso({ lote: lote.id, letra: lote.letra, prompt: pedido.content, refs: pm?.refs ?? [] });
+        setAmpliarPc(false);
+        setReusoAmp({ lote: lote.id, letra: lote.letra, origem, info: null });
+        api.get<{ w: number; h: number; fps: number; quadros: number }>(`/local/video/sondar?path=${encodeURIComponent(origem)}`)
+          .then((info) => setReusoAmp((r) => r && r.origem === origem ? { ...r, info } : r))
+          .catch((e) => {
+            setReusoAmp(null);
+            mostrarErro(`O original não está mais disponível: ${e.message}`);
+          });
+        return;
       }
+      // os quadros do lote vêm para os slots (dá para trocar: o vídeo novo leva os que estiverem lá)
+      const r = pm?.refs ?? [];
+      setSlots([r[0] ?? null, r[1] ?? null]);
+      setModo(modoDe(r));
+      setPrompt("");
+      setReusoAmp(null);
+      setReuso({ lote: lote.id, letra: lote.letra, prompt: pedido.content, refs: r });
       texto.current?.focus();
       return;
     }
-    const r = pm?.refs ?? [];
+    const r = refsDo(pm, item);
     setSlots([r[0] ?? null, r[1] ?? null]);
-    setModo(r.length === 2 ? "flf2v" : r.length === 1 ? "i2v" : "t2v");
-    setO((c) => c && { ...c, ...meta.opts, ...(semente ? { seed: semente } : {}) });
+    setModo(modoDe(r));
+    setReusoAmp(null);
+    setO((c) => c && { ...c, ...optsDo(meta, item), ...(semente ? { seed: semente } : {}) });
     if (semente) setSeedMode("fixa");
-    const usado = pm?.models?.[0];
+    const usado = item?.model ?? pm?.models?.[0];
     if (usado && st?.video_models.some((m) => m.path === usado)) setModelo(usado);
     setCount(semente ? 1 : meta.count);
     setPrompt(pedido.content);
@@ -483,9 +517,9 @@ export default function VideoView(props: {
             setFoco(null);
             usarQuadro(b, onde);
           }}
-          onReaproveitar={(semente) => {
+          onReaproveitar={(semente, item) => {
             setFoco(null);
-            reaproveitar(focoLote.resposta.meta as LoteMeta, focoLote.pedido, semente);
+            reaproveitar(focoLote.resposta.meta as LoteMeta, focoLote.pedido, semente, undefined, item);
           }}
           onAbrir={abrirArquivo}
           onMudou={carregarConversa}
@@ -540,7 +574,7 @@ export default function VideoView(props: {
           {lotes.map(({ pedido, resposta }, iLote) => (
             <Tomada
               key={resposta.id}
-              reaproveitando={reuso?.lote === resposta.id}
+              reaproveitando={reuso?.lote === resposta.id || reusoAmp?.lote === resposta.id}
               letra={String.fromCharCode(65 + (iLote % 26))}
               ultimo={iLote === lotes.length - 1}
               filtro={filtro}
@@ -551,8 +585,8 @@ export default function VideoView(props: {
               onPasta={(p) => abrirArquivo(p, "reveal")}
               onError={mostrarErro}
               onMudou={carregarConversa}
-              onReaproveitar={(semente) => reaproveitar(resposta.meta as LoteMeta, pedido, semente,
-                                                       { id: resposta.id, letra: String.fromCharCode(65 + (iLote % 26)) })}
+              onReaproveitar={(semente, item) => reaproveitar(resposta.meta as LoteMeta, pedido, semente,
+                                                             { id: resposta.id, letra: String.fromCharCode(65 + (iLote % 26)) }, item)}
             />
           ))}
           <div ref={fim} />
@@ -640,12 +674,45 @@ export default function VideoView(props: {
                 <AmpliarArquivo
                   ensureConversation={props.ensureConversation}
                   onError={mostrarErro}
+                  varios
                   onPronto={(conv) => {
                     setAmpliarPc(false);
                     props.onConversationChanged();
                     carregarConversa(conv);
                   }}
                 />
+              ) : reusoAmp ? (
+                <div className="flex flex-col gap-2">
+                  <span className="flex items-center gap-1.5 text-[11.5px] text-accent-text">
+                    <span className="min-w-0 truncate" title={reusoAmp.origem}>
+                      Ampliar de novo na tomada {reusoAmp.letra} · original: {reusoAmp.origem.split(/[\\/]/).pop()}
+                    </span>
+                    <button onClick={() => setReusoAmp(null)} title="Não reaproveitar" className="shrink-0 text-faint hover:text-fg">
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                  {!reusoAmp.info ? (
+                    <p className="text-xs text-faint">Lendo o vídeo original…</p>
+                  ) : (
+                    <div className="max-w-md">
+                      <PainelAmpliar
+                        key={reusoAmp.origem}
+                        w={reusoAmp.info.w}
+                        h={reusoAmp.info.h}
+                        fps={reusoAmp.info.fps}
+                        quadros={reusoAmp.info.quadros}
+                        varios
+                        onError={mostrarErro}
+                        enviar={async (c) => {
+                          await api.post(`/imagens/${reusoAmp.lote}/ampliar-mais`, c);
+                          setReusoAmp(null);
+                          props.onConversationChanged();
+                          carregarConversa();
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
               ) : (
               <>
               <div className="flex items-start gap-3">
@@ -688,7 +755,7 @@ export default function VideoView(props: {
               <div className="flex min-w-0 flex-1 flex-col gap-1">
               {reuso && (
                 <span className="flex items-center gap-1.5 text-[11.5px] text-accent-text">
-                  Mais vídeos na tomada {reuso.letra} · Enter gera · Tab edita o prompt · digitar começa uma tomada nova
+                  Mais vídeos na tomada {reuso.letra} · modo, quadros e ajustes da tela valem · Enter gera · Tab edita o prompt · digitar começa uma tomada nova
                   <button onClick={() => setReuso(null)} title="Não reaproveitar" className="text-faint hover:text-fg">
                     <X className="size-3" />
                   </button>
@@ -1329,7 +1396,7 @@ function Tomada(props: {
   onPasta: (path: string) => void;
   onError: (e: string) => void;
   onMudou: () => void;
-  onReaproveitar: (semente?: number) => void;
+  onReaproveitar: (semente?: number, item?: LoteImagem) => void;
   letra: string;
   ultimo: boolean;
   filtro: Filtro;
@@ -1371,7 +1438,8 @@ function Tomada(props: {
   }
 
   if (!itens.some(mostra)) return null;
-  const modoLote = refs.length === 2 ? "flf2v" : refs.length === 1 ? "i2v" : "t2v";
+  const modoLote = modoDe(refs);
+  const metodos = [...new Set(itens.map((i) => metodoDo(meta, pm, i)))];
   const acelLote = (meta.opts.loras ?? []).find((l) => /lightx2v|distill|step/i.test(l.path));
 
   return (
@@ -1387,7 +1455,7 @@ function Tomada(props: {
           {modoLote} · {w}×{h} · {fmtS(segundosDe(frames, fps))}
           {meta.opts.steps !== undefined && ` · ${acelLote ? "⚡" : ""}${meta.opts.steps} passos`}
           {" · "}
-          <button onClick={() => props.onReaproveitar(itens[0].seed)}
+          <button onClick={() => props.onReaproveitar(itens[0].seed, itens[0])}
                   title={`${rotuloSementes(itens.map((i) => i.seed), meta.seed_mode)}\nClique para refazer com ${itens[0].seed}`}
                   className="hover:text-fg">
             {itens[0].seed}{itens.length > 1 ? "+" : ""}
@@ -1398,13 +1466,18 @@ function Tomada(props: {
             Cancelar
           </button>
         ) : (
-          <button onClick={() => props.onReaproveitar()} title="Deixa o campo pronto para gerar mais vídeos nesta tomada, com o mesmo prompt, quadros e ajustes"
+          <button onClick={() => props.onReaproveitar()}
+                  title={meta.opts.ampliacao ? "Traz o vídeo original de volta para ampliar por outro método, nesta mesma tomada"
+                    : "Deixa o campo pronto para gerar mais vídeos nesta tomada, com o mesmo prompt; modo, quadros e ajustes você muda na tela"}
                   className={`shrink-0 rounded-[7px] border px-2 py-0.5 text-xs hover:bg-raised hover:text-fg ${props.reaproveitando ? "border-accent text-accent-text" : "border-line text-muted"}`}>
             Reaproveitar
           </button>
         )}
       </div>
-      {(refs.length > 0 || meta.opts.ampliacao || (meta.opts.loras ?? []).length > 0) && (
+      <p className="-mt-1.5 mb-2.5 truncate pl-[34px] text-[11.5px] text-muted" title={metodos.join("\n")}>
+        {metodos.length > 1 ? `${metodos.length} métodos: ` : "Método: "}{metodos.join(" · ")}
+      </p>
+      {(refs.length > 0 || (meta.opts.loras ?? []).length > 0) && (
         <div className="-mt-1 mb-2.5 flex flex-wrap items-center gap-1.5 text-[11px] text-faint">
           {refs.length > 0 && (
             <span className="flex items-center gap-1 rounded-[5px] bg-raised py-0.5 pl-0.5 pr-2">
@@ -1412,7 +1485,6 @@ function Tomada(props: {
               {refs.length === 2 ? "início → fim" : "imagem → vídeo"}
             </span>
           )}
-          {meta.opts.ampliacao && <Chip>{`ampliado ${meta.opts.ampliacao.fator}×${meta.opts.ampliacao.suavizar ? " · suavizado" : ""}`}</Chip>}
           {(meta.opts.loras ?? []).length > 0 && (
             <Chip>
               <span title={(meta.opts.loras ?? []).map((l) => `${l.path} × ${l.peso}`).join("\n")}>
@@ -1429,8 +1501,9 @@ function Tomada(props: {
             key={item.path}
             item={item}
             aspecto={w / h}
-            segundos={segundosDe(frames, fps)}
-            origem={refs[0]}
+            segundos={segundosDe(optsDo(meta, item).frames ?? frames, optsDo(meta, item).fps ?? fps)}
+            origem={refsDo(pm, item)[0]}
+            rotulo={metodos.length > 1 ? metodoDo(meta, pm, item).replace(/^ampliado com /, "") : ""}
             marcado={sel.has(item.path)}
             onMarcar={() =>
               setSel((s) => {
@@ -1443,7 +1516,7 @@ function Tomada(props: {
             onAbrir={() => props.onAbrir(i)}
             onContinuar={() => props.onContinuar(item.path)}
             onPasta={() => props.onPasta(item.path)}
-            onSemente={() => props.onReaproveitar(item.seed)}
+            onSemente={() => props.onReaproveitar(item.seed, item)}
             posFila={item.status === "pendente" ? itens.slice(0, i + 1).filter((x) => x.status === "pendente").length : 0}
           />
         ))}
@@ -1505,6 +1578,7 @@ function CartaoVideo(props: {
   aspecto: number;
   segundos: number;
   origem?: string;
+  rotulo?: string; // o método, quando o lote mistura métodos
   marcado: boolean;
   onMarcar: () => void;
   onAbrir: () => void;
@@ -1608,8 +1682,8 @@ function CartaoVideo(props: {
           <span className="pointer-events-none absolute right-2 top-2 rounded-[5px] bg-black/55 px-1.5 py-px font-mono text-[10.5px] tabular-nums text-fg">
             {fmtS(props.segundos)}
           </span>
-          <span className="pointer-events-none absolute bottom-2 left-2.5 font-mono text-[10.5px] text-white/60 transition-opacity group-hover:opacity-0">
-            seed {item.seed}
+          <span className="pointer-events-none absolute bottom-2 left-2.5 max-w-[85%] truncate font-mono text-[10.5px] text-white/60 transition-opacity group-hover:opacity-0">
+            {props.rotulo || `seed ${item.seed}`}
           </span>
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/90 via-black/35 to-black/15 opacity-0 transition-opacity group-hover:opacity-100" />
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-[3px] bg-white/10 opacity-0 transition-opacity group-hover:opacity-100">
@@ -1649,7 +1723,7 @@ function CartaoVideo(props: {
             <span className="text-[11.5px] text-faint">na fila{props.posFila ? ` · ${props.posFila}º` : ""}</span>
           ) : null}
           {!temArquivo && item.status !== "erro" && (
-            <span className="absolute bottom-2 left-2.5 font-mono text-[10.5px] text-faint">seed {item.seed}</span>
+            <span className="absolute bottom-2 left-2.5 max-w-[85%] truncate font-mono text-[10.5px] text-faint">{props.rotulo || `seed ${item.seed}`}</span>
           )}
         </div>
       )}
@@ -1712,7 +1786,7 @@ function Foco(props: {
   onIndice: (i: number) => void;
   onFechar: () => void;
   onUsarQuadro: (b: Blob | null, onde: "inicio" | "fim") => void;
-  onReaproveitar: (semente?: number) => void;
+  onReaproveitar: (semente?: number, item?: LoteImagem) => void;
   onAbrir: (path: string, mode: "reveal" | "open") => void;
   onMudou: () => void;
   onError: (e: string) => void;
@@ -1722,17 +1796,18 @@ function Foco(props: {
   const prontos = meta.images.map((x, i) => ({ x, i })).filter(({ x }) => ["pronta", "mantida", "descartada"].includes(x.status));
   const pos = Math.max(0, prontos.findIndex(({ i }) => i === props.indice));
   const atual = prontos[pos]?.x;
+  const oi = optsDo(meta, atual);
   const player = useRef<VideoPlayerApi>(null);
   // Fecha no clique fora do vídeo, mas só se o clique também COMEÇOU fora: arrastar a linha do tempo e
   // soltar no fundo escuro não pode fechar o player no meio do scrub.
   const comecouFora = useRef(false);
   const [anuncio, setAnuncio] = useState(""); // leitor de tela: "Tomada 2 mantida"
   const decidirRef = useRef<(manter: boolean, avancar?: boolean) => void>(() => {});
-  const w = meta.opts.width ?? 832;
-  const h = meta.opts.height ?? 480;
-  const fps = meta.opts.fps ?? 16;
-  const frames = meta.opts.frames ?? 33;
-  const refs = pm?.refs ?? [];
+  const w = oi.width ?? 832;
+  const h = oi.height ?? 480;
+  const fps = oi.fps ?? 16;
+  const frames = oi.frames ?? 33;
+  const refs = refsDo(pm, atual);
   const [salvo, setSalvo] = useState("");
   const [ampliar, setAmpliar] = useState(false);
 
@@ -1845,6 +1920,7 @@ function Foco(props: {
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           <p className="text-[13px] leading-relaxed text-fg">{props.pedido.content}</p>
+          <p className="mt-1 text-[11.5px] text-muted">Método: {metodoDo(meta, pm, atual)}</p>
           {refs.length > 0 && (
             <div className="mt-3 flex items-center gap-2">
               {refs.map((r, i) => (
@@ -1860,7 +1936,7 @@ function Foco(props: {
             <Chip>{`${w}×${h}`}</Chip>
             <Chip>{`${frames} q · ${fps} fps`}</Chip>
             <Chip>{`semente ${atual.seed}`}</Chip>
-            {meta.opts.steps !== undefined && <Chip>{`${meta.opts.steps} passos${meta.opts.cfg != null ? ` · CFG ${meta.opts.cfg}` : ""}`}</Chip>}
+            {oi.steps !== undefined && !meta.opts.ampliacao && <Chip>{`${oi.steps} passos${oi.cfg != null ? ` · CFG ${oi.cfg}` : ""}`}</Chip>}
           </div>
 
           <div className="mt-4 grid grid-cols-2 gap-2">
@@ -1888,7 +1964,7 @@ function Foco(props: {
           <button className={acao} onClick={async () => props.onUsarQuadro((await player.current?.capturar()) ?? null, "fim")}>
             <Camera className="size-3.5" /> Usar este quadro como fim
           </button>
-          <button className={acao} onClick={() => props.onReaproveitar(atual.seed)}>
+          <button className={acao} onClick={() => props.onReaproveitar(atual.seed, atual)}>
             <Refresh className="size-3.5" /> Refazer com esta semente
           </button>
 
@@ -1898,6 +1974,8 @@ function Foco(props: {
               w={w}
               h={h}
               fps={fps}
+              quadros={frames}
+              varios
               onError={props.onError}
               enviar={async (c) => {
                 await api.post(`/imagens/${props.resposta.id}/ampliar`, { path: atual.path, ...c });
