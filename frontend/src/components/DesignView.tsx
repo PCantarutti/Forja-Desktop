@@ -18,7 +18,7 @@ import DesignPlano, { type Plano } from "./DesignPlano";
 import DesignVariacoes, { Miniatura, type Variacao } from "./DesignVariacoes";
 import { type Item, type Modo, type NoArvore, type NoCaminho, type Problema, docEstatico, enviar as paraIframe, lerMensagem, paraCanvas, ponte } from "./designCanvas";
 import { ArrowLeft, ArrowRight, Bubble, Camadas as CamadasIcone, Celular, Check, FolderOpen, LadoALado, Monitor, Tablet, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, PanelLeft, Paperclip, Play, Plus,
-  Split, TelaCheia, Undo, X } from "./icons";
+  Split, TelaCheia, Undo, X, Pin, Sliders, Eye, GitBranch } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import ContextRing from "./ContextRing";
@@ -960,7 +960,43 @@ export default function DesignView(props: {
   const seg = "flex items-center gap-0.5 rounded-lg border border-line bg-surface p-0.5";
   const segBtn = (on: boolean) => `inline-flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] disabled:opacity-35 ${on ? "bg-raised text-fg" : "text-faint hover:text-fg"}`;
   const campoPop = "w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none";
-  const abaBtn = (on: boolean) => `rounded-lg px-2.5 py-1 text-xs ${on ? "bg-raised text-fg" : "text-muted hover:text-fg"}`;
+  // Selo das abas no feitio do painel lateral (seloDaAba): pílula mono de 15px; a cor diz o tipo
+  const selo = (n: number, tom: string, dica?: string) => (
+    <span title={dica} className={`h-[15px] min-w-[15px] shrink-0 rounded-full px-1 text-center font-mono text-[9.5px] leading-[15px] font-semibold tabular-nums ${tom}`}>{n}</span>
+  );
+  const errosA11y = aba !== "acessibilidade" ? (auditoria.itens?.filter((x) => x.gravidade === "erro").length ?? 0) : 0;
+  const problemasVisuais = aba !== "acessibilidade" ? (revisao?.problemas.length ?? 0) : 0;
+  const abas: { id: typeof aba; rotulo: string; icone: React.ReactNode; dica?: string; selo?: React.ReactNode }[] = [
+    { id: "chat", rotulo: "Chat", icone: <Bubble className="size-3.5" /> },
+    { id: "comentarios", rotulo: "Comentários", icone: <Pin className="size-3.5" />,
+      dica: pendentes.length ? `${pendentes.length} pendente${pendentes.length > 1 ? "s" : ""}` : undefined,
+      selo: pendentes.length ? selo(pendentes.length, "bg-accent text-accent-fg") : undefined },
+    { id: "ajustes", rotulo: "Ajustes", icone: <Sliders className="size-3.5" />,
+      dica: criandoSistema ? "criando um design system…" : undefined,
+      selo: criandoSistema ? <span className="size-2.5 shrink-0 animate-spin rounded-full border border-accent/30 border-t-accent" aria-hidden /> : undefined },
+    { id: "acessibilidade", rotulo: "Revisão", icone: <Eye className="size-3.5" />,
+      dica: [problemasVisuais ? `${problemasVisuais} da revisão visual` : "", errosA11y ? `${errosA11y} erro${errosA11y > 1 ? "s" : ""} de acessibilidade` : ""]
+        .filter(Boolean).join(" · ") || "Revisão visual nas 3 larguras e acessibilidade",
+      selo: problemasVisuais + errosA11y ? selo(problemasVisuais + errosA11y, errosA11y ? "bg-err/20 text-err" : "bg-warn/20 text-warn") : undefined },
+    { id: "versoes", rotulo: "Versões", icone: <GitBranch className="size-3.5" />,
+      dica: total ? (total === 1 ? "1 versão" : `${total} versões`) : undefined,
+      selo: total ? selo(total, "bg-line text-muted") : undefined },
+  ];
+  function abrirAba(id: typeof aba) {
+    setAba(id);
+    if (id === "acessibilidade") auditar();
+    if (id === "versoes") versoes.slice(0, 12).forEach((m) => htmlDaVersao(m.versao!));
+  }
+  /** Setas, Home e End andam entre as abas, como num tablist de verdade. */
+  function teclaNasAbas(e: React.KeyboardEvent) {
+    const i = abas.findIndex((t) => t.id === aba);
+    const alvo = e.key === "ArrowRight" ? (i + 1) % abas.length : e.key === "ArrowLeft" ? (i - 1 + abas.length) % abas.length
+      : e.key === "Home" ? 0 : e.key === "End" ? abas.length - 1 : -1;
+    if (alvo < 0) return;
+    e.preventDefault();
+    abrirAba(abas[alvo].id);
+    document.getElementById(`aba-${abas[alvo].id}`)?.focus();
+  }
 
   /** Bloco da resposta em andamento: raciocínio ao vivo, progresso e a linha de métricas ao vivo. */
   const ROTULO_VIVO: Record<string, string> = {
@@ -1056,24 +1092,23 @@ export default function DesignView(props: {
       {/* Esquerda: chat / comentários / versões + composer */}
       <div style={{ width: `${(prefs.chatFracao ?? 0.35) * 100}%` }}
            className={`flex min-w-[320px] shrink-0 flex-col ${prefs.chatOculto ? "hidden" : ""}`}>
-        <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-3">
-          <button className={abaBtn(aba === "chat")} onClick={() => setAba("chat")}>Chat</button>
-          <button className={abaBtn(aba === "comentarios")} onClick={() => setAba("comentarios")}>
-            Comentários{!!pendentes.length && <span className="ml-1 rounded-full bg-accent-soft px-1.5 text-[10.5px] text-accent-text">{pendentes.length}</span>}
-          </button>
-          <button className={`${abaBtn(aba === "ajustes")} inline-flex items-center gap-1.5`} onClick={() => setAba("ajustes")}
-                  title={criandoSistema ? "Criando um design system…" : undefined}>
-            Ajustes
-            {criandoSistema && <span className="size-2.5 animate-spin rounded-full border border-accent/30 border-t-accent" aria-label="criando design system" />}
-          </button>
-          <button className={abaBtn(aba === "acessibilidade")} title="Revisão visual nas 3 larguras e acessibilidade"
-                  onClick={() => { setAba("acessibilidade"); auditar(); }}>
-            Revisão{!!revisao?.problemas.length && aba !== "acessibilidade" &&
-              <span className="ml-1 rounded-full bg-amber-500/20 px-1.5 text-[10.5px] text-amber-300">{revisao.problemas.length}</span>}
-            {!!auditoria.itens?.filter((x) => x.gravidade === "erro").length && aba !== "acessibilidade" &&
-              <span className="ml-1 rounded-full bg-red-500/20 px-1.5 text-[10.5px] text-red-300">{auditoria.itens!.filter((x) => x.gravidade === "erro").length}</span>}
-          </button>
-          <button className={abaBtn(aba === "versoes")} onClick={() => { setAba("versoes"); versoes.slice(0, 12).forEach((m) => htmlDaVersao(m.versao!)); }}>Versões{!!total && <span className="ml-1 text-faint">{total}</span>}</button>
+        <div role="tablist" aria-label="Seções do projeto" onKeyDown={teclaNasAbas}
+             className="@container/abas flex h-11 shrink-0 items-center gap-0.5 border-b border-line px-2">
+          {abas.map((t) => {
+            const on = aba === t.id;
+            return (
+              <button key={t.id} role="tab" id={`aba-${t.id}`} aria-selected={on} tabIndex={on ? 0 : -1}
+                      title={t.dica} aria-label={t.dica ? `${t.rotulo}: ${t.dica}` : t.rotulo}
+                      onClick={() => abrirAba(t.id)}
+                      className={`group relative inline-flex h-7 min-w-0 shrink-0 items-center gap-1.5 rounded-[7px] px-2 text-[12.5px] transition-colors
+                        focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-focus
+                        ${on ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"}`}>
+                <span className={`shrink-0 ${on ? "text-accent-text" : "text-faint group-hover:text-muted"}`}>{t.icone}</span>
+                <span className={on ? "inline" : "hidden @[26rem]/abas:inline"}>{t.rotulo}</span>
+                {t.selo}
+              </button>
+            );
+          })}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
           {aba === "chat" && (
