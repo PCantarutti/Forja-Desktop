@@ -308,6 +308,91 @@ export type EstudosProjeto = {
   resumos: { message_id: number; titulo: string; status: string; criado: string }[];
   resumo: EstudosEstado | null;
   rodando: number | null;
+  provas: EstudosProvaResumo[];
+};
+
+export type EstudosTipoQuestao = "me" | "vf" | "disc";
+
+export type EstudosQuestao = {
+  id: string;
+  tipo: EstudosTipoQuestao;
+  enunciado: string;
+  pontos: number;
+  topico: string;
+  dificuldade: "facil" | "media" | "dificil";
+  alternativas?: string[];
+  // o resto só vem depois da primeira entrega (a prova sai sem gabarito até lá)
+  correta?: number | boolean;
+  explicacao?: string;
+  por_alternativa?: string[];
+  resposta_modelo?: string;
+  rubrica?: { criterio: string; pontos: number }[];
+  pagina?: string;
+  verificada?: boolean;
+};
+
+export type EstudosProvaConfig = {
+  me: number; vf: number; disc: number;
+  dificuldade: "facil" | "media" | "dificil" | "mista";
+  topicos: string[];
+  estilo: boolean;     // imitar a prova anexada
+  tempo: number;       // minutos; 0 = sem cronômetro
+  instrucoes: string;
+  alternativas: number;
+};
+
+export type EstudosPlanejada = {
+  id: string; tipo: EstudosTipoQuestao; topico: string; dificuldade: string; motivo: string;
+  status: "fila" | "gerando" | "verificando" | "ok" | "descartada";
+};
+
+export type EstudosProva = {
+  message_id: number;
+  tipo: "prova";
+  titulo: string;
+  config: EstudosProvaConfig;
+  motor: "forja" | "claude";
+  status: EstudosEstado["status"];
+  etapa: string;
+  aviso: string;
+  planejadas: EstudosPlanejada[];
+  questoes: EstudosQuestao[];
+  revelada: boolean;
+  stats: PesquisaEstado["stats"];
+};
+
+export type EstudosCorrecao = {
+  resposta: number | boolean | string | null;
+  certa: boolean | null;   // null = discursiva com nota parcial (ou ainda sendo corrigida)
+  pontos: number;
+  max: number;
+  feedback: string;
+  pendente?: boolean;
+  criterios?: { criterio: string; pontos: number; max: number }[];
+};
+
+export type EstudosTentativa = {
+  message_id: number;
+  tipo: "tentativa";
+  prova_id: number;
+  titulo: string;
+  segundos: number;
+  correcao: Record<string, EstudosCorrecao>;
+  motor: "forja" | "claude";
+  status: EstudosEstado["status"];
+  etapa: string;
+  aviso: string;
+  pontos: number; max: number; nota: number; acertos: number;
+  por_topico: { topico: string; pontos: number; max: number }[];
+  questoes: EstudosQuestao[];   // as da prova, já com gabarito
+  stats: PesquisaEstado["stats"];
+};
+
+export type EstudosProvaResumo = {
+  message_id: number; titulo: string; status: string; n: number; config: EstudosProvaConfig;
+  motor: "forja" | "claude"; criado: string;
+  tentativas: { message_id: number; status: string; nota: number; pontos: number; max: number; acertos: number;
+                segundos: number; criado: string }[];
 };
 
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)

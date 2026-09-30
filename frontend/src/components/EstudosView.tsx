@@ -9,16 +9,11 @@ import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pil
 import { Menu } from "./Controls";
 import { matematica, sumario } from "./estudosTexto";
 import Sinapse from "./Sinapse";
-
-// Mesmas classes da Pesquisa, repetidas para a aba viajar inteira num cherry-pick para o forja-web.
-const card = "rounded-xl border border-line bg-surface p-3.5";
-const btn = "inline-flex items-center gap-1.5 rounded-[9px] border border-line-strong px-3 py-1.5 text-fg hover:border-focus hover:bg-raised disabled:opacity-40";
-const btnPrimary = "inline-flex items-center gap-1.5 rounded-[9px] border border-accent bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
-const rotulo = "font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase";
+import Provas from "./EstudosProva";
+import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
 const KEY_MODELOS = "forja.estudos.modelos";
-const MOTOR_CLAUDE = "claude-mcp";   // o provider que o backend entende como "o Claude faz via MCP"
 const TEXTO_LONGO = 1500;            // colar mais que isto no campo do tema vira material
 
 type Opcao<T extends string> = { id: T; label: string; hint: string };
@@ -68,18 +63,7 @@ const ETAPAS: { id: EstudosEstado["etapa"]; label: string }[] = [
 
 const MARCA_TOPICO: Record<string, string> = { fila: "·", escrevendo: "›", pronto: "✓", erro: "✕" };
 
-type Par = { provider: string; model: string };
-type Modelos = { motor: "forja" | "claude"; escritor: Par; extrator: Par | null };   // extrator null = automático
 type McpServidor = { ligado: boolean; comando: string };
-
-const relogio = (seg: number) => `${Math.floor(seg / 60)}:${String(Math.floor(seg % 60)).padStart(2, "0")}`;
-
-function numeros(e: EstudosEstado): string {
-  const s = e.stats;
-  const tps = s.gerando > 0.5 ? Math.round(s.tokens / s.gerando) : 0;
-  return [s.tokens ? `${s.tokens.toLocaleString("pt-BR")} tokens${s.estimado ? " (estim.)" : ""}` : "",
-          tps ? `${tps} tok/s` : "", s.segundos ? relogio(s.segundos) : ""].filter(Boolean).join(" · ");
-}
 
 const FASE_ETAPA: Record<EstudosEstado["etapa"], string> = {
   material: "lendo o material", web: "pesquisando na web", plano: "montando o roteiro",
@@ -102,15 +86,6 @@ function sinapseDe(e: EstudosEstado) {
   const estado = { status: "rodando" as const, fontes, rodadas: [], pergunta: e.titulo || e.tema,
                    fase: "pronto" as const, rodada: 0, rodadas_total: 0, stats: e.stats };
   return { estado, ramos, fase: e.status === "aguardando" ? "esperando o Claude" : FASE_ETAPA[e.etapa] };
-}
-
-function ler<T>(chave: string, padrao: T): T {
-  try {
-    const v = JSON.parse(localStorage.getItem(chave) ?? "null");
-    return v ? (padrao ? { ...padrao, ...v } : v) : padrao;
-  } catch {
-    return padrao;
-  }
 }
 
 function Opcoes<T extends string>(props: { titulo: string; itens: Opcao<T>[]; ligado: (id: T) => boolean;
@@ -160,6 +135,7 @@ export default function EstudosView(props: {
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [mcp, setMcp] = useState<McpServidor | null>(null);
+  const [aba, setAba] = useState<"resumo" | "provas">("resumo");
   const statusAnterior = useRef("");
   const acompanhando = useRef(0);   // message_id ouvido por SSE; -1 = o POST de estudar está no ar
   const escolhida = useRef(0);      // versão antiga aberta pelo seletor (0 = a mais recente)
@@ -202,7 +178,7 @@ export default function EstudosView(props: {
     corte.current = ctl;
     acompanhando.current = messageId;
     try {
-      await streamSSE(`/estudos/resumo/${messageId}/stream`, { signal: ctl.signal },
+      await streamSSE(`/estudos/execucao/${messageId}/stream`, { signal: ctl.signal },
         (ev) => !ev.erro && !ctl.signal.aborted && receber(ev));
     } catch (e: any) {
       if (!ctl.signal.aborted) aoErro.current(e.message);
@@ -307,7 +283,6 @@ export default function EstudosView(props: {
     const t = tema.trim();
     if (!t || rodando) return;
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
-    const claude = modelos.motor === "claude";
     try {
       const id = await props.ensureConversation();
       corte.current?.abort();
@@ -319,9 +294,7 @@ export default function EstudosView(props: {
       setPainel("");
       try {
         await streamSSE(`/estudos/${id}/estudar`, { method: "POST", signal: ctl.signal, body: JSON.stringify({
-          tema: t, preferencias: prefs, web, profundidade,
-          provider: claude ? MOTOR_CLAUDE : modelos.escritor.provider, model: claude ? "" : modelos.escritor.model,
-          ex_provider: claude ? "" : modelos.extrator?.provider ?? "", ex_model: claude ? "" : modelos.extrator?.model ?? "" }) },
+          tema: t, preferencias: prefs, web, profundidade, ...motorDe(modelos) }) },
           (ev) => {
             if (ctl.signal.aborted) return;
             if (ev.erro) props.onError(ev.erro);
@@ -338,7 +311,7 @@ export default function EstudosView(props: {
   }
 
   async function parar() {
-    if (estado) await api.post(`/estudos/resumo/${estado.message_id}/cancelar`, {}).catch(() => {});
+    if (estado) await api.post(`/estudos/execucao/${estado.message_id}/cancelar`, {}).catch(() => {});
     if (aguardando) carregar(props.conv);
   }
 
@@ -379,7 +352,102 @@ export default function EstudosView(props: {
   const perfil = estado?.perfil;
   const resumoPrefs = [NIVEIS.find((o) => o.id === prefs.nivel), TONS.find((o) => o.id === prefs.tom),
                        TAMANHOS.find((o) => o.id === prefs.tamanho)].map((o) => o?.label).filter(Boolean).join(" · ");
-  const pedidoClaude = "Atenda os pedidos da tela Estudos do Forja.";
+
+
+  const painelModelos = (
+    <div className={`${card} mb-2 text-xs`}>
+      <div className="mb-2.5 flex items-center gap-2">
+        <span className="font-medium text-fg">Quem faz o estudo</span>
+        <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Motor">
+          {([["forja", "Modelo do Forja"], ["claude", "Claude via MCP"]] as const).map(([id, nome]) => (
+            <button key={id} role="radio" aria-checked={modelos.motor === id} onClick={() => setModelos((m) => ({ ...m, motor: id }))}
+                    className={`rounded-[9px] px-2.5 py-0.5 ${modelos.motor === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+              {nome}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setPainel("")} title="Fechar" className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+          <X className="size-3.5" />
+        </button>
+      </div>
+      {modelos.motor === "forja" ? (
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-muted">Resumo e prova</span>
+            <div className="flex [&>div]:ml-0">
+              <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
+                           onChange={(provider, model) => setModelos((m) => ({ ...m, escritor: { provider, model } }))} />
+            </div>
+            <span className="text-faint">Escreve o resumo, as questões e corrige as discursivas. Vale o melhor modelo que você tiver.</span>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-muted">Leitura</span>
+            <div className="flex items-center gap-2 [&>div]:ml-0">
+              <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Leitura">
+                {([["auto", "Automática"], ["propria", "Escolher"]] as const).map(([id, nome]) => {
+                  const ligado = (id === "propria") === !!modelos.extrator;
+                  return (
+                    <button key={id} role="radio" aria-checked={ligado}
+                            onClick={() => setModelos((m) => ({ ...m, extrator: id === "auto" ? null : m.extrator ?? { ...m.escritor } }))}
+                            className={`rounded-[9px] px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                      {nome}
+                    </button>
+                  );
+                })}
+              </div>
+              {modelos.extrator && (
+                <ModelPicker provider={modelos.extrator.provider} model={modelos.extrator.model}
+                             onChange={(provider, model) => setModelos((m) => ({ ...m, extrator: { provider, model } }))} />
+              )}
+            </div>
+            <span className="text-faint">Tira notas do material grande e lê as páginas da web. Automática: o subagente Rápido, ou o mesmo do resumo.</span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 text-muted">
+          <p>
+            O Claude (no Claude Code ou no Claude Desktop) faz tudo com o próprio raciocínio e a própria busca:
+            lê o seu material pelo MCP do Forja e grava aqui o resumo, a prova e a correção. O pedido fica esperando; no
+            Claude, peça <span className="text-fg">“{PEDIDO_CLAUDE}”</span>.
+          </p>
+          {mcp && !mcp.ligado && <p className="text-amber-300">Desligado: ligue “Permitir que o Claude controle o Forja” em Configurações › MCP.</p>}
+          {mcp?.ligado && (
+            <p className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={mcp.comando}>{mcp.comando}</span>
+              <button className={btn} onClick={() => navigator.clipboard.writeText(mcp.comando)}><Copy className="size-3.5" /> Conectar no Claude Code</button>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+  const botaoModelos = (
+    <button onClick={() => setPainel(painel === "modelos" ? "" : "modelos")}
+            title={modelos.motor === "claude" ? "O Claude faz o estudo pelo MCP" : `Resumo: ${modelos.escritor.model || "—"}\nLeitura: ${modelos.extrator?.model ?? "automática"}`}
+            className={`flex min-w-0 max-w-[min(18rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg px-2.5 py-1 text-xs whitespace-nowrap ${
+              painel === "modelos" ? "bg-line-strong text-fg" : "bg-raised text-muted hover:text-fg"}`}>
+      {modelos.motor === "claude" ? <Livro className="size-3.5 shrink-0" /> : <Cube className="size-3.5 shrink-0" />}
+      <span className="min-w-0 truncate">{modelos.motor === "claude" ? "Claude via MCP" : modelos.escritor.model || "escolher modelo"}</span>
+    </button>
+  );
+  const abas = (
+    <div className="flex gap-1 self-start rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
+      {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`]] as const).map(([id, nome]) => (
+        <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)}
+                className={`rounded-full px-3 py-1 ${aba === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+          {nome}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (aba === "provas" && props.conv !== null && projeto) {
+    return (
+      <Provas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos} abas={abas}
+              botaoModelos={botaoModelos} painelModelos={painel === "modelos" ? painelModelos : null}
+              onError={props.onError} onRecarregar={() => carregar(props.conv)} />
+    );
+  }
 
   return (
     <div className={`flex h-full min-h-0 flex-col ${arrastando ? "ring-2 ring-accent/50 ring-inset" : ""}`}
@@ -392,6 +460,7 @@ export default function EstudosView(props: {
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto flex max-w-6xl flex-col items-start gap-3 xl:flex-row">
           <div className="flex w-full min-w-0 flex-1 flex-col gap-3">
+            {projeto && abas}
             {!estado && (
               <div className={`${card} text-xs text-muted`}>
                 <p className="text-sm text-fg">Seu material, um resumo feito para você estudar.</p>
@@ -424,14 +493,14 @@ export default function EstudosView(props: {
                     <p className="text-sm text-fg">Pedido enviado ao Claude</p>
                     <p className="mt-1">
                       No Claude Code (ou Claude Desktop) conectado ao Forja pelo MCP, peça:{" "}
-                      <span className="text-fg">“{pedidoClaude}”</span>. Ele lê o material, pesquisa e grava o resumo
+                      <span className="text-fg">“{PEDIDO_CLAUDE}”</span>. Ele lê o material, pesquisa e grava o resumo
                       aqui — a tela atualiza sozinha.
                     </p>
                     {mcp && !mcp.ligado && (
                       <p className="mt-2 text-amber-300">O controle pelo Claude está desligado: ligue em Configurações › MCP.</p>
                     )}
                     <div className="mt-2 flex gap-2">
-                      <button className={btn} onClick={() => navigator.clipboard.writeText(pedidoClaude)}>
+                      <button className={btn} onClick={() => navigator.clipboard.writeText(PEDIDO_CLAUDE)}>
                         <Copy className="size-3.5" /> Copiar o pedido
                       </button>
                       <button className={btn} onClick={parar}><X className="size-3.5" /> Cancelar pedido</button>
@@ -645,73 +714,7 @@ export default function EstudosView(props: {
             </div>
           )}
 
-          {painel === "modelos" && (
-            <div className={`${card} mb-2 text-xs`}>
-              <div className="mb-2.5 flex items-center gap-2">
-                <span className="font-medium text-fg">Quem faz o estudo</span>
-                <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Motor">
-                  {([["forja", "Modelo do Forja"], ["claude", "Claude via MCP"]] as const).map(([id, nome]) => (
-                    <button key={id} role="radio" aria-checked={modelos.motor === id} onClick={() => setModelos((m) => ({ ...m, motor: id }))}
-                            className={`rounded-[9px] px-2.5 py-0.5 ${modelos.motor === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                      {nome}
-                    </button>
-                  ))}
-                </div>
-                <button onClick={() => setPainel("")} title="Fechar" className="ml-auto rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
-                  <X className="size-3.5" />
-                </button>
-              </div>
-              {modelos.motor === "forja" ? (
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-muted">Resumo</span>
-                    <div className="flex [&>div]:ml-0">
-                      <ModelPicker provider={modelos.escritor.provider} model={modelos.escritor.model}
-                                   onChange={(provider, model) => setModelos((m) => ({ ...m, escritor: { provider, model } }))} />
-                    </div>
-                    <span className="text-faint">Monta o roteiro e escreve cada tópico. Vale o melhor modelo que você tiver.</span>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-muted">Leitura</span>
-                    <div className="flex items-center gap-2 [&>div]:ml-0">
-                      <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Leitura">
-                        {([["auto", "Automática"], ["propria", "Escolher"]] as const).map(([id, nome]) => {
-                          const ligado = (id === "propria") === !!modelos.extrator;
-                          return (
-                            <button key={id} role="radio" aria-checked={ligado}
-                                    onClick={() => setModelos((m) => ({ ...m, extrator: id === "auto" ? null : m.extrator ?? { ...m.escritor } }))}
-                                    className={`rounded-[9px] px-2.5 py-0.5 ${ligado ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                              {nome}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {modelos.extrator && (
-                        <ModelPicker provider={modelos.extrator.provider} model={modelos.extrator.model}
-                                     onChange={(provider, model) => setModelos((m) => ({ ...m, extrator: { provider, model } }))} />
-                      )}
-                    </div>
-                    <span className="text-faint">Tira notas do material grande e lê as páginas da web. Automática: o subagente Rápido, ou o mesmo do resumo.</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-2 text-muted">
-                  <p>
-                    O Claude (no Claude Code ou no Claude Desktop) faz tudo com o próprio raciocínio e a própria busca:
-                    lê o seu material pelo MCP do Forja e grava o resumo aqui. Ao estudar, o pedido fica esperando; no
-                    Claude, peça <span className="text-fg">“{pedidoClaude}”</span>.
-                  </p>
-                  {mcp && !mcp.ligado && <p className="text-amber-300">Desligado: ligue “Permitir que o Claude controle o Forja” em Configurações › MCP.</p>}
-                  {mcp?.ligado && (
-                    <p className="flex items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-faint" title={mcp.comando}>{mcp.comando}</span>
-                      <button className={btn} onClick={() => navigator.clipboard.writeText(mcp.comando)}><Copy className="size-3.5" /> Conectar no Claude Code</button>
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          {painel === "modelos" && painelModelos}
 
           <CaixaPrompt>
             <textarea
@@ -758,13 +761,7 @@ export default function EstudosView(props: {
                       button={(label) => (<><Search className="size-3.5" />{label}</>)} />
               )}
               <DireitaPrompt>
-                <button onClick={() => setPainel(painel === "modelos" ? "" : "modelos")}
-                        title={modelos.motor === "claude" ? "O Claude faz o estudo pelo MCP" : `Resumo: ${modelos.escritor.model || "—"}\nLeitura: ${modelos.extrator?.model ?? "automática"}`}
-                        className={`flex min-w-0 max-w-[min(18rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg px-2.5 py-1 text-xs whitespace-nowrap ${
-                          painel === "modelos" ? "bg-line-strong text-fg" : "bg-raised text-muted hover:text-fg"}`}>
-                  {modelos.motor === "claude" ? <Livro className="size-3.5 shrink-0" /> : <Cube className="size-3.5 shrink-0" />}
-                  <span className="min-w-0 truncate">{modelos.motor === "claude" ? "Claude via MCP" : modelos.escritor.model || "escolher modelo"}</span>
-                </button>
+                {botaoModelos}
                 <BotaoEnviar rodando={rodando} onParar={parar} onEnviar={estudar} titulo="Estudar" desabilitado={!tema.trim() || !!lendo} />
               </DireitaPrompt>
             </RodapePrompt>

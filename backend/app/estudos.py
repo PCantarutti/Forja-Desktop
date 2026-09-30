@@ -365,11 +365,42 @@ def _visao(itens: list[dict], teto: int) -> str:
 # ------------------------------------------------------------------ banco e estado
 
 INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "erro_busca", "porte", "gravar",
-           "pergunta", "contexto", "texto", "_mats")
+           "pergunta", "contexto", "texto")
+TIPOS_EXECUCAO = ("resumo", "prova", "tentativa")   # o que tem estado, SSE e pode ficar para o Claude
 
 
 def _publico(run: dict) -> dict:
-    return {k: v for k, v in run.items() if k not in INTERNO}
+    """O que vai para o banco e para a tela; chave com "_" na frente é só da execução."""
+    return {k: v for k, v in run.items() if k not in INTERNO and not k.startswith("_")}
+
+
+def stats_novos(extrator: dict, escritor: dict) -> dict:
+    return {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0, "tokens": 0, "tokens_entrada": 0,
+            "gerando": 0.0, "chamadas": 0, "estimado": False, "extrator": extrator["model"],
+            "escritor": escritor["model"], "extrator_provider": extrator["provider"],
+            "escritor_provider": escritor["provider"]}
+
+
+def modelos(provider: str, model: str, ex_provider: str = "", ex_model: str = "") -> tuple[dict, dict, bool]:
+    """(extrator, escritor, é_o_claude). O Claude via MCP só pode ser escolhido com o interruptor ligado."""
+    if provider == MOTOR_CLAUDE:
+        if not config.MCP_SERVIDOR:
+            raise ToolError("Para usar o Claude, ligue \"Permitir que o Claude controle o Forja\" em Configurações › MCP "
+                            "e conecte o Claude Code ou o Claude Desktop.")
+        claude = {"provider": MOTOR_CLAUDE, "model": "Claude (MCP)"}
+        return claude, claude, True
+    if not (provider and model):
+        raise ToolError("Escolha um modelo antes de estudar.")
+    return (*pesquisa._modelos(provider, model, ex_provider, ex_model), False)
+
+
+def disparar(run: dict, coro) -> None:
+    """Registra a execução e guarda referência forte da task (o loop só guarda fraca: sem isto o coletor de
+    lixo pode levar a execução no meio e a mensagem fica "running" para sempre)."""
+    _RUNS[run["message_id"]] = run
+    t = asyncio.create_task(coro)
+    _TAREFAS.add(t)
+    t.add_done_callback(_TAREFAS.discard)
 
 
 def _patch(message_id: int, **fields) -> None:
@@ -396,16 +427,23 @@ def _situacao(status: str | None) -> str:
 
 
 def estado(message_id: int) -> dict:
-    """Retrato da corrida viva, ou o que está no banco. É o payload do SSE."""
+    """Retrato da execução viva, ou o que está no banco (resumo, prova ou tentativa). É o payload do SSE.
+    Prova sai sem gabarito até ser entregue uma vez; tentativa sai com as questões da prova, reveladas."""
     if run := _RUNS.get(message_id):
         run["stats"]["segundos"] = round(time.monotonic() - run["t0"], 1)
-        return {"message_id": message_id, **_publico(run), "texto": run["texto"]}
-    with db.session() as s:
-        m = s.get(db.Message, message_id)
-        e = ((m.meta or {}).get("estudos") if m else None) or {}
-        if e.get("tipo") != "resumo":
-            raise ToolError("Estudo não encontrado.")
-        return {"message_id": message_id, **e, "status": _situacao(m.status), "texto": m.content or ""}
+        e, conv_id = {"message_id": message_id, **_publico(run), "texto": run["texto"]}, run["conv_id"]
+    else:
+        with db.session() as s:
+            m = s.get(db.Message, message_id)
+            e = ((m.meta or {}).get("estudos") if m else None) or {}
+            if e.get("tipo") not in TIPOS_EXECUCAO:
+                raise ToolError("Estudo não encontrado.")
+            e = {"message_id": message_id, **e, "status": _situacao(m.status), "texto": m.content or ""}
+            conv_id = m.conversation_id
+    if e["tipo"] == "resumo":
+        return e
+    from . import estudos_prova
+    return estudos_prova.para_tela(e, conv_id)
 
 
 def cancelar(message_id: int) -> dict:
@@ -449,8 +487,10 @@ def projeto(conv_id: int) -> dict:
                    for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                db.Message.role == "assistant").order_by(db.Message.id))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
+    from . import estudos_prova
     return {"id": conv_id, "titulo": titulo, "materiais": materiais(conv_id), "resumos": resumos,
-            "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id)}
+            "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),
+            "provas": estudos_prova.lista(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração
@@ -471,12 +511,7 @@ def start(conv_id: int, tema: str, preferencias: dict | None = None, web_ligada:
         raise ToolError("Escreva o tema do estudo.")
     if profundidade not in PROFUNDIDADES:
         raise ToolError(f"profundidade deve ser {', '.join(PROFUNDIDADES)}.")
-    claude = provider == MOTOR_CLAUDE
-    if claude and not config.MCP_SERVIDOR:
-        raise ToolError("Para usar o Claude, ligue \"Permitir que o Claude controle o Forja\" em Configurações › MCP "
-                        "e conecte o Claude Code ou o Claude Desktop.")
-    if not claude and not (provider and model):
-        raise ToolError("Escolha um modelo antes de estudar.")
+    extrator, escritor, claude = modelos(provider, model, ex_provider, ex_model)
     if rodando(conv_id):
         raise ToolError("Este estudo já está rodando. Pare antes de começar outro.")
     prefs = _prefs(preferencias)
@@ -486,10 +521,6 @@ def start(conv_id: int, tema: str, preferencias: dict | None = None, web_ligada:
         if conv.title == "Nova conversa":
             conv.title = tema.splitlines()[0][:60]
         s.commit()
-    if claude:
-        extrator = escritor = {"provider": MOTOR_CLAUDE, "model": "Claude (MCP)"}
-    else:
-        extrator, escritor = pesquisa._modelos(provider, model, ex_provider, ex_model)
     aviso = "" if (web_ligada or any(m["uso"] == "conteudo" for m in mats)) else \
         "Sem material e sem web: o resumo sai só do que o modelo sabe. Confira antes de confiar."
     _save(conv_id, role="user", content=tema,
@@ -500,20 +531,15 @@ def start(conv_id: int, tema: str, preferencias: dict | None = None, web_ligada:
         "etapa": "material", "fase": "", "aviso": aviso, "titulo": "", "visao_geral": "", "perfil": {},
         "materiais": [{"id": m["id"], "nome": m["nome"], "uso": m["uso"], "pedacos": 0, "feitos": 0} for m in mats],
         "plano": {"perguntas": [], "buscas": []}, "rodada": 0, "rodadas": [], "fontes": [], "topicos": [],
-        "stats": {"fontes": 0, "uteis": 0, "segundos": 0.0, "rodadas": 0, "tokens": 0, "tokens_entrada": 0,
-                  "gerando": 0.0, "chamadas": 0, "estimado": False, "extrator": extrator["model"],
-                  "escritor": escritor["model"], "extrator_provider": extrator["provider"],
-                  "escritor_provider": escritor["provider"]},
+        "stats": stats_novos(extrator, escritor),
     }
     msg = _save(conv_id, role="assistant", content="", status="aguardando" if claude else "running",
                 meta={"estudos": publico})
     if claude:
         return msg.to_dict()
-    run = _RUNS[msg.id] = _novo_run(publico, msg.id, conv_id)
+    run = _novo_run(publico, msg.id, conv_id)
     run["_mats"] = [{**m, "texto": _texto(conv_id, m)} for m in mats]
-    t = asyncio.create_task(_rodar(run, extrator, escritor))
-    _TAREFAS.add(t)
-    t.add_done_callback(_TAREFAS.discard)
+    disparar(run, _rodar(run, extrator, escritor))
     return msg.to_dict()
 
 
@@ -804,11 +830,11 @@ MAX_LEITURA = 40_000
 
 
 def pedidos() -> list[dict]:
-    """Resumos pedidos na tela com o motor "Claude (MCP)" que ainda ninguém fez."""
+    """O que a tela pediu com o motor "Claude (MCP)" e ninguém fez ainda: resumo, prova ou correção de discursiva."""
     with db.session() as s:
         return [{"pedido_id": m.id, "conv_id": m.conversation_id, **m.meta["estudos"]} for m in s.scalars(
             select(db.Message).where(db.Message.status == "aguardando").order_by(db.Message.id))
-            if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
+            if ((m.meta or {}).get("estudos") or {}).get("tipo") in TIPOS_EXECUCAO]
 
 
 def _aviso_pedidos() -> str:
@@ -850,10 +876,28 @@ def mcp_abrir(conv_id: int) -> str:
     linhas = [f"Estudo {conv_id}: {p['titulo']}", "", "Material:"]
     linhas += [_linha_material(m) for m in p["materiais"]] or ["(nenhum)"]
     if r := p["resumo"]:
-        linhas += ["", f"Último resumo ({r['status']}, motor {r.get('motor', 'forja')}): {r.get('titulo') or r.get('tema')}",
+        linhas += ["", f"Último resumo ({r['status']}, motor {r.get('motor', 'forja')}): {r.get('titulo') or r.get('tema')}"
+                   " — leia com estudos_ler_resumo",
                    f"Preferências do aluno:\n{preferencias_texto(_prefs(r.get('preferencias')), inteiro=True)}"]
+    if p["provas"]:
+        linhas += ["", "Provas (veja com estudos_ver_prova):"]
+        linhas += [f"- prova {x['message_id']}: {x['titulo']} · {x['n']} questões · {x['status']}"
+                   + "".join(f"\n  - tentativa {t['message_id']}: nota {t['nota']} ({t['status']})" for t in x["tentativas"])
+                   for x in p["provas"]]
     linhas += ["", "Leia o material com estudos_ler_material (por páginas).", REGRAS_RESUMO]
     return "\n".join(linhas) + _aviso_pedidos()
+
+
+def mcp_ler_resumo(conv_id: int, resumo_id: int = 0) -> str:
+    """O último resumo do estudo (ou o `resumo_id`), em Markdown."""
+    try:
+        p = projeto(conv_id)
+    except ToolError as e:
+        return f"ERRO: {e}"
+    r = estado(resumo_id) if resumo_id else p["resumo"]
+    if not r or r.get("tipo") != "resumo" or not r["texto"]:
+        return "Este estudo ainda não tem resumo." + _aviso_pedidos()
+    return f"Resumo {r['message_id']} ({r['status']}):\n\n{r['texto'][:60_000]}" + _aviso_pedidos()
 
 
 def mcp_ler_material(material_id: int, inicio: int = 1, fim: int = 0) -> str:
@@ -962,8 +1006,12 @@ async def mcp_pedidos(espera: int = 60) -> str:
         await asyncio.sleep(1)
     if not lista:
         return "Nenhum pedido pendente na tela Estudos."
+    from . import estudos_prova
     blocos = []
     for p in lista:
+        if p["tipo"] != "resumo":
+            blocos.append(estudos_prova.bloco_pedido(p))
+            continue
         mats, prefs = materiais(p["conv_id"]), _prefs(p.get("preferencias"))
         blocos.append("\n".join([
             f"PEDIDO {p['pedido_id']} — resumo do estudo {p['conv_id']}",
@@ -973,5 +1021,6 @@ async def mcp_pedidos(espera: int = 60) -> str:
             "Tamanho: {} ({} a {} tópicos)".format(prefs["tamanho"], *TAMANHOS[prefs["tamanho"]][0]),
             "Material (leia com estudos_ler_material):", *([_linha_material(m) for m in mats] or ["(nenhum)"]),
             f"Quando terminar: estudos_salvar_resumo(pedido_id={p['pedido_id']}, markdown=..., fontes=[{{titulo, url}}]).",
+            REGRAS_RESUMO,
         ]))
-    return "\n\n".join(blocos) + "\n\n" + REGRAS_RESUMO
+    return "\n\n".join(blocos)

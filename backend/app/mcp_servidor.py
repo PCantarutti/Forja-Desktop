@@ -420,8 +420,8 @@ INSTRUCOES = (
     "no painel do Forja em cada etapa. Se um resultado trouxer '[Mensagem do usuário…]', ela vale como pedido "
     "dele: leve em conta antes de seguir. "
     "Tela Estudos (não precisa de `path`): ferramentas estudos_* — crie a matéria, anexe material, leia por "
-    "páginas, pesquise com a sua própria busca e grave o resumo; estudos_pedidos traz o que o usuário pediu na "
-    "tela com o motor \"Claude (MCP)\".")
+    "páginas, pesquise com a sua própria busca, grave o resumo e a prova, corrija discursivas; estudos_pedidos traz "
+    "o que o usuário pediu na tela com o motor \"Claude (MCP)\".")
 
 
 def _servidor():
@@ -578,6 +578,32 @@ def _servidor():
         sem ele, cria um resumo novo no `estudo_id`. `fontes` = [{titulo, url}] das páginas da web usadas;
         `modelo` = o seu nome (aparece na tela)."""
         return estudos.mcp_salvar_resumo(markdown, estudo_id, pedido_id, tema, fontes, modelo)
+
+    @mcp.tool()
+    async def estudos_ler_resumo(estudo_id: int, resumo_id: int = 0) -> str:
+        """O resumo do estudo em Markdown (o último, ou o `resumo_id`): base para montar a prova."""
+        return estudos.mcp_ler_resumo(estudo_id, resumo_id)
+
+    @mcp.tool()
+    async def estudos_salvar_prova(questoes: list[dict], estudo_id: int = 0, pedido_id: int = 0, titulo: str = "",
+                                   modelo: str = "") -> str:
+        """Grava uma prova (formato das questões no pedido, em estudos_pedidos). Com `pedido_id` atende o pedido da
+        tela; sem ele, cria a prova no `estudo_id`. Se alguma questão vier errada, nada é gravado e o resultado diz
+        o que corrigir. `modelo` = o seu nome (aparece na tela)."""
+        from . import estudos_prova
+        return estudos_prova.mcp_salvar_prova(questoes, estudo_id, pedido_id, titulo, modelo)
+
+    @mcp.tool()
+    async def estudos_corrigir(tentativa_id: int, correcoes: list[dict]) -> str:
+        """Nota das discursivas de uma entrega: correcoes = [{questao_id, pontos, feedback}] (pedido em estudos_pedidos)."""
+        from . import estudos_prova
+        return estudos_prova.mcp_corrigir(tentativa_id, correcoes)
+
+    @mcp.tool()
+    async def estudos_ver_prova(prova_id: int) -> str:
+        """Uma prova inteira, com gabarito e explicações, e as entregas dela com o que o aluno respondeu."""
+        from . import estudos_prova
+        return estudos_prova.mcp_ver_prova(prova_id)
 
     @mcp.tool()
     async def estudos_pedidos(espera: int = 60) -> str:

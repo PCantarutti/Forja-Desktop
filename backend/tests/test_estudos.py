@@ -342,7 +342,7 @@ def test_api_do_estudo(monkeypatch):
         assert linhas[-1]["status"] == "pronto" and "## 1. Mitocôndria" in linhas[-1]["texto"]
         p = c.get(f"/api/estudos/{conv}").json()
         assert len(p["materiais"]) == 2 and p["resumo"]["status"] == "pronto" and p["rodando"] is None
-        assert c.get(f"/api/estudos/resumo/{p['resumo']['message_id']}/stream").status_code == 200
+        assert c.get(f"/api/estudos/execucao/{p['resumo']['message_id']}/stream").status_code == 200
         pasta = estudos.pasta(conv)
         assert pasta.exists()
         assert c.delete(f"/api/conversations/{conv}").json()["ok"]

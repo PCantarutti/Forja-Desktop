@@ -2309,12 +2309,65 @@ async def estudos_estudar(conv_id: int, body: EstudosBody):
     return _sse_estudos(msg["id"])
 
 
-@app.get("/api/estudos/resumo/{message_id}/stream")
+class ProvaBody(BaseModel):
+    config: dict = {}               # me, vf, disc (quantas), dificuldade, topicos[], estilo, tempo (min), instrucoes
+    provider: str = ""              # "claude-mcp" = a prova fica para o Claude via MCP
+    model: str = ""
+    ex_provider: str = ""
+    ex_model: str = ""
+
+
+class EntregaBody(BaseModel):
+    respostas: dict = {}            # {questao_id: índice (me) | true/false (vf) | texto (disc)}
+    segundos: int = 0
+    provider: str = ""              # quem corrige as discursivas
+    model: str = ""
+
+
+@app.post("/api/estudos/{conv_id}/prova")
+async def estudos_prova_gerar(conv_id: int, body: ProvaBody):
+    from . import estudos_prova
+    try:
+        msg = estudos_prova.start(conv_id, body.config, body.provider, body.model, body.ex_provider, body.ex_model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
+@app.post("/api/estudos/prova/{prova_id}/entregar")
+async def estudos_prova_entregar(prova_id: int, body: EntregaBody):
+    from . import estudos_prova
+    try:
+        msg = estudos_prova.entregar(prova_id, body.respostas, body.segundos, body.provider, body.model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
+@app.delete("/api/estudos/prova/{prova_id}")
+def estudos_prova_apagar(prova_id: int):
+    from . import estudos_prova
+    try:
+        return estudos_prova.apagar_prova(prova_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/estudos/execucao/{message_id}")
+def estudos_execucao(message_id: int):
+    """Resumo, prova (sem gabarito até a 1ª entrega) ou entrega corrigida (com as questões reveladas)."""
+    try:
+        return estudos.estado(message_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get("/api/estudos/execucao/{message_id}/stream")
 def estudos_stream(message_id: int):
     return _sse_estudos(message_id)
 
 
-@app.post("/api/estudos/resumo/{message_id}/cancelar")
+@app.post("/api/estudos/execucao/{message_id}/cancelar")
 def estudos_cancelar(message_id: int):
     return estudos.cancelar(message_id)
 
