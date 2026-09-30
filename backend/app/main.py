@@ -1266,6 +1266,36 @@ async def imagens_referencia(file: UploadFile = File(...), video: bool = False):
     return {"path": str(alvo)}
 
 
+@app.post("/api/imagens/video")
+async def imagens_video(file: UploadFile = File(...)):
+    """Vídeo do celular para ampliar: gravado aos pedaços (não cabe na memória como a imagem) na pasta de
+    referências dos vídeos, que a rota de arquivo serve. O nome leva o hash: mandar o mesmo de novo reaproveita."""
+    nome = uploads.safe_name(file.filename or "video.mp4")
+    if not ((file.content_type or "").startswith("video/") or Path(nome).suffix.lower() in (".mp4", ".mov", ".mkv", ".webm", ".avi", ".3gp")):
+        raise HTTPException(400, "Envie um vídeo (mp4, mov, mkv, webm…).")
+    pasta = lotes.referencias_dir(True)
+    pasta.mkdir(parents=True, exist_ok=True)
+    tmp = pasta / f".recebendo-{secrets.token_hex(6)}"
+    h, total = hashlib.sha256(), 0
+    try:
+        with tmp.open("wb") as f:
+            while bloco := await file.read(1 << 20):
+                total += len(bloco)
+                if total > 4_000_000_000:
+                    raise HTTPException(400, "Vídeo maior que 4 GB.")
+                h.update(bloco)
+                f.write(bloco)
+        alvo = pasta / f"{h.hexdigest()[:16]}-{nome}"
+        if alvo.exists():
+            tmp.unlink()
+        else:
+            tmp.replace(alvo)
+    finally:
+        tmp.unlink(missing_ok=True)
+    lotes.registrar_origem(str(alvo))
+    return {"path": str(alvo)}
+
+
 class CaminhoBody(BaseModel):
     path: str
 

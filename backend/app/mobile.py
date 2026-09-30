@@ -11,6 +11,7 @@ O acesso remoto é do Tailscale (`tailscale serve` na porta do backend): o backe
 from __future__ import annotations
 
 import asyncio
+import threading
 import json
 import os
 import secrets
@@ -395,6 +396,31 @@ def avisa(titulo: str, texto: str, conv_id: int | None = None) -> None:
         httpx.post(EXPO_PUSH, json=[{**msg, "to": t} for t in alvos], timeout=10)
     except httpx.HTTPError as e:  # ponytail: sem retry, como o _enviar
         print(f"Forja: push para o celular falhou: {e}", flush=True)
+
+
+# O mesmo aviso de "terminou" que o PC mostra (App.tsx, vigia da atividade): lote de imagem e de vídeo sem o
+# prompt (o título da conversa é o prompt), comparação e design com o título da conversa.
+FIM = {"imagem": ("Lote de imagens concluído", "As imagens estão prontas."),
+       "video": ("Geração de vídeo concluída", "O vídeo está pronto."),
+       "comparar": ("Comparação terminou", None), "design": ("Design terminou", None)}
+
+
+def avisa_fim(conv_id: int, erro: bool = False) -> None:
+    """Push de fim de lote, ampliação, comparação ou design. Em thread: quem chama pode estar no laço de eventos
+    (comparação, design) e o `avisa` é síncrono. Cancelado não avisa: foi a pessoa que parou."""
+    if not devices():
+        return
+    from . import db
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        kind, titulo_conv = (c.kind, c.title) if c else ("", "")
+    if kind not in FIM:
+        return
+    titulo, texto = FIM[kind]
+    if erro:
+        titulo, texto = titulo.replace("concluído", "com erro").replace("concluída", "com erro").replace("terminou", "deu erro"), \
+            "Toque para ver o que aconteceu."
+    threading.Thread(target=avisa, args=(titulo, texto or titulo_conv or "Toque para abrir", conv_id), daemon=True).start()
 
 
 def notify(ev: dict, conv_id: int, run_id: str, maestro: bool = False) -> None:

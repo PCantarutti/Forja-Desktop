@@ -1550,6 +1550,9 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
         _anexa(run)
         _RUNS.pop(mid, None)
         mirror.write(run["conv_id"])
+        if not run["cancelar"]:
+            from . import mobile
+            mobile.avisa_fim(run["conv_id"])
         if RETITULAR:
             _dispara(_retitular(run["conv_id"], run["spec"]))
 
@@ -1728,6 +1731,9 @@ async def _rodar_etapas(run: dict) -> None:
         _anexa(run)
         _RUNS.pop(mid, None)
         mirror.write(run["conv_id"])
+        if not run["cancelar"]:
+            from . import mobile
+            mobile.avisa_fim(run["conv_id"])
         if RETITULAR:
             _dispara(_retitular(run["conv_id"], run["spec"]))
 

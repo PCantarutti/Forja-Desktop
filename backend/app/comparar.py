@@ -295,6 +295,9 @@ async def _rodar(run: dict, mensagens: list[dict], effort: str, so_fila: bool = 
         mirror.write(run["conv_id"])
         # sai do ar por último: daqui em diante o `estado()` vem do banco, já final
         _RUNS.pop(run["message_id"], None)
+        if run["status"] != "cancelado":
+            from . import mobile
+            mobile.avisa_fim(run["conv_id"], erro=run["status"] == "erro")
         if run["status"] == "pronto":
             _revisar_sozinho(run["message_id"])
 

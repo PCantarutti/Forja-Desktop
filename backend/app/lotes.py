@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import db, downloads, imagegen, localai, mirror
+from . import db, downloads, imagegen, localai, mirror, mobile
 from . import slots as projeto
 from .tools import ToolError
 
@@ -685,6 +685,8 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts_lote: dict, job_
     # o status sai por último de propósito: é o sinal de "acabou" para quem espera o lote, e nada
     # pode acontecer depois dele (nos testes, o monkeypatch das pastas já teria sido desfeito).
     _patch(message_id, status=status, meta={"images": imagens})
+    if status != "cancelado" and not do_site and not _mensagem(message_id)["meta"].get("variacao_de"):
+        mobile.avisa_fim(conv_id, erro=status == "erro")  # o PC avisa pela atividade; o celular, por push
 
 
 # ------------------------------------------------------------------ ampliação
@@ -928,8 +930,10 @@ def _ampliar_trabalho(conv_id: int, message_id: int, job_id: str) -> None:
     erro = next((i["error"] for i in imagens if i.get("error")), "")
     downloads.finish(job_id, error="" if pronta else erro)
     mirror.write(conv_id)
-    _patch(message_id, status="pronto" if pronta else ("cancelado" if any(i["status"] == "cancelada" for i in imagens)
-                                                       else "erro"), meta={"images": imagens})
+    final = "pronto" if pronta else ("cancelado" if any(i["status"] == "cancelada" for i in imagens) else "erro")
+    _patch(message_id, status=final, meta={"images": imagens})
+    if final != "cancelado":
+        mobile.avisa_fim(conv_id, erro=final == "erro")
 
 
 def _ampliar_um(message_id: int, meta: dict, imagens: list[dict], item: dict, job_id: str) -> None:

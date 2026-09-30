@@ -586,3 +586,35 @@ def test_pendentes_acende_na_fila_e_apaga_ao_terminar(monkeypatch):
             break
         time.sleep(0.05)
     assert 991 not in lotes.pendentes()
+
+
+def test_celular_recebe_aviso_de_fim_sem_o_prompt(monkeypatch):
+    """O PC avisa o fim do lote pela atividade; o celular, por push — lote de vídeo sem o prompt, e cancelado não avisa."""
+    from app import mobile
+    avisos = []
+    monkeypatch.setattr(mobile, "devices", lambda: ["ExponentPushToken[x]"])
+    monkeypatch.setattr(mobile, "avisa", lambda titulo, texto, conv_id=None: avisos.append((titulo, texto, conv_id)))
+    _fake_sd(monkeypatch, falhar=("ruim.gguf",))
+    conv = _conversa("video")
+    _esperar(lotes.start(conv, "a secret prompt", models=["wan.gguf"], count=1)["id"])
+    _esperar(lotes.start(conv, "a secret prompt", models=["ruim.gguf"], count=1)["id"])
+    for _ in range(50):
+        if len(avisos) >= 2:
+            break
+        time.sleep(0.05)
+    assert avisos == [("Geração de vídeo concluída", "O vídeo está pronto.", conv),
+                      ("Geração de vídeo com erro", "Toque para ver o que aconteceu.", conv)]
+    assert not any("secret" in t for a in avisos for t in a[:2])
+
+
+def test_video_do_celular_sobe_em_pedacos_e_fica_servivel():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    with TestClient(app) as c:
+        r = c.post("/api/imagens/video", files={"file": ("ferias.mp4", b"\x00" * 3_000_000, "video/mp4")})
+        assert r.status_code == 200, r.text
+        p = Path(r.json()["path"])
+        assert p.is_file() and p.stat().st_size == 3_000_000 and p.name.endswith("-ferias.mp4")
+        assert lotes.eh_referencia(str(p))  # a rota de arquivo serve, e a ampliação compara com ele
+        assert c.post("/api/imagens/video", files={"file": ("x.txt", b"oi", "text/plain")}).status_code == 400
