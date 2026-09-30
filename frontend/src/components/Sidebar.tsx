@@ -386,19 +386,20 @@ export default function Sidebar(props: {
 
   return (
     <aside className="flex w-[236px] shrink-0 flex-col border-r border-line bg-side">
-      <div className="arrasta flex h-[52px] shrink-0 items-center gap-2 pr-3.5 pl-12">
-        <span className="text-sm font-semibold text-fg">{SECOES.find((x) => x.id === props.section)?.label}</span>
-        <span className="font-mono text-[11px] text-faint">{props.conversations.length}</span>
+      {/* Largura fixa: rótulo comprido (Comparar, Pesquisa) empurrava o "Novo" para fora. O rótulo é quem cede. */}
+      <div className="arrasta flex h-[52px] shrink-0 items-center gap-1 pr-2.5 pl-10">
+        <span className="min-w-0 truncate text-sm font-semibold text-fg">{SECOES.find((x) => x.id === props.section)?.label}</span>
+        <span className="shrink-0 font-mono text-[11px] text-faint">{props.conversations.length}</span>
         <button
           onClick={() => setSelecting((v) => !v)}
           title={selecting ? "Sair da seleção" : "Selecionar várias conversas"}
-          className={`ml-auto grid h-7 min-w-7 place-items-center rounded-[7px] px-1 text-[11.5px] ${selecting ? "bg-raised px-2 text-fg" : "text-faint hover:bg-raised hover:text-fg"}`}
+          className={`ml-auto grid h-6 min-w-6 shrink-0 place-items-center rounded-[7px] px-1 text-[11.5px] ${selecting ? "bg-raised px-2 text-fg" : "text-faint hover:bg-raised hover:text-fg"}`}
         >
           {selecting ? "Cancelar" : <CheckSquare className="size-3.5" />}
         </button>
         <button onClick={props.onNew} title={props.section === "chat" ? "Nova conversa de chat" : props.section === "maestro" ? "Nova conversa Maestro" : "Nova conversa do agente"}
-                className="flex items-center gap-1.5 rounded-[9px] border border-accent-line bg-accent-soft py-[5px] pr-[11px] pl-[9px] text-[12.5px] font-medium text-accent-text hover:border-accent hover:bg-accent/20">
-          <Edit className="size-3.5" /> Novo
+                className="flex shrink-0 items-center gap-1 rounded-[9px] border border-accent-line bg-accent-soft py-[5px] pr-2.5 pl-2 text-[12.5px] font-medium text-accent-text hover:border-accent hover:bg-accent/20">
+          <Edit className="size-3" /> Novo
         </button>
       </div>
       <label className="mx-3 mb-2.5 flex items-center gap-2 rounded-[9px] border border-raised bg-surface px-2.5 py-[7px] text-[12.5px] text-faint focus-within:border-focus">
