@@ -26,7 +26,7 @@ export type Approval = {
 
 /** O que está rodando agora: turno do agente e delegações por conversa, e processos vivos. */
 export type Activity = {
-  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean; alertas?: number;
+  conversations: { id: number; running: boolean; subagents: number; servers: number; waiting?: number; paused?: boolean; alertas?: number; kind?: string;
     run?: string }[];  // id do turno mais recente (rodando ou recém-terminado)
   servers: number;
   local?: boolean;  // modelo local carregado no llama-server

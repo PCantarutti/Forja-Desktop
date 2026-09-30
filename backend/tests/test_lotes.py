@@ -559,3 +559,18 @@ def test_segundo_lote_entra_na_fila_em_vez_de_ser_recusado(monkeypatch):
     ma, mb = _esperar(a["id"]), _esperar(b["id"])
     assert ma["status"] == mb["status"] == "pronto", (ma["meta"]["images"], mb["meta"]["images"])
     assert ordem == ["primeiro", "segundo"]
+
+
+def test_pendentes_acende_na_fila_e_apaga_ao_terminar(monkeypatch):
+    # o /api/activity usa isto para acender a bolinha e avisar "lote concluído"
+    monkeypatch.setattr(localai, "image_busy", lambda: False)
+    solta = threading.Event()
+    lotes._enfileirar(lambda conv: solta.wait(5), 991)
+    lotes._enfileirar(lambda conv: 1 / 0, 991)  # o que estoura também sai da conta
+    assert 991 in lotes.pendentes()
+    solta.set()
+    for _ in range(50):
+        if 991 not in lotes.pendentes():
+            break
+        time.sleep(0.05)
+    assert 991 not in lotes.pendentes()
