@@ -26,6 +26,7 @@
     "afterSign": "scripts/exe-comments.js",
     "files": [
       "electron/**",
+      "!electron/**/*.test.js",
       "package.json",
       "node_modules/**/*"
     ],

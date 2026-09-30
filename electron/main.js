@@ -15,6 +15,7 @@ const { ZOOM_STEPS, nextZoom } = require("./zoom");
 const { BrowserHost } = require("./browserHost");
 const { autoUpdater } = require("electron-updater");
 const { isSafeExternal, sameOrigin } = require("./links");
+const { ligarOrtografia } = require("./ortografia");
 
 const DEV = !app.isPackaged;
 const ROOT = DEV ? path.join(__dirname, "..") : process.resourcesPath;
@@ -388,6 +389,7 @@ function createWindow({ hidden = false } = {}) {
 
   win.loadURL(`http://127.0.0.1:${port}`);
   wireZoomShortcuts(win);
+  ligarOrtografia(win);   // corretor em pt-BR e o menu do botão direito (sugestões, dicionário, editar)
   host = new BrowserHost(win, `http://127.0.0.1:${port}`, token);
   host.start();
 
