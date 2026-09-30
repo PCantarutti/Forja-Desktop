@@ -20,6 +20,7 @@ import { type Item, type Modo, type NoArvore, type NoCaminho, type Problema, doc
 import { ArrowLeft, ArrowRight, Bubble, Camadas as CamadasIcone, Celular, Check, FolderOpen, LadoALado, Monitor, Tablet, ChevronDown, Code, Cube, Download, Edit, ExternalLink, Globe, Image, Minus, Mira, PanelLeft, Paperclip, Play, Plus,
   Split, TelaCheia, Undo, X, Pin, Sliders, Eye, GitBranch } from "./icons";
 import { Markdown, PromptRow, StatsRow, aggregate } from "./MessageView";
+import { Vazio, botaoItem, botaoPrincipal, botaoTexto, item, tituloSecao } from "./designUi";
 import ModelPicker from "./ModelPicker";
 import ContextRing from "./ContextRing";
 import TodosBar from "./TodosBar";
@@ -246,6 +247,7 @@ export default function DesignView(props: {
   const convDoStream = useRef<number | null>(null);
   const ultimoEvento = useRef<Geracao | null>(null);
   const fimChat = useRef<HTMLDivElement>(null);
+  const rolagemPainel = useRef<HTMLDivElement>(null);   // o painel da esquerda: cada aba (menos o Chat) abre no topo
   const aoErro = useRef(props.onError);
   aoErro.current = props.onError;
   const rodando = geracao?.status === "rodando";
@@ -953,7 +955,6 @@ export default function DesignView(props: {
     (filhos.get(0) ?? []).forEach((r, i) => anda(r, i, i > 0));
     return out;
   }, [chaveArvore]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const btn = "grid size-8 place-items-center rounded-lg text-muted hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent";
   // barra do canvas: um tamanho só (h-7), o mesmo segmentado da tela Imagem
   const tb = "inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[12.5px] text-muted hover:bg-raised hover:text-fg disabled:opacity-35 disabled:hover:bg-transparent";
   const ico = "grid size-7 place-items-center rounded-lg text-muted hover:bg-raised hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent";
@@ -984,6 +985,7 @@ export default function DesignView(props: {
   ];
   function abrirAba(id: typeof aba) {
     setAba(id);
+    if (id !== "chat") requestAnimationFrame(() => rolagemPainel.current?.scrollTo({ top: 0 }));
     if (id === "acessibilidade") auditar();
     if (id === "versoes") versoes.slice(0, 12).forEach((m) => htmlDaVersao(m.versao!));
   }
@@ -1110,7 +1112,7 @@ export default function DesignView(props: {
             );
           })}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
+        <div ref={rolagemPainel} className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
           {aba === "chat" && (
             <>
               {!mensagens.length && (
@@ -1207,68 +1209,103 @@ export default function DesignView(props: {
             </>
           )}
 
-          {aba === "comentarios" && (
-            <div className="flex flex-col gap-2 py-2">
-              {pendentes.length > 1 && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button disabled={rodando} onClick={() => { pedir({ comentarios: escolhidos.length ? escolhidos : pendentes.map((c) => c.id) }); setMarcados([]); }}
-                          className="rounded-[9px] bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-                    {escolhidos.length ? `Aplicar ${escolhidos.length} selecionado${escolhidos.length > 1 ? "s" : ""} numa chamada`
-                      : `Aplicar ${pendentes.length} pendentes numa chamada`}
-                  </button>
-                  {escolhidos.length > 0 && (
-                    <>
-                      <button onClick={() => descartarVarios(escolhidos)} className="rounded-[9px] px-2 py-1.5 text-xs text-muted hover:text-fg">
-                        Descartar {escolhidos.length}
+          {aba === "comentarios" && (() => {
+            const todos = projeto?.comentarios ?? [];
+            const abertos = todos.filter((c) => c.status === "pendente");   // pendentes na ordem dos pins, órfãos no fim
+            const emOrdem = [...abertos.filter((c) => !c.orfao), ...abertos.filter((c) => c.orfao)];
+            const resolvidos = todos.filter((c) => c.status !== "pendente").reverse();
+            const todosMarcados = pendentes.length > 0 && escolhidos.length === pendentes.length;
+            const cartao = (c: Comentario) => {
+              const n = numero(c.id), ativo = !!n && n === pinAtivo, aberto = c.status === "pendente";
+              return (
+                <li key={c.id} className={`${item} group p-2.5 ${ativo ? "border-accent-line bg-accent-soft/50" : "hover:bg-raised/40"} ${aberto ? "" : "opacity-70"}`}>
+                  <div className="flex items-start gap-2.5">
+                    {aberto && !c.orfao && pendentes.length > 1 && (
+                      <input type="checkbox" checked={escolhidos.includes(c.id)} onChange={() => marca(c.id)}
+                             aria-label={`Selecionar o comentário ${n}`} className="mt-[3px] size-3.5 shrink-0 cursor-pointer accent-[var(--accent)]" />
+                    )}
+                    {n > 0 ? (
+                      <span className="grid size-5 shrink-0 place-items-center rounded-[10px_10px_10px_3px] bg-accent font-mono text-[10.5px] font-bold text-accent-fg" aria-hidden>{n}</span>
+                    ) : c.status === "aplicado" ? <Check className="mt-0.5 size-4 shrink-0 text-ok" aria-hidden />
+                      : c.orfao ? <span className="mt-1.5 size-2 shrink-0 rounded-full bg-warn" aria-hidden /> : <X className="mt-0.5 size-4 shrink-0 text-faint" aria-hidden />}
+                    <div className="min-w-0 flex-1">
+                      <button onClick={() => mostrarComentario(c)} className="block w-full text-left" title="Mostrar no canvas">
+                        <span className="block text-[13px] leading-snug whitespace-pre-wrap text-fg">{c.texto}</span>
+                        {c.orfao && <span className="mt-1 block text-[12px] text-warn">O elemento não existe mais nesta versão.</span>}
                       </button>
-                      <button onClick={() => setMarcados([])} className="rounded-[9px] px-2 py-1.5 text-xs text-faint hover:text-fg">Limpar seleção</button>
-                    </>
-                  )}
-                  {!escolhidos.length && <span className="text-[11.5px] text-faint">ou marque alguns para resolver só esses</span>}
-                </div>
-              )}
-              {!projeto?.comentarios.length && (
-                <p className="text-xs text-muted">Selecione elementos no canvas, escreva e use “Comentar”: os comentários
-                  ficam aqui, com pins numerados no canvas, até você aplicar um agora ou todos de uma vez.</p>
-              )}
-              {[...(projeto?.comentarios ?? [])].reverse().map((c) => {
-                const n = numero(c.id);
-                return (
-                  <div key={c.id} onClick={() => mostrarComentario(c)}
-                       className={`cursor-pointer rounded-xl border p-2.5 text-[13px] ${n && n === pinAtivo ? "border-accent-line bg-accent-soft" : "border-line hover:bg-raised/50"} ${c.status !== "pendente" ? "opacity-60" : ""}`}>
-                    <div className="flex items-start gap-2">
-                      {c.status === "pendente" && !c.orfao && pendentes.length > 1 && (
-                        <input type="checkbox" checked={escolhidos.includes(c.id)} onChange={() => marca(c.id)} onClick={(e) => e.stopPropagation()}
-                               aria-label={`Selecionar o comentário ${n}`} className="mt-1 size-3.5 shrink-0 accent-[var(--accent)]" />
-                      )}
-                      {n > 0 ? (
-                        <span className="grid size-5 shrink-0 place-items-center rounded-full bg-accent font-mono text-[10.5px] font-bold text-accent-fg">{n}</span>
-                      ) : c.status === "aplicado" ? <Check className="mt-0.5 size-4 shrink-0 text-emerald-300" /> : <span className="size-5 shrink-0" />}
-                      <div className="min-w-0 flex-1">
-                        <p className="whitespace-pre-wrap text-fg">{c.texto}</p>
-                        <p className="mt-0.5 font-mono text-[11px] text-faint">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+                        <span className="mr-auto font-mono text-[10.5px] text-faint">
                           {c.fids.length === 1 ? "1 elemento" : `${c.fids.length} elementos`} · v{c.versao_criada}
-                          {c.status === "aplicado" && ` · aplicado na v${c.versao_aplicada}`}
+                          {c.status === "aplicado" && ` → aplicado na v${c.versao_aplicada}`}
                           {c.status === "descartado" && " · descartado"}
-                        </p>
-                        {c.orfao && <p className="mt-1 text-[12px] text-amber-300">Órfão: o elemento não existe mais nesta versão.</p>}
+                        </span>
+                        {aberto && (
+                          <span className="flex gap-1 opacity-75 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                            {!c.orfao && (
+                              <button disabled={rodando} onClick={() => pedir({ comentarios: [c.id] })} className={botaoItem}>Aplicar</button>
+                            )}
+                            <button onClick={() => descartar(c.id)} className={botaoTexto}>Descartar</button>
+                          </span>
+                        )}
                       </div>
                     </div>
-                    {c.status === "pendente" && (
-                      <div className="mt-2 flex gap-1.5 pl-7" onClick={(e) => e.stopPropagation()}>
-                        {!c.orfao && (
-                          <button disabled={rodando} onClick={() => pedir({ comentarios: [c.id] })}
-                                  className="rounded-lg border border-line px-2 py-0.5 text-xs text-fg hover:bg-raised disabled:opacity-40">Aplicar agora</button>
-                        )}
-                        <button onClick={() => descartar(c.id)} className="rounded-lg px-2 py-0.5 text-xs text-muted hover:text-fg">Descartar</button>
-                      </div>
+                  </div>
+                </li>
+              );
+            };
+            return (
+              <div className="flex flex-col gap-3 py-2">
+                {abertos.length > 0 && (
+                  <div className="flex flex-col gap-2 px-1">
+                    <div className="flex items-center gap-2">
+                      {pendentes.length > 1 && (
+                        <input type="checkbox" checked={todosMarcados} aria-label="Selecionar todos os pendentes"
+                               ref={(el) => { if (el) el.indeterminate = escolhidos.length > 0 && !todosMarcados; }}
+                               onChange={() => setMarcados(todosMarcados ? [] : pendentes.map((c) => c.id))}
+                               className="size-3.5 shrink-0 cursor-pointer accent-[var(--accent)]" />
+                      )}
+                      <h3 className={tituloSecao}>
+                        {escolhidos.length ? `${escolhidos.length} de ${pendentes.length} selecionado${escolhidos.length > 1 ? "s" : ""}`
+                          : `${abertos.length} pendente${abertos.length > 1 ? "s" : ""}`}
+                      </h3>
+                      <span className="flex-1" />
+                      {escolhidos.length > 0 && (
+                        <button onClick={() => descartarVarios(escolhidos)} className={botaoTexto}>Descartar</button>
+                      )}
+                      {pendentes.length > 0 && (
+                        <button disabled={rodando} onClick={() => { pedir({ comentarios: escolhidos.length ? escolhidos : pendentes.map((c) => c.id) }); setMarcados([]); }}
+                                className={botaoPrincipal}>
+                          {escolhidos.length ? `Aplicar ${escolhidos.length}` : pendentes.length > 1 ? `Aplicar os ${pendentes.length}` : "Aplicar"}
+                        </button>
+                      )}
+                    </div>
+                    {pendentes.length > 1 && (
+                      <p className="text-[11.5px] leading-snug text-faint">Vão todos numa chamada só, cada um no seu elemento. Marque alguns para resolver só esses.</p>
                     )}
                   </div>
-                );
-              })}
-            </div>
-          )}
-
+                )}
+                {emOrdem.length > 0 && <ol className="flex flex-col gap-1.5" aria-label="Comentários pendentes">{emOrdem.map(cartao)}</ol>}
+                {!todos.length && (
+                  <Vazio icone={<Pin className="size-4" />} titulo="Nenhum comentário">
+                    Use <span className="text-fg-2">Comentar</span> na barra do canvas (ou selecione elementos e escreva no campo):
+                    cada comentário ganha um pin numerado e espera aqui até você aplicar.
+                  </Vazio>
+                )}
+                {!!todos.length && !abertos.length && (
+                  <Vazio icone={<Check className="size-4" />} titulo="Tudo resolvido">Nenhum comentário pendente nesta versão.</Vazio>
+                )}
+                {resolvidos.length > 0 && (
+                  <details className="group/res px-1">
+                    <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 select-none [&::-webkit-details-marker]:hidden">
+                      <ChevronDown className="size-3.5 -rotate-90 text-faint transition-transform group-open/res:rotate-0" />
+                      <span className={tituloSecao}>{resolvidos.length} resolvido{resolvidos.length > 1 ? "s" : ""}</span>
+                    </summary>
+                    <ol className="mt-1.5 flex flex-col gap-1.5">{resolvidos.map(cartao)}</ol>
+                  </details>
+                )}
+              </div>
+            );
+          })()}
           {aba === "ajustes" && (
             <DesignAjustes
               html={projeto?.html ?? ""}
@@ -1304,57 +1341,94 @@ export default function DesignView(props: {
           )}
 
           {aba === "versoes" && (
-            <div className="flex flex-col gap-1 py-2">
-              <p className="px-2 pb-1 text-[11.5px] leading-snug text-faint">
-                Ajustes à mão ficam no rascunho até você salvar (Ctrl+S). Para abrir um ramo, vá até uma versão antiga e siga
-                editando: a próxima versão nasce dela, sem apagar as outras. Cada versão é um commit do Git na pasta do projeto.
-              </p>
-              {!!projeto?.pasta && !!ponte()?.token && (
-                <button onClick={abrirPasta} title={projeto.pasta}
-                        className="mx-2 mb-1 inline-flex items-center gap-1.5 self-start rounded-lg border border-line px-2 py-1 text-[12px] text-fg hover:bg-raised">
-                  <FolderOpen className="size-3.5" /> Abrir pasta do projeto
-                </button>
-              )}
-              {projeto?.rascunho && (
-                <div className="rounded-lg border border-amber-400/40 bg-amber-500/5 px-2.5 py-2 text-[12.5px]">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-amber-300">Rascunho sobre a v{projeto.rascunho.base}</span>
-                    <span className="text-faint">{projeto.rascunho.mudancas} {projeto.rascunho.mudancas === 1 ? "ajuste" : "ajustes"}</span>
-                    <span className="flex-1" />
-                    <button onClick={() => setAbrirSalvar(true)} className="rounded border border-line px-1.5 text-[11px] hover:bg-raised">Salvar versão</button>
-                    <button onClick={() => acaoRascunho("descartar")} className="rounded border border-line px-1.5 text-[11px] hover:bg-raised">Descartar</button>
-                  </div>
-                  <ul className="mt-1 text-[11.5px] leading-snug text-faint">
-                    {projeto.rascunho.passos.slice(-6).map((x, i) => <li key={i} className="truncate">· {x}</li>)}
-                  </ul>
-                </div>
-              )}
-              {arvore.map((n) => versoes.find((x) => x.versao === n.v)!).map((m, i) => (
-                <div key={m.id} style={{ marginLeft: arvore[i].nivel * 14 }}
-                     className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] ${arvore[i].nivel ? "border-l border-line-strong" : ""} ${m.versao === atual ? "bg-accent-soft text-accent-text" : "text-fg-2 hover:bg-raised"}`}>
-                  <button onClick={() => ir(m.versao!)} disabled={rodando} className="shrink-0" title="Mostrar esta versão">
-                    {htmlVersoes[m.versao!] ? <Miniatura html={htmlVersoes[m.versao!]} titulo={`Miniatura da v${m.versao}`} />
-                      : <div className="grid h-[163px] w-[243px] place-items-center rounded-lg border border-dashed border-line text-[11px] text-faint"
-                             ref={(el) => { if (el) htmlDaVersao(m.versao!); }}>v{m.versao}</div>}
+            <div className="flex flex-col gap-3 py-2">
+              <div className="flex items-center gap-2 px-1">
+                <h3 className={tituloSecao}>{total ? `${total} ${total === 1 ? "versão" : "versões"}` : "Versões"}</h3>
+                <span className="flex-1" />
+                {comparar !== null && (
+                  <button onClick={() => setComparar(null)} className={botaoItem}>Parar de comparar</button>
+                )}
+                {!!projeto?.pasta && !!ponte()?.token && (
+                  <button onClick={abrirPasta} title={projeto.pasta} className={botaoItem}>
+                    <FolderOpen className="size-3.5" /> Pasta do projeto
                   </button>
-                  <div className="flex min-w-0 flex-1 flex-col gap-1">
-                    <button onClick={() => ir(m.versao!)} disabled={rodando} className="truncate text-left">{m.content}</button>
-                    {arvore[i].ramo && <span className="self-start rounded bg-raised px-1.5 text-[10.5px] text-muted">ramo da v{paiDe(m.versao!)}</span>}
-                    {m.versao !== atual && (
-                      <button onClick={() => { setComparar(m.versao!); htmlDaVersao(m.versao!); }}
-                              className={`self-start rounded border px-1.5 text-[11px] ${comparar === m.versao ? "border-accent-line text-accent-text" : "border-line hover:bg-raised"}`}>
-                        {comparar === m.versao ? "comparando" : `comparar com a v${atual}`}
-                      </button>
-                    )}
+                )}
+              </div>
+              <p className="px-1 text-[11.5px] leading-snug text-faint">
+                Cada versão é um commit do Git. Continuar a partir de uma antiga abre um ramo, sem apagar nada.
+              </p>
+              {projeto?.rascunho && (
+                <div className="rounded-xl border border-warn/35 bg-warn/[.06] p-2.5">
+                  <div className="flex items-center gap-2">
+                    <span className="size-1.5 shrink-0 rounded-full bg-warn" aria-hidden />
+                    <span className="text-[12.5px] font-medium text-fg">Rascunho sobre a v{projeto.rascunho.base}</span>
+                    <span className="text-[11.5px] text-faint">
+                      {projeto.rascunho.mudancas} {projeto.rascunho.mudancas === 1 ? "ajuste à mão" : "ajustes à mão"}
+                    </span>
                   </div>
-                  <span className="shrink-0 font-mono text-[10.5px] text-faint">{m.rota ? ROTULO_ROTA[m.rota] ?? m.rota : ""}</span>
-                  {m.versao !== atual && m.versao !== total && (
-                    <button onClick={() => restaurar(m.versao!)} disabled={rodando} title="Copia esta versão para o topo do histórico"
-                            className="shrink-0 rounded border border-line px-1.5 text-[11px] opacity-0 group-hover:opacity-100 hover:bg-raised">Restaurar</button>
+                  {!!projeto.rascunho.passos.length && (
+                    <ul className="mt-1.5 flex flex-col gap-0.5 pl-3.5 text-[11.5px] leading-snug text-muted">
+                      {projeto.rascunho.passos.slice(-5).map((x, i) => <li key={i} className="truncate">{x}</li>)}
+                    </ul>
                   )}
+                  <div className="mt-2 flex items-center gap-1.5 pl-3.5">
+                    <button onClick={() => setAbrirSalvar(true)} className={botaoPrincipal}>Salvar versão</button>
+                    <button onClick={() => acaoRascunho("descartar")} className={botaoTexto}>Descartar</button>
+                    <span className="ml-auto font-mono text-[10.5px] text-faint">Ctrl+S</span>
+                  </div>
                 </div>
-              ))}
-              {!versoes.length && <p className="text-xs text-muted">Nenhuma versão ainda.</p>}
+              )}
+              {versoes.length ? (
+                <ol className="flex flex-col gap-1" aria-label="Histórico de versões">
+                  {arvore.map((n) => versoes.find((x) => x.versao === n.v)!).map((m, i) => {
+                    const nivel = arvore[i].nivel, eAtual = m.versao === atual, comparando = comparar === m.versao;
+                    const titulo = m.content.replace(/^v\d+:\s*/, "");
+                    return (
+                      <li key={m.id} className="relative" style={{ paddingLeft: nivel * 16 }}>
+                        {nivel > 0 && <span aria-hidden className="absolute inset-y-0 border-l border-line-strong" style={{ left: nivel * 16 - 9 }} />}
+                        <div className={`group flex gap-3 rounded-xl border p-2 transition-colors ${
+                          eAtual ? "border-accent-line bg-accent-soft/50" : comparando ? "border-line-strong bg-raised/40" : "border-transparent hover:border-line hover:bg-raised/40"}`}>
+                          <button onClick={() => ir(m.versao!)} disabled={rodando || eAtual} aria-label={eAtual ? `v${m.versao}, a versão atual` : `Mostrar a v${m.versao}`}
+                                  className="shrink-0 self-start rounded-lg focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-1 focus-visible:outline-focus disabled:cursor-default">
+                            {htmlVersoes[m.versao!] ? <Miniatura html={htmlVersoes[m.versao!]} titulo={`Miniatura da v${m.versao}`} largura={128} />
+                              : <div className="grid h-[86px] w-[128px] place-items-center rounded-lg border border-dashed border-line font-mono text-[11px] text-faint"
+                                     ref={(el) => { if (el) htmlDaVersao(m.versao!); }}>v{m.versao}</div>}
+                          </button>
+                          <div className="flex min-w-0 flex-1 flex-col gap-1 py-0.5">
+                            <div className="flex min-w-0 items-center gap-1.5">
+                              <span className={`font-mono text-[11.5px] font-semibold ${eAtual ? "text-accent-text" : "text-muted"}`}>v{m.versao}</span>
+                              {eAtual && <span className="rounded-full bg-accent px-1.5 text-[10px] leading-4 font-medium text-accent-fg">atual</span>}
+                              {arvore[i].ramo && <span className="shrink-0 rounded-full bg-raised px-1.5 text-[10px] leading-4 text-muted">ramo da v{paiDe(m.versao!)}</span>}
+                              <span className="ml-auto truncate font-mono text-[10.5px] text-faint">{m.rota ? ROTULO_ROTA[m.rota] ?? m.rota : ""}</span>
+                            </div>
+                            <button onClick={() => ir(m.versao!)} disabled={rodando || eAtual} title={titulo}
+                                    className="line-clamp-2 text-left text-[12.5px] leading-snug text-fg-2 enabled:hover:text-fg disabled:cursor-default">
+                              {titulo || "sem descrição"}
+                            </button>
+                            {!eAtual && (
+                              <div className="mt-auto flex flex-wrap gap-1.5 pt-0.5 opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                                <button onClick={() => { if (comparando) setComparar(null); else { setComparar(m.versao!); htmlDaVersao(m.versao!); } }}
+                                        aria-pressed={comparando} title={`Abrir ao lado da v${atual} para comparar`} aria-label={`Comparar a v${m.versao} com a v${atual}`}
+                                        className={`${botaoItem} ${comparando ? "border-accent-line text-accent-text" : ""}`}>
+                                  {comparando ? "Comparando" : "Comparar"}
+                                </button>
+                                {m.versao !== total && (
+                                  <button onClick={() => restaurar(m.versao!)} disabled={rodando} title="Copia esta versão para o topo do histórico"
+                                          className={botaoItem}>Restaurar</button>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : (
+                <Vazio icone={<GitBranch className="size-4" />} titulo="Nenhuma versão ainda">
+                  A primeira aparece quando a IA gera o design ou quando você salva o rascunho.
+                </Vazio>
+              )}
             </div>
           )}
           <div ref={fimChat} />

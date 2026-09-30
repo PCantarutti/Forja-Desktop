@@ -8,11 +8,13 @@ export type Variacao = { nome: string; descricao: string; tokens: Record<string,
 
 const LARG = 1280, ALT = 860, ESCALA = 0.19;
 
-export function Miniatura(props: { html: string; css?: string; titulo: string }) {
+/** `largura`: a miniatura em px (padrão 243); a página é desenhada a 1280px e reduzida na mesma proporção. */
+export function Miniatura(props: { html: string; css?: string; titulo: string; largura?: number }) {
+  const escala = props.largura ? props.largura / LARG : ESCALA;
   return (
-    <div className="relative overflow-hidden rounded-lg border border-line bg-white" style={{ width: LARG * ESCALA, height: ALT * ESCALA }}>
+    <div className="relative overflow-hidden rounded-lg border border-line bg-white" style={{ width: LARG * escala, height: ALT * escala }}>
       <iframe title={props.titulo} sandbox="" srcDoc={docEstatico(props.html, props.css)} tabIndex={-1}
-              className="pointer-events-none origin-top-left border-0" style={{ width: LARG, height: ALT, transform: `scale(${ESCALA})` }} />
+              className="pointer-events-none origin-top-left border-0" style={{ width: LARG, height: ALT, transform: `scale(${escala})` }} />
     </div>
   );
 }

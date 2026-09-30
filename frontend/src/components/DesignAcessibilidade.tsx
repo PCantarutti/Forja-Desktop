@@ -1,4 +1,6 @@
 import type { Problema } from "./designCanvas";
+import { botao, botaoPrincipal, item, tituloSecao } from "./designUi";
+import { Check } from "./icons";
 
 // Revisão de acessibilidade feita dentro do canvas, sem IA (cores e tamanhos computados de verdade).
 // Clicar num item mostra o elemento; "Corrigir com a IA" manda só esses elementos como fragmento.
@@ -15,36 +17,51 @@ export default function DesignAcessibilidade(props: {
   const erros = itens.filter((x) => x.gravidade === "erro");
   const corrigiveis = itens.filter((x) => x.fid);
   return (
-    <div className="flex flex-col gap-2 py-2 text-[13px]">
-      <div className="flex items-center gap-2">
-        <button onClick={props.onVerificar} className="rounded-lg border border-line px-2.5 py-1 text-xs text-fg hover:bg-raised">Verificar de novo</button>
+    <section aria-label="Acessibilidade" className="flex flex-col gap-2.5 border-t border-line py-3">
+      <div className="flex items-center gap-2 px-1">
+        <h3 className={tituloSecao}>Acessibilidade</h3>
+        <span className="truncate text-[11px] text-faint">{props.escopo}</span>
+        <span className="flex-1" />
+        <button onClick={props.onVerificar} className={botao}>Verificar de novo</button>
         {!!corrigiveis.length && (
-          <button disabled={props.desabilitado} onClick={() => props.onCorrigir(corrigiveis)}
-                  className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
+          <button disabled={props.desabilitado} onClick={() => props.onCorrigir(corrigiveis)} className={botaoPrincipal}>
             Corrigir {corrigiveis.length} com a IA
           </button>
         )}
-        <span className="ml-auto text-[11.5px] text-faint">{props.escopo}</span>
       </div>
       {props.itens === null ? (
-        <p className="text-xs text-muted">Verificando o canvas…</p>
+        <p className="flex items-center gap-2 px-1 text-[12px] text-muted">
+          <span className="size-3 animate-spin rounded-full border border-accent/30 border-t-accent" aria-hidden /> Verificando o canvas…
+        </p>
       ) : !itens.length ? (
-        <p className="text-xs text-emerald-300">Nenhum problema encontrado ({props.escopo}): contraste, textos alternativos, nomes de botões e títulos em ordem.</p>
+        <p className="flex items-start gap-2 px-1 text-[12px] leading-snug text-fg-2">
+          <Check className="mt-px size-4 shrink-0 text-ok" aria-hidden />
+          Nenhum problema: contraste, textos alternativos, nomes de botões e títulos em ordem.
+        </p>
       ) : (
         <>
-          <p className="text-xs text-muted">{erros.length} erro(s) e {itens.length - erros.length} aviso(s) — WCAG 2.1 AA, calculado sem IA.</p>
-          {itens.map((x, i) => (
-            <button key={i} onClick={() => x.fid && props.onMostrar(x.fid)} disabled={!x.fid}
-                    className="flex items-start gap-2 rounded-lg border border-line p-2 text-left hover:bg-raised/60 disabled:hover:bg-transparent">
-              <span className={`mt-0.5 size-2 shrink-0 rounded-full ${x.gravidade === "erro" ? "bg-red-400" : "bg-amber-400"}`} />
-              <span className="min-w-0">
-                <span className="block text-fg">{x.tipo} <span className="font-mono text-[11px] text-faint">{x.rotulo}</span></span>
-                <span className="block text-[12px] text-muted">{x.detalhe}</span>
-              </span>
-            </button>
-          ))}
+          <p className="px-1 text-[12px] text-muted">
+            <span className="text-err">{erros.length} erro{erros.length === 1 ? "" : "s"}</span> e {itens.length - erros.length} aviso{itens.length - erros.length === 1 ? "" : "s"} · WCAG 2.1 AA, medido sem IA
+          </p>
+          <ul className="flex flex-col gap-1.5">
+            {itens.map((x, i) => (
+              <li key={i}>
+                <button onClick={() => x.fid && props.onMostrar(x.fid)} disabled={!x.fid} title={x.fid ? "Mostrar no canvas" : undefined}
+                        className={`${item} flex w-full items-start gap-2.5 p-2.5 text-left enabled:hover:bg-raised/40 disabled:cursor-default`}>
+                  <span className={`mt-1.5 size-2 shrink-0 rounded-full ${x.gravidade === "erro" ? "bg-err" : "bg-warn"}`} aria-hidden />
+                  <span className="min-w-0">
+                    <span className="flex min-w-0 items-baseline gap-1.5">
+                      <span className="text-[13px] text-fg"><span className="sr-only">{x.gravidade === "erro" ? "Erro: " : "Aviso: "}</span>{x.tipo}</span>
+                      <span className="truncate font-mono text-[10.5px] text-faint">{x.rotulo}</span>
+                    </span>
+                    <span className="mt-0.5 block text-[12px] leading-snug text-muted">{x.detalhe}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         </>
       )}
-    </div>
+    </section>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ponte } from "./designCanvas";
-import { FolderOpen, Trash } from "./icons";
+import { Vazio, botaoItem, botaoPrincipal, item, tituloSecao } from "./designUi";
+import { FolderOpen, Sliders, Trash } from "./icons";
 
 // Aba Ajustes da tela Design: os tokens do :root viram controles (cor, slider, fonte) que mexem no
 // canvas ao vivo e vão para o rascunho, sem chamar modelo nenhum; e os design systems (tirados do código
@@ -10,7 +11,7 @@ import { FolderOpen, Trash } from "./icons";
 export type CriandoSistema = { pasta: string; nome: string; modelo: string; desde: number };
 
 function Criando({ c }: { c: CriandoSistema }) {
-  const [agora, setAgora] = useState(Date.now());
+  const [agora, setAgora] = useState(() => Date.now());
   useEffect(() => {
     const t = setInterval(() => setAgora(Date.now()), 1000);
     return () => clearInterval(t);
@@ -188,21 +189,23 @@ export default function DesignAjustes(props: {
   const vistos = new Set<string>(Object.keys(tweaks));
   const daIA = originais.filter(([n]) => tweaks[n]);
   return (
-    <div className="flex flex-col gap-4 py-2 text-[13px]">
-      {!originais.length && <p className="text-xs text-muted">Este documento não tem tokens no :root ainda.</p>}
+    <div className="flex flex-col gap-5 px-1 py-2 text-[13px]">
+      {originais.length ? (
+        <p className="text-[11.5px] leading-snug text-faint">Tudo aqui muda o canvas na hora e vai para o rascunho, sem chamar o modelo.</p>
+      ) : (
+        <Vazio icone={<Sliders className="size-4" />} titulo="Sem tokens ainda">Os controles aparecem quando o design tiver tokens no :root (a IA cria no primeiro plano).</Vazio>
+      )}
       <section>
-        <div className="mb-1.5 flex items-center gap-2">
-          <h3 className="font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Criados pela IA</h3>
-          <span className="flex-1" />
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <h3 className={`${tituloSecao} mr-auto`}>Criados pela IA</h3>
           <button disabled={props.desabilitado} onClick={props.onVariacoes}
-                  title="Três direções visuais (só tokens) para ver lado a lado no chat e escolher"
-                  className="rounded-md border border-line px-2 py-0.5 text-[11.5px] text-fg hover:bg-raised disabled:opacity-40">
-            Ver 3 variações
+                  title="Três direções visuais (só tokens) para ver lado a lado no chat e escolher" className={botaoItem}>
+            3 variações
           </button>
           <button disabled={props.desabilitado} onClick={props.onCriarComIA}
                   title="A IA cria sliders para esta página (ou para os elementos selecionados). O texto do campo, se houver, diz o foco."
-                  className="rounded-md border border-line px-2 py-0.5 text-[11.5px] text-fg hover:bg-raised disabled:opacity-40">
-            {props.selecionados ? `Criar ajustes para ${props.selecionados === 1 ? "o elemento" : `${props.selecionados} elementos`}` : "Criar ajustes com a IA"}
+                  className={botaoItem}>
+            {props.selecionados ? `Criar ajustes para ${props.selecionados === 1 ? "o elemento" : `${props.selecionados} elementos`}` : "Criar ajustes"}
           </button>
         </div>
         {daIA.length ? (
@@ -210,7 +213,7 @@ export default function DesignAjustes(props: {
             {daIA.map(([n, v]) => <Controle key={n} nome={n} valor={valores[n] ?? v} tweak={tweaks[n]} onChange={(x) => mexe(n, x)} />)}
           </div>
         ) : (
-          <p className="text-[11.5px] text-faint">Controles sob medida para este design (altura do hero, colunas, respiro...), criados numa chamada e depois ajustados sem IA.</p>
+          <p className="text-[11.5px] leading-snug text-faint">Controles sob medida para este design (altura do hero, colunas, respiro…): a IA cria numa chamada, depois você ajusta sem IA.</p>
         )}
       </section>
       {GRUPOS.map((g) => {
@@ -218,20 +221,18 @@ export default function DesignAjustes(props: {
         itens.forEach(([n]) => vistos.add(n));
         return itens.length ? (
           <section key={g.titulo}>
-            <h3 className="mb-1.5 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">{g.titulo}</h3>
+            <h3 className={`${tituloSecao} mb-2`}>{g.titulo}</h3>
             <div className={`flex flex-col gap-1.5 ${props.desabilitado ? "pointer-events-none opacity-50" : ""}`}>
               {itens.map(([n, v]) => <Controle key={n} nome={n} valor={valores[n] ?? v} onChange={(x) => mexe(n, x)} />)}
             </div>
           </section>
         ) : null;
       })}
-      <p className="text-[11.5px] text-faint">Mexe no canvas na hora e vai para o rascunho (Salvar versão quando quiser) — sem chamar o modelo.</p>
 
-      <section className="border-t border-line pt-3">
-        <h3 className="mb-1.5 font-mono text-[10.5px] font-medium tracking-[.08em] text-faint uppercase">Design systems</h3>
-        <p className="mb-2 text-[11.5px] text-faint">Tirados do código de um projeto (CSS, Tailwind, componentes). O escolhido em
-          “Próximos planos” manda nos tokens e no CSS dos designs novos.</p>
-        <label className="mb-2 flex items-center gap-2 text-xs text-muted">
+      <section className="border-t border-line pt-4">
+        <h3 className={`${tituloSecao} mb-1.5`}>Design systems</h3>
+        <p className="mb-2.5 text-[11.5px] leading-snug text-faint">O escolhido em “Próximos planos” manda nos tokens, no CSS e na logo dos designs novos.</p>
+        <label className="mb-2.5 flex items-center gap-2 text-[12px] text-muted">
           Próximos planos
           <select value={props.sistemaNovos} onChange={(e) => props.onSistemaNovos(e.target.value)} className={`${campo} flex-1 font-sans`}>
             <option value="">nenhum (o modelo escolhe)</option>
@@ -241,7 +242,7 @@ export default function DesignAjustes(props: {
         <div className="flex flex-col gap-1.5">
           {props.criando && <Criando c={props.criando} />}
           {props.sistemas.map((s) => (
-            <div key={s.id} className={`rounded-lg border p-2 ${props.sistemaDoDoc === s.id ? "border-accent-line bg-accent-soft/40" : "border-line"}`}>
+            <div key={s.id} className={`${item} p-2.5 ${props.sistemaDoDoc === s.id ? "border-accent-line bg-accent-soft/40" : ""}`}>
               <div className="flex items-center gap-2">
                 <div className="flex shrink-0 -space-x-1">
                   {Object.entries(s.tokens).filter(([, v]) => hex6(v)).slice(0, 5).map(([k, v]) => (
@@ -250,24 +251,26 @@ export default function DesignAjustes(props: {
                 </div>
                 <span className="min-w-0 flex-1 truncate text-fg" title={s.pasta}>{s.nome}</span>
                 {props.sistemaDoDoc === s.id ? (
-                  <span className="text-[11px] text-accent-text">neste design</span>
+                  <span className="rounded-full bg-accent-soft px-1.5 text-[10.5px] leading-4 text-accent-text">neste design</span>
                 ) : (
-                  <button disabled={props.desabilitado || !props.html} onClick={() => props.onAplicarSistema(s.id)}
-                          className="rounded border border-line px-1.5 text-[11px] text-fg hover:bg-raised disabled:opacity-40">Aplicar aqui</button>
+                  <button disabled={props.desabilitado || !props.html} onClick={() => props.onAplicarSistema(s.id)} className={botaoItem}>Aplicar aqui</button>
                 )}
-                <button onClick={() => props.onApagar(s.id)} title="Apagar este design system" className="p-0.5 text-faint hover:text-red-300">
+                <button onClick={() => props.onApagar(s.id)} title="Apagar este design system" aria-label={`Apagar ${s.nome}`}
+                        className="grid size-6 place-items-center rounded-md text-faint transition-colors hover:bg-raised hover:text-err">
                   <Trash className="size-3.5" />
                 </button>
               </div>
-              {s.notas && <p className="mt-1 text-[11.5px] text-faint">{s.notas}</p>}
+              {s.notas && <p className="mt-1.5 line-clamp-3 text-[11.5px] leading-snug text-faint" title={s.notas}>{s.notas}</p>}
             </div>
           ))}
         </div>
-        <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-dashed border-line p-2">
+        <div className="mt-2.5 flex flex-col gap-1.5 rounded-xl border border-dashed border-line p-2.5">
+          <span className="text-[12px] font-medium text-fg-2">Novo, a partir de uma pasta</span>
           <div className="flex items-center gap-1.5">
             <input value={pasta} onChange={(e) => setPasta(e.target.value)} placeholder="Pasta do projeto" className={`${campo} flex-1`} />
             {ponte()?.pickFolder && (
-              <button onClick={escolherPasta} title="Escolher pasta" className="rounded p-1 text-muted hover:bg-raised hover:text-fg">
+              <button onClick={escolherPasta} title="Escolher pasta" aria-label="Escolher pasta"
+                      className="grid size-7 place-items-center rounded-md text-muted transition-colors hover:bg-raised hover:text-fg">
                 <FolderOpen className="size-4" />
               </button>
             )}
@@ -279,11 +282,11 @@ export default function DesignAjustes(props: {
                       await props.onExtrair(pasta.trim(), nome.trim());
                       setNome("");
                     }}
-                    className="rounded-md bg-accent px-2 py-0.5 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-              {extraindo ? "Criando…" : "Criar do código"}
+                    className={botaoPrincipal}>
+              {extraindo ? "Criando…" : "Criar"}
             </button>
           </div>
-          <p className="text-[11px] text-faint">Lê a pasta de um projeto (CSS, Tailwind, componentes) ou de um design system pronto (DESIGN.md, tokens em JSON, fontes) e resume; o modelo de edição só vê esse resumo.</p>
+          <p className="text-[11px] leading-snug text-faint">Projeto (CSS, Tailwind, componentes) ou design system pronto (DESIGN.md, tokens JSON, fontes, logo SVG).</p>
         </div>
       </section>
     </div>
