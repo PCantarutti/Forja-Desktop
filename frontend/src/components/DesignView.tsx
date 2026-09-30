@@ -59,6 +59,7 @@ type Geracao = {
   message_id: number; status: string; modo?: string; parcial?: string; raciocinio?: string; tokens?: number;
   segundos?: number; escrevendo?: boolean; texto?: string; versao?: number | null; base?: number | null; patches?: Patch[];
   vivo?: Stats; secoes?: { nome: string; status: string }[]; n?: number; doc?: string;
+  passos?: string[];
   revisao?: { status: string; texto: string } | null;   // autorrevisão: a página pronta olhada antes de entregar
 };
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
@@ -967,9 +968,23 @@ export default function DesignView(props: {
     if (geracao.raciocinio && !geracao.escrevendo) return "pensando";
     return FASE[geracao.modo ?? ""] ?? "escrevendo o documento";
   })();
+  // a "ferramenta" em curso, como no Agente: o que o modelo está escrevendo agora
+  const FERRAMENTA: Record<string, string> = {
+    fragmento: "editar_elementos", documento: "escrever_documento", tokens: "ajustar_tokens", secao: "escrever_secao",
+    plano: "planejar", perguntas: "perguntar", tweaks: "criar_ajustes", variacoes: "criar_variacoes",
+  };
+  const ferramentaAtual = (() => {
+    if (!geracao) return null;
+    const rev = geracao.revisao?.status === "gerando" ? geracao.revisao.texto : "";
+    if (rev) return rev.includes("“") ? { nome: "escrever_secao", alvo: `${rev.match(/“([^”]+)”/)?.[1] ?? ""} (revisão)` } : { nome: "revisar_visual", alvo: "" };
+    const sec = secoesVivas.find((x) => x.status === "gerando");
+    if (sec) return { nome: "escrever_secao", alvo: sec.nome };
+    return geracao.modo && geracao.modo !== "etapas" ? { nome: FERRAMENTA[geracao.modo] ?? geracao.modo, alvo: "" } : null;
+  })();
   const aoVivo = rodando && geracao && (
     <div className="my-4">
-      <DesignAtividade ao_vivo raciocinio={geracao.raciocinio ?? ""} passos={[]} rotulo={ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"} />
+      <DesignAtividade ao_vivo raciocinio={geracao.raciocinio ?? ""} passos={geracao.passos ?? []} rotulo={ROTULO_VIVO[geracao.modo ?? ""] ?? "Gerando…"}
+                       parcial={geracao.parcial} atual={ferramentaAtual} doc={geracao.doc} />
       <StatsRow s={geracao.vivo ? aggregate([geracao.vivo]) : { model: prefs.modelos.geracao.model, tokens: 0, seconds: 0, tps: null, estimated: false }}
                 live phase={fase} />
     </div>

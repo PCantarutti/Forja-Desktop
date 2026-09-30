@@ -11,3 +11,13 @@ os.environ.setdefault("FORJA_DATA", _TMP)
 # workspace próprio não pode cair num repositório git de verdade (~/Forja ou outro).
 os.environ.setdefault("WORKSPACE_ROOT", os.path.join(_TMP, "ws"))
 os.makedirs(os.environ["WORKSPACE_ROOT"], exist_ok=True)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _sem_titulo_do_design(monkeypatch):
+    """O título do Design é uma chamada extra ao modelo: os modelos falsos dos testes não esperam por ela."""
+    from app import design
+    monkeypatch.setattr(design, "RETITULAR", False)

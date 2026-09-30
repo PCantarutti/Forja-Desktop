@@ -905,6 +905,39 @@ def _antes_do_documento(conv_id: int, pedido: str) -> dict:
     return {"pedidos": pedidos, "respostas": respostas, "plano": plano}
 
 
+RETITULAR = True   # os testes desligam (o modelo falso deles não sabe dar título)
+
+
+async def _retitular(conv_id: int, spec: dict) -> None:
+    """Como no Agente: o título provisório (o começo do pedido) vira um resumo do modelo quando a
+    primeira resposta termina. Depois e não antes, para não disputar o modelo local com a geração."""
+    from .agent import TITLE_CTX, TITLE_PROMPT, _clean_title
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        msgs = s.query(db.Message).filter(db.Message.conversation_id == conv_id, db.Message.role.in_(("user", "assistant"))) \
+            .order_by(db.Message.id).limit(4).all()
+        primeiro = next((m.content for m in msgs if m.role == "user" and (m.content or "").strip()), "")
+        if not c or not primeiro or c.title != _descricao(primeiro):   # já tem título (ou o usuário renomeou)
+            return
+        provisorio, texto = c.title, "\n\n".join(f"{m.role}: {(m.content or '').strip()[:600]}" for m in msgs if (m.content or "").strip())
+    bruto = ""
+    try:
+        async for kind, val in llm.chat_stream(spec["provider"], spec["model"], [{"role": "system", "content": TITLE_PROMPT},
+                                                                              {"role": "user", "content": texto}],
+                                               None, TITLE_CTX, "baixo", think=False):
+            if kind == "content":
+                bruto += val
+    except Exception:   # título é enfeite: qualquer falha deixa o provisório
+        return
+    titulo = _clean_title(bruto)
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        if titulo and c and c.title == provisorio:
+            c.title = titulo
+            s.commit()
+    mirror.write(conv_id)
+
+
 def _descricao(pedido: str, n: int = 60) -> str:
     linha = " ".join(pedido.split())
     return linha if len(linha) <= n else linha[:n - 3].rstrip() + "…"
@@ -1256,7 +1289,7 @@ async def _chamar(run: dict, mensagens: list[dict]) -> str:
     ctx_max = await _janela(spec["provider"], spec["model"])
     mensagens = _caber(run, mensagens, ctx_max)
     content, reasoning, done, t0, t_first = "", "", {}, time.monotonic(), 0.0
-    run["parcial"] = ""
+    run["parcial"], run["_t1"], run["_n1"] = "", 0.0, 0
     async with aclosing(llm.chat_stream(spec["provider"], spec["model"], mensagens, None, config.NUM_CTX,
                                         run["esforco"])) as fluxo:
         async for kind, val in fluxo:
@@ -1267,11 +1300,13 @@ async def _chamar(run: dict, mensagens: list[dict]) -> str:
                 content += val
                 run["parcial"] = content
                 run["vivos"] += 1
+                run["_t1"], run["_n1"] = run["_t1"] or t_first, run["_n1"] + 1
             elif kind == "reasoning":
                 t_first = t_first or time.monotonic()
                 reasoning += val
                 run["raciocinio"] += val
                 run["vivos"] += 1
+                run["_t1"], run["_n1"] = run["_t1"] or t_first, run["_n1"] + 1
             elif kind == "done":
                 done = val or {}
     pensou, texto = split_think(content)
@@ -1436,6 +1471,8 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
         _anexa(run)
         _RUNS.pop(mid, None)
         mirror.write(run["conv_id"])
+        if RETITULAR:
+            _dispara(_retitular(run["conv_id"], run["spec"]))
 
 
 def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo", imagens: str = "skill") -> dict:
@@ -1551,6 +1588,7 @@ async def _rodar_etapas(run: dict) -> None:
     telas = plano.get("tipo") == "prototipo"
     unidade = {"slides": "slide", "prototipo": "tela"}.get(plano.get("tipo"), "seção")
     erros, passos = [], [f"Montou o esqueleto: tokens do plano e {len(nomes)} lugar(es) de {unidade}"]
+    run["passos"] = passos
     try:
         for i, sec in enumerate(plano["secoes"]):
             if run["cancelar"]:
@@ -1608,19 +1646,23 @@ async def _rodar_etapas(run: dict) -> None:
         _anexa(run)
         _RUNS.pop(mid, None)
         mirror.write(run["conv_id"])
+        if RETITULAR:
+            _dispara(_retitular(run["conv_id"], run["spec"]))
 
 
 def _stats_vivo(run: dict) -> dict:
     """Linha de estatísticas enquanto gera: o que já fechou + a chamada em curso (contagem aproximada)."""
     fechados = sum(s["tokens"] for s in run["stats"])
+    dt = time.monotonic() - run["_t1"] if run.get("_t1") else 0   # t/s da chamada em curso (pedaços do stream ≈ tokens)
     return {"model": run["spec"]["model"], "tokens": max(fechados, run["vivos"]), "seconds": round(time.monotonic() - run["t0"], 1),
-            "tps": None, "estimated": True}
+            "tps": round(run["_n1"] / dt, 2) if dt > 1 and run.get("_n1") else None, "estimated": True}
 
 
 def estado(message_id: int) -> dict:
     if run := _RUNS.get(message_id):
         out = {"message_id": message_id, "status": "rodando", "modo": run["modo"],
-               "parcial": run["parcial"] if run["modo"] == "documento" else "",
+               "parcial": run["parcial"] if run["modo"] == "documento" else run["parcial"][-12000:],
+               "passos": list(run.get("passos") or []),
                "escrevendo": bool(run["parcial"]),   # já saiu texto da chamada atual (senão ainda está pensando)
                "raciocinio": run["raciocinio"], "tokens": run["vivos"],
                "segundos": round(time.monotonic() - run["t0"], 1), "vivo": _stats_vivo(run)}

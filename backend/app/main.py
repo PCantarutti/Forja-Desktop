@@ -418,6 +418,8 @@ async def get_activity():
             e["waiting"] = len(r.approvals)
             e["paused"] = r.paused
             e["alertas"] = r.alertas  # "pode estar travada": a interface notifica quando sobe
+    for r in list(design._RUNS.values()):   # geração do Design também acende a bolinha da conversa
+        entrada(r["conv_id"])["running"] = True
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
     vivos = 0
