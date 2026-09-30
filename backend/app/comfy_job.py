@@ -335,23 +335,28 @@ def main() -> int:
         for i, nome in enumerate(nomes):
             diz("FASE", f"ampliando o quadro {i + 1} de {n}")
             escala[0], escala[1] = i / n, 1 / n
-            shutil.copyfile(Path(o.entrada) / nome, trabalho / "in" / "quadro.png")
+            # nome único por quadro: com o mesmo nome, dois quadros iguais seguidos (comum em vídeo) davam o mesmo fluxo,
+            # o ComfyUI devolvia o resultado do cache — o arquivo do quadro anterior, que já tinha sido apagado
+            q = f"q{i:05d}.png"
+            shutil.copyfile(Path(o.entrada) / nome, trabalho / "in" / q)
             if o.modo == "seedvr2":
-                g = fluxo_seedvr2("quadro.png", o.fator, modelo.name, Path(o.vae).name, o.semente)
+                g = fluxo_seedvr2(q, o.fator, modelo.name, Path(o.vae).name, o.semente)
                 # sem correção de cor, como no blueprint de vídeo: a "lab" roda na CPU, ~19 s por quadro de 640x360
                 g["10"]["inputs"]["color_correction_method"] = "none"
                 saiu = rodar(g)
             else:
-                saiu = rodar(fluxo_spandrel("quadro.png", modelo.name))
+                saiu = rodar(fluxo_spandrel(q, modelo.name))
                 if not passadas:
                     with Image.open(saiu) as im:
                         passadas = 2 if im.width < alvo[0] else 1
                 if passadas == 2:
-                    shutil.move(str(saiu), trabalho / "in" / "quadro.png")
-                    saiu = rodar(fluxo_spandrel("quadro.png", modelo.name))
+                    shutil.move(str(saiu), trabalho / "in" / f"q{i:05d}b.png")
+                    saiu = rodar(fluxo_spandrel(f"q{i:05d}b.png", modelo.name))
             with Image.open(saiu) as im:
                 no_alvo(im).save(destino / nome)
             saiu.unlink(missing_ok=True)  # out/ não acumula milhares de quadros
+            for f in (trabalho / "in").glob(f"q{i:05d}*.png"):
+                f.unlink()
         return alvo
 
     def seedvr2_em_trechos(nomes: list[str], destino: Path, alvo, no_alvo, escala: list) -> None:
@@ -372,7 +377,7 @@ def main() -> int:
                 f.unlink()
             locais = []
             for j, nome in enumerate(nomes[a:b]):
-                local = f"t{j:05d}.png"
+                local = f"t{k:04d}_{j:05d}.png"  # único por trecho: trecho igual ao anterior não sai do cache
                 shutil.copyfile(Path(o.entrada) / nome, trabalho / "in" / local)
                 locais.append(local)
             saidas = rodar(fluxo_seedvr2_video(locais, o.fator, modelo.name, Path(o.vae).name, o.semente,
