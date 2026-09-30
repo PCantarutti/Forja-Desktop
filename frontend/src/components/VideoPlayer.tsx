@@ -113,6 +113,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   const [ajuda, setAjuda] = useState(false);
   const [dims, setDims] = useState<[number, number]>([0, 0]);
   const esconder = useRef<number | undefined>(undefined);
+  const retomar = useRef(false); // clique na linha do tempo com o vídeo tocando: volta a tocar ao soltar
   // Comparar: o outro vídeo só segue este (tocar, pausar, posição, velocidade); quem manda é o principal.
   const outro = useRef<HTMLVideoElement>(null);
   const [corte, setCorte] = useState(0.5);
@@ -473,6 +474,8 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           onPointerDown={(e) => {
             e.currentTarget.setPointerCapture(e.pointerId);
             setArrastando(true);
+            // pausa só enquanto arrasta (o quadro sob o mouse fica parado na tela); tocando, retoma ao soltar
+            retomar.current = !!video.current && !video.current.paused;
             video.current?.pause();
             irPara(fracaoDo(e) * dur);
           }}
@@ -481,7 +484,16 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
             setSobre(f);
             if (arrastando) irPara(f * dur);
           }}
-          onPointerUp={() => setArrastando(false)}
+          onPointerUp={() => {
+            setArrastando(false);
+            if (retomar.current) video.current?.play().catch(() => {});
+            retomar.current = false;
+          }}
+          onPointerCancel={() => {
+            setArrastando(false);
+            if (retomar.current) video.current?.play().catch(() => {});
+            retomar.current = false;
+          }}
           onPointerLeave={() => setSobre(null)}
           className={`relative cursor-pointer select-none overflow-visible rounded-md ${props.compacto ? "h-1.5" : "h-8"}`}
         >
