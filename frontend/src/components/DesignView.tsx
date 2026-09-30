@@ -409,7 +409,10 @@ export default function DesignView(props: {
       setAba("chat");
       // o pedido aparece já no chat, antes do primeiro retrato do SSE
       setProjeto((p) => p && { ...p, mensagens: [...p.mensagens, {
-        id: -1, role: "user", content: pedido || (extra.comentarios ? `${extra.comentarios.length} comentário(s)` : `refazer a seção ${extra.secao}`),
+        // comentários: o mesmo texto que o backend grava ("Comentário 3: …"), com a numeração dos pins
+        id: -1, role: "user", content: extra.comentarios
+          ? [...extra.comentarios.map((cid) => `Comentário ${numero(cid)}: ${projeto?.comentarios.find((c) => c.id === cid)?.texto ?? ""}`), pedido].filter(Boolean).join("\n")
+          : pedido || `refazer a seção ${extra.secao}`,
         status: null, thinking: "", versao: null, fids, stats: [], comentarios: extra.comentarios ?? [], plano: null,
         respostas: extra.respostas ?? null, referencias: anexos.map((r) => ({ ...r, texto: undefined })) }] });
       setGeracao({ message_id: 0, status: "rodando", modo: fids.length || extra.comentarios ? "fragmento" : "", tokens: 0, segundos: 0 });
