@@ -76,3 +76,15 @@ def test_fonte_mono_da_web_ganha_consolas_antes_do_courier():
     assert design_html.sem_ciclos(".a{font-family:'Space Mono', monospace}") == ".a{font-family:'Space Mono', ui-monospace, Consolas, monospace}"
     ok = ".b{font-family:ui-monospace, Consolas, monospace}"
     assert design_html.sem_ciclos(ok) == ok
+
+
+def test_fonte_mono_em_token_tambem():
+    from app import design_html
+    assert design_html.sem_ciclos(":root{--fonte-mono: 'Space Mono', monospace;}") == \
+        ":root{--fonte-mono: 'Space Mono', ui-monospace, Consolas, monospace;}"
+
+
+def test_ui_monospace_sozinho_tambem_ganha_consolas():
+    from app import design_html
+    assert design_html.sem_ciclos('.l{font-family: "Space Mono", ui-monospace, monospace}') == \
+        '.l{font-family: "Space Mono", ui-monospace, Consolas, monospace}'

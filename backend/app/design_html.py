@@ -250,7 +250,7 @@ def _tokens(html: str, tokens: dict) -> str:
 _CICLO = re.compile(r"(--[\w-]+)\s*:\s*var\(\s*\1\s*[,)][^;}]*;?")
 
 
-_SO_MONO = re.compile(r"(font-family\s*:[^;{}]*?),\s*monospace\b")
+_SO_MONO = re.compile(r"((?:font-family|--[\w-]*(?:font|fonte|mono)[\w-]*)\s*:[^;{}]*?),\s*monospace\b")   # também em token
 
 
 def sem_ciclos(css: str) -> str:
@@ -258,7 +258,11 @@ def sem_ciclos(css: str) -> str:
     TODOS os tamanhos, cores e espaços que dependem dele (o hero inteiro virava texto cru). E fonte
     mono da web (Space Mono, JetBrains) sem rede cai no genérico `monospace` = Courier: entra Consolas antes."""
     css = _CICLO.sub("", css)
-    return _SO_MONO.sub(lambda m: m.group(1) + ", ui-monospace, Consolas, monospace" if "ui-monospace" not in m.group(1) else m.group(0), css)
+    def mono(m: re.Match) -> str:   # ui-monospace não existe no Chromium do Windows: o que vale é o Consolas
+        if "consolas" in m.group(1).lower():
+            return m.group(0)
+        return re.sub(r",\s*ui-monospace\s*$", "", m.group(1)) + ", ui-monospace, Consolas, monospace"
+    return _SO_MONO.sub(mono, css)
 
 
 def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:

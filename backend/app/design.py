@@ -1202,6 +1202,9 @@ async def _fotos(run: dict, html: str) -> tuple[str, list[str]]:
     E a logo do design system entra no lugar que o modelo marcou com data-logo."""
     if ds := design_sistema.do_documento(html):
         html = design_sistema.aplicar_logos(html, ds)
+    # CSS do documento inteiro (tokens do :root inclusos): sem token circular e mono com fallback do sistema
+    html = re.sub(r"(<style[^>]*>)(.*?)(</style\s*>)", lambda m: m.group(1) + design_html.sem_ciclos(m.group(2)) + m.group(3),
+                  html, flags=re.S | re.I)
     if run.get("imagens") == "internet":
         return await design_imagens.fotos_da_internet(html)
     return design_imagens.sem_links(html), []
@@ -1588,7 +1591,10 @@ async def _autorrevisar(run: dict, doc: str, passos: list[str]) -> str:
         fid = e["attrs"]["data-fid"]
         pedido = (f"Revisão visual da página pronta: {a['problema']} Correção: {a['correcao']} "
                   "Mantenha o conteúdo e o que já está bom; mude só o necessário para corrigir.")
-        user = design_imagens.enxugar(_ctx_secao(titulo, doc, nomes, {"nome": a["nome"]}, design_html.outer(doc, fid), pedido))
+        user = _ctx_secao(titulo, doc, nomes, {"nome": a["nome"]}, design_html.outer(doc, fid), pedido)
+        if ds := design_sistema.do_documento(doc):   # a correção também segue o sistema (e mantém a logo)
+            user += "\n\n" + design_sistema.para_prompt(ds)
+        user = design_imagens.enxugar(user)
         try:
             html_sec, css = design_html.ler_secao(await _chamar(run, [{"role": "system", "content": sis},
                                                                      {"role": "user", "content": user}]), a["nome"])
