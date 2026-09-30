@@ -286,6 +286,11 @@ def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
         if not e:
             raise ValueError(f"Elemento {p['fid']} não existe no documento.")
         novo = p["html"].strip()
+        if not novo:   # "remova essa div": patch vazio apaga o elemento (menos o que o canvas precisa)
+            if e["tag"] in ("body", "head", "html", "style") or e["pai"] is None:
+                raise ValueError(f"O elemento {p['fid']} ({e['tag']}) não pode ser removido.")
+            alvos.append((e, ""))
+            continue
         sub = indexar(novo)
         raizes = [s for s in sub if s["pai"] is None]
         inteiro = len(raizes) == 1 and raizes[0]["ini"] == 0 and raizes[0]["fim"] == len(novo)
@@ -300,8 +305,10 @@ def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
         if b["ini"] < a["fim"]:
             raise ValueError("Dois patches no mesmo trecho (um elemento dentro do outro).")
     for e, novo in reversed(alvos):
-        html = html[:e["ini"]] + novo + html[e["fim"]:]
-    mudou = [p["fid"] for p in patches]
+        fim = e["fim"] + (not novo and html[e["fim"]:e["fim"] + 1] == "\n")   # removido leva a quebra de linha junto
+        html = html[:e["ini"]] + novo + html[fim:]
+    # algo removido: não há o que mandar por fid, o canvas recarrega o documento
+    mudou = [] if any(not n for _, n in alvos) else [p["fid"] for p in patches]
 
     if tokens:
         html = _tokens(html, tokens)

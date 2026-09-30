@@ -59,7 +59,7 @@ type Geracao = {
   message_id: number; status: string; modo?: string; parcial?: string; raciocinio?: string; tokens?: number;
   segundos?: number; escrevendo?: boolean; texto?: string; versao?: number | null; base?: number | null; patches?: Patch[];
   vivo?: Stats; secoes?: { nome: string; status: string }[]; n?: number; doc?: string;
-  passos?: string[];
+  passos?: string[]; carregando?: string;   // carregando: subindo o modelo local escolhido
   revisao?: { status: string; texto: string } | null;   // autorrevisão: a página pronta olhada antes de entregar
 };
 type Selecao = { fid: string; tag: string; path: NoCaminho[]; itens: Item[]; rect: { x: number; y: number; w: number; h: number } | null;
@@ -979,6 +979,7 @@ export default function DesignView(props: {
   if (geracao?.revisao) tarefas.push({ text: "Revisão visual da página pronta", status: geracao.revisao.status === "ok" ? "done" : "doing" });
   const fase = (() => {
     if (!geracao) return "";
+    if (geracao.carregando) return geracao.carregando;
     if (geracao.revisao?.status === "gerando") return geracao.revisao.texto;
     const i = secoesVivas.findIndex((x) => x.status === "gerando");
     if (i >= 0 && !geracao.escrevendo && geracao.raciocinio) return `pensando em “${secoesVivas[i].nome}” (${i + 1} de ${secoesVivas.length})`;

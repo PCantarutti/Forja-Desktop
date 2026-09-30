@@ -13,6 +13,8 @@ Responda SÓ com um objeto JSON, sem texto antes nem depois e sem cerca de códi
 Regras:
 - Um patch por elemento alvo que muda. `html` é o elemento inteiro (a tag de abertura até a de
   fechamento), um único elemento, com o mesmo `data-fid` na raiz.
+- Para REMOVER um elemento alvo ("remova", "apague", "tire isso"), mande o patch dele com
+  `"html": ""`. Nada de devolver um elemento vazio ou escondido no lugar.
 - Preserve todos os `data-fid` que já existem dentro do elemento, exatamente como estão. Não invente
   `data-fid` novos: elementos novos vão sem esse atributo (o sistema carimba depois).
 - Prefira classes e CSS a `style` inline. Se precisar de estilo novo, escreva a regra em `css`

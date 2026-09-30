@@ -1292,9 +1292,36 @@ async def _janela(provider: str, model: str) -> int | None:
     return n
 
 
+async def _garantir_local(run: dict) -> None:
+    """IA local sem modelo nenhum no ar: sobe o escolhido em "Modelo por etapa" (com os parâmetros salvos
+    dele) em vez de falhar com "Nenhum modelo carregado". Com outro modelo carregado não troca: pode
+    estar em uso por outra conversa."""
+    spec = run["spec"]
+    try:
+        if llm.spec(spec["provider"])["type"] != "llamacpp":
+            return
+    except Exception:
+        return
+    from . import localai
+    st = localai.status()
+    if st.get("running") or (st.get("loading") or {}).get("path"):
+        return
+    path = next((m["path"] for m in localai.scan() if m.get("kind") == "chat"
+                 and spec["model"] in (localai.alias_of(m["path"]), m.get("name"))), None)
+    if not path:
+        return
+    run["carregando"] = f"carregando {spec['model']}"
+    try:
+        await asyncio.to_thread(localai.load, path)
+        run.setdefault("passos", []).append(f"Carregou o modelo local {spec['model']} (não havia nenhum no ar)")
+    finally:
+        run["carregando"] = ""
+
+
 async def _chamar(run: dict, mensagens: list[dict]) -> str:
     """Uma chamada ao modelo, em streaming. Guarda raciocínio e estatísticas no run (formato do agente)."""
     spec = run["spec"]
+    await _garantir_local(run)
     ctx_max = await _janela(spec["provider"], spec["model"])
     mensagens = _caber(run, mensagens, ctx_max)
     content, reasoning, done, t0, t_first = "", "", {}, time.monotonic(), 0.0
@@ -1689,7 +1716,8 @@ def estado(message_id: int) -> dict:
         out = {"message_id": message_id, "status": "rodando", "modo": run["modo"],
                "parcial": run["parcial"] if run["modo"] == "documento" else run["parcial"][-12000:],
                "passos": list(run.get("passos") or []),
-               "escrevendo": bool(run["parcial"]),   # já saiu texto da chamada atual (senão ainda está pensando)
+               "escrevendo": bool(run["parcial"]),
+               "carregando": run.get("carregando") or "",   # subindo o modelo local escolhido   # já saiu texto da chamada atual (senão ainda está pensando)
                "raciocinio": run["raciocinio"], "tokens": run["vivos"],
                "segundos": round(time.monotonic() - run["t0"], 1), "vivo": _stats_vivo(run)}
         if run["modo"] == "etapas":
