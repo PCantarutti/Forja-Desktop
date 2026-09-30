@@ -41,6 +41,8 @@ obrigatório", as regras e notas DELE vencem estas (peso, raio, sombra, cores, g
 - Ícones em SVG inline de traço (estilo Lucide), nunca formas vazias no lugar de ícone.
 - Ritmo: fundos alternados entre seções; faixa escura na chamada final e no rodapé; respiro
   vertical generoso; cartões com borda suave, sombra e hover que levanta.
+- Interação funciona de verdade: menu hambúrguer no celular abre e fecha, abas e carrossel andam
+  (JavaScript curto e inline no fim do <body>, sem biblioteca; nunca só a classe sem o script).
 - Preços: plano destacado com borda na cor primária e selo; preço em uma linha. FAQ com
   `<details>`. Depoimentos com estrelas, avatar de iniciais, nome e cargo.
 - Tipografia confortável (16–18px, entrelinha 1.5–1.7, até ~70 caracteres por linha); contraste
