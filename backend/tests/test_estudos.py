@@ -245,6 +245,8 @@ def test_cancelar_guarda_o_que_ja_saiu(monkeypatch):
 
     e = asyncio.run(main())
     assert e["status"] == "cancelado" and "## 1. Mitocôndria" in e["texto"]
+    assert "## 2." not in e["texto"]   # a seção que estava sendo escrita não entra pela metade
+    assert [t["status"] for t in e["topicos"]] == ["pronto", "fila"]
 
 
 def test_reap_solta_estudo_preso():
@@ -278,11 +280,12 @@ def test_pedido_ao_claude_fica_aguardando_e_ele_atende(monkeypatch):
     monkeypatch.setattr(config, "MCP_SERVIDOR", True)
     conv = _estudo()
     mat = estudos.adicionar_material(conv, "aula.txt", texto="--- página 1 ---\num\n\n--- página 2 ---\ndois")
-    msg = estudos.start(conv, "Citologia", {"tamanho": "curto"}, True, "normal", estudos.MOTOR_CLAUDE)
+    msg = estudos.start(conv, "Citologia", {"tamanho": "curto", "extras": ["quadro"]}, True, "normal", estudos.MOTOR_CLAUDE)
     assert estudos.estado(msg["id"])["status"] == "aguardando" and not estudos._RUNS
     texto = asyncio.run(estudos.mcp_pedidos(0))
     assert f"PEDIDO {msg['id']}" in texto and "Citologia" in texto and f"material {mat['id']}" in texto
     assert "(3 a 4 tópicos)" in texto
+    assert "Revisão rápida" in texto   # o extra que no motor do Forja é uma chamada à parte vai como pedido
     assert "dois" in estudos.mcp_ler_material(mat["id"], 2) and "um" not in estudos.mcp_ler_material(mat["id"], 2)
     assert "pedido(s) na tela Estudos" in estudos.mcp_listar()
     md = "# Citologia\n\nVisão.\n\n## 1. Membrana\n\ntexto [p. 1]\n\n## Fontes\n\n- aula"

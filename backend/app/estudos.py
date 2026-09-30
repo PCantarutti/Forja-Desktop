@@ -88,9 +88,13 @@ def _prefs(p: dict | None) -> dict:
             "observacoes": str(p.get("observacoes") or "").strip()[:1000]}
 
 
-def preferencias_texto(p: dict) -> str:
+def preferencias_texto(p: dict, inteiro: bool = False) -> str:
+    """`inteiro`: para quem escreve o resumo de uma vez (o Claude), a revisão do fim entra como pedido; no
+    motor do Forja ela é uma chamada à parte, e pedi-la em cada seção repetiria a tabela a cada tópico."""
     linhas = [NIVEIS[p["nivel"]], OBJETIVOS[p["objetivo"]], TONS[p["tom"]]]
     linhas += [EXTRAS[x] for x in p["extras"] if EXTRAS[x]]
+    if inteiro and "quadro" in p["extras"]:
+        linhas.append(REVISAO_NO_FIM)
     if p["observacoes"]:
         linhas.append(f"Pedido do aluno: {p['observacoes']}")
     return "\n".join(f"- {x}" for x in linhas)
@@ -126,7 +130,8 @@ Responda SÓ com um objeto JSON, sem texto antes nem depois:
 - topicos: de {minimo} a {maximo}, na ordem em que se aprende (do básico ao avançado). "objetivo" é o que o
   aluno saberá fazer ao fim do tópico; "pontos" são 3 a 6 itens que o tópico precisa cobrir.
 Baseie o roteiro no material do aluno quando houver; o que cai na prova (perfil) tem prioridade.
-Mesmo idioma do tema."""
+Todo tópico é um assunto: exemplos, exercícios, dicas e revisão entram DENTRO dos tópicos, nunca como
+tópico à parte. Mesmo idioma do tema."""
 
 SECAO_PROMPT = """Você é um professor escrevendo UMA seção de um resumo de estudo, em Markdown, no idioma do tema.
 Como o aluno quer:
@@ -136,7 +141,7 @@ Regras:
 - Cubra todos os pontos pedidos, explicando o porquê, não só o quê.
 - O material do aluno é a base; as fontes da web completam. Cite junto da frase que a fonte sustenta:
   [p. N] para página do material, [título](url) para a web. Nunca invente citação.
-- Fórmulas em LaTeX: $...$ no meio do texto, $$...$$ em bloco.
+- Fórmulas em LaTeX: $...$ no meio do texto, $$...$$ em bloco. Fórmula química em \\mathrm: $\\mathrm{{CO_2}}$.
 - Não repita o que as outras seções do roteiro cobrem.
 - Entre {minimo} e {maximo} palavras.
 Devolva só a seção, sem comentário sobre ela."""
@@ -151,9 +156,10 @@ REGRAS_RESUMO = """Formato que a tela Estudos espera (Markdown):
 - "# Título", depois um parágrafo de visão geral (2 a 4 frases).
 - Uma seção por tópico: "## 1. Título", "## 2. Título"…, com subtítulos "###"; do básico ao avançado.
 - Cite junto da frase: [p. N] para página do material do aluno, [título](url) para a web. Nunca invente citação.
-- Fórmulas em LaTeX: $...$ inline, $$...$$ em bloco.
-- Com o extra "quadro": termine com "## Revisão rápida" (tabela | Conceito | O que lembrar | e "### Teste-se").
+- Fórmulas em LaTeX: $...$ inline, $$...$$ em bloco. Fórmula química em \\mathrm: $\\mathrm{CO_2}$.
 - Por último "## Fontes", com os materiais e as páginas da web usados."""
+REVISAO_NO_FIM = ('Antes das fontes, feche com "## Revisão rápida": uma tabela | Conceito | O que lembrar | com os '
+                  'pontos mais importantes e "### Teste-se" com 3 a 5 perguntas de autoteste, sem resposta.')
 
 # ------------------------------------------------------------------ material
 
@@ -731,6 +737,9 @@ async def _escrever(run: dict, escritor: dict, itens: list[dict], orcamento: int
             t["status"] = "erro"
             _avisar(run, f"A seção {i} falhou: {e}"[:300])
             continue
+        if run["cancelar"]:   # parou no meio da seção: meia seção não entra, e o tópico não "falhou"
+            t["status"] = "fila"
+            break
         secao = _secao(split_think(bruto)[1], i, t["titulo"])
         t["status"] = "pronto" if secao else "erro"
         if secao:
@@ -775,7 +784,8 @@ async def _rodar(run: dict, extrator: dict, escritor: dict) -> None:
         run["status"] = "erro"
         run["aviso"] = f"{e.__class__.__name__}: {e}"[:300]
     finally:
-        run["etapa"] = "pronto"
+        if run["status"] == "pronto":   # parado ou com erro, a tela mostra a etapa em que ficou
+            run["etapa"] = "pronto"
         run["stats"].update(fontes=len(run["fontes"]), uteis=sum(f["status"] == "util" for f in run["fontes"]),
                             segundos=round(time.monotonic() - run["t0"], 1))
         try:
@@ -841,7 +851,7 @@ def mcp_abrir(conv_id: int) -> str:
     linhas += [_linha_material(m) for m in p["materiais"]] or ["(nenhum)"]
     if r := p["resumo"]:
         linhas += ["", f"Último resumo ({r['status']}, motor {r.get('motor', 'forja')}): {r.get('titulo') or r.get('tema')}",
-                   f"Preferências do aluno:\n{preferencias_texto(_prefs(r.get('preferencias')))}"]
+                   f"Preferências do aluno:\n{preferencias_texto(_prefs(r.get('preferencias')), inteiro=True)}"]
     linhas += ["", "Leia o material com estudos_ler_material (por páginas).", REGRAS_RESUMO]
     return "\n".join(linhas) + _aviso_pedidos()
 
@@ -959,7 +969,7 @@ async def mcp_pedidos(espera: int = 60) -> str:
             f"PEDIDO {p['pedido_id']} — resumo do estudo {p['conv_id']}",
             f"Tema: {p['tema']}",
             f"Pesquisar na web: {'sim (use a sua busca e cite as páginas)' if p['web'] else 'não (só o material)'}",
-            f"Como o aluno quer:\n{preferencias_texto(prefs)}",
+            f"Como o aluno quer:\n{preferencias_texto(prefs, inteiro=True)}",
             "Tamanho: {} ({} a {} tópicos)".format(prefs["tamanho"], *TAMANHOS[prefs["tamanho"]][0]),
             "Material (leia com estudos_ler_material):", *([_linha_material(m) for m in mats] or ["(nenhum)"]),
             f"Quando terminar: estudos_salvar_resumo(pedido_id={p['pedido_id']}, markdown=..., fontes=[{{titulo, url}}]).",

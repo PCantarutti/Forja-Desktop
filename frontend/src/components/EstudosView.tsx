@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import { api, enviarArquivo, streamSSE } from "../api";
-import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto } from "../types";
+import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto, PesquisaFonte } from "../types";
 import { Check, Clipboard, Copy, Cube, Download, ExternalLink, Globe, Livro, Paperclip, Search, Sliders, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada, redondo } from "./Composer";
 import { Menu } from "./Controls";
 import { matematica, sumario } from "./estudosTexto";
+import Sinapse from "./Sinapse";
 
 // Mesmas classes da Pesquisa, repetidas para a aba viajar inteira num cherry-pick para o forja-web.
 const card = "rounded-xl border border-line bg-surface p-3.5";
@@ -80,10 +81,33 @@ function numeros(e: EstudosEstado): string {
           tps ? `${tps} tok/s` : "", s.segundos ? relogio(s.segundos) : ""].filter(Boolean).join(" · ");
 }
 
+const FASE_ETAPA: Record<EstudosEstado["etapa"], string> = {
+  material: "lendo o material", web: "pesquisando na web", plano: "montando o roteiro",
+  escrita: "escrevendo os tópicos", pronto: "concluído",
+};
+const DO_TOPICO: Record<string, PesquisaFonte["status"]> = { fila: "fila", escrevendo: "lendo", pronto: "util", erro: "erro" };
+
+/** O grafo da Pesquisa com os ramos do estudo: material (uma folha por arquivo), web (uma por página)
+ *  e tópicos (uma por seção). Cada folha acende conforme a etapa anda. */
+function sinapseDe(e: EstudosEstado) {
+  const ramos = e.web ? ["Material", "Web", "Tópicos"] : ["Material", "Tópicos"];
+  const folha = (id: string, ramo: number, titulo: string, status: PesquisaFonte["status"]): PesquisaFonte =>
+    ({ id, rodada: ramo, titulo, status, url: "", dominio: "", erro: "", resumo: "", trecho: "" });
+  const fontes = [
+    ...e.materiais.map((m) => folha(`m${m.id}`, 1, m.nome,
+      m.uso === "prova" || (m.pedacos && m.feitos >= m.pedacos) || e.etapa !== "material" ? "util" : "lendo")),
+    ...(e.web ? e.fontes.map((f) => ({ ...f, id: `w${f.id}`, rodada: 2 })) : []),
+    ...e.topicos.map((t, i) => folha(`t${i}`, ramos.length, t.titulo, DO_TOPICO[t.status] ?? "fila")),
+  ];
+  const estado = { status: "rodando" as const, fontes, rodadas: [], pergunta: e.titulo || e.tema,
+                   fase: "pronto" as const, rodada: 0, rodadas_total: 0, stats: e.stats };
+  return { estado, ramos, fase: e.status === "aguardando" ? "esperando o Claude" : FASE_ETAPA[e.etapa] };
+}
+
 function ler<T>(chave: string, padrao: T): T {
   try {
     const v = JSON.parse(localStorage.getItem(chave) ?? "null");
-    return v ? { ...padrao, ...v } : padrao;
+    return v ? (padrao ? { ...padrao, ...v } : v) : padrao;
   } catch {
     return padrao;
   }
@@ -124,8 +148,11 @@ export default function EstudosView(props: {
   const [web, setWeb] = useState(() => ler(KEY_PREFS + ".web", { v: true }).v);
   const [profundidade, setProfundidade] = useState<EstudosEstado["profundidade"]>(
     () => ler(KEY_PREFS + ".profundidade", { v: "rapida" as EstudosEstado["profundidade"] }).v);
-  const [modelos, setModelos] = useState<Modelos>(() => ler(KEY_MODELOS, {
-    motor: "forja", escritor: { provider: props.provider, model: props.model }, extrator: null } as Modelos));
+  // Sem escolha salva, segue o modelo do Chat — que chega depois do 1º render (as configurações carregam
+  // assíncronas): guardar o valor inicial deixava a tela presa no modelo padrão de antes do carregamento.
+  const [escolha, setEscolha] = useState<Modelos | null>(() => ler<Modelos | null>(KEY_MODELOS, null));
+  const modelos: Modelos = escolha ?? { motor: "forja", escritor: { provider: props.provider, model: props.model }, extrator: null };
+  const setModelos = (f: (m: Modelos) => Modelos) => setEscolha((m) => f(m ?? modelos));
   const [painel, setPainel] = useState<"" | "prefs" | "modelos" | "colar">("");
   const [colado, setColado] = useState("");
   const [lendo, setLendo] = useState(0);   // arquivos sendo enviados/extraídos (OCR demora)
@@ -150,7 +177,7 @@ export default function EstudosView(props: {
   useEffect(() => { localStorage.setItem(KEY_PREFS, JSON.stringify(prefs)); }, [prefs]);
   useEffect(() => { localStorage.setItem(KEY_PREFS + ".web", JSON.stringify({ v: web })); }, [web]);
   useEffect(() => { localStorage.setItem(KEY_PREFS + ".profundidade", JSON.stringify({ v: profundidade })); }, [profundidade]);
-  useEffect(() => { localStorage.setItem(KEY_MODELOS, JSON.stringify(modelos)); }, [modelos]);
+  useEffect(() => { if (escolha) localStorage.setItem(KEY_MODELOS, JSON.stringify(escolha)); }, [escolha]);
 
   // O motor Claude depende do interruptor do MCP: a tela diz na hora se ele está desligado.
   useEffect(() => {
@@ -377,6 +404,19 @@ export default function EstudosView(props: {
               </div>
             )}
 
+            {estado && (rodando || aguardando) && (() => {
+              const s = sinapseDe(estado);
+              const feitos = estado.topicos.filter((t) => t.status === "pronto").length;
+              return (
+                <Sinapse estado={s.estado} ramos={s.ramos} fase={s.fase}
+                         meta={aguardando ? <></> : <>
+                           {!!estado.topicos.length && <><span className="sin-sep">·</span>
+                             <span><b>{feitos}</b> de {estado.topicos.length} tópicos</span></>}
+                           {numeros(estado) && <><span className="sin-sep">·</span><span>{numeros(estado)}</span></>}
+                         </>} />
+              );
+            })()}
+
             {estado && (rodando || aguardando || estado.aviso || estado.status !== "pronto") && (
               <div className={card}>
                 {aguardando ? (
@@ -406,7 +446,7 @@ export default function EstudosView(props: {
                           {x.label}
                         </span>
                       ))}
-                      <span className="ml-auto text-faint">{numeros(estado)}</span>
+                      {!rodando && <span className="ml-auto text-faint">{numeros(estado)}</span>}
                     </div>
                     {rodando && estado.etapa === "material" && estado.materiais.some((m) => m.pedacos > 1) && (
                       <p className="mt-2 text-xs text-faint">
@@ -456,12 +496,14 @@ export default function EstudosView(props: {
               </div>
             )}
 
-            {estado?.texto && !rodando && (
+            {estado && !rodando && (estado.texto || (projeto?.resumos.length ?? 0) > 1) && (
               <div className="flex flex-wrap items-center gap-2 text-xs">
-                <button className={btn} onClick={copiar}>
-                  {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} Copiar .md
-                </button>
-                <button className={btn} onClick={baixar}><Download className="size-3.5" /> Baixar .md</button>
+                {estado.texto && <>
+                  <button className={btn} onClick={copiar}>
+                    {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} Copiar .md
+                  </button>
+                  <button className={btn} onClick={baixar}><Download className="size-3.5" /> Baixar .md</button>
+                </>}
                 {(projeto?.resumos.length ?? 0) > 1 && (
                   <select value={estado.message_id} onChange={(e) => abrirVersao(Number(e.target.value))}
                           title="Resumos anteriores deste estudo"
