@@ -58,6 +58,7 @@ import {
   PromptRow,
   processamentoDoPrompt,
   SubagentSteps,
+  TestarCodigo,
   Thinking,
   ToolDraft,
   ToolBlock,
@@ -2266,7 +2267,26 @@ export default function App() {
     return () => ro.disconnect();
   }, []);
 
+  /** "Testar" em qualquer bloco de código do app (o Comparar fornece o dele, com uma pasta por modelo):
+   *  HTML abre no navegador integrado desta conversa; Python e JavaScript rodam no terminal dela. */
+  async function testarCodigo(codigo: string, linguagem: string) {
+    try {
+      const r = await api.post<{ tipo: string; url?: string; comando?: string }>("/comparar/testar",
+        { codigo, linguagem, chave: `conversa-${browserKey}`, conv: currentId });
+      if (r.tipo === "web" && r.url) {
+        abrir("browser");
+        await api.post(`/browser/abrir?conv=${browserKey}`, { url: r.url });
+      } else if (r.comando) {
+        abrir("terminal");
+        await executarNoTerminal(browserKey, r.comando);
+      }
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
   return (
+    <TestarCodigo.Provider value={testarCodigo}>
     <div className="flex h-full">
       <SectionRail
         value={section}
@@ -2543,5 +2563,6 @@ export default function App() {
         <PanelLeft />
       </button>
     </div>
+    </TestarCodigo.Provider>
   );
 }
