@@ -1072,10 +1072,11 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
         if any(r["conv_id"] == conv_id for r in _RUNS.values()):
             raise ToolError("Já tem uma geração rodando neste projeto.")
         html_base, base, _ = _base(s, conv_id)
-        pend = []
+        pend, num = [], {}
         if comentarios:   # "aplicar agora" / "aplicar pendentes": vira edição de fragmento
-            pend = [x for x in _comentarios(s, conv_id, html_base)
-                    if x["id"] in comentarios and x["status"] == "pendente" and not x["orfao"]]
+            todos = [x for x in _comentarios(s, conv_id, html_base) if x["status"] == "pendente" and not x["orfao"]]
+            num = {x["id"]: i for i, x in enumerate(todos, 1)}   # a mesma numeração dos pins e da aba
+            pend = [x for x in todos if x["id"] in comentarios]
             if not pend:
                 raise ToolError("Nenhum comentário pendente aplicável (os órfãos ficam de fora).")
         if not pedido and not pend and rota not in ("secao", "tweaks", "variacoes"):
@@ -1084,10 +1085,13 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
             c.title = _descricao(pedido)
         s.commit()
 
+    pedido_usuario = pedido
     if pend:
         fids = [f for x in pend for f in x["fids"]]
-        linhas = "\n".join(f"{i}. (elementos {', '.join(x['fids'])}) {x['texto']}" for i, x in enumerate(pend, 1))
-        pedido = f"Aplique estes comentários, cada um nos elementos indicados:\n{linhas}" + (f"\n\nAlém disso: {pedido}" if pedido else "")
+        linhas = "\n".join(f"Comentário {num[x['id']]} (elementos {', '.join(x['fids'])}): {x['texto']}" for x in pend)
+        pedido = (f"Aplique estes comentários, cada um nos elementos indicados:\n{linhas}"
+                  + (f"\n\nAlém disso: {pedido}" if pedido else "")
+                  + '\n\nSe algum não der para fazer, diga em "nao_feitos" o número dele e explique em "mensagem".')
     fids = [f for f in dict.fromkeys(fids or []) if f]
     nomes = [e["attrs"]["data-section"] for e in design_html.secoes(html_base)] if html_base else []
     if rota == "auto":
@@ -1191,7 +1195,8 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
     sis = prompt(sistema) + (design_imagens.INSTRUCAO_INTERNET if imagens == "internet" and sistema in _COM_IMAGEM else "")
     mensagens = [{"role": "system", "content": sis}, {"role": "user", "content": conteudo}]
 
-    rotulo = (f"{len(pend)} comentário(s)" if pend else pedido or
+    rotulo = ("\n".join(f"Comentário {num[x['id']]}: {x['texto']}" for x in pend) + (f"\n{pedido_usuario}" if pedido_usuario else "")
+              if pend else pedido or
               {"tweaks": "criar ajustes", "variacoes": "3 variações"}.get(modo) or f"refazer a seção {extra.get('secao')}")
     _save(conv_id, role="user", content=rotulo,
           meta={"design": {"fids": fids, "rota": modo, "comentarios": [x["id"] for x in pend],
@@ -1201,7 +1206,8 @@ def start(conv_id: int, pedido: str, modelos: dict, fids: list[str] | None = Non
                                  "secao": extra.get("secao"), "comentarios": [x["id"] for x in pend]}})
     run = _novo_run(conv_id, msg.id, modo, spec, esforco, base=base, html_base=html_base,
                     entrada=len(user), descricao=_descricao(rotulo),
-                    comentarios=[x["id"] for x in pend], ds_id=ds["id"] if ds and modo == "plano" else "",
+                    comentarios=[x["id"] for x in pend], num_comentario={x["id"]: num[x["id"]] for x in pend},   # id → número
+                    ds_id=ds["id"] if ds and modo == "plano" else "",
                     pedido=pedido, imagens=imagens, **extra)
     _dispara(_rodar(run, mensagens))
     return msg.to_dict()
@@ -1481,6 +1487,13 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                     passos.append("Acrescentou as regras CSS que usam esses ajustes")
                 else:
                     resp = d
+                    # o que o modelo disse que não conseguiu fica pendente (antes todos viravam "aplicado")
+                    inv = {v: k for k, v in (run.get("num_comentario") or {}).items()}
+                    run["nao_feitos"] = [inv[n] for n in (d.get("nao_feitos") or []) if isinstance(n, int) and n in inv]
+                    for c in run["nao_feitos"]:
+                        passos.append(f"Não conseguiu o comentário {run['num_comentario'][c]}: ficou pendente")
+                    if isinstance(d.get("js"), str) and d["js"].strip():
+                        passos.append("Escreveu o JavaScript do comportamento")
                     els = design_html.indexar(base_html)
                     for p_ in d.get("patches") or []:
                         e = design_html.por_fid(els, str((p_ or {}).get("fid")))
@@ -1527,7 +1540,8 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
         n = _nova_versao(run["conv_id"], mid, html, run["descricao"], patches=[] if run.get("nova") else mudou,
                          mensagem=mensagem, sugestoes=sugs, passos=passos, **extra)
         if run.get("comentarios"):
-            _marca_comentarios(run["conv_id"], run["comentarios"], n)
+            feitos = [c for c in run["comentarios"] if c not in (run.get("nao_feitos") or [])]
+            _marca_comentarios(run["conv_id"], feitos, n)
     except JanelaCheia as e:
         _fecha(mid, "erro", str(e))
     except Exception as e:   # erro do modelo não pode deixar a mensagem em "running"

@@ -272,11 +272,13 @@ def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
     if not isinstance(patches, list) or not all(
             isinstance(p, dict) and isinstance(p.get("fid"), str) and isinstance(p.get("html"), str) for p in patches):
         raise ValueError("'patches' deve ser uma lista de {fid, html}.")
-    css, tokens = resp.get("css") or "", resp.get("tokens") or {}
-    if not isinstance(css, str) or not isinstance(tokens, dict):
-        raise ValueError("'css' deve ser texto e 'tokens' um objeto.")
+    css, tokens, js = resp.get("css") or "", resp.get("tokens") or {}, resp.get("js") or ""
+    if not isinstance(css, str) or not isinstance(tokens, dict) or not isinstance(js, str):
+        raise ValueError("'css' e 'js' devem ser texto e 'tokens' um objeto.")
     css = sem_ciclos(css)
-    if not (patches or css.strip() or tokens):
+    if "</script" in js.lower():
+        raise ValueError("O JS do patch fecha a tag <script>.")
+    if not (patches or css.strip() or tokens or js.strip()):
         raise ValueError("A resposta não trouxe nenhuma mudança.")
 
     els = indexar(html)
@@ -309,6 +311,12 @@ def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
         html = html[:e["ini"]] + novo + html[fim:]
     # algo removido: não há o que mandar por fid, o canvas recarrega o documento
     mudou = [] if any(not n for _, n in alvos) else [p["fid"] for p in patches]
+    if js.strip():   # comportamento (menu que abre, abas): no fim do body; o canvas recarrega para rodar
+        i = html.lower().rfind("</body>")
+        if i < 0:
+            raise ValueError("Documento sem </body> para receber o JS.")
+        html = html[:i] + f"<script data-forja-js>\n{js.strip()}\n</script>\n" + html[i:]
+        mudou = []
 
     if tokens:
         html = _tokens(html, tokens)

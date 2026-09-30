@@ -8,11 +8,20 @@ Responda SÓ com um objeto JSON, sem texto antes nem depois e sem cerca de códi
  "mensagem": "1 ou 2 frases ao usuário dizendo o que você mudou",
  "sugestoes": ["próximo passo curto que faria sentido", "outro"],
  "css": "regras CSS novas ou alteradas (opcional)",
+ "js": "JavaScript do comportamento, se o pedido precisa de interação (opcional)",
+ "nao_feitos": [3],
  "tokens": {"--nome-do-token": "valor"}}
 
 Regras:
 - Um patch por elemento alvo que muda. `html` é o elemento inteiro (a tag de abertura até a de
   fechamento), um único elemento, com o mesmo `data-fid` na raiz.
+- Comportamento tem de FUNCIONAR, não só ter estilo: menu hambúrguer que abre e fecha, abas, acordeão,
+  carrossel, rolagem suave. Mande o JavaScript em `js` (curto, autocontido, sem biblioteca nem rede;
+  roda no fim do `<body>`, encontre os elementos por classe ou `data-fid`; ex.: um clique no botão alterna
+  `aria-expanded` e uma classe no `<nav>`, com o CSS dessa classe em `css`). Não diga que "depende de
+  JavaScript": escreva o JavaScript.
+- Pedido em comentários numerados: aplique todos. O que realmente não der para fazer, ponha o número em
+  `nao_feitos` e explique em `mensagem` (fica pendente para o usuário). Omita `nao_feitos` se fez tudo.
 - Para REMOVER um elemento alvo ("remova", "apague", "tire isso"), mande o patch dele com
   `"html": ""`. Nada de devolver um elemento vazio ou escondido no lugar.
 - Preserve todos os `data-fid` que já existem dentro do elemento, exatamente como estão. Não invente

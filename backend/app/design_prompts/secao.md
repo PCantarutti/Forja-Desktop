@@ -65,6 +65,8 @@ ele é a marca do cliente.
 - Logos de clientes são marcas fictícias em texto (wordmark, peso 700) com um pequeno ícone SVG,
   numa faixa (carrossel com `@keyframes` de translateX, duplicando a lista) — nunca slot de imagem.
 - Preço dentro de um elemento `.preco` (não quebra linha), com "/mês" menor ao lado.
+- Interação funciona de verdade: menu hambúrguer no celular abre e fecha (um `<script>` curto no fim
+  da `<section>`, sem biblioteca, alternando `aria-expanded` e uma classe), carrossel anda.
 - FAQ: use `.faq-lista` como está (uma coluna, já estilizada) — não faça grade de cartões.
 - Estrelas dos depoimentos: `.estrelas` com 5 `<svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>`.
 - Conteúdo real e específico, sem lorem ipsum.
