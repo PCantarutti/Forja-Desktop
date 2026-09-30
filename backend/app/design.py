@@ -1470,7 +1470,8 @@ async def _rodar(run: dict, mensagens: list[dict]) -> None:
                     els = design_html.indexar(base_html)
                     for p_ in d.get("patches") or []:
                         e = design_html.por_fid(els, str((p_ or {}).get("fid")))
-                        passos.append(f"Alterou <{design_html._rotulo(e).split('[')[0]}>" if e else f"Alterou {p_.get('fid')}")
+                        verbo = "Removeu" if isinstance(p_, dict) and not str(p_.get("html") or "").strip() else "Alterou"
+                        passos.append(f"{verbo} <{design_html._rotulo(e).split('[')[0]}>" if e else f"{verbo} {p_.get('fid')}")
                     if str(d.get("css") or "").strip():
                         passos.append("Acrescentou regras CSS")
                     if d.get("tokens"):
