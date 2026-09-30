@@ -584,3 +584,28 @@ def test_seedvr2_em_video_vai_como_um_video_em_blocos_temporais():
     assert tipos.count("LoadImage") == 3 and tipos.count("ImageBatch") == 2  # um lote só: o modelo vê os vizinhos
     assert g["12"]["inputs"]["chunking_mode.frames_per_chunk"] == 9 and g["12"]["inputs"]["temporal_overlap"] == 1
     assert g["8"]["inputs"]["latent_image"] == ["12", 0] and g["13"]["inputs"]["temporal_overlap"] == ["12", 1]
+
+
+def test_ampliar_de_novo_sem_limpeza_nao_herda_a_do_lote(isolado, monkeypatch):
+    """Lote criado com limpeza forte; "Ampliar de novo" sem limpeza tem que ir sem (herdava a do 1º item)."""
+    feitas = []
+
+    def falso(entrada, saida, fator, modelo="", suavizar=False, job_id="", progresso=None, previa=None, limpeza=""):
+        feitas.append(limpeza)
+        Path(saida).write_bytes(b"webm")
+        return {"w": 200, "h": 100, "fps": 16.0, "quadros": 33}
+    monkeypatch.setattr(ampliar, "ampliar", falso)
+    monkeypatch.setattr(ampliar, "_ffmpeg", lambda: Path("ffmpeg.exe"))
+    monkeypatch.setattr(ampliar, "sondar", lambda v: {"w": 100, "h": 50, "fps": 16, "quadros": 33, "audio": False})
+    monkeypatch.setattr(localai, "status", lambda: {"running": False})
+    with db.session() as s:
+        c = db.Conversation(kind="video")
+        s.add(c)
+        s.commit()
+        conv = c.id
+    fora = isolado / "de-fora" / "x.mp4"
+    fora.parent.mkdir()
+    fora.write_bytes(b"mp4")
+    m = _esperar(lotes.ampliar_arquivo(conv, str(fora), 2, limpeza="forte")["id"])
+    _esperar(lotes.ampliar_mais(m["id"], 2, [""])["ok"] and m["id"])
+    assert feitas == ["forte", ""]

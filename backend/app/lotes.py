@@ -733,7 +733,9 @@ def _itens_ampliacao(origem: str, lugar: Path, ext: str, opts: dict, seed: int, 
     itens = []
     for modelo in dict.fromkeys(modelos):
         amp_i = {"origem": origem, "fator": int(fator), "modelo": modelo, "suavizar": bool(suavizar),
-                 **_redesenho(modelo, prompt, forca), **({"limpeza": limpeza} if limpeza else {})}
+                 **_redesenho(modelo, prompt, forca),
+                 # sempre, mesmo vazia: sem ela o item herdava a do lote (o 1º item) e "sem limpeza" saía limpo
+                 "limpeza": limpeza}
         saida = _saida_ao_lado(lugar, fator, modelo, ext, suavizar, tomados)
         tomados.add(str(saida))
         nome = Path(modelo).stem if modelo else "Lanczos"
