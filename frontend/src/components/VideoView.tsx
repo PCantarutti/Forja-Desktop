@@ -3,14 +3,14 @@ import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { createPortal } from "react-dom";
 import { api, uploadReferencia } from "../api";
 import type { ImageOpts, LocalModel, LocalState, LoteImagem, LoteMeta, Message, ModoVideo, PedidoMeta, SeedMode } from "../types";
-import { ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trash, Trocar, X } from "./icons";
+import { Split, ArrowUp, Camera, Check, ChevronDown, Download, ExternalLink, FolderOpen, Image, Plus, Raio, Refresh, TelaCheia, Trash, Trocar, X } from "./icons";
 import { campoPrompt } from "./Composer";
 import SeletorFormato, { type Forma } from "./Formato";
 import { btn, btnPrimary, SAMPLERS } from "./LocalPanel";
 import { PROPORCOES, estimarTempo, proporcaoPerto, quadrosDe, tamanhosDe, type Proporcao, type Tamanhos } from "./videoConta";
 import { A_REFAZER, AnelProgresso, BarraTopo, FiltroLotes, type Filtro, passaNoFiltro, Caixa, Chip, duracao, Fundo, Liquido, listras, numeroCaixa, rotuloSementes, Secao, SEEDS, Stepper, urlDa, velocidade } from "./ImagensView";
 import ModelPicker from "./ModelPicker";
-import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
+import { VideoPlayer, type ComparaVideo, type VideoPlayerApi } from "./VideoPlayer";
 import { AmpliarArquivo, PainelAmpliar } from "./AmpliarVideo";
 import Saudacao from "./Saudacao";
 import AberturaSobreposta, { useAbertura } from "./AberturaSobreposta";
@@ -524,6 +524,9 @@ export default function VideoView(props: {
           onAbrir={abrirArquivo}
           onMudou={carregarConversa}
           onError={mostrarErro}
+          outras={lotes.flatMap(({ pedido, resposta }, iLote) => (resposta.meta as LoteMeta).images
+            .filter((x) => ["pronta", "mantida", "descartada"].includes(x.status))
+            .map((x) => ({ path: x.path, nome: `${String.fromCharCode(65 + (iLote % 26))} · ${metodoDo(resposta.meta as LoteMeta, pedido.meta as PedidoMeta | null, x).replace(/^ampliado com /, "")}` })))}
         />
       )}
 
@@ -1793,6 +1796,7 @@ function Foco(props: {
   onAbrir: (path: string, mode: "reveal" | "open") => void;
   onMudou: () => void;
   onError: (e: string) => void;
+  outras: { path: string; nome: string }[]; // as tomadas prontas da conversa (Comparar)
 }) {
   const meta = props.resposta.meta as LoteMeta;
   const pm = props.pedido.meta as PedidoMeta | null;
@@ -1800,6 +1804,28 @@ function Foco(props: {
   const pos = Math.max(0, prontos.findIndex(({ i }) => i === props.indice));
   const atual = prontos[pos]?.x;
   const oi = optsDo(meta, atual);
+  // Comparar, como no visualizador de imagens: o original (ampliação) abre na cortina; outra tomada, lado a lado.
+  const [comparando, setComparando] = useState<{ path: string; nome: string; antes?: boolean } | null>(null);
+  const [modoCmp, setModoCmp] = useState<ComparaVideo["modo"]>("deslizar");
+  const [escolhendo, setEscolhendo] = useState(false);
+  const origem = (atual?.ampliacao ?? meta.opts.ampliacao)?.origem;
+  const opcoesCmp = [
+    ...(origem ? [{ path: origem, nome: "Original (antes)", antes: true }] : []),
+    ...props.outras.filter((o) => o.path !== atual?.path && o.path !== origem),
+  ];
+  const comparar = (c: typeof comparando) => {
+    setComparando(c);
+    setEscolhendo(false);
+    if (c) setModoCmp(c.antes ? "deslizar" : "lado");
+  };
+  // trocar de tomada (↑↓) mantém a comparação, a não ser que a outra seja a própria tomada nova
+  useEffect(() => {
+    if (comparando && comparando.path === atual?.path) setComparando(null);
+  }, [atual?.path]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const cmp: ComparaVideo | null = comparando && atual ? {
+    src: urlDa(comparando.path), nome: comparando.nome, antes: comparando.antes, modo: modoCmp,
+    nomeAtual: metodoDo(meta, pm, atual).replace(/^ampliado com /, ""),
+  } : null;
   const player = useRef<VideoPlayerApi>(null);
   // Fecha no clique fora do vídeo, mas só se o clique também COMEÇOU fora: arrastar a linha do tempo e
   // soltar no fundo escuro não pode fechar o player no meio do scrub.
@@ -1878,7 +1904,8 @@ function Foco(props: {
     <div
       ref={dialogo}
       tabIndex={-1}
-      className="fixed inset-0 z-50 flex bg-black/85 outline-none backdrop-blur-md"
+      // fundo quase opaco, sem backdrop-blur: com vídeo tocando por cima, o desfoque era refeito a cada quadro
+      className="fixed inset-0 z-50 flex bg-black/95 outline-none"
       role="dialog"
       aria-modal="true"
       aria-label="Player de vídeo"
@@ -1900,9 +1927,12 @@ function Foco(props: {
           tecladoGlobal
           atalhosExtras={[["↑ · ↓", "tomada anterior · próxima"], ["M · X", "manter · descartar e ir à próxima"], ["Esc", "fechar"]]}
           marcas={refs.length === 2}
+          comparar={cmp}
           className="rounded-xl shadow-popover shadow-black"
-          // cabe inteiro com folga em volta: 88% da área, e a altura deixa respiro em cima e embaixo
-          style={{ aspectRatio: w / h, width: `min(88%, calc((100vh - 200px) * ${w / h}))` }}
+          // cabe inteiro com folga em volta: 88% da área, e a altura deixa respiro em cima e embaixo; lado a lado,
+          // a caixa é de dois vídeos (a proporção dobra)
+          style={{ aspectRatio: (cmp?.modo === "lado" ? 2 : 1) * w / h,
+                   width: `min(${cmp?.modo === "lado" ? 96 : 88}%, calc((100vh - 200px) * ${(cmp?.modo === "lado" ? 2 : 1) * w / h}))` }}
         />
       </div>
       <aside className="flex w-80 shrink-0 flex-col border-l border-line bg-panel" onClick={(e) => e.stopPropagation()}>
@@ -1970,6 +2000,50 @@ function Foco(props: {
           <button className={acao} onClick={() => props.onReaproveitar(atual.seed, atual)}>
             <Refresh className="size-3.5" /> Refazer com esta semente
           </button>
+
+          {opcoesCmp.length > 0 && (
+            <>
+              <p className="mb-1 mt-4 px-1 text-[10.5px] font-mono uppercase tracking-[.08em] text-faint">Comparar</p>
+              {comparando ? (
+                <div className="flex flex-col gap-2 px-1">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="min-w-0 flex-1 truncate text-fg" title={comparando.nome}>com {comparando.nome}</span>
+                    <button onClick={() => comparar(null)} title="Parar de comparar" aria-label="Parar de comparar"
+                            className="rounded-md p-1 text-muted hover:bg-raised hover:text-fg">
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                  <div className="flex rounded-lg border border-line p-0.5 text-xs" role="radiogroup" aria-label="Modo de comparar">
+                    {([["deslizar", "Cortina"], ["lado", "Lado a lado"]] as const).map(([id, rot]) => (
+                      <button key={id} role="radio" aria-checked={modoCmp === id} onClick={() => setModoCmp(id)}
+                              className={`flex-1 rounded-md px-2 py-1 ${modoCmp === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+                        {rot}
+                      </button>
+                    ))}
+                  </div>
+                  <button className="text-left text-[11px] text-muted underline-offset-2 hover:text-fg hover:underline" onClick={() => setEscolhendo((e) => !e)}>
+                    {escolhendo ? "Fechar a lista" : "Trocar o vídeo comparado…"}
+                  </button>
+                </div>
+              ) : (
+                <button className={acao} onClick={() => (opcoesCmp.length === 1 ? comparar(opcoesCmp[0]) : setEscolhendo((e) => !e))}
+                        title={origem ? "Comparar com o original ou com outra tomada da conversa, tocando junto" : "Comparar com outra tomada da conversa, tocando junto"}>
+                  <Split className="size-3.5" /> Comparar com…
+                </button>
+              )}
+              {escolhendo && (
+                <div className="mt-1.5 grid max-h-64 grid-cols-2 gap-1.5 overflow-y-auto px-1">
+                  {opcoesCmp.map((c) => (
+                    <button key={c.path} onClick={() => comparar(c)} title={c.nome}
+                            className={`overflow-hidden rounded-lg border text-left ${comparando?.path === c.path ? "border-accent" : "border-line hover:border-focus"}`}>
+                      <video src={`${urlDa(c.path)}#t=0.1`} muted preload="metadata" className="aspect-video w-full bg-black object-cover" />
+                      <span className="block truncate px-1.5 py-0.5 text-[10.5px] text-muted">{c.nome}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
 
           <p className="mb-1 mt-4 px-1 text-[10.5px] font-mono uppercase tracking-[.08em] text-faint">Ampliar</p>
           {ampliar ? (

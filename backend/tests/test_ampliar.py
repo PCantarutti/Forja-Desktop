@@ -554,6 +554,7 @@ def test_varios_metodos_no_mesmo_lote_e_reaproveitar_amplia_o_original(isolado, 
     m = _esperar(lotes.ampliar_arquivo(conv, str(fora), 2, modelos=[esrgan, ""])["id"])
     assert m["status"] == "pronto" and [i["model_name"] for i in m["meta"]["images"]] == ["4x-Sharp · 2×", "Lanczos · 2×"]
     assert feitas == [(str(fora), 2, "4x-Sharp"), (str(fora), 2, "")]
+    assert lotes.eh_referencia(str(fora))  # o player compara com o original: a rota de arquivo precisa servi-lo
 
     lotes.ampliar_mais(m["id"], 4, [""])
     m = _esperar(m["id"])

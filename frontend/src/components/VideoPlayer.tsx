@@ -6,6 +6,10 @@ import { Pause, Pip, Play, QuadroAntes, QuadroDepois, Repetir, TelaCheia, Teclad
  *  Por isso os controles são outros que os do `<video controls>`: linha do tempo com miniaturas,
  *  contador de quadro exato, passo de um quadro, loop ligado e velocidade — e nada de volume. */
 
+/** O outro vídeo, tocando junto com este (Comparar): `deslizar` = cortina, com ele à esquerda da barra;
+ *  `lado` = lado a lado, ele à esquerda. `antes`: é o original (a cortina diz Antes/Depois). */
+export type ComparaVideo = { src: string; nome: string; modo: "deslizar" | "lado"; antes?: boolean; nomeAtual?: string };
+
 export type VideoPlayerApi = {
   /** O quadro na tela, em PNG no tamanho real do vídeo ("usar como início", "salvar quadro"). */
   capturar: () => Promise<Blob | null>;
@@ -90,6 +94,7 @@ type Props = {
   className?: string;
   style?: React.CSSProperties;
   onTelaCheia?: () => void;
+  comparar?: ComparaVideo | null;
 };
 
 export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlayer(props, ref) {
@@ -108,8 +113,37 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   const [ajuda, setAjuda] = useState(false);
   const [dims, setDims] = useState<[number, number]>([0, 0]);
   const esconder = useRef<number | undefined>(undefined);
+  // Comparar: o outro vídeo só segue este (tocar, pausar, posição, velocidade); quem manda é o principal.
+  const outro = useRef<HTMLVideoElement>(null);
+  const [corte, setCorte] = useState(0.5);
+  const [outroFalhou, setOutroFalhou] = useState(false);
+  const cmp = props.comparar ?? null;
+  const lado = cmp?.modo === "lado";
+  useEffect(() => {
+    setCorte(0.5);
+    setOutroFalhou(false);
+  }, [cmp?.src]);
 
   const fps = props.fps || 16;
+  /** Leva o outro vídeo ao estado do principal. Pausado ou num salto (seek, volta do loop), acerta a posição.
+   *  Tocando, não salta: cada salto é um seek, que engasga o decodificador — ele acelera ou freia 3% até
+   *  alcançar, e só salta se ficou mais de 4 quadros para trás ou para a frente. */
+  const segue = useCallback((forcar = false) => {
+    const o = outro.current, v = video.current;
+    if (!o || !v || !o.duration) return;
+    const quadro = 1 / (props.fps || 16);
+    const alvo = Math.min(o.duration, v.currentTime);
+    const d = o.currentTime - alvo;
+    if (forcar || v.paused || Math.abs(d) > 4 * quadro) {
+      if (Math.abs(d) > 1e-3) o.currentTime = alvo;
+      o.playbackRate = v.playbackRate;
+    } else {
+      const r = Math.abs(d) > quadro / 2 ? v.playbackRate * (d > 0 ? 0.97 : 1.03) : v.playbackRate;
+      if (o.playbackRate !== r) o.playbackRate = r;
+    }
+    if (v.paused && !o.paused) o.pause();
+    else if (!v.paused && o.paused && alvo < o.duration) o.play().catch(() => {});
+  }, [props.fps]);
   const total = props.quadros || Math.max(1, Math.round(dur * fps));
   const quadro = Math.min(total - 1, Math.max(0, Math.floor(t * fps + EPS)));
 
@@ -126,6 +160,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
         // Só tocando: pausado, o quadro de um seek anterior chegava depois do seguinte e voltava o
         // contador (Home e três → paravam no quadro 3, não no 4). Pausado quem manda é o currentTime.
         if (!v.paused) setT(meta.mediaTime);
+        segue();
         id = rvfc(cada);
       };
       id = rvfc(cada);
@@ -137,6 +172,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
     const quadroAQuadro = () => {
       if (!vivo) return;
       setT(v.currentTime);
+      segue();
       id = requestAnimationFrame(quadroAQuadro);
     };
     id = requestAnimationFrame(quadroAQuadro);
@@ -144,7 +180,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
       vivo = false;
       cancelAnimationFrame(id);
     };
-  }, [props.src]);
+  }, [props.src, segue]);
 
   useEffect(() => {
     setFotos([]);
@@ -159,6 +195,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
 
   useEffect(() => {
     if (video.current) video.current.playbackRate = vel;
+    if (outro.current) outro.current.playbackRate = vel;
   }, [vel]);
 
   const mexeu = useCallback(() => {
@@ -174,6 +211,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
     // passo a passo nunca chegavam nele (paravam no 16 de 17).
     v.currentTime = Math.min(v.duration, Math.max(0, s));
     setT(v.currentTime);
+    if (outro.current?.duration) outro.current.currentTime = Math.min(outro.current.duration, v.currentTime);
   }, []);
 
   const tocarPausar = useCallback(() => {
@@ -211,7 +249,10 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   }, []);
 
   useImperativeHandle(ref, () => ({
-    pausar: () => video.current?.pause(),
+    pausar: () => {
+      video.current?.pause();
+      outro.current?.pause();
+    },
     capturar: async () => {
       const v = video.current;
       if (!v || !v.videoWidth) return null;
@@ -288,31 +329,97 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
         mostrar ? "" : "cursor-none"
       } ${props.className ?? ""}`}
     >
-      <video
-        ref={video}
-        src={props.src}
-        loop={loop}
-        muted
-        playsInline
-        autoPlay={props.autoPlay}
-        preload="auto"
-        onClick={tocarPausar}
-        onDoubleClick={telaCheia}
-        onPlay={() => {
-          setTocando(true);
-          mexeu();
-        }}
-        onPause={(e) => {
-          setTocando(false);
-          setT(e.currentTarget.currentTime);
-        }}
-        onSeeked={(e) => e.currentTarget.paused && setT(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => {
-          setDur(e.currentTarget.duration);
-          setDims([e.currentTarget.videoWidth, e.currentTarget.videoHeight]);
-        }}
-        className="block size-full cursor-pointer object-contain"
-      />
+      <div className={`size-full ${lado ? "flex" : "relative"}`}>
+        {cmp && lado && (
+          <video ref={outro} src={cmp.src} loop={loop} muted playsInline preload="auto"
+                 onLoadedMetadata={() => segue(true)} onError={() => setOutroFalhou(true)}
+                 onClick={tocarPausar}
+                 className="block h-full w-1/2 min-w-0 cursor-pointer border-r border-white/10 object-contain" />
+        )}
+        <video
+          ref={video}
+          src={props.src}
+          loop={loop}
+          muted
+          playsInline
+          autoPlay={props.autoPlay}
+          preload="auto"
+          onClick={tocarPausar}
+          onDoubleClick={telaCheia}
+          onPlay={() => {
+            setTocando(true);
+            mexeu();
+            segue(true);
+          }}
+          onPause={(e) => {
+            setTocando(false);
+            setT(e.currentTarget.currentTime);
+            segue(true);
+          }}
+          onSeeked={(e) => {
+            if (e.currentTarget.paused) setT(e.currentTarget.currentTime);
+            segue(true);
+          }}
+          onLoadedMetadata={(e) => {
+            setDur(e.currentTarget.duration);
+            setDims([e.currentTarget.videoWidth, e.currentTarget.videoHeight]);
+          }}
+          className={`block cursor-pointer object-contain ${lado ? "h-full w-1/2 min-w-0" : "size-full"}`}
+        />
+        {cmp && !lado && (
+          // A cortina: o outro por cima, recortado até a barra (o recorte é da caixa, então os dois ficam alinhados
+          // mesmo com resoluções diferentes: a ampliação 2× sai do mesmo tamanho na tela e a diferença é detalhe).
+          <video ref={outro} src={cmp.src} loop={loop} muted playsInline preload="auto"
+                 onLoadedMetadata={() => segue(true)} onError={() => setOutroFalhou(true)}
+                 className="pointer-events-none absolute inset-0 block size-full object-contain"
+                 style={{ clipPath: `inset(0 ${(1 - corte) * 100}% 0 0)` }} />
+        )}
+      </div>
+
+      {cmp && !lado && (
+        <div
+          className="absolute inset-y-0 z-[1] w-8 -translate-x-1/2 cursor-ew-resize touch-none"
+          style={{ left: `${corte * 100}%` }}
+          role="slider"
+          aria-label="Divisão entre os dois vídeos"
+          aria-valuenow={Math.round(corte * 100)}
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              e.stopPropagation();  // senão o player passava um quadro
+              setCorte((c) => Math.min(1, Math.max(0, c + (e.key === "ArrowLeft" ? -0.02 : 0.02))));
+            }
+          }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={(e) => {
+            if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+            const r = caixa.current!.getBoundingClientRect();
+            setCorte(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)));
+          }}
+        >
+          <div className="mx-auto h-full w-0.5 bg-white/90 shadow-[0_0_8px_rgba(0,0,0,.6)]" />
+          <div className="absolute top-1/2 left-1/2 grid size-9 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border border-white/40 bg-black/75 text-white shadow-popover">
+            <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="m9 7-5 5 5 5M15 7l5 5-5 5" />
+            </svg>
+          </div>
+        </div>
+      )}
+      {cmp && (
+        <>
+          <span className="pointer-events-none absolute left-3 top-3 z-[1] max-w-[40%] truncate rounded-md bg-black/70 px-2 py-0.5 text-[11px] text-white/85" title={cmp.nome}>
+            {outroFalhou ? "Não deu para tocar este vídeo aqui" : lado ? cmp.nome : cmp.antes ? "Antes" : cmp.nome}
+          </span>
+          <span className={`pointer-events-none absolute top-3 z-[1] max-w-[40%] truncate rounded-md bg-black/70 px-2 py-0.5 text-[11px] text-white/85 ${lado ? "left-[calc(50%+0.75rem)]" : "right-3"}`}
+                title={cmp.nomeAtual}>
+            {!lado && cmp.antes ? "Depois" : cmp.nomeAtual ?? "Este"}
+          </span>
+        </>
+      )}
 
       {/* Grande no meio só com o vídeo parado: o convite para tocar, sem cobrir a imagem tocando. */}
       {!tocando && !arrastando && (
@@ -348,8 +455,9 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
 
       <div
         // Painel sólido flutuando sobre o vídeo (o degradê sumia em cena clara: neve, céu), com a borda e o
-        // fundo dos painéis do Forja.
-        className={`absolute rounded-xl border border-white/10 bg-[#161616]/90 shadow-lg shadow-black/40 backdrop-blur-md transition-opacity duration-300 ${
+        // fundo dos painéis do Forja. Sem backdrop-blur: por cima de vídeo tocando ele refaz o desfoque a cada
+        // quadro (medido: 8 fps na página e metade dos quadros perdidos; sem ele, 70 fps).
+        className={`absolute z-[2] rounded-xl border border-white/10 bg-[#161616]/95 shadow-lg shadow-black/40 transition-opacity duration-300 ${
           props.compacto ? "inset-x-1.5 bottom-1.5 px-2 pb-1 pt-2" : "inset-x-3 bottom-3 px-3 pb-2 pt-2.5"
         } ${mostrar ? "opacity-100" : "pointer-events-none opacity-0"}`}
       >

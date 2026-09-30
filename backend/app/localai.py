@@ -211,7 +211,7 @@ def _blank() -> dict:
     return {"dirs": [], "models": {}, "image": dict(DEFAULT_IMAGE), "last": "", "speed": SEGUNDOS_POR_GB,
             "download_dir": "", "models_dir": "", "image_models": {}, "hf_token": "", "runtime": {},
             "runtime_dir": {}, "presets": {}, "preset_ativo": {}, "devices_off": [], "defaults": {}, "autoload": False, "guardrail": "relaxado", "kinds": {},
-            "sem_proj": [], "referencias": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0,
+            "sem_proj": [], "referencias": [], "origens": [], "video": {}, "tempos": {}, "vae_mem": {}, "livre_sd_mb": 0,
             "slots_liberados": [], "video_dir": "", "padroes_e4_visto": False}  # arquivos de slot do site que a rota de imagem serve (lotes._liberar)
 
 

@@ -244,7 +244,18 @@ def registrar_referencia(path: str) -> str:
 
 
 def eh_referencia(path: str) -> bool:
-    return localai._chave(path) in (localai.read_config().get("referencias") or [])
+    chave = localai._chave(path)
+    cfg = localai.read_config()
+    return chave in (cfg.get("referencias") or []) or chave in (cfg.get("origens") or [])
+
+
+def registrar_origem(path: str) -> None:
+    """Vídeo do disco que a pessoa ampliou: o player compara a ampliação com ele ("original"), então a rota de
+    arquivo precisa poder servi-lo. Só o que foi escolhido para ampliar, nada mais do disco."""
+    chave = localai._chave(str(Path(path)))
+    data = localai.read_config()
+    data["origens"] = ([p for p in data.get("origens") or [] if p != chave] + [chave])[-MAX_REFERENCIAS:]
+    localai.write_config(data)
 
 
 # ------------------------------------------------------------------ geração
@@ -837,6 +848,7 @@ def ampliar_arquivo(conv_id: int, path: str, fator: int, modelo: str = "", suavi
                                {"width": w, "height": h}, 0, fator, modelos, False, prompt, forca)
     for m in dict.fromkeys(modelos):
         _validar_ampliacao(fator, m, True, confirm)
+    registrar_origem(path)  # o player compara a ampliação com o original
     pasta = imagegen.video_dir()
     pasta.mkdir(parents=True, exist_ok=True)
     return _nova_ampliacao(conv_id, path, pasta / f"{time.strftime('%Y%m%d-%H%M%S')}-{Path(path).name}", ".webm",
@@ -869,6 +881,7 @@ def ampliar_mais(message_id: int, fator: int, modelos: list[str], suavizar: bool
     imagem = amp.eh_imagem(str(origem))
     for m in dict.fromkeys(modelos):
         _validar_ampliacao(fator, m, not imagem, confirm)
+    registrar_origem(str(origem))  # lote antigo: passa a comparar com o original também
     if imagem:
         from PIL import Image
         with Image.open(origem) as im:
