@@ -250,10 +250,15 @@ def _tokens(html: str, tokens: dict) -> str:
 _CICLO = re.compile(r"(--[\w-]+)\s*:\s*var\(\s*\1\s*[,)][^;}]*;?")
 
 
+_SO_MONO = re.compile(r"(font-family\s*:[^;{}]*?),\s*monospace\b")
+
+
 def sem_ciclos(css: str) -> str:
     """Tira `--x: var(--x)`: token que aponta para si mesmo é inválido e, na seção onde aparece, apaga
-    TODOS os tamanhos, cores e espaços que dependem dele (o hero inteiro virava texto cru)."""
-    return _CICLO.sub("", css)
+    TODOS os tamanhos, cores e espaços que dependem dele (o hero inteiro virava texto cru). E fonte
+    mono da web (Space Mono, JetBrains) sem rede cai no genérico `monospace` = Courier: entra Consolas antes."""
+    css = _CICLO.sub("", css)
+    return _SO_MONO.sub(lambda m: m.group(1) + ", ui-monospace, Consolas, monospace" if "ui-monospace" not in m.group(1) else m.group(0), css)
 
 
 def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
@@ -383,6 +388,8 @@ img,svg{max-width:100%;display:block}
 .faq-lista details p{margin:var(--esp-3, .75rem) 0 0;color:color-mix(in srgb, currentColor 72%, transparent)}
 .estrelas{display:inline-flex;gap:2px;color:#f59e0b}
 .estrelas svg{width:18px;height:18px;fill:currentColor}
+[data-logo]{display:inline-flex;align-items:center;line-height:0}
+[data-logo] svg{height:1.25em;width:auto;fill:currentColor}
 .grade{display:grid;gap:var(--esp-4, 1.5rem);grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
 .fundo-alt{background:var(--cor-fundo-alt, color-mix(in srgb, var(--cor-texto) 3%, var(--cor-fundo)))}
 .fundo-escuro{background:var(--cor-escura, #0f172a);color:var(--cor-sobre-escura, #f1f5f9)}

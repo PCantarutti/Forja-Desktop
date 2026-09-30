@@ -1198,7 +1198,10 @@ _COM_IMAGEM = ("documento", "secao", "slide", "tela", "fragmento")
 
 
 async def _fotos(run: dict, html: str) -> tuple[str, list[str]]:
-    """Onde as imagens vêm de: internet (baixa os links do modelo) ou skill (link não entra: vira slot)."""
+    """Onde as imagens vêm de: internet (baixa os links do modelo) ou skill (link não entra: vira slot).
+    E a logo do design system entra no lugar que o modelo marcou com data-logo."""
+    if ds := design_sistema.do_documento(html):
+        html = design_sistema.aplicar_logos(html, ds)
     if run.get("imagens") == "internet":
         return await design_imagens.fotos_da_internet(html)
     return design_imagens.sem_links(html), []

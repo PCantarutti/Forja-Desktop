@@ -203,12 +203,62 @@ async def extrair(pasta: str, nome: str, spec: dict, esforco: str = "baixo") -> 
 
 # ------------------------------------------------------------------ usar num design
 
+_NOME_LOGO = re.compile(r"logo|wordmark|marca|brand|lockup|s[ií]mbolo|emblema", re.I)
+MAX_SVG = 80_000
+
+
+def logos(s: dict) -> dict[str, str]:
+    """SVGs de marca da pasta do sistema (logo, wordmark, lockup...), lidos na hora: {nome: svg limpo}.
+    Sem script, sem on*=, sem link externo — vai inline no documento, que roda num iframe sem rede."""
+    pasta, out = Path(s.get("pasta") or ""), {}
+    if not pasta.is_dir():
+        return out
+    for atual, pastas, arquivos in os.walk(pasta):
+        pastas[:] = [p for p in pastas if p not in IGNORAR and not p.startswith(".")]
+        for nome in sorted(arquivos):
+            f = Path(atual) / nome
+            if f.suffix.lower() != ".svg" or not _NOME_LOGO.search(f.stem) or len(out) >= 6:
+                continue
+            try:
+                if f.stat().st_size > MAX_SVG:
+                    continue
+                svg = f.read_text("utf-8", "ignore")
+            except OSError:
+                continue
+            i = svg.lower().find("<svg")
+            if i < 0:
+                continue
+            svg = svg[i:svg.lower().rfind("</svg>") + 6]
+            svg = re.sub(r"<script\b.*?</script\s*>", "", svg, flags=re.S | re.I)
+            svg = re.sub(r"\son\w+\s*=\s*(\"[^\"]*\"|'[^']*')", "", svg, flags=re.I)
+            svg = re.sub(r"\s(?:xlink:)?href\s*=\s*(\"(?!#)[^\"]*\"|'(?!#)[^']*')", "", svg, flags=re.I)
+            out[design_html.slug(f.stem)] = svg
+    return out
+
+
+def aplicar_logos(html: str, s: dict) -> str:
+    """Onde o modelo marcou `<span data-logo="nome">`, entra o SVG oficial (a cor segue o `color`)."""
+    marcas = logos(s) if 'data-logo="' in html else {}
+    if not marcas:
+        return html
+    def troca(m: re.Match) -> str:
+        svg = marcas.get(m.group(3)) or next(iter(marcas.values()))
+        return f"<{m.group(1)}{m.group(2)}>{svg}</{m.group(1)}>"
+    return re.sub(r'<(span|div|a|i)(\s[^>]*\bdata-logo="([\w-]+)"[^>]*)>(.*?)</\1>', troca, html, flags=re.S)
+
+
 def para_prompt(s: dict) -> str:
     tokens = "\n".join(f"  {k}: {v};" for k, v in s["tokens"].items())
     classes = sorted(set(re.findall(r"\.([a-zA-Z][\w-]*)", s.get("css") or "")))
+    marcas = logos(s)
     return (f"Design system obrigatório: “{s['nome']}”. Use estes tokens (os nomes e valores exatos):\n{tokens}\n"
             + (f"Classes de componente já prontas (use em vez de recriar): {', '.join('.' + c for c in classes[:40])}\n" if classes else "")
-            + (f"Notas de estilo: {s['notas']}" if s.get("notas") else ""))
+            + (f"Logo oficial da marca (SVG): {', '.join(marcas)}. Onde a marca aparece (topo, rodapé), escreva "
+               f'`<span class="logo" data-logo="{next(iter(marcas))}" role="img" aria-label="{s["nome"]}"></span>` — o sistema põe o SVG '
+               "oficial dentro (a cor segue o `color` do elemento e a altura é 1.25em do font-size). Nunca desenhe nem "
+               "escreva a logo em texto.\n" if marcas else "")
+            + (f"Notas de estilo: {s['notas']}\n" if s.get("notas") else "")
+            + "Se as notas limitam o peso da fonte, declare font-weight em todo título (h1–h4 saem em 700 por padrão).")
 
 
 def css_bloco(s: dict) -> str:

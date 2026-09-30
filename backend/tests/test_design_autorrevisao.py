@@ -69,3 +69,10 @@ def test_token_que_aponta_para_si_mesmo_sai_do_css():
     limpo = design_html.sem_ciclos(css)
     assert "--texto-3xl" not in limpo and "--esp-8:" not in limpo
     assert "--proprio:2px" in limpo and "--a:var(--ab)" in limpo and "padding:var(--esp-8)" in limpo
+
+
+def test_fonte_mono_da_web_ganha_consolas_antes_do_courier():
+    from app import design_html
+    assert design_html.sem_ciclos(".a{font-family:'Space Mono', monospace}") == ".a{font-family:'Space Mono', ui-monospace, Consolas, monospace}"
+    ok = ".b{font-family:ui-monospace, Consolas, monospace}"
+    assert design_html.sem_ciclos(ok) == ok
