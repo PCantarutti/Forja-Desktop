@@ -10,6 +10,7 @@ Aponte só defeito VISÍVEL que um designer corrigiria com certeza. Os mais comu
 - texto sobre imagem/fundo sem contraste; destaque em gradiente que some no fundo;
 - slot de imagem sobrando (retrato em cada depoimento quando já existe avatar, imagem que empurra o texto);
 - vazio enorme ou seção alta demais para o que mostra; alinhamento torto (logo no meio da barra);
+- conteúdo COLADO NA BORDA da tela (x perto de 0 no Desktop): faltou o `.container`;
 - marcador duplicado (dois ícones de abrir no FAQ), número gigante sozinho numa linha;
 - no celular: título que estoura, grade que não virou coluna, menu que não cabe.
 

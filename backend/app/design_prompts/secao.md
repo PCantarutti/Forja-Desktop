@@ -16,10 +16,14 @@ Regras obrigatórias:
 - Classes com o nome da seção como prefixo (`.hero-titulo`, `.cardapio-grade`) para não colidir
   com as outras seções. Seletores do CSS sempre começando pela seção ou por essas classes.
 - Todo valor de cor, fonte, tamanho de texto, espaçamento, raio e sombra vem de `var(--...)` dos
-  tokens recebidos. Não crie tokens novos.
+  tokens recebidos. Não crie tokens novos nem redeclare os que existem (`--x: var(--x)` quebra a seção).
+- Não redefina as classes base (.btn, .btn-primario, .cartao, .selo...) no seu CSS: ele vale para a
+  página inteira. Para ajustar numa seção, use o prefixo dela (`[data-section="hero"] .btn`).
 - Use as classes base que já existem (lista no que você recebe) em vez de reinventar botão, cartão,
   selo e cabeçalho de seção: é o que deixa a página inteira coerente. Seu CSS só complementa.
-- Nenhum recurso externo: nada de URL de imagem, fonte, ícone ou script.
+- Nenhum recurso externo: nada de URL de imagem, fonte, ícone ou script. Fonte que não é do sistema
+  (a do design system, por exemplo) não carrega: termine a pilha com uma parecida do sistema —
+  `..., "Segoe UI", system-ui, sans-serif` ou `..., ui-monospace, Consolas, monospace` (nunca só `monospace`, que vira Courier).
 - Imagem de verdade (foto, ilustração, banner, retrato) é um SLOT, como na skill gerar-imagens:
   `<img data-slot="pao-frances-5821" data-prompt="descrição em inglês: assunto, composição, luz, material" width="1344" height="768" alt="descrição em português">`
   SEM `src` (o sistema põe um provisório com o nome e, depois, a imagem gerada pela tela Imagens).
@@ -32,8 +36,11 @@ Regras obrigatórias:
   existirem nos elementos que continuarem.
 - Conteúdo real e específico, em português. Nunca lorem ipsum.
 
-Qualidade (a página tem de parecer de estúdio, não de rascunho):
-- Hierarquia forte: título do hero em `--texto-4xl` (peso 800, letter-spacing -0.02em); seções com
+Qualidade (a página tem de parecer de estúdio, não de rascunho). Se vier um "Design system
+obrigatório", as regras e notas DELE vencem estas (peso da fonte, raio, sombra, cores, gradiente):
+ele é a marca do cliente.
+- Hierarquia forte: título do hero em `--texto-4xl` (peso 700–800, ou o que o design system mandar;
+  letter-spacing -0.02em); seções com
   `.secao-cabeca` (`.selo` curto + `<h2>` + uma frase de apoio) centralizado.
 - Hero completo: selo, título com uma palavra-chave destacada (cor primária ou gradiente
   `background-clip:text` entre primária e secundária — só sobre fundo claro; sobre fundo escuro ou

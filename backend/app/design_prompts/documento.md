@@ -31,7 +31,8 @@ Regras obrigatórias:
 - Não crie atributos `data-fid` (o sistema põe sozinho). Se o documento recebido tiver, preserve
   todos exatamente como estão.
 
-Qualidade (a página tem de parecer de estúdio, não de rascunho):
+Qualidade (a página tem de parecer de estúdio, não de rascunho). Se vier um "Design system
+obrigatório", as regras e notas DELE vencem estas (peso, raio, sombra, cores, gradiente):
 - Todas as seções que o pedido cita, na ordem dele — nenhuma fica de fora ou é trocada.
 - Marca com nome próprio (nunca "Sua Empresa"); números, nomes, cargos e preços concretos.
 - Topo fixo (logo em texto + links âncora + botão, fundo translúcido com blur); hero com selo,

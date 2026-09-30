@@ -231,5 +231,6 @@ def geometria(medido: dict) -> str:
                 extra += f" {i['linhas']} linha(s)" if i["linhas"] > 1 else ""
                 extra += " (slot de imagem)" if i.get("slot") else ""
                 extra += " (FORA da área visível)" if i.get("fora") else ""
+                extra += " (COLADO NA BORDA da tela, sem margem)" if i["x"] < 8 and i["texto"] and sec["largura"] > 600 else ""
                 linhas.append(f"  {i['el']} x{i['x']} y{i['y']} {i['w']}×{i['h']}{extra}")
     return "\n".join(linhas)

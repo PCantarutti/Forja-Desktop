@@ -61,3 +61,11 @@ def test_critica_ilegivel_nao_estraga_a_pagina(monkeypatch):
     p = design.projeto(conv)
     assert p["total"] == 1 and p["html"].count("Logo quebrada") == 3
     assert any("crítica não veio legível" in x for x in p["mensagens"][-1]["passos"])
+
+
+def test_token_que_aponta_para_si_mesmo_sai_do_css():
+    from app import design_html
+    css = '[data-section="hero"]{--texto-3xl: var(--texto-3xl);--esp-8:var(--esp-8, 5rem);--proprio:2px;--a:var(--ab);padding:var(--esp-8)}'
+    limpo = design_html.sem_ciclos(css)
+    assert "--texto-3xl" not in limpo and "--esp-8:" not in limpo
+    assert "--proprio:2px" in limpo and "--a:var(--ab)" in limpo and "padding:var(--esp-8)" in limpo

@@ -247,6 +247,15 @@ def _tokens(html: str, tokens: dict) -> str:
     return html[:m.start(1)] + corpo + html[m.end(1):]
 
 
+_CICLO = re.compile(r"(--[\w-]+)\s*:\s*var\(\s*\1\s*[,)][^;}]*;?")
+
+
+def sem_ciclos(css: str) -> str:
+    """Tira `--x: var(--x)`: token que aponta para si mesmo é inválido e, na seção onde aparece, apaga
+    TODOS os tamanhos, cores e espaços que dependem dele (o hero inteiro virava texto cru)."""
+    return _CICLO.sub("", css)
+
+
 def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
     """Aplica {patches:[{fid, html}], css?, tokens?}. Tudo ou nada: qualquer coisa errada levanta
     ValueError e o documento original fica como estava. Devolve (html novo, fids que mudaram)."""
@@ -257,6 +266,7 @@ def aplicar(html: str, resp: dict) -> tuple[str, list[str]]:
     css, tokens = resp.get("css") or "", resp.get("tokens") or {}
     if not isinstance(css, str) or not isinstance(tokens, dict):
         raise ValueError("'css' deve ser texto e 'tokens' um objeto.")
+    css = sem_ciclos(css)
     if not (patches or css.strip() or tokens):
         raise ValueError("A resposta não trouxe nenhuma mudança.")
 
@@ -355,8 +365,8 @@ img,svg{max-width:100%;display:block}
 .secao-cabeca h2{font-size:var(--texto-3xl, 3rem);letter-spacing:-.02em;margin:var(--esp-3, .75rem) 0}
 .secao-cabeca p{font-size:var(--texto-lg, 1.25rem);color:color-mix(in srgb, currentColor 70%, transparent);margin:0}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:.5em;padding:.9em 1.6em;border-radius:var(--raio-md, 10px);font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer;transition:transform .2s, box-shadow .2s, background .2s;white-space:nowrap}
-.btn-primario{background:var(--cor-primaria);color:#fff;box-shadow:0 8px 24px color-mix(in srgb, var(--cor-primaria) 30%, transparent)}
-.btn-primario:hover{transform:translateY(-2px);box-shadow:0 12px 32px color-mix(in srgb, var(--cor-primaria) 40%, transparent)}
+.btn-primario{background:var(--cor-primaria);color:#fff;box-shadow:var(--sombra-sm, 0 1px 2px rgba(0,0,0,.2))}
+.btn-primario:hover{transform:translateY(-2px);box-shadow:var(--sombra-md, 0 8px 20px rgba(0,0,0,.25))}
 .btn-secundario{background:var(--cor-superficie, #fff);color:var(--cor-texto);border-color:var(--cor-borda, #ddd)}
 .btn-secundario:hover{border-color:var(--cor-primaria);color:var(--cor-primaria)}
 .cartao{background:var(--cor-superficie, #fff);border:1px solid var(--cor-borda, #e5e5e5);border-radius:var(--raio-lg, 20px);padding:var(--esp-4, 1.5rem);box-shadow:var(--sombra-sm, none);transition:transform .25s, box-shadow .25s}
