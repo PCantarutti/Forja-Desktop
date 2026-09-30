@@ -378,6 +378,10 @@ export default function DesignView(props: {
   }, [geracao?.modo, geracao?.n, geracao?.doc]);
 
   const pendentes = (projeto?.comentarios ?? []).filter((c) => c.status === "pendente" && !c.orfao);
+  // comentários marcados na aba para resolver juntos (os que deixaram de estar pendentes saem sozinhos)
+  const [marcados, setMarcados] = useState<number[]>([]);
+  const escolhidos = marcados.filter((id) => pendentes.some((c) => c.id === id));
+  const marca = (id: number) => setMarcados((l) => (l.includes(id) ? l.filter((x) => x !== id) : [...l, id]));
   const numero = (id: number) => pendentes.findIndex((c) => c.id === id) + 1;
   const pinsAtuais = () => pendentes.map((c, i) => ({ fid: c.fids[0], n: i + 1 }));
   useEffect(() => paraIframe(janela(), { type: "showPins", pins: pinsAtuais(), ...corDoTema() }), [projeto?.comentarios]);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -573,6 +577,11 @@ export default function DesignView(props: {
     } catch (e: any) {
       props.onError(e.message);
     }
+  }
+
+  async function descartarVarios(ids: number[]) {
+    for (const id of ids) await descartar(id);
+    setMarcados([]);
   }
 
   async function cancelar() {
@@ -1165,10 +1174,22 @@ export default function DesignView(props: {
           {aba === "comentarios" && (
             <div className="flex flex-col gap-2 py-2">
               {pendentes.length > 1 && (
-                <button disabled={rodando} onClick={() => pedir({ comentarios: pendentes.map((c) => c.id) })}
-                        className="self-start rounded-[9px] bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-                  Aplicar {pendentes.length} pendentes numa chamada
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button disabled={rodando} onClick={() => { pedir({ comentarios: escolhidos.length ? escolhidos : pendentes.map((c) => c.id) }); setMarcados([]); }}
+                          className="rounded-[9px] bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
+                    {escolhidos.length ? `Aplicar ${escolhidos.length} selecionado${escolhidos.length > 1 ? "s" : ""} numa chamada`
+                      : `Aplicar ${pendentes.length} pendentes numa chamada`}
+                  </button>
+                  {escolhidos.length > 0 && (
+                    <>
+                      <button onClick={() => descartarVarios(escolhidos)} className="rounded-[9px] px-2 py-1.5 text-xs text-muted hover:text-fg">
+                        Descartar {escolhidos.length}
+                      </button>
+                      <button onClick={() => setMarcados([])} className="rounded-[9px] px-2 py-1.5 text-xs text-faint hover:text-fg">Limpar seleção</button>
+                    </>
+                  )}
+                  {!escolhidos.length && <span className="text-[11.5px] text-faint">ou marque alguns para resolver só esses</span>}
+                </div>
               )}
               {!projeto?.comentarios.length && (
                 <p className="text-xs text-muted">Selecione elementos no canvas, escreva e use “Comentar”: os comentários
@@ -1180,6 +1201,10 @@ export default function DesignView(props: {
                   <div key={c.id} onClick={() => mostrarComentario(c)}
                        className={`cursor-pointer rounded-xl border p-2.5 text-[13px] ${n && n === pinAtivo ? "border-accent-line bg-accent-soft" : "border-line hover:bg-raised/50"} ${c.status !== "pendente" ? "opacity-60" : ""}`}>
                     <div className="flex items-start gap-2">
+                      {c.status === "pendente" && !c.orfao && pendentes.length > 1 && (
+                        <input type="checkbox" checked={escolhidos.includes(c.id)} onChange={() => marca(c.id)} onClick={(e) => e.stopPropagation()}
+                               aria-label={`Selecionar o comentário ${n}`} className="mt-1 size-3.5 shrink-0 accent-[var(--accent)]" />
+                      )}
                       {n > 0 ? (
                         <span className="grid size-5 shrink-0 place-items-center rounded-full bg-accent font-mono text-[10.5px] font-bold text-accent-fg">{n}</span>
                       ) : c.status === "aplicado" ? <Check className="mt-0.5 size-4 shrink-0 text-emerald-300" /> : <span className="size-5 shrink-0" />}
