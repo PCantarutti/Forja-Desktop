@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import type { EstudosProjeto, EstudosProva, EstudosProvaConfig, EstudosQuestao, EstudosTentativa, PesquisaFonte }
   from "../types";
-import { ArrowLeft, ArrowRight, Bubble, Check, Clock, Copy, Pin, Refresh, Trash, X } from "./icons";
+import { ArrowLeft, ArrowRight, Bubble, Check, Clock, Copy, Lampada, Pin, Refresh, Trash, X } from "./icons";
 import { ConversaDuvida } from "./EstudosDuvidas";
 import { Markdown } from "./MessageView";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada }
@@ -14,7 +14,7 @@ import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLoc
   from "./estudosUi";
 
 const KEY_CONFIG = "forja.estudos.prova";
-const rascunhoDe = (id: number) => `forja.estudos.rascunho.${id}`;
+const rascunhoDe = (id: number, treino = false) => `forja.estudos.${treino ? "treino" : "rascunho"}.${id}`;
 const LETRAS = "ABCDE";
 const NOMES = { me: "Múltipla", vf: "V/F", disc: "Discursiva" } as const;   // rótulos do grafo: curtos, ficam no meio da aresta
 const TIPO_CURTO = { me: "múltipla escolha", vf: "verdadeiro ou falso", disc: "discursiva" } as const;
@@ -29,8 +29,14 @@ const PADRAO: Partial<EstudosProvaConfig> = { me: 8, vf: 2, disc: 0, dificuldade
 const DA_PLANEJADA: Record<string, PesquisaFonte["status"]> = { fila: "fila", gerando: "lendo", verificando: "lendo", ok: "util", descartada: "erro" };
 
 type Resposta = number | boolean | string;
-type Rascunho = { respostas: Record<string, Resposta>; marcadas: string[]; atual: number; inicio: number };
-type Vista = { tipo: "lista" } | { tipo: "fazer"; prova: EstudosProva } | { tipo: "resultado"; t: EstudosTentativa };
+/** O que o modo treino recebe ao conferir uma questão: o gabarito e a explicação dela. */
+type Conferida = Pick<EstudosQuestao, "correta" | "explicacao" | "por_alternativa" | "resposta_modelo" | "rubrica" | "pagina">
+  & { certa: boolean | null };
+type Rascunho = { respostas: Record<string, Resposta>; marcadas: string[]; atual: number; inicio: number;
+                  conferidas?: Record<string, Conferida> };
+type Vista = { tipo: "lista" } | { tipo: "fazer"; prova: EstudosProva; treino: boolean } | { tipo: "resultado"; t: EstudosTentativa };
+/** Pedido de prova que vem de fora da aba (a "prova dos pontos fracos" do Desempenho). */
+export type ProvaPendente = { topicos: string[]; instrucoes: string };
 
 function Numero(props: { valor: number; min: number; max: number; unidade: string; dica: string;
                          onChange: (v: number) => void; icone?: React.ReactNode }) {
@@ -77,7 +83,7 @@ function SinapseCorrecao({ t }: { t: EstudosTentativa }) {
   );
 }
 
-function AguardandoClaude({ texto, onCancelar }: { texto: string; onCancelar: () => void }) {
+export function AguardandoClaude({ texto, onCancelar }: { texto: string; onCancelar: () => void }) {
   return (
     <div className={`${card} text-xs text-muted`}>
       <p className="text-sm text-fg">Pedido enviado ao Claude</p>
@@ -92,10 +98,11 @@ function AguardandoClaude({ texto, onCancelar }: { texto: string; onCancelar: ()
 
 // ------------------------------------------------------------------ fazer a prova
 
-function FazerProva({ prova, onEntregar, onSair }: {
-  prova: EstudosProva; onEntregar: (respostas: Record<string, Resposta>, segundos: number) => void; onSair: () => void;
+function FazerProva({ prova, treino, duvida, onEntregar, onSair }: {
+  prova: EstudosProva; treino: boolean; duvida: Duvida;
+  onEntregar: (respostas: Record<string, Resposta>, segundos: number) => void; onSair: () => void;
 }) {
-  const chave = rascunhoDe(prova.message_id);
+  const chave = rascunhoDe(prova.message_id, treino);
   const [r, setR] = useState<Rascunho>(() => lerLocal<Rascunho | null>(chave, null) ?? { respostas: {}, marcadas: [], atual: 0, inicio: Date.now() });
   const [agora, setAgora] = useState(() => Date.now());
   const [confirmar, setConfirmar] = useState(false);
@@ -103,9 +110,11 @@ function FazerProva({ prova, onEntregar, onSair }: {
   const qs = prova.questoes;
   const q = qs[Math.min(r.atual, qs.length - 1)];
   const decorrido = Math.max(0, Math.floor((agora - r.inicio) / 1000));
-  const limite = (prova.config.tempo || 0) * 60;
+  const limite = treino ? 0 : (prova.config.tempo || 0) * 60;   // treino é sem relógio
   const resta = limite ? limite - decorrido : 0;
   const respondidas = qs.filter((x) => r.respostas[x.id] !== undefined && r.respostas[x.id] !== "").length;
+  const conf = r.conferidas?.[q.id];   // modo treino: esta já foi conferida (resposta travada, gabarito à vista)
+  const [conferindo, setConferindo] = useState(false);
 
   useEffect(() => { const t = setInterval(() => setAgora(Date.now()), 1000); return () => clearInterval(t); }, []);
   useEffect(() => gravarLocal(chave, r), [chave, r]);
@@ -119,7 +128,21 @@ function FazerProva({ prova, onEntregar, onSair }: {
 
   useEffect(() => { if (limite && resta <= 0) entregar(); }, [limite, resta, entregar]);   // acabou o tempo: entrega
 
-  const responder = (v: Resposta) => setR((x) => ({ ...x, respostas: { ...x.respostas, [q.id]: v } }));
+  const responder = (v: Resposta) => !conf && setR((x) => ({ ...x, respostas: { ...x.respostas, [q.id]: v } }));
+  const respondida = r.respostas[q.id] !== undefined && r.respostas[q.id] !== "";
+
+  async function conferir() {
+    if (!treino || conf || !respondida || conferindo) return;
+    setConferindo(true);
+    try {
+      const c = await api.post<Conferida>(`/estudos/prova/${prova.message_id}/conferir`, { questao_id: q.id, resposta: r.respostas[q.id] });
+      setR((x) => ({ ...x, conferidas: { ...x.conferidas, [q.id]: c } }));
+    } catch (e: any) {
+      duvida.onError(e.message);
+    } finally {
+      setConferindo(false);
+    }
+  }
   const ir = (i: number) => setR((x) => ({ ...x, atual: Math.max(0, Math.min(qs.length - 1, i)) }));
   const marcada = r.marcadas.includes(q.id);
 
@@ -131,6 +154,7 @@ function FazerProva({ prova, onEntregar, onSair }: {
       else if (e.key === "ArrowLeft") ir(r.atual - 1);
       else if (q.tipo === "me" && LETRAS.slice(0, q.alternativas?.length).includes(e.key.toUpperCase())) responder(LETRAS.indexOf(e.key.toUpperCase()));
       else if (q.tipo === "vf" && ["v", "f"].includes(e.key.toLowerCase())) responder(e.key.toLowerCase() === "v");
+      else if (e.key === "Enter" && treino) conferir();
     };
     window.addEventListener("keydown", tecla);
     return () => window.removeEventListener("keydown", tecla);
@@ -143,12 +167,13 @@ function FazerProva({ prova, onEntregar, onSair }: {
         <button className="text-faint hover:text-fg" title="Sair (as respostas ficam guardadas)" onClick={onSair}><ArrowLeft className="size-4" /></button>
         <span className="text-sm font-medium text-fg">{prova.titulo}</span>
         <span className="text-muted">{respondidas} de {qs.length} respondidas</span>
+        {treino && <span className="rounded-full bg-accent-soft px-2 py-0.5 text-accent-text">treino · correção na hora</span>}
         <span className={`ml-auto flex items-center gap-1 font-mono ${limite && resta < 300 ? "text-amber-300" : "text-muted"}`}
               title={limite ? "Tempo que falta" : "Tempo de prova"}>
           <Clock className="size-3.5" />{relogio(limite ? Math.max(0, resta) : decorrido)}
         </span>
         <button className={btnPrimary} onClick={() => (faltam || r.marcadas.length ? setConfirmar(true) : entregar())}>
-          <Check className="size-3.5" /> Entregar
+          <Check className="size-3.5" /> {treino ? "Terminar o treino" : "Entregar"}
         </button>
       </div>
 
@@ -166,10 +191,13 @@ function FazerProva({ prova, onEntregar, onSair }: {
       <div className="flex flex-wrap gap-1.5" aria-label="Questões">
         {qs.map((x, i) => {
           const feita = r.respostas[x.id] !== undefined && r.respostas[x.id] !== "";
+          const c = r.conferidas?.[x.id];
+          const cor = c ? (c.certa === true ? "border-ok/60 bg-ok/[.08] text-ok" : c.certa === false ? "border-red-400/60 bg-red-400/[.07] text-red-300"
+            : "border-accent-line bg-accent-soft text-accent-text") : feita ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-faint hover:text-fg";
           return (
             <button key={x.id} onClick={() => ir(i)} title={`Questão ${i + 1}${r.marcadas.includes(x.id) ? " · marcada" : ""}`}
                     className={`relative grid size-8 place-items-center rounded-lg border font-mono text-xs ${
-                      i === r.atual ? "border-focus text-fg ring-2 ring-accent/30" : feita ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-faint hover:text-fg"}`}>
+                      i === r.atual ? "border-focus text-fg ring-2 ring-accent/30" : cor}`}>
               {i + 1}
               {r.marcadas.includes(x.id) && <span className="absolute -top-1 -right-1 size-2 rounded-full bg-amber-300" />}
             </button>
@@ -187,41 +215,79 @@ function FazerProva({ prova, onEntregar, onSair }: {
         </div>
         <Markdown text={matematica(q.enunciado)} math />
         <div className="mt-4 flex flex-col gap-2">
-          {q.tipo === "me" && q.alternativas?.map((a, i) => (
-            <button key={i} onClick={() => responder(i)} aria-pressed={r.respostas[q.id] === i}
-                    className={`flex items-start gap-3 rounded-xl border px-3.5 py-2.5 text-left ${
-                      r.respostas[q.id] === i ? "border-accent-line bg-accent-soft" : "border-line hover:border-focus hover:bg-raised"}`}>
-              <span className={`grid size-6 shrink-0 place-items-center rounded-full border font-mono text-xs ${
-                r.respostas[q.id] === i ? "border-accent bg-accent text-accent-fg" : "border-line-strong text-muted"}`}>{LETRAS[i]}</span>
-              <span className="min-w-0 flex-1 [&_.md]:text-[14px] [&_p]:my-0"><Markdown text={matematica(a)} math /></span>
-            </button>
-          ))}
+          {q.tipo === "me" && q.alternativas?.map((a, i) => {
+            const minha = r.respostas[q.id] === i, certa = conf && conf.correta === i;
+            return (
+              <button key={i} onClick={() => responder(i)} aria-pressed={minha} disabled={!!conf}
+                      className={`flex flex-col rounded-xl border px-3.5 py-2.5 text-left ${
+                        certa ? "border-ok/55 bg-ok/[.06]" : conf && minha ? "border-red-400/50 bg-red-400/[.05]"
+                          : minha ? "border-accent-line bg-accent-soft" : conf ? "border-line" : "border-line hover:border-focus hover:bg-raised"}`}>
+                <span className="flex items-start gap-3">
+                  <span className={`grid size-6 shrink-0 place-items-center rounded-full border font-mono text-xs ${
+                    certa ? "border-ok text-ok" : conf && minha ? "border-red-300 text-red-300"
+                      : minha ? "border-accent bg-accent text-accent-fg" : "border-line-strong text-muted"}`}>{LETRAS[i]}</span>
+                  <span className="min-w-0 flex-1 [&_.md]:text-[14px] [&_p]:my-0"><Markdown text={matematica(a)} math /></span>
+                </span>
+                {conf?.por_alternativa?.[i] && (certa || minha) && <span className="mt-1 ml-9 text-xs text-muted">{conf.por_alternativa[i]}</span>}
+              </button>
+            );
+          })}
           {q.tipo === "vf" && (
             <div className="grid grid-cols-2 gap-2">
               {([[true, "Verdadeiro", "V"], [false, "Falso", "F"]] as const).map(([v, nome, tecla]) => (
-                <button key={nome} onClick={() => responder(v)} aria-pressed={r.respostas[q.id] === v}
+                <button key={nome} onClick={() => responder(v)} aria-pressed={r.respostas[q.id] === v} disabled={!!conf}
                         className={`rounded-xl border px-3.5 py-3 text-sm ${
-                          r.respostas[q.id] === v ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:border-focus hover:bg-raised"}`}>
+                          conf && conf.correta === v ? "border-ok/55 bg-ok/[.06] text-ok"
+                            : conf && r.respostas[q.id] === v ? "border-red-400/50 bg-red-400/[.05] text-red-300"
+                            : r.respostas[q.id] === v ? "border-accent-line bg-accent-soft text-accent-text" : "border-line text-fg hover:border-focus hover:bg-raised"}`}>
                   {nome} <span className="ml-1 font-mono text-xs text-faint">{tecla}</span>
                 </button>
               ))}
             </div>
           )}
           {q.tipo === "disc" && (
-            <textarea rows={8} value={String(r.respostas[q.id] ?? "")} onChange={(e) => responder(e.target.value)}
+            <textarea rows={8} value={String(r.respostas[q.id] ?? "")} onChange={(e) => responder(e.target.value)} readOnly={!!conf}
                       placeholder="Sua resposta"
                       className="rounded-xl border border-line bg-raised p-3 text-[14px] text-fg focus:border-focus focus:outline-none" />
           )}
         </div>
+
+        {conf && (
+          // a correção na hora do modo treino: o porquê (e, na discursiva, a resposta esperada; a nota sai no fim)
+          <div className="mt-4 rounded-xl bg-raised/50 px-3.5 py-2.5">
+            <p className={`${rotulo} mb-1 ${conf.certa === true ? "text-ok!" : conf.certa === false ? "text-red-300!" : ""}`}>
+              {conf.certa === true ? "Certa" : conf.certa === false ? "Errada" : "Resposta esperada"}
+            </p>
+            {conf.resposta_modelo && <div className="[&_.md]:text-[14px]"><Markdown text={matematica(conf.resposta_modelo)} math /></div>}
+            {!!conf.rubrica?.length && (
+              <ul className="mt-1 text-xs text-muted">{conf.rubrica.map((x) => <li key={x.criterio}>· {x.criterio} ({nota(x.pontos)} pt)</li>)}</ul>
+            )}
+            {conf.explicacao && q.tipo !== "disc" && <div className="[&_.md]:text-[14px]"><Markdown text={matematica(conf.explicacao)} math /></div>}
+            {conf.pagina && <p className="mt-1 text-xs text-faint">Material: {conf.pagina}</p>}
+          </div>
+        )}
+
+        {treino && !conf && (
+          <div className="mt-4 border-t border-line pt-3">
+            <ConversaDuvida key={q.id} conv={duvida.conv} fio={`dica:${prova.message_id}:${q.id}`} carimbo={duvida.carimbo}
+                            modelos={duvida.modelos} dica compacta onError={duvida.onError} />
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2 text-xs">
         <button className={btn} disabled={r.atual === 0} onClick={() => ir(r.atual - 1)}><ArrowLeft className="size-3.5" /> Anterior</button>
+        {treino && (
+          <button className={btnPrimary} disabled={!respondida || !!conf || conferindo} onClick={conferir}
+                  title="Ver na hora se acertou, com a explicação (Enter)">
+            <Check className="size-3.5" /> {conf ? "Conferida" : conferindo ? "Conferindo…" : "Conferir"}
+          </button>
+        )}
         <button className={`${btn} ${marcada ? "border-amber-300/60! text-amber-300!" : ""}`} aria-pressed={marcada}
                 onClick={() => setR((x) => ({ ...x, marcadas: marcada ? x.marcadas.filter((m) => m !== q.id) : [...x.marcadas, q.id] }))}>
           <Pin className="size-3.5" /> {marcada ? "Marcada para revisar" : "Marcar para revisar"}
         </button>
-        <span className="ml-auto hidden text-faint md:inline">← → navegam · A–E ou V/F respondem</span>
+        <span className="ml-auto hidden text-faint md:inline">← → navegam · A–E ou V/F respondem{treino ? " · Enter confere" : ""}</span>
         <button className={btn} disabled={r.atual >= qs.length - 1} onClick={() => ir(r.atual + 1)}>Próxima <ArrowRight className="size-3.5" /></button>
       </div>
     </div>
@@ -402,6 +468,8 @@ export default function Provas(props: {
   painelModelos: React.ReactNode | null;
   onError: (e: string) => void;
   onRecarregar: () => Promise<void> | void;
+  pendente?: ProvaPendente | null;
+  onPendenteUsado?: () => void;
 }) {
   const [vista, setVista] = useState<Vista>({ tipo: "lista" });
   const [cfg, setCfg] = useState<Partial<EstudosProvaConfig>>(() => lerLocal(KEY_CONFIG, PADRAO));
@@ -465,7 +533,7 @@ export default function Provas(props: {
     else setViva(null);
   }, [props.projeto, ouvir]);
 
-  async function gerar() {
+  async function gerar(extra?: ProvaPendente) {
     if (!total || gerando) return;
     setPronta(null);
     corte.current?.abort();
@@ -475,7 +543,7 @@ export default function Provas(props: {
     try {
       ouvindo.current = -1;
       await streamSSE(`/estudos/${props.conv}/prova`, { method: "POST", signal: ctl.signal, body: JSON.stringify({
-        config: { ...cfg, topicos: escolhidos, instrucoes }, ...motorDe(props.modelos) }) }, (ev) => {
+        config: { ...cfg, topicos: extra?.topicos ?? escolhidos, instrucoes: extra?.instrucoes ?? instrucoes }, ...motorDe(props.modelos) }) }, (ev) => {
         if (ctl.signal.aborted) return;
         if (ev.erro) aoErro.current(ev.erro);
         else { ultimo = ev; setViva(ev); }
@@ -492,13 +560,21 @@ export default function Provas(props: {
     setInstrucoes("");
   }
 
-  async function fazer(provaId: number) {
+  // A prova dos pontos fracos pedida no Desempenho: gera uma vez, com os tópicos de lá.
+  useEffect(() => {
+    if (props.pendente && !gerando) {
+      gerar(props.pendente);
+      props.onPendenteUsado?.();
+    }
+  }, [props.pendente]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fazer(provaId: number, treino = false) {
     try {
       const p = await api.get<EstudosProva>(`/estudos/execucao/${provaId}`);
       if (!p.questoes.length) return aoErro.current("Esta prova não tem questões.");
       // refazer uma prova já entregue: a tela mostra de novo sem gabarito (as respostas começam do zero)
       setPronta(null);
-      setVista({ tipo: "fazer", prova: { ...p, questoes: p.questoes.map(({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas }) =>
+      setVista({ tipo: "fazer", treino, prova: { ...p, questoes: p.questoes.map(({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas }) =>
         ({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas })) } });
     } catch (e: any) {
       aoErro.current(e.message);
@@ -513,7 +589,7 @@ export default function Provas(props: {
     }
   }
 
-  async function entregar(prova: EstudosProva, respostas: Record<string, Resposta>, segundos: number) {
+  async function entregar(prova: EstudosProva, respostas: Record<string, Resposta>, segundos: number, treino: boolean) {
     corte.current?.abort();
     const ctl = new AbortController();
     corte.current = ctl;
@@ -521,14 +597,14 @@ export default function Provas(props: {
     try {
       ouvindo.current = -1;
       await streamSSE(`/estudos/prova/${prova.message_id}/entregar`, { method: "POST", signal: ctl.signal,
-        body: JSON.stringify({ respostas, segundos, ...motorDe(props.modelos) }) }, (ev) => {
+        body: JSON.stringify({ respostas, segundos, modo: treino ? "treino" : "prova", ...motorDe(props.modelos) }) }, (ev) => {
         if (ctl.signal.aborted) return;
         if (ev.erro) aoErro.current(ev.erro);
         else { ultimo = ev; setViva(ev); setVista({ tipo: "resultado", t: ev }); }
       });
     } catch (e: any) {
       aoErro.current(e.message);
-      setVista({ tipo: "fazer", prova });   // as respostas não se perdem: voltam para a prova
+      setVista({ tipo: "fazer", prova, treino });   // as respostas não se perdem: voltam para a prova
     } finally {
       if (ouvindo.current === -1) ouvindo.current = 0;
     }
@@ -546,6 +622,7 @@ export default function Provas(props: {
     try {
       await api.del(`/estudos/prova/${id}`);
       gravarLocal(rascunhoDe(id), null);
+      gravarLocal(rascunhoDe(id, true), null);
       await recarregar.current();
     } catch (e: any) {
       aoErro.current(e.message);
@@ -572,8 +649,9 @@ export default function Provas(props: {
           {vista.tipo !== "fazer" && props.abas}
 
           {vista.tipo === "fazer" && (
-            <FazerProva prova={vista.prova} onSair={() => setVista({ tipo: "lista" })}
-                        onEntregar={(respostas, segundos) => entregar(vista.prova, respostas, segundos)} />
+            <FazerProva prova={vista.prova} treino={vista.treino} onSair={() => setVista({ tipo: "lista" })}
+                        duvida={{ conv: props.conv, modelos: props.modelos, carimbo: props.carimbo, contagem: {}, onError: props.onError }}
+                        onEntregar={(respostas, segundos) => entregar(vista.prova, respostas, segundos, vista.treino)} />
           )}
 
           {vista.tipo === "resultado" && (
@@ -627,11 +705,15 @@ export default function Provas(props: {
                       <span className={p.status === "erro" ? "text-red-300" : "text-amber-300"}>{p.status}</span>
                     )}
                     <div className="ml-auto flex gap-2">
-                      {p.n > 0 && p.status !== "rodando" && p.status !== "aguardando" && (
+                      {p.n > 0 && p.status !== "rodando" && p.status !== "aguardando" && <>
+                        <button className={btn} onClick={() => fazer(p.message_id, true)}
+                                title="Uma questão por vez, com a correção na hora e até 3 dicas por questão">
+                          <Lampada className="size-3.5" /> Treinar
+                        </button>
                         <button className={p.tentativas.length ? btn : btnPrimary} onClick={() => fazer(p.message_id)}>
                           {p.tentativas.length ? <><Refresh className="size-3.5" /> Refazer</> : "Fazer a prova"}
                         </button>
-                      )}
+                      </>}
                       <button className="rounded-md p-1.5 text-faint hover:bg-raised hover:text-fg" title="Apagar a prova e as entregas dela"
                               onClick={() => apagar(p.message_id)}><Trash className="size-3.5" /></button>
                     </div>
@@ -641,7 +723,7 @@ export default function Provas(props: {
                       {p.tentativas.map((t, i) => (
                         <button key={t.message_id} onClick={() => verResultado(t.message_id)} title="Ver a correção e as explicações"
                                 className="rounded-lg border border-line px-2.5 py-1 hover:border-focus hover:bg-raised">
-                          <span className="text-faint">{i + 1}ª · </span>
+                          <span className="text-faint">{i + 1}ª{t.modo === "treino" ? " treino" : ""} · </span>
                           <span className={`font-mono ${t.nota >= 7 ? "text-ok" : t.nota >= 5 ? "text-amber-300" : "text-red-300"}`}>{nota(t.nota)}</span>
                           <span className="text-faint"> · {quando(t.criado)}{t.status !== "pronto" ? ` · ${t.status}` : ""}</span>
                         </button>
@@ -708,7 +790,7 @@ export default function Provas(props: {
                         dica="Tempo de prova (0 = sem cronômetro); acabou, entrega sozinha" onChange={(tempo) => setCfg((c) => ({ ...c, tempo }))} />
                 <DireitaPrompt>
                   {props.botaoModelos}
-                  <BotaoEnviar rodando={gerando?.status === "rodando"} onParar={parar} onEnviar={gerar} titulo="Gerar prova"
+                  <BotaoEnviar rodando={gerando?.status === "rodando"} onParar={parar} onEnviar={() => gerar()} titulo="Gerar prova"
                                desabilitado={!total || total > 40 || !!gerando} />
                 </DireitaPrompt>
               </RodapePrompt>

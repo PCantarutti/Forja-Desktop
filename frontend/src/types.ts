@@ -311,6 +311,45 @@ export type EstudosProjeto = {
   provas: EstudosProvaResumo[];
   topicos: string[];   // os que a prova pode cobrar (do último resumo com texto)
   duvidas: Record<string, number>;   // perguntas por conversa: "geral" e "questao:<entrega>:<id>"
+  revisao: EstudosPainel;
+};
+
+/** Estado de revisão espaçada de um item (Leitner: caixa 1 a 5; acertou na 5, dominado). */
+export type EstudosLeitner = { caixa: number; proxima: string; acertos: number; erros: number; dominada: boolean; vence: boolean };
+export type EstudosItemRevisao = EstudosLeitner & { chave: string; topico: string } & (
+  | { tipo: "erro"; questao: EstudosQuestao; resposta: number | boolean | string | null; prova: string; tentativa_id: number }
+  | { tipo: "cartao"; id: string; frente: string; verso: string; origem: "resumo" | "erro" });
+
+export type EstudosTarefa = { id: string; tipo: "estudar" | "revisar" | "simulado"; texto: string; topico: string; minutos: number; feito: boolean };
+export type EstudosPlano = { data: string; minutos: number; criado: string; dias: { dia: string; tarefas: EstudosTarefa[] }[] };
+
+export type EstudosPainel = {
+  hoje: string;
+  itens: EstudosItemRevisao[];
+  vencem: number;
+  plano: EstudosPlano | null;
+  geracoes: { message_id: number; status: string; n: number; motor: "forja" | "claude"; aviso: string; criado: string }[];
+};
+
+export type EstudosFlashcards = {
+  message_id: number;
+  tipo: "flashcards";
+  quantos: number;
+  motor: "forja" | "claude";
+  status: EstudosEstado["status"];
+  aviso: string;
+  partes: { id: string; topicos: string[]; n: number; status: "fila" | "gerando" | "ok" | "erro" }[];
+  cartoes: { id: string; frente: string; verso: string; topico: string }[];
+  stats: PesquisaEstado["stats"];
+};
+
+export type EstudosDesempenho = {
+  entregas: { message_id: number; prova_id: number; titulo: string; nota: number; acertos: number; n: number;
+              modo: "prova" | "treino"; segundos: number; criado: string }[];
+  topicos: { topico: string; pontos: number; max: number; pct: number | null; ultima: number | null }[];
+  fracos: string[];
+  revisao: { erros: number; cartoes: number; vencem: number; dominados: number };
+  plano: EstudosPlano | null;
 };
 
 export type EstudosDuvidaMsg = {
@@ -391,6 +430,7 @@ export type EstudosTentativa = {
   prova_id: number;
   titulo: string;
   segundos: number;
+  modo?: "prova" | "treino";
   correcao: Record<string, EstudosCorrecao>;
   motor: "forja" | "claude";
   status: EstudosEstado["status"];
@@ -406,7 +446,7 @@ export type EstudosProvaResumo = {
   message_id: number; titulo: string; status: string; n: number; config: EstudosProvaConfig;
   motor: "forja" | "claude"; criado: string;
   tentativas: { message_id: number; status: string; nota: number; pontos: number; max: number; acertos: number;
-                segundos: number; criado: string }[];
+                segundos: number; criado: string; modo?: "prova" | "treino" }[];
 };
 
 // ------------------------------------------------------------------ IA local (llama.cpp / sd.cpp)

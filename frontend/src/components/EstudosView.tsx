@@ -9,8 +9,10 @@ import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pil
 import { Menu } from "./Controls";
 import { matematica, sumario } from "./estudosTexto";
 import Sinapse from "./Sinapse";
-import Provas from "./EstudosProva";
+import Provas, { type ProvaPendente } from "./EstudosProva";
 import Duvidas, { type Pendente } from "./EstudosDuvidas";
+import Revisao from "./EstudosRevisao";
+import Desempenho from "./EstudosDesempenho";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
@@ -136,8 +138,10 @@ export default function EstudosView(props: {
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [mcp, setMcp] = useState<McpServidor | null>(null);
-  const [aba, setAba] = useState<"resumo" | "provas" | "duvidas">("resumo");
+  const [aba, setAba] = useState<"resumo" | "provas" | "duvidas" | "revisao" | "desempenho">("resumo");
   const [pendente, setPendente] = useState<Pendente | null>(null);   // trecho do resumo a explicar de outro jeito
+  const [provaPendente, setProvaPendente] = useState<ProvaPendente | null>(null);   // a prova dos pontos fracos
+  const [gerandoPdf, setGerandoPdf] = useState(false);
   const [selecao, setSelecao] = useState<{ texto: string; x: number; y: number } | null>(null);
   const statusAnterior = useRef("");
   const acompanhando = useRef(0);   // message_id ouvido por SSE; -1 = o POST de estudar está no ar
@@ -337,6 +341,30 @@ export default function EstudosView(props: {
     setTimeout(() => setCopiado(false), 1500);
   }
 
+  /** O resumo como está na tela (fórmulas já desenhadas) vira PDF no backend, com as folhas de estilo daqui. */
+  async function baixarPdf() {
+    if (!resumoRef.current || !estado?.texto || gerandoPdf) return;
+    setGerandoPdf(true);
+    const titulo = (estado.titulo || estado.tema).replace(/[\\/:*?"<>|]+/g, "").slice(0, 60) || "resumo";
+    try {
+      const css = [...document.styleSheets].map((f) => f.href).filter((h): h is string => !!h);
+      const r = await fetch("/api/estudos/pdf", {
+        method: "POST", body: JSON.stringify({ titulo, html: resumoRef.current.innerHTML, css }),
+        headers: { "Content-Type": "application/json", ...(window.forja?.token ? { "X-Forja-Token": window.forja.token } : {}) } });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${titulo}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      aoErro.current(e.message);
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
+
   function baixar() {
     if (!estado?.texto) return;
     const url = URL.createObjectURL(new Blob([estado.texto], { type: "text/markdown" }));
@@ -439,7 +467,8 @@ export default function EstudosView(props: {
   const abas = (
     <div className="flex gap-1 self-start rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
       {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
-         ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`]] as const).map(([id, nome]) => (
+         ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`],
+         ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const).map(([id, nome]) => (
         <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)}
                 className={`rounded-full px-3 py-1 ${aba === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
           {nome}
@@ -447,6 +476,21 @@ export default function EstudosView(props: {
       ))}
     </div>
   );
+
+  if (aba === "revisao" && props.conv !== null && projeto) {
+    return (
+      <Revisao conv={props.conv} projeto={projeto} modelos={modelos} abas={abas} botaoModelos={botaoModelos}
+               painelModelos={painel === "modelos" ? painelModelos : null} onError={props.onError}
+               onRecarregar={() => carregar(props.conv)} />
+    );
+  }
+
+  if (aba === "desempenho" && props.conv !== null && projeto) {
+    return (
+      <Desempenho conv={props.conv} carimbo={props.carimbo} abas={abas} onError={props.onError} onIr={setAba}
+                  onProva={(p) => { setProvaPendente(p); setAba("provas"); }} />
+    );
+  }
 
   if (aba === "duvidas" && props.conv !== null && projeto) {
     return (
@@ -477,7 +521,8 @@ export default function EstudosView(props: {
     return (
       <Provas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos} abas={abas}
               botaoModelos={botaoModelos} painelModelos={painel === "modelos" ? painelModelos : null}
-              onError={props.onError} onRecarregar={() => carregar(props.conv)} />
+              onError={props.onError} onRecarregar={() => carregar(props.conv)}
+              pendente={provaPendente} onPendenteUsado={() => setProvaPendente(null)} />
     );
   }
 
@@ -612,6 +657,9 @@ export default function EstudosView(props: {
                     {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} Copiar .md
                   </button>
                   <button className={btn} onClick={baixar}><Download className="size-3.5" /> Baixar .md</button>
+                  <button className={btn} onClick={baixarPdf} disabled={gerandoPdf} title="O resumo com as fórmulas, pronto para imprimir">
+                    <Download className="size-3.5" /> {gerandoPdf ? "Gerando o PDF…" : "Baixar PDF"}
+                  </button>
                 </>}
                 {(projeto?.resumos.length ?? 0) > 1 && (
                   <select value={estado.message_id} onChange={(e) => abrirVersao(Number(e.target.value))}

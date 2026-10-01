@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import type { EstudosDuvidaMsg, EstudosProjeto } from "../types";
-import { Bubble } from "./icons";
+import { Bubble, Lampada } from "./icons";
 import { Markdown } from "./MessageView";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula } from "./Composer";
 import { matematica } from "./estudosTexto";
-import { PEDIDO_CLAUDE, type Modelos, card, motorDe } from "./estudosUi";
+import { PEDIDO_CLAUDE, type Modelos, btn, card, motorDe, rotulo } from "./estudosUi";
 
 export type Pendente = { pergunta: string; trecho: string };
 
@@ -20,6 +20,7 @@ export function ConversaDuvida(props: {
   pendente?: Pendente | null;   // pergunta que chegou de fora (trecho marcado no resumo): vai sozinha uma vez
   onPendenteUsado?: () => void;
   compacta?: boolean;           // dentro do cartão da questão: sem a caixa de prompt grande
+  dica?: boolean;               // modo treino: só o botão "Pedir uma dica" (até 3), sem as perguntas na tela
   onError: (e: string) => void;
 }) {
   const [msgs, setMsgs] = useState<EstudosDuvidaMsg[]>([]);
@@ -114,6 +115,7 @@ export function ConversaDuvida(props: {
   }
 
   const respondendo = enviando || msgs.some((m) => m.role === "assistant" && (m.status === "rodando" || m.status === "aguardando"));
+  const dadas = msgs.filter((m) => m.role === "assistant");
 
   const campo = (
     <textarea rows={props.compacta ? 1 : 2} value={texto} onChange={(e) => setTexto(e.target.value)}
@@ -124,13 +126,14 @@ export function ConversaDuvida(props: {
 
   return (
     <div className="flex flex-col gap-2">
-      {msgs.map((m) => m.role === "user" ? (
+      {msgs.map((m) => m.role === "user" ? (props.dica ? null :
         <div key={m.id} className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2 text-[14px] text-fg">
           {m.trecho && <p className="mb-1 border-l-2 border-line-strong pl-2 text-xs text-muted italic">«{m.trecho}»</p>}
           <p className="whitespace-pre-wrap">{m.texto}</p>
         </div>
       ) : (
         <div key={m.id} className="max-w-full">
+          {props.dica && <p className={`${rotulo} mb-1 flex items-center gap-1`}><Lampada className="size-3" /> Dica {dadas.indexOf(m) + 1}</p>}
           {m.status === "aguardando" ? (
             <p className="text-xs text-muted">Esperando o Claude — no Claude Code conectado ao Forja, peça: <span className="text-fg">“{PEDIDO_CLAUDE}”</span></p>
           ) : m.texto ? (
@@ -152,7 +155,14 @@ export function ConversaDuvida(props: {
         </div>
       )}
 
-      {props.compacta ? (
+      {props.dica ? (
+        dadas.length < 3 && (
+          <button className={`${btn} self-start text-xs`} disabled={respondendo} onClick={() => enviar("Quero uma dica")}>
+            <Lampada className="size-3.5" /> {dadas.length ? "Outra dica" : "Pedir uma dica"}
+            <span className="font-mono text-[10.5px] text-faint">{dadas.length + 1}/3</span>
+          </button>
+        )
+      ) : props.compacta ? (
         <div className="flex items-end gap-2 rounded-xl border border-line bg-surface px-3 py-2 focus-within:border-focus">
           {campo}
           <BotaoEnviar rodando={respondendo} onParar={parar} onEnviar={() => enviar(texto)} titulo="Perguntar" desabilitado={!texto.trim()} />
