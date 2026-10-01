@@ -2460,6 +2460,75 @@ def estudos_flashcard_apagar(conv_id: int, cartao_id: str):
     return _revisao("apagar_cartao", conv_id, cartao_id)
 
 
+class SimuladoBody(BaseModel):
+    material_id: int
+    gabarito: str = ""              # o gabarito colado ("91 C 92 A ...")
+    gabarito_material: int = 0      # ou um material que é o gabarito
+    provider: str = ""
+    model: str = ""
+    ex_provider: str = ""
+    ex_model: str = ""
+
+
+class BuscaBody(BaseModel):
+    pedido: str                     # "ENEM 2023 2º dia", "FUVEST 2024 1ª fase"
+    provider: str = ""
+    model: str = ""
+    ex_provider: str = ""
+    ex_model: str = ""
+
+
+@app.post("/api/estudos/{conv_id}/simulado")
+async def estudos_simulado_start(conv_id: int, body: SimuladoBody):
+    """Confere a IA com o gabarito oficial: recorta as questões reais, resolve às cegas e compara (SSE)."""
+    from . import estudos_simulado
+    try:
+        msg = estudos_simulado.start(conv_id, body.material_id, body.gabarito, body.gabarito_material,
+                                     body.provider, body.model, body.ex_provider, body.ex_model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
+@app.get("/api/estudos/simulado/{message_id}")
+def estudos_simulado_detalhe(message_id: int):
+    from . import estudos_simulado
+    try:
+        return estudos_simulado.detalhe(message_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/estudos/simulado/{message_id}/prova")
+def estudos_simulado_prova(message_id: int):
+    """O simulado real como prova (gabarito oficial, letras do caderno)."""
+    from . import estudos_simulado
+    try:
+        return estudos_simulado.criar_prova(message_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/estudos/simulado/{message_id}")
+def estudos_simulado_apagar(message_id: int):
+    from . import estudos_simulado
+    try:
+        return estudos_simulado.apagar(message_id)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/busca")
+async def estudos_busca_start(conv_id: int, body: BuscaBody):
+    """Procura PDFs de prova e gabarito na web e anexa os que conferem (SSE)."""
+    from . import estudos_busca
+    try:
+        msg = estudos_busca.start(conv_id, body.pedido, body.provider, body.model, body.ex_provider, body.ex_model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
 @app.get("/api/estudos-figura/{conv_id}/{material_id}/{figura}")
 def estudos_figura(conv_id: int, material_id: int, figura: str):
     """O recorte de uma figura do PDF (questão com figura). Fora do /api/estudos para valer o token do cookie

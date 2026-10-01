@@ -434,6 +434,3 @@ def ref_mcp(conv_id: int, valor) -> dict | None:
     f = next((x for x in m.get("figuras") or [] if x["id"] == fid), {"id": fid, "pagina": 0})
     return para_questao({**f, "material": m["id"]})
 
-
-def para_json(x) -> str:
-    return json.dumps(x, ensure_ascii=False)

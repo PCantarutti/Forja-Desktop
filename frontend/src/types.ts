@@ -277,7 +277,7 @@ export type EstudosPreferencias = {
 export type EstudosMaterial = {
   id: number; n: number; nome: string; arquivo: string; chars: number; paginas: number; ocr: boolean;
   uso: "conteudo" | "prova";   // prova = simulado: vira o perfil do que cai, não conteúdo do resumo
-  figuras?: number | null;     // recortadas do PDF (null = ainda não procurou; material de OCR não tem)
+  figuras?: number | null; gabarito?: boolean;     // recortadas do PDF (null = ainda não procurou; material de OCR não tem)
 };
 
 /** Figura do PDF que uma questão usa: a imagem sai de /api/estudos-figura/<conv>/<material>/<id>. */
@@ -317,6 +317,43 @@ export type EstudosProjeto = {
   duvidas: Record<string, number>;   // perguntas por conversa: "geral" e "questao:<entrega>:<id>"
   revisao: EstudosPainel;
   figuras: { detectadas: number; uteis: number; olhadas: number };
+  simulados: EstudosSimuladoResumo[];
+  ranking: EstudosRanking | null;
+  busca: EstudosBusca | null;
+};
+
+/** Uma questão real do simulado, conferida: a letra da IA (às cegas) contra a oficial. */
+export type EstudosQuestaoReal = {
+  numero: number; pagina: number; area: string; assunto: string; oficial: string; ia: string; certa: boolean | null;
+  conta: string; motivo: string; inicio: string;
+  figura: "" | "vista" | "faltou";   // dependia de figura: o modelo viu, ou não tinha como ver
+};
+type Parte = { resolvidas: number; acertos: number };
+export type EstudosPlacarSimulado = {
+  questoes: number; com_gabarito: number; resolvidas: number; acertos: number; em_branco: number;
+  so_texto: Parte; figura_vista: Parte; figura_faltou: Parte;
+  por_area: { area: string; total: number; acertos: number }[];
+};
+export type EstudosRanking = {
+  itens: { assunto: string; area: string; questoes: number; simulados: number; fracao: number }[];
+  simulados: number; questoes: number;
+};
+export type EstudosSimuladoResumo = {
+  message_id: number; material_id: number; material: string; status: string; etapa: string;
+  placar: Partial<EstudosPlacarSimulado>; gabarito: string; prova_id: number | null; criado: string;
+};
+export type EstudosSimulado = EstudosSimuladoResumo & {
+  tipo: "simulado"; titulo: string; aviso: string; progresso: string; questoes: EstudosQuestaoReal[];
+  ranking: EstudosRanking | null; stats: PesquisaEstado["stats"];
+};
+export type EstudosCandidato = {
+  url: string; titulo: string; trecho: string; tipo: "prova" | "gabarito"; exame: string;
+  status: "fila" | "baixando" | "anexado" | "rejeitado"; motivo: string; material_id?: number; paginas?: number;
+};
+export type EstudosBusca = {
+  message_id: number; tipo: "busca"; titulo: string; pedido: string; status: string; etapa: string; aviso: string;
+  progresso: string; buscas: { busca: string; achados: number; erro?: string }[]; candidatos: EstudosCandidato[];
+  anexados: { material_id: number; nome: string; tipo: string; url: string }[]; stats: PesquisaEstado["stats"];
 };
 
 /** Estado de revisão espaçada de um item (Leitner: caixa 1 a 5; acertou na 5, dominado). */

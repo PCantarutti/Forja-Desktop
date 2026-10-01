@@ -13,6 +13,7 @@ import Provas, { type ProvaPendente } from "./EstudosProva";
 import Duvidas, { type Pendente } from "./EstudosDuvidas";
 import Revisao from "./EstudosRevisao";
 import Desempenho from "./EstudosDesempenho";
+import Simulados from "./EstudosSimulados";
 import EstudosMapaMental from "./EstudosMapaMental";
 import { acharTitulo } from "./estudosMapa";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
@@ -184,7 +185,7 @@ export default function EstudosView(props: {
   const [arrastando, setArrastando] = useState(false);
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
-  const [aba, setAba] = useState<"resumo" | "provas" | "duvidas" | "revisao" | "desempenho">("resumo");
+  const [aba, setAba] = useState<"resumo" | "provas" | "simulados" | "duvidas" | "revisao" | "desempenho">("resumo");
   const [imersao, setImersao] = useState(false);   // fazendo prova ou revisando: a fila de abas sai da frente
   const [pendente, setPendente] = useState<Pendente | null>(null);   // trecho do resumo a explicar de outro jeito
   const [provaPendente, setProvaPendente] = useState<ProvaPendente | null>(null);   // a prova dos pontos fracos
@@ -543,6 +544,7 @@ export default function EstudosView(props: {
   const abas = (
     <div className="flex gap-1 rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
       {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
+         ["simulados", `Simulados${projeto?.simulados?.length ? ` · ${new Set(projeto.simulados.map((x) => x.material_id)).size}` : ""}`],
          ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`],
          ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const).map(([id, nome]) => (
         <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)}
@@ -570,6 +572,14 @@ export default function EstudosView(props: {
       <Revisao conv={props.conv} projeto={projeto} modelos={modelos} botaoModelos={botaoModelos}
                painelModelos={painel === "modelos" ? painelModelos : null} onError={props.onError}
                onRecarregar={() => carregar(props.conv)} onImersao={setImersao} />,
+    );
+  }
+
+  if (aba === "simulados" && props.conv !== null && projeto) {
+    return quadro(
+      <Simulados conv={props.conv} projeto={projeto} modelos={modelos} botaoModelos={botaoModelos}
+                 painelModelos={painel === "modelos" ? painelModelos : null} onError={props.onError}
+                 onRecarregar={() => carregar(props.conv)} onIrProvas={() => setAba("provas")} />,
     );
   }
 

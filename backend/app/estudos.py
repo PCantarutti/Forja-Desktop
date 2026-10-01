@@ -295,6 +295,9 @@ def adicionar_material(conv_id: int, nome: str, dados: bytes | None = None, text
     meta = {"tipo": "material", "n": n, "nome": nome, "arquivo": arq.name, "chars": len(extraido),
             "paginas": len(MARCA_PAGINA.findall(extraido)), "ocr": ocr_usado,
             "uso": "prova" if _parece_prova(extraido) else "conteudo"}
+    from . import estudos_simulado
+    if estudos_simulado.parece_gabarito(extraido):   # só o gabarito: entra como prova, mas a tela não o confere
+        meta.update(uso="prova", gabarito=True)
     from . import estudos_figuras
     if estudos_figuras.deve_recortar(arq.name, ocr_usado):   # as figuras, para questões com figura
         try:
@@ -416,7 +419,7 @@ def _visao(itens: list[dict], teto: int) -> str:
 
 INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "erro_busca", "porte", "gravar",
            "pergunta", "contexto", "texto")
-TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida", "flashcards")   # o que tem estado, SSE e pode ficar para o Claude
+TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida", "flashcards", "simulado", "busca")   # o que tem estado, SSE e pode ficar para o Claude
 
 
 def _publico(run: dict) -> dict:
@@ -497,7 +500,7 @@ def estado(message_id: int) -> dict:
                 raise ToolError("Estudo não encontrado.")
             e = {"message_id": message_id, **e, "status": _situacao(m.status), "texto": m.content or ""}
             conv_id = m.conversation_id
-    if e["tipo"] in ("resumo", "duvida", "flashcards"):
+    if e["tipo"] in ("resumo", "duvida", "flashcards", "simulado", "busca"):
         return e
     from . import estudos_prova
     return estudos_prova.para_tela(e, conv_id)
@@ -546,7 +549,7 @@ def projeto(conv_id: int) -> dict:
                    for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                db.Message.role == "assistant").order_by(db.Message.id))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
-    from . import estudos_duvidas, estudos_figuras, estudos_prova, estudos_revisao
+    from . import estudos_busca, estudos_duvidas, estudos_figuras, estudos_prova, estudos_revisao, estudos_simulado
     # PDF anexado antes das figuras existirem é recortado na primeira abertura (uma vez, ~2 s por 50 páginas)
     mats = estudos_figuras.garantir(conv_id)
     # a tela só precisa da contagem: a lista inteira (com as descrições) é pesada para ir a cada carimbo
@@ -555,7 +558,10 @@ def projeto(conv_id: int) -> dict:
             "figuras": estudos_figuras.resumo(mats),
             "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),
             "provas": estudos_prova.lista(conv_id), "topicos": estudos_prova.topicos(conv_id),
-            "duvidas": estudos_duvidas.fios(conv_id), "revisao": estudos_revisao.painel(conv_id)}
+            "duvidas": estudos_duvidas.fios(conv_id), "revisao": estudos_revisao.painel(conv_id),
+            # simulados reais: as conferências com o gabarito oficial, o "o que mais cai" e a última busca na web
+            "simulados": estudos_simulado.lista(conv_id), "ranking": estudos_simulado.ranking(conv_id),
+            "busca": estudos_busca.ultima(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração
