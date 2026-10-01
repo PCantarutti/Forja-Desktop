@@ -901,6 +901,23 @@ def start(conv_id: int, tema: str, preferencias: dict | None = None, web_ligada:
     return msg.to_dict()
 
 
+_CHAVE = re.compile(r"^(t[ií]tulo|objetivo|pontos|[áa]rea|visao_geral|vis[ãa]o geral|topicos|t[óo]picos)\s*:\s*", re.I)
+
+
+def titulos_soltos(texto: str, maximo: int) -> list[str]:
+    """O roteiro com o JSON quebrado ainda dá a lista de títulos — mas o modelo às vezes escreve as chaves em linhas
+    ("- titulo: Hardware Básico", "objetivo: ..."): o título perde o "titulo:" e as outras chaves saem."""
+    out = []
+    for x in pesquisa._lista(texto, maximo * 4):
+        m = _CHAVE.match(x)
+        if m and not m.group(1).lower().startswith("t"):
+            continue
+        x = x[m.end():].strip().strip("\"',").strip() if m else x
+        if x and x not in out:
+            out.append(x)
+    return out[:maximo]
+
+
 def _avisar(run: dict, texto: str) -> None:
     """Os avisos se somam: o de "sem material" não pode esconder o de uma seção que falhou."""
     texto = texto.strip()
@@ -1086,7 +1103,7 @@ async def _planejar(run: dict, escritor: dict, itens: list[dict], orcamento: int
                             "status": "fila"})
     if not topicos:   # JSON quebrado: uma lista de títulos ainda serve; nada, o tema vira o tópico único
         topicos = [{"titulo": x[:120], "objetivo": "", "pontos": [], "status": "fila"}
-                   for x in pesquisa._lista(texto, maximo)] or [{"titulo": run["tema"][:120], "objetivo": "", "pontos": [], "status": "fila"}]
+                   for x in titulos_soltos(texto, maximo)] or [{"titulo": run["tema"][:120], "objetivo": "", "pontos": [], "status": "fila"}]
     run["topicos"] = topicos[:maximo]
     run["titulo"] = str(obj.get("titulo") or "").strip()[:120] or run["tema"][:120]
     run["visao_geral"] = str(obj.get("visao_geral") or "").strip()[:1200]

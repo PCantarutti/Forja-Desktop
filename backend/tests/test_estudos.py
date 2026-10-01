@@ -428,3 +428,8 @@ def test_ferramentas_mcp_do_estudo_existem():
     nomes = {t.name for t in mcp_servidor.SERVIDOR._tool_manager.list_tools()}
     assert {"estudos_listar", "estudos_criar", "estudos_abrir", "estudos_ler_material", "estudos_anexar",
             "estudos_salvar_resumo", "estudos_pedidos"} <= nomes
+
+
+def test_titulos_soltos_tira_as_chaves_do_json_quebrado():
+    texto = '- titulo: Hardware Básico\n- objetivo: entender as peças\n- titulo: "Memórias"\n- Periféricos: entrada e saída'
+    assert estudos.titulos_soltos(texto, 5) == ["Hardware Básico", "Memórias", "Periféricos: entrada e saída"]
