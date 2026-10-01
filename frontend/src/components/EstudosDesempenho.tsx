@@ -3,11 +3,12 @@ import { api } from "../api";
 import type { EstudosDesempenho, EstudosPlano, EstudosTarefa } from "../types";
 import { ArrowRight, Check, Clock, Trash } from "./icons";
 import type { ProvaPendente } from "./EstudosProva";
-import { btn, btnPrimary, card, nota, rotulo } from "./estudosUi";
+import { btn, btnPrimary, nota, rotulo } from "./estudosUi";
 
 const W = 640, H = 150, PX = 28, PY = 14;
 const diaCurto = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00`).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" });
-const corPct = (p: number) => (p >= 0.7 ? "bg-emerald-400/70" : p >= 0.4 ? "bg-amber-300/70" : "bg-red-400/70");
+const corPct = (p: number) => (p >= 0.7 ? "bg-ok/70" : p >= 0.4 ? "bg-warn/70" : "bg-err/70");
+const cardD = "rounded-xl border border-line bg-surface px-[18px] py-4";
 
 /** As notas na ordem das entregas; treino em ponto vazado. SVG à mão: uma linha não pede biblioteca. */
 function Grafico({ entregas }: { entregas: EstudosDesempenho["entregas"] }) {
@@ -75,7 +76,7 @@ function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: 
   const total = plano?.dias.flatMap((d) => d.tarefas).length ?? 0;
 
   return (
-    <div className={`${card} flex flex-col gap-3 text-xs`}>
+    <div className={`${cardD} flex flex-col gap-3 text-xs`}>
       <div className="flex flex-wrap items-center gap-2">
         <Clock className="size-4 text-faint" />
         <span className="text-sm text-fg">Cronograma</span>
@@ -109,20 +110,26 @@ function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: 
         </div>
       )}
 
+      {plano && !editando && total > 0 && (
+        <div className="h-1 overflow-hidden rounded-full bg-raised" aria-hidden>
+          <div className="h-full rounded-full bg-ok transition-[width] duration-[250ms]" style={{ width: `${(100 * feitas) / total}%` }} />
+        </div>
+      )}
+
       {plano && !editando && (
         <div className="flex flex-col gap-1.5">
           {dias.map((d) => (
-            <div key={d.dia} className={`flex flex-wrap items-start gap-x-3 gap-y-1 rounded-lg border px-3 py-2 ${
-              d.dia === hoje ? "border-accent-line bg-accent-soft/40" : d.dia < hoje ? "border-line opacity-60" : "border-line"}`}>
-              <span className={`w-24 shrink-0 font-mono ${d.dia === hoje ? "text-accent-text" : "text-faint"}`}>{d.dia === hoje ? "hoje" : diaCurto(d.dia)}</span>
+            <div key={d.dia} className={`flex flex-wrap items-start gap-x-3 gap-y-1 rounded-[10px] border px-3 py-[9px] ${
+              d.dia === hoje ? "border-accent-line bg-accent-soft/50" : d.dia < hoje ? "border-line opacity-60" : "border-line"}`}>
+              <span className={`w-[92px] shrink-0 font-mono ${d.dia === hoje ? "text-accent-text" : "text-faint"}`}>{d.dia === hoje ? "hoje" : diaCurto(d.dia)}</span>
               <div className="flex min-w-0 flex-1 flex-col gap-1">
                 {d.tarefas.map((t) => (
                   <div key={t.id} className="flex items-center gap-2">
                     <button role="checkbox" aria-checked={t.feito} onClick={() => marcar(t)}
-                            className={`grid size-4 shrink-0 place-items-center rounded border ${t.feito ? "border-ok bg-ok/20 text-ok" : "border-line-strong hover:border-focus"}`}>
+                            className={`grid size-4 shrink-0 place-items-center rounded-[4px] border ${t.feito ? "border-ok bg-ok/20 text-ok" : "border-line-strong hover:border-focus"}`}>
                       {t.feito && <Check className="size-3" />}
                     </button>
-                    <span className={`min-w-0 flex-1 ${t.feito ? "text-faint line-through" : "text-fg"}`}>{t.texto}</span>
+                    <span className={`min-w-0 flex-1 text-[12.5px] ${t.feito ? "text-faint line-through" : "text-fg"}`}>{t.texto}</span>
                     <span className="font-mono text-faint">{t.minutos} min</span>
                     {d.dia === hoje && !t.feito && (
                       <button className="text-accent-text hover:underline"
@@ -167,11 +174,12 @@ export default function Desempenho(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
+        <div className="mx-auto flex max-w-[960px] flex-col gap-3">
           {d && (
             <>
-              <div className={`${card} flex flex-col gap-3`}>
+              <div className="grid grid-cols-[1.5fr_1fr] gap-3">
+              <div className={`${cardD} flex min-w-0 flex-col gap-3`}>
                 <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
                   <div>
                     <p className={rotulo}>{d.entregas.at(-1)?.modo === "treino" ? "último treino" : "última prova"}</p>
@@ -189,8 +197,20 @@ export default function Desempenho(props: {
                   : <p className="text-xs text-faint">Faça uma prova (ou um treino) na aba Provas para ver a evolução aqui.</p>}
               </div>
 
+              <div className={`${cardD} flex flex-col gap-3 text-xs text-muted`}>
+                <span className="text-sm text-fg">Revisão</span>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                  <div><p className="font-mono text-2xl font-semibold text-fg">{d.revisao.vencem}</p><p>para hoje</p></div>
+                  <div><p className="font-mono text-2xl font-semibold text-fg">{d.revisao.dominados}</p><p>dominados</p></div>
+                  <div><p className="font-mono text-base text-fg-2">{d.revisao.erros}</p><p>no caderno de erros</p></div>
+                  <div><p className="font-mono text-base text-fg-2">{d.revisao.cartoes}</p><p>cartões</p></div>
+                </div>
+                <button className={`${btn} mt-auto self-start`} onClick={() => props.onIr("revisao")}>Abrir a revisão <ArrowRight className="size-3.5" /></button>
+              </div>
+              </div>
+
               {!!d.topicos.length && (
-                <div className={`${card} flex flex-col gap-1.5 text-xs`}>
+                <div className={`${cardD} flex flex-col gap-1.5 text-xs`}>
                   <div className="mb-1 flex flex-wrap items-center gap-2">
                     <span className="text-sm text-fg">Acerto por tópico</span>
                     <span className="text-faint">somando todas as entregas; o traço é a última</span>
@@ -203,7 +223,7 @@ export default function Desempenho(props: {
                   </div>
                   {(todos ? d.topicos : testados).map((t) => (
                     <div key={t.topico} className="flex items-center gap-3">
-                      <span className={`w-52 shrink-0 truncate ${d.fracos.includes(t.topico) ? "text-amber-300" : "text-muted"}`} title={t.topico}>{t.topico}</span>
+                      <span className={`w-[220px] shrink-0 truncate ${d.fracos.includes(t.topico) ? "text-amber-300" : "text-muted"}`} title={t.topico}>{t.topico}</span>
                       <div className="relative h-1.5 min-w-0 flex-1 rounded-full bg-raised">
                         {t.pct !== null && <div className={`h-full rounded-full ${corPct(t.pct)}`} style={{ width: `${Math.round(t.pct * 100)}%` }} />}
                         {t.ultima !== null && <div className="absolute -top-1 h-3.5 w-0.5 bg-fg/70" style={{ left: `${Math.round(t.ultima * 100)}%` }} />}
@@ -218,15 +238,6 @@ export default function Desempenho(props: {
                   )}
                 </div>
               )}
-
-              <div className={`${card} flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted`}>
-                <span className="text-sm text-fg">Revisão</span>
-                <span><b className="text-fg">{d.revisao.vencem}</b> para hoje</span>
-                <span>{d.revisao.erros} no caderno de erros</span>
-                <span>{d.revisao.cartoes} cartões</span>
-                <span>{d.revisao.dominados} dominados</span>
-                <button className={`${btn} ml-auto`} onClick={() => props.onIr("revisao")}>Abrir a revisão <ArrowRight className="size-3.5" /></button>
-              </div>
 
               <Cronograma key={d.plano?.criado ?? "novo"} conv={props.conv} plano={d.plano} lembrete={d.lembrete} onMudou={carregar}
                           onProva={props.onProva} onIr={props.onIr} onError={props.onError} />
