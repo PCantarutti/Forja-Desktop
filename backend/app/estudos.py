@@ -295,6 +295,12 @@ def adicionar_material(conv_id: int, nome: str, dados: bytes | None = None, text
     meta = {"tipo": "material", "n": n, "nome": nome, "arquivo": arq.name, "chars": len(extraido),
             "paginas": len(MARCA_PAGINA.findall(extraido)), "ocr": ocr_usado,
             "uso": "prova" if _parece_prova(extraido) else "conteudo"}
+    from . import estudos_figuras
+    if estudos_figuras.deve_recortar(arq.name, ocr_usado):   # as figuras, para questões com figura
+        try:
+            meta["figuras"] = estudos_figuras.detectar(arq, estudos_figuras.pasta(conv_id, n))
+        except Exception:   # figura é extra: o material entra sem elas
+            meta["figuras"] = []
     msg = _save(conv_id, role="event", content=nome, meta={"estudos": meta})
     return {"id": msg.id, **meta}
 
@@ -324,9 +330,12 @@ def remover_material(material_id: int) -> dict:
         s.delete(m)
         _tocar(s, conv_id)
         s.commit()
+    import shutil
     dir_ = pasta(conv_id) / "material"
     (dir_ / e["arquivo"]).unlink(missing_ok=True)
     (dir_ / f"{e['n']:02d}.txt").unlink(missing_ok=True)
+    # as questões que usavam estas figuras perdem a imagem (a tela mostra o enunciado sem ela)
+    shutil.rmtree(dir_ / f"{e['n']:02d}-figuras", ignore_errors=True)
     return {"ok": True}
 
 
@@ -537,8 +546,13 @@ def projeto(conv_id: int) -> dict:
                    for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                db.Message.role == "assistant").order_by(db.Message.id))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
-    from . import estudos_duvidas, estudos_prova, estudos_revisao
-    return {"id": conv_id, "titulo": titulo, "materiais": materiais(conv_id), "resumos": resumos,
+    from . import estudos_duvidas, estudos_figuras, estudos_prova, estudos_revisao
+    # PDF anexado antes das figuras existirem é recortado na primeira abertura (uma vez, ~2 s por 50 páginas)
+    mats = estudos_figuras.garantir(conv_id)
+    # a tela só precisa da contagem: a lista inteira (com as descrições) é pesada para ir a cada carimbo
+    return {"id": conv_id, "titulo": titulo, "resumos": resumos,
+            "materiais": [{**m, "figuras": len(m["figuras"]) if isinstance(m.get("figuras"), list) else None} for m in mats],
+            "figuras": estudos_figuras.resumo(mats),
             "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),
             "provas": estudos_prova.lista(conv_id), "topicos": estudos_prova.topicos(conv_id),
             "duvidas": estudos_duvidas.fios(conv_id), "revisao": estudos_revisao.painel(conv_id)}
@@ -915,8 +929,11 @@ def _aviso_pedidos() -> str:
 
 
 def _linha_material(m: dict) -> str:
+    figs = m.get("figuras")
+    n = len(figs) if isinstance(figs, list) else figs or 0
     return (f"- material {m['id']}: {m['nome']} · {m['uso']} · {m['chars']:,} caracteres"
-            + (f" · {m['paginas']} páginas" if m["paginas"] else "") + (" · veio de OCR" if m["ocr"] else "")).replace(",", ".")
+            + (f" · {m['paginas']} páginas" if m["paginas"] else "") + (" · veio de OCR" if m["ocr"] else "")
+            + (f" · {n} figuras recortadas" if n else "")).replace(",", ".")
 
 
 def mcp_listar() -> str:
@@ -992,7 +1009,10 @@ def mcp_ler_material(material_id: int, inicio: int = 1, fim: int = 0) -> str:
             saida += paginas[n]
             ultima = n
         resto = f"\n\n[continua: chame com inicio={ultima + 1}]" if ultima < max(paginas) and ultima < fim else ""
-        return f"{e['nome']} — páginas {inicio} a {ultima} de {max(paginas)}\n\n{web.UNTRUSTED}{saida}{resto}"
+        from . import estudos_figuras
+        atual = next((x for x in estudos_figuras.garantir(conv_id) if x["id"] == material_id), {"id": material_id, **e})
+        figs = estudos_figuras.lista_mcp(conv_id, atual, inicio, ultima)
+        return f"{e['nome']} — páginas {inicio} a {ultima} de {max(paginas)}\n\n{web.UNTRUSTED}{saida}{resto}{figs}"
     partes = [texto[i:i + MAX_LEITURA] for i in range(0, len(texto), MAX_LEITURA)] or [""]
     if inicio > len(partes):
         return f"{e['nome']} tem só {len(partes)} parte(s)."

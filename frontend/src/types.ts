@@ -277,7 +277,11 @@ export type EstudosPreferencias = {
 export type EstudosMaterial = {
   id: number; n: number; nome: string; arquivo: string; chars: number; paginas: number; ocr: boolean;
   uso: "conteudo" | "prova";   // prova = simulado: vira o perfil do que cai, não conteúdo do resumo
+  figuras?: number | null;     // recortadas do PDF (null = ainda não procurou; material de OCR não tem)
 };
+
+/** Figura do PDF que uma questão usa: a imagem sai de /api/estudos-figura/<conv>/<material>/<id>. */
+export type EstudosFigura = { material: number; id: string; pagina: number; descricao?: string };
 
 export type EstudosTopico = { titulo: string; objetivo: string; pontos: string[]; status: "fila" | "escrevendo" | "pronto" | "erro" };
 
@@ -312,6 +316,7 @@ export type EstudosProjeto = {
   topicos: string[];   // os que a prova pode cobrar (do último resumo com texto)
   duvidas: Record<string, number>;   // perguntas por conversa: "geral" e "questao:<entrega>:<id>"
   revisao: EstudosPainel;
+  figuras: { detectadas: number; uteis: number; olhadas: number };
 };
 
 /** Estado de revisão espaçada de um item (Leitner: caixa 1 a 5; acertou na 5, dominado). */
@@ -383,6 +388,7 @@ export type EstudosQuestao = {
   rubrica?: { criterio: string; pontos: number }[];
   pagina?: string;
   verificada?: boolean;
+  figura?: EstudosFigura;
 };
 
 export type EstudosProvaConfig = {
@@ -393,11 +399,13 @@ export type EstudosProvaConfig = {
   tempo: number;       // minutos; 0 = sem cronômetro
   instrucoes: string;
   alternativas: number;
+  figuras: number;     // quantas usam uma figura do PDF (precisa de modelo que enxerga)
 };
 
 export type EstudosPlanejada = {
   id: string; tipo: EstudosTipoQuestao; topico: string; dificuldade: string; motivo: string;
   status: "fila" | "gerando" | "verificando" | "ok" | "descartada";
+  figura?: EstudosFigura;
 };
 
 export type EstudosProva = {
@@ -412,6 +420,7 @@ export type EstudosProva = {
   planejadas: EstudosPlanejada[];
   questoes: EstudosQuestao[];
   revelada: boolean;
+  figuras_olhadas?: string;   // "12 de 80", enquanto a etapa "figuras" olha os recortes
   stats: PesquisaEstado["stats"];
 };
 

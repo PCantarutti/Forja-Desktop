@@ -141,7 +141,16 @@ def _bloco_dica(q: dict) -> str:
     else:
         linhas.append(f"Resposta esperada (NÃO revele): {q.get('resposta_modelo', '')}")
     linhas.append(f"Explicação (NÃO revele): {q.get('explicacao', '')}")
-    return "\n".join(linhas)
+    return "\n".join(linhas + _linha_figura(q))
+
+
+def _linha_figura(q: dict) -> list[str]:
+    """A figura do PDF que a questão usa, por escrito: o tutor sem visão também sabe o que o aluno vê."""
+    f = q.get("figura")
+    if not isinstance(f, dict):
+        return []
+    return [f"A questão tem uma figura (página {f.get('pagina') or '?'} do material)"
+            + (f": {f['descricao']}" if f.get("descricao") else "") + "."]
 
 
 def _bloco_questao(q: dict, c: dict) -> str:
@@ -156,6 +165,7 @@ def _bloco_questao(q: dict, c: dict) -> str:
         linhas.append(f"Resposta esperada: {q.get('resposta_modelo', '')}")
         linhas += [f"Critério: {r['criterio']} ({r['pontos']:g} pt)" for r in q.get("rubrica") or []]
     linhas.append(f"Explicação já dada ao aluno: {q.get('explicacao', '')}")
+    linhas += _linha_figura(q)
     linhas.append(f"Resposta do aluno: {_marca(q, c.get('resposta'))} — "
                   f"{'certa' if c.get('certa') else 'parcial' if c.get('certa') is None and c.get('pontos') else 'errada'}"
                   f" ({c.get('pontos', 0):g} de {c.get('max', q['pontos']):g})")
@@ -251,6 +261,24 @@ def _historico(conv_id: int, fio: str, ate: int) -> list[dict]:
     return [{"role": m.role, "content": m.content} for m in msgs[-HISTORICO:]]
 
 
+async def _com_figura(run: dict, spec: dict, pergunta: str):
+    """A pergunta e, se a questão em pauta tem figura e o modelo enxerga, a imagem dela."""
+    from . import estudos_figuras as F
+    try:
+        if run.get("dica"):
+            q = _questao_da_prova(run["conv_id"], run["dica"]["prova_id"], run["dica"]["questao_id"])
+        elif run.get("questao"):
+            q = _questao(run["conv_id"], run["questao"]["tentativa_id"], run["questao"]["questao_id"])[0]
+        else:
+            return pergunta
+    except ToolError:
+        return pergunta
+    png = F.da_questao(run["conv_id"], q)
+    if not png or not await F.enxerga(spec):
+        return pergunta
+    return [{"type": "text", "text": pergunta}, {"type": "image_url", "image_url": {"url": F.data_uri(png)}}]
+
+
 async def _responder(run: dict, spec: dict) -> None:
     from . import design
     texto, cru, t0, t_first = "", "", time.monotonic(), 0.0
@@ -263,7 +291,7 @@ async def _responder(run: dict, spec: dict) -> None:
         pergunta = run["pergunta"] + (f"\n\n(Sobre o trecho: «{run['trecho']}»)" if run.get("trecho") else "")
         mensagens = [{"role": "system", "content": sistema},
                      *_historico(run["conv_id"], run["fio"], run["message_id"]),
-                     {"role": "user", "content": pergunta}]
+                     {"role": "user", "content": await _com_figura(run, spec, pergunta)}]
         saida = 0
 
         async def coletar() -> None:

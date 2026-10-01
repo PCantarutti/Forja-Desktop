@@ -109,7 +109,7 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
 # inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
 # navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
-TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file")
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/")
 SUFIXO_SEM_TOKEN = ("/relatorio",)
 
 
@@ -2458,6 +2458,18 @@ async def estudos_flashcards(conv_id: int, body: FlashcardsBody):
 @app.delete("/api/estudos/{conv_id}/flashcards/{cartao_id}")
 def estudos_flashcard_apagar(conv_id: int, cartao_id: str):
     return _revisao("apagar_cartao", conv_id, cartao_id)
+
+
+@app.get("/api/estudos-figura/{conv_id}/{material_id}/{figura}")
+def estudos_figura(conv_id: int, material_id: int, figura: str):
+    """O recorte de uma figura do PDF (questão com figura). Fora do /api/estudos para valer o token do cookie
+    e do `?t=` (é um <img>)."""
+    from . import estudos_figuras
+    try:
+        p = estudos_figuras.arquivo(conv_id, material_id, figura)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.get("/api/estudos/{conv_id}/flashcards.csv")

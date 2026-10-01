@@ -749,7 +749,7 @@ export default function EstudosView(props: {
                   </div>
                   <div className="mt-1 flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-faint">
-                      {m.paginas ? `${m.paginas} págs · ` : ""}{tamanhoTexto(m.chars)} caracteres{m.ocr ? " · OCR" : ""}
+                      {m.paginas ? `${m.paginas} págs · ` : ""}{tamanhoTexto(m.chars)} caracteres{m.ocr ? " · OCR" : ""}{m.figuras ? ` · ${m.figuras} figura${m.figuras === 1 ? "" : "s"}` : ""}
                     </span>
                     <div className="flex shrink-0 rounded-full border border-line p-0.5" role="radiogroup" aria-label="Uso do material">
                       {([["conteudo", "Conteúdo", "Vira base do resumo"], ["prova", "Prova", "Simulado ou prova antiga: mostra o que cai"]] as const).map(([id, nome, dica]) => (

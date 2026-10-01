@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
-import type { EstudosProjeto, EstudosProva, EstudosProvaConfig, EstudosQuestao, EstudosTentativa, PesquisaFonte }
+import type { EstudosFigura, EstudosProjeto, EstudosProva, EstudosProvaConfig, EstudosQuestao, EstudosTentativa, PesquisaFonte }
   from "../types";
-import { ArrowLeft, ArrowRight, Bubble, Check, Clock, Copy, Lampada, Pin, Refresh, Trash, X } from "./icons";
+import { ArrowLeft, ArrowRight, Bubble, Check, Clock, Copy, Image, Lampada, Pin, Refresh, Trash, X } from "./icons";
+import { Lightbox } from "./Lightbox";
 import { ConversaDuvida } from "./EstudosDuvidas";
 import { Markdown } from "./MessageView";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada }
@@ -53,6 +54,31 @@ function Numero(props: { valor: number; min: number; max: number; unidade: strin
 
 const quando = (iso: string) => (iso ? new Date(iso).toLocaleDateString("pt-BR") : "");
 
+/** A figura do PDF que a questão usa. Fundo branco: é recorte de página impressa, e no tema escuro o desenho
+ *  preto sumia. Clique amplia (o Lightbox dá zoom no detalhe do gráfico). Material apagado: some sem quebrar. */
+export function FiguraQuestao({ conv, f }: { conv: number; f?: EstudosFigura }) {
+  const [aberta, setAberta] = useState(false);
+  const [falhou, setFalhou] = useState("");   // a src que falhou: a próxima questão (outra figura) aparece
+  // ampliada, os atalhos da prova (A–E, setas, Enter) não respondem por trás
+  useEffect(() => {
+    if (!aberta) return;
+    document.body.dataset.figuraAberta = "1";
+    return () => { delete document.body.dataset.figuraAberta; };
+  }, [aberta]);
+  const src = f ? `/api/estudos-figura/${conv}/${f.material}/${f.id}` : "";
+  if (!f || falhou === src) return null;
+  return (
+    <>
+      <button type="button" onClick={() => setAberta(true)} title="Ampliar a figura"
+              className="my-3 block w-fit max-w-full cursor-zoom-in overflow-hidden rounded-xl border border-line bg-white p-2">
+        <img src={src} alt={f.descricao || "Figura da questão"} onError={() => setFalhou(src)} loading="lazy"
+             className="block max-h-[min(440px,55vh)] w-auto max-w-full object-contain" />
+      </button>
+      {aberta && <Lightbox src={src} titulo="Figura da questão" onClose={() => setAberta(false)} />}
+    </>
+  );
+}
+
 /** O grafo da Pesquisa com um ramo por tipo de questão e uma folha por questão pedida. */
 function SinapseProva({ p }: { p: EstudosProva }) {
   const tipos = (["me", "vf", "disc"] as const).filter((t) => p.planejadas.some((q) => q.tipo === t));
@@ -64,7 +90,9 @@ function SinapseProva({ p }: { p: EstudosProva }) {
     <Sinapse estado={{ status: "rodando", fontes, rodadas: [], pergunta: p.titulo, fase: "pronto", rodada: 0, rodadas_total: 0,
                        stats: p.stats }}
              ramos={tipos.map((t) => NOMES[t])}
-             fase={aguardando ? "esperando o Claude" : p.etapa === "conferindo" ? "conferindo o gabarito" : "escrevendo as questões"}
+             fase={aguardando ? "esperando o Claude" : p.etapa === "conferindo" ? "conferindo o gabarito"
+                   : p.etapa === "figuras" ? `olhando as figuras do PDF${p.figuras_olhadas ? ` (${p.figuras_olhadas})` : ""}`
+                   : "escrevendo as questões"}
              meta={aguardando ? <></> : <>
                <span className="sin-sep">·</span><span><b>{prontas}</b> de {p.planejadas.length} questões</span>
                {numeros(p) && <><span className="sin-sep">·</span><span>{numeros(p)}</span></>}
@@ -149,7 +177,7 @@ function FazerProva({ prova, treino, duvida, onEntregar, onSair }: {
   // Teclado: ← → navegam; A–E marcam a alternativa; V/F no verdadeiro ou falso (fora do campo de texto).
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest("textarea, input") || e.ctrlKey || e.metaKey || e.altKey) return;
+      if ((e.target as HTMLElement)?.closest("textarea, input") || e.ctrlKey || e.metaKey || e.altKey || document.body.dataset.figuraAberta) return;
       if (e.key === "ArrowRight") ir(r.atual + 1);
       else if (e.key === "ArrowLeft") ir(r.atual - 1);
       else if (q.tipo === "me" && LETRAS.slice(0, q.alternativas?.length).includes(e.key.toUpperCase())) responder(LETRAS.indexOf(e.key.toUpperCase()));
@@ -214,6 +242,7 @@ function FazerProva({ prova, treino, duvida, onEntregar, onSair }: {
           <span>· vale {nota(q.pontos)} ponto{q.pontos === 1 ? "" : "s"}</span>
         </div>
         <Markdown text={matematica(q.enunciado)} math />
+        <FiguraQuestao conv={duvida.conv} f={q.figura} />
         <div className="mt-4 flex flex-col gap-2">
           {q.tipo === "me" && q.alternativas?.map((a, i) => {
             const minha = r.respostas[q.id] === i, certa = conf && conf.correta === i;
@@ -374,6 +403,7 @@ function QuestaoCorrigida({ q, n, t, duvida }: { q: EstudosQuestao; n: number; t
         <span className="ml-auto font-mono">{nota(c?.pontos ?? 0)}/{nota(q.pontos)}</span>
       </div>
       <Markdown text={matematica(q.enunciado)} math />
+      <FiguraQuestao conv={duvida.conv} f={q.figura} />
 
       {q.tipo === "me" && (
         <div className="mt-3 flex flex-col gap-1.5">
@@ -492,6 +522,10 @@ export default function Provas(props: {
   const escolhidos = (cfg.topicos ?? []).filter((t) => topicosDisp.includes(t));
   const temSimulado = props.projeto.materiais.some((m) => m.uso === "prova") || !!props.projeto.resumo?.perfil?.banca;
   const total = (cfg.me ?? 0) + (cfg.vf ?? 0) + (cfg.disc ?? 0);
+  const figs = props.projeto.figuras;
+  // o teto: as que servem mais as ainda não olhadas (nada olhado = as recortadas; tudo olhado = as úteis)
+  const maxFiguras = Math.min(total, figs ? figs.uteis + figs.detectadas - figs.olhadas : 0);
+  const comFigura = Math.min(cfg.figuras ?? 0, maxFiguras);
   const gerando = viva?.tipo === "prova" && (viva.status === "rodando" || viva.status === "aguardando") ? viva : null;
   const corrigindo = viva?.tipo === "tentativa" && (viva.status === "rodando" || viva.status === "aguardando") ? viva : null;
 
@@ -544,7 +578,8 @@ export default function Provas(props: {
     try {
       ouvindo.current = -1;
       await streamSSE(`/estudos/${props.conv}/prova`, { method: "POST", signal: ctl.signal, body: JSON.stringify({
-        config: { ...cfg, topicos: extra?.topicos ?? escolhidos, instrucoes: extra?.instrucoes ?? instrucoes }, ...motorDe(props.modelos) }) }, (ev) => {
+        config: { ...cfg, figuras: comFigura, topicos: extra?.topicos ?? escolhidos, instrucoes: extra?.instrucoes ?? instrucoes },
+        ...motorDe(props.modelos) }) }, (ev) => {
         if (ctl.signal.aborted) return;
         if (ev.erro) aoErro.current(ev.erro);
         else { ultimo = ev; setViva(ev); }
@@ -575,8 +610,8 @@ export default function Provas(props: {
       if (!p.questoes.length) return aoErro.current("Esta prova não tem questões.");
       // refazer uma prova já entregue: a tela mostra de novo sem gabarito (as respostas começam do zero)
       setPronta(null);
-      setVista({ tipo: "fazer", treino, prova: { ...p, questoes: p.questoes.map(({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas }) =>
-        ({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas })) } });
+      setVista({ tipo: "fazer", treino, prova: { ...p, questoes: p.questoes.map(({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas, figura }) =>
+        ({ id, tipo, enunciado, pontos, topico, dificuldade, alternativas, figura })) } });
     } catch (e: any) {
       aoErro.current(e.message);
     }
@@ -788,6 +823,12 @@ export default function Provas(props: {
                         title={temSimulado ? "Imitar o jeito das provas anexadas (banca, formato, enunciado)" : "Anexe uma prova ou simulado (marcado como Prova) para usar"}>
                   <Check className={`size-3.5 ${cfg.estilo && temSimulado ? "" : "opacity-30"}`} /> Estilo do simulado
                 </button>
+                {maxFiguras > 0 && (
+                  <Numero valor={comFigura} min={0} max={maxFiguras} unidade="com figura" icone={<Image className="size-3.5" />}
+                          dica={`Questões que usam uma figura do PDF (gráfico, diagrama, tabela, tirinha) — ${figs.detectadas} recortada(s)`
+                                + `${figs.olhadas ? `, ${figs.uteis} que servem` : ""}. Precisa de um modelo que enxerga (Qwen3.6, Gemma 4…).`}
+                          onChange={(figuras) => setCfg((c) => ({ ...c, figuras }))} />
+                )}
                 <Numero valor={cfg.tempo ?? 0} min={0} max={600} unidade="min" icone={<Clock className="size-3.5" />}
                         dica="Tempo de prova (0 = sem cronômetro); acabou, entrega sozinha" onChange={(tempo) => setCfg((c) => ({ ...c, tempo }))} />
                 <DireitaPrompt>

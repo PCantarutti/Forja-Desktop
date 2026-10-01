@@ -4,7 +4,7 @@ import type { EstudosFlashcards, EstudosItemRevisao, EstudosProjeto, PesquisaFon
 import { ArrowRight, Check, Download, Lampada, Refresh, Trash, X } from "./icons";
 import { Markdown } from "./MessageView";
 import Sinapse from "./Sinapse";
-import { AguardandoClaude } from "./EstudosProva";
+import { AguardandoClaude, FiguraQuestao } from "./EstudosProva";
 import { matematica } from "./estudosTexto";
 import { type Modelos, btn, btnPrimary, card, motorDe, numeros, rotulo } from "./estudosUi";
 
@@ -51,7 +51,7 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
   // Teclado: espaço vira o cartão (ou mostra a resposta); 1 = errei, 2 = acertei; A–E / V F respondem.
   useEffect(() => {
     const tecla = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.closest("textarea, input") || !item) return;
+      if ((e.target as HTMLElement)?.closest("textarea, input") || !item || document.body.dataset.figuraAberta) return;
       const k = e.key.toLowerCase();
       if (fechada && resposta === null) {
         if (q!.tipo === "me" && LETRAS.slice(0, q!.alternativas?.length).toLowerCase().includes(k) && k.length === 1) setResposta(LETRAS.toLowerCase().indexOf(k));
@@ -101,6 +101,7 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
         ) : (
           <>
             <Markdown text={matematica(q!.enunciado)} math />
+            <FiguraQuestao conv={conv} f={q!.figura} />
             {q!.tipo === "me" && (
               <div className="mt-3 flex flex-col gap-1.5">
                 {q!.alternativas?.map((a, k) => {

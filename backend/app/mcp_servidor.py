@@ -420,7 +420,7 @@ INSTRUCOES = (
     "no painel do Forja em cada etapa. Se um resultado trouxer '[Mensagem do usuário…]', ela vale como pedido "
     "dele: leve em conta antes de seguir. "
     "Tela Estudos (não precisa de `path`): ferramentas estudos_* — crie a matéria, anexe material, leia por "
-    "páginas, pesquise com a sua própria busca, grave o resumo, a prova e flashcards, corrija discursivas, responda dúvidas e dicas, veja o desempenho e monte o cronograma; estudos_pedidos traz "
+    "páginas (com as figuras do PDF: estudos_ver_figura), pesquise com a sua própria busca, grave o resumo, a prova (com ou sem figura) e flashcards, corrija discursivas, responda dúvidas e dicas, veja o desempenho e monte o cronograma; estudos_pedidos traz "
     "o que o usuário pediu na tela com o motor \"Claude (MCP)\".")
 
 
@@ -557,13 +557,26 @@ def _servidor():
     @mcp.tool()
     async def estudos_abrir(estudo_id: int) -> str:
         """Material anexado, último resumo, preferências do aluno e o formato que a tela espera."""
-        return estudos.mcp_abrir(estudo_id)
+        return await asyncio.to_thread(estudos.mcp_abrir, estudo_id)
 
     @mcp.tool()
     async def estudos_ler_material(material_id: int, inicio: int = 1, fim: int = 0) -> str:
         """Texto de um material: páginas inicio..fim (ou a parte `inicio`, se não tiver páginas). Até 40 mil
         caracteres por chamada; o fim do resultado diz de onde continuar."""
-        return estudos.mcp_ler_material(material_id, inicio, fim)
+        return await asyncio.to_thread(estudos.mcp_ler_material, material_id, inicio, fim)
+
+    @mcp.tool()
+    async def estudos_ver_figura(estudo_id: int, figura: str):
+        """Mostra uma figura recortada do PDF do material ("<material>:<figura>", da lista no fim do
+        estudos_ler_material). Olhe antes de escrever uma questão com ela."""
+        from mcp.server.fastmcp import Image
+        from . import estudos_figuras
+        from .tools import ToolError
+        try:
+            legenda, png = await asyncio.to_thread(estudos_figuras.mcp_ver, estudo_id, figura)
+        except ToolError as e:
+            return f"ERRO: {e}"
+        return [legenda, Image(data=png, format="png")]
 
     @mcp.tool()
     async def estudos_anexar(estudo_id: int, caminho: str = "", texto: str = "", nome: str = "") -> str:
@@ -582,7 +595,7 @@ def _servidor():
     @mcp.tool()
     async def estudos_ler_resumo(estudo_id: int, resumo_id: int = 0) -> str:
         """O resumo do estudo em Markdown (o último, ou o `resumo_id`): base para montar a prova."""
-        return estudos.mcp_ler_resumo(estudo_id, resumo_id)
+        return await asyncio.to_thread(estudos.mcp_ler_resumo, estudo_id, resumo_id)
 
     @mcp.tool()
     async def estudos_salvar_prova(questoes: list[dict], estudo_id: int = 0, pedido_id: int = 0, titulo: str = "",
