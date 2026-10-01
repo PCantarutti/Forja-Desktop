@@ -645,9 +645,13 @@ def _trabalhar(conv_id: int, message_id: int, prompt: str, opts_lote: dict, job_
                     from . import ampliar as amp
                     if amp.ext_video() != ".webm":  # MP4 (AV1/H.264) escolhido nos Parâmetros: o gerado sai igual ao ampliado
                         final = arquivo.with_suffix(amp.ext_video())
-                        amp.recodificar(arquivo, final, job_id)
-                        arquivo.unlink(missing_ok=True)
-                        item["path"] = str(final)
+                        try:
+                            amp.recodificar(arquivo, final, job_id)
+                            arquivo.unlink(missing_ok=True)
+                            item["path"] = str(final)
+                        except Exception as e:  # sem ffmpeg ou encoder: o vídeo gerou certo, fica em webm
+                            final.unlink(missing_ok=True)
+                            logging.warning("vídeo gerado ficou em webm (recodificar falhou): %s", e)
                 item["status"] = "pronta"
                 if opts.get("hires"):  # o tamanho final é o do sd-cli (escala arredondada por ele): o do arquivo
                     from PIL import Image
