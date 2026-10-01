@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, streamSSE } from "../api";
+import { api, auth, streamSSE } from "../api";
 import type { EstudosFlashcards, EstudosItemRevisao, EstudosProjeto, PesquisaFonte } from "../types";
 import { ArrowRight, Check, Download, Lampada, Refresh, Trash, X } from "./icons";
 import { Markdown } from "./MessageView";
@@ -246,7 +246,7 @@ export default function Revisao(props: {
   async function exportar() {
     try {
       const r = await fetch(`/api/estudos/${props.conv}/flashcards.csv`,
-                            { headers: window.forja?.token ? { "X-Forja-Token": window.forja.token } : {} });
+                            { headers: auth() });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const url = URL.createObjectURL(await r.blob());
       const a = document.createElement("a");

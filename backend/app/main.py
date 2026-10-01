@@ -2815,7 +2815,7 @@ async def bulk_conversations(body: BulkBody):
             if not c:
                 continue
             if body.action == "delete":
-                if active_run(cid):
+                if active_run(cid) or estudos.rodando(cid):
                     skipped.append(cid)  # não apaga conversa com execução em andamento
                     continue
                 s.query(db.Checkpoint).filter(db.Checkpoint.conversation_id == cid).delete()

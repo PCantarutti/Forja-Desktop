@@ -1,6 +1,6 @@
 // Token desta execução do app, exigido pelo backend nas rotas /api. Ausente quando a UI abre
 // numa aba comum do navegador (dev com Vite) — e ali o backend também não exige.
-const auth = (): Record<string, string> => (window.forja?.token ? { "X-Forja-Token": window.forja.token } : {});
+export const auth = (): Record<string, string> => (window.forja?.token ? { "X-Forja-Token": window.forja.token } : {});
 // <img src> e link de download não mandam header: levam o token neste cookie (sem Max-Age, morre com o
 // app, como o próprio token). Strict: página de outro site não consegue fazer o navegador mandá-lo.
 if (window.forja?.token) document.cookie = `forja_token=${window.forja.token}; path=/api; SameSite=Strict`;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
-import { api, enviarArquivo, streamSSE } from "../api";
+import { auth, api, enviarArquivo, streamSSE } from "../api";
 import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto, PesquisaFonte } from "../types";
 import { Bubble, Check, Clipboard, Copy, Cube, Download, ExternalLink, Globe, Livro, Paperclip, Search, Sliders, X } from "./icons";
 import { Markdown } from "./MessageView";
@@ -388,7 +388,7 @@ export default function EstudosView(props: {
       const css = await cssDaTela();
       const r = await fetch("/api/estudos/pdf", {
         method: "POST", body: JSON.stringify({ titulo, html: resumoRef.current.innerHTML, css }),
-        headers: { "Content-Type": "application/json", ...(window.forja?.token ? { "X-Forja-Token": window.forja.token } : {}) } });
+        headers: { "Content-Type": "application/json", ...auth() } });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
       const url = URL.createObjectURL(await r.blob());
       const a = document.createElement("a");
