@@ -68,7 +68,8 @@ export function ConversaDuvida(props: {
     const viva = msgs.find((m) => m.role === "assistant" && m.status === "rodando");
     if (viva && !enviando) ouvir(viva.id);
   }, [msgs, enviando, ouvir]);
-  useEffect(() => { fim.current?.scrollIntoView({ block: "nearest" }); }, [msgs.length, msgs.at(-1)?.texto]);
+  // "nearest" com scroll-margin num elemento de altura zero não rola no Chromium: na aba inteira vai "end"
+  useEffect(() => { fim.current?.scrollIntoView({ block: props.compacta ? "nearest" : "end" }); }, [msgs.length, msgs.at(-1)?.texto]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const enviar = useCallback(async (pergunta: string, trecho = "") => {
     pergunta = pergunta.trim();
@@ -141,7 +142,7 @@ export function ConversaDuvida(props: {
           {m.modelo && m.status === "pronto" && <p className="mt-1 font-mono text-[10.5px] text-faint">{m.modelo}</p>}
         </div>
       ))}
-      <div ref={fim} />
+      <div ref={fim} className={props.compacta ? "" : "scroll-mb-40"} />   {/* a margem: a caixa presa no rodapé não cobre a última linha */}
 
       {!!props.sugestoes?.length && !respondendo && (
         <div className="flex flex-wrap gap-1.5">
