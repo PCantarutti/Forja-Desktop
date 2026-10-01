@@ -56,7 +56,7 @@ _TAREFAS: set = set()
 # x-forja-materia e fica nesta variável durante a requisição (e nas execuções que ela dispara: a task copia o
 # contexto): quem lê as mensagens filtra por ela, quem grava marca com ela. None = "Tudo", sem filtro.
 MATERIA: ContextVar[str | None] = ContextVar("estudos_materia", default=None)
-SEM_MATERIA = ("revisao", "objetivo", "edital")   # do objetivo inteiro: valem para todas as matérias
+SEM_MATERIA = ("revisao", "objetivo", "edital", "piloto")   # do objetivo inteiro: valem para todas as matérias
 _TRAVA_OBJETIVO = threading.Lock()
 
 
@@ -834,7 +834,7 @@ def projeto(conv_id: int) -> dict:
                    for m in filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                        db.Message.role == "assistant").order_by(db.Message.id)))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
-    from . import estudos_busca, estudos_duvidas, estudos_edital, estudos_figuras, estudos_prova, estudos_revisao, estudos_simulado
+    from . import estudos_busca, estudos_duvidas, estudos_edital, estudos_figuras, estudos_piloto, estudos_prova, estudos_revisao, estudos_simulado
     # PDF anexado antes das figuras existirem é recortado na primeira abertura (uma vez, ~2 s por 50 páginas)
     mats = estudos_figuras.garantir(conv_id)
     # a tela só precisa da contagem: a lista inteira (com as descrições) é pesada para ir a cada carimbo
@@ -847,7 +847,8 @@ def projeto(conv_id: int) -> dict:
             "duvidas": estudos_duvidas.fios(conv_id), "revisao": estudos_revisao.painel(conv_id),
             # simulados reais: as conferências com o gabarito oficial, o "o que mais cai" e a última busca na web
             "simulados": estudos_simulado.lista(conv_id), "ranking": estudos_simulado.ranking(conv_id),
-            "busca": estudos_busca.ultima(conv_id), "edital": estudos_edital.ultima(conv_id)}
+            "busca": estudos_busca.ultima(conv_id), "edital": estudos_edital.ultima(conv_id),
+            "piloto": estudos_piloto.resumo(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração
