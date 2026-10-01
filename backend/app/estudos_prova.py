@@ -26,7 +26,7 @@ from collections import Counter
 from sqlalchemy import select
 
 from . import db, estudos as E, mirror, pesquisa, web
-from .agent import _save
+from .estudos import _save
 from .parsing import split_think
 from .tools import ToolError
 
@@ -135,8 +135,8 @@ def _base(conv_id: int) -> tuple[str, str, dict, dict[str, str], list[str]]:
     vazio não pode apagar os tópicos de que a prova precisa."""
     with db.session() as s:
         titulo = E._conv(s, conv_id).title
-        resumo = next((m for m in s.scalars(select(db.Message).where(
-            db.Message.conversation_id == conv_id, db.Message.role == "assistant").order_by(db.Message.id.desc()))
+        resumo = next((m for m in E.filtrar(s.scalars(select(db.Message).where(
+            db.Message.conversation_id == conv_id, db.Message.role == "assistant").order_by(db.Message.id.desc())))
             if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo" and m.content), None)
         texto, e = (resumo.content, resumo.meta["estudos"]) if resumo else ("", {})
     secoes = _secoes(texto)
@@ -529,7 +529,7 @@ def para_tela(e: dict, conv_id: int) -> dict:
 def lista(conv_id: int) -> list[dict]:
     """As provas do estudo, com as tentativas de cada uma, para a lista da tela (sem questões)."""
     with db.session() as s:
-        msgs = list(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id).order_by(db.Message.id)))
+        msgs = E.filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id).order_by(db.Message.id)))
     tentativas: dict[int, list[dict]] = {}
     for m in msgs:
         e = (m.meta or {}).get("estudos") or {}

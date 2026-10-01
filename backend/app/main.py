@@ -135,6 +135,19 @@ async def fronteira(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def materia_estudos(request, call_next):
+    """A matéria aberta na tela Estudos (cabeçalho x-forja-materia; sem ele = "Tudo"): quem lê filtra por ela,
+    quem grava marca com ela — também nas execuções que a requisição dispara (a task copia o contexto)."""
+    if not request.url.path.startswith("/api/estudos"):
+        return await call_next(request)
+    marca = estudos.MATERIA.set(request.headers.get("x-forja-materia") or None)
+    try:
+        return await call_next(request)
+    finally:
+        estudos.MATERIA.reset(marca)
+
+
 @app.get("/api/config")
 def get_config():
     return {"providers": [{"id": p["id"], "name": p["name"]} for p in config.PROVIDERS.values()],
@@ -2239,7 +2252,12 @@ class MaterialTextoBody(BaseModel):
 
 
 class MaterialUsoBody(BaseModel):
-    uso: str                        # conteudo | prova
+    uso: str | None = None          # conteudo | prova
+    materia: str | None = None      # id da matéria; "" = Geral (serve para todas)
+
+
+class MateriaBody(BaseModel):
+    nome: str = ""
 
 
 def _sse_estudos(message_id: int) -> StreamingResponse:
@@ -2291,7 +2309,31 @@ def estudos_material_texto(conv_id: int, body: MaterialTextoBody):
 @app.patch("/api/estudos/material/{material_id}")
 def estudos_material_uso(material_id: int, body: MaterialUsoBody):
     try:
-        return estudos.alterar_material(material_id, body.uso)
+        return estudos.alterar_material(material_id, body.uso, body.materia)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/materias")
+def estudos_materia_nova(conv_id: int, body: MateriaBody):
+    try:
+        return estudos.nova_materia(conv_id, body.nome)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/estudos/{conv_id}/materias/{materia}")
+def estudos_materia_renomear(conv_id: int, materia: str, body: MateriaBody):
+    try:
+        return estudos.renomear_materia(conv_id, materia, body.nome)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/estudos/{conv_id}/materias/{materia}")
+def estudos_materia_apagar(conv_id: int, materia: str):
+    try:
+        return estudos.apagar_materia(conv_id, materia)
     except ToolError as e:
         raise HTTPException(400, str(e))
 

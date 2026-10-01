@@ -18,16 +18,18 @@ Dois motores: o do Forja (modelo local ou de API) e o Claude via MCP. No segundo
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 from datetime import timezone
 import json
 import re
+import threading
 import time
 from pathlib import Path
 
 from sqlalchemy import select
 
 from . import config, db, documentos, mirror, pesquisa, web
-from .agent import _save
+from .agent import _save as _salvar
 from .parsing import split_think
 from .tools import ToolError
 
@@ -47,6 +49,155 @@ PROFUNDIDADES = ("rapida", "normal", "funda")
 
 _RUNS: dict[int, dict] = {}   # message_id -> corrida viva
 _TAREFAS: set = set()
+
+# ------------------------------------------------------------------ objetivo e matérias
+# A conversa é o OBJETIVO (um concurso, o ENEM); dentro dela, matérias. Cada mensagem do estudo leva
+# meta["estudos"]["materia"] (id da matéria; "" = Geral). A matéria escolhida na tela chega no cabeçalho
+# x-forja-materia e fica nesta variável durante a requisição (e nas execuções que ela dispara: a task copia o
+# contexto): quem lê as mensagens filtra por ela, quem grava marca com ela. None = "Tudo", sem filtro.
+MATERIA: ContextVar[str | None] = ContextVar("estudos_materia", default=None)
+SEM_MATERIA = ("revisao", "objetivo")   # uma por objetivo: valem para todas as matérias
+_TRAVA_OBJETIVO = threading.Lock()
+
+
+def _tipo(m) -> str:
+    return ((m.meta or {}).get("estudos") or {}).get("tipo") or ""
+
+
+def da_materia(m) -> bool:
+    """A mensagem entra na matéria da requisição? Material "Geral" (sem matéria) serve para todas."""
+    atual = MATERIA.get()
+    if atual is None:
+        return True
+    e = (m.meta or {}).get("estudos") or {}
+    if e.get("tipo") in SEM_MATERIA:
+        return True
+    dela = e.get("materia") or ""
+    return dela == atual or (dela == "" and e.get("tipo") == "material")
+
+
+def filtrar(msgs) -> list:
+    return [m for m in msgs if da_materia(m)]
+
+
+def _materia_do_pai(e: dict) -> str | None:
+    """Tentativa, dica e dúvida de questão herdam a matéria da prova/entrega (entregar pelo "Tudo" não muda)."""
+    pai = e.get("prova_id")
+    if not pai and (f := re.match(r"(?:questao|dica):(\d+):", e.get("fio") or "")):
+        pai = int(f.group(1))
+    if not pai:
+        return None
+    with db.session() as s:
+        m = s.get(db.Message, int(pai))
+        return ((m.meta or {}).get("estudos") or {}).get("materia") or "" if m else None
+
+
+def _save(conv_id: int, **fields) -> db.Message:
+    """O _save do agente, marcando a matéria. Muda o dict que veio: a execução montada dele já sai marcada."""
+    e = (fields.get("meta") or {}).get("estudos")
+    if isinstance(e, dict) and "materia" not in e and e.get("tipo") not in SEM_MATERIA:
+        pai = _materia_do_pai(e)
+        e["materia"] = pai if pai is not None else (MATERIA.get() or "")
+    return _salvar(conv_id, **fields)
+
+
+def _objetivo(s, conv_id: int):
+    return next((m for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
+                                                               db.Message.role == "event")) if _tipo(m) == "objetivo"), None)
+
+
+def materias(conv_id: int) -> list[dict]:
+    """[{id, nome}] do objetivo. Na 1ª vez cria a lista; estudo de antes das matérias vira um objetivo com uma
+    matéria só (o título) e tudo o que já tinha passa a ser dela — o progresso não se perde."""
+    with _TRAVA_OBJETIVO, db.session() as s:
+        conv = _conv(s, conv_id)
+        if obj := _objetivo(s, conv_id):
+            return list(obj.meta["estudos"]["materias"])
+        antigas = [m for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id))
+                   if (m.meta or {}).get("estudos") and _tipo(m) not in SEM_MATERIA and "materia" not in m.meta["estudos"]]
+        lista = [{"id": "m1", "nome": conv.title[:60] if conv.title != "Nova conversa" else "Matéria 1"}] if antigas else []
+        for m in antigas:
+            m.meta = {**m.meta, "estudos": {**m.meta["estudos"], "materia": "m1"}}
+        s.commit()
+    _salvar(conv_id, role="event", content="Objetivo", status="pronto", meta={"estudos": {"tipo": "objetivo", "materias": lista}})
+    return lista
+
+
+def _mudar_materias(conv_id: int, f) -> list[dict]:
+    materias(conv_id)
+    with _TRAVA_OBJETIVO, db.session() as s:
+        obj = _objetivo(s, conv_id)
+        lista = [dict(x) for x in obj.meta["estudos"]["materias"]]
+        f(lista, s)
+        obj.meta = {**obj.meta, "estudos": {**obj.meta["estudos"], "materias": lista}}
+        _tocar(s, conv_id)
+        s.commit()
+    mirror.write(conv_id)
+    return lista
+
+
+def _nome_materia(nome: str) -> str:
+    nome = re.sub(r"\s+", " ", nome or "").strip()[:60]
+    if not nome:
+        raise ToolError("Dê um nome à matéria.")
+    return nome
+
+
+def nova_materia(conv_id: int, nome: str) -> dict:
+    nome = _nome_materia(nome)
+    nova = {}
+
+    def f(lista, s):
+        if any(x["nome"].casefold() == nome.casefold() for x in lista):
+            raise ToolError("Já existe uma matéria com esse nome.")
+        n = max((int(x["id"][1:]) for x in lista if x["id"][1:].isdigit()), default=0) + 1
+        nova.update(id=f"m{n}", nome=nome)
+        lista.append(dict(nova))
+    _mudar_materias(conv_id, f)
+    return nova
+
+
+def renomear_materia(conv_id: int, materia: str, nome: str) -> dict:
+    nome = _nome_materia(nome)
+
+    def f(lista, s):
+        alvo = next((x for x in lista if x["id"] == materia), None)
+        if not alvo:
+            raise ToolError("Matéria não encontrada.")
+        alvo["nome"] = nome
+    _mudar_materias(conv_id, f)
+    return {"id": materia, "nome": nome}
+
+
+def apagar_materia(conv_id: int, materia: str) -> dict:
+    """Tira a matéria da lista; o que era dela (resumos, provas, material) vai para o Geral, nada se apaga."""
+    if any(r["conv_id"] == conv_id and r.get("materia") == materia for r in _RUNS.values()):
+        raise ToolError("Há algo rodando nesta matéria. Espere terminar ou pare antes.")
+
+    def f(lista, s):
+        if not any(x["id"] == materia for x in lista):
+            raise ToolError("Matéria não encontrada.")
+        lista[:] = [x for x in lista if x["id"] != materia]
+        for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id)):
+            e = (m.meta or {}).get("estudos") or {}
+            if e.get("materia") == materia:
+                m.meta = {**m.meta, "estudos": {**e, "materia": ""}}
+    _mudar_materias(conv_id, f)
+    return {"ok": True}
+
+
+def _acerto_por_materia(conv_id: int) -> dict[str, dict]:
+    """{materia: {acerto %, entregas}} pelas entregas corrigidas (pontos sobre o máximo, todas juntas)."""
+    out: dict[str, dict] = {}
+    with db.session() as s:
+        for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "user")):
+            e = (m.meta or {}).get("estudos") or {}
+            if e.get("tipo") == "tentativa" and m.status == "pronto" and e.get("max"):
+                x = out.setdefault(e.get("materia") or "", {"pontos": 0.0, "max": 0.0, "entregas": 0})
+                x["pontos"] += float(e.get("pontos") or 0)
+                x["max"] += float(e["max"])
+                x["entregas"] += 1
+    return {k: {"acerto": round(100 * v["pontos"] / v["max"]), "entregas": v["entregas"]} for k, v in out.items()}
 
 # ------------------------------------------------------------------ preferências
 
@@ -315,12 +466,18 @@ def _material(s, material_id: int) -> db.Message:
     return m
 
 
-def alterar_material(material_id: int, uso: str) -> dict:
-    if uso not in ("conteudo", "prova"):
+def alterar_material(material_id: int, uso: str | None = None, materia: str | None = None) -> dict:
+    """Troca o uso (conteúdo/prova) e/ou a matéria ("" = Geral, serve para todas)."""
+    if uso is not None and uso not in ("conteudo", "prova"):
         raise ToolError("uso deve ser conteudo ou prova.")
     with db.session() as s:
         m = _material(s, material_id)
-        m.meta = {**m.meta, "estudos": {**m.meta["estudos"], "uso": uso}}
+        obj = _objetivo(s, m.conversation_id)
+        if materia and not any(x["id"] == materia for x in (obj.meta["estudos"]["materias"] if obj else [])):
+            raise ToolError("Matéria não encontrada.")
+        novo = {**m.meta["estudos"], **({"uso": uso} if uso is not None else {}),
+                **({"materia": materia} if materia is not None else {})}
+        m.meta = {**m.meta, "estudos": novo}
         _tocar(s, m.conversation_id)
         s.commit()
         return {"id": m.id, **m.meta["estudos"]}
@@ -351,9 +508,9 @@ def _texto(conv_id: int, e: dict) -> str:
 
 def materiais(conv_id: int) -> list[dict]:
     with db.session() as s:
-        return [{"id": m.id, **m.meta["estudos"]} for m in s.scalars(
+        return [{"id": m.id, **m.meta["estudos"]} for m in filtrar(s.scalars(
             select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "event")
-            .order_by(db.Message.id)) if ((m.meta or {}).get("estudos") or {}).get("tipo") == "material"]
+            .order_by(db.Message.id))) if ((m.meta or {}).get("estudos") or {}).get("tipo") == "material"]
 
 
 def apagar(conv_id: int) -> None:
@@ -540,20 +697,23 @@ def reap() -> int:
 
 
 def projeto(conv_id: int) -> dict:
-    """Tudo o que a tela precisa de uma matéria."""
+    """Tudo o que a tela precisa do objetivo, filtrado pela matéria da requisição (MATERIA; None = tudo)."""
+    lista_materias = materias(conv_id)
+    acertos = _acerto_por_materia(conv_id)
     with db.session() as s:
         conv = _conv(s, conv_id)
         titulo = conv.title
         resumos = [{"message_id": m.id, "titulo": m.meta["estudos"].get("titulo") or m.meta["estudos"].get("tema") or "",
                     "status": _situacao(m.status), "criado": quando(m.created_at)}
-                   for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
-                                                               db.Message.role == "assistant").order_by(db.Message.id))
+                   for m in filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
+                                                                       db.Message.role == "assistant").order_by(db.Message.id)))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
     from . import estudos_busca, estudos_duvidas, estudos_figuras, estudos_prova, estudos_revisao, estudos_simulado
     # PDF anexado antes das figuras existirem é recortado na primeira abertura (uma vez, ~2 s por 50 páginas)
     mats = estudos_figuras.garantir(conv_id)
     # a tela só precisa da contagem: a lista inteira (com as descrições) é pesada para ir a cada carimbo
-    return {"id": conv_id, "titulo": titulo, "resumos": resumos,
+    return {"id": conv_id, "titulo": titulo, "resumos": resumos, "materia": MATERIA.get(),
+            "materias": [{**x, **acertos.get(x["id"], {"acerto": None, "entregas": 0})} for x in lista_materias],
             "materiais": [{**m, "figuras": len(m["figuras"]) if isinstance(m.get("figuras"), list) else None} for m in mats],
             "figuras": estudos_figuras.resumo(mats),
             "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),

@@ -21,7 +21,7 @@ from contextlib import aclosing
 from sqlalchemy import select
 
 from . import config, db, estudos as E, llm, mirror, web
-from .agent import _save
+from .estudos import _save
 from .parsing import split_think
 from .tools import ToolError
 
@@ -62,8 +62,8 @@ def _fio_questao(tentativa_id: int, questao_id: str) -> str:
 
 
 def _mensagens_do_fio(s, conv_id: int, fio: str) -> list[db.Message]:
-    return [m for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
-                                                          db.Message.role.in_(("user", "assistant"))).order_by(db.Message.id))
+    return [m for m in E.filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
+                                                                  db.Message.role.in_(("user", "assistant"))).order_by(db.Message.id)))
             if ((m.meta or {}).get("estudos") or {}).get("tipo") == "duvida" and m.meta["estudos"].get("fio") == fio]
 
 
@@ -71,7 +71,7 @@ def fios(conv_id: int) -> dict[str, int]:
     """{fio: perguntas feitas} — a tela mostra o número no botão de cada questão."""
     with db.session() as s:
         out: dict[str, int] = {}
-        for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "user")):
+        for m in E.filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "user"))):
             e = (m.meta or {}).get("estudos") or {}
             if e.get("tipo") == "duvida":
                 out[e["fio"]] = out.get(e["fio"], 0) + 1

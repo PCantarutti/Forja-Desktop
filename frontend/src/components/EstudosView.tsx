@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
-import { auth, api, enviarArquivo, streamSSE } from "../api";
+import { auth, api, enviarArquivo, setMateriaEstudos, streamSSE } from "../api";
 import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto, PesquisaFonte } from "../types";
 import { Bubble, Check, Clipboard, Copy, Cube, Download, ExternalLink, Globe, Livro, Paperclip, Search, Sliders, X } from "./icons";
 import { Markdown } from "./MessageView";
@@ -15,11 +15,13 @@ import Revisao from "./EstudosRevisao";
 import Desempenho from "./EstudosDesempenho";
 import Simulados from "./EstudosSimulados";
 import EstudosMapaMental from "./EstudosMapaMental";
+import EstudosMaterias from "./EstudosMaterias";
 import { acharTitulo } from "./estudosMapa";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
 const KEY_MODELOS = "forja.estudos.modelos";
+const KEY_MATERIA = "forja.estudos.materia.";   // + conv: a matéria aberta em cada objetivo
 const TEXTO_LONGO = 1500;            // colar mais que isto no campo do tema vira material
 
 type Opcao<T extends string> = { id: T; label: string; hint: string };
@@ -162,6 +164,9 @@ export default function EstudosView(props: {
   onConversationChanged: () => void;
 }) {
   const [projeto, setProjeto] = useState<EstudosProjeto | null>(null);
+  // a matéria aberta (null = "Tudo"): vai em toda chamada pelo cabeçalho (setMateriaEstudos), e o backend filtra
+  const [materia, setMateria] = useState<string | null>(null);
+  const materiaAtual = useRef<string | null>(null);
   const [mapa, setMapa] = useState(() => ler(KEY_PREFS + ".mapa", { v: false }).v);   // o resumo como mapa mental
   // a seção pedida com o mapa na tela (clique num nó, ou o Sumário), aberta quando o texto voltar
   const irDepois = useRef<{ i: number; titulos: string; texto?: string } | null>(null);
@@ -253,7 +258,7 @@ export default function EstudosView(props: {
     if (id === null) return;
     try {
       const p = await api.get<EstudosProjeto>(`/estudos/${id}`);
-      if (convAtual.current !== id) return;   // trocou de estudo no meio
+      if (convAtual.current !== id || (p.materia ?? null) !== materiaAtual.current) return;   // trocou no meio
       setProjeto(p);
       if (acompanhando.current || escolhida.current) return;   // o SSE (ou a versão escolhida) manda no resumo
       if (p.resumo) receber(p.resumo);
@@ -264,17 +269,49 @@ export default function EstudosView(props: {
     }
   }, [receber, ouvir]);
 
-  useEffect(() => {
+  /** Esquece o resumo aberto (o SSE dele, a versão escolhida): troca de estudo ou de matéria. */
+  function largar() {
     corte.current?.abort();
     acompanhando.current = 0;
     escolhida.current = 0;
     statusAnterior.current = "";
     setTerminou(null);
     setEstado(null);
-    setProjeto(null);
     setTema("");
+  }
+
+  function usarMateria(m: string | null) {
+    materiaAtual.current = m;
+    setMateriaEstudos(m);
+    setMateria(m);
+  }
+
+  function escolherMateria(m: string | null) {
+    if (m === materiaAtual.current || props.conv === null) return;
+    gravarLocal(KEY_MATERIA + props.conv, { v: m });
+    largar();
+    usarMateria(m);
     carregar(props.conv);
-  }, [props.conv, carregar]);
+  }
+
+  useEffect(() => {
+    largar();
+    setProjeto(null);
+    usarMateria(props.conv === null ? null : ler<{ v: string | null } | null>(KEY_MATERIA + props.conv, null)?.v ?? null);
+    carregar(props.conv);
+  }, [props.conv, carregar]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Matéria que sumiu (tirada em outro aparelho) volta para o Tudo; objetivo com uma matéria só (o estudo de
+  // antes das matérias) abre nela, para o que for criado já cair lá.
+  useEffect(() => {
+    if (!projeto || props.conv === null) return;
+    const ids = projeto.materias.map((m) => m.id);
+    const salva = ler<{ v: string | null } | null>(KEY_MATERIA + props.conv, null);
+    if (materia !== null && !ids.includes(materia)) escolherMateria(null);
+    else if (materia === null && !salva && ids.length === 1) escolherMateria(ids[0]);
+  }, [projeto?.materias]);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => () => setMateriaEstudos(null), []);   // fora da tela Estudos o cabeçalho não vai
 
   // O tema do último resumo volta para o campo ao abrir o estudo: refazer é um Enter.
   useEffect(() => {
@@ -318,6 +355,15 @@ export default function EstudosView(props: {
       setPainel("");
       await carregar(id);
       props.onConversationChanged();
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  async function materiaDe(m: EstudosMaterial, nova: string) {
+    try {
+      await api.patch(`/estudos/material/${m.id}`, { materia: nova });
+      await carregar(props.conv);
     } catch (e: any) {
       props.onError(e.message);
     }
@@ -556,14 +602,22 @@ export default function EstudosView(props: {
   );
 
   // A fila de abas fica num topo fixo, no mesmo lugar em toda aba (cada aba tem a sua largura de conteúdo).
+  // À esquerda, as matérias do objetivo (somem fazendo prova/revisando, como as abas). A chave da matéria
+  // remonta as abas: cada uma busca de novo o que é da matéria nova.
   const quadro = (conteudo: React.ReactNode) => (
-    <div className="flex h-full min-h-0 flex-col">
-      {projeto && !imersao && (
-        <div className="shrink-0 px-5 pt-3">
-          <div className="mx-auto flex max-w-6xl justify-center">{abas}</div>
-        </div>
+    <div className="flex h-full min-h-0">
+      {projeto && !imersao && props.conv !== null && (
+        <EstudosMaterias conv={props.conv} projeto={projeto} materia={materia} onEscolher={escolherMateria}
+                         onMudou={() => carregar(props.conv)} onError={props.onError} />
       )}
-      <div className="flex min-h-0 flex-1 flex-col">{conteudo}</div>
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        {projeto && !imersao && (
+          <div className="shrink-0 px-5 pt-3">
+            <div className="mx-auto flex max-w-6xl justify-center">{abas}</div>
+          </div>
+        )}
+        <div key={materia ?? ""} className="flex min-h-0 flex-1 flex-col">{conteudo}</div>
+      </div>
     </div>
   );
 
@@ -807,6 +861,14 @@ export default function EstudosView(props: {
                 <div key={m.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
                   <div className="flex items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-fg" title={m.nome}>{m.nome}</span>
+                    {!!projeto?.materias.length && (
+                      <select aria-label={`Matéria de ${m.nome}`} value={m.materia ?? ""} onChange={(e) => materiaDe(m, e.target.value)}
+                              title="Geral: o material serve para todas as matérias"
+                              className="max-w-[7.5rem] shrink-0 truncate rounded-md border border-line bg-surface px-1 py-0.5 text-[11px] text-muted">
+                        <option value="">Geral</option>
+                        {projeto.materias.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
+                      </select>
+                    )}
                     <button title="Tirar do estudo" onClick={() => remover(m)} className="shrink-0 text-faint hover:text-fg">
                       <X className="size-3.5" />
                     </button>

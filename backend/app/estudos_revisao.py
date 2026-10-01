@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import select
 
 from . import db, estudos as E, mirror, mobile, pesquisa, web
-from .agent import _save
+from .estudos import _save
 from .tools import ToolError
 
 log = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def _hoje() -> date:
 def _mensagens(conv_id: int) -> list[db.Message]:
     with db.session() as s:
         E._conv(s, conv_id)
-        return list(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id).order_by(db.Message.id)))
+        return E.filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id).order_by(db.Message.id)))
 
 
 def _tipo(m: db.Message) -> str:

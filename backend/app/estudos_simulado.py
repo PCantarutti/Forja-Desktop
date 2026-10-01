@@ -26,7 +26,7 @@ from collections import Counter
 from sqlalchemy import select
 
 from . import db, estudos as E, mirror, pesquisa, web
-from .agent import _save
+from .estudos import _save
 from .tools import ToolError
 
 log = logging.getLogger("forja.estudos")
@@ -279,8 +279,8 @@ def placar(reais: list[dict]) -> dict:
 def lista(conv_id: int) -> list[dict]:
     """As análises de simulado do estudo, para a tela (sem as questões)."""
     with db.session() as s:
-        msgs = list(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
-                                                       db.Message.role == "assistant").order_by(db.Message.id)))
+        msgs = E.filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
+                                                            db.Message.role == "assistant").order_by(db.Message.id)))
     return [{"message_id": m.id, "material_id": e.get("material_id"), "material": e.get("material", ""),
              "status": E._situacao(m.status), "etapa": e.get("etapa", ""), "placar": e.get("placar") or {},
              "gabarito": e.get("gabarito", ""), "prova_id": e.get("prova_id"), "criado": E.quando(m.created_at)}
@@ -290,8 +290,8 @@ def lista(conv_id: int) -> list[dict]:
 def ranking(conv_id: int) -> dict | None:
     """O ranking da análise mais nova que terminou (cada uma junta todas as anteriores do estudo)."""
     with db.session() as s:
-        for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "assistant",
-                                                    db.Message.status == "pronto").order_by(db.Message.id.desc())):
+        for m in E.filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "assistant",
+                                                            db.Message.status == "pronto").order_by(db.Message.id.desc()))):
             e = (m.meta or {}).get("estudos") or {}
             if e.get("tipo") == "simulado" and e.get("ranking"):
                 return e["ranking"]
@@ -693,6 +693,7 @@ def criar_prova(message_id: int) -> dict:
     publico.update(questoes=questoes, etapa="pronto",
                    planejadas=[{"id": q["id"], "tipo": "me", "topico": q["topico"], "dificuldade": "media", "status": "ok",
                                 "motivo": ""} for q in questoes])
+    publico["materia"] = e.get("materia") or ""
     prova = _save(conv_id, role="assistant", content="", status="pronto", meta={"estudos": publico})
     E._patch(message_id, meta={"estudos": {**e, "prova_id": prova.id}})
     mirror.write(conv_id)

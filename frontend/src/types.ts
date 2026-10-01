@@ -278,7 +278,11 @@ export type EstudosMaterial = {
   id: number; n: number; nome: string; arquivo: string; chars: number; paginas: number; ocr: boolean;
   uso: "conteudo" | "prova";   // prova = simulado: vira o perfil do que cai, não conteúdo do resumo
   figuras?: number | null; gabarito?: boolean;     // recortadas do PDF (null = ainda não procurou; material de OCR não tem)
+  materia?: string;            // id da matéria; "" = Geral (serve para todas)
 };
+
+/** Matéria do objetivo (a conversa é o objetivo: um concurso, o ENEM). acerto = % das entregas corrigidas. */
+export type EstudosMateria = { id: string; nome: string; acerto: number | null; entregas: number };
 
 /** Figura do PDF que uma questão usa: a imagem sai de /api/estudos-figura/<conv>/<material>/<id>. */
 export type EstudosFigura = { material: number; id: string; pagina: number; descricao?: string };
@@ -308,6 +312,8 @@ export type EstudosEstado = {
 export type EstudosProjeto = {
   id: number;
   titulo: string;
+  materias: EstudosMateria[];
+  materia: string | null;   // a matéria desta leitura (null = "Tudo")
   materiais: EstudosMaterial[];
   resumos: { message_id: number; titulo: string; status: string; criado: string }[];
   resumo: EstudosEstado | null;

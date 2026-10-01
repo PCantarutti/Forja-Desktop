@@ -23,7 +23,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from . import config, documentos, estudos as E, mirror, pesquisa, web
-from .agent import _save
+from .estudos import _save
 from .tools import ToolError
 
 log = logging.getLogger("forja.estudos")
@@ -461,8 +461,8 @@ def ultima(conv_id: int) -> dict | None:
     """A busca mais nova do estudo (a tela mostra o que achou e anexou)."""
     from sqlalchemy import select
     with E.db.session() as s:
-        for m in s.scalars(select(E.db.Message).where(E.db.Message.conversation_id == conv_id, E.db.Message.role == "assistant")
-                           .order_by(E.db.Message.id.desc())):
+        for m in E.filtrar(s.scalars(select(E.db.Message).where(E.db.Message.conversation_id == conv_id,
+                                                                E.db.Message.role == "assistant").order_by(E.db.Message.id.desc()))):
             e = (m.meta or {}).get("estudos") or {}
             if e.get("tipo") == "busca":
                 return {"message_id": m.id, **e, "status": E._situacao(m.status)}
