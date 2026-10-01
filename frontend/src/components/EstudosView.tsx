@@ -17,6 +17,7 @@ import Simulados from "./EstudosSimulados";
 import EstudosMapaMental from "./EstudosMapaMental";
 import EstudosMaterias from "./EstudosMaterias";
 import { ResumoGeral, VisaoGeral } from "./EstudosTudo";
+import { LerEdital, TrazerEstudo } from "./EstudosObjetivo";
 import { acharTitulo } from "./estudosMapa";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
@@ -326,6 +327,10 @@ export default function EstudosView(props: {
     else if (!tudo && SO_TUDO.includes(aba)) setAba("resumo");
   }, [tudo]);   // eslint-disable-line react-hooks/exhaustive-deps
   const abrirMateria = (m: string) => { escolherMateria(m); setAba("resumo"); };
+  // painel do objetivo por cima das abas: ler o edital, trazer um estudo antigo
+  const [objetivo, setObjetivo] = useState<"" | "edital" | "trazer">("");
+  useEffect(() => setObjetivo(""), [props.conv]);
+  const doEdital = projeto?.materias.find((m) => m.id === materia)?.topicos ?? [];
   const simuladoFracos = () => { setProvaPendente({ topicos: [], instrucoes: "" }); setAba("simulado"); };
 
   // O tema do último resumo volta para o campo ao abrir o estudo: refazer é um Enter.
@@ -624,11 +629,12 @@ export default function EstudosView(props: {
   const quadro = (conteudo: React.ReactNode) => (
     <div className="flex h-full min-h-0">
       {projeto && !imersao && props.conv !== null && (
-        <EstudosMaterias conv={props.conv} projeto={projeto} materia={materia} onEscolher={escolherMateria}
-                         onMudou={() => carregar(props.conv)} onError={props.onError} />
+        <EstudosMaterias conv={props.conv} projeto={projeto} materia={materia} onEscolher={(m) => { setObjetivo(""); escolherMateria(m); }}
+                         onMudou={() => carregar(props.conv)} onError={props.onError}
+                         onEdital={() => setObjetivo("edital")} onTrazer={() => setObjetivo("trazer")} />
       )}
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        {projeto && !imersao && (
+        {projeto && !imersao && !objetivo && (
           <div className="shrink-0 px-5 pt-3">
             <div className="mx-auto flex max-w-6xl justify-center">{abas}</div>
           </div>
@@ -637,6 +643,21 @@ export default function EstudosView(props: {
       </div>
     </div>
   );
+
+  if (objetivo === "edital" && props.conv !== null && projeto) {
+    return quadro(
+      <LerEdital conv={props.conv} projeto={projeto} modelos={modelos} botaoModelos={botaoModelos}
+                 painelModelos={painel === "modelos" ? painelModelos : null} onError={props.onError}
+                 onFechar={() => setObjetivo("")} onFeito={() => { setObjetivo(""); escolherMateria(null); carregar(props.conv); }} />,
+    );
+  }
+
+  if (objetivo === "trazer" && props.conv !== null && projeto) {
+    return quadro(
+      <TrazerEstudo conv={props.conv} onError={props.onError} onFechar={() => setObjetivo("")}
+                    onFeito={() => { setObjetivo(""); carregar(props.conv); props.onConversationChanged(); }} />,
+    );
+  }
 
   if (tudo && aba === "visao" && props.conv !== null && projeto) {
     return quadro(
@@ -743,6 +764,16 @@ export default function EstudosView(props: {
                   no tom que você escolher, citando a página de onde tirou cada coisa. Prova anexada vira o perfil do
                   que cai: o resumo dá prioridade a isso.
                 </p>
+                {!!doEdital.length && (
+                  <div className="mt-3 border-t border-line pt-2.5">
+                    <p className="mb-1.5 text-faint">Do edital · toque num tópico para pedir o resumo dele</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {doEdital.map((t) => (
+                        <button key={t} className={pilula} onClick={() => setTema(t)} title="Usar como tema do resumo">{t}</button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 

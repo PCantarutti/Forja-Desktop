@@ -56,7 +56,7 @@ _TAREFAS: set = set()
 # x-forja-materia e fica nesta variável durante a requisição (e nas execuções que ela dispara: a task copia o
 # contexto): quem lê as mensagens filtra por ela, quem grava marca com ela. None = "Tudo", sem filtro.
 MATERIA: ContextVar[str | None] = ContextVar("estudos_materia", default=None)
-SEM_MATERIA = ("revisao", "objetivo")   # uma por objetivo: valem para todas as matérias
+SEM_MATERIA = ("revisao", "objetivo", "edital")   # do objetivo inteiro: valem para todas as matérias
 _TRAVA_OBJETIVO = threading.Lock()
 
 
@@ -196,6 +196,73 @@ def apagar_materia(conv_id: int, materia: str) -> dict:
                 m.meta = {**m.meta, "estudos": {**e, "materia": ""}}
     _mudar_materias(conv_id, f)
     return {"ok": True}
+
+
+def juntar(conv_id: int, de: int) -> dict:
+    """Traz o estudo `de` para dentro deste objetivo: as matérias dele viram matérias daqui (mesmo nome junta na
+    mesma) e tudo vem junto — resumos, provas, entregas, dúvidas, cartões, simulados, o material (renumerado, com
+    os arquivos) e o estado da revisão. O `de` fica sem nada; quem chama apaga a conversa."""
+    import shutil
+    if conv_id == de:
+        raise ToolError("Escolha outro estudo.")
+    if any(r["conv_id"] in (conv_id, de) for r in _RUNS.values()):
+        raise ToolError("Há algo rodando num dos dois estudos. Espere terminar ou pare antes.")
+    with db.session() as s:
+        _conv(s, conv_id)
+        _conv(s, de)
+    origem = materias(de)            # estudo de antes das matérias: vira uma (o título) aqui também
+    mapa: dict[str, str] = {}
+
+    def f(lista, s):
+        for x in origem:
+            igual = next((y for y in lista if y["nome"].casefold() == x["nome"].casefold()), None)
+            if igual:
+                mapa[x["id"]] = igual["id"]
+                continue
+            n = max((int(y["id"][1:]) for y in lista if y["id"][1:].isdigit()), default=0) + 1
+            lista.append({**x, "id": f"m{n}"})
+            mapa[x["id"]] = f"m{n}"
+    _mudar_materias(conv_id, f)
+
+    aqui, la = pasta(conv_id), pasta(de)
+    (aqui / "material").mkdir(parents=True, exist_ok=True)
+    n = max((int(p.name[:2]) for p in (aqui / "material").iterdir() if p.name[:2].isdigit()), default=0)
+    movidas = 0
+    with _TRAVA_OBJETIVO, db.session() as s:
+        msgs = list(s.scalars(select(db.Message).where(db.Message.conversation_id == de).order_by(db.Message.id)))
+        rev_aqui = next((m for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id))
+                         if _tipo(m) == "revisao"), None)
+        for m in msgs:
+            e = dict((m.meta or {}).get("estudos") or {})
+            if _tipo(m) == "objetivo":
+                s.delete(m)
+                continue
+            if _tipo(m) == "revisao" and rev_aqui:   # o estado de cada item (caixa, próxima data) vem junto
+                r = dict(rev_aqui.meta["estudos"])
+                r["itens"] = {**(e.get("itens") or {}), **(r.get("itens") or {})}
+                r["plano"] = r.get("plano") or e.get("plano")
+                rev_aqui.meta = {**rev_aqui.meta, "estudos": r}
+                s.delete(m)
+                continue
+            if e and _tipo(m) not in SEM_MATERIA:
+                e["materia"] = mapa.get(e.get("materia") or "", "")
+            if _tipo(m) == "material":
+                n += 1
+                velho = e["n"]
+                for p in (la / "material").glob(f"{velho:02d}*"):
+                    p.rename(aqui / "material" / f"{n:02d}{p.name[2:]}")
+                e.update(n=n, arquivo=f"{n:02d}{e.get('arquivo', '')[2:]}")
+            m.meta = {**(m.meta or {}), "estudos": e} if e else m.meta
+            m.conversation_id = conv_id
+            movidas += 1
+        _tocar(s, conv_id)
+        s.commit()
+    if (la / "simulados").is_dir():   # as questões recortadas dos simulados reais (pelo id da mensagem: não colidem)
+        (aqui / "simulados").mkdir(parents=True, exist_ok=True)
+        for p in (la / "simulados").iterdir():
+            shutil.move(str(p), str(aqui / "simulados" / p.name))
+    mirror.write(conv_id)
+    return {"ok": True, "mensagens": movidas, "materias": materias(conv_id)}
 
 
 def _acerto_por_materia(conv_id: int) -> dict[str, dict]:
@@ -634,7 +701,7 @@ def _visao(itens: list[dict], teto: int) -> str:
 
 INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "erro_busca", "porte", "gravar",
            "pergunta", "contexto", "texto")
-TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida", "flashcards", "simulado", "busca")   # o que tem estado, SSE e pode ficar para o Claude
+TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida", "flashcards", "simulado", "busca", "edital")   # o que tem estado, SSE e pode ficar para o Claude
 
 
 def _publico(run: dict) -> dict:
@@ -715,7 +782,7 @@ def estado(message_id: int) -> dict:
                 raise ToolError("Estudo não encontrado.")
             e = {"message_id": message_id, **e, "status": _situacao(m.status), "texto": m.content or ""}
             conv_id = m.conversation_id
-    if e["tipo"] in ("resumo", "duvida", "flashcards", "simulado", "busca"):
+    if e["tipo"] in ("resumo", "duvida", "flashcards", "simulado", "busca", "edital"):
         return e
     from . import estudos_prova
     return estudos_prova.para_tela(e, conv_id)
@@ -766,7 +833,7 @@ def projeto(conv_id: int) -> dict:
                    for m in filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                        db.Message.role == "assistant").order_by(db.Message.id)))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
-    from . import estudos_busca, estudos_duvidas, estudos_figuras, estudos_prova, estudos_revisao, estudos_simulado
+    from . import estudos_busca, estudos_duvidas, estudos_edital, estudos_figuras, estudos_prova, estudos_revisao, estudos_simulado
     # PDF anexado antes das figuras existirem é recortado na primeira abertura (uma vez, ~2 s por 50 páginas)
     mats = estudos_figuras.garantir(conv_id)
     # a tela só precisa da contagem: a lista inteira (com as descrições) é pesada para ir a cada carimbo
@@ -779,7 +846,7 @@ def projeto(conv_id: int) -> dict:
             "duvidas": estudos_duvidas.fios(conv_id), "revisao": estudos_revisao.painel(conv_id),
             # simulados reais: as conferências com o gabarito oficial, o "o que mais cai" e a última busca na web
             "simulados": estudos_simulado.lista(conv_id), "ranking": estudos_simulado.ranking(conv_id),
-            "busca": estudos_busca.ultima(conv_id)}
+            "busca": estudos_busca.ultima(conv_id), "edital": estudos_edital.ultima(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração

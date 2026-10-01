@@ -282,7 +282,15 @@ export type EstudosMaterial = {
 };
 
 /** Matéria do objetivo (a conversa é o objetivo: um concurso, o ENEM). acerto = % das entregas corrigidas. */
-export type EstudosMateria = { id: string; nome: string; peso?: number; acerto: number | null; entregas: number };
+export type EstudosMateria = { id: string; nome: string; peso?: number; topicos?: string[];   // tópicos: do edital
+  acerto: number | null; entregas: number };
+
+/** Ler o edital (execução "edital"): a proposta de matérias; nada muda até aplicar. existe = id da matéria de mesmo nome. */
+export type EstudosEditalItem = { nome: string; peso: number; questoes: number | null; topicos: string[]; existe: string | null };
+export type EstudosEdital = {
+  message_id: number; tipo: "edital"; status: EstudosEstado["status"]; etapa: string; progresso: string; aviso: string;
+  cargo: string; pedacos: number; proposta: EstudosEditalItem[]; stats: PesquisaEstado["stats"];
+};
 
 /** O "Tudo" do objetivo (GET /estudos/<conv>/visao). quadro = a "Revisão rápida" do último resumo da matéria. */
 export type EstudosVisaoMateria = EstudosMateria & {
@@ -336,6 +344,7 @@ export type EstudosProjeto = {
   simulados: EstudosSimuladoResumo[];
   ranking: EstudosRanking | null;
   busca: EstudosBusca | null;
+  edital?: EstudosEdital | null;   // a última leitura de edital do objetivo
 };
 
 /** Uma questão real do simulado, conferida: a letra da IA (às cegas) contra a oficial. */

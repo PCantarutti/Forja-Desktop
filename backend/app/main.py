@@ -2331,6 +2331,65 @@ def estudos_materia_renomear(conv_id: int, materia: str, body: MateriaBody):
         raise HTTPException(400, str(e))
 
 
+class EditalBody(BaseModel):
+    texto: str = ""
+    cargo: str = ""
+    provider: str = ""
+    model: str = ""
+
+
+class EditalAplicarBody(BaseModel):
+    materias: list[dict] = []        # [{nome, peso, topicos}] marcadas na proposta
+
+
+class JuntarBody(BaseModel):
+    de: int                          # o estudo que vem para dentro deste objetivo (e some da lista)
+
+
+@app.post("/api/estudos/{conv_id}/edital/arquivo")
+async def estudos_edital_arquivo(conv_id: int, file: UploadFile = File(...)):
+    """O texto do edital enviado (não vira material: edital não é conteúdo de estudo)."""
+    from . import estudos_edital
+    dados = await file.read()
+    if len(dados) > config.MAX_DOC_BYTES:
+        raise HTTPException(413, f"Arquivo maior que {config.MAX_DOC_BYTES // 1_000_000} MB.")
+    try:
+        return await asyncio.to_thread(estudos_edital.texto_de_arquivo, file.filename or "edital.pdf", dados)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/edital")
+async def estudos_edital_ler(conv_id: int, body: EditalBody):
+    """Lê o edital e propõe as matérias, com peso e tópicos (SSE). Nada muda até aplicar."""
+    from . import estudos_edital
+    try:
+        msg = estudos_edital.start(conv_id, body.texto, body.cargo, body.provider, body.model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
+@app.post("/api/estudos/{conv_id}/edital/aplicar")
+def estudos_edital_aplicar(conv_id: int, body: EditalAplicarBody):
+    from . import estudos_edital
+    try:
+        return estudos_edital.aplicar(conv_id, body.materias)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/juntar")
+async def estudos_juntar(conv_id: int, body: JuntarBody):
+    """Traz outro estudo para dentro deste objetivo e apaga a conversa dele (vazia)."""
+    try:
+        r = await asyncio.to_thread(estudos.juntar, conv_id, body.de)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    await delete_conversation(body.de)
+    return r
+
+
 @app.get("/api/estudos/{conv_id}/visao")
 def estudos_visao(conv_id: int):
     try:

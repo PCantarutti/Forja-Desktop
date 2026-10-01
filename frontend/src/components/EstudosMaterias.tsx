@@ -23,6 +23,8 @@ export default function EstudosMaterias(props: {
   onEscolher: (m: string | null) => void;
   onMudou: () => void;
   onError: (e: string) => void;
+  onEdital: () => void;    // abre "Ler o edital"
+  onTrazer: () => void;    // abre "Trazer um estudo para cá"
 }) {
   const [nova, setNova] = useState<string | null>(null);        // campo "+ Matéria" aberto
   const [editando, setEditando] = useState<{ id: string; nome: string } | null>(null);
@@ -121,6 +123,14 @@ export default function EstudosMaterias(props: {
                onKeyDown={(e) => { if (e.key === "Enter") criar(); if (e.key === "Escape") setNova(null); }}
                className="mt-1 rounded-[9px] border border-focus bg-surface px-2.5 py-1.5 text-[13px] text-fg outline-none" />
       )}
+      <button onClick={props.onEdital} className={`${item} text-faint hover:bg-raised/60 hover:text-fg`}
+              title="As matérias, o peso de cada uma e os tópicos, tirados do edital">
+        Ler o edital
+      </button>
+      <button onClick={props.onTrazer} className={`${item} text-faint hover:bg-raised/60 hover:text-fg`}
+              title="Juntar um estudo antigo neste objetivo, com todo o progresso dele">
+        Trazer um estudo
+      </button>
       <p className="mt-auto px-2.5 pt-4 text-[11px] leading-relaxed text-faint">
         {ms.length ? "Cada matéria guarda os seus resumos, provas e cartões. Em Tudo aparece o objetivo inteiro."
           : "Separe o objetivo em matérias: cada uma guarda os seus resumos, provas e cartões."}
