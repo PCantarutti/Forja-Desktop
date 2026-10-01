@@ -2718,6 +2718,36 @@ def estudos_cronograma_apagar(conv_id: int):
     return _revisao("apagar_plano", conv_id)
 
 
+class BlocoBody(BaseModel):
+    bloco: str
+
+
+@app.post("/api/estudos/simulado/{message_id}/gabarito")
+def estudos_simulado_bloco(message_id: int, body: BlocoBody):
+    from . import estudos_simulado
+    try:
+        return estudos_simulado.trocar_bloco(message_id, body.bloco)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/estudos/{conv_id}/gabarito/imagem")
+async def estudos_gabarito_imagem(conv_id: int, request: Request):
+    """Print(s) do gabarito → um modelo que enxerga anota em texto → material do estudo (o de PDF segue igual)."""
+    from . import estudos_gabarito
+    form = await request.form()
+    imagens = []
+    for f in form.getlist("files"):
+        dados = await f.read()
+        if len(dados) > config.MAX_DOC_BYTES:
+            raise HTTPException(413, f"{f.filename}: imagem grande demais.")
+        imagens.append((f.filename or "", dados))
+    try:
+        return await estudos_gabarito.transcrever(conv_id, imagens, str(form.get("provider") or ""), str(form.get("model") or ""))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 class PilotoBody(BaseModel):
     # tudo opcional: o que não vier fica como da última vez (o "Continuar" do celular manda só o pedido)
     ate: str | None = None          # AAAA-MM-DD: prepara o cronograma até este dia

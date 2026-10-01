@@ -25,7 +25,7 @@ from collections import Counter
 
 from sqlalchemy import select
 
-from . import db, estudos as E, mirror, pesquisa, web
+from . import db, estudos as E, estudos_gabarito as G, mirror, pesquisa, web
 from .estudos import _save
 from .tools import ToolError
 
@@ -311,6 +311,59 @@ def detalhe(message_id: int) -> dict:
 # ------------------------------------------------------------------ disparar
 
 
+def _arquivo_blocos(conv_id: int, message_id: int):
+    return E.pasta(conv_id) / "simulados" / f"{message_id}-gabarito.json"
+
+
+def _publico_bloco(escolha: dict) -> dict | None:
+    """O que a tela mostra do bloco escolhido; as opções são as do mesmo cargo (ou as que mais batem, sem cargo)."""
+    b = escolha.get("bloco")
+    if not escolha.get("opcoes") or len(escolha["opcoes"]) <= 1:
+        return None
+    ops = escolha["opcoes"]
+    cargo = b["cargo"] if b else ""
+    mesmas = [o for o in ops if o["cargo"] == cargo] if cargo else []
+    outras = sorted((o for o in ops if o not in mesmas), key=lambda o: (-o["iguais"], o["rotulo"]))
+    return {"id": b["id"] if b else "", "rotulo": G.rotulo(b) if b else "", "motivo": escolha.get("motivo", ""),
+            "opcoes": (mesmas + outras)[:40], "total": len(ops)}
+
+
+def aplicar_bloco(reais: list[dict], pares: dict[int, str]) -> None:
+    for q in reais:
+        q["oficial"] = pares.get(q["numero"], "")
+        q["certa"] = (q["ia"] == q["oficial"]) if q.get("ia") and q["oficial"] in tuple(LETRAS) else None
+
+
+def trocar_bloco(message_id: int, bloco_id: str) -> dict:
+    """Outra versão/cargo do gabarito, sem resolver de novo: as respostas da IA já estão guardadas."""
+    with E.db.session() as s:
+        m = s.get(E.db.Message, message_id)
+        if not m or ((m.meta or {}).get("estudos") or {}).get("tipo") != "simulado":
+            raise ToolError("Conferência não encontrada.")
+        conv_id, e = m.conversation_id, dict(m.meta["estudos"])
+    if E._RUNS.get(message_id):
+        raise ToolError("A conferência ainda está rodando.")
+    try:
+        bs = json.loads(_arquivo_blocos(conv_id, message_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ToolError("Esta conferência não tem blocos de gabarito para trocar.")
+    for b in bs:
+        b["pares"] = {int(k): v for k, v in b["pares"].items()}
+    reais = reais_de(conv_id, message_id)
+    ia = {q["numero"]: q.get("ia", "") for q in reais}
+    escolha = G.escolher(bs, "", "", ia, forcado=bloco_id)
+    if not escolha["bloco"] or escolha["bloco"]["id"] != bloco_id:
+        raise ToolError("Bloco de gabarito não encontrado.")
+    aplicar_bloco(reais, escolha["bloco"]["pares"])
+    _guardar(conv_id, message_id, reais)
+    e.update(placar=placar(reais), questoes=[_resumo_questao(q) for q in reais], bloco=_publico_bloco(escolha))
+    E._patch(message_id, meta={"estudos": e})
+    with E.db.session() as s:
+        E._tocar(s, conv_id)
+        s.commit()
+    return detalhe(message_id)
+
+
 def start(conv_id: int, material_id: int, gabarito: str = "", gabarito_material: int = 0, provider: str = "",
           model: str = "", ex_provider: str = "", ex_model: str = "") -> dict:
     extrator, escritor, claude = E.modelos(provider, model, ex_provider, ex_model)
@@ -325,6 +378,7 @@ def start(conv_id: int, material_id: int, gabarito: str = "", gabarito_material:
     aviso = aviso_gabarito(gabarito)
     if gabarito.strip() and not oficial:
         raise ToolError("Não li nenhum par número-letra no gabarito colado (ex.: 91 C 92 A).")
+    texto_g = gabarito
     if gabarito_material:
         g = mats.get(int(gabarito_material))
         if not g:
@@ -333,6 +387,10 @@ def start(conv_id: int, material_id: int, gabarito: str = "", gabarito_material:
         oficial = {**ler_gabarito(texto_g), **oficial}
         aviso = aviso or aviso_gabarito(texto_g)
         origem = origem or f"material: {g['nome']}"
+    # Gabarito com vários cargos/versões (o "definitivo" da banca): o bloco desta prova, não a primeira sequência
+    from . import estudos_edital
+    blocos_g = G.blocos(texto_g) if texto_g.strip() else []
+    cargo_edital = ((estudos_edital.ultima(conv_id) or {}).get("cargo") or "") if len(blocos_g) > 1 else ""
     if E.rodando(conv_id):
         raise ToolError("Este estudo já está rodando. Espere terminar ou pare antes.")
     # quem resolve: o modelo de conferência, se escolhido (como na prova); senão o mesmo que escreve
@@ -343,6 +401,10 @@ def start(conv_id: int, material_id: int, gabarito: str = "", gabarito_material:
     msg = _save(conv_id, role="assistant", content="", status="running", meta={"estudos": publico})
     run = {**publico, "message_id": msg.id, "conv_id": conv_id, "cancelar": False, "t0": time.monotonic(), "teto": TETO,
            "texto": "", "gravar": E._gravar, "_oficial": oficial, "_material": m}
+    if len(blocos_g) > 1:
+        run["_blocos"], run["_cargo_edital"] = blocos_g, cargo_edital
+        _arquivo_blocos(conv_id, msg.id).parent.mkdir(parents=True, exist_ok=True)
+        _arquivo_blocos(conv_id, msg.id).write_text(json.dumps(blocos_g, ensure_ascii=False), encoding="utf-8")
     E.disparar(run, _rodar(run, extrator, escritor, resolve))
     return msg.to_dict()
 
@@ -362,9 +424,13 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, resolve: dict) -> No
         reais = [q for q in reais if len(q["alternativas"]) >= 4 or FIGURA_NO_TEXTO.search(q["enunciado"])]
         if not reais:
             raise ToolError("Não achei questões objetivas nesta prova (o texto não tem \"QUESTÃO N\" e o modelo não recortou).")
+        escolha = None
+        if run.get("_blocos"):   # vários cargos/versões: o cargo pelo nome; a versão pela capa ou, depois, pela IA
+            escolha = G.escolher(run["_blocos"], texto, run.get("_cargo_edital", ""))
+            run["_oficial"] = escolha["bloco"]["pares"] if escolha["bloco"] else {}
         for q in reais:   # o gabarito colado ou de outro material vale mais que o "Resposta:" do PDF
-            q["oficial"] = run["_oficial"].get(q["numero"], q.get("oficial", ""))
-        if not any(q["oficial"] for q in reais):
+            q["oficial"] = run["_oficial"].get(q["numero"], "" if run.get("_blocos") else q.get("oficial", ""))
+        if not any(q["oficial"] for q in reais) and not run.get("_blocos"):
             E._avisar(run, "Sem gabarito oficial: o PDF não traz \"Resposta: X\" e nenhum foi colado. A IA resolve, "
                            "mas não há com o que comparar — cole o gabarito e confira de novo.")
         run["questoes"] = [_resumo_questao(q) for q in reais]
@@ -383,6 +449,17 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, resolve: dict) -> No
                 if f.get("util") is not False:
                     figuras.setdefault(f["pagina"], []).append({**f, "material": m["id"]})
         await _resolver(run, resolve, reais, figuras)
+        if run.get("_blocos"):
+            if escolha is None or escolha["bloco"] is None:
+                escolha = G.escolher(run["_blocos"], texto, run.get("_cargo_edital", ""), {q["numero"]: q.get("ia", "") for q in reais})
+            else:   # já decidido pelo texto: as concordâncias ainda servem para a tela
+                escolha = G.escolher(run["_blocos"], texto, run.get("_cargo_edital", ""), {q["numero"]: q.get("ia", "") for q in reais},
+                                     forcado=escolha["bloco"]["id"]) | {"motivo": escolha["motivo"], "aviso": escolha["aviso"]}
+            if escolha["bloco"]:
+                aplicar_bloco(reais, escolha["bloco"]["pares"])
+            if escolha["aviso"]:
+                E._avisar(run, escolha["aviso"])
+            run["bloco"] = _publico_bloco(escolha)
         run["placar"] = placar(reais)
         run["questoes"] = [_resumo_questao(q) for q in reais]
         _guardar(conv_id, run["message_id"], reais)
