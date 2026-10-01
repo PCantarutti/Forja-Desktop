@@ -199,6 +199,24 @@ def _html_para_texto(html: str) -> str:
     return re.sub(r"[ \t]+", " ", re.sub(r"<[^>]+>", " ", html))
 
 
+# Simulados impressos com a fonte de "bolinhas" A–E (os do Objetivo, por exemplo) saem do pypdf com a letra
+# como glifo: /L57840 … /L57844. Sem isto a alternativa vira "/L57842250m" e ninguém sabe que era a C.
+GLIFO_ALTERNATIVA = re.compile(r"/L5784([0-4])")
+
+
+def _glifos(texto: str) -> str:
+    return GLIFO_ALTERNATIVA.sub(lambda m: "\n" + "ABCDE"[int(m.group(1))] + ") ", texto)
+
+
+def _amostra(texto: str, total: int, partes: int = 5) -> str:
+    """`total` caracteres espalhados pelo texto inteiro, não só o começo: num simulado de 90 questões o começo
+    é uma matéria só (o 2º dia do ENEM começa por Ciências da Natureza e deixa a Matemática para o fim)."""
+    if len(texto) <= total:
+        return texto
+    passo, n = (len(texto) - total // partes) / (partes - 1), total // partes
+    return "\n[…]\n".join(texto[int(i * passo):int(i * passo) + n] for i in range(partes))
+
+
 def _extrair(arq: Path, dados: bytes) -> tuple[str, bool]:
     """(texto, veio_de_ocr). Texto vazio quando não saiu nada."""
     ext = arq.suffix.lower()
@@ -207,7 +225,7 @@ def _extrair(arq: Path, dados: bytes) -> tuple[str, bool]:
         return (_html_para_texto(texto) if ext in (".html", ".htm") else texto), False
     if ext in documentos.EXTRATORES:
         if texto := documentos.extrair(arq):
-            return texto, False
+            return _glifos(texto), False
         if ext == ".pdf":   # escaneado: OCR, que custa segundos por página
             return documentos.extrair_ocr(arq) or "", True
         return "", False
@@ -290,8 +308,8 @@ def remover_material(material_id: int) -> dict:
 
 
 def _texto(conv_id: int, e: dict) -> str:
-    try:
-        return (pasta(conv_id) / "material" / f"{e['n']:02d}.txt").read_text(encoding="utf-8")
+    try:   # _glifos de novo na leitura: material anexado antes da correção também sai com as letras certas
+        return _glifos((pasta(conv_id) / "material" / f"{e['n']:02d}.txt").read_text(encoding="utf-8"))
     except OSError:
         return ""
 
@@ -574,10 +592,12 @@ async def _orcamento(spec: dict) -> int:
 
 
 async def _ler_material(run: dict, extrator: dict, escritor: dict) -> list[dict]:
-    """Notas do material de conteúdo (ou o texto cru, se cabe) e o perfil das provas anexadas."""
+    """Notas do material de conteúdo (ou o texto cru, se cabe) e o perfil das provas anexadas. Só com prova
+    anexada, ela vira o conteúdo também: um simulado resolvido explica a matéria questão por questão."""
     run["etapa"] = "material"
     _gravar(run)
-    conteudo = [m for m in run["_mats"] if m["uso"] == "conteudo" and m["texto"]]
+    conteudo = ([m for m in run["_mats"] if m["uso"] == "conteudo" and m["texto"]]
+                or [m for m in run["_mats"] if m["uso"] == "prova" and m["texto"]])
     direto = sum(len(m["texto"]) for m in conteudo) <= DIRETO
     itens: list[dict | None] = []
     fila: list[tuple[int, dict, dict, str]] = []
@@ -621,7 +641,7 @@ async def _ler_material(run: dict, extrator: dict, escritor: dict) -> list[dict]
         for m in provas:
             try:
                 bruto = await pesquisa._perguntar(escritor, PERFIL_PROMPT,
-                                                  f"{web.UNTRUSTED}{m['texto'][:PERFIL_CHARS]}", run)
+                                                  f"{web.UNTRUSTED}{_amostra(m['texto'], PERFIL_CHARS)}", run)
             except Exception:
                 continue
             p = pesquisa._json(bruto) or {}

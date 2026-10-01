@@ -147,6 +147,29 @@ def test_pedacos_repetem_a_marca_da_pagina():
     assert "--- página 2 ---" in pedacos[-1]
 
 
+def test_glifos_das_alternativas_viram_letras():
+    assert estudos._glifos("vale:\n/L57840100m\n/L57842250m") == "vale:\n\nA) 100m\n\nC) 250m"
+
+
+def test_amostra_cobre_o_texto_inteiro():
+    texto = "".join(f"[{i:03d}]" + "x" * 95 for i in range(1000))   # 100 mil caracteres, marcados a cada 100
+    a = estudos._amostra(texto, 5000)
+    assert "[000]" in a and "[999]" in a and len(a) < 5200
+    assert estudos._amostra("curto", 5000) == "curto"
+
+
+def test_so_com_simulado_o_resumo_le_o_simulado(monkeypatch):
+    chamados = _fake_llm(monkeypatch)
+    conv = _estudo()
+    prova = "\n".join(f"Questão {i}\nEnunciado sobre mitocôndria e ATP\na) x\nb) y\nc) z\nResolução: a mitocôndria [p. 3]"
+                      for i in range(1, 6))
+    m = estudos.adicionar_material(conv, "simulado.txt", texto=prova)
+    assert m["uso"] == "prova"
+    e = _rodar(conv)
+    assert e["status"] == "pronto"
+    assert e["materiais"][0]["pedacos"] == 1 and "perfil" in chamados   # leu como conteúdo E tirou o perfil
+
+
 def test_selecionar_prefere_o_que_fala_do_topico():
     itens = [{"nome": "a", "cabeca": "[a]", "texto": "fotossíntese clorofila luz " * 20},
              {"nome": "b", "cabeca": "[b]", "texto": "mitocôndria respiração energia " * 20}]

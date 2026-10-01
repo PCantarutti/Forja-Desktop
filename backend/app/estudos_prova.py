@@ -51,7 +51,8 @@ Formato de cada questão, conforme o tipo:
 - disc (discursiva): {"tipo": "disc", "enunciado": "...", "resposta_modelo": "a resposta completa esperada",
   "rubrica": [{"criterio": "o que a resposta precisa ter", "pontos": 1}], "explicacao": "o raciocínio da resposta", "pagina": ""}
 Regras:
-- A resposta certa tem de estar sustentada no material ou no resumo abaixo. Não invente dado.
+- A resposta certa tem de estar sustentada no material, no resumo ou nas páginas da web abaixo. Não invente dado.
+- A prova que o aluno anexou é fonte e modelo: escreva questões NOVAS, nunca copie nem reescreva uma questão dela.
 - Múltipla escolha: uma única correta; as erradas são plausíveis (erros comuns de aluno), do mesmo tamanho e estilo
   da correta. Nada de "todas as anteriores" nem "nenhuma das anteriores".
 - As alternativas serão embaralhadas: nas explicações, fale do conteúdo, nunca da letra.
@@ -111,19 +112,41 @@ def topicos(conv_id: int) -> list[str]:
     return _base(conv_id)[4]
 
 
+QUESTAO = re.compile(r"(?mi)^\s*quest[ãa]o\s*\d+")
+RESOLUCAO = re.compile(r"(?i)\n\s*(resolu[çc][ãa]o|gabarito|resposta\s*:)")
+
+
+def _exemplo(texto: str, teto: int = EXEMPLO_TETO, quantas: int = 3) -> str:
+    """Enunciados de verdade da prova anexada, espalhados por ela (o começo costuma ser a capa e uma matéria
+    só), sem a resolução: é o modelo de estilo, não a resposta."""
+    marcas = [m.start() for m in QUESTAO.finditer(texto)]
+    blocos = [RESOLUCAO.split(texto[a:b], 1)[0].strip() for a, b in zip(marcas, marcas[1:] + [len(texto)])]
+    blocos = [b for b in blocos if len(b) > 150]
+    if not blocos:
+        return texto[:teto]
+    escolhidos = [blocos[round(i * (len(blocos) - 1) / max(1, quantas - 1))] for i in range(min(quantas, len(blocos)))]
+    cada = teto // len(escolhidos)
+    return "\n\n".join(b[:cada] for b in dict.fromkeys(escolhidos))
+
+
 def _contexto(conv_id: int) -> dict:
-    """O que a prova usa: o último resumo com texto, os tópicos, o material cru e o estilo das provas anexadas."""
+    """O que a prova usa: o último resumo com texto, os tópicos, o material cru (o de conteúdo e o das provas
+    anexadas, que trazem as resoluções), os achados da web do resumo e o estilo das provas anexadas."""
     titulo, texto, e, secoes, topicos_ = _base(conv_id)
     mats = E.materiais(conv_id)
-    itens = [{"nome": m["nome"], "cabeca": f"[{m['nome']}]", "texto": p}
-             for m in mats if m["uso"] == "conteudo" for p in E._pedacos(E._texto(conv_id, m))]
+    itens = [{"nome": m["nome"], "cabeca": f"[{m['nome']}]" if m["uso"] == "conteudo"
+              else f"[{m['nome']} — prova anexada: use o conteúdo, não copie as questões]", "texto": p}
+             for m in mats for p in E._pedacos(E._texto(conv_id, m))]
+    web_ = [{"nome": f["titulo"], "cabeca": f"[{f['titulo']}]({f['url']})",
+             "texto": (f.get("resumo") or "") + (f'\nTrecho: "{f["trecho"]}"' if f.get("trecho") else "")}
+            for f in e.get("fontes") or [] if f.get("status") == "util" and (f.get("resumo") or f.get("trecho"))]
     if not texto and not itens:
         raise ToolError("Anexe material ou gere o resumo antes de montar a prova.")
     simulado = next((E._texto(conv_id, m) for m in mats if m["uso"] == "prova"), "")
     tema = e.get("tema") or titulo
     return {"tema": tema, "prefs": E._prefs(e.get("preferencias")), "secoes": secoes,
-            "topicos": topicos_ or [tema], "itens": itens, "perfil": e.get("perfil") or {},
-            "simulado": simulado[:EXEMPLO_TETO]}
+            "topicos": topicos_ or [tema], "itens": itens, "web": web_, "perfil": e.get("perfil") or {},
+            "simulado": _exemplo(simulado) if simulado else ""}
 
 
 def _config(c: dict | None, ctx: dict) -> dict:
@@ -375,6 +398,7 @@ async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, 
     topicos = list(dict.fromkeys(q["topico"] for q in lote))
     resumo = "\n\n".join(f"## {t}\n{ctx['secoes'][t]}" for t in topicos if t in ctx["secoes"])[:RESUMO_TETO]
     material = E._selecionar(ctx["itens"], " ".join(topicos), min(MATERIAL_TETO, orcamento))
+    achados = E._selecionar(ctx["web"], " ".join(topicos), E.WEB_TETO)
     pedidas = "\n".join(f"{i}. {q['tipo']} ({NOMES[q['tipo']]}) · tópico \"{q['topico']}\" · dificuldade {q['dificuldade']}"
                         for i, q in enumerate(lote, 1))
     user = (f"Tema: {ctx['tema']}\n{E.NIVEIS[ctx['prefs']['nivel']]}\n"
@@ -382,6 +406,7 @@ async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, 
             + f"\nQuestões a escrever ({len(lote)}):\n{pedidas}\n"
             + (f"\nResumo dos tópicos:\n{resumo}\n" if resumo else "")
             + (f"\nMaterial do aluno:\n{web.UNTRUSTED}{material}\n" if material else "")
+            + (f"\nPáginas da web lidas na pesquisa do resumo:\n{web.UNTRUSTED}{achados}\n" if achados else "")
             + _estilo_user(ctx, cfg))
     system = (QUESTOES_PROMPT.replace("ALT_N", str(cfg["alternativas"])).replace("ULTIMA", str(cfg["alternativas"] - 1))
               .replace("PONTOS_DISC", str(PONTOS["disc"])).replace("ESTILO", ESTILO_PROMPT if cfg["estilo"] else ""))
@@ -398,8 +423,12 @@ async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento:
         opcoes = ("\n" + "\n".join(f"{LETRAS[i]}) {a}" for i, a in enumerate(q["alternativas"]))) if q["tipo"] == "me" \
             else "\n(responda V ou F)"
         blocos.append(f"[{q['id']}] {NOMES[q['tipo']]}\n{q['enunciado']}{opcoes}")
-    material = E._selecionar(ctx["itens"], " ".join(q["topico"] for q in qs), min(MATERIAL_TETO, orcamento))
-    user = (f"Material:\n{web.UNTRUSTED}{material}\n\n" if material else "") + "Questões:\n\n" + "\n\n".join(blocos)
+    consulta = " ".join(q["topico"] for q in qs)
+    material = E._selecionar(ctx["itens"], consulta, min(MATERIAL_TETO, orcamento))
+    achados = E._selecionar(ctx["web"], consulta, E.WEB_TETO)
+    user = ((f"Material:\n{web.UNTRUSTED}{material}\n\n" if material else "")
+            + (f"Páginas da web:\n{web.UNTRUSTED}{achados}\n\n" if achados else "")
+            + "Questões:\n\n" + "\n\n".join(blocos))
     obj = pesquisa._json(await pesquisa._perguntar(spec, VERIFICAR_PROMPT, user, run, effort="medio")) or {}
     respostas = obj.get("respostas") if isinstance(obj, dict) else None
     if isinstance(respostas, dict):

@@ -4,6 +4,7 @@ import re
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app import config, db, estudos, estudos_prova as P, mirror, pesquisa
 from app.tools import ToolError
@@ -53,13 +54,18 @@ def _disc(i):
                                                                          {"criterio": "cita glicólise", "pontos": 1}]}
 
 
+USUARIO: list[str] = []   # o que cada chamada ao modelo falso recebeu como mensagem do usuário
+
+
 def _fake(monkeypatch, gerar=None, verificar=None, corrigir=None, pausa=0.0):
     """gerar(pedidas: list[str]) -> lista de questões; verificar(questoes do prompt) -> {id: resposta}."""
     chamados: list[str] = []
     ultimas: dict[str, list] = {}
+    USUARIO.clear()
 
     async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         system, user = messages[0]["content"], messages[1]["content"]
+        USUARIO.append(user)
         if pausa:
             await asyncio.sleep(pausa)
         if system.startswith("Você é um professor que elabora"):
@@ -167,6 +173,46 @@ def test_resumo_cancelado_vazio_nao_apaga_os_topicos():
     assert P.topicos(conv) == ["Glicólise", "Fermentação"] == estudos.projeto(conv)["topicos"]
 
 
+SIMULADO = ("--- página 1 ---\nLEIA ATENTAMENTE AS INSTRUÇÕES. Este caderno contém 90 questões.\n\n"
+            + "\n\n".join(f"QUESTÃO {n}\nEnunciado da questão {n} sobre fermentação e respiração celular, com texto-base "
+                          f"longo o bastante para valer como exemplo de estilo de enunciado do ENEM.\n"
+                          "/L57840um\n/L57841dois\n/L57842três\n/L57843quatro\n/L57844cinco\n"
+                          f"Resolução\nA resposta é a C porque a fermentação regenera NAD+.\nResposta: C"
+                          for n in range(91, 99)))
+
+
+def test_simulado_sozinho_vira_fonte_e_exemplo_sem_a_resolucao(monkeypatch):
+    conv = _estudo(resumo=False)
+    m = estudos.adicionar_material(conv, "simulado.txt", texto=SIMULADO)
+    assert m["uso"] == "prova"
+    ctx = P._contexto(conv)   # sem resumo e sem material de conteúdo: o simulado basta
+    assert any("prova anexada" in i["cabeca"] for i in ctx["itens"])
+    ex = ctx["simulado"]
+    assert "QUESTÃO 91" in ex and "QUESTÃO 98" in ex and "Resolução" not in ex and "LEIA ATENTAMENTE" not in ex
+    assert "C) três" in ex   # as letras das alternativas voltaram (glifos /L5784x)
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    pid = _gerar(conv, {"me": 1, "estilo": True})
+    assert estudos.estado(pid)["status"] == "pronto"
+    gerar = USUARIO[0]
+    assert "prova anexada: use o conteúdo, não copie" in gerar and "imite o estilo" in gerar
+
+
+def test_paginas_da_web_do_resumo_vao_para_a_prova(monkeypatch):
+    conv = _estudo()
+    with db.session() as s:
+        m = s.scalars(select(db.Message).where(db.Message.conversation_id == conv)).first()
+        fonte = {"id": "0", "url": "https://bio.org/glicolise", "titulo": "Glicólise passo a passo", "status": "util",
+                 "resumo": "A fosfofrutoquinase é a enzima-chave da glicólise.", "trecho": "enzima-chave"}
+        m.meta = {"estudos": {**m.meta["estudos"], "fontes": [fonte, {**fonte, "id": "1", "status": "vazia"}]}}
+        s.commit()
+    assert len(P._contexto(conv)["web"]) == 1   # só as úteis
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    _gerar(conv, {"me": 1})
+    gerar, conferir = USUARIO[0], USUARIO[1]
+    assert "Páginas da web lidas na pesquisa do resumo" in gerar and "fosfofrutoquinase" in gerar
+    assert "[Glicólise passo a passo](https://bio.org/glicolise)" in gerar and "fosfofrutoquinase" in conferir
+
+
 def test_sem_resumo_nem_material_nao_da_prova():
     with pytest.raises(ToolError, match="Anexe material"):
         P._contexto(_estudo(resumo=False))
@@ -187,20 +233,33 @@ def test_gera_confere_e_esconde_o_gabarito(monkeypatch):
     cheia = _cheia(pid)["questoes"]
     assert all(q["verificada"] for q in cheia if q["tipo"] != "disc")
     assert all(q["alternativas"][q["correta"]].endswith("-1") for q in cheia if q["tipo"] == "me")
-    assert len({q["correta"] for q in cheia if q["tipo"] == "me"}) > 1   # embaralhou: a correta não fica sempre em B
+    assert {q["correta"] for q in cheia if q["tipo"] == "me"} != {1}   # embaralhou: a correta não fica onde o modelo pôs (B)
     assert [p["titulo"] for p in P.lista(conv)] == ["Prova 1"]
 
 
 def test_verificador_que_discorda_regera_e_depois_descarta(monkeypatch):
-    # verificador sempre responde "A": a correta só cai em A por acaso do embaralhamento
-    _fake(monkeypatch, verificar=lambda user, ids: {i: "A" for i in ids})
+    # verificador que sempre marca a letra seguinte à certa: discorda de tudo, nas duas rodadas
+    def errado(user, ids):
+        return {i: "ABCDE"[("ABCDE".index(c) + 1) % 4] for i, c in _correto_do_prompt(user, ids).items()}
+
+    chamados = _fake(monkeypatch, verificar=errado)
     pid = _gerar(_estudo(), {"me": 4})
     e, plano = estudos.estado(pid), _cheia(pid)["planejadas"]
-    assert all(p["status"] in ("ok", "descartada") for p in plano)
-    ok = [p for p in plano if p["status"] == "ok"]
-    assert len(e["questoes"]) == len(ok) < 4
-    assert all(p["motivo"] == "o verificador chegou a outra resposta" for p in plano if p["status"] == "descartada")
-    assert "ficaram de fora" in e["aviso"] or not ok
+    assert chamados.count("gerar") == 2   # a 1ª rodada e a refeita
+    assert [p["status"] for p in plano] == ["descartada"] * 4 and not e["questoes"]
+    assert all(p["motivo"] == "o verificador chegou a outra resposta" for p in plano)
+    assert e["status"] == "erro" and "verificador chegou a outra resposta" in e["aviso"]
+
+
+def test_verificador_que_discorda_so_de_uma_fica_com_as_outras(monkeypatch):
+    def quase(user, ids):
+        certo = _correto_do_prompt(user, ids)
+        return {i: ("ABCDE"[("ABCDE".index(c) + 1) % 4] if i == "q1" else c) for i, c in certo.items()}
+
+    _fake(monkeypatch, verificar=quase)
+    pid = _gerar(_estudo(), {"me": 3})
+    e = estudos.estado(pid)
+    assert [q["id"] for q in e["questoes"]] == ["q2", "q3"] and "ficaram de fora" in e["aviso"]
 
 
 def test_formato_errado_na_primeira_vez_e_refeito(monkeypatch):
