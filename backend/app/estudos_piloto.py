@@ -230,9 +230,21 @@ def _lancar(conv_id: int) -> None:
 
 # ------------------------------------------------------------------ API
 
-def start(conv_id: int, ate: str, provider: str = "", model: str = "", ex_provider: str = "", ex_model: str = "",
-          preferencias: dict | None = None, web: bool = True, profundidade: str = "normal", questoes: int = 10) -> dict:
-    """Começa ou continua (o que já está em `feitos` não se refaz)."""
+def start(conv_id: int, ate: str | None = None, provider: str | None = None, model: str | None = None,
+          ex_provider: str | None = None, ex_model: str | None = None, preferencias: dict | None = None,
+          web: bool | None = None, profundidade: str | None = None, questoes: int | None = None) -> dict:
+    """Começa ou continua (o que já está em `feitos` não se refaz). O que vier None fica como estava: o
+    "Continuar" do celular não manda o modelo nem as preferências escolhidos no PC."""
+    p = ler(conv_id)
+    mot = p["motor"]
+    if provider is None:
+        provider, model, ex_provider, ex_model = (mot.get(k, "") for k in ("provider", "model", "ex_provider", "ex_model"))
+    model, ex_provider, ex_model = model or "", ex_provider or "", ex_model or ""
+    ate = ate or p["ate"]
+    preferencias = p["preferencias"] if preferencias is None else preferencias
+    web = p["web"] if web is None else web
+    profundidade = profundidade or p["profundidade"]
+    questoes = questoes or p["questoes"]
     try:
         date.fromisoformat(ate)
     except (TypeError, ValueError):

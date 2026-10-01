@@ -2719,15 +2719,16 @@ def estudos_cronograma_apagar(conv_id: int):
 
 
 class PilotoBody(BaseModel):
-    ate: str                        # AAAA-MM-DD: prepara o cronograma até este dia
-    provider: str = ""
-    model: str = ""
-    ex_provider: str = ""
-    ex_model: str = ""
-    preferencias: dict = {}
-    web: bool = True
-    profundidade: str = "normal"
-    questoes: int = 10              # por prova
+    # tudo opcional: o que não vier fica como da última vez (o "Continuar" do celular manda só o pedido)
+    ate: str | None = None          # AAAA-MM-DD: prepara o cronograma até este dia
+    provider: str | None = None
+    model: str | None = None
+    ex_provider: str | None = None
+    ex_model: str | None = None
+    preferencias: dict | None = None
+    web: bool | None = None
+    profundidade: str | None = None
+    questoes: int | None = None     # por prova
 
 
 # async: o piloto vive numa task do loop (um endpoint síncrono roda numa thread sem loop)

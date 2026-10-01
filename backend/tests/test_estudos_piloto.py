@@ -96,7 +96,8 @@ def test_percorre_o_cronograma_ate_a_data_com_resumo_e_prova_e_busca_por_materia
     assert set(r["feitos"]) == {f"{ds[0]}-0", f"{ds[1]}-0"} and all(f["resumo"] and f["prova"] for f in r["feitos"].values())
     # continuar até o fim só faz o que falta: o 3º tópico e o simulado geral (no Tudo); sem buscar de novo
     async def mais():
-        PIL.start(conv, ds[3])
+        PIL.start(conv, ds[3])   # sem questoes: continua com as 8 de antes
+        assert PIL.ler(conv)["questoes"] == 8
         await _ate_parar(conv)
     asyncio.run(mais())
     assert FEITO[6:] == [("resumo", ms["pt"], "Regência"), ("prova", ms["pt"], "Prova só sobre o tópico: Regência."),
