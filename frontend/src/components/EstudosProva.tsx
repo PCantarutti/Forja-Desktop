@@ -6,12 +6,12 @@ import { ArrowLeft, ArrowRight, Bubble, Check, Clock, Copy, Image, Lampada, Pin,
 import { Lightbox } from "./Lightbox";
 import { ConversaDuvida } from "./EstudosDuvidas";
 import { Markdown } from "./MessageView";
-import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada }
+import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada }
   from "./Composer";
 import { Menu } from "./Controls";
 import Sinapse from "./Sinapse";
 import { matematica } from "./estudosTexto";
-import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal, motorDe, nota, numeros, relogio, rotulo }
+import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, corAcerto, gravarLocal, lerLocal, motorDe, nota, numeros, relogio, rotulo }
   from "./estudosUi";
 
 const KEY_CONFIG = "forja.estudos.prova";
@@ -42,11 +42,11 @@ export type ProvaPendente = { topicos: string[]; instrucoes: string };
 function Numero(props: { valor: number; min: number; max: number; unidade: string; dica: string;
                          onChange: (v: number) => void; icone?: React.ReactNode }) {
   return (
-    <label title={props.dica} className={`${pilula} focus-within:border-focus`}>
-      {props.icone}
+    <label title={props.dica} className={`${pilula} rounded-full py-0.5 pl-0.5 focus-within:border-focus`}>
       <input type="number" min={props.min} max={props.max} value={props.valor}
              onChange={(e) => props.onChange(Math.min(props.max, Math.max(props.min, Number(e.target.value) || 0)))}
-             className={numeroPilula} style={larguraNumero(props.valor)} />
+             className="w-10 [appearance:textfield] rounded-full bg-raised py-0.5 text-center font-mono text-fg outline-none [&::-webkit-inner-spin-button]:appearance-none" />
+      {props.icone}
       {props.unidade}
     </label>
   );
@@ -711,8 +711,8 @@ export default function Provas(props: {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
+      <div className={`min-h-0 flex-1 overflow-y-auto ${vista.tipo === "lista" ? "px-8 pt-6 pb-10" : "px-5 py-4"}`}>
+        <div className={`mx-auto flex flex-col gap-3 ${vista.tipo === "lista" ? "max-w-[860px]" : "max-w-3xl"}`}>
 
           {vista.tipo === "fazer" && (
             <FazerProva prova={vista.prova} treino={vista.treino} onSair={() => setVista({ tipo: "lista" })}
@@ -771,15 +771,17 @@ export default function Provas(props: {
               )}
 
               {provas.map((p) => (
-                <div key={p.message_id} className={`${card} text-xs`}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-fg">{p.titulo}</span>
-                    <span className="text-faint">{quando(p.criado)} · {p.status === "rodando" ? "gerando…" : p.status === "aguardando"
+                <div key={p.message_id} className="rounded-xl border border-line bg-surface px-[18px] py-4 text-xs">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="min-w-0 flex-1">
+                    <p className="text-[14px] font-semibold text-fg">{p.titulo}</p>
+                    <p className="mt-0.5 text-[12px] text-faint">{quando(p.criado)} · {p.status === "rodando" ? "gerando…" : p.status === "aguardando"
                       ? "esperando o Claude" : `${p.n}${pedidas(p.config) > p.n ? ` de ${pedidas(p.config)}` : ""} questões`}{p.config ? ` · ${resumoCfg(p.config)}` : ""}
-                      {p.config?.tempo ? ` · ${p.config.tempo} min` : ""}{p.motor === "claude" ? " · feita pelo Claude" : ""}</span>
+                      {p.config?.tempo ? ` · ${p.config.tempo} min` : ""}{p.motor === "claude" ? " · feita pelo Claude" : ""}
                     {p.status !== "pronto" && p.status !== "rodando" && p.status !== "aguardando" && (
-                      <span className={p.status === "erro" ? "text-red-300" : "text-amber-300"}>{p.status}</span>
-                    )}
+                      <span className={`ml-1.5 ${p.status === "erro" ? "text-red-300" : "text-amber-300"}`}>{p.status}</span>
+                    )}</p>
+                    </div>
                     <div className="ml-auto flex gap-2">
                       {p.n > 0 && p.status !== "rodando" && p.status !== "aguardando" && <>
                         <button className={btn} onClick={() => fazer(p.message_id, true)}
@@ -795,14 +797,14 @@ export default function Provas(props: {
                     </div>
                   </div>
                   {!!p.tentativas.length && (
-                    <div className="mt-2 flex flex-wrap gap-1.5 border-t border-line pt-2">
+                    <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
                       {p.tentativas.map((t, i) => (
                         <button key={t.message_id} onClick={() => verResultado(t.message_id)} title="Ver a correção e as explicações"
-                                className="rounded-lg border border-line px-2.5 py-1 hover:border-focus hover:bg-raised">
+                                className="rounded-[9px] border border-line px-[11px] py-[5px] hover:border-focus hover:bg-raised">
                           <span className="text-faint">{i + 1}ª{t.modo === "treino" ? " treino" : ""} · </span>
-                          <span className={`font-mono ${t.nota >= 7 ? "text-ok" : t.nota >= 5 ? "text-amber-300" : "text-red-300"}`}>{nota(t.nota)}</span>
-                          <span className="font-mono text-faint">/10</span>
-                          <span className="text-faint"> · {quando(t.criado)}{t.status !== "pronto" ? ` · ${t.status}` : ""}</span>
+                          <span className={`font-mono text-[13px] font-semibold ${t.nota >= 7 ? "text-ok" : t.nota >= 5 ? "text-amber-300" : "text-red-300"}`}>{nota(t.nota)}</span>
+                          <span className="font-mono text-faint">/10{t.criado ? ` · ${new Date(t.criado).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` : ""}</span>
+                          {t.status !== "pronto" && <span className="text-faint"> · {t.status}</span>}
                         </button>
                       ))}
                     </div>
@@ -816,12 +818,13 @@ export default function Provas(props: {
 
       {vista.tipo === "lista" && (
         <div className="shrink-0 px-5 pb-4">
-          <div className="mx-auto max-w-3xl">
+          <div className="mx-auto max-w-[796px]">
             {props.painelModelos}
             {geral && !!ms.length && (
               <div className={`${card} mb-2 flex flex-col gap-1.5 text-xs`}>
                 <div className="flex items-center gap-2">
-                  <span className="font-medium text-fg">Quantas de cada matéria</span>
+                  <span className="text-[13px] font-semibold text-fg">Quantas de cada matéria</span>
+                  <span className="font-mono text-faint">{total} questões</span>
                   <div className="ml-auto flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Distribuição">
                     {([["peso", "Pelo peso", "Na proporção do peso de cada matéria"],
                        ["fracos", "Mais dos pontos fracos", "O peso vezes o que falta acertar: a matéria fraca leva mais"]] as const).map(([id, nome, dica]) => (
@@ -837,9 +840,10 @@ export default function Provas(props: {
                   const fatia = pesoDe(m) / somaPeso;
                   return (
                     <div key={m.id} className="flex items-center gap-3">
-                      <span className="w-44 shrink-0 truncate text-muted" title={m.nome}>{m.nome}</span>
+                      <span className={`size-2 shrink-0 rounded-full ${corAcerto(m.acerto)}`} />
+                      <span className="w-[170px] shrink-0 truncate text-muted" title={m.nome}>{m.nome}</span>
                       <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
-                        <div className="h-full rounded-full bg-accent/70" style={{ width: `${Math.round(fatia * 100)}%` }} />
+                        <div className="h-full rounded-full bg-accent/70 transition-[width] duration-[250ms]" style={{ width: `${Math.round(fatia * 100)}%` }} />
                       </div>
                       <span className="w-28 shrink-0 whitespace-nowrap text-right font-mono text-faint">≈ {Math.round(fatia * total)} questões</span>
                     </div>

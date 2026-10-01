@@ -136,18 +136,18 @@ export default function Simulados(props: {
   const analise = viva?.tipo === "simulado" ? viva : null;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-8">
-      <div className="mx-auto flex max-w-3xl flex-col gap-3">
+    <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
+      <div className="mx-auto flex max-w-[860px] flex-col gap-3">
         {props.painelModelos}
 
         {/* ---------------------------------------------------------------- busca na web */}
         <section className={card}>
           <div className="mb-2 flex items-center gap-2">
             <Globe className="size-4 text-muted" />
-            <h2 className="text-sm font-medium text-fg">Buscar provas reais na web</h2>
+            <h2 className="text-[14px] font-semibold text-fg">Buscar provas reais na web</h2>
             <span className="ml-auto">{props.botaoModelos}</span>
           </div>
-          <p className="mb-2.5 text-xs text-muted">
+          <p className="mb-2.5 text-[12.5px] text-muted">
             O modelo procura o caderno de questões e o gabarito oficial, baixa só PDF e anexa o que confere como prova.
           </p>
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); buscar(); }}>
@@ -163,8 +163,8 @@ export default function Simulados(props: {
 
         {/* ---------------------------------------------------------------- gabarito oficial × IA */}
         <section className={card}>
-          <h2 className="mb-1 text-sm font-medium text-fg">Gabarito oficial × IA</h2>
-          <p className="mb-2.5 text-xs text-muted">
+          <h2 className="mb-1 text-[14px] font-semibold text-fg">Gabarito oficial × IA</h2>
+          <p className="mb-2.5 text-[12.5px] text-muted">
             O modelo resolve as questões reais sem ver a resolução nem a resposta; depois o Forja compara com o gabarito
             oficial (o do próprio PDF, o de outro material ou o que você colar).
           </p>
@@ -250,7 +250,7 @@ function Busca({ b, viva }: { b: EstudosBusca; viva: boolean }) {
       )}
       {b.candidatos.map((c, i) => (
         <div key={`${i}:${c.url}`} className="flex items-center gap-2">
-          <span className={`w-16 shrink-0 font-mono ${COR[c.status]}`}>{c.status}</span>
+          <span className={`w-[66px] shrink-0 font-mono ${COR[c.status]}`}>{c.status}</span>
           <span className="w-16 shrink-0 text-muted">{c.tipo}</span>
           <span className="min-w-0 flex-1 truncate text-fg" title={c.url}>{c.exame || c.titulo}</span>
           {c.motivo && <span className="shrink-0 text-faint">{c.motivo}</span>}
@@ -282,7 +282,7 @@ function Parte({ nome, a, t, dica }: { nome: string; a: number; t: number; dica:
   if (!t) return null;
   return (
     <div className="flex items-center gap-3" title={dica}>
-      <span className="w-44 shrink-0 text-muted">{nome}</span>
+      <span className="w-[170px] shrink-0 truncate text-muted" title={nome}>{nome}</span>
       <div className="h-1.5 min-w-0 flex-1 rounded-full bg-raised"><div className={`h-full rounded-full ${corPct(pct(a, t))}`} style={{ width: `${pct(a, t)}%` }} /></div>
       <span className="w-28 shrink-0 whitespace-nowrap text-right font-mono text-faint">{a}/{t} · {pct(a, t)}%</span>
     </div>
@@ -299,9 +299,9 @@ function Resultado({ d, so, onSo, onProva, onApagar }: { d: EstudosSimulado; so:
   const qs = d.questoes.filter((q) => (so === "todas" ? true : q.certa === false));
   const brancas = d.questoes.filter((q) => !q.ia);
   return (
-    <div className="flex flex-col gap-3 rounded-xl bg-raised/40 p-3 text-xs">
+    <div className="flex flex-col gap-3 rounded-xl bg-raised/60 px-4 py-3.5 text-xs">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-2xl font-semibold text-fg">{pct(pl.acertos, pl.resolvidas)}%</span>
+        <span className="font-mono text-[26px] font-semibold text-fg">{pct(pl.acertos, pl.resolvidas)}%</span>
         <span className="text-muted">a IA acertou <b className="text-fg">{pl.acertos}</b> de {pl.resolvidas} · {d.stats.escritor}</span>
         <span className="text-faint">gabarito: {d.gabarito || "do PDF"} · {pl.com_gabarito} de {pl.questoes} questões têm gabarito</span>
       </div>
@@ -369,15 +369,15 @@ function Ranking({ r }: { r: NonNullable<EstudosProjeto["ranking"]> }) {
   const max = Math.max(...r.itens.map((i) => i.questoes), 1);
   return (
     <section className={card}>
-      <h2 className="mb-1 text-sm font-medium text-fg">O que mais cai</h2>
-      <p className="mb-2.5 text-xs text-muted">
+      <h2 className="mb-1 text-[14px] font-semibold text-fg">O que mais cai</h2>
+      <p className="mb-2.5 text-[12.5px] text-muted">
         {r.questoes} questões de {r.simulados} simulado{r.simulados > 1 ? "s" : ""} conferido{r.simulados > 1 ? "s" : ""}, por assunto
         {r.simulados > 1 ? " (primeiro o que aparece em mais simulados)" : ""}.
       </p>
       <div className="flex flex-col gap-1.5 text-xs">
         {r.itens.slice(0, 20).map((i) => (
           <div key={i.assunto} className="flex items-center gap-3">
-            <span className="w-56 shrink-0 truncate text-fg" title={`${i.assunto} · ${i.area}`}>{i.assunto}</span>
+            <span className="w-[200px] shrink-0 truncate text-fg" title={`${i.assunto} · ${i.area}`}>{i.assunto}</span>
             <div className="h-1.5 min-w-0 flex-1 rounded-full bg-raised"><div className="h-full rounded-full bg-accent" style={{ width: `${(i.questoes / max) * 100}%` }} /></div>
             <span className="w-28 shrink-0 text-right font-mono text-faint">
               {i.questoes} · {Math.round(i.fracao * 100)}%{r.simulados > 1 ? ` · ${i.simulados}/${r.simulados}` : ""}

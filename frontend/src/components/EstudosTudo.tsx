@@ -210,6 +210,11 @@ export function VisaoGeral(props: {
   );
 }
 
+// as tabelas do quadro de revisão viram ficha (o .md global tem as bordas e o zebrado: aqui saem)
+const ficha = "[&_.md-table]:border-0! [&_.md-table]:rounded-none! [&_.md_table]:border-0! [&_.md_tr]:bg-transparent! [&_.md_th]:bg-transparent! [&_.md_th]:text-left [&_.md_td]:border-0! [&_.md_th]:border-0! "
+  + "[&_.md_tr]:border-b! [&_.md_tr]:border-raised! [&_.md_td:first-child]:w-[200px] [&_.md_td:first-child]:text-[13px]! [&_.md_td:first-child]:font-semibold "
+  + "[&_.md_td:first-child]:text-fg-2! [&_.md_td+td]:text-muted! [&_.md_td+td]:leading-[1.5]!";
+
 /** O resumo geral: um índice — cada matéria com os resumos dela, os pontos fracos e o quadro de revisão do
  * último resumo. Não reescreve nada (o resumo de cada matéria já fecha com o quadro). */
 export function ResumoGeral(props: { conv: number; carimbo?: string; onError: (e: string) => void; onAbrir: (materia: string) => void }) {
@@ -222,10 +227,13 @@ export function ResumoGeral(props: { conv: number; carimbo?: string; onError: (e
     navigator.clipboard.writeText(md).then(() => { setCopiado(true); setTimeout(() => setCopiado(false), 1500); }).catch(() => {});
   }
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-      <div className="mx-auto flex max-w-3xl flex-col gap-3">
+    <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
+      <div className="mx-auto flex max-w-[860px] flex-col gap-3">
         <div className="flex items-center gap-2">
-          <p className={rotulo}>Resumo geral · o quadro de revisão de cada matéria</p>
+          <div className="min-w-0">
+            <h1 className="text-[18px] font-semibold text-fg">Resumo geral</h1>
+            <p className="text-[12.5px] text-muted">o quadro de revisão de cada matéria</p>
+          </div>
           {!!comQuadro.length && (
             <button className={`${btn} ml-auto text-xs`} onClick={copiar} title="Os quadros de todas as matérias, em Markdown: a folha da véspera">
               {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} {copiado ? "Copiado" : "Copiar a folha da véspera"}
@@ -233,12 +241,12 @@ export function ResumoGeral(props: { conv: number; carimbo?: string; onError: (e
           )}
         </div>
         {v.materias.map((m) => (
-          <section key={m.id} className={card}>
+          <section key={m.id} className="rounded-xl border border-line bg-surface px-[18px] py-4">
             <div className="flex items-center gap-2">
               <span className={`size-2 shrink-0 rounded-full ${corAcerto(m.acerto)}`} />
-              <h2 className="min-w-0 flex-1 truncate text-sm font-medium text-fg">{m.nome}</h2>
-              <span className="text-[11px] text-faint">{pct(m.acerto)}{m.erros ? ` · ${m.erros} no caderno de erros` : ""}</span>
-              <button className="text-xs text-accent hover:underline" onClick={() => props.onAbrir(m.id)}>abrir →</button>
+              <h2 className="min-w-0 flex-1 truncate text-[14.5px] font-semibold text-fg">{m.nome}</h2>
+              <span className="font-mono text-[11px] text-faint">{pct(m.acerto)}{m.erros ? ` · ${m.erros} no caderno de erros` : ""}</span>
+              <button className="text-xs text-accent-text hover:underline" onClick={() => props.onAbrir(m.id)}>abrir →</button>
             </div>
             {m.resumos.length ? (
               <p className="mt-1 text-xs text-muted">{m.resumos.map((r) => r.titulo || "Resumo").join(" · ")}</p>
@@ -250,7 +258,7 @@ export function ResumoGeral(props: { conv: number; carimbo?: string; onError: (e
                 {m.fracos.map((t) => <span key={t} className="rounded-full border border-amber-300/40 px-2 py-0.5 text-[11px] text-amber-200">{t}</span>)}
               </div>
             )}
-            {m.quadro ? <div className="mt-3 border-t border-line pt-3"><Markdown text={matematica(m.quadro)} math /></div>
+            {m.quadro ? <div className={`mt-3 border-t border-line pt-3 ${ficha}`}><Markdown text={matematica(m.quadro)} math /></div>
               : !!m.secoes.length && (
                 <div className="mt-3 border-t border-line pt-3 text-xs">
                   <ol className="list-decimal space-y-0.5 pl-5 text-muted">{m.secoes.map((t) => <li key={t}>{t}</li>)}</ol>

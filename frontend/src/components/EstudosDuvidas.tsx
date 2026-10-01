@@ -125,10 +125,12 @@ export function ConversaDuvida(props: {
               className={campoPrompt} />
   );
 
+  const aba = !props.compacta && !props.dica;
   return (
-    <div className="flex flex-col gap-2">
+    <div className={`flex flex-col ${aba ? "gap-3.5" : "gap-2"}`}>
       {msgs.map((m) => m.role === "user" ? (props.dica ? null :
-        <div key={m.id} className="ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-raised px-3.5 py-2 text-[14px] text-fg">
+        <div key={m.id} className={`ml-auto max-w-[85%] bg-raised px-3.5 py-2 text-[14px] text-fg ${
+          aba ? "rounded-[18px_18px_6px_18px] leading-[1.55]" : "rounded-2xl rounded-br-md"}`}>
           {m.trecho && <p className="mb-1 border-l-2 border-line-strong pl-2 text-xs text-muted italic">«{m.trecho}»</p>}
           <p className="whitespace-pre-wrap">{m.texto}</p>
         </div>
@@ -138,7 +140,7 @@ export function ConversaDuvida(props: {
           {m.status === "aguardando" ? (
             <p className="text-xs text-muted">Esperando o Claude — no Claude Code conectado ao Forja, peça: <span className="text-fg">“{PEDIDO_CLAUDE}”</span></p>
           ) : m.texto ? (
-            <div className="[&_.md]:text-[14px]"><Markdown text={matematica(m.texto)} math /></div>
+            <div className={aba ? "[&_.md]:text-[15px]! [&_.md]:leading-[1.7]! [&_.md]:text-fg-2!" : "[&_.md]:text-[14px]"}><Markdown text={matematica(m.texto)} math /></div>
           ) : m.status === "rodando" ? (
             <p className="animate-pulse text-xs text-sky-300">pensando…</p>
           ) : null}
@@ -171,6 +173,7 @@ export function ConversaDuvida(props: {
       ) : (
         // presa no fim da tela enquanto a conversa rola, como a caixa das outras abas
         <div className="sticky bottom-0 bg-bg pt-2 pb-1">
+          <div className="mx-auto w-full max-w-[696px]">
           <CaixaPrompt>
             {campo}
             <RodapePrompt>
@@ -181,6 +184,7 @@ export function ConversaDuvida(props: {
               </DireitaPrompt>
             </RodapePrompt>
           </CaixaPrompt>
+          </div>
         </div>
       )}
     </div>
@@ -202,8 +206,8 @@ export default function Duvidas(props: {
   const vazia = !props.projeto.duvidas?.geral && !props.pendente;
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6">
+        <div className="mx-auto flex max-w-[760px] flex-col gap-3">
           {props.painelModelos}
           {vazia && (
             <div className={`${card} text-xs text-muted`}>
