@@ -348,6 +348,7 @@ export type EstudosDesempenho = {
               modo: "prova" | "treino"; segundos: number; criado: string }[];
   topicos: { topico: string; pontos: number; max: number; pct: number | null; ultima: number | null }[];
   fracos: string[];
+  lembrete: boolean;   // há celular pareado para o aviso do cronograma (no Forja web, nunca)
   revisao: { erros: number; cartoes: number; vencem: number; dominados: number };
   plano: EstudosPlano | null;
 };

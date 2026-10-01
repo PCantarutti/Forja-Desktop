@@ -2428,7 +2428,7 @@ class MarcarBody(BaseModel):
 class PdfBody(BaseModel):
     titulo: str = ""
     html: str                       # o resumo como a tela desenhou (KaTeX incluso)
-    css: list[str] = []             # as folhas de estilo da página (só as do próprio Forja são usadas)
+    css: str = ""                   # o CSS da tela, com as fontes usadas embutidas
 
 
 def _revisao(f, *args, codigo: int = 400):
@@ -2489,11 +2489,11 @@ def estudos_cronograma_apagar(conv_id: int):
 
 
 @app.post("/api/estudos/pdf")
-async def estudos_pdf(body: PdfBody, request: Request):
+async def estudos_pdf(body: PdfBody):
     from urllib.parse import quote
     from . import estudos_revisao
     try:
-        dados = await estudos_revisao.pdf(body.html, body.css, str(request.base_url), body.titulo)
+        dados = await estudos_revisao.pdf(body.html, body.css, body.titulo)
     except ToolError as e:
         raise HTTPException(400, str(e))
     seguro = re.sub(r'[\\/:*?"<>|]+', "", body.titulo).strip()[:60] or "resumo"

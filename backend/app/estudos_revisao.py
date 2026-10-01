@@ -355,6 +355,7 @@ def desempenho(conv_id: int) -> dict:
     fracos = sorted((t for t in topicos if t["pct"] is not None and t["pct"] < 0.7), key=lambda t: t["pct"])[:4]
     p = painel(conv_id)
     return {"entregas": entregas, "topicos": topicos, "fracos": [t["topico"] for t in fracos],
+            "lembrete": bool(mobile.devices()),
             "revisao": {"erros": sum(x["tipo"] == "erro" for x in p["itens"]), "cartoes": sum(x["tipo"] == "cartao" for x in p["itens"]),
                         "vencem": p["vencem"], "dominados": sum(x["dominada"] for x in p["itens"])},
             "plano": p["plano"]}
@@ -478,15 +479,14 @@ PDF_CSS = (":root{color-scheme:light;--color-bg:#fff;--color-surface:#fff;--colo
            "--color-faint:#777}html,body{background:#fff!important;color:#111;margin:0}")
 
 
-async def pdf(corpo: str, css: list[str], origem: str, titulo: str = "") -> bytes:
+async def pdf(corpo: str, css: str, titulo: str = "") -> bytes:
     """O resumo como está na tela — fórmulas já desenhadas pelo KaTeX — em PDF, pelo Chromium headless que o
-    documentos já usa. A página abre na origem do próprio Forja para as folhas de estilo e as fontes do KaTeX
-    carregarem (fonte de outra origem o Chromium barra). JavaScript desligado: o HTML é só para ler."""
+    documentos já usa. O CSS vem da própria tela, com as fontes embutidas (data:): no Docker quem serve os
+    arquivos da interface é o nginx, que o backend não alcança. Sem JavaScript e sem rede: o HTML é só leitura."""
     from playwright.async_api import async_playwright
-    folhas = [c for c in css if isinstance(c, str) and c.startswith(origem)][:8]   # só as do próprio Forja
-    links = "".join(f'<link rel="stylesheet" href="{html.escape(c, quote=True)}">' for c in folhas)
+    estilo = (css or "").replace("</", "<\\/")   # nada fecha o <style> antes da hora
     doc = (f'<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>{html.escape(titulo)}</title>'
-           f'{links}<style>{PDF_CSS}</style></head><body>{corpo}</body></html>')
+           f'<style>{estilo}</style><style>{PDF_CSS}</style></head><body>{corpo}</body></html>')
     async with async_playwright() as pw:
         try:
             navegador = await pw.chromium.launch(headless=True)
@@ -496,8 +496,8 @@ async def pdf(corpo: str, css: list[str], origem: str, titulo: str = "") -> byte
                             f"({e.__class__.__name__})") from e
         try:
             pagina = await navegador.new_page(java_script_enabled=False)
-            await pagina.goto(folhas[0] if folhas else origem)
-            await pagina.set_content(doc, wait_until="networkidle")
+            await pagina.route("**/*", lambda r: r.abort())   # tudo já vem no documento
+            await pagina.set_content(doc, wait_until="load")
             return await pagina.pdf(format="A4", print_background=True,
                                     margin={"top": "1.6cm", "bottom": "1.6cm", "left": "1.8cm", "right": "1.8cm"},
                                     display_header_footer=True, header_template="<div></div>",

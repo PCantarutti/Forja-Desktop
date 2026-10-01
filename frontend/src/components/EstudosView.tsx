@@ -110,6 +110,44 @@ function Opcoes<T extends string>(props: { titulo: string; itens: Opcao<T>[]; li
 
 const tamanhoTexto = (n: number) => (n >= 1000 ? `${Math.round(n / 1000).toLocaleString("pt-BR")} mil` : String(n));
 
+const semAspas = (s: string) => s.replace(/["'\s]/g, "").toLowerCase();
+
+/** O CSS da página com as fontes que ela de fato carregou embutidas em data:. O Chromium que monta o PDF não
+ *  alcança os arquivos da interface (no Docker, quem os serve é o nginx), então tudo vai no corpo do pedido. */
+async function cssDaTela(): Promise<string> {
+  const usadas = new Set<string>();
+  document.fonts.forEach((f) => {
+    if (f.status === "loaded") usadas.add(semAspas(`${f.family}|${f.weight}|${f.style}|${f.unicodeRange}`));
+  });
+  const partes: string[] = [];
+  for (const folha of Array.from(document.styleSheets)) {
+    let regras: CSSRuleList;
+    try {
+      regras = folha.cssRules;
+    } catch {
+      continue;   // folha de outra origem: o navegador não deixa ler
+    }
+    for (const r of Array.from(regras)) {
+      if (!(r instanceof CSSFontFaceRule)) {
+        partes.push(r.cssText);
+        continue;
+      }
+      const s = r.style, v = (p: string, padrao: string) => s.getPropertyValue(p) || padrao;
+      const chave = semAspas(`${v("font-family", "")}|${v("font-weight", "normal")}|${v("font-style", "normal")}|${v("unicode-range", "U+0-10FFFF")}`);
+      const url = /url\("?([^")]+\.woff2)"?\)/.exec(v("src", ""))?.[1];
+      if (!usadas.has(chave) || !url) continue;   // fonte que a tela não usou fica de fora (o PDF não precisa)
+      const blob = await fetch(new URL(url, folha.href ?? location.href)).then((x) => x.blob());
+      const dado = await new Promise<string>((ok) => {
+        const fr = new FileReader();
+        fr.onload = () => ok(String(fr.result));
+        fr.readAsDataURL(blob);
+      });
+      partes.push(r.cssText.replace(/src:[^;]+;/, `src: url("${dado}") format("woff2");`));
+    }
+  }
+  return partes.join("\n");
+}
+
 export default function EstudosView(props: {
   conv: number | null;
   carimbo?: string;   // activity.lista: o estudo mexido em outro lugar (celular, Claude) recarrega aqui
@@ -341,13 +379,13 @@ export default function EstudosView(props: {
     setTimeout(() => setCopiado(false), 1500);
   }
 
-  /** O resumo como está na tela (fórmulas já desenhadas) vira PDF no backend, com as folhas de estilo daqui. */
+  /** O resumo como está na tela (fórmulas já desenhadas) vira PDF no backend, com o CSS e as fontes daqui. */
   async function baixarPdf() {
     if (!resumoRef.current || !estado?.texto || gerandoPdf) return;
     setGerandoPdf(true);
     const titulo = (estado.titulo || estado.tema).replace(/[\\/:*?"<>|]+/g, "").slice(0, 60) || "resumo";
     try {
-      const css = [...document.styleSheets].map((f) => f.href).filter((h): h is string => !!h);
+      const css = await cssDaTela();
       const r = await fetch("/api/estudos/pdf", {
         method: "POST", body: JSON.stringify({ titulo, html: resumoRef.current.innerHTML, css }),
         headers: { "Content-Type": "application/json", ...(window.forja?.token ? { "X-Forja-Token": window.forja.token } : {}) } });

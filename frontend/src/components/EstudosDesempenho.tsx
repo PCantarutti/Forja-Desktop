@@ -34,8 +34,8 @@ function Grafico({ entregas }: { entregas: EstudosDesempenho["entregas"] }) {
   );
 }
 
-function Cronograma({ conv, plano, onMudou, onProva, onIr, onError }: {
-  conv: number; plano: EstudosPlano | null; onMudou: () => void; onProva: (p: ProvaPendente) => void;
+function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: {
+  conv: number; plano: EstudosPlano | null; lembrete: boolean; onMudou: () => void; onProva: (p: ProvaPendente) => void;
   onIr: (aba: "resumo" | "revisao") => void; onError: (e: string) => void;
 }) {
   // AAAA-MM-DD no fuso daqui (o toISOString é UTC: depois das 21h já seria amanhã)
@@ -104,7 +104,7 @@ function Cronograma({ conv, plano, onMudou, onProva, onIr, onError }: {
           {plano && <button className={btn} onClick={() => setEditando(false)}>Voltar</button>}
           <p className="w-full text-faint">
             Um tópico por dia (os seus pontos fracos voltam mais vezes), revisão dos cartões e erros todo dia e um simulado por
-            semana e na véspera. O celular avisa a tarefa do dia às 8h.
+            semana e na véspera.{lembrete && " O celular avisa a tarefa do dia às 8h."}
           </p>
         </div>
       )}
@@ -220,7 +220,7 @@ export default function Desempenho(props: {
                 <button className={`${btn} ml-auto`} onClick={() => props.onIr("revisao")}>Abrir a revisão <ArrowRight className="size-3.5" /></button>
               </div>
 
-              <Cronograma key={d.plano?.criado ?? "novo"} conv={props.conv} plano={d.plano} onMudou={carregar}
+              <Cronograma key={d.plano?.criado ?? "novo"} conv={props.conv} plano={d.plano} lembrete={d.lembrete} onMudou={carregar}
                           onProva={props.onProva} onIr={props.onIr} onError={props.onError} />
             </>
           )}
