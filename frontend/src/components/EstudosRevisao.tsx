@@ -10,6 +10,9 @@ import { type Modelos, btn, btnPrimary, card, motorDe, numeros, rotulo } from ".
 
 const LETRAS = "ABCDE";
 const DA_PARTE: Record<string, PesquisaFonte["status"]> = { fila: "fila", gerando: "lendo", ok: "util", erro: "erro" };
+const acao = "rounded-[10px] px-4 py-2 text-[13px]";   // botões da sessão
+const VOLTA = [1, 3, 7, 15, 30];   // dias até o item voltar, por caixa
+const COR_CAIXA = ["bg-err/55", "bg-warn/55", "bg-warn/35", "bg-ok/40", "bg-ok/70"];
 const quando = (iso: string) => new Date(`${iso}T12:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 
 function SinapseCartoes({ f }: { f: EstudosFlashcards }) {
@@ -69,13 +72,13 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
 
   if (!item) {
     return (
-      <div className={`${card} flex flex-wrap items-center gap-3`}>
-        <Check className="size-5 text-ok" />
+      <div className={`${card} flex flex-wrap items-center gap-3 px-[18px] py-4`}>
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-ok/15 text-ok"><Check className="size-5" /></span>
         <div className="min-w-0 flex-1">
           <p className="text-sm text-fg">Revisão feita: {placar.certas} de {placar.feitas} certas.</p>
           <p className="text-xs text-muted">O que você errou volta amanhã; o que acertou, só daqui a alguns dias.</p>
         </div>
-        <button className={btnPrimary} onClick={onFim}>Fechar</button>
+        <button className={`${btnPrimary} rounded-[10px] px-4 py-2 text-[13px]`} onClick={onFim}>Fechar</button>
       </div>
     );
   }
@@ -91,16 +94,16 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
         <button className="text-faint hover:text-fg" title="Parar a revisão" onClick={onFim}><X className="size-4" /></button>
       </div>
 
-      <div className={`${card} px-6 py-5`}>
+      <div className="min-h-[220px] rounded-2xl border border-line bg-surface px-[30px] py-7">
         {item.topico && <p className={`${rotulo} mb-2`}>{item.topico}</p>}
         {item.tipo === "cartao" ? (
           <>
-            <div className="text-[15px] [&_.md]:text-[15px]"><Markdown text={matematica(item.frente)} math /></div>
-            {virado && <div className="mt-4 border-t border-line pt-4 [&_.md]:text-[14px]"><Markdown text={matematica(item.verso)} math /></div>}
+            <div className="[&_.md]:text-[19px]! [&_.md]:leading-[1.55]!"><Markdown text={matematica(item.frente)} math /></div>
+            {virado && <div className="mt-4 border-t border-line pt-4 [&_.md]:text-[16px]!"><Markdown text={matematica(item.verso)} math /></div>}
           </>
         ) : (
           <>
-            <Markdown text={matematica(q!.enunciado)} math />
+            <div className="[&_.md]:text-[19px]! [&_.md]:leading-[1.55]!"><Markdown text={matematica(q!.enunciado)} math /></div>
             <FiguraQuestao conv={conv} f={q!.figura} />
             {q!.tipo === "me" && (
               <div className="mt-3 flex flex-col gap-1.5">
@@ -108,12 +111,12 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
                   const certa = resposta !== null && k === q!.correta, minha = resposta === k;
                   return (
                     <button key={k} disabled={resposta !== null} onClick={() => setResposta(k)}
-                            className={`flex items-start gap-3 rounded-xl border px-3.5 py-2 text-left ${
+                            className={`flex items-start gap-3 rounded-xl border px-3.5 py-2.5 text-left text-[14.5px] ${
                               certa ? "border-ok/55 bg-ok/[.06]" : minha ? "border-red-400/50 bg-red-400/[.05]"
                                 : resposta === null ? "border-line hover:border-focus hover:bg-raised" : "border-line"}`}>
                       <span className={`grid size-6 shrink-0 place-items-center rounded-full border font-mono text-xs ${
                         certa ? "border-ok text-ok" : minha ? "border-red-300 text-red-300" : "border-line-strong text-muted"}`}>{LETRAS[k]}</span>
-                      <span className="min-w-0 flex-1 [&_.md]:text-[14px] [&_p]:my-0"><Markdown text={matematica(a)} math /></span>
+                      <span className="min-w-0 flex-1 [&_.md]:text-[14.5px] [&_p]:my-0"><Markdown text={matematica(a)} math /></span>
                     </button>
                   );
                 })}
@@ -123,7 +126,7 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
               <div className="mt-3 grid grid-cols-2 gap-2">
                 {([[true, "Verdadeiro"], [false, "Falso"]] as const).map(([v, nome]) => (
                   <button key={nome} disabled={resposta !== null} onClick={() => setResposta(v)}
-                          className={`rounded-xl border px-3.5 py-2.5 text-sm ${
+                          className={`rounded-xl border px-3.5 py-2.5 text-[14.5px] ${
                             resposta !== null && v === q!.correta ? "border-ok/55 bg-ok/[.06] text-ok"
                               : resposta === v ? "border-red-400/50 bg-red-400/[.05] text-red-300" : "border-line text-fg hover:border-focus"}`}>{nome}</button>
                 ))}
@@ -142,13 +145,13 @@ function Sessao({ conv, itens, onFim, onError }: { conv: number; itens: EstudosI
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
         {fechada ? (
-          resposta !== null && <button className={btnPrimary} onClick={() => proximo(!!acertouFechada)}>Próximo <ArrowRight className="size-3.5" /></button>
+          resposta !== null && <button className={`${btnPrimary} ${acao}`} onClick={() => proximo(!!acertouFechada)}>Próximo <ArrowRight className="size-3.5" /></button>
         ) : !virado ? (
-          <button className={btnPrimary} onClick={() => setVirado(true)}>{item.tipo === "cartao" ? "Virar o cartão" : "Mostrar a resposta"}</button>
+          <button className={`${btnPrimary} ${acao}`} onClick={() => setVirado(true)}>{item.tipo === "cartao" ? "Virar o cartão" : "Mostrar a resposta"}</button>
         ) : (
           <>
-            <button className={btn} onClick={() => proximo(false)}><X className="size-3.5" /> Errei <span className="font-mono text-faint">1</span></button>
-            <button className={btnPrimary} onClick={() => proximo(true)}><Check className="size-3.5" /> Acertei <span className="font-mono opacity-60">2</span></button>
+            <button className={`${btn} ${acao}`} onClick={() => proximo(false)}><X className="size-3.5" /> Errei <span className="font-mono text-faint">1</span></button>
+            <button className={`${btnPrimary} ${acao}`} onClick={() => proximo(true)}><Check className="size-3.5" /> Acertei <span className="font-mono opacity-60">2</span></button>
           </>
         )}
         <span className="ml-auto hidden text-faint md:inline">
@@ -193,6 +196,7 @@ export default function Revisao(props: {
   const vencem = ativos.filter((x) => x.vence);
   const erros = painel.itens.filter((x) => x.tipo === "erro");
   const cartoes = painel.itens.filter((x) => x.tipo === "cartao");
+  const porCaixa = [1, 2, 3, 4, 5].map((c) => painel.itens.filter((x) => Math.min(5, Math.max(1, x.caixa)) === c).length);
   const gerando = viva && (viva.status === "rodando" || viva.status === "aguardando") ? viva : null;
 
   const ouvir = useCallback(async (path: string, init: RequestInit) => {
@@ -272,9 +276,9 @@ export default function Revisao(props: {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-3">
+    <div className={`flex h-full min-h-0 flex-col ${sessao ? "bg-side" : ""}`}>
+      <div className={`min-h-0 flex-1 overflow-y-auto px-8 ${sessao ? "py-10" : "pt-6 pb-10"}`}>
+        <div className={`mx-auto flex flex-col gap-3 ${sessao ? "max-w-[720px]" : "max-w-[860px]"}`}>
           {!sessao && props.painelModelos}
 
           {sessao ? (
@@ -282,24 +286,39 @@ export default function Revisao(props: {
                     onFim={() => { setSessao(null); recarregar.current(); }} />
           ) : (
             <>
-              <div className={`${card} flex flex-wrap items-center gap-x-6 gap-y-3`}>
+              <div className="rounded-xl border border-line bg-surface px-[18px] py-4">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
                 <div>
                   <p className={rotulo}>para hoje</p>
-                  <p className="mt-1 font-mono text-4xl font-semibold text-fg">{vencem.length}</p>
+                  <p className="mt-1 font-mono text-[40px] leading-none font-semibold text-fg">{vencem.length}</p>
                 </div>
-                <div className="text-xs text-muted">
+                <div className="text-[12.5px] text-muted">
                   <p><b className="text-fg">{erros.length}</b> questões no caderno de erros · <b className="text-fg">{cartoes.length}</b> cartões</p>
                   <p className="mt-0.5">{painel.itens.filter((x) => x.dominada).length} dominados · revisão espaçada: errou, volta amanhã; acertou, espaça (1, 3, 7, 15, 30 dias)</p>
                 </div>
-                <div className="ml-auto flex gap-2 text-xs">
+                <div className="ml-auto flex gap-2">
                   {vencem.length ? (
-                    <button className={btnPrimary} onClick={() => comecar(false)}><Refresh className="size-3.5" /> Revisar agora</button>
+                    <button className={`${btnPrimary} px-4 py-[9px] text-[13px]`} onClick={() => comecar(false)}><Refresh className="size-3.5" /> Revisar agora</button>
                   ) : ativos.length ? (
-                    <button className={btn} onClick={() => comecar(true)} title="Nada vence hoje: revisa tudo o que não está dominado">
+                    <button className={`${btnPrimary} px-4 py-[9px] text-[13px]`} onClick={() => comecar(true)} title="Nada vence hoje: revisa tudo o que não está dominado">
                       <Refresh className="size-3.5" /> Revisar mesmo assim
                     </button>
                   ) : null}
                 </div>
+              </div>
+              {!!painel.itens.length && (
+                <div className="mt-4">
+                  <div className="flex h-2.5 gap-0.5 overflow-hidden rounded-full">
+                    {porCaixa.map((n, k) => !!n && (
+                      <div key={k} className={`h-full transition-[width] duration-[250ms] ${COR_CAIXA[k]}`} style={{ width: `${(100 * n) / painel.itens.length}%` }}
+                           title={`Caixa ${k + 1}: volta em ${VOLTA[k]} dia${VOLTA[k] === 1 ? "" : "s"}`} />
+                    ))}
+                  </div>
+                  <div className="mt-1.5 grid grid-cols-5 font-mono text-[10.5px] text-faint">
+                    {porCaixa.map((n, k) => <span key={k}>caixa {k + 1} · {n}</span>)}
+                  </div>
+                </div>
+              )}
               </div>
 
               {!painel.itens.length && !gerando && (
@@ -346,7 +365,7 @@ export default function Revisao(props: {
                   {(lista === "erros" ? erros : cartoes).map((x) => (
                     <div key={x.chave} className="flex items-start gap-3 px-3.5 py-2.5">
                       <div className="min-w-0 flex-1">
-                        <div className="line-clamp-2 text-fg [&_.md]:text-[13px] [&_p]:my-0">
+                        <div className="line-clamp-2 text-fg [&_.md]:text-[13.5px] [&_p]:my-0">
                           <Markdown text={matematica(x.tipo === "erro" ? x.questao.enunciado : x.frente)} math />
                         </div>
                         {x.tipo === "cartao" && (
