@@ -122,3 +122,11 @@ def test_gabarito_por_imagem_vira_material_que_a_conferencia_le(monkeypatch):
     monkeypatch.setattr(F, "enxerga", lambda spec: asyncio.sleep(0, result=False))
     with pytest.raises(Exception, match="não enxerga"):
         asyncio.run(G.transcrever(conv, [("p.png", _png())], "fake", "v"))
+
+
+def test_cargo_repetido_antes_de_cada_versao_nao_vira_cabecalho():
+    # o que um modelo (ou uma pessoa) escreve ao anotar: o cargo de novo em cada versão
+    texto = "\n".join(f"ANALISTA DE SISTEMAS\nPROVA {i}\n{_linhas(CERTAS)}" for i in range(1, 5))
+    assert [G.rotulo(b) for b in G.blocos(texto)] == [f"ANALISTA DE SISTEMAS · Prova {i}" for i in range(1, 5)]
+    anotado = G.como_texto([{"cargo": "Analista de Sistemas", "prova": str(i), "respostas": CERTAS} for i in (1, 2, 3)])
+    assert anotado.count("ANALISTA DE SISTEMAS") == 1 and len(G.blocos(anotado)) == 3

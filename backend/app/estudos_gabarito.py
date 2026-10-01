@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import base64
+import time
 import io
 import re
 import unicodedata
@@ -44,7 +45,10 @@ def blocos(texto: str) -> list[dict]:
     from .estudos_simulado import ler_gabarito
 
     linhas = [l.strip() for l in (texto or "").splitlines()]
-    repetidas = {l for l, n in Counter(l for l in linhas if l).items() if n >= 3}
+    cheias = [l for l in linhas if l]
+    # cabeçalho = repete 3+ vezes e nunca vem logo antes de "PROVA n" ou de respostas (o nome do cargo vem)
+    antes_de_bloco = {a for a, b in zip(cheias, cheias[1:]) if VERSAO.match(b) or len(PAR.findall(b)) >= 2}
+    repetidas = {l for l, n in Counter(cheias).items() if n >= 3 and l not in antes_de_bloco}
     out: list[dict] = []
     cargo = prova = ultimo = ""
     buf: list[str] = []
@@ -170,10 +174,11 @@ def _data_uri(dados: bytes) -> str:
 
 def como_texto(blocos_: list[dict]) -> str:
     """O gabarito anotado no formato que o `blocos()` lê de volta (cargo, PROVA n, "01: A 02: C ...")."""
-    partes = []
+    partes, cargo = [], None
     for b in blocos_:
-        if b.get("cargo"):
-            partes.append(str(b["cargo"]).upper())
+        if b.get("cargo") and str(b["cargo"]).upper() != cargo:   # uma vez por cargo, como no gabarito da banca
+            cargo = str(b["cargo"]).upper()
+            partes.append(cargo)
         if b.get("prova"):
             partes.append(f"PROVA {b['prova']}")
         itens = sorted(b["respostas"].items())
@@ -216,7 +221,8 @@ async def transcrever(conv_id: int, imagens: list[tuple[str, bytes]], provider: 
     if claude:
         raise ToolError("A leitura do gabarito por imagem roda num modelo do Forja que enxerga.")
     spec = escritor
-    run = {"conv_id": conv_id, "cancelar": False, "stats": E.stats_novos(spec, spec), "texto": "", "teto": 300}
+    run = {"conv_id": conv_id, "cancelar": False, "stats": E.stats_novos(spec, spec), "texto": "", "teto": 300,
+           "t0": time.monotonic()}
     await design._garantir_local({"spec": spec})
     if not await F.enxerga(spec):
         raise ToolError(f"O modelo {spec['model']} não enxerga imagem. Escolha um com visão (ex.: Qwen3.6, Gemma 4).")
