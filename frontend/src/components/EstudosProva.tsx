@@ -15,7 +15,7 @@ import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLoc
 const KEY_CONFIG = "forja.estudos.prova";
 const rascunhoDe = (id: number) => `forja.estudos.rascunho.${id}`;
 const LETRAS = "ABCDE";
-const NOMES = { me: "Múltipla escolha", vf: "V/F", disc: "Discursivas" } as const;
+const NOMES = { me: "Múltipla", vf: "V/F", disc: "Discursiva" } as const;   // rótulos do grafo: curtos, ficam no meio da aresta
 const TIPO_CURTO = { me: "múltipla escolha", vf: "verdadeiro ou falso", disc: "discursiva" } as const;
 const DIFICULDADE = { facil: "fácil", media: "média", dificil: "difícil" } as Record<string, string>;
 const DIFICULDADES: { id: EstudosProvaConfig["dificuldade"]; label: string; hint: string }[] = [
@@ -396,7 +396,7 @@ export default function Provas(props: {
   useEffect(() => gravarLocal(KEY_CONFIG, { ...cfg, instrucoes: undefined }), [cfg]);
   useEffect(() => () => corte.current?.abort(), []);
 
-  const topicosDisp = props.projeto.resumo?.topicos.filter((t) => t.status === "pronto").map((t) => t.titulo) ?? [];
+  const topicosDisp = props.projeto.topicos ?? [];
   const escolhidos = (cfg.topicos ?? []).filter((t) => topicosDisp.includes(t));
   const temSimulado = props.projeto.materiais.some((m) => m.uso === "prova") || !!props.projeto.resumo?.perfil?.banca;
   const total = (cfg.me ?? 0) + (cfg.vf ?? 0) + (cfg.disc ?? 0);
@@ -595,7 +595,8 @@ export default function Provas(props: {
                 <div key={p.message_id} className={`${card} text-xs`}>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-fg">{p.titulo}</span>
-                    <span className="text-faint">{quando(p.criado)} · {p.n} questões{p.config ? ` · ${resumoCfg(p.config)}` : ""}
+                    <span className="text-faint">{quando(p.criado)} · {p.status === "rodando" ? "gerando…" : p.status === "aguardando"
+                      ? "esperando o Claude" : `${p.n} questões`}{p.config ? ` · ${resumoCfg(p.config)}` : ""}
                       {p.config?.tempo ? ` · ${p.config.tempo} min` : ""}{p.motor === "claude" ? " · feita pelo Claude" : ""}</span>
                     {p.status !== "pronto" && p.status !== "rodando" && p.status !== "aguardando" && (
                       <span className={p.status === "erro" ? "text-red-300" : "text-amber-300"}>{p.status}</span>

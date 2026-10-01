@@ -309,6 +309,7 @@ export type EstudosProjeto = {
   resumo: EstudosEstado | null;
   rodando: number | null;
   provas: EstudosProvaResumo[];
+  topicos: string[];   // os que a prova pode cobrar (do último resumo com texto)
 };
 
 export type EstudosTipoQuestao = "me" | "vf" | "disc";

@@ -160,6 +160,13 @@ def test_config_valida():
     assert cfg["topicos"] == ["Fermentação"] and cfg["alternativas"] == 4 and cfg["estilo"]
 
 
+def test_resumo_cancelado_vazio_nao_apaga_os_topicos():
+    conv = _estudo()
+    estudos._save(conv, role="assistant", content="", status="cancelado",
+                  meta={"estudos": {"tipo": "resumo", "tema": "x", "topicos": [{"titulo": "Outro", "status": "fila"}]}})
+    assert P.topicos(conv) == ["Glicólise", "Fermentação"] == estudos.projeto(conv)["topicos"]
+
+
 def test_sem_resumo_nem_material_nao_da_prova():
     with pytest.raises(ToolError, match="Anexe material"):
         P._contexto(_estudo(resumo=False))

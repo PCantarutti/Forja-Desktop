@@ -92,17 +92,28 @@ def _secoes(md: str) -> dict[str, str]:
     return out
 
 
-def _contexto(conv_id: int) -> dict:
-    """O que a prova usa: o último resumo com texto, os tópicos, o material cru e o estilo das provas anexadas."""
+def _base(conv_id: int) -> tuple[str, str, dict, dict[str, str], list[str]]:
+    """(título do estudo, texto, meta, seções, tópicos) do último resumo COM texto: um resumo cancelado
+    vazio não pode apagar os tópicos de que a prova precisa."""
     with db.session() as s:
-        conv = E._conv(s, conv_id)
-        titulo = conv.title
+        titulo = E._conv(s, conv_id).title
         resumo = next((m for m in s.scalars(select(db.Message).where(
             db.Message.conversation_id == conv_id, db.Message.role == "assistant").order_by(db.Message.id.desc()))
             if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo" and m.content), None)
         texto, e = (resumo.content, resumo.meta["estudos"]) if resumo else ("", {})
     secoes = _secoes(texto)
     topicos = [t["titulo"] for t in e.get("topicos") or [] if t.get("status") == "pronto" and t["titulo"] in secoes]
+    return titulo, texto, e, secoes, topicos or list(secoes)
+
+
+def topicos(conv_id: int) -> list[str]:
+    """Os tópicos que a prova pode cobrar (a tela mostra para escolher)."""
+    return _base(conv_id)[4]
+
+
+def _contexto(conv_id: int) -> dict:
+    """O que a prova usa: o último resumo com texto, os tópicos, o material cru e o estilo das provas anexadas."""
+    titulo, texto, e, secoes, topicos_ = _base(conv_id)
     mats = E.materiais(conv_id)
     itens = [{"nome": m["nome"], "cabeca": f"[{m['nome']}]", "texto": p}
              for m in mats if m["uso"] == "conteudo" for p in E._pedacos(E._texto(conv_id, m))]
@@ -111,7 +122,7 @@ def _contexto(conv_id: int) -> dict:
     simulado = next((E._texto(conv_id, m) for m in mats if m["uso"] == "prova"), "")
     tema = e.get("tema") or titulo
     return {"tema": tema, "prefs": E._prefs(e.get("preferencias")), "secoes": secoes,
-            "topicos": topicos or list(secoes) or [tema], "itens": itens, "perfil": e.get("perfil") or {},
+            "topicos": topicos_ or [tema], "itens": itens, "perfil": e.get("perfil") or {},
             "simulado": simulado[:EXEMPLO_TETO]}
 
 

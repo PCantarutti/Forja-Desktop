@@ -490,7 +490,7 @@ def projeto(conv_id: int) -> dict:
     from . import estudos_prova
     return {"id": conv_id, "titulo": titulo, "materiais": materiais(conv_id), "resumos": resumos,
             "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),
-            "provas": estudos_prova.lista(conv_id)}
+            "provas": estudos_prova.lista(conv_id), "topicos": estudos_prova.topicos(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração
