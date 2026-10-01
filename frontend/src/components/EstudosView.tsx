@@ -19,7 +19,7 @@ import EstudosMaterias from "./EstudosMaterias";
 import { ResumoGeral, VisaoGeral } from "./EstudosTudo";
 import { LerEdital, TrazerEstudo } from "./EstudosObjetivo";
 import { acharTitulo } from "./estudosMapa";
-import { PEDIDO_CLAUDE, type Modelos, abaDesligada, abaLigada, acertoGeral, corAcerto, selo, seloDestaque, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
+import { PEDIDO_CLAUDE, type Modelos, abaDesligada, abaLigada, acertoGeral, corAcerto, selo, seloDestaque, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo, btnLeve } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
 const KEY_MODELOS = "forja.estudos.modelos";
@@ -543,8 +543,33 @@ export default function EstudosView(props: {
   const etapas = ETAPAS.filter((x) => x.id !== "web" || estado?.web);
   const atual = estado?.etapa === "pronto" ? etapas.length : etapas.findIndex((x) => x.id === estado?.etapa);
   const secoes = estado?.texto ? sumario(estado.texto) : [];
+  // Painel lateral do resumo e progresso de leitura: estado só desta tela, não vai para a API
+  const [railTab, setRailTab] = useState<"sumario" | "material" | "cai" | "web" | null>(null);
+  const [lido, setLido] = useState(0);
+  const [secAtual, setSecAtual] = useState(0);
+  const rolagem = useRef<HTMLDivElement>(null);
+  function medirLeitura() {
+    const c = rolagem.current;
+    if (!c) return;
+    const max = c.scrollHeight - c.clientHeight;
+    setLido(max > 0 ? Math.min(1, c.scrollTop / max) : 1);
+    const topo = c.getBoundingClientRect().top - c.scrollTop;
+    const hs = [...(resumoRef.current?.querySelectorAll<HTMLElement>("h2") ?? [])];
+    let i = 0;
+    hs.forEach((h, k) => { if (h.getBoundingClientRect().top - topo - 140 <= c.scrollTop) i = k; });
+    setSecAtual(i);
+  }
+  useEffect(() => { requestAnimationFrame(medirLeitura); }, [estado?.message_id, !!estado?.texto, mapa]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fontesWeb = estado?.fontes ?? [];
   const perfil = estado?.perfil;
+  const trilhos = ([["sumario", "Sumário", secoes.length > 1], ["material", `Material · ${materiais.length}`, true],
+                    ["cai", "O que cai", !!perfil && (!!perfil.banca || !!perfil.topicos?.length)],
+                    ["web", `Web · ${fontesWeb.filter((f) => f.status === "util").length}`, !!fontesWeb.length]] as const)
+    .filter((t) => t[2]);
+  const rail = trilhos.find((t) => t[0] === railTab)?.[0] ?? (secoes.length > 1 ? "sumario" : "material");
+  const foco = imersao && aba === "resumo";   // modo foco do resumo: o mesmo imersao da prova e da revisão
+  const leitura = "[&_.md]:text-[16.5px]! [&_.md]:leading-[1.75]! [&_.md]:text-fg-2! [&_.md_h1]:text-[30px]! [&_.md_h1]:font-bold! [&_.md_h1]:text-fg! "
+    + "[&_.md_h2]:mt-7! [&_.md_h2]:mb-2.5! [&_.md_h2]:text-[21px]! [&_.md_h2]:font-bold! [&_.md_h2]:text-fg! [&_.md_strong]:text-fg! [&_.md_li+li]:mt-1.5!";
   const resumoPrefs = [NIVEIS.find((o) => o.id === prefs.nivel), TONS.find((o) => o.id === prefs.tom),
                        TAMANHOS.find((o) => o.id === prefs.tamanho)].map((o) => o?.label).filter(Boolean).join(" · ");
 
@@ -760,6 +785,7 @@ export default function EstudosView(props: {
     setPendente({ pergunta: "Não entendi este trecho. Explique de outro jeito, mais simples, com um exemplo.", trecho: selecao.texto });
     setSelecao(null);
     window.getSelection()?.removeAllRanges();
+    setImersao(false);
     setAba("duvidas");
   }
 
@@ -773,7 +799,7 @@ export default function EstudosView(props: {
   }
 
   return quadro(
-    <div className={`flex h-full min-h-0 flex-col ${arrastando ? "ring-2 ring-accent/50 ring-inset" : ""}`}
+    <div className={`flex h-full min-h-0 ${arrastando ? "ring-2 ring-accent/50 ring-inset" : ""}`}
          onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setArrastando(true); } }}
          onDragLeave={(e) => { if (e.currentTarget === e.target) setArrastando(false); }}
          onDrop={(e) => { e.preventDefault(); setArrastando(false); anexar(Array.from(e.dataTransfer.files)); }}>
@@ -788,12 +814,62 @@ export default function EstudosView(props: {
           <Bubble className="size-3.5" /> Explicar de outro jeito
         </button>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" onScroll={() => selecao && setSelecao(null)}>
-        <div className="mx-auto flex max-w-6xl flex-col items-start gap-3 xl:flex-row">
-          <div className="flex w-full min-w-0 flex-1 flex-col gap-3">
+      <div className="flex min-w-0 flex-1 flex-col">
+      {estado && (estado.texto || (!rodando && (projeto?.resumos.length ?? 0) > 1)) && (
+        <div className="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-2 border-b border-line px-6 py-2.5">
+            {estado?.texto && secoes.length > 1 && (
+            <div className="flex rounded-full border border-line p-0.5 text-xs" role="radiogroup" aria-label="Ver o resumo como">
+              {([[false, "Texto"], [true, "Mapa mental"]] as const).map(([v, nome]) => (
+                <button key={nome} role="radio" aria-checked={mapa === v} onClick={() => verMapa(v)}
+                        className={`rounded-full px-3 py-1 ${mapa === v ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                  {nome}
+                </button>
+              ))}
+            </div>
+          )}
+          {estado.texto && !mapa && secoes.length > 0 && (
+            <span className="font-mono text-[11px] text-faint">{Math.round(lido * 100)}% lido · seção {secAtual + 1} de {secoes.length}</span>
+          )}
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            {estado.texto && !rodando && <>
+              <button className={btnLeve} onClick={copiar} title="Copiar .md">
+                {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} {copiado ? "Copiado" : ".md"}
+              </button>
+              <button className={btnLeve} onClick={baixar} title="Baixar .md"><Download className="size-3.5" /> .md</button>
+              <button className={btnLeve} onClick={baixarPdf} disabled={gerandoPdf} title="Baixar PDF: o resumo com as fórmulas, pronto para imprimir">
+                <Download className="size-3.5" /> {gerandoPdf ? "Gerando o PDF…" : "PDF"}
+              </button>
+            </>}
+            {!rodando && (projeto?.resumos.length ?? 0) > 1 && (
+              <select value={estado.message_id} onChange={(e) => abrirVersao(Number(e.target.value))}
+                      title="Resumos anteriores deste estudo"
+                      className="rounded-lg border border-line bg-bg px-2 py-1 text-[12px] text-fg-2 focus:border-focus focus:outline-none">
+                {projeto!.resumos.map((r, i) => (
+                  <option key={r.message_id} value={r.message_id}>
+                    Versão {i + 1}{r.criado ? ` · ${new Date(r.criado).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` : ""}{r.status !== "pronto" ? ` · ${r.status}` : ""}
+                  </option>
+                ))}
+              </select>
+            )}
+            {estado.texto && (
+              <button className={`${btnLeve} ${foco ? "border-accent-line text-fg" : ""}`} onClick={() => setImersao(!foco)}
+                      aria-pressed={foco} title="Esconde as matérias, as abas e o painel lateral">
+                <Sliders className="size-3.5" /> {foco ? "Sair do foco" : "Modo foco"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {estado?.texto && !mapa && (
+        <div className="h-0.5 shrink-0 bg-raised" aria-hidden>
+          <div className="h-full bg-accent transition-[width] duration-[250ms]" style={{ width: `${Math.round(lido * 100)}%` }} />
+        </div>
+      )}
+      <div ref={rolagem} className="relative min-h-0 flex-1 overflow-y-auto" onScroll={() => { if (selecao) setSelecao(null); medirLeitura(); }}>
+        <div className="mx-auto flex max-w-[700px] flex-col gap-3 px-8 pt-7 pb-12">
             {!estado && (
-              <div className={`${card} text-xs text-muted`}>
-                <p className="text-sm text-fg">Seu material, um resumo feito para você estudar.</p>
+              <div className="rounded-xl border border-line bg-surface p-5 text-xs text-muted">
+                <p className="text-[15px] font-semibold text-fg">Seu material, um resumo feito para você estudar.</p>
                 <p className="mt-1">
                   Anexe apostilas, slides, anotações ou provas antigas (PDF, Word, PowerPoint, texto ou foto) e diga o
                   tema. A IA lê tudo, completa com pesquisa na web se você quiser e escreve um resumo didático no nível e
@@ -905,152 +981,32 @@ export default function EstudosView(props: {
               </div>
             )}
 
-            {estado?.texto && secoes.length > 1 && (
-              <div className="flex rounded-full border border-line p-0.5 text-xs self-start" role="radiogroup" aria-label="Ver o resumo como">
-                {([[false, "Texto"], [true, "Mapa mental"]] as const).map(([v, nome]) => (
-                  <button key={nome} role="radio" aria-checked={mapa === v} onClick={() => verMapa(v)}
-                          className={`rounded-full px-3 py-1 ${mapa === v ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                    {nome}
-                  </button>
-                ))}
-              </div>
-            )}
             {estado?.texto && mapa && secoes.length > 1 && (
               <EstudosMapaMental key={estado.message_id} md={estado.texto} tema={estado.tema}
                                  onAbrir={(i, texto) => { irDepois.current = { i, titulos: "h2, h3, h4", texto }; verMapa(false); }} />
             )}
+            {estado?.texto && !rodando && (
+              <p className="font-mono text-[11.5px] text-faint">
+                {estado.motor === "claude" ? `feito por ${estado.stats.escritor}`
+                  : `resumo: ${estado.stats.escritor} · leitura: ${estado.stats.extrator}`}
+                {numeros(estado) && ` · ${numeros(estado)}`}
+              </p>
+            )}
             {estado?.texto && (
               <div ref={resumoRef} onMouseUp={marcar} onKeyUp={marcar} onMouseDown={() => setDestaque(null)}
-                   className={`${card} relative px-6 py-5 ${mapa && secoes.length > 1 ? "hidden" : ""}`}>
+                   className={`${leitura} relative ${mapa && secoes.length > 1 ? "hidden" : ""}`}>
                 {destaque && (
-                  <div aria-hidden className="pointer-events-none absolute inset-x-2.5 animate-[surgir_.35s_ease-out] rounded-xl bg-accent-soft ring-1 ring-accent/35"
+                  <div aria-hidden className="pointer-events-none absolute -inset-x-4 animate-[surgir_.35s_ease-out] rounded-xl bg-accent-soft ring-1 ring-accent/35"
                        style={{ top: destaque.top, height: destaque.height }} />
                 )}
                 <div className="relative"><Markdown text={matematica(estado.texto)} math /></div>
               </div>
             )}
-
-            {estado && !rodando && (estado.texto || (projeto?.resumos.length ?? 0) > 1) && (
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                {estado.texto && <>
-                  <button className={btn} onClick={copiar}>
-                    {copiado ? <Check className="size-3.5" /> : <Copy className="size-3.5" />} Copiar .md
-                  </button>
-                  <button className={btn} onClick={baixar}><Download className="size-3.5" /> Baixar .md</button>
-                  <button className={btn} onClick={baixarPdf} disabled={gerandoPdf} title="O resumo com as fórmulas, pronto para imprimir">
-                    <Download className="size-3.5" /> {gerandoPdf ? "Gerando o PDF…" : "Baixar PDF"}
-                  </button>
-                </>}
-                {(projeto?.resumos.length ?? 0) > 1 && (
-                  <select value={estado.message_id} onChange={(e) => abrirVersao(Number(e.target.value))}
-                          title="Resumos anteriores deste estudo"
-                          className="rounded-[9px] border border-line bg-raised px-2 py-1.5 text-xs text-fg focus:border-focus focus:outline-none">
-                    {projeto!.resumos.map((r, i) => (
-                      <option key={r.message_id} value={r.message_id}>
-                        Versão {i + 1}{r.criado ? ` · ${new Date(r.criado).toLocaleDateString("pt-BR")}` : ""} · {r.status}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <span className="text-faint">
-                  {estado.motor === "claude" ? `feito por ${estado.stats.escritor}`
-                    : `resumo: ${estado.stats.escritor} · leitura: ${estado.stats.extrator}`}
-                  {numeros(estado) && ` · ${numeros(estado)}`}
-                </span>
-              </div>
-            )}
-          </div>
-
-          <aside className="flex w-full shrink-0 flex-col gap-3 xl:sticky xl:top-0 xl:w-[300px]">
-            <div className={card}>
-              <div className="mb-2 flex items-center gap-2">
-                <p className={rotulo}>Material · {materiais.length}</p>
-                {!!lendo && <span className="animate-pulse text-xs text-sky-300">lendo {lendo}…</span>}
-              </div>
-              {materiais.map((m) => (
-                <div key={m.id} className="border-t border-line py-1.5 text-xs first:border-0 first:pt-0">
-                  <div className="flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-fg" title={m.nome}>{m.nome}</span>
-                    {!!projeto?.materias.length && (
-                      <select aria-label={`Matéria de ${m.nome}`} value={m.materia ?? ""} onChange={(e) => materiaDe(m, e.target.value)}
-                              title="Geral: o material serve para todas as matérias"
-                              className="max-w-[7.5rem] shrink-0 truncate rounded-md border border-line bg-surface px-1 py-0.5 text-[11px] text-muted">
-                        <option value="">Geral</option>
-                        {projeto.materias.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
-                      </select>
-                    )}
-                    <button title="Tirar do estudo" onClick={() => remover(m)} className="shrink-0 text-faint hover:text-fg">
-                      <X className="size-3.5" />
-                    </button>
-                  </div>
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="min-w-0 flex-1 truncate text-faint">
-                      {m.paginas ? `${m.paginas} págs · ` : ""}{tamanhoTexto(m.chars)} caracteres{m.ocr ? " · OCR" : ""}{m.figuras ? ` · ${m.figuras} figura${m.figuras === 1 ? "" : "s"}` : ""}
-                    </span>
-                    <div className="flex shrink-0 rounded-full border border-line p-0.5" role="radiogroup" aria-label="Uso do material">
-                      {([["conteudo", "Conteúdo", "Vira base do resumo"], ["prova", "Prova", "Simulado ou prova antiga: mostra o que cai"]] as const).map(([id, nome, dica]) => (
-                        <button key={id} role="radio" aria-checked={m.uso === id} title={dica} onClick={() => m.uso !== id && usoDe(m, id)}
-                                className={`rounded-[9px] px-2 py-0.5 ${m.uso === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-                          {nome}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <div className={`flex flex-wrap gap-2 text-xs ${materiais.length ? "mt-2 border-t border-line pt-2" : ""}`}>
-                <button className={btn} onClick={() => arquivo.current?.click()}><Paperclip className="size-3.5" /> Arquivo</button>
-                <button className={btn} onClick={() => setPainel(painel === "colar" ? "" : "colar")}><Clipboard className="size-3.5" /> Colar texto</button>
-              </div>
-              {!materiais.length && <p className="mt-2 text-xs text-faint">ou arraste arquivos para esta tela</p>}
-            </div>
-
-            {perfil && (perfil.banca || !!perfil.topicos?.length) && (
-              <div className={`${card} text-xs`}>
-                <p className={`${rotulo} mb-1.5`}>O que cai · pelas provas anexadas</p>
-                {(perfil.banca || perfil.formato) && (
-                  <p className="text-fg">{[perfil.banca, perfil.formato].filter(Boolean).join(" · ")}</p>
-                )}
-                {perfil.estilo && <p className="mt-1 text-muted">{perfil.estilo}</p>}
-                {!!perfil.topicos?.length && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {perfil.topicos.map((t) => <span key={t} className="rounded-md bg-raised px-1.5 py-0.5 text-muted">{t}</span>)}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {secoes.length > 1 && (
-              <div className={`${card} text-xs`}>
-                <p className={`${rotulo} mb-1.5`}>Sumário</p>
-                {secoes.map((s, i) => (
-                  <button key={i} onClick={() => { if (mapa) { irDepois.current = { i, titulos: "h2" }; verMapa(false); } else irPara(i); }}
-                          className="block w-full truncate py-0.5 text-left text-muted hover:text-fg" title={s}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {!!fontesWeb.length && (
-              <div className={`${card} text-xs`}>
-                <p className={`${rotulo} mb-1.5`}>Web · {fontesWeb.filter((f) => f.status === "util").length} úteis</p>
-                {fontesWeb.map((f) => (
-                  <div key={f.id} className="flex items-center gap-2 py-0.5">
-                    <span className={`min-w-0 flex-1 truncate ${f.status === "util" ? "text-fg" : "text-faint"}`} title={f.titulo}>{f.titulo}</span>
-                    <a href={f.url} target="_blank" rel="noreferrer" className="shrink-0 text-faint hover:text-fg" title="Abrir a página">
-                      <ExternalLink className="size-3.5" />
-                    </a>
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
         </div>
       </div>
 
       <div className="shrink-0 px-5 pb-4">
-        <div className="mx-auto max-w-3xl">
+        <div className="mx-auto max-w-[760px]">
           {painel === "colar" && (
             <div className={`${card} mb-2 flex flex-col gap-2 text-xs`}>
               <div className="flex items-center">
@@ -1074,14 +1030,14 @@ export default function EstudosView(props: {
                   <X className="size-3.5" />
                 </button>
               </div>
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid grid-cols-2 gap-3">
                 <Opcoes titulo="Nível" itens={NIVEIS} ligado={(id) => prefs.nivel === id} onClick={(nivel) => setPrefs((p) => ({ ...p, nivel }))} />
                 <Opcoes titulo="Objetivo" itens={OBJETIVOS} ligado={(id) => prefs.objetivo === id} onClick={(objetivo) => setPrefs((p) => ({ ...p, objetivo }))} />
                 <Opcoes titulo="Tom" itens={TONS} ligado={(id) => prefs.tom === id} onClick={(tom) => setPrefs((p) => ({ ...p, tom }))} />
                 <Opcoes titulo="Tamanho" itens={TAMANHOS} ligado={(id) => prefs.tamanho === id} onClick={(tamanho) => setPrefs((p) => ({ ...p, tamanho }))} />
+                <Opcoes titulo="Extras" itens={EXTRAS} ligado={(id) => prefs.extras.includes(id)}
+                        onClick={(id) => setPrefs((p) => ({ ...p, extras: p.extras.includes(id) ? p.extras.filter((x) => x !== id) : [...p.extras, id] }))} />
               </div>
-              <Opcoes titulo="Extras" itens={EXTRAS} ligado={(id) => prefs.extras.includes(id)}
-                      onClick={(id) => setPrefs((p) => ({ ...p, extras: p.extras.includes(id) ? p.extras.filter((x) => x !== id) : [...p.extras, id] }))} />
               <label className="flex flex-col gap-1.5">
                 <span className="text-muted">Algo mais? (opcional)</span>
                 <input value={prefs.observacoes} onChange={(e) => setPrefs((p) => ({ ...p, observacoes: e.target.value }))}
@@ -1145,6 +1101,106 @@ export default function EstudosView(props: {
           </CaixaPrompt>
         </div>
       </div>
+      </div>
+      {!foco && (
+        <aside className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-l border-line bg-side">
+          <div className="flex flex-wrap gap-0.5 px-2.5 pt-2.5" role="tablist" aria-label="Painel do resumo">
+            {trilhos.map(([id, nome]) => (
+              <button key={id} role="tab" aria-selected={rail === id} onClick={() => setRailTab(id)}
+                      className={`rounded-lg px-[9px] py-[5px] text-xs ${rail === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                {nome}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-2 px-3 pt-3 pb-4">
+          {rail === "sumario" && (<>
+            <div className="flex items-center justify-between font-mono text-[10.5px] text-faint">
+              <span>{Math.round(lido * 100)}% lido</span><span>seção {secAtual + 1} de {secoes.length}</span>
+            </div>
+            <div className="h-1 overflow-hidden rounded-full bg-raised" aria-hidden>
+              <div className="h-full rounded-full bg-accent transition-[width] duration-[250ms]" style={{ width: `${Math.round(lido * 100)}%` }} />
+            </div>
+            <div className="mt-1 flex flex-col gap-0.5">
+              {secoes.map((t, i) => {
+                const lida = i < secAtual, atual = i === secAtual;
+                return (
+                  <button key={i} onClick={() => { if (mapa) { irDepois.current = { i, titulos: "h2" }; verMapa(false); } else irPara(i); }}
+                          title={t}
+                          className={`flex items-start gap-2 rounded-r-lg border-l-2 px-2.5 py-[7px] text-left text-[13px] ${
+                            atual ? "border-accent bg-accent-soft text-fg" : lida ? "border-transparent text-muted hover:bg-raised" : "border-transparent text-faint hover:bg-raised hover:text-fg"}`}>
+                    <span className={`w-4 shrink-0 pt-px font-mono text-[10.5px] ${lida ? "text-ok" : ""}`}>{lida ? "✓" : String(i + 1).padStart(2, "0")}</span>
+                    <span className="min-w-0">{t}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-[11px] leading-relaxed text-faint">Selecione um trecho do texto para pedir outra explicação nas Dúvidas.</p>
+          </>)}
+          {rail === "material" && (<>
+            {!!lendo && <span className="animate-pulse text-xs text-sky-300">lendo {lendo}…</span>}
+              {materiais.map((m) => (
+            <div key={m.id} className="rounded-[10px] border border-line bg-surface/60 px-2.5 py-[9px] text-xs">
+              <div className="flex items-start gap-2">
+                <span className="line-clamp-2 min-w-0 flex-1 text-[12.5px] break-words text-fg" title={m.nome}>{m.nome}</span>
+                <button title="Tirar do estudo" onClick={() => remover(m)} className="shrink-0 text-faint hover:text-fg">
+                  <X className="size-3.5" />
+                </button>
+              </div>
+              <p className="mt-0.5 text-[11px] text-faint">
+                {m.paginas ? `${m.paginas} págs · ` : ""}{tamanhoTexto(m.chars)} caracteres{m.ocr ? " · OCR" : ""}{m.figuras ? ` · ${m.figuras} figura${m.figuras === 1 ? "" : "s"}` : ""}
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                {!!projeto?.materias.length && (
+                  <select aria-label={`Matéria de ${m.nome}`} value={m.materia ?? ""} onChange={(e) => materiaDe(m, e.target.value)}
+                          title="Geral: o material serve para todas as matérias"
+                          className="min-w-0 flex-1 truncate rounded-md border border-line bg-surface px-1 py-0.5 text-[11px] text-muted">
+                    <option value="">Geral</option>
+                    {projeto.materias.map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
+                  </select>
+                )}
+                <div className="ml-auto flex shrink-0 rounded-full border border-line p-0.5" role="radiogroup" aria-label="Uso do material">
+                  {([["conteudo", "Conteúdo", "Vira base do resumo"], ["prova", "Prova", "Simulado ou prova antiga: mostra o que cai"]] as const).map(([id, nome, dica]) => (
+                    <button key={id} role="radio" aria-checked={m.uso === id} title={dica} onClick={() => m.uso !== id && usoDe(m, id)}
+                            className={`rounded-[9px] px-2 py-0.5 ${m.uso === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                      {nome}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+              ))}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+            <button className={`${btn} justify-center`} onClick={() => arquivo.current?.click()}><Paperclip className="size-3.5" /> Arquivo</button>
+            <button className={`${btn} justify-center`} onClick={() => setPainel(painel === "colar" ? "" : "colar")}><Clipboard className="size-3.5" /> Colar texto</button>
+              </div>
+              <p className="text-xs text-faint">ou arraste arquivos para esta tela</p>
+          </>)}
+          {rail === "cai" && perfil && (
+            <div className="text-xs">
+              <p className={`${rotulo} mb-1.5`}>pelas provas anexadas</p>
+              {(perfil.banca || perfil.formato) && (
+                <p className="text-[14px] font-semibold text-fg">{[perfil.banca, perfil.formato].filter(Boolean).join(" · ")}</p>
+              )}
+              {perfil.estilo && <p className="mt-1 text-[12.5px] text-muted">{perfil.estilo}</p>}
+              {!!perfil.topicos?.length && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {perfil.topicos.map((t) => <span key={t} className="rounded-md bg-raised px-1.5 py-0.5 text-muted">{t}</span>)}
+                </div>
+              )}
+            </div>
+          )}
+          {rail === "web" && fontesWeb.map((f) => (
+            <div key={f.id} className="flex items-start gap-2 text-xs">
+              <span className={`mt-1.5 size-1.5 shrink-0 rounded-full ${f.status === "util" ? "bg-fg-2" : "bg-faint"}`} />
+              <span className={`min-w-0 flex-1 ${f.status === "util" ? "text-fg-2" : "text-faint"}`}>{f.titulo}</span>
+              <a href={f.url} target="_blank" rel="noreferrer" className="shrink-0 text-faint hover:text-fg" title="Abrir a página">
+                <ExternalLink className="size-3.5" />
+              </a>
+            </div>
+          ))}
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
