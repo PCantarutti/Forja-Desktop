@@ -7,9 +7,12 @@ import { type Modelos, btn, btnPrimary, card, motorDe, numeros, rotulo } from ".
 /** Ler o edital: colar ou enviar o arquivo → o modelo propõe matérias, peso e tópicos → o aluno confere e aplica. */
 export function LerEdital(props: {
   conv: number; projeto: EstudosProjeto; modelos: Modelos; botaoModelos: React.ReactNode; painelModelos: React.ReactNode | null;
-  onFechar: () => void; onFeito: () => void; onError: (e: string) => void;
+  onFechar: () => void; onFeito: (comPlano: boolean) => void; onError: (e: string) => void;
 }) {
   const [texto, setTexto] = useState("");
+  const [link, setLink] = useState("");
+  // o plano de estudos sai junto: até a data da prova, pelos tópicos do edital e o peso de cada matéria
+  const [plano, setPlano] = useState({ ligado: true, data: "", minutos: 60 });
   const [cargo, setCargo] = useState("");
   const [enviando, setEnviando] = useState(false);
   // a última leitura do objetivo volta aberta (a proposta não se perde ao trocar de aba)
@@ -21,6 +24,7 @@ export function LerEdital(props: {
   useEffect(() => () => corte.current?.abort(), []);
   useEffect(() => {
     if (ex?.status === "pronto" || (ex && !lendo)) setItens((ex?.proposta ?? []).map((x) => ({ ...x, marcada: true })));
+    if (ex?.data_prova) setPlano((p) => ({ ...p, data: p.data || ex.data_prova! }));
   }, [ex?.message_id, ex?.status]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   async function enviar(f: File) {
@@ -36,13 +40,14 @@ export function LerEdital(props: {
   }
 
   async function ler() {
-    if (texto.trim().length < 200 || lendo) return props.onError("Cole o edital (ou o quadro de provas e o conteúdo programático).");
+    const porLink = /^https?:\/\//i.test(link.trim());
+    if (lendo || (!porLink && texto.trim().length < 200)) return props.onError("Cole o link do edital, o texto dele ou envie o arquivo.");
     corte.current?.abort();
     const ctl = new AbortController();
     corte.current = ctl;
     try {
       await streamSSE(`/estudos/${props.conv}/edital`, { method: "POST", signal: ctl.signal,
-        body: JSON.stringify({ texto, cargo, ...motorDe(props.modelos) }) }, (ev) => {
+        body: JSON.stringify({ texto: porLink ? "" : texto, link: porLink ? link.trim() : "", cargo, ...motorDe(props.modelos) }) }, (ev) => {
         if (ctl.signal.aborted) return;
         if (ev.erro) props.onError(ev.erro);
         else setEx(ev);
@@ -56,8 +61,9 @@ export function LerEdital(props: {
     const marcadas = itens.filter((x) => x.marcada && x.nome.trim());
     if (!marcadas.length) return props.onError("Marque pelo menos uma matéria.");
     try {
-      await api.post(`/estudos/${props.conv}/edital/aplicar`, { materias: marcadas.map(({ nome, peso, topicos }) => ({ nome, peso, topicos })) });
-      props.onFeito();
+      const cronograma = plano.ligado && plano.data ? { data: plano.data, minutos: plano.minutos } : null;
+      await api.post(`/estudos/${props.conv}/edital/aplicar`, { materias: marcadas.map(({ nome, peso, topicos }) => ({ nome, peso, topicos })), cronograma });
+      props.onFeito(!!cronograma);
     } catch (e: any) {
       props.onError(e.message);
     }
@@ -76,10 +82,14 @@ export function LerEdital(props: {
         {!mostrar && (
           <div className={`${card} flex flex-col gap-2 text-xs`}>
             <p className="text-muted">
-              Cole o edital ou envie o arquivo. A IA procura o quadro de provas (quantas questões cada disciplina tem) e o conteúdo
-              programático, e propõe as matérias com peso e tópicos. Você confere antes de criar; o edital não vira material de estudo.
+              Cole o link da página do concurso (ou do PDF do edital), o texto, ou envie o arquivo. A IA procura o quadro de provas
+              (quantas questões cada disciplina tem) e o conteúdo programático do seu cargo, e propõe as matérias com peso e tópicos e
+              o plano de estudos até a prova. Você confere antes de criar; o edital não vira material de estudo.
             </p>
-            <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={8} disabled={lendo}
+            <input value={link} onChange={(e) => setLink(e.target.value)} disabled={lendo} inputMode="url"
+                   placeholder="https://… a página do concurso na banca, ou o PDF do edital"
+                   className="w-full rounded-[9px] border border-line bg-surface px-2.5 py-1.5 text-fg focus:border-focus focus:outline-none" />
+            <textarea value={texto} onChange={(e) => setTexto(e.target.value)} rows={link.trim() ? 2 : 8} disabled={lendo || !!link.trim()}
                       placeholder="ANEXO II — CONTEÚDO PROGRAMÁTICO&#10;LÍNGUA PORTUGUESA: 1 Compreensão de textos. 2 Crase…"
                       className="w-full resize-y rounded-[9px] border border-line bg-surface p-2.5 font-mono text-[12px] text-fg focus:border-focus focus:outline-none" />
             <div className="flex flex-wrap items-center gap-2">
@@ -95,7 +105,7 @@ export function LerEdital(props: {
             {props.painelModelos}
             <div className="flex items-center gap-2">
               {props.botaoModelos}
-              <button className={`${btnPrimary} ml-auto`} onClick={ler} disabled={lendo || texto.trim().length < 200}>
+              <button className={`${btnPrimary} ml-auto`} onClick={ler} disabled={lendo || (!/^https?:\/\//i.test(link.trim()) && texto.trim().length < 200)}>
                 {lendo ? "Lendo…" : "Ler o edital"}
               </button>
             </div>
@@ -112,8 +122,14 @@ export function LerEdital(props: {
           <div className={`${card} flex flex-col gap-1 text-xs`}>
             <div className="mb-1 flex items-center gap-2">
               <p className={rotulo}>Matérias do edital{ex?.cargo ? ` · ${ex.cargo}` : ""}</p>
-              <span className="ml-auto text-faint">peso = questões na prova</span>
+              <span className="ml-auto text-faint">peso = questões × peso no quadro de provas</span>
             </div>
+            {!!ex?.anexos?.length && (
+              <p className="mb-1 text-faint" title={ex.anexos.map((a) => a.nome).join("\n")}>
+                Lido de {ex.anexos.filter((a) => a.chars).length} PDF{ex.anexos.filter((a) => a.chars).length === 1 ? "" : "s"} do concurso:{" "}
+                {ex.anexos.filter((a) => a.chars).map((a) => a.nome.split(" · ")[0]).join(" · ")}
+              </p>
+            )}
             {itens.map((x, i) => (
               <details key={i} className="group rounded-lg border border-line px-2.5 py-1.5 open:bg-raised/40">
                 <summary className="flex cursor-pointer list-none items-center gap-2">
@@ -136,10 +152,25 @@ export function LerEdital(props: {
                 )}
               </details>
             ))}
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-line px-2.5 py-2">
+              <input type="checkbox" checked={plano.ligado} onChange={(e) => setPlano((p) => ({ ...p, ligado: e.target.checked }))} aria-label="Montar o plano de estudos" />
+              <span className="text-fg">Montar o plano de estudos até a prova</span>
+              <input type="date" value={plano.data} onChange={(e) => setPlano((p) => ({ ...p, data: e.target.value }))} disabled={!plano.ligado}
+                     className="rounded-md border border-line bg-surface px-1.5 py-0.5 text-fg" aria-label="Data da prova" />
+              <label className="flex items-center gap-1 text-faint">
+                <input type="number" min={15} max={600} step={15} value={plano.minutos} disabled={!plano.ligado}
+                       onChange={(e) => setPlano((p) => ({ ...p, minutos: Math.max(15, Math.min(600, Number(e.target.value) || 60)) }))}
+                       className="w-14 rounded-md border border-line bg-surface px-1 py-0.5 text-right font-mono text-fg" /> min por dia
+              </label>
+              <span className="w-full text-faint">
+                {ex?.data_prova ? "A data veio do edital. " : "O edital não disse a data: escolha. "}
+                Um tópico por dia, as matérias na proporção do peso, revisão diária e um simulado por semana; vai melhorando conforme as provas.
+              </span>
+            </div>
             <div className="mt-2 flex items-center gap-2">
               <button className={btn} onClick={() => { setItens([]); setEx(null); }}>Ler outro edital</button>
               <button className={`${btnPrimary} ml-auto`} onClick={aplicar}>
-                <Check className="size-3.5" /> Criar e atualizar {itens.filter((x) => x.marcada).length} matérias
+                <Check className="size-3.5" /> Criar {itens.filter((x) => x.marcada).length} matérias{plano.ligado && plano.data ? " e o plano" : ""}
               </button>
             </div>
           </div>

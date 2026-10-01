@@ -36,7 +36,7 @@ function Grafico({ entregas }: { entregas: EstudosDesempenho["entregas"] }) {
 
 function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: {
   conv: number; plano: EstudosPlano | null; lembrete: boolean; onMudou: () => void; onProva: (p: ProvaPendente) => void;
-  onIr: (aba: "resumo" | "revisao") => void; onError: (e: string) => void;
+  onIr: (aba: "resumo" | "revisao", topico?: string) => void; onError: (e: string) => void;   // topico: o "ler" do cronograma
 }) {
   // AAAA-MM-DD no fuso daqui (o toISOString é UTC: depois das 21h já seria amanhã)
   const [[hoje, amanha]] = useState(() => [new Date(), new Date(Date.now() + 86_400_000)].map((x) => x.toLocaleDateString("sv-SE")));
@@ -127,7 +127,7 @@ function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: 
                     {d.dia === hoje && !t.feito && (
                       <button className="text-accent-text hover:underline"
                               onClick={() => (t.tipo === "simulado" ? onProva({ topicos: [], instrucoes: "Simulado: todos os tópicos, no estilo da prova." })
-                                : onIr(t.tipo === "revisar" ? "revisao" : "resumo"))}>
+                                : onIr(t.tipo === "revisar" ? "revisao" : "resumo", t.topico || undefined))}>
                         {t.tipo === "simulado" ? "gerar" : t.tipo === "revisar" ? "revisar" : "ler"} <ArrowRight className="inline size-3" />
                       </button>
                     )}
@@ -149,7 +149,7 @@ export default function Desempenho(props: {
   conv: number;
   carimbo?: string;
   onProva: (p: ProvaPendente) => void;
-  onIr: (aba: "resumo" | "revisao") => void;
+  onIr: (aba: "resumo" | "revisao", topico?: string) => void;   // topico: o "ler" do cronograma
   onError: (e: string) => void;
 }) {
   const [d, setD] = useState<EstudosDesempenho | null>(null);
@@ -161,6 +161,9 @@ export default function Desempenho(props: {
   const provas = d?.entregas.filter((e) => e.modo === "prova") ?? [];
   const media = provas.length ? provas.reduce((s, e) => s + e.nota, 0) / provas.length : 0;
   const testados = d?.topicos.filter((t) => t.pct !== null) ?? [];
+  // com o edital, são dezenas de tópicos ainda sem questão: viram uma linha (e abrem num clique)
+  const [todos, setTodos] = useState(false);
+  const semQuestao = (d?.topicos.length ?? 0) - testados.length;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -198,7 +201,7 @@ export default function Desempenho(props: {
                       </button>
                     )}
                   </div>
-                  {d.topicos.map((t) => (
+                  {(todos ? d.topicos : testados).map((t) => (
                     <div key={t.topico} className="flex items-center gap-3">
                       <span className={`w-52 shrink-0 truncate ${d.fracos.includes(t.topico) ? "text-amber-300" : "text-muted"}`} title={t.topico}>{t.topico}</span>
                       <div className="relative h-1.5 min-w-0 flex-1 rounded-full bg-raised">
@@ -208,7 +211,11 @@ export default function Desempenho(props: {
                       <span className="w-20 shrink-0 text-right font-mono text-faint">{t.pct === null ? "sem questão" : `${Math.round(t.pct * 100)}%`}</span>
                     </div>
                   ))}
-                  {!testados.length && <p className="text-faint">Nenhum tópico com questão feita ainda.</p>}
+                  {!!semQuestao && (
+                    <button className="self-start text-faint hover:text-fg" onClick={() => setTodos((v) => !v)}>
+                      {todos ? "Esconder os tópicos sem questão" : `${testados.length ? "+ " : ""}${semQuestao} tópico${semQuestao === 1 ? "" : "s"} ainda sem questão · ver`}
+                    </button>
+                  )}
                 </div>
               )}
 

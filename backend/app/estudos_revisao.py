@@ -354,7 +354,9 @@ def desempenho(conv_id: int) -> dict:
     entregas, por = [], {}
     alvo = E.MATERIA.get()
     # no Tudo de um objetivo com matérias, o tópico vai com o nome da matéria (dois "Introdução" não se somam)
-    nomes = {x["id"]: x["nome"] for x in E.materias(conv_id)} if alvo is None else {}
+    lista_m = E.materias(conv_id)
+    nomes = {x["id"]: x["nome"] for x in lista_m} if alvo is None else {}
+    doEdital = {x["id"]: x.get("topicos") or [] for x in lista_m}
 
     def somar(topico: str, t: dict, materia: str) -> None:
         x = por.setdefault(topico, {"topico": topico, "materia": materia, "pontos": 0.0, "max": 0.0, "ultima": None})
@@ -392,10 +394,13 @@ def desempenho(conv_id: int) -> dict:
                 tops = estudos_prova.topicos(conv_id) if any(_tipo(m) == "resumo" for m in _mensagens(conv_id)) else []
             finally:
                 E.MATERIA.reset(marca)
-            for t in tops:
+            for t in tops or doEdital.get(mid, []):   # sem resumo ainda: os tópicos do edital
                 por.setdefault(f"{nome} · {t}", {"topico": f"{nome} · {t}", "materia": mid, "pontos": 0.0, "max": 0.0, "ultima": None})
     for t in estudos_prova.topicos(conv_id) if not nomes and any(_tipo(m) == "resumo" for m in msgs) else []:
         por.setdefault(t, {"topico": t, "pontos": 0.0, "max": 0.0, "ultima": None})
+    if alvo is not None and not por:   # matéria sem resumo nem prova: o conteúdo do edital
+        for t in doEdital.get(alvo, []):
+            por.setdefault(t, {"topico": t, "materia": alvo, "pontos": 0.0, "max": 0.0, "ultima": None})
     topicos = [{**x, "pontos": round(x["pontos"], 2), "max": round(x["max"], 2),
                 "pct": round(x["pontos"] / x["max"], 2) if x["max"] else None} for x in por.values()]
     fracos = sorted((t for t in topicos if t["pct"] is not None and t["pct"] < 0.7), key=lambda t: t["pct"])[:4]
@@ -427,7 +432,7 @@ def planejar(conv_id: int, data: str, minutos: int = 60) -> dict:
     minutos = max(15, min(E._int(minutos) or 60, 600))
     topicos = desempenho(conv_id)["topicos"]
     if not topicos:
-        raise ToolError("Gere o resumo antes: o cronograma reparte os tópicos dele.")
+        raise ToolError("Gere o resumo (ou leia o edital) antes: o cronograma reparte os tópicos.")
     pesos = _pesos(topicos)
     peso_m = {x["id"]: E._peso(x.get("peso")) for x in E.materias(conv_id)} if E.MATERIA.get() is None else {}
     if peso_m:
@@ -436,7 +441,10 @@ def planejar(conv_id: int, data: str, minutos: int = 60) -> dict:
                  for t in topicos}
     estudo = round(minutos * 0.6)
     simulados = {d for d in range(dias) if (d + 1) % 7 == 0} | {dias - 1}
-    seq = iter(_sequencia(list(pesos), pesos, dias - len(simulados)))
+    # no objetivo com matérias, o rodízio é entre as MATÉRIAS (60% do peso = 3 dias em 5, intercalados), e dentro de
+    # cada uma os tópicos se revezam; por tópico, a matéria de tópicos pesados tomava a primeira semana inteira
+    grupos = {t["topico"]: t.get("materia") or t["topico"] for t in topicos} if peso_m else None
+    seq = iter(_sequencia(list(pesos), pesos, dias - len(simulados), grupos))
     plano = []
     for d in range(dias):
         dia = (hoje + timedelta(days=d)).isoformat()

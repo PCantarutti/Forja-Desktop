@@ -290,6 +290,8 @@ export type EstudosEditalItem = { nome: string; peso: number; questoes: number |
 export type EstudosEdital = {
   message_id: number; tipo: "edital"; status: EstudosEstado["status"]; etapa: string; progresso: string; aviso: string;
   cargo: string; pedacos: number; proposta: EstudosEditalItem[]; stats: PesquisaEstado["stats"];
+  link?: string; anexos?: { url: string; nome: string; chars?: number; erro?: string }[];   // lido por link
+  data_prova?: string;   // AAAA-MM-DD, se o edital (ou a página do concurso) disse
 };
 
 /** O "Tudo" do objetivo (GET /estudos/<conv>/visao). quadro = a "Revisão rápida" do último resumo da matéria. */

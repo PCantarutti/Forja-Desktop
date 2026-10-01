@@ -332,6 +332,14 @@ export default function EstudosView(props: {
   useEffect(() => setObjetivo(""), [props.conv]);
   const doEdital = projeto?.materias.find((m) => m.id === materia)?.topicos ?? [];
   const simuladoFracos = () => { setProvaPendente({ topicos: [], instrucoes: "" }); setAba("simulado"); };
+  /** O "ler" do cronograma: a matéria do tópico ("Português · Crase"), com o tópico como tema do resumo. */
+  function irDoCronograma(a: "resumo" | "revisao", topico?: string) {
+    const [nome, ...resto] = (topico ?? "").split(" · ");
+    const m = tudo && resto.length ? projeto?.materias.find((x) => x.nome === nome) : null;
+    if (m) escolherMateria(m.id);
+    setAba(a);
+    if (a === "resumo" && topico && (m || !estado)) setTema(m ? resto.join(" · ") : topico);
+  }
 
   // O tema do último resumo volta para o campo ao abrir o estudo: refazer é um Enter.
   useEffect(() => {
@@ -648,7 +656,8 @@ export default function EstudosView(props: {
     return quadro(
       <LerEdital conv={props.conv} projeto={projeto} modelos={modelos} botaoModelos={botaoModelos}
                  painelModelos={painel === "modelos" ? painelModelos : null} onError={props.onError}
-                 onFechar={() => setObjetivo("")} onFeito={() => { setObjetivo(""); escolherMateria(null); carregar(props.conv); }} />,
+                 onFechar={() => setObjetivo("")}
+                 onFeito={(comPlano) => { setObjetivo(""); escolherMateria(null); if (comPlano) setAba("desempenho"); carregar(props.conv); }} />,
     );
   }
 
@@ -697,7 +706,7 @@ export default function EstudosView(props: {
 
   if (aba === "desempenho" && props.conv !== null && projeto) {
     return quadro(
-      <Desempenho conv={props.conv} carimbo={props.carimbo} onError={props.onError} onIr={setAba}
+      <Desempenho conv={props.conv} carimbo={props.carimbo} onError={props.onError} onIr={irDoCronograma}
                   onProva={(p) => { setProvaPendente(p); setAba(tudo ? "simulado" : "provas"); }} />,
     );
   }

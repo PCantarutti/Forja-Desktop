@@ -2368,6 +2368,7 @@ def estudos_materia_renomear(conv_id: int, materia: str, body: MateriaBody):
 
 class EditalBody(BaseModel):
     texto: str = ""
+    link: str = ""                   # a página do concurso ou o PDF do edital (lido em vez do texto)
     cargo: str = ""
     provider: str = ""
     model: str = ""
@@ -2375,6 +2376,7 @@ class EditalBody(BaseModel):
 
 class EditalAplicarBody(BaseModel):
     materias: list[dict] = []        # [{nome, peso, topicos}] marcadas na proposta
+    cronograma: dict | None = None   # {data: AAAA-MM-DD, minutos}: monta o plano até a prova
 
 
 class JuntarBody(BaseModel):
@@ -2399,7 +2401,7 @@ async def estudos_edital_ler(conv_id: int, body: EditalBody):
     """Lê o edital e propõe as matérias, com peso e tópicos (SSE). Nada muda até aplicar."""
     from . import estudos_edital
     try:
-        msg = estudos_edital.start(conv_id, body.texto, body.cargo, body.provider, body.model)
+        msg = estudos_edital.start(conv_id, body.texto, body.cargo, body.provider, body.model, body.link)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_estudos(msg["id"])
@@ -2409,7 +2411,7 @@ async def estudos_edital_ler(conv_id: int, body: EditalBody):
 def estudos_edital_aplicar(conv_id: int, body: EditalAplicarBody):
     from . import estudos_edital
     try:
-        return estudos_edital.aplicar(conv_id, body.materias)
+        return estudos_edital.aplicar(conv_id, body.materias, body.cronograma)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
