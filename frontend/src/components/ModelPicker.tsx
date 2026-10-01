@@ -117,10 +117,11 @@ export default function ModelPicker(props: {
   // mesmo com nada carregado, que é justamente quando a pessoa precisa carregar alguma coisa.
   const ggufs = (local?.models ?? []).filter((m) => m.kind === "chat");
   const localAtivo = prov?.type === "llamacpp" && !!local;
-  // O do ar vai para o topo: é ele que responde agora, então é o primeiro que a pessoa procura.
-  const daPasta = ggufs
-    .filter((m) => m.name.toLowerCase().includes(q.toLowerCase()))
-    .sort((a, b) => Number(b.path === local?.server.path) - Number(a.path === local?.server.path));
+  // O do ar e o escolhido vão para o topo: são os que a pessoa procura. O escolhido junto para a lista não
+  // se reorganizar debaixo do cursor ao descarregar (o Carregar de outro modelo cairia sob o mouse).
+  const peso = (m: { path: string; name: string }) =>
+    2 * Number(m.path === local?.server.path) + Number(active === props.provider && m.name === props.model);
+  const daPasta = ggufs.filter((m) => m.name.toLowerCase().includes(q.toLowerCase())).sort((a, b) => peso(b) - peso(a));
 
   const contar = (p: CatalogEntry) =>
     p.type === "llamacpp" && local ? ggufs.length : p.error ? "off" : p.models.length;
