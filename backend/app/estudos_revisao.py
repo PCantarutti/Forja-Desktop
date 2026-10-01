@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import csv
+from collections import Counter
 import html
 import io
 import logging
@@ -116,10 +117,24 @@ def responder_item(item: dict, acertou: bool, hoje: date) -> dict:
 # ------------------------------------------------------------------ caderno de erros e cartões
 
 
+def _do_geral(conv_id: int) -> list[db.Message]:
+    """As provas do simulado geral e as entregas delas, sem o filtro da matéria: dentro de uma matéria, as
+    questões dela que caíram no simulado geral também contam (erro, acerto por tópico)."""
+    with db.session() as s:
+        msgs = list(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id).order_by(db.Message.id)))
+    gerais = {m.id for m in msgs if _tipo(m) == "prova" and (m.meta["estudos"].get("config") or {}).get("geral")}
+    return [m for m in msgs if m.id in gerais or (_tipo(m) == "tentativa" and m.meta["estudos"].get("prova_id") in gerais)]
+
+
 def erros(conv_id: int, msgs: list[db.Message] | None = None) -> list[dict]:
     """Toda questão que não saiu certa numa entrega (errada, parcial ou em branco), uma vez cada, com a
-    questão inteira (a entrega já revelou o gabarito) e a resposta mais recente do aluno."""
+    questão inteira (a entrega já revelou o gabarito) e a resposta mais recente do aluno. Numa matéria,
+    entram também as questões dela que o aluno errou no simulado geral."""
     msgs = msgs if msgs is not None else _mensagens(conv_id)
+    alvo = E.MATERIA.get()
+    if alvo is not None:
+        vistos = {m.id for m in msgs}
+        msgs = msgs + [m for m in _do_geral(conv_id) if m.id not in vistos]
     provas = {m.id: m.meta["estudos"] for m in msgs if _tipo(m) == "prova"}
     out: dict[str, dict] = {}
     for m in msgs:
@@ -131,6 +146,8 @@ def erros(conv_id: int, msgs: list[db.Message] | None = None) -> list[dict]:
         for qid, c in (e.get("correcao") or {}).items():
             if c.get("certa") is True or c.get("pendente") or qid not in questoes:
                 continue
+            if alvo is not None and questoes[qid].get("materia", alvo) != alvo:
+                continue   # do simulado geral, de outra matéria
             chave = f"q:{e['prova_id']}:{qid}"
             out[chave] = {"chave": chave, "tipo": "erro", "questao": questoes[qid], "resposta": c.get("resposta"),
                           "prova": p.get("titulo", "Prova"), "topico": questoes[qid].get("topico", ""),
@@ -335,6 +352,15 @@ def desempenho(conv_id: int) -> dict:
     msgs = _mensagens(conv_id)
     provas = {m.id: m.meta["estudos"] for m in msgs if _tipo(m) == "prova"}
     entregas, por = [], {}
+    alvo = E.MATERIA.get()
+    # no Tudo de um objetivo com matérias, o tópico vai com o nome da matéria (dois "Introdução" não se somam)
+    nomes = {x["id"]: x["nome"] for x in E.materias(conv_id)} if alvo is None else {}
+
+    def somar(topico: str, t: dict, materia: str) -> None:
+        x = por.setdefault(topico, {"topico": topico, "materia": materia, "pontos": 0.0, "max": 0.0, "ultima": None})
+        x["pontos"] += t["pontos"]
+        x["max"] += t["max"]
+        x["ultima"] = round(t["pontos"] / t["max"], 2) if t["max"] else None
     for m in msgs:
         e = (m.meta or {}).get("estudos") or {}
         if e.get("tipo") != "tentativa" or m.status != "pronto":
@@ -343,12 +369,32 @@ def desempenho(conv_id: int) -> dict:
                          "nota": e.get("nota", 0), "acertos": e.get("acertos", 0),
                          "n": len((provas.get(e["prova_id"]) or {}).get("questoes") or []), "modo": e.get("modo", "prova"),
                          "segundos": e.get("segundos", 0), "criado": E.quando(m.created_at)})
+        nome = nomes.get(e.get("materia") or "")
+        org = ((provas.get(e["prova_id"]) or {}).get("config") or {}).get("origem") or {}
         for t in e.get("por_topico") or []:
-            x = por.setdefault(t["topico"], {"topico": t["topico"], "pontos": 0.0, "max": 0.0, "ultima": None})
-            x["pontos"] += t["pontos"]
-            x["max"] += t["max"]
-            x["ultima"] = round(t["pontos"] / t["max"], 2) if t["max"] else None
-    for t in estudos_prova.topicos(conv_id) if any(_tipo(m) == "resumo" for m in msgs) else []:
+            # no Tudo, o tópico leva o nome da matéria ("Português · Crase"); o do simulado geral já vem assim
+            somar(f"{nome} · {t['topico']}" if nome else t["topico"], t, org.get(t["topico"], [e.get("materia") or ""])[0])
+    if alvo is not None:   # as questões desta matéria que caíram no simulado geral
+        geral = _do_geral(conv_id)
+        origem = {m.id: (m.meta["estudos"].get("config") or {}).get("origem") or {} for m in geral if _tipo(m) == "prova"}
+        for m in geral:
+            e = m.meta["estudos"]
+            if _tipo(m) != "tentativa" or m.status != "pronto":
+                continue
+            for t in e.get("por_topico") or []:
+                o = origem.get(e["prova_id"], {}).get(t["topico"])
+                if o and o[0] == alvo:
+                    somar(o[1], t, alvo)
+    if alvo is None and nomes:   # os tópicos do último resumo de cada matéria
+        for mid, nome in nomes.items():
+            marca = E.MATERIA.set(mid)
+            try:
+                tops = estudos_prova.topicos(conv_id) if any(_tipo(m) == "resumo" for m in _mensagens(conv_id)) else []
+            finally:
+                E.MATERIA.reset(marca)
+            for t in tops:
+                por.setdefault(f"{nome} · {t}", {"topico": f"{nome} · {t}", "materia": mid, "pontos": 0.0, "max": 0.0, "ultima": None})
+    for t in estudos_prova.topicos(conv_id) if not nomes and any(_tipo(m) == "resumo" for m in msgs) else []:
         por.setdefault(t, {"topico": t, "pontos": 0.0, "max": 0.0, "ultima": None})
     topicos = [{**x, "pontos": round(x["pontos"], 2), "max": round(x["max"], 2),
                 "pct": round(x["pontos"] / x["max"], 2) if x["max"] else None} for x in por.values()]
@@ -383,6 +429,11 @@ def planejar(conv_id: int, data: str, minutos: int = 60) -> dict:
     if not topicos:
         raise ToolError("Gere o resumo antes: o cronograma reparte os tópicos dele.")
     pesos = _pesos(topicos)
+    peso_m = {x["id"]: E._peso(x.get("peso")) for x in E.materias(conv_id)} if E.MATERIA.get() is None else {}
+    if peso_m:
+        n = Counter(t.get("materia") or "" for t in topicos)
+        pesos = {t["topico"]: pesos[t["topico"]] * peso_m.get(t.get("materia") or "", 1) / n[t.get("materia") or ""]
+                 for t in topicos}
     estudo = round(minutos * 0.6)
     simulados = {d for d in range(dias) if (d + 1) % 7 == 0} | {dias - 1}
     seq = iter(_sequencia(list(pesos), pesos, dias - len(simulados)))

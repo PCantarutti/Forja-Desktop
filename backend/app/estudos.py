@@ -143,7 +143,12 @@ def _nome_materia(nome: str) -> str:
     return nome
 
 
-def nova_materia(conv_id: int, nome: str) -> dict:
+def _peso(v) -> int:
+    """Peso da matéria no objetivo (questões no edital, ou uma nota de 1 a 100): só a proporção importa."""
+    return max(1, min(_int(v) or 1, 100))
+
+
+def nova_materia(conv_id: int, nome: str, peso: int = 1) -> dict:
     nome = _nome_materia(nome)
     nova = {}
 
@@ -151,22 +156,29 @@ def nova_materia(conv_id: int, nome: str) -> dict:
         if any(x["nome"].casefold() == nome.casefold() for x in lista):
             raise ToolError("Já existe uma matéria com esse nome.")
         n = max((int(x["id"][1:]) for x in lista if x["id"][1:].isdigit()), default=0) + 1
-        nova.update(id=f"m{n}", nome=nome)
+        nova.update(id=f"m{n}", nome=nome, peso=_peso(peso))
         lista.append(dict(nova))
     _mudar_materias(conv_id, f)
     return nova
 
 
-def renomear_materia(conv_id: int, materia: str, nome: str) -> dict:
-    nome = _nome_materia(nome)
+def alterar_materia(conv_id: int, materia: str, nome: str | None = None, peso: int | None = None) -> dict:
+    nome = _nome_materia(nome) if nome is not None else None
+    out = {}
 
     def f(lista, s):
         alvo = next((x for x in lista if x["id"] == materia), None)
         if not alvo:
             raise ToolError("Matéria não encontrada.")
-        alvo["nome"] = nome
+        if nome is not None:
+            if any(x["id"] != materia and x["nome"].casefold() == nome.casefold() for x in lista):
+                raise ToolError("Já existe uma matéria com esse nome.")
+            alvo["nome"] = nome
+        if peso is not None:
+            alvo["peso"] = _peso(peso)
+        out.update(alvo)
     _mudar_materias(conv_id, f)
-    return {"id": materia, "nome": nome}
+    return out
 
 
 def apagar_materia(conv_id: int, materia: str) -> dict:
@@ -193,11 +205,57 @@ def _acerto_por_materia(conv_id: int) -> dict[str, dict]:
         for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.role == "user")):
             e = (m.meta or {}).get("estudos") or {}
             if e.get("tipo") == "tentativa" and m.status == "pronto" and e.get("max"):
-                x = out.setdefault(e.get("materia") or "", {"pontos": 0.0, "max": 0.0, "entregas": 0})
-                x["pontos"] += float(e.get("pontos") or 0)
-                x["max"] += float(e["max"])
-                x["entregas"] += 1
-    return {k: {"acerto": round(100 * v["pontos"] / v["max"]), "entregas": v["entregas"]} for k, v in out.items()}
+                partes = e.get("por_materia") or [{"materia": e.get("materia") or "", "pontos": e.get("pontos"), "max": e["max"]}]
+                for p in partes:
+                    x = out.setdefault(p["materia"], {"pontos": 0.0, "max": 0.0, "entregas": 0})
+                    x["pontos"] += float(p.get("pontos") or 0)
+                    x["max"] += float(p.get("max") or 0)
+                    x["entregas"] += 1
+    return {k: {"acerto": round(100 * v["pontos"] / v["max"]), "entregas": v["entregas"]} for k, v in out.items() if v["max"]}
+
+
+QUADRO = re.compile(r"(?ms)^##[ \t]+(?:\d+[.)][ \t]*)?revis[ãa]o r[áa]pida[^\n]*\n(.*?)(?=^##[ \t]|\Z)", re.I)
+
+
+def _quadro(md: str) -> str:
+    """O quadro "Revisão rápida" que fecha todo resumo: é o resumo de véspera da matéria, sem chamar modelo."""
+    m = QUADRO.search(md or "")
+    return m.group(1).strip()[:4000] if m else ""
+
+
+def visao(conv_id: int) -> dict:
+    """O "Tudo" do objetivo: cada matéria com peso, acerto, resumos, provas, caderno de erros e o que revisar
+    hoje, o quadro de revisão do último resumo dela, e qual pede mais atenção (peso alto, acerto baixo)."""
+    from . import estudos_prova, estudos_revisao
+    lista, acertos = materias(conv_id), _acerto_por_materia(conv_id)
+    out = []
+    for x in lista:
+        marca = MATERIA.set(x["id"])
+        try:
+            d = estudos_revisao.desempenho(conv_id)
+            _, texto, e, _, tops = estudos_prova._base(conv_id)
+            with db.session() as s:
+                msgs = filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
+                                                                  db.Message.role == "assistant").order_by(db.Message.id)))
+            resumos = [{"message_id": m.id, "titulo": m.meta["estudos"].get("titulo") or m.meta["estudos"].get("tema") or ""}
+                       for m in msgs if _tipo(m) == "resumo" and m.content]
+            provas = sum(1 for m in msgs if _tipo(m) == "prova")
+        finally:
+            MATERIA.reset(marca)
+        a = acertos.get(x["id"], {"acerto": None, "entregas": 0})
+        out.append({**x, "peso": _peso(x.get("peso")), **a, "resumos": resumos, "provas": provas,
+                    "topicos": len(tops) if texto else 0, "secoes": tops[:15] if texto else [], "fracos": d["fracos"][:3],
+                    **d["revisao"], "quadro": _quadro(texto)})
+    soma = sum(x["peso"] for x in out) or 1
+    # o que rende mais por hora: peso grande e acerto baixo (sem prova feita conta como 50%)
+    fraca = max(out, key=lambda x: x["peso"] / soma * (1 - (x["acerto"] if x["acerto"] is not None else 50) / 100), default=None)
+    com = [x for x in out if x["acerto"] is not None]
+    n = sum(x["entregas"] for x in com)
+    painel = estudos_revisao.painel(conv_id)
+    return {"materias": out, "fraca": fraca["id"] if fraca else None,
+            "acerto": round(sum(x["acerto"] * x["entregas"] for x in com) / n) if n else None,
+            "entregas": len(estudos_revisao.desempenho(conv_id)["entregas"]), "vencem": painel["vencem"],
+            "plano": painel["plano"]}
 
 # ------------------------------------------------------------------ preferências
 

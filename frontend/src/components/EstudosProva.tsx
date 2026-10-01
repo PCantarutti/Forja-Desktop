@@ -328,8 +328,8 @@ function FazerProva({ prova, treino, duvida, onEntregar, onSair }: {
 /** O que a conversa de dúvidas embutida na questão precisa. */
 type Duvida = { conv: number; modelos: Modelos; carimbo?: string; contagem: Record<string, number>; onError: (e: string) => void };
 
-function Resultado({ t, onRefazer, onVoltar, duvida }: { t: EstudosTentativa; onRefazer: () => void; onVoltar: () => void;
-                                                          duvida: Duvida }) {
+function Resultado({ t, onRefazer, onVoltar, duvida, nomes = {} }: { t: EstudosTentativa; onRefazer: () => void; onVoltar: () => void;
+                                                                     duvida: Duvida; nomes?: Record<string, string> }) {
   const [filtro, setFiltro] = useState<"todas" | "erradas" | "certas">("todas");
   const corrigindo = t.status === "rodando" || t.status === "aguardando";
   const qs = t.questoes.filter((q) => {
@@ -353,6 +353,24 @@ function Resultado({ t, onRefazer, onVoltar, duvida }: { t: EstudosTentativa; on
           <button className={btn} onClick={onVoltar}><ArrowLeft className="size-3.5" /> Provas</button>
           <button className={btn} onClick={onRefazer}><Refresh className="size-3.5" /> Refazer esta prova</button>
         </div>
+        {!!t.por_materia?.length && (
+          <div className="flex w-full flex-col gap-1.5 border-t border-line pt-3 text-xs">
+            <p className={rotulo}>Por matéria · cada erro foi para o caderno da matéria</p>
+            {t.por_materia.map((x) => {
+              const pct = x.max ? x.pontos / x.max : 0;
+              return (
+                <div key={x.materia} className="flex items-center gap-3">
+                  <span className="w-48 shrink-0 truncate text-fg" title={nomes[x.materia]}>{nomes[x.materia] ?? "Matéria tirada"}</span>
+                  <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
+                    <div className={`h-full rounded-full ${pct >= 0.7 ? "bg-emerald-400/70" : pct >= 0.4 ? "bg-amber-300/70" : "bg-red-400/70"}`}
+                         style={{ width: `${Math.round(pct * 100)}%` }} />
+                  </div>
+                  <span className="w-16 shrink-0 text-right font-mono text-faint">{x.acertos}/{x.n}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
         {t.por_topico.length > 1 && (
           <div className="flex w-full flex-col gap-1.5 border-t border-line pt-3 text-xs">
             {t.por_topico.map((x) => {
@@ -500,8 +518,11 @@ export default function Provas(props: {
   onRecarregar: () => Promise<void> | void;
   pendente?: ProvaPendente | null;
   onPendenteUsado?: () => void;
+  geral?: boolean;   // no "Tudo" do objetivo: o simulado geral (todas as matérias, pelo peso de cada uma)
 }) {
   const [vista, setVista] = useState<Vista>({ tipo: "lista" });
+  const geral = !!props.geral;
+  const nomes = Object.fromEntries((props.projeto.materias ?? []).map((m) => [m.id, m.nome]));
   const [cfg, setCfg] = useState<Partial<EstudosProvaConfig>>(() => lerLocal(KEY_CONFIG, PADRAO));
   const [instrucoes, setInstrucoes] = useState("");
   const [topicosAberto, setTopicosAberto] = useState(false);
@@ -578,7 +599,11 @@ export default function Provas(props: {
     try {
       ouvindo.current = -1;
       await streamSSE(`/estudos/${props.conv}/prova`, { method: "POST", signal: ctl.signal, body: JSON.stringify({
-        config: { ...cfg, figuras: comFigura, topicos: extra?.topicos ?? escolhidos, instrucoes: extra?.instrucoes ?? instrucoes },
+        config: geral
+          // os pontos fracos pedidos no Desempenho do Tudo viram a distribuição "fracos" do simulado geral
+          ? { ...cfg, figuras: 0, topicos: [], estilo: false, geral: true, distribuicao: extra ? "fracos" : (cfg.distribuicao ?? "peso"),
+              instrucoes: extra?.instrucoes ?? instrucoes }
+          : { ...cfg, figuras: comFigura, topicos: extra?.topicos ?? escolhidos, instrucoes: extra?.instrucoes ?? instrucoes },
         ...motorDe(props.modelos) }) }, (ev) => {
         if (ctl.signal.aborted) return;
         if (ev.erro) aoErro.current(ev.erro);
@@ -675,7 +700,12 @@ export default function Provas(props: {
     if (vista.tipo === "resultado" && !corrigindo && (vista.t.status === "rodando" || vista.t.status === "aguardando")) verResultado(vista.t.message_id);
   }, [corrigindo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  const provas = [...props.projeto.provas].reverse();
+  // no Tudo, só os simulados gerais (as provas de cada matéria ficam na matéria)
+  const provas = [...props.projeto.provas].filter((p) => !geral || p.config?.geral).reverse();
+  // a previsão de quantas questões cada matéria leva (o backend reparte igual: pelo peso)
+  const ms = props.projeto.materias ?? [];
+  const pesoDe = (m: (typeof ms)[number]) => (m.peso ?? 1) * (cfg.distribuicao === "fracos" ? 1 + 2 * (1 - (m.acerto ?? 50) / 100) : 1);
+  const somaPeso = ms.reduce((s, m) => s + pesoDe(m), 0) || 1;
   const resumoCfg = (c: EstudosProvaConfig) => (["me", "vf", "disc"] as const).filter((t) => c[t]).map((t) => `${c[t]} ${TIPO_CURTO[t]}`).join(" · ");
   const pedidas = (c?: EstudosProvaConfig) => (c ? (c.me ?? 0) + (c.vf ?? 0) + (c.disc ?? 0) : 0);
 
@@ -695,7 +725,7 @@ export default function Provas(props: {
               {corrigindo?.message_id === vista.t.message_id && (corrigindo.status === "aguardando"
                 ? <AguardandoClaude texto="As discursivas vão ser corrigidas pelo Claude." onCancelar={parar} />
                 : <SinapseCorrecao t={corrigindo} />)}
-              <Resultado t={vista.t} onVoltar={() => setVista({ tipo: "lista" })} onRefazer={() => fazer(vista.t.prova_id)}
+              <Resultado t={vista.t} nomes={nomes} onVoltar={() => setVista({ tipo: "lista" })} onRefazer={() => fazer(vista.t.prova_id)}
                          duvida={{ conv: props.conv, modelos: props.modelos, carimbo: props.carimbo,
                                    contagem: props.projeto.duvidas ?? {}, onError: props.onError }} />
             </>
@@ -703,7 +733,17 @@ export default function Provas(props: {
 
           {vista.tipo === "lista" && (
             <>
-              {!provas.length && !gerando && (
+              {geral && !provas.length && !gerando && (
+                <div className={`${card} text-xs text-muted`}>
+                  <p className="text-sm text-fg">Um simulado com todas as matérias do objetivo.</p>
+                  <p className="mt-1">
+                    As questões saem de cada matéria na proporção do peso dela (o número de questões no edital, por exemplo), ou
+                    do peso vezes o que falta acertar. Na entrega, a nota sai por matéria e cada erro vai para o caderno da matéria.
+                    Matéria sem resumo nem material fica de fora.
+                  </p>
+                </div>
+              )}
+              {!geral && !provas.length && !gerando && (
                 <div className={`${card} text-xs text-muted`}>
                   <p className="text-sm text-fg">Uma prova do seu material, com nota e o porquê de cada questão.</p>
                   <p className="mt-1">
@@ -778,7 +818,36 @@ export default function Provas(props: {
         <div className="shrink-0 px-5 pb-4">
           <div className="mx-auto max-w-3xl">
             {props.painelModelos}
-            {topicosAberto && (
+            {geral && !!ms.length && (
+              <div className={`${card} mb-2 flex flex-col gap-1.5 text-xs`}>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-fg">Quantas de cada matéria</span>
+                  <div className="ml-auto flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Distribuição">
+                    {([["peso", "Pelo peso", "Na proporção do peso de cada matéria"],
+                       ["fracos", "Mais dos pontos fracos", "O peso vezes o que falta acertar: a matéria fraca leva mais"]] as const).map(([id, nome, dica]) => (
+                      <button key={id} role="radio" aria-checked={(cfg.distribuicao ?? "peso") === id} title={dica}
+                              onClick={() => setCfg((c) => ({ ...c, distribuicao: id }))}
+                              className={`rounded-full px-2.5 py-0.5 ${(cfg.distribuicao ?? "peso") === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                        {nome}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {ms.map((m) => {
+                  const fatia = pesoDe(m) / somaPeso;
+                  return (
+                    <div key={m.id} className="flex items-center gap-3">
+                      <span className="w-44 shrink-0 truncate text-muted" title={m.nome}>{m.nome}</span>
+                      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised">
+                        <div className="h-full rounded-full bg-accent/70" style={{ width: `${Math.round(fatia * 100)}%` }} />
+                      </div>
+                      <span className="w-28 shrink-0 whitespace-nowrap text-right font-mono text-faint">≈ {Math.round(fatia * total)} questões</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {!geral && topicosAberto && (
               <div className={`${card} mb-2 flex flex-col gap-2 text-xs`}>
                 <div className="flex items-center">
                   <span className="font-medium text-fg">Tópicos da prova</span>
@@ -814,16 +883,16 @@ export default function Provas(props: {
                         onChange={(disc) => setCfg((c) => ({ ...c, disc }))} />
                 <Menu title="Dificuldade" items={DIFICULDADES} value={cfg.dificuldade ?? "mista"}
                       onChange={(dificuldade) => setCfg((c) => ({ ...c, dificuldade }))} button={(label) => <>{label}</>} />
-                <button className={`${pilula} ${topicosAberto ? pilulaLigada : ""}`} onClick={() => setTopicosAberto((v) => !v)}
+                {!geral && <button className={`${pilula} ${topicosAberto ? pilulaLigada : ""}`} onClick={() => setTopicosAberto((v) => !v)}
                         title="Escolher os tópicos da prova">
                   Tópicos {escolhidos.length ? `${escolhidos.length}/${topicosDisp.length}` : "· todos"}
-                </button>
-                <button className={`${pilula} ${cfg.estilo && temSimulado ? pilulaLigada : ""}`} disabled={!temSimulado}
+                </button>}
+                {!geral && <button className={`${pilula} ${cfg.estilo && temSimulado ? pilulaLigada : ""}`} disabled={!temSimulado}
                         aria-pressed={!!cfg.estilo && temSimulado} onClick={() => setCfg((c) => ({ ...c, estilo: !c.estilo }))}
                         title={temSimulado ? "Imitar o jeito das provas anexadas (banca, formato, enunciado)" : "Anexe uma prova ou simulado (marcado como Prova) para usar"}>
                   <Check className={`size-3.5 ${cfg.estilo && temSimulado ? "" : "opacity-30"}`} /> Estilo do simulado
-                </button>
-                {maxFiguras > 0 && (
+                </button>}
+                {!geral && maxFiguras > 0 && (
                   <Numero valor={comFigura} min={0} max={maxFiguras} unidade="com figura" icone={<Image className="size-3.5" />}
                           dica={`Questões que usam uma figura do PDF (gráfico, diagrama, tabela, tirinha) — ${figs.detectadas} recortada(s)`
                                 + `${figs.olhadas ? `, ${figs.uteis} que servem` : ""}. Precisa de um modelo que enxerga (Qwen3.6, Gemma 4…).`}
@@ -833,7 +902,7 @@ export default function Provas(props: {
                         dica="Tempo de prova (0 = sem cronômetro); acabou, entrega sozinha" onChange={(tempo) => setCfg((c) => ({ ...c, tempo }))} />
                 <DireitaPrompt>
                   {props.botaoModelos}
-                  <BotaoEnviar rodando={gerando?.status === "rodando"} onParar={parar} onEnviar={() => gerar()} titulo="Gerar prova"
+                  <BotaoEnviar rodando={gerando?.status === "rodando"} onParar={parar} onEnviar={() => gerar()} titulo={geral ? "Gerar o simulado geral" : "Gerar prova"}
                                desabilitado={!total || total > 40 || !!gerando} />
                 </DireitaPrompt>
               </RodapePrompt>

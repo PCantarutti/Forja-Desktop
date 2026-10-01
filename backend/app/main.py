@@ -2257,7 +2257,8 @@ class MaterialUsoBody(BaseModel):
 
 
 class MateriaBody(BaseModel):
-    nome: str = ""
+    nome: str | None = None
+    peso: int | None = None         # proporção no simulado geral e no cronograma (questões no edital)
 
 
 def _sse_estudos(message_id: int) -> StreamingResponse:
@@ -2317,7 +2318,7 @@ def estudos_material_uso(material_id: int, body: MaterialUsoBody):
 @app.post("/api/estudos/{conv_id}/materias")
 def estudos_materia_nova(conv_id: int, body: MateriaBody):
     try:
-        return estudos.nova_materia(conv_id, body.nome)
+        return estudos.nova_materia(conv_id, body.nome or "", body.peso or 1)
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -2325,9 +2326,17 @@ def estudos_materia_nova(conv_id: int, body: MateriaBody):
 @app.patch("/api/estudos/{conv_id}/materias/{materia}")
 def estudos_materia_renomear(conv_id: int, materia: str, body: MateriaBody):
     try:
-        return estudos.renomear_materia(conv_id, materia, body.nome)
+        return estudos.alterar_materia(conv_id, materia, body.nome, body.peso)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/estudos/{conv_id}/visao")
+def estudos_visao(conv_id: int):
+    try:
+        return estudos.visao(conv_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.delete("/api/estudos/{conv_id}/materias/{materia}")

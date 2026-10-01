@@ -249,6 +249,46 @@ def _contexto(conv_id: int) -> dict:
             "_da_prova": [b for m in mats if m["uso"] == "prova" for b in _blocos_prova(E._texto(conv_id, m))]}
 
 
+def _contexto_geral(conv_id: int, distribuicao: str = "peso") -> dict:
+    """O simulado geral: o contexto de cada matéria (o último resumo dela, o material dela e o Geral) num só.
+    O tópico vira "Matéria · tópico" e a matéria é o grupo do rodízio, com o peso dela (ou o peso vezes o que
+    falta acertar, em "fracos") repartido entre os tópicos — 10 questões, pesos 2 e 3, dão 4 e 6."""
+    lista = E.materias(conv_id)
+    if not lista:
+        raise ToolError("Crie as matérias do objetivo antes do simulado geral.")
+    acertos = E._acerto_por_materia(conv_id)
+    partes, sem = [], []
+    for x in lista:
+        marca = E.MATERIA.set(x["id"])
+        try:
+            partes.append((x, _contexto(conv_id)))
+        except ToolError:
+            sem.append(x["nome"])
+        finally:
+            E.MATERIA.reset(marca)
+    if not partes:
+        raise ToolError("Nenhuma matéria tem resumo ou material ainda: gere o resumo de pelo menos uma.")
+    secoes, topicos, origem, pesos, grupos = {}, [], {}, {}, {}
+    for x, c in partes:
+        peso = float(E._peso(x.get("peso")))
+        if distribuicao == "fracos":
+            a = acertos.get(x["id"], {}).get("acerto")
+            peso *= 1 + 2 * (1 - (a if a is not None else 50) / 100)
+        for t in c["topicos"]:
+            chave = f"{x['nome']} · {t}"
+            topicos.append(chave)
+            origem[chave], pesos[chave], grupos[chave] = [x["id"], t], peso / len(c["topicos"]), x["nome"]
+            if t in c["secoes"]:
+                secoes[chave] = c["secoes"][t]
+    with db.session() as s:
+        tema = E._conv(s, conv_id).title
+    base = partes[0][1]
+    return {**base, "tema": tema, "secoes": secoes, "topicos": topicos, "perfil": {}, "area_de": {}, "simulado": "",
+            "itens": [i for _, c in partes for i in c["itens"]], "web": [w for _, c in partes for w in c["web"]],
+            "enem": any(c["enem"] for _, c in partes), "_da_prova": [b for _, c in partes for b in c["_da_prova"]],
+            "_geral": {"origem": origem, "pesos": pesos, "grupos": grupos, "sem": sem}}
+
+
 def _config(c: dict | None, ctx: dict) -> dict:
     c = c or {}
     qtd = {t: max(0, E._int(c.get(t))) for t in TIPOS}
@@ -581,17 +621,31 @@ def _novo_titulo(conv_id: int) -> str:
 
 def start(conv_id: int, config: dict | None = None, provider: str = "", model: str = "", ex_provider: str = "",
           ex_model: str = "") -> dict:
-    """Cria a mensagem da prova e dispara a geração (ou deixa o pedido para o Claude)."""
-    ctx = _contexto(conv_id)
-    cfg = _config(config, ctx)
+    """Cria a mensagem da prova e dispara a geração (ou deixa o pedido para o Claude). Pelo "Tudo", com
+    config.geral, é o simulado geral: questões de todas as matérias, na proporção do peso de cada uma."""
+    config = dict(config or {})
+    geral = bool(config.get("geral")) and E.MATERIA.get() is None
+    distribuicao = "fracos" if config.get("distribuicao") == "fracos" else "peso"
+    ctx = _contexto_geral(conv_id, distribuicao) if geral else _contexto(conv_id)
+    cfg = _config({**config, "topicos": [] if geral else config.get("topicos")}, ctx)
+    if geral:
+        g = ctx["_geral"]
+        cfg.update(pesos=g["pesos"], grupos=g["grupos"], estilo=False, geral=True, distribuicao=distribuicao, origem=g["origem"])
     _, escritor, claude = E.modelos(provider, model, ex_provider, ex_model)
     # Quem confere o gabarito: o modelo de "Leitura e conferência" se a pessoa escolheu um; senão o mesmo que
     # escreveu (o automático da leitura é o subagente Rápido, pequeno demais para resolver prova).
     verificador = {"provider": ex_provider, "model": ex_model} if ex_provider and ex_model and not claude else escritor
     if E.rodando(conv_id):
         raise ToolError("Este estudo já está rodando. Espere terminar ou pare antes.")
-    publico = _publico_prova(_novo_titulo(conv_id), cfg, "claude" if claude else "forja", verificador, escritor,
+    titulo = (f"Simulado geral {1 + sum(1 for p in lista(conv_id) if (p.get('config') or {}).get('geral'))}"
+              if geral else _novo_titulo(conv_id))
+    publico = _publico_prova(titulo, cfg, "claude" if claude else "forja", verificador, escritor,
                              "aguardando" if claude else "rodando")
+    if geral:
+        for q in publico["planejadas"]:   # cada questão sabe a matéria: a nota e o caderno de erros saem por ela
+            q["materia"] = cfg["origem"].get(q["topico"], [""])[0]
+        if ctx["_geral"]["sem"]:
+            publico["aviso"] = f"Ficou de fora (sem resumo nem material): {', '.join(ctx['_geral']['sem'])}."
     msg = _save(conv_id, role="assistant", content="", status="aguardando" if claude else "running",
                 meta={"estudos": publico})
     if claude:
@@ -850,7 +904,8 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                         q.update(status="fila", motivo=motivo)
                         refazer.append(q)
                         continue
-                    limpa.update(id=q["id"], topico=q["topico"], dificuldade=q["dificuldade"])
+                    limpa.update(id=q["id"], topico=q["topico"], dificuldade=q["dificuldade"],
+                                 **({"materia": q["materia"]} if q.get("materia") else {}))
                     if q.get("figura"):
                         limpa["figura"] = q["figura"]
                     if limpa["tipo"] == "me":
@@ -963,9 +1018,18 @@ def _placar(questoes: list[dict], correcao: dict) -> dict:
         t = por.setdefault(q.get("topico") or "—", {"topico": q.get("topico") or "—", "pontos": 0.0, "max": 0.0})
         t["pontos"] += correcao[q["id"]]["pontos"]
         t["max"] += q["pontos"]
+    pm: dict[str, dict] = {}   # simulado geral: a parte de cada matéria
+    for q in questoes:
+        if q.get("materia"):
+            x = pm.setdefault(q["materia"], {"materia": q["materia"], "pontos": 0.0, "max": 0.0, "acertos": 0, "n": 0})
+            x["pontos"] += correcao[q["id"]]["pontos"]
+            x["max"] += q["pontos"]
+            x["acertos"] += correcao[q["id"]]["certa"] is True
+            x["n"] += 1
     return {"pontos": round(pontos, 2), "max": round(maximo, 2), "nota": round(10 * pontos / maximo, 1),
             "acertos": sum(1 for c in correcao.values() if c["certa"] is True),
-            "por_topico": [{**t, "pontos": round(t["pontos"], 2)} for t in por.values()]}
+            "por_topico": [{**t, "pontos": round(t["pontos"], 2)} for t in por.values()],
+            **({"por_materia": [{**x, "pontos": round(x["pontos"], 2)} for x in pm.values()]} if pm else {})}
 
 
 def _corrigir_fechada(q: dict, r) -> dict:

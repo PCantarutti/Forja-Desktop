@@ -282,7 +282,17 @@ export type EstudosMaterial = {
 };
 
 /** Matéria do objetivo (a conversa é o objetivo: um concurso, o ENEM). acerto = % das entregas corrigidas. */
-export type EstudosMateria = { id: string; nome: string; acerto: number | null; entregas: number };
+export type EstudosMateria = { id: string; nome: string; peso?: number; acerto: number | null; entregas: number };
+
+/** O "Tudo" do objetivo (GET /estudos/<conv>/visao). quadro = a "Revisão rápida" do último resumo da matéria. */
+export type EstudosVisaoMateria = EstudosMateria & {
+  peso: number; resumos: { message_id: number; titulo: string }[]; provas: number; topicos: number; secoes: string[]; fracos: string[];
+  erros: number; cartoes: number; vencem: number; dominados: number; quadro: string;
+};
+export type EstudosVisao = {
+  materias: EstudosVisaoMateria[]; fraca: string | null; acerto: number | null; entregas: number; vencem: number;
+  plano: EstudosPainel["plano"];
+};
 
 /** Figura do PDF que uma questão usa: a imagem sai de /api/estudos-figura/<conv>/<material>/<id>. */
 export type EstudosFigura = { material: number; id: string; pagina: number; descricao?: string };
@@ -443,6 +453,8 @@ export type EstudosProvaConfig = {
   instrucoes: string;
   alternativas: number;
   figuras: number;     // quantas usam uma figura do PDF (precisa de modelo que enxerga)
+  geral?: boolean;     // simulado geral do objetivo: questões de todas as matérias
+  distribuicao?: "peso" | "fracos";   // pelo peso de cada matéria, ou o peso vezes o que falta acertar
 };
 
 export type EstudosPlanejada = {
@@ -491,6 +503,7 @@ export type EstudosTentativa = {
   aviso: string;
   pontos: number; max: number; nota: number; acertos: number;
   por_topico: { topico: string; pontos: number; max: number }[];
+  por_materia?: { materia: string; pontos: number; max: number; acertos: number; n: number }[];   // simulado geral
   questoes: EstudosQuestao[];   // as da prova, já com gabarito
   stats: PesquisaEstado["stats"];
 };

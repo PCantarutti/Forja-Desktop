@@ -16,12 +16,19 @@ import Desempenho from "./EstudosDesempenho";
 import Simulados from "./EstudosSimulados";
 import EstudosMapaMental from "./EstudosMapaMental";
 import EstudosMaterias from "./EstudosMaterias";
+import { ResumoGeral, VisaoGeral } from "./EstudosTudo";
 import { acharTitulo } from "./estudosMapa";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
 const KEY_MODELOS = "forja.estudos.modelos";
 const KEY_MATERIA = "forja.estudos.materia.";   // + conv: a matéria aberta em cada objetivo
+
+type Aba = "resumo" | "provas" | "simulados" | "duvidas" | "revisao" | "desempenho" | "visao" | "simulado" | "geral";
+// No "Tudo" de um objetivo com matérias: a visão de cada matéria, o simulado geral e o resumo geral; a revisão e o
+// desempenho valem para tudo. Resumo, provas, simulados reais e dúvidas são de uma matéria.
+const ABAS_TUDO: Aba[] = ["visao", "simulado", "geral", "revisao", "desempenho"];
+const SO_TUDO: Aba[] = ["visao", "simulado", "geral"];
 const TEXTO_LONGO = 1500;            // colar mais que isto no campo do tema vira material
 
 type Opcao<T extends string> = { id: T; label: string; hint: string };
@@ -190,7 +197,7 @@ export default function EstudosView(props: {
   const [arrastando, setArrastando] = useState(false);
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
-  const [aba, setAba] = useState<"resumo" | "provas" | "simulados" | "duvidas" | "revisao" | "desempenho">("resumo");
+  const [aba, setAba] = useState<Aba>("resumo");
   const [imersao, setImersao] = useState(false);   // fazendo prova ou revisando: a fila de abas sai da frente
   const [pendente, setPendente] = useState<Pendente | null>(null);   // trecho do resumo a explicar de outro jeito
   const [provaPendente, setProvaPendente] = useState<ProvaPendente | null>(null);   // a prova dos pontos fracos
@@ -312,6 +319,14 @@ export default function EstudosView(props: {
   }, [projeto?.materias]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => () => setMateriaEstudos(null), []);   // fora da tela Estudos o cabeçalho não vai
+
+  const tudo = materia === null && !!projeto?.materias.length;
+  useEffect(() => {
+    if (tudo && !ABAS_TUDO.includes(aba)) setAba("visao");
+    else if (!tudo && SO_TUDO.includes(aba)) setAba("resumo");
+  }, [tudo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const abrirMateria = (m: string) => { escolherMateria(m); setAba("resumo"); };
+  const simuladoFracos = () => { setProvaPendente({ topicos: [], instrucoes: "" }); setAba("simulado"); };
 
   // O tema do último resumo volta para o campo ao abrir o estudo: refazer é um Enter.
   useEffect(() => {
@@ -589,10 +604,12 @@ export default function EstudosView(props: {
   );
   const abas = (
     <div className="flex gap-1 rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
-      {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
+      {(tudo ? ([["visao", "Visão geral"], ["simulado", "Simulado geral"], ["geral", "Resumo geral"],
+                 ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const)
+        : ([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
          ["simulados", `Simulados${projeto?.simulados?.length ? ` · ${new Set(projeto.simulados.map((x) => x.material_id)).size}` : ""}`],
          ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`],
-         ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const).map(([id, nome]) => (
+         ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const)).map(([id, nome]) => (
         <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)}
                 className={`rounded-full px-3 py-1 ${aba === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
           {nome}
@@ -621,6 +638,26 @@ export default function EstudosView(props: {
     </div>
   );
 
+  if (tudo && aba === "visao" && props.conv !== null && projeto) {
+    return quadro(
+      <VisaoGeral conv={props.conv} carimbo={props.carimbo} onError={props.onError} onMudou={() => carregar(props.conv)}
+                  onAbrir={abrirMateria} onSimuladoFracos={simuladoFracos} onIr={setAba} />,
+    );
+  }
+
+  if (tudo && aba === "geral" && props.conv !== null && projeto) {
+    return quadro(<ResumoGeral conv={props.conv} carimbo={props.carimbo} onError={props.onError} onAbrir={abrirMateria} />);
+  }
+
+  if (tudo && aba === "simulado" && props.conv !== null && projeto) {
+    return quadro(
+      <Provas geral conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos}
+              botaoModelos={botaoModelos} painelModelos={painel === "modelos" ? painelModelos : null}
+              onError={props.onError} onRecarregar={() => carregar(props.conv)}
+              pendente={provaPendente} onPendenteUsado={() => setProvaPendente(null)} onImersao={setImersao} />,
+    );
+  }
+
   if (aba === "revisao" && props.conv !== null && projeto) {
     return quadro(
       <Revisao conv={props.conv} projeto={projeto} modelos={modelos} botaoModelos={botaoModelos}
@@ -640,7 +677,7 @@ export default function EstudosView(props: {
   if (aba === "desempenho" && props.conv !== null && projeto) {
     return quadro(
       <Desempenho conv={props.conv} carimbo={props.carimbo} onError={props.onError} onIr={setAba}
-                  onProva={(p) => { setProvaPendente(p); setAba("provas"); }} />,
+                  onProva={(p) => { setProvaPendente(p); setAba(tudo ? "simulado" : "provas"); }} />,
     );
   }
 
