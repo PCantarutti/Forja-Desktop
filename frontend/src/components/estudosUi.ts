@@ -20,6 +20,10 @@ export function acertoGeral(ms: { acerto: number | null; entregas: number }[]): 
   return n ? Math.round(com.reduce((s, m) => s + (m.acerto ?? 0) * m.entregas, 0) / n) : null;
 }
 
+/** Dias até a data da prova (AAAA-MM-DD), arredondando para cima; null sem data. */
+export const diasAte = (data?: string | null) =>
+  data ? Math.ceil((new Date(`${data}T00:00:00`).getTime() - Date.now()) / 86_400_000) : null;
+
 // Barra de abas sublinhadas do topo
 export const aba = "flex shrink-0 items-center gap-[7px] whitespace-nowrap border-b-2 pt-3.5 pb-3 -mb-px";
 export const abaLigada = `${aba} border-accent font-medium text-fg`;

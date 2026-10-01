@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import type { EstudosMateria, EstudosProjeto } from "../types";
 import { Clipboard, Download, Edit, Plus, Trash } from "./icons";
-import { acertoGeral, corAcerto, rotulo } from "./estudosUi";
+import { acertoGeral, corAcerto, diasAte, rotulo } from "./estudosUi";
 
 /** Coluna "Tudo + matérias" do objetivo. Trocar de matéria troca o filtro de todas as abas. */
 export default function EstudosMaterias(props: {
@@ -67,7 +67,7 @@ export default function EstudosMaterias(props: {
     </div>
   );
   const plano = props.projeto.revisao?.plano;
-  const dias = plano?.data ? Math.ceil((new Date(`${plano.data}T00:00:00`).getTime() - Date.now()) / 86_400_000) : null;
+  const dias = diasAte(plano?.data);
   return (
     <nav aria-label="Matérias" className="flex w-64 shrink-0 flex-col overflow-y-auto border-r border-line bg-side">
       <div className="flex flex-col gap-2 border-b border-line px-4 pt-[18px] pb-3.5">

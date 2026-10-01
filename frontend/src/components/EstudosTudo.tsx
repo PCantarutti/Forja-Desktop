@@ -4,7 +4,7 @@ import type { EstudosVisao, EstudosVisaoMateria } from "../types";
 import { ArrowRight, Check, Copy } from "./icons";
 import { Markdown } from "./MessageView";
 import { matematica } from "./estudosTexto";
-import { btn, btnPrimary, card, corAcerto, corAcertoFundo, pilulaFraco, rotulo, trilho } from "./estudosUi";
+import { btn, btnPrimary, card, corAcerto, corAcertoFundo, diasAte, pilulaFraco, rotulo, trilho } from "./estudosUi";
 
 /** O "Tudo" lê a visão do objetivo uma vez e de novo quando o estudo muda (carimbo) ou o peso muda aqui. */
 function useVisao(conv: number, carimbo: string | undefined, onError: (e: string) => void) {
@@ -87,7 +87,7 @@ export function VisaoGeral(props: {
   if (!v) return <p className="p-6 text-center text-xs text-faint">Lendo o objetivo…</p>;
   const fraca = v.materias.find((m) => m.id === v.fraca);
   const soma = v.materias.reduce((s, m) => s + m.peso, 0) || 1;
-  const dias = v.plano?.data ? Math.ceil((new Date(`${v.plano.data}T00:00:00`).getTime() - Date.now()) / 86_400_000) : null;
+  const dias = diasAte(v.plano?.data);
   const num = (n: number) => <span className={n ? "" : "text-faint"}>{n}</span>;
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">

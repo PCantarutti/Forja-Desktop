@@ -292,11 +292,9 @@ export default function VideoView(props: {
   const refs = slots.slice(0, precisaQuadros).filter(Boolean) as string[];
 
   // Estimativa pelo que esta máquina já mediu com este modelo, em qualquer conversa (ver estimarTempo).
-  const estimativa = useMemo(() => {
-    if (!o || !st || !atual?.chave) return null;
-    const e = estimarTempo(st.tempos_video ?? [], atual.chave, o);
-    return e && { s: e.s * count, minimo: e.minimo };
-  }, [st, atual, o, count]);
+  // ponytail: sem useMemo — a conta é barata e o React Compiler não preservava a memoização manual
+  const estimado = o && st && atual?.chave ? estimarTempo(st.tempos_video ?? [], atual.chave, o) : null;
+  const estimativa = estimado && { s: estimado.s * count, minimo: estimado.minimo };
 
   function escolherQuadro(i: 0 | 1, path: string | null) {
     setSlots((s) => (i === 0 ? [path, s[1]] : [s[0], path]));
