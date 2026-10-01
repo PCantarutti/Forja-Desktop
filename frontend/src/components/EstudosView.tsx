@@ -13,7 +13,8 @@ import Provas, { type ProvaPendente } from "./EstudosProva";
 import Duvidas, { type Pendente } from "./EstudosDuvidas";
 import Revisao from "./EstudosRevisao";
 import Desempenho from "./EstudosDesempenho";
-import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
+import EstudosMapaMental from "./EstudosMapaMental";
+import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
 const KEY_MODELOS = "forja.estudos.modelos";
@@ -159,6 +160,8 @@ export default function EstudosView(props: {
   onConversationChanged: () => void;
 }) {
   const [projeto, setProjeto] = useState<EstudosProjeto | null>(null);
+  const [mapa, setMapa] = useState(() => ler(KEY_PREFS + ".mapa", { v: false }).v);   // o resumo como mapa mental
+  const irDepois = useRef<number | null>(null);   // a seção que o clique no mapa pediu, aberta quando o texto voltar
   const [estado, setEstado] = useState<EstudosEstado | null>(null);
   const [tema, setTema] = useState("");
   const [prefs, setPrefs] = useState<EstudosPreferencias>(() => ler(KEY_PREFS, PADRAO));
@@ -371,9 +374,24 @@ export default function EstudosView(props: {
     ouvir(mid);
   }
 
-  function irPara(i: number) {
-    resumoRef.current?.querySelectorAll("h2")[i]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function irPara(i: number, titulos = "h2") {
+    const el = resumoRef.current?.querySelectorAll<HTMLElement>(titulos)[i];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    // o título pisca de leve: depois do salto, o olho acha onde parou
+    el.animate([{ backgroundColor: "var(--color-accent-soft)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
   }
+  function verMapa(v: boolean) {
+    setMapa(v);
+    gravarLocal(KEY_PREFS + ".mapa", { v });
+  }
+  // do mapa para o texto: a seção abre depois que o texto voltou à tela
+  useEffect(() => {
+    if (mapa || irDepois.current == null) return;
+    const i = irDepois.current;
+    irDepois.current = null;
+    requestAnimationFrame(() => irPara(i, "h2, h3, h4"));
+  }, [mapa]);
 
   function copiar() {
     if (!estado?.texto) return;
@@ -696,7 +714,20 @@ export default function EstudosView(props: {
               </div>
             )}
 
-            {estado?.texto && (
+            {estado?.texto && secoes.length > 1 && (
+              <div className="flex rounded-full border border-line p-0.5 text-xs self-start" role="radiogroup" aria-label="Ver o resumo como">
+                {([[false, "Texto"], [true, "Mapa mental"]] as const).map(([v, nome]) => (
+                  <button key={nome} role="radio" aria-checked={mapa === v} onClick={() => verMapa(v)}
+                          className={`rounded-full px-3 py-1 ${mapa === v ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
+                    {nome}
+                  </button>
+                ))}
+              </div>
+            )}
+            {estado?.texto && mapa && secoes.length > 1 && (
+              <EstudosMapaMental md={estado.texto} tema={estado.tema} onAbrir={(i) => { irDepois.current = i; verMapa(false); }} />
+            )}
+            {estado?.texto && (!mapa || secoes.length < 2) && (
               <div ref={resumoRef} onMouseUp={marcar} onKeyUp={marcar} className={`${card} px-6 py-5`}>
                 <Markdown text={matematica(estado.texto)} math />
               </div>
