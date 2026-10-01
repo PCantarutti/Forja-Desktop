@@ -151,3 +151,63 @@ def test_plano_de_estudos_sai_dos_topicos_do_edital_sem_resumo():
     # intercalado: nenhuma sequência de 5 dias seguidos da mesma matéria
     materias = [t.split(" · ")[0] for t in estudar]
     assert not any(len(set(materias[i:i + 5])) == 1 for i in range(len(materias) - 5))
+
+
+QUADRO_CONTAGEM = """=== 03 - ANEXO III - QUADRO DE PROVAS.pdf ===
+ANEXO III - QUADRO DE PROVAS
+ENSINO MÉDIO COMPLETO
+CÓDIGO/CARGO
+LÍNGUA
+PORTUGUESA
+(Peso 2)
+CONHEC.
+ESPECIFÍCOS
+(Peso 3)
+TOTAL DE
+QUESTÕES
+301 - ASSISTENTE ADMINISTRATIVO
+10 20 30 100,0
+ENSINO SUPERIOR COMPLETO
+CÓDIGO/CARGO
+PROVA
+DE
+TÍTULOS
+LÍNGUA
+PORTUGUESA
+(Peso 2)
+RACIOCÍNIO
+LÓGICO
+(Peso 2)
+CONHEC.
+GERAIS DO
+MUNICÍPIO
+(Peso 1)
+CONHEC.
+ESPECIFÍCOS
+(Peso 3)
+TOTAL DE
+QUESTÕES
+TOTAL DE
+PONTOS (*)
+501 - ANALISTA DE TI
+10 05 10
+20
+45 100,0 30,0 6,5
+502 - ARQUITETO 20
+503 - ARQUIVISTA 20
+"""
+
+
+def test_quadro_de_provas_lido_sem_modelo_e_corrige_o_peso():
+    ti = ED.quadro_do_cargo(QUADRO_CONTAGEM, "Analista de TI")
+    assert [(c["questoes"], c["peso"]) for c in ti] == [(10, 2), (5, 2), (10, 1), (20, 3)]
+    # célula mesclada: o Arquiteto só tem a coluna dele; as comuns vêm da 1ª linha do bloco
+    assert [c["questoes"] for c in ED.quadro_do_cargo(QUADRO_CONTAGEM, "arquiteto")] == [10, 5, 10, 20]
+    assert [c["questoes"] for c in ED.quadro_do_cargo(QUADRO_CONTAGEM, "Assistente Administrativo")] == [10, 20]
+    assert ED.quadro_do_cargo(QUADRO_CONTAGEM, "Cargo que não existe") == []
+    achadas = {k: {"nome": n, "questoes": q, "topicos": []} for k, n, q in [
+        ("a", "Língua Portuguesa", None), ("b", "Raciocínio Lógico", 3), ("c", "Conhecimentos Gerais do Município", None),
+        ("d", "Conhecimentos Específicos", 1)]}
+    ED.corrigir_pelo_quadro(achadas, ti)
+    assert {v["nome"]: v["questoes"] for v in achadas.values()} == {
+        "Língua Portuguesa": 20, "Raciocínio Lógico": 10, "Conhecimentos Gerais do Município": 10, "Conhecimentos Específicos": 60}
