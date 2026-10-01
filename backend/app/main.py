@@ -423,8 +423,9 @@ async def get_activity():
         entrada(r["conv_id"])["running"] = True
     for r in list(comparar._RUNS.values()):  # comparação e lote de imagem/vídeo também
         entrada(r["conv_id"])["running"] = True
-    for r in list(estudos._RUNS.values()):   # e o resumo da tela Estudos
-        entrada(r["conv_id"])["running"] = True
+    for r in list(estudos._RUNS.values()):   # e o resumo/prova da tela Estudos (dúvida não: viraria "Estudo pronto")
+        if r.get("tipo") != "duvida":
+            entrada(r["conv_id"])["running"] = True
     for c in lotes.pendentes():
         entrada(c)["running"] = True
     for a in subagents.ativas():
@@ -2351,6 +2352,35 @@ def estudos_prova_apagar(prova_id: int):
         return estudos_prova.apagar_prova(prova_id)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+class DuvidaBody(BaseModel):
+    pergunta: str = ""
+    fio: str = "geral"              # "geral"; numa questão, vem o `questao` e o fio sai dele
+    questao: dict | None = None     # {tentativa_id, questao_id}
+    trecho: str = ""                # trecho do resumo marcado ("explique de outro jeito")
+    provider: str = ""              # "claude-mcp" = a resposta fica para o Claude via MCP
+    model: str = ""
+
+
+@app.post("/api/estudos/{conv_id}/duvida")
+async def estudos_duvida(conv_id: int, body: DuvidaBody):
+    from . import estudos_duvidas
+    try:
+        msg = estudos_duvidas.perguntar(conv_id, body.pergunta, body.fio, body.questao, body.trecho,
+                                        body.provider, body.model)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    return _sse_estudos(msg["id"])
+
+
+@app.get("/api/estudos/{conv_id}/duvidas")
+def estudos_duvidas_fio(conv_id: int, fio: str = "geral"):
+    from . import estudos_duvidas
+    try:
+        return estudos_duvidas.conversa(conv_id, fio)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.get("/api/estudos/execucao/{message_id}")

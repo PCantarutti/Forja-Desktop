@@ -406,7 +406,7 @@ def _visao(itens: list[dict], teto: int) -> str:
 
 INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "erro_busca", "porte", "gravar",
            "pergunta", "contexto", "texto")
-TIPOS_EXECUCAO = ("resumo", "prova", "tentativa")   # o que tem estado, SSE e pode ficar para o Claude
+TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida")   # o que tem estado, SSE e pode ficar para o Claude
 
 
 def _publico(run: dict) -> dict:
@@ -480,7 +480,7 @@ def estado(message_id: int) -> dict:
                 raise ToolError("Estudo não encontrado.")
             e = {"message_id": message_id, **e, "status": _situacao(m.status), "texto": m.content or ""}
             conv_id = m.conversation_id
-    if e["tipo"] == "resumo":
+    if e["tipo"] in ("resumo", "duvida"):
         return e
     from . import estudos_prova
     return estudos_prova.para_tela(e, conv_id)
@@ -501,7 +501,9 @@ def cancelar(message_id: int) -> dict:
 
 
 def rodando(conv_id: int) -> int | None:
-    return next((mid for mid, r in _RUNS.items() if r["conv_id"] == conv_id), None)
+    """Resumo, prova ou correção em andamento no estudo. Dúvida não conta: é curta, tem fila própria por
+    conversa e não pode travar o gerar da prova."""
+    return next((mid for mid, r in _RUNS.items() if r["conv_id"] == conv_id and r.get("tipo") != "duvida"), None)
 
 
 def reap() -> int:
@@ -527,10 +529,11 @@ def projeto(conv_id: int) -> dict:
                    for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                db.Message.role == "assistant").order_by(db.Message.id))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
-    from . import estudos_prova
+    from . import estudos_duvidas, estudos_prova
     return {"id": conv_id, "titulo": titulo, "materiais": materiais(conv_id), "resumos": resumos,
             "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),
-            "provas": estudos_prova.lista(conv_id), "topicos": estudos_prova.topicos(conv_id)}
+            "provas": estudos_prova.lista(conv_id), "topicos": estudos_prova.topicos(conv_id),
+            "duvidas": estudos_duvidas.fios(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração
@@ -1069,6 +1072,10 @@ async def mcp_pedidos(espera: int = 60) -> str:
     from . import estudos_prova
     blocos = []
     for p in lista:
+        if p["tipo"] == "duvida":
+            from . import estudos_duvidas
+            blocos.append(estudos_duvidas.bloco_pedido(p))
+            continue
         if p["tipo"] != "resumo":
             blocos.append(estudos_prova.bloco_pedido(p))
             continue

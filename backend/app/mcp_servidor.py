@@ -420,7 +420,7 @@ INSTRUCOES = (
     "no painel do Forja em cada etapa. Se um resultado trouxer '[Mensagem do usuário…]', ela vale como pedido "
     "dele: leve em conta antes de seguir. "
     "Tela Estudos (não precisa de `path`): ferramentas estudos_* — crie a matéria, anexe material, leia por "
-    "páginas, pesquise com a sua própria busca, grave o resumo e a prova, corrija discursivas; estudos_pedidos traz "
+    "páginas, pesquise com a sua própria busca, grave o resumo e a prova, corrija discursivas e responda dúvidas; estudos_pedidos traz "
     "o que o usuário pediu na tela com o motor \"Claude (MCP)\".")
 
 
@@ -604,6 +604,13 @@ def _servidor():
         """Uma prova inteira, com gabarito e explicações, e as entregas dela com o que o aluno respondeu."""
         from . import estudos_prova
         return estudos_prova.mcp_ver_prova(prova_id)
+
+    @mcp.tool()
+    async def estudos_responder_duvida(duvida_id: int, resposta: str, modelo: str = "") -> str:
+        """Responde uma dúvida do aluno pedida na tela Estudos (o pedido, com a questão e o contexto, vem em
+        estudos_pedidos). `resposta` em Markdown; `modelo` = o seu nome."""
+        from . import estudos_duvidas
+        return estudos_duvidas.mcp_responder(duvida_id, resposta, modelo)
 
     @mcp.tool()
     async def estudos_pedidos(espera: int = 60) -> str:
