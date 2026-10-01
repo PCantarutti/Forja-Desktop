@@ -668,7 +668,7 @@ export default function EstudosView(props: {
   const contexto = ms.length ? (
     <div className="flex h-6 shrink-0 items-center gap-2 border-r border-line pr-5 whitespace-nowrap">
       <span className={`size-2 shrink-0 rounded-full ${aberta ? corAcerto(aberta.acerto) : "bg-accent"}`} />
-      <span className="text-[13.5px] font-semibold text-fg">{aberta ? aberta.nome : "Tudo"}</span>
+      <span className="max-w-[240px] truncate text-[13.5px] font-semibold text-fg" title={aberta?.nome}>{aberta ? aberta.nome : "Tudo"}</span>
       <span className="font-mono text-[11px] text-faint">
         {aberta ? `${aberta.acerto == null ? "—" : `${aberta.acerto}%`} · peso ${Math.round((100 * (aberta.peso ?? 1)) / somaPeso)}%`
           : `${geralAcerto == null ? "—" : `${geralAcerto}%`} · ${ms.length} matéria${ms.length === 1 ? "" : "s"}`}
