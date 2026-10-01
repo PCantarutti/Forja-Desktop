@@ -168,6 +168,7 @@ def test_so_com_simulado_o_resumo_le_o_simulado(monkeypatch):
     e = _rodar(conv)
     assert e["status"] == "pronto"
     assert e["materiais"][0]["pedacos"] == 1 and "perfil" in chamados   # leu como conteúdo E tirou o perfil
+    assert "Sem material" not in e["aviso"]
 
 
 def test_selecionar_prefere_o_que_fala_do_topico():

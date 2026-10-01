@@ -539,7 +539,7 @@ def start(conv_id: int, tema: str, preferencias: dict | None = None, web_ligada:
         if conv.title == "Nova conversa":
             conv.title = tema.splitlines()[0][:60]
         s.commit()
-    aviso = "" if (web_ligada or any(m["uso"] == "conteudo" for m in mats)) else \
+    aviso = "" if (web_ligada or mats) else \
         "Sem material e sem web: o resumo sai só do que o modelo sabe. Confira antes de confiar."
     _save(conv_id, role="user", content=tema,
           meta={"estudos": {"tipo": "estudo", "preferencias": prefs, "web": web_ligada, "profundidade": profundidade}})
