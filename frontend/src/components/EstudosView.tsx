@@ -381,7 +381,7 @@ export default function EstudosView(props: {
             <span className="text-faint">Escreve o resumo, as questões e corrige as discursivas. Vale o melhor modelo que você tiver.</span>
           </div>
           <div className="flex flex-col gap-1.5">
-            <span className="text-muted">Leitura</span>
+            <span className="text-muted">Leitura e conferência</span>
             <div className="flex items-center gap-2 [&>div]:ml-0">
               <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Leitura">
                 {([["auto", "Automática"], ["propria", "Escolher"]] as const).map(([id, nome]) => {
@@ -400,7 +400,10 @@ export default function EstudosView(props: {
                              onChange={(provider, model) => setModelos((m) => ({ ...m, extrator: { provider, model } }))} />
               )}
             </div>
-            <span className="text-faint">Tira notas do material grande e lê as páginas da web. Automática: o subagente Rápido, ou o mesmo do resumo.</span>
+            <span className="text-faint">
+              Tira notas do material grande, lê as páginas da web e confere o gabarito da prova resolvendo cada questão.
+              Um modelo diferente do de cima pega mais erro. Automática: o subagente Rápido na leitura; na prova, o mesmo de cima.
+            </span>
           </div>
         </div>
       ) : (

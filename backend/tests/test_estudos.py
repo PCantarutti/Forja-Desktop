@@ -171,6 +171,26 @@ def test_so_com_simulado_o_resumo_le_o_simulado(monkeypatch):
     assert "Sem material" not in e["aviso"]
 
 
+def test_areas_do_perfil_somam_um_e_ignoram_lixo():
+    assert estudos.areas([{"area": "Matemática", "peso": 45}, {"area": "Física", "peso": "15%"},
+                          {"area": "", "peso": 1}, {"area": "Química", "peso": "muito"}, "lixo"]) == [
+        {"area": "Matemática", "peso": 0.75}, {"area": "Física", "peso": 0.25}]
+    assert estudos.areas(None) == []
+
+
+def test_perfil_guarda_as_areas_e_o_roteiro_a_area_do_topico(monkeypatch):
+    perfil = ('{"banca": "ENEM", "alternativas": 5, "topicos": ["funções"], '
+              '"areas": [{"area": "Matemática", "peso": 0.5}, {"area": "Biologia", "peso": 0.5}]}')
+    plano = ('{"titulo": "T", "visao_geral": "v", "topicos": [{"titulo": "Funções", "area": "Matemática", "objetivo": "o", '
+             '"pontos": ["p"]}, {"titulo": "Células", "area": "Biologia", "objetivo": "o", "pontos": ["p"]}]}')
+    _fake_llm(monkeypatch, {"perfil": perfil, "plano": plano})
+    conv = _estudo()
+    estudos.adicionar_material(conv, "simulado.txt", texto="\n".join(f"Questão {i}\na) 1\nb) 2\nc) 3" for i in range(5)))
+    e = _rodar(conv)
+    assert e["perfil"]["areas"] == [{"area": "Matemática", "peso": 0.5}, {"area": "Biologia", "peso": 0.5}]
+    assert [t["area"] for t in e["topicos"]] == ["Matemática", "Biologia"]
+
+
 def test_selecionar_prefere_o_que_fala_do_topico():
     itens = [{"nome": "a", "cabeca": "[a]", "texto": "fotossíntese clorofila luz " * 20},
              {"nome": "b", "cabeca": "[b]", "texto": "mitocôndria respiração energia " * 20}]

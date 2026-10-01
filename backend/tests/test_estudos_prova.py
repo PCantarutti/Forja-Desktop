@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import re
 
@@ -55,6 +56,8 @@ def _disc(i):
 
 
 USUARIO: list[str] = []   # o que cada chamada ao modelo falso recebeu como mensagem do usuário
+SISTEMA: list[str] = []   # e como prompt de sistema
+MODELOS: list[str] = []   # e qual modelo foi chamado
 
 
 def _fake(monkeypatch, gerar=None, verificar=None, corrigir=None, pausa=0.0):
@@ -62,10 +65,14 @@ def _fake(monkeypatch, gerar=None, verificar=None, corrigir=None, pausa=0.0):
     chamados: list[str] = []
     ultimas: dict[str, list] = {}
     USUARIO.clear()
+    SISTEMA.clear()
+    MODELOS.clear()
 
     async def chat_stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         system, user = messages[0]["content"], messages[1]["content"]
         USUARIO.append(user)
+        SISTEMA.append(system)
+        MODELOS.append(model)
         if pausa:
             await asyncio.sleep(pausa)
         if system.startswith("Você é um professor que elabora"):
@@ -213,6 +220,74 @@ def test_paginas_da_web_do_resumo_vao_para_a_prova(monkeypatch):
     assert "[Glicólise passo a passo](https://bio.org/glicolise)" in gerar and "fosfofrutoquinase" in conferir
 
 
+def test_pesos_seguem_as_areas_da_prova_anexada():
+    areas = [{"area": "Matemática", "peso": 0.5}, {"area": "Física", "peso": 0.3}, {"area": "Química", "peso": 0.2}]
+    topicos = ["Funções", "Probabilidade", "Cinemática", "Cinética química"]
+    area_de = {"Funções": "Matemática", "Probabilidade": "matematica", "Cinemática": "Física"}   # Cinética: pelo título
+    pesos = P._pesos(topicos, area_de, areas)
+    assert pesos == pytest.approx({"Funções": 0.25, "Probabilidade": 0.25, "Cinemática": 0.3, "Cinética química": 0.2})
+    seq = P._sequencia(topicos, pesos, 20)
+    from collections import Counter
+    assert Counter(seq) == {"Funções": 5, "Probabilidade": 5, "Cinemática": 6, "Cinética química": 4}
+    assert seq[:4] != ["Cinemática"] * 4   # intercalado, não em bloco
+    assert P._pesos(topicos, {}, []) == {t: 1.0 for t in topicos}   # sem áreas: todos iguais
+    assert P._pesos(["Outro"], {}, areas) == {"Outro": 1.0}          # nenhum casou: todos iguais
+
+
+def test_areas_do_perfil_viram_pesos_da_prova(monkeypatch):
+    conv = _estudo()
+    with db.session() as s:
+        m = s.scalars(select(db.Message).where(db.Message.conversation_id == conv)).first()
+        e = copy.deepcopy(m.meta["estudos"])   # mexer no dict carregado não grava: o JSON não é MutableDict
+        e["perfil"] = {**e["perfil"], "areas": [{"area": "Biologia", "peso": 0.75}, {"area": "Química", "peso": 0.25}]}
+        e["topicos"] = [{**t, "area": "Biologia" if t["titulo"] == "Glicólise" else "Química"} for t in e["topicos"]]
+        m.meta = {"estudos": e}
+        s.commit()
+    cfg = P._config({"me": 8}, P._contexto(conv))
+    assert [q["topico"] for q in P._planejar(cfg)].count("Glicólise") == 6
+
+
+def test_regras_enem_pela_banca_ou_pelo_objetivo(monkeypatch):
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    _gerar(_estudo(), {"me": 1})   # o perfil do _estudo é ENEM
+    assert "Padrão ENEM" in SISTEMA[0] and "calculadora" in SISTEMA[0]
+    conv = _estudo()
+    with db.session() as s:
+        m = s.scalars(select(db.Message).where(db.Message.conversation_id == conv)).first()
+        m.meta = {"estudos": {**m.meta["estudos"], "perfil": {"banca": "FUVEST"}, "preferencias": {"objetivo": "faculdade"}}}
+        s.commit()
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    _gerar(conv, {"me": 1})
+    assert "Padrão ENEM" not in SISTEMA[0]
+
+
+def test_verificador_usa_o_modelo_de_conferencia_quando_escolhido(monkeypatch):
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    pid = _gerar(_estudo(), {"me": 2}, ex_provider="fake", ex_model="outro")
+    assert MODELOS == ["m", "outro"]   # escreve com um, confere com o outro
+    assert _cheia(pid)["stats"]["extrator"] == "outro"
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    _gerar(_estudo(), {"me": 2})
+    assert MODELOS == ["m", "m"]   # sem escolha: o mesmo (o automático da leitura é pequeno demais para isso)
+    assert "conta" in SISTEMA[1] and "menor, maior, exceto" in SISTEMA[1]
+
+
+def test_motivo_do_descarte_traz_a_conta_do_verificador(monkeypatch):
+    async def fala(provider, model, messages, *a, **kw):
+        if messages[0]["content"].startswith("Você resolve"):
+            certo = _correto_do_prompt(messages[1]["content"], re.findall(r"^\[(q\d+)\]", messages[1]["content"], re.M))
+            yield ("content", json.dumps({"respostas": [{"id": i, "conta": "56,2° não basta", "resposta": "ABCD"[("ABCD".index(c) + 1) % 4]}
+                                                        for i, c in certo.items()]}))
+        else:
+            yield ("content", json.dumps({"questoes": [{**_me(1), "correta": 1}]}))
+        yield ("done", {})
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", fala)
+    pid = _gerar(_estudo(), {"me": 1})
+    motivo = _cheia(pid)["planejadas"][0]["motivo"]
+    assert motivo.startswith("o verificador chegou a outra resposta") and "56,2° não basta" in motivo
+
+
 def test_sem_resumo_nem_material_nao_da_prova():
     with pytest.raises(ToolError, match="Anexe material"):
         P._contexto(_estudo(resumo=False))
@@ -247,7 +322,7 @@ def test_verificador_que_discorda_regera_e_depois_descarta(monkeypatch):
     e, plano = estudos.estado(pid), _cheia(pid)["planejadas"]
     assert chamados.count("gerar") == 2   # a 1ª rodada e a refeita
     assert [p["status"] for p in plano] == ["descartada"] * 4 and not e["questoes"]
-    assert all(p["motivo"] == "o verificador chegou a outra resposta" for p in plano)
+    assert all(p["motivo"].startswith("o verificador chegou a outra resposta (") for p in plano)
     assert e["status"] == "erro" and "verificador chegou a outra resposta" in e["aviso"]
 
 
