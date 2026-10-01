@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import { auth, api, enviarArquivo, setMateriaEstudos, streamSSE } from "../api";
 import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto, PesquisaFonte } from "../types";
-import { Bubble, Check, Clipboard, Copy, Cube, Download, ExternalLink, Globe, Livro, Paperclip, Search, Sliders, X } from "./icons";
+import { Activity, Bubble, Check, CheckSquare, Clipboard, Copy, Cube, Download, ExternalLink, Gauge, Globe, Livro, Paperclip, Repetir, Search, Sliders, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada, redondo } from "./Composer";
@@ -19,7 +19,7 @@ import EstudosMaterias from "./EstudosMaterias";
 import { ResumoGeral, VisaoGeral } from "./EstudosTudo";
 import { LerEdital, TrazerEstudo } from "./EstudosObjetivo";
 import { acharTitulo } from "./estudosMapa";
-import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
+import { PEDIDO_CLAUDE, type Modelos, abaDesligada, abaLigada, acertoGeral, corAcerto, selo, seloDestaque, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
 const KEY_MODELOS = "forja.estudos.modelos";
@@ -628,17 +628,35 @@ export default function EstudosView(props: {
       <span className="min-w-0 truncate">{modelos.motor === "claude" ? "Claude via MCP" : modelos.escritor.model || "escolher modelo"}</span>
     </button>
   );
+  const vencem = projeto?.revisao?.vencem ?? 0;
+  const lista: [Aba, string, (p: { className?: string }) => React.ReactNode, number][] = tudo
+    ? [["visao", "Visão geral", Gauge, 0], ["simulado", "Simulado geral", Clipboard, 0], ["geral", "Resumo geral", Livro, 0],
+       ["revisao", "Revisão", Repetir, vencem], ["desempenho", "Desempenho", Activity, 0]]
+    : [["resumo", "Resumo", Livro, 0], ["provas", "Provas", CheckSquare, projeto?.provas.length ?? 0],
+       ["simulados", "Simulados", Globe, new Set(projeto?.simulados?.map((x) => x.material_id) ?? []).size],
+       ["duvidas", "Dúvidas", Bubble, projeto?.duvidas?.geral ?? 0],
+       ["revisao", "Revisão", Repetir, vencem], ["desempenho", "Desempenho", Activity, 0]];
+  const ms = projeto?.materias ?? [];
+  const aberta = ms.find((m) => m.id === materia);
+  const somaPeso = ms.reduce((s, m) => s + (m.peso ?? 1), 0) || 1;
+  const geralAcerto = acertoGeral(ms);
+  const contexto = ms.length ? (
+    <div className="flex h-6 shrink-0 items-center gap-2 border-r border-line pr-5 whitespace-nowrap">
+      <span className={`size-2 shrink-0 rounded-full ${aberta ? corAcerto(aberta.acerto) : "bg-accent"}`} />
+      <span className="text-[13.5px] font-semibold text-fg">{aberta ? aberta.nome : "Tudo"}</span>
+      <span className="font-mono text-[11px] text-faint">
+        {aberta ? `${aberta.acerto == null ? "—" : `${aberta.acerto}%`} · peso ${Math.round((100 * (aberta.peso ?? 1)) / somaPeso)}%`
+          : `${geralAcerto == null ? "—" : `${geralAcerto}%`} · ${ms.length} matéria${ms.length === 1 ? "" : "s"}`}
+      </span>
+    </div>
+  ) : null;
   const abas = (
-    <div className="flex gap-1 rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
-      {(tudo ? ([["visao", "Visão geral"], ["simulado", "Simulado geral"], ["geral", "Resumo geral"],
-                 ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const)
-        : ([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
-         ["simulados", `Simulados${projeto?.simulados?.length ? ` · ${new Set(projeto.simulados.map((x) => x.material_id)).size}` : ""}`],
-         ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`],
-         ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const)).map(([id, nome]) => (
-        <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)}
-                className={`rounded-full px-3 py-1 ${aba === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
-          {nome}
+    <div className="flex shrink-0 items-center gap-[22px] overflow-x-auto border-b border-line px-7 text-[13px] [scrollbar-width:none]!" role="tablist" aria-label="Estudos">
+      {contexto}
+      {lista.map(([id, nome, Icone, n]) => (
+        <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)} className={aba === id ? abaLigada : abaDesligada}>
+          <Icone className="size-[15px]" /> {nome}
+          {n > 0 && <span className={id === "revisao" ? seloDestaque : selo}>{n}</span>}
         </button>
       ))}
     </div>
@@ -655,11 +673,7 @@ export default function EstudosView(props: {
                          onEdital={() => setObjetivo("edital")} onTrazer={() => setObjetivo("trazer")} />
       )}
       <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
-        {projeto && !imersao && !objetivo && (
-          <div className="shrink-0 px-5 pt-3">
-            <div className="mx-auto flex max-w-6xl justify-center">{abas}</div>
-          </div>
-        )}
+        {projeto && !imersao && !objetivo && abas}
         <div key={materia ?? ""} className="flex min-h-0 flex-1 flex-col">{conteudo}</div>
       </div>
     </div>
