@@ -59,6 +59,9 @@ async def lifespan(_app):
     vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
     vigia = asyncio.create_task(modelctl.vigia_ociosidade())  # E4: descarrega o modelo local sem uso
     vivas.add(vigia)
+    from . import estudos_revisao
+    lembrete = asyncio.create_task(estudos_revisao.vigia())  # Estudos: o aviso do dia no celular, de hora em hora
+    vivas.add(lembrete)
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
@@ -71,6 +74,7 @@ async def lifespan(_app):
     await mobile.desliga_lan()
     task.cancel()
     vigia.cancel()  # laço sem fim: sem o cancel o gather abaixo esperava para sempre
+    lembrete.cancel()
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
@@ -2323,6 +2327,12 @@ class EntregaBody(BaseModel):
     segundos: int = 0
     provider: str = ""              # quem corrige as discursivas
     model: str = ""
+    modo: str = "prova"             # prova | treino
+
+
+class ConferirBody(BaseModel):
+    questao_id: str
+    resposta: int | bool | str | None = None
 
 
 @app.post("/api/estudos/{conv_id}/prova")
@@ -2339,10 +2349,20 @@ async def estudos_prova_gerar(conv_id: int, body: ProvaBody):
 async def estudos_prova_entregar(prova_id: int, body: EntregaBody):
     from . import estudos_prova
     try:
-        msg = estudos_prova.entregar(prova_id, body.respostas, body.segundos, body.provider, body.model)
+        msg = estudos_prova.entregar(prova_id, body.respostas, body.segundos, body.provider, body.model, body.modo)
     except ToolError as e:
         raise HTTPException(400, str(e))
     return _sse_estudos(msg["id"])
+
+
+@app.post("/api/estudos/prova/{prova_id}/conferir")
+def estudos_prova_conferir(prova_id: int, body: ConferirBody):
+    """Modo treino: o gabarito e a explicação de uma questão, logo depois de respondida."""
+    from . import estudos_prova
+    try:
+        return estudos_prova.conferir(prova_id, body.questao_id, body.resposta)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
 
 
 @app.delete("/api/estudos/prova/{prova_id}")
@@ -2381,6 +2401,104 @@ def estudos_duvidas_fio(conv_id: int, fio: str = "geral"):
         return estudos_duvidas.conversa(conv_id, fio)
     except ToolError as e:
         raise HTTPException(404, str(e))
+
+
+class RevisarBody(BaseModel):
+    chave: str                      # q:<prova>:<questão> | f:<cartão>
+    acertou: bool = False
+    tirar: bool = False             # sai da revisão de vez (questão com defeito)
+
+
+class FlashcardsBody(BaseModel):
+    quantos: int = 20
+    provider: str = ""              # "claude-mcp" = os cartões ficam para o Claude via MCP
+    model: str = ""
+
+
+class CronogramaBody(BaseModel):
+    data: str                       # AAAA-MM-DD, o dia da prova
+    minutos: int = 60               # por dia
+
+
+class MarcarBody(BaseModel):
+    tarefa_id: str
+    feito: bool = True
+
+
+class PdfBody(BaseModel):
+    titulo: str = ""
+    html: str                       # o resumo como a tela desenhou (KaTeX incluso)
+    css: list[str] = []             # as folhas de estilo da página (só as do próprio Forja são usadas)
+
+
+def _revisao(f, *args, codigo: int = 400):
+    from . import estudos_revisao
+    try:
+        return getattr(estudos_revisao, f)(*args)
+    except ToolError as e:
+        raise HTTPException(codigo, str(e))
+
+
+@app.get("/api/estudos/{conv_id}/revisao")
+def estudos_revisao_painel(conv_id: int):
+    return _revisao("painel", conv_id, codigo=404)
+
+
+@app.post("/api/estudos/{conv_id}/revisao")
+def estudos_revisao_responder(conv_id: int, body: RevisarBody):
+    return _revisao("revisar", conv_id, body.chave, body.acertou, body.tirar)
+
+
+@app.post("/api/estudos/{conv_id}/flashcards")
+async def estudos_flashcards(conv_id: int, body: FlashcardsBody):
+    msg = _revisao("start", conv_id, body.quantos, body.provider, body.model)
+    return _sse_estudos(msg["id"])
+
+
+@app.delete("/api/estudos/{conv_id}/flashcards/{cartao_id}")
+def estudos_flashcard_apagar(conv_id: int, cartao_id: str):
+    return _revisao("apagar_cartao", conv_id, cartao_id)
+
+
+@app.get("/api/estudos/{conv_id}/flashcards.csv")
+def estudos_flashcards_csv(conv_id: int):
+    """Para o Anki: frente, verso e o tópico como etiqueta."""
+    texto = _revisao("anki_csv", conv_id, codigo=404)
+    return Response(texto.encode("utf-8-sig"), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''flashcards.csv"})
+
+
+@app.get("/api/estudos/{conv_id}/desempenho")
+def estudos_desempenho(conv_id: int):
+    return _revisao("desempenho", conv_id, codigo=404)
+
+
+@app.post("/api/estudos/{conv_id}/cronograma")
+def estudos_cronograma(conv_id: int, body: CronogramaBody):
+    return _revisao("planejar", conv_id, body.data, body.minutos)
+
+
+@app.post("/api/estudos/{conv_id}/cronograma/marcar")
+def estudos_cronograma_marcar(conv_id: int, body: MarcarBody):
+    return _revisao("marcar", conv_id, body.tarefa_id, body.feito)
+
+
+@app.delete("/api/estudos/{conv_id}/cronograma")
+def estudos_cronograma_apagar(conv_id: int):
+    return _revisao("apagar_plano", conv_id)
+
+
+@app.post("/api/estudos/pdf")
+async def estudos_pdf(body: PdfBody, request: Request):
+    from urllib.parse import quote
+    from . import estudos_revisao
+    try:
+        dados = await estudos_revisao.pdf(body.html, body.css, str(request.base_url), body.titulo)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    seguro = re.sub(r'[\\/:*?"<>|]+', "", body.titulo).strip()[:60] or "resumo"
+    nome = quote(f"{seguro}.pdf")
+    return Response(dados, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{nome}"})
 
 
 @app.get("/api/estudos/execucao/{message_id}")

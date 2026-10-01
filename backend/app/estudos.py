@@ -18,6 +18,7 @@ Dois motores: o do Forja (modelo local ou de API) e o Claude via MCP. No segundo
 from __future__ import annotations
 
 import asyncio
+from datetime import timezone
 import json
 import re
 import time
@@ -406,7 +407,7 @@ def _visao(itens: list[dict], teto: int) -> str:
 
 INTERNO = ("cancelar", "t0", "teto", "message_id", "conv_id", "lidas", "erro_busca", "porte", "gravar",
            "pergunta", "contexto", "texto")
-TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida")   # o que tem estado, SSE e pode ficar para o Claude
+TIPOS_EXECUCAO = ("resumo", "prova", "tentativa", "duvida", "flashcards")   # o que tem estado, SSE e pode ficar para o Claude
 
 
 def _publico(run: dict) -> dict:
@@ -462,6 +463,13 @@ def _gravar(run: dict) -> None:
     _patch(run["message_id"], content=run["texto"], meta={"estudos": _publico(run)})
 
 
+def quando(dt) -> str:
+    """created_at para a tela, com o fuso: o SQLite devolve sem (é UTC) e o navegador leria como hora local."""
+    if not dt:
+        return ""
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
+
+
 def _situacao(status: str | None) -> str:
     return "rodando" if status == "running" else (status or "pronto")
 
@@ -480,7 +488,7 @@ def estado(message_id: int) -> dict:
                 raise ToolError("Estudo não encontrado.")
             e = {"message_id": message_id, **e, "status": _situacao(m.status), "texto": m.content or ""}
             conv_id = m.conversation_id
-    if e["tipo"] in ("resumo", "duvida"):
+    if e["tipo"] in ("resumo", "duvida", "flashcards"):
         return e
     from . import estudos_prova
     return estudos_prova.para_tela(e, conv_id)
@@ -525,15 +533,15 @@ def projeto(conv_id: int) -> dict:
         conv = _conv(s, conv_id)
         titulo = conv.title
         resumos = [{"message_id": m.id, "titulo": m.meta["estudos"].get("titulo") or m.meta["estudos"].get("tema") or "",
-                    "status": _situacao(m.status), "criado": m.created_at.isoformat() if m.created_at else ""}
+                    "status": _situacao(m.status), "criado": quando(m.created_at)}
                    for m in s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                db.Message.role == "assistant").order_by(db.Message.id))
                    if ((m.meta or {}).get("estudos") or {}).get("tipo") == "resumo"]
-    from . import estudos_duvidas, estudos_prova
+    from . import estudos_duvidas, estudos_prova, estudos_revisao
     return {"id": conv_id, "titulo": titulo, "materiais": materiais(conv_id), "resumos": resumos,
             "resumo": estado(resumos[-1]["message_id"]) if resumos else None, "rodando": rodando(conv_id),
             "provas": estudos_prova.lista(conv_id), "topicos": estudos_prova.topicos(conv_id),
-            "duvidas": estudos_duvidas.fios(conv_id)}
+            "duvidas": estudos_duvidas.fios(conv_id), "revisao": estudos_revisao.painel(conv_id)}
 
 
 # ------------------------------------------------------------------ orquestração
@@ -1075,6 +1083,10 @@ async def mcp_pedidos(espera: int = 60) -> str:
         if p["tipo"] == "duvida":
             from . import estudos_duvidas
             blocos.append(estudos_duvidas.bloco_pedido(p))
+            continue
+        if p["tipo"] == "flashcards":
+            from . import estudos_revisao
+            blocos.append(estudos_revisao.bloco_pedido(p))
             continue
         if p["tipo"] != "resumo":
             blocos.append(estudos_prova.bloco_pedido(p))

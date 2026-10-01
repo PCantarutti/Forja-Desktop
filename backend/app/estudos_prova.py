@@ -521,11 +521,12 @@ def lista(conv_id: int) -> list[dict]:
         if e.get("tipo") == "tentativa":
             tentativas.setdefault(e["prova_id"], []).append(
                 {"message_id": m.id, "status": E._situacao(m.status), "nota": e.get("nota", 0), "pontos": e.get("pontos", 0),
+                 "modo": e.get("modo", "prova"),
                  "max": e.get("max", 0), "acertos": e.get("acertos", 0), "segundos": e.get("segundos", 0),
-                 "criado": m.created_at.isoformat() if m.created_at else ""})
+                 "criado": E.quando(m.created_at)})
     return [{"message_id": m.id, "titulo": m.meta["estudos"].get("titulo", "Prova"), "status": E._situacao(m.status),
              "n": len(m.meta["estudos"].get("questoes") or []), "config": m.meta["estudos"].get("config", {}),
-             "motor": m.meta["estudos"].get("motor", "forja"), "criado": m.created_at.isoformat() if m.created_at else "",
+             "motor": m.meta["estudos"].get("motor", "forja"), "criado": E.quando(m.created_at),
              "tentativas": tentativas.get(m.id, [])}
             for m in msgs if ((m.meta or {}).get("estudos") or {}).get("tipo") == "prova"]
 
@@ -894,8 +895,23 @@ def aplicar_correcao(c: dict, q: dict, pontos: float, feedback: str = "", criter
     c["pendente"] = False
 
 
-def entregar(prova_id: int, respostas: dict | None, segundos: int = 0, provider: str = "", model: str = "") -> dict:
-    """Corrige o que dá na hora; discursiva respondida vai para o modelo (ou fica para o Claude)."""
+def conferir(prova_id: int, questao_id: str, resposta=None) -> dict:
+    """Modo treino: a correção de UMA questão na hora — o gabarito e a explicação dela, e só dela. Discursiva
+    mostra a resposta esperada; a nota dela sai na entrega, como na prova."""
+    with db.session() as s:
+        m = s.get(db.Message, prova_id)
+        e = ((m.meta or {}).get("estudos") if m else None) or {}
+    q = next((x for x in e.get("questoes") or [] if x["id"] == questao_id), None) if e.get("tipo") == "prova" else None
+    if not q:
+        raise ToolError("Questão não encontrada nesta prova.")
+    revela = {k: q[k] for k in ESCONDIDO if k in q}
+    return {**revela, "certa": None if q["tipo"] == "disc" else _corrigir_fechada(q, resposta)["certa"]}
+
+
+def entregar(prova_id: int, respostas: dict | None, segundos: int = 0, provider: str = "", model: str = "",
+             modo: str = "prova") -> dict:
+    """Corrige o que dá na hora; discursiva respondida vai para o modelo (ou fica para o Claude). `modo` treino
+    só marca a entrega (o desempenho separa uma da outra)."""
     respostas = respostas or {}
     with db.session() as s:
         m = s.get(db.Message, prova_id)
@@ -921,6 +937,7 @@ def entregar(prova_id: int, respostas: dict | None, segundos: int = 0, provider:
         extrator, escritor, claude = E.modelos(provider, model)
     status = ("aguardando" if claude else "running") if pendentes else "pronto"
     publico = {"tipo": "tentativa", "prova_id": prova_id, "titulo": e.get("titulo", "Prova"), "segundos": max(0, E._int(segundos)),
+               "modo": "treino" if modo == "treino" else "prova",
                "correcao": correcao, "motor": "claude" if claude else "forja", "etapa": "corrigindo" if pendentes else "pronto",
                "status": {"running": "rodando"}.get(status, status), "aviso": "", **_placar(questoes, correcao),
                "stats": E.stats_novos(extrator, escritor)}

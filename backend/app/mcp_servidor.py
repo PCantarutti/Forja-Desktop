@@ -420,7 +420,7 @@ INSTRUCOES = (
     "no painel do Forja em cada etapa. Se um resultado trouxer '[Mensagem do usuário…]', ela vale como pedido "
     "dele: leve em conta antes de seguir. "
     "Tela Estudos (não precisa de `path`): ferramentas estudos_* — crie a matéria, anexe material, leia por "
-    "páginas, pesquise com a sua própria busca, grave o resumo e a prova, corrija discursivas e responda dúvidas; estudos_pedidos traz "
+    "páginas, pesquise com a sua própria busca, grave o resumo, a prova e flashcards, corrija discursivas, responda dúvidas e dicas, veja o desempenho e monte o cronograma; estudos_pedidos traz "
     "o que o usuário pediu na tela com o motor \"Claude (MCP)\".")
 
 
@@ -611,6 +611,32 @@ def _servidor():
         estudos_pedidos). `resposta` em Markdown; `modelo` = o seu nome."""
         from . import estudos_duvidas
         return estudos_duvidas.mcp_responder(duvida_id, resposta, modelo)
+
+    @mcp.tool()
+    async def estudos_salvar_flashcards(cartoes: list[dict], conv_id: int = 0, pedido_id: int = 0, modelo: str = "") -> str:
+        """Grava flashcards num estudo: cartoes = [{frente, verso, topico}]. Com `pedido_id` atende um pedido da
+        tela (estudos_pedidos); sem ele, use `conv_id`. Cartão repetido (mesma frente) fica de fora."""
+        from . import estudos_revisao
+        return estudos_revisao.mcp_salvar(cartoes, conv_id, pedido_id, modelo)
+
+    @mcp.tool()
+    async def estudos_desempenho(conv_id: int) -> str:
+        """Notas de cada entrega, acerto por tópico, pontos fracos, revisão (erros e cartões que vencem hoje) e o
+        cronograma do estudo."""
+        from . import estudos_revisao
+        return estudos_revisao.mcp_desempenho(conv_id)
+
+    @mcp.tool()
+    async def estudos_cronograma(conv_id: int, data: str, minutos: int = 60) -> str:
+        """Monta (ou refaz) o plano diário até a data da prova (AAAA-MM-DD), com `minutos` de estudo por dia:
+        um tópico por dia, os fracos mais vezes, revisão diária e um simulado por semana e na véspera."""
+        from . import estudos_revisao
+        try:
+            p = estudos_revisao.planejar(conv_id, data, minutos)
+        except Exception as e:
+            return f"ERRO: {e}"
+        return (f"Cronograma de {len(p['dias'])} dia(s) até {p['data']} gravado: aparece na aba Desempenho, e o "
+                f"celular avisa o do dia." + estudos._aviso_pedidos())
 
     @mcp.tool()
     async def estudos_pedidos(espera: int = 60) -> str:
