@@ -383,6 +383,9 @@ def validar(q, tipo: str | None = None) -> tuple[dict | None, str]:
         correta = _letra(q.get("correta"), len(alts))
         if correta is None:
             return None, "sem a alternativa correta"
+        if len(alts[correta]) >= 25 and _norm(alts[correta]).strip(" .") in _norm(enunciado):
+            # "Assinale a pontuação correta para: «frase já pontuada certo»" e a frase é a alternativa B
+            return None, "o enunciado já traz a resposta certa"
         por = q.get("por_alternativa") or []
         if isinstance(por, dict):   # {"A": "...", ...}
             por = [por.get(LETRAS[i]) or por.get(LETRAS[i].lower()) or "" for i in range(len(alts))]

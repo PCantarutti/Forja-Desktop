@@ -250,6 +250,15 @@ def test_json_torto_ganha_uma_chance_de_conserto(monkeypatch):
     assert len(_cheia(pid)["questoes"]) == 1
 
 
+def test_enunciado_que_traz_a_resposta_certa_e_recusado():
+    frase = "O plano de modernização da rede, que inclui a substituição de equipamentos, vai reduzir custos."
+    q = {"tipo": "me", "enunciado": f"Assinale a pontuação correta para a frase: «{frase}»",
+         "alternativas": [frase, frase.replace(", que", " que"), frase.replace("equipamentos,", "equipamentos"), "Nenhuma vírgula."],
+         "correta": 0, "explicacao": "Oração explicativa entre vírgulas."}
+    assert P.validar(q)[1] == "o enunciado já traz a resposta certa"
+    assert P.validar({**q, "enunciado": "Assinale a frase com a pontuação correta."})[0]   # sem a frase no enunciado: ok
+
+
 def test_alternativa_nenhuma_das_anteriores_e_letra_na_explicacao():
     assert "anteriores" in P.validar({**_me(1), "alternativas": ["x", "y", "z", "Nenhuma das anteriores"]})[1]
     assert "anteriores" in P.validar({**_me(1), "alternativas": ["x", "y", "z", "Todas as alternativas"]})[1]
