@@ -829,6 +829,7 @@ def projeto(conv_id: int) -> dict:
         conv = _conv(s, conv_id)
         titulo = conv.title
         resumos = [{"message_id": m.id, "titulo": m.meta["estudos"].get("titulo") or m.meta["estudos"].get("tema") or "",
+                    "tema": m.meta["estudos"].get("tema") or "",
                     "status": _situacao(m.status), "criado": quando(m.created_at)}
                    for m in filtrar(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id,
                                                                        db.Message.role == "assistant").order_by(db.Message.id)))

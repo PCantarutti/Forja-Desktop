@@ -335,7 +335,7 @@ export type EstudosProjeto = {
   materias: EstudosMateria[];
   materia: string | null;   // a matéria desta leitura (null = "Tudo")
   materiais: EstudosMaterial[];
-  resumos: { message_id: number; titulo: string; status: string; criado: string }[];
+  resumos: { message_id: number; titulo: string; tema: string; status: string; criado: string }[];
   resumo: EstudosEstado | null;
   rodando: number | null;
   provas: EstudosProvaResumo[];

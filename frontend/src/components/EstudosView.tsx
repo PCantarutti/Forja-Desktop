@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import { auth, api, enviarArquivo, setMateriaEstudos, streamSSE } from "../api";
 import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto, PesquisaFonte } from "../types";
-import { Activity, Bubble, Check, CheckSquare, Clipboard, Copy, Cube, Download, ExternalLink, Gauge, Globe, Livro, Paperclip, Repetir, Search, Sliders, X } from "./icons";
+import { Activity, Bubble, Check, Lampada, CheckSquare, Clipboard, Copy, Cube, Download, ExternalLink, Gauge, Globe, Livro, Paperclip, Repetir, Search, Sliders, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada, redondo } from "./Composer";
@@ -180,6 +180,7 @@ export default function EstudosView(props: {
   const irDepois = useRef<{ i: number; titulos: string; texto?: string } | null>(null);
   const [estado, setEstado] = useState<EstudosEstado | null>(null);
   const [tema, setTema] = useState("");
+  const [marcados, setMarcados] = useState<string[]>([]);   // tópicos marcados para o próximo resumo
   const [prefs, setPrefs] = useState<EstudosPreferencias>(() => ler(KEY_PREFS, PADRAO));
   const [web, setWeb] = useState(() => ler(KEY_PREFS + ".web", { v: true }).v);
   const [profundidade, setProfundidade] = useState<EstudosEstado["profundidade"]>(
@@ -286,6 +287,7 @@ export default function EstudosView(props: {
     setTerminou(null);
     setEstado(null);
     setTema("");
+    setMarcados([]);
   }
 
   function usarMateria(m: string | null) {
@@ -344,6 +346,40 @@ export default function EstudosView(props: {
     }
   }
   const doEdital = projeto?.materias.find((m) => m.id === materia)?.topicos ?? [];
+  const chave = (t: string) => t.trim().toLowerCase();
+  // Uma aba por tema; a versão mais nova de cada abre (a ordem é a do primeiro resumo de cada tema)
+  const grupos: { tema: string; mids: number[] }[] = [];
+  for (const r of projeto?.resumos ?? []) {
+    const t = r.tema || r.titulo || "Resumo";
+    const g = grupos.find((x) => chave(x.tema) === chave(t));
+    if (g) g.mids.push(r.message_id); else grupos.push({ tema: t, mids: [r.message_id] });
+  }
+  const grupoAberto = grupos.find((g) => estado && g.mids.includes(estado.message_id));
+  const resumidos = new Set(grupos.flatMap((g) => g.tema.split(";").map(chave)));
+  const todosTopicos = [...doEdital, ...grupos.flatMap((g) => g.tema.split(";").map((x) => x.trim()))
+    .filter((t) => t && !doEdital.some((d) => chave(d) === chave(t)))]
+    .filter((t, i, a) => a.findIndex((x) => chave(x) === chave(t)) === i);
+  function marcarTopico(t: string) {
+    const novos = marcados.includes(t) ? marcados.filter((x) => x !== t) : [...marcados, t];
+    setMarcados(novos);
+    setTema(novos.join("; "));
+  }
+  /** Os tópicos de agora pelo plano: os pendentes do cronograma desta matéria (os fracos na frente), sem resumo ainda. */
+  async function sugerir() {
+    const nome = projeto?.materias.find((m) => m.id === materia)?.nome;
+    const hoje = new Date().toLocaleDateString("sv-SE");
+    const doPlano = (projeto?.revisao?.plano?.dias ?? []).filter((d) => d.dia >= hoje)
+      .flatMap((d) => d.tarefas).filter((t) => t.tipo === "estudar" && !t.feito && t.topico)
+      .map((t) => { const [m, ...r] = t.topico.split(" · "); return r.length ? (m === nome ? r.join(" · ") : "") : t.topico; })
+      .filter(Boolean);
+    let fracos: string[] = [];
+    try { fracos = (await api.get<{ fracos: string[] }>(`/estudos/${props.conv}/desempenho`)).fracos ?? []; } catch { /* sem desempenho, segue o plano */ }
+    const ordem = [...fracos.filter((f) => doPlano.some((t) => chave(t) === chave(f))), ...doPlano, ...fracos, ...doEdital];
+    const escolha = ordem.filter((t, i, a) => !resumidos.has(chave(t)) && a.findIndex((x) => chave(x) === chave(t)) === i).slice(0, 3);
+    if (!escolha.length) return props.onError("Nada pendente no plano para esta matéria: todos os tópicos já têm resumo.");
+    setMarcados(escolha);
+    setTema(escolha.join("; "));
+  }
   const simuladoFracos = () => { setProvaPendente({ topicos: [], instrucoes: "" }); setAba("simulado"); };
   /** O "ler" do cronograma: a matéria do tópico ("Português · Crase"), com o tópico como tema do resumo. */
   function irDoCronograma(a: "resumo" | "revisao", topico?: string) {
@@ -428,8 +464,8 @@ export default function EstudosView(props: {
     }
   }
 
-  async function estudar() {
-    const t = tema.trim();
+  async function estudar(texto?: string) {
+    const t = (texto ?? tema).trim();
     if (!t || rodando) return;
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
     try {
@@ -439,6 +475,7 @@ export default function EstudosView(props: {
       corte.current = ctl;
       acompanhando.current = -1;
       escolhida.current = 0;
+      setMarcados([]);
       setTerminou(null);
       setPainel("");
       try {
@@ -462,6 +499,17 @@ export default function EstudosView(props: {
   async function parar() {
     if (estado) await api.post(`/estudos/execucao/${estado.message_id}/cancelar`, {}).catch(() => {});
     if (aguardando) carregar(props.conv);
+  }
+
+  function novoTopico() {
+    corte.current?.abort();
+    acompanhando.current = 0;
+    escolhida.current = -1;
+    statusAnterior.current = "";
+    setTerminou(null);
+    setEstado(null);
+    setTema("");
+    setMarcados([]);
   }
 
   function abrirVersao(mid: number) {
@@ -544,7 +592,7 @@ export default function EstudosView(props: {
   const atual = estado?.etapa === "pronto" ? etapas.length : etapas.findIndex((x) => x.id === estado?.etapa);
   const secoes = estado?.texto ? sumario(estado.texto) : [];
   // Painel lateral do resumo e progresso de leitura: estado só desta tela, não vai para a API
-  const [railTab, setRailTab] = useState<"sumario" | "material" | "cai" | "web" | null>(null);
+  const [railTab, setRailTab] = useState<"sumario" | "topicos" | "material" | "cai" | "web" | null>(null);
   const [lido, setLido] = useState(0);
   const [secAtual, setSecAtual] = useState(0);
   const rolagem = useRef<HTMLDivElement>(null);
@@ -562,7 +610,8 @@ export default function EstudosView(props: {
   useEffect(() => { requestAnimationFrame(medirLeitura); }, [estado?.message_id, !!estado?.texto, mapa]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fontesWeb = estado?.fontes ?? [];
   const perfil = estado?.perfil;
-  const trilhos = ([["sumario", "Sumário", secoes.length > 1], ["material", `Material · ${materiais.length}`, true],
+  const trilhos = ([["sumario", "Sumário", secoes.length > 1], ["topicos", "Tópicos", !!estado && todosTopicos.length > 0],
+                    ["material", `Material · ${materiais.length}`, true],
                     ["cai", "O que cai", !!perfil && (!!perfil.banca || !!perfil.topicos?.length)],
                     ["web", `Web · ${fontesWeb.filter((f) => f.status === "util").length}`, !!fontesWeb.length]] as const)
     .filter((t) => t[2]);
@@ -675,6 +724,31 @@ export default function EstudosView(props: {
       </span>
     </div>
   ) : null;
+  const blocoTopicos = (
+    <div className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap gap-1.5">
+        {todosTopicos.map((t) => (
+          <button key={t} aria-pressed={marcados.includes(t)} onClick={() => marcarTopico(t)}
+                  className={`${pilula} h-auto max-w-full py-1 text-left whitespace-normal ${marcados.includes(t) ? pilulaLigada : ""}`}
+                  title={resumidos.has(chave(t)) ? "Já tem resumo (aba no topo); marque para fazer de novo" : "Marcar para o resumo"}>
+            {resumidos.has(chave(t)) && <Check className="size-3 text-ok" />}{t}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button className={btn} onClick={sugerir} title="Os tópicos pendentes do seu cronograma, com os pontos fracos na frente">
+          <Lampada className="size-3.5" /> Sugerir pelo plano
+        </button>
+        {!!marcados.length && (
+          <button className={btnPrimary} disabled={rodando || !!lendo} onClick={() => estudar(marcados.join("; "))}>
+            Resumir {marcados.length === 1 ? "o tópico" : `${marcados.length} tópicos`}
+          </button>
+        )}
+        {!!marcados.length && <button className="text-faint hover:text-fg" onClick={() => { setMarcados([]); setTema(""); }}>limpar</button>}
+      </div>
+    </div>
+  );
+
   const abas = (
     <div className="flex shrink-0 items-center gap-[22px] overflow-x-auto border-b border-line px-7 text-[13px] [scrollbar-width:none]!" role="tablist" aria-label="Estudos">
       {contexto}
@@ -815,7 +889,22 @@ export default function EstudosView(props: {
         </button>
       )}
       <div className="flex min-w-0 flex-1 flex-col">
-      {estado && (estado.texto || (!rodando && (projeto?.resumos.length ?? 0) > 1)) && (
+      {!!grupos.length && (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-line px-6 pt-2 [scrollbar-width:none]!" role="tablist" aria-label="Resumos da matéria">
+          {grupos.map((g) => (
+            <button key={g.tema} role="tab" aria-selected={grupoAberto === g} onClick={() => abrirVersao(g.mids.at(-1)!)} title={g.tema}
+                    className={`-mb-px max-w-[220px] shrink-0 truncate rounded-t-lg border border-b-0 px-3 py-1.5 text-[12.5px] ${
+                      grupoAberto === g ? "border-line bg-bg text-fg" : "border-transparent text-muted hover:text-fg"}`}>
+              {g.tema}
+            </button>
+          ))}
+          <button className={`shrink-0 rounded-t-lg px-3 py-1.5 text-[12.5px] ${!estado ? "text-fg" : "text-faint hover:text-fg"}`}
+                  onClick={novoTopico} disabled={rodando} title="Resumo de outro tópico (os que você já tem continuam nas abas)">
+            + Novo tópico
+          </button>
+        </div>
+      )}
+      {estado && (estado.texto || (!rodando && (grupoAberto?.mids.length ?? 0) > 1)) && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-2 border-b border-line px-6 py-2.5">
             {estado?.texto && secoes.length > 1 && (
             <div className="flex rounded-full border border-line p-0.5 text-xs" role="radiogroup" aria-label="Ver o resumo como">
@@ -840,11 +929,11 @@ export default function EstudosView(props: {
                 <Download className="size-3.5" /> {gerandoPdf ? "Gerando o PDF…" : "PDF"}
               </button>
             </>}
-            {!rodando && (projeto?.resumos.length ?? 0) > 1 && (
+            {!rodando && (grupoAberto?.mids.length ?? 0) > 1 && (
               <select value={estado.message_id} onChange={(e) => abrirVersao(Number(e.target.value))}
                       title="Resumos anteriores deste estudo"
                       className="rounded-lg border border-line bg-bg px-2 py-1 text-[12px] text-fg-2 focus:border-focus focus:outline-none">
-                {projeto!.resumos.map((r, i) => (
+                {projeto!.resumos.filter((r) => grupoAberto!.mids.includes(r.message_id)).map((r, i) => (
                   <option key={r.message_id} value={r.message_id}>
                     Versão {i + 1}{r.criado ? ` · ${new Date(r.criado).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` : ""}{r.status !== "pronto" ? ` · ${r.status}` : ""}
                   </option>
@@ -866,7 +955,7 @@ export default function EstudosView(props: {
         </div>
       )}
       <div ref={rolagem} className="relative min-h-0 flex-1 overflow-y-auto" onScroll={() => { if (selecao) setSelecao(null); medirLeitura(); }}>
-        <div className="mx-auto flex max-w-[700px] flex-col gap-3 px-8 pt-7 pb-12">
+        <div className={`mx-auto flex flex-col gap-3 px-8 pt-7 pb-12 ${estado?.texto && mapa && secoes.length > 1 ? "max-w-none" : "max-w-[860px]"}`}>
             {!estado && (
               <div className="rounded-xl border border-line bg-surface p-5 text-xs text-muted">
                 <p className="text-[15px] font-semibold text-fg">Seu material, um resumo feito para você estudar.</p>
@@ -882,14 +971,10 @@ export default function EstudosView(props: {
                     <Clipboard className="size-3.5" /> Começar pelo edital do concurso
                   </button>
                 )}
-                {!!doEdital.length && (
+                {!!todosTopicos.length && (
                   <div className="mt-3 border-t border-line pt-2.5">
-                    <p className="mb-1.5 text-faint">Do edital · toque num tópico para pedir o resumo dele</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {doEdital.map((t) => (
-                        <button key={t} className={pilula} onClick={() => setTema(t)} title="Usar como tema do resumo">{t}</button>
-                      ))}
-                    </div>
+                    <p className="mb-1.5 text-faint">{doEdital.length ? "Do edital" : "Tópicos"} · toque em um ou mais tópicos para pedir o resumo deles</p>
+                    {blocoTopicos}
                   </div>
                 )}
               </div>
@@ -1006,7 +1091,7 @@ export default function EstudosView(props: {
       </div>
 
       <div className="shrink-0 px-5 pb-4">
-        <div className="mx-auto max-w-[760px]">
+        <div className="mx-auto max-w-[860px]">
           {painel === "colar" && (
             <div className={`${card} mb-2 flex flex-col gap-2 text-xs`}>
               <div className="flex items-center">
@@ -1095,7 +1180,7 @@ export default function EstudosView(props: {
               )}
               <DireitaPrompt>
                 {botaoModelos}
-                <BotaoEnviar rodando={rodando} onParar={parar} onEnviar={estudar} titulo="Estudar" desabilitado={!tema.trim() || !!lendo} />
+                <BotaoEnviar rodando={rodando} onParar={parar} onEnviar={() => estudar()} titulo="Estudar" desabilitado={!tema.trim() || !!lendo} />
               </DireitaPrompt>
             </RodapePrompt>
           </CaixaPrompt>
@@ -1136,6 +1221,7 @@ export default function EstudosView(props: {
             </div>
             <p className="mt-2 text-[11px] leading-relaxed text-faint">Selecione um trecho do texto para pedir outra explicação nas Dúvidas.</p>
           </>)}
+          {rail === "topicos" && blocoTopicos}
           {rail === "material" && (<>
             {!!lendo && <span className="animate-pulse text-xs text-sky-300">lendo {lendo}…</span>}
               {materiais.map((m) => (
