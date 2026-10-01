@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import "katex/dist/katex.min.css";
 import { api, enviarArquivo, streamSSE } from "../api";
 import type { EstudosEstado, EstudosMaterial, EstudosPreferencias, EstudosProjeto, PesquisaFonte } from "../types";
-import { Check, Clipboard, Copy, Cube, Download, ExternalLink, Globe, Livro, Paperclip, Search, Sliders, X } from "./icons";
+import { Bubble, Check, Clipboard, Copy, Cube, Download, ExternalLink, Globe, Livro, Paperclip, Search, Sliders, X } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, pilula, pilulaLigada, redondo } from "./Composer";
@@ -10,6 +10,7 @@ import { Menu } from "./Controls";
 import { matematica, sumario } from "./estudosTexto";
 import Sinapse from "./Sinapse";
 import Provas from "./EstudosProva";
+import Duvidas, { type Pendente } from "./EstudosDuvidas";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
@@ -135,7 +136,9 @@ export default function EstudosView(props: {
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [mcp, setMcp] = useState<McpServidor | null>(null);
-  const [aba, setAba] = useState<"resumo" | "provas">("resumo");
+  const [aba, setAba] = useState<"resumo" | "provas" | "duvidas">("resumo");
+  const [pendente, setPendente] = useState<Pendente | null>(null);   // trecho do resumo a explicar de outro jeito
+  const [selecao, setSelecao] = useState<{ texto: string; x: number; y: number } | null>(null);
   const statusAnterior = useRef("");
   const acompanhando = useRef(0);   // message_id ouvido por SSE; -1 = o POST de estudar está no ar
   const escolhida = useRef(0);      // versão antiga aberta pelo seletor (0 = a mais recente)
@@ -435,7 +438,8 @@ export default function EstudosView(props: {
   );
   const abas = (
     <div className="flex gap-1 self-start rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
-      {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`]] as const).map(([id, nome]) => (
+      {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
+         ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`]] as const).map(([id, nome]) => (
         <button key={id} role="tab" aria-selected={aba === id} onClick={() => setAba(id)}
                 className={`rounded-full px-3 py-1 ${aba === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
           {nome}
@@ -443,6 +447,31 @@ export default function EstudosView(props: {
       ))}
     </div>
   );
+
+  if (aba === "duvidas" && props.conv !== null && projeto) {
+    return (
+      <Duvidas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos} abas={abas}
+               botaoModelos={botaoModelos} painelModelos={painel === "modelos" ? painelModelos : null}
+               pendente={pendente} onPendenteUsado={() => setPendente(null)} onError={props.onError} />
+    );
+  }
+
+  /** Trecho selecionado no resumo: aparece o "Explicar de outro jeito" em cima dele. */
+  function marcar() {
+    const sel = window.getSelection();
+    const texto = sel?.toString().trim() ?? "";
+    if (!sel || texto.length < 12 || !resumoRef.current?.contains(sel.anchorNode)) return setSelecao(null);
+    const r = sel.getRangeAt(0).getBoundingClientRect();
+    setSelecao({ texto: texto.slice(0, 1500), x: r.left + r.width / 2, y: r.top });
+  }
+
+  function explicarTrecho() {
+    if (!selecao) return;
+    setPendente({ pergunta: "Não entendi este trecho. Explique de outro jeito, mais simples, com um exemplo.", trecho: selecao.texto });
+    setSelecao(null);
+    window.getSelection()?.removeAllRanges();
+    setAba("duvidas");
+  }
 
   if (aba === "provas" && props.conv !== null && projeto) {
     return (
@@ -460,7 +489,15 @@ export default function EstudosView(props: {
       <input ref={arquivo} type="file" multiple hidden
              accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.html,.htm,.json,.png,.jpg,.jpeg,.webp,.bmp"
              onChange={(e) => { anexar(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      {selecao && (
+        // fixo na tela, em cima do trecho; some ao rolar ou ao clicar em outro lugar
+        <button onMouseDown={(e) => e.preventDefault()} onClick={explicarTrecho}
+                style={{ left: selecao.x, top: Math.max(8, selecao.y - 40) }}
+                className={`${btnPrimary} fixed z-40 -translate-x-1/2 text-xs shadow-lg`}>
+          <Bubble className="size-3.5" /> Explicar de outro jeito
+        </button>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" onScroll={() => selecao && setSelecao(null)}>
         <div className="mx-auto flex max-w-6xl flex-col items-start gap-3 xl:flex-row">
           <div className="flex w-full min-w-0 flex-1 flex-col gap-3">
             {projeto && abas}
@@ -563,7 +600,7 @@ export default function EstudosView(props: {
             )}
 
             {estado?.texto && (
-              <div ref={resumoRef} className={`${card} px-6 py-5`}>
+              <div ref={resumoRef} onMouseUp={marcar} onKeyUp={marcar} className={`${card} px-6 py-5`}>
                 <Markdown text={matematica(estado.texto)} math />
               </div>
             )}

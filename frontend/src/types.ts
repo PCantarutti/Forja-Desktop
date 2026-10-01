@@ -310,6 +310,19 @@ export type EstudosProjeto = {
   rodando: number | null;
   provas: EstudosProvaResumo[];
   topicos: string[];   // os que a prova pode cobrar (do último resumo com texto)
+  duvidas: Record<string, number>;   // perguntas por conversa: "geral" e "questao:<entrega>:<id>"
+};
+
+export type EstudosDuvidaMsg = {
+  id: number;
+  role: "user" | "assistant";
+  texto: string;
+  status: "rodando" | "aguardando" | "pronto" | "erro" | "cancelado";
+  trecho: string;   // trecho do resumo marcado ("explique de outro jeito")
+  motor: string;
+  aviso: string;
+  modelo: string;
+  criado: string;
 };
 
 export type EstudosTipoQuestao = "me" | "vf" | "disc";

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, streamSSE } from "../api";
 import type { EstudosProjeto, EstudosProva, EstudosProvaConfig, EstudosQuestao, EstudosTentativa, PesquisaFonte }
   from "../types";
-import { ArrowLeft, ArrowRight, Check, Clock, Copy, Pin, Refresh, Trash, X } from "./icons";
+import { ArrowLeft, ArrowRight, Bubble, Check, Clock, Copy, Pin, Refresh, Trash, X } from "./icons";
+import { ConversaDuvida } from "./EstudosDuvidas";
 import { Markdown } from "./MessageView";
 import { BotaoEnviar, CaixaPrompt, DireitaPrompt, RodapePrompt, campoPrompt, larguraNumero, numeroPilula, pilula, pilulaLigada }
   from "./Composer";
@@ -229,7 +230,11 @@ function FazerProva({ prova, onEntregar, onSair }: {
 
 // ------------------------------------------------------------------ resultado
 
-function Resultado({ t, onRefazer, onVoltar }: { t: EstudosTentativa; onRefazer: () => void; onVoltar: () => void }) {
+/** O que a conversa de dúvidas embutida na questão precisa. */
+type Duvida = { conv: number; modelos: Modelos; carimbo?: string; contagem: Record<string, number>; onError: (e: string) => void };
+
+function Resultado({ t, onRefazer, onVoltar, duvida }: { t: EstudosTentativa; onRefazer: () => void; onVoltar: () => void;
+                                                          duvida: Duvida }) {
   const [filtro, setFiltro] = useState<"todas" | "erradas" | "certas">("todas");
   const corrigindo = t.status === "rodando" || t.status === "aguardando";
   const qs = t.questoes.filter((q) => {
@@ -279,13 +284,18 @@ function Resultado({ t, onRefazer, onVoltar }: { t: EstudosTentativa; onRefazer:
         ))}
       </div>
 
-      {qs.map((q) => <QuestaoCorrigida key={q.id} q={q} n={t.questoes.indexOf(q) + 1} t={t} />)}
+      {qs.map((q) => <QuestaoCorrigida key={q.id} q={q} n={t.questoes.indexOf(q) + 1} t={t} duvida={duvida} />)}
     </div>
   );
 }
 
-function QuestaoCorrigida({ q, n, t }: { q: EstudosQuestao; n: number; t: EstudosTentativa }) {
+function QuestaoCorrigida({ q, n, t, duvida }: { q: EstudosQuestao; n: number; t: EstudosTentativa; duvida: Duvida }) {
   const c = t.correcao[q.id];
+  const fio = `questao:${t.message_id}:${q.id}`;
+  const feitas = duvida.contagem[fio] ?? 0;
+  const [aberta, setAberta] = useState(false);
+  const sugestoes = [c?.certa === true ? "Por que essa é a certa?" : "Por que a minha está errada?",
+    "Explique de outro jeito", "Me dê um exemplo parecido", "Acho que o gabarito está errado"];
   const marca = c?.pendente ? ["…", "text-sky-300", "corrigindo"] : c?.certa === true ? ["✓", "text-ok", "certa"]
     : c?.certa === null ? ["½", "text-amber-300", "parcial"] : ["✕", "text-red-300", "errada"];
   return (
@@ -363,6 +373,19 @@ function QuestaoCorrigida({ q, n, t }: { q: EstudosQuestao; n: number; t: Estudo
           </p>
         </div>
       )}
+
+      <div className="mt-3 border-t border-line pt-3">
+        <button className={`${btn} text-xs`} aria-expanded={aberta} onClick={() => setAberta((v) => !v)}>
+          <Bubble className="size-3.5" /> {aberta ? "Fechar a conversa" : "Perguntar sobre esta questão"}
+          {!!feitas && !aberta && <span className="rounded-full bg-raised px-1.5 font-mono text-[10.5px] text-muted">{feitas}</span>}
+        </button>
+        {aberta && (
+          <div className="mt-3">
+            <ConversaDuvida conv={duvida.conv} fio={fio} questao={{ tentativa_id: t.message_id, questao_id: q.id }}
+                            carimbo={duvida.carimbo} modelos={duvida.modelos} sugestoes={sugestoes} compacta onError={duvida.onError} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -558,7 +581,9 @@ export default function Provas(props: {
               {corrigindo?.message_id === vista.t.message_id && (corrigindo.status === "aguardando"
                 ? <AguardandoClaude texto="As discursivas vão ser corrigidas pelo Claude." onCancelar={parar} />
                 : <SinapseCorrecao t={corrigindo} />)}
-              <Resultado t={vista.t} onVoltar={() => setVista({ tipo: "lista" })} onRefazer={() => fazer(vista.t.prova_id)} />
+              <Resultado t={vista.t} onVoltar={() => setVista({ tipo: "lista" })} onRefazer={() => fazer(vista.t.prova_id)}
+                         duvida={{ conv: props.conv, modelos: props.modelos, carimbo: props.carimbo,
+                                   contagem: props.projeto.duvidas ?? {}, onError: props.onError }} />
             </>
           )}
 
