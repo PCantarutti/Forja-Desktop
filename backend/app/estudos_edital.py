@@ -312,6 +312,36 @@ async def pagina_renderizada(url: str) -> tuple[str, list[dict]]:
     return re.sub(r"\n{3,}", "\n\n", texto or "").strip()[:8000], links
 
 
+def nome_do_concurso(pagina: str, cargo: str = "") -> str:
+    """"Concurso Público do Município de Contagem/MG — Analista de TI": a linha da página que fala do concurso
+    (ou do edital) e o cargo. "" se a página não tiver uma."""
+    linha = next((l.strip() for l in (pagina or "").splitlines()
+                  if not l.startswith("===") and re.search(r"(?i)concurso|processo seletivo|edital", l) and 12 <= len(l.strip()) <= 140), "")
+    linha = re.sub(r"\s*[-–]\s*EDITAL\s+N[º°o.]*\s*[\d/.-]+\s*$", "", linha, flags=re.I).strip()
+    if not linha:
+        return ""
+    if linha.isupper():   # caixa alta da página: "Município de Contagem/MG" (preposição baixa, UF alta)
+        def palavra(w: str) -> str:
+            if w in ("de", "do", "da", "dos", "das", "e"):
+                return w
+            return "/".join(p.upper() if len(p) == 2 and i else p.capitalize() for i, p in enumerate(w.split("/")))
+        linha = " ".join(palavra(w) for w in linha.lower().split())
+    return (f"{linha} — {cargo}" if cargo else linha)[:120]
+
+
+def _nomear(conv_id: int, pagina: str, cargo: str) -> None:
+    """O objetivo que ainda se chama "Nova conversa" ganha o nome do concurso (a página do concurso diz)."""
+    nome = nome_do_concurso(pagina, cargo)
+    if not nome:
+        return
+    with E.db.session() as s:
+        c = E._conv(s, conv_id)
+        if c.title in ("", "Nova conversa"):
+            c.title = nome
+            E._tocar(s, conv_id)
+            s.commit()
+
+
 def texto_de_link(url: str, cancelado=None) -> dict:
     """{texto, pagina, anexos}: o PDF do link, ou os anexos que importam da página do concurso, baixados (só PDF,
     pelo download checado da busca de provas) e lidos. O texto da página vai junto: ele traz a data da prova."""
@@ -409,6 +439,7 @@ async def _rodar(run: dict, spec: dict) -> None:
             run["anexos"] = r["anexos"]
             run["_partes"] = em_lotes(trechos(r["texto"], run["cargo"]))
             run["_colunas"] = quadro_do_cargo(r["texto"], run["cargo"])
+            _nomear(conv_id, r["pagina"], run["cargo"])
             run.update(pedacos=len(run["_partes"]), etapa="lendo")
             E._gravar(run)
         await design._garantir_local({"spec": spec})

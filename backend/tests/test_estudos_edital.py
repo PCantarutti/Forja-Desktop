@@ -211,3 +211,9 @@ def test_quadro_de_provas_lido_sem_modelo_e_corrige_o_peso():
     ED.corrigir_pelo_quadro(achadas, ti)
     assert {v["nome"]: v["questoes"] for v in achadas.values()} == {
         "Língua Portuguesa": 20, "Raciocínio Lógico": 10, "Conhecimentos Gerais do Município": 10, "Conhecimentos Específicos": 60}
+
+
+def test_objetivo_ganha_o_nome_do_concurso():
+    pagina = "CONCURSOS\nÁrea do Candidato\nMUNICÍPIO DE CONTAGEM/MG\nCONCURSO PÚBLICO DO MUNICÍPIO DE CONTAGEM/MG - EDITAL Nº 01/2026\n"
+    assert ED.nome_do_concurso(pagina, "Analista de TI") == "Concurso Público do Município de Contagem/MG — Analista de TI"
+    assert ED.nome_do_concurso("Home\nContato", "x") == ""
