@@ -441,7 +441,7 @@ def _lembrete(conv_id: int, hoje: date) -> str:
 def lembrar(agora: datetime | None = None) -> int:
     """Um aviso por dia por estudo com cronograma, a partir das HORA_AVISO. Devolve quantos foram."""
     agora = agora or datetime.now()
-    if agora.hour < HORA_AVISO:
+    if agora.hour < HORA_AVISO or not mobile.devices():   # sem celular pareado (o web nunca tem), nada a fazer
         return 0
     hoje = agora.date()
     with db.session() as s:

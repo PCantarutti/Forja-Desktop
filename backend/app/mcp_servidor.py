@@ -635,8 +635,10 @@ def _servidor():
             p = estudos_revisao.planejar(conv_id, data, minutos)
         except Exception as e:
             return f"ERRO: {e}"
-        return (f"Cronograma de {len(p['dias'])} dia(s) até {p['data']} gravado: aparece na aba Desempenho, e o "
-                f"celular avisa o do dia." + estudos._aviso_pedidos())
+        from . import mobile
+        aviso = ", e o celular avisa o do dia" if mobile.devices() else ""   # no Forja web não há celular
+        return (f"Cronograma de {len(p['dias'])} dia(s) até {p['data']} gravado: aparece na aba Desempenho{aviso}."
+                + estudos._aviso_pedidos())
 
     @mcp.tool()
     async def estudos_pedidos(espera: int = 60) -> str:

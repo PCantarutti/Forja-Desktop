@@ -240,6 +240,7 @@ def test_cronograma_ate_a_prova_com_simulado_e_mais_dias_para_o_fraco(monkeypatc
 def test_lembrete_uma_vez_por_dia_e_so_depois_das_8(monkeypatch):
     avisos = []
     monkeypatch.setattr(R.mobile, "avisa", lambda titulo, texto, conv_id=None: avisos.append((titulo, texto, conv_id)))
+    monkeypatch.setattr(R.mobile, "devices", lambda: ["ExponentPushToken[x]"])
     conv = _estudo()
     R.planejar(conv, (date.today() + timedelta(days=3)).isoformat())
     cedo = datetime.combine(date.today(), datetime.min.time()).replace(hour=6)
@@ -252,8 +253,17 @@ def test_lembrete_uma_vez_por_dia_e_so_depois_das_8(monkeypatch):
     assert len([a for a in avisos if a[2] == conv]) == 1   # o de hoje já foi
 
 
+def test_sem_celular_o_vigia_nao_mexe_em_nada(monkeypatch):
+    monkeypatch.setattr(R.mobile, "devices", lambda: [])
+    conv = _estudo()
+    R.planejar(conv, (date.today() + timedelta(days=3)).isoformat())
+    assert R.lembrar(datetime.now().replace(hour=10)) == 0
+    assert R._ler(conv)["avisado"] == ""   # nem marca o dia (marcar mexia no carimbo do estudo todo dia)
+
+
 def test_estudo_sem_cronograma_nao_avisa(monkeypatch):
     avisos = []
+    monkeypatch.setattr(R.mobile, "devices", lambda: ["ExponentPushToken[x]"])
     monkeypatch.setattr(R.mobile, "avisa", lambda titulo, texto, conv_id=None: avisos.append(conv_id))
     conv = _estudo()
     p = _prova(conv)

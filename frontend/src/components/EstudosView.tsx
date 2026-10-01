@@ -66,7 +66,8 @@ const ETAPAS: { id: EstudosEstado["etapa"]; label: string }[] = [
 
 const MARCA_TOPICO: Record<string, string> = { fila: "·", escrevendo: "›", pronto: "✓", erro: "✕" };
 
-type McpServidor = { ligado: boolean; comando: string };
+// disponivel=false: este Forja não expõe o /mcp (no web o nginx não repassa e não há o interruptor) — sem a opção Claude
+type McpServidor = { ligado: boolean; comando: string; disponivel?: boolean };
 
 const FASE_ETAPA: Record<EstudosEstado["etapa"], string> = {
   material: "lendo o material", web: "pesquisando na web", plano: "montando o roteiro",
@@ -167,7 +168,10 @@ export default function EstudosView(props: {
   // Sem escolha salva, segue o modelo do Chat — que chega depois do 1º render (as configurações carregam
   // assíncronas): guardar o valor inicial deixava a tela presa no modelo padrão de antes do carregamento.
   const [escolha, setEscolha] = useState<Modelos | null>(() => ler<Modelos | null>(KEY_MODELOS, null));
-  const modelos: Modelos = escolha ?? { motor: "forja", escritor: { provider: props.provider, model: props.model }, extrator: null };
+  const [mcp, setMcp] = useState<McpServidor | null>(null);
+  const semClaude = mcp?.disponivel === false;
+  const modelos: Modelos = escolha && !(semClaude && escolha.motor === "claude") ? escolha
+    : { motor: "forja", escritor: escolha?.escritor ?? { provider: props.provider, model: props.model }, extrator: escolha?.extrator ?? null };
   const setModelos = (f: (m: Modelos) => Modelos) => setEscolha((m) => f(m ?? modelos));
   const [painel, setPainel] = useState<"" | "prefs" | "modelos" | "colar">("");
   const [colado, setColado] = useState("");
@@ -175,7 +179,6 @@ export default function EstudosView(props: {
   const [arrastando, setArrastando] = useState(false);
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
-  const [mcp, setMcp] = useState<McpServidor | null>(null);
   const [aba, setAba] = useState<"resumo" | "provas" | "duvidas" | "revisao" | "desempenho">("resumo");
   const [pendente, setPendente] = useState<Pendente | null>(null);   // trecho do resumo a explicar de outro jeito
   const [provaPendente, setProvaPendente] = useState<ProvaPendente | null>(null);   // a prova dos pontos fracos
@@ -200,9 +203,8 @@ export default function EstudosView(props: {
   useEffect(() => { localStorage.setItem(KEY_PREFS + ".profundidade", JSON.stringify({ v: profundidade })); }, [profundidade]);
   useEffect(() => { if (escolha) localStorage.setItem(KEY_MODELOS, JSON.stringify(escolha)); }, [escolha]);
 
-  // O motor Claude depende do interruptor do MCP: a tela diz na hora se ele está desligado.
+  // O motor Claude depende do interruptor do MCP (a tela diz na hora se está desligado) e de o /mcp existir.
   useEffect(() => {
-    if (modelos.motor !== "claude" && !aguardando) return;
     api.get<McpServidor>("/mcp/servidor").then(setMcp).catch(() => setMcp(null));
   }, [modelos.motor, aguardando]);
 
@@ -428,7 +430,7 @@ export default function EstudosView(props: {
       <div className="mb-2.5 flex items-center gap-2">
         <span className="font-medium text-fg">Quem faz o estudo</span>
         <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Motor">
-          {([["forja", "Modelo do Forja"], ["claude", "Claude via MCP"]] as const).map(([id, nome]) => (
+          {([["forja", "Modelo do Forja"], ["claude", "Claude via MCP"]] as const).filter(([id]) => id !== "claude" || !semClaude).map(([id, nome]) => (
             <button key={id} role="radio" aria-checked={modelos.motor === id} onClick={() => setModelos((m) => ({ ...m, motor: id }))}
                     className={`rounded-[9px] px-2.5 py-0.5 ${modelos.motor === id ? "bg-raised text-fg" : "text-faint hover:text-fg"}`}>
               {nome}
