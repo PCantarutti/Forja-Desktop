@@ -144,12 +144,24 @@ def test_ociosidade(monkeypatch):
     assert not modelctl.precisa_descarregar()                # 0 = nunca
 
 
-def test_recarrega_sob_demanda_so_sem_nada_carregado(monkeypatch):
+def test_recarrega_sob_demanda_troca_so_sem_outra_execucao(monkeypatch):
+    from app import agent
     spec = {"provider": config.LOCAL_PROVIDER["id"], "model": "m"}
+    monkeypatch.setattr(localai, "image_busy", lambda: False)
+    monkeypatch.setattr(localai, "_loading", {})
+    monkeypatch.setattr(agent, "RUNS", {})
     monkeypatch.setattr(localai, "status", lambda: {"running": False})
     assert modelctl.recarregar_sob_demanda(spec)
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "m"})
+    assert not modelctl.recarregar_sob_demanda(spec)       # já é o do ar
     monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "outro"})
-    assert not modelctl.recarregar_sob_demanda(spec)       # outro carregado: escolha do usuário, não troca
+    assert modelctl.recarregar_sob_demanda(spec)           # seletor só escolheu: a mensagem troca
+    propria = type("R", (), {"finished": False, "approvals": {}})()
+    outra = type("R", (), {"finished": False, "approvals": {}})()
+    monkeypatch.setattr(agent, "RUNS", {"a": propria})
+    assert modelctl.recarregar_sob_demanda(spec, propria)  # a própria execução não segura a troca
+    monkeypatch.setattr(agent, "RUNS", {"a": propria, "b": outra})
+    assert not modelctl.recarregar_sob_demanda(spec, propria)  # outra gerando: não derruba
 
 
 def test_mudar_parametro_do_cache_descarta_o_salvo_daquele_modelo(servidor, monkeypatch, tmp_path):

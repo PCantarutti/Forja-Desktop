@@ -99,6 +99,9 @@ export const TelaCheia = base(<path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2
 export const Pip = base(<><rect x="2.5" y="4.5" width="19" height="15" rx="2" /><rect x="12" y="11.5" width="7" height="5" rx="1" /></>);
 export const Trocar = base(<path d="M7 7h11l-3-3M17 17H6l3 3" />);
 export const Teclado = base(<><rect x="2.5" y="6" width="19" height="12" rx="2" /><path d="M6.5 10h1M10.5 10h1M14.5 10h1M6.5 14h11" /></>);
+// Modelo local: pôr na VRAM (seta entrando na bandeja) e tirar (ejetar).
+export const Carregar = base(<><path d="M12 3v10m-4-4 4 4 4-4" /><path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></>);
+export const Ejetar = base(<><path d="M12 5 5 13h14z" /><path d="M5 18h14" /></>);
 export const Raio = base(<path d="M13 2 4 14h7l-1 8 9-12h-7z" />);
 export const Star = ({ className = "size-4", cheia }: P & { cheia?: boolean }) => (
   <svg viewBox="0 0 24 24" fill={cheia ? "currentColor" : "none"} stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" className={className} aria-hidden>

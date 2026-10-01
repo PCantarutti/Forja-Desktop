@@ -1340,9 +1340,9 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
     # Entre tarefas o orquestrador troca o GGUF para o do Worker, e o llama.cpp ignora o campo `model`
     # do pedido — sem isto a Maestro rodaria calada no modelo do Worker, e a janela medida seria a dele.
     maestro_spec = {"provider": req.provider, "model": req.model}
-    # E4: também fora do Maestro quando não há modelo nenhum no ar (descarregado por ociosidade): a mensagem
-    # carrega o mesmo modelo de novo. Com outro modelo carregado não troca: foi escolha do usuário.
-    if maestro_mode or modelctl.recarregar_sob_demanda(maestro_spec):
+    # E4: também fora do Maestro: o seletor só escolhe, e é a mensagem que põe o modelo no ar (descarregado
+    # por ociosidade, ou trocado por outro). No meio de outra execução não troca (ver recarregar_sob_demanda).
+    if maestro_mode or modelctl.recarregar_sob_demanda(maestro_spec, run):
         async for ev in _garante_modelo(conv_id, maestro_spec, run):
             yield ev
             if ev.get("type") == "done":

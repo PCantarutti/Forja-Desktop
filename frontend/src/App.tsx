@@ -642,10 +642,10 @@ export default function App() {
                `${conv(c.id)?.title ?? "Conversa"}: ${c.waiting} esperando você`, true, c.id);
       }
     }
-    // "IA local" com outro nome no seletor (o modelo foi trocado pelo celular ou pela API): o llama-server só
-    // tem um modelo, então a resposta viria dele com o rótulo do antigo. O seletor passa a mostrar o carregado.
-    if (activity.local && activity.local_alias && settings.provider === "local" && settings.model !== activity.local_alias
-        && secaoRef.current !== "maestro")
+    // O modelo do ar TROCOU por fora (celular, API, painel IA local): o seletor acompanha. Só na troca, não
+    // sempre que diferem: escolher outro GGUF no seletor sem carregar é válido (o envio carrega).
+    if (activity.local && activity.local_alias && activity.local_alias !== antes.local_alias
+        && settings.provider === "local" && settings.model !== activity.local_alias && secaoRef.current !== "maestro")
       setSettings((s) => ({ ...s, model: activity.local_alias! }));
     const agora = new Set(activity.conversations.filter((c) => c.running).map((c) => c.id));
     // Turno que esta tela não disparou (o celular, ou aviso de processo em segundo plano) na conversa aberta:
@@ -2145,6 +2145,7 @@ export default function App() {
             refreshKey={catalogKey}
             minCtx={section === "maestro" ? config.min_ctx_maestro : undefined}
             autoFallback={section !== "maestro"}
+            cargaNoEnvio
             onChange={(provider, model) => update({ provider, model })}
           />
           {running ? (

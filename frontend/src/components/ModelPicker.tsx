@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
-import { Check, Cube, Eye, Search } from "./icons";
+import { Carregar, Check, Cube, Ejetar, Eye, Search } from "./icons";
 
 export type CatalogEntry = { id: string; name: string; type: string; models: string[]; error: string };
 
@@ -11,8 +11,8 @@ type IaLocal = {
   image_busy: boolean;
 };
 
-const POP_W = 544;   // w-[34rem]
-const POP_H = 320;   // h-80
+const POP_W = 640;   // w-[40rem]
+const POP_H = 352;   // h-[22rem]
 const MARGEM = 8;
 
 /** Onde o popover cabe. Posição FIXA calculada do botão, e não `absolute bottom-full`: o seletor mora
@@ -44,6 +44,9 @@ export default function ModelPicker(props: {
   // Worker, que só diz QUAL modelo usar quando houver tarefa — carregar ali trocaria o modelo da
   // própria Maestro, se ela roda local.
   loadLocal?: boolean;
+  // Clicar no GGUF só escolhe; quem põe na VRAM é o envio (agent._garante_modelo) ou o botão Carregar.
+  // Só onde o backend carrega sozinho na mensagem: nas outras telas escolher continua carregando.
+  cargaNoEnvio?: boolean;
   // Janela mínima (tokens por requisição) para um GGUF local ser escolhível. Abaixo disso o servidor
   // recusa o prompt no meio do trabalho, então o modelo aparece desabilitado com o motivo.
   minCtx?: number;
@@ -62,14 +65,16 @@ export default function ModelPicker(props: {
 
   const load = () => {
     // Os .gguf baixados não passam pelo /catalog: sem modelo carregado o llama-server nem está no ar.
-    api.get<IaLocal>("/local").then(setLocal).catch(() => setLocal(null));
+    const loc = api.get<IaLocal>("/local").then((l) => (setLocal(l), l)).catch(() => (setLocal(null), null));
     return api
       .get<CatalogEntry[]>("/catalog")
-      .then((c) => {
+      .then(async (c) => {
         setCatalog(c);
         // Modelo salvo sumiu (provedor removido ou modelo desmarcado): cai no primeiro disponível.
+        // GGUF escolhido e ainda não carregado não está no /catalog (só o do ar está), mas existe na pasta.
         const current = c.find((p) => p.id === props.provider);
-        if ((props.autoFallback ?? true) && !current?.models.includes(props.model)) {
+        const naPasta = current?.type === "llamacpp" && !!(await loc)?.models.some((m) => m.name === props.model);
+        if ((props.autoFallback ?? true) && !current?.models.includes(props.model) && !naPasta) {
           const first = c.find((p) => p.models.length);
           if (first) props.onChange(first.id, first.models[0]);
         }
@@ -112,19 +117,23 @@ export default function ModelPicker(props: {
   // mesmo com nada carregado, que é justamente quando a pessoa precisa carregar alguma coisa.
   const ggufs = (local?.models ?? []).filter((m) => m.kind === "chat");
   const localAtivo = prov?.type === "llamacpp" && !!local;
-  const daPasta = ggufs.filter((m) => m.name.toLowerCase().includes(q.toLowerCase()));
+  // O do ar vai para o topo: é ele que responde agora, então é o primeiro que a pessoa procura.
+  const daPasta = ggufs
+    .filter((m) => m.name.toLowerCase().includes(q.toLowerCase()))
+    .sort((a, b) => Number(b.path === local?.server.path) - Number(a.path === local?.server.path));
 
   const contar = (p: CatalogEntry) =>
     p.type === "llamacpp" && local ? ggufs.length : p.error ? "off" : p.models.length;
 
-  async function carregar(caminho: string) {
+  async function carregar(caminho: string, fechar = false) {
     setCarregando(caminho);
     setErro("");
     try {
       const s = await api.post<{ alias?: string }>("/local/load", { path: caminho, params: {} });
       await load();
+      // Carregou, então é este que vai responder: escolher outro faria a próxima mensagem trocar de volta.
       if (s.alias) props.onChange(active, s.alias);
-      setOpen(false);
+      if (fechar) setOpen(false);
     } catch (e: any) {
       setErro(e.message);
       load();   // a falha fica registrada no painel IA local; aqui só atualizamos o estado
@@ -143,6 +152,11 @@ export default function ModelPicker(props: {
     load();
   }
 
+  const linha = (marcado: boolean, extra = "") =>
+    `group flex items-center gap-1 rounded-[9px] pr-1 transition-colors duration-150 ${
+      marcado ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
+    } ${extra}`;
+
   return (
     <div ref={box} className="relative ml-auto min-w-0">
       <button
@@ -152,6 +166,7 @@ export default function ModelPicker(props: {
           setOpen(!open);
         }}
         title={`Trocar provedor e modelo — ${providerName} · ${props.model}`}
+        aria-expanded={open}
         className="flex max-w-[min(14rem,100%)] items-center gap-1.5 overflow-hidden rounded-lg bg-raised px-2.5 py-1 text-xs whitespace-nowrap text-muted hover:text-fg"
       >
         <Cube className="size-3.5 shrink-0" />
@@ -162,113 +177,120 @@ export default function ModelPicker(props: {
       {open && (
         <div
           style={pos ?? undefined}
-          className={`${pos ? "fixed" : "absolute right-0 bottom-full mb-2"} z-50 flex h-80 w-[34rem] max-w-[90vw] overflow-hidden rounded-xl border border-line bg-surface shadow-popover`}
+          className={`${pos ? "fixed" : "absolute right-0 bottom-full mb-2"} z-50 flex h-[22rem] w-[40rem] max-w-[90vw] overflow-hidden rounded-[14px] border border-line-strong bg-surface shadow-popover`}
         >
-          <ul className="w-40 shrink-0 space-y-0.5 overflow-y-auto border-r border-line bg-side p-2 text-sm">
-            {catalog === null && <li className="px-2 py-1 text-muted">carregando…</li>}
-            {catalog?.map((p) => (
-              <li key={p.id}>
-                <button
-                  onClick={() => setActive(p.id)}
-                  className={`flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left ${
-                    p.id === active ? "bg-raised text-fg" : "text-muted hover:bg-surface hover:text-fg"
-                  }`}
-                >
-                  <span className="truncate">{p.name}</span>
-                  <span className="flex shrink-0 items-center gap-1">
+          <ul className="w-44 shrink-0 space-y-0.5 overflow-y-auto border-r border-line p-1.5">
+            {catalog === null && <li className="px-2.5 py-2 text-[12.5px] text-faint">carregando…</li>}
+            {catalog?.map((p) => {
+              const off = !!p.error && !(p.type === "llamacpp" && local);
+              return (
+                <li key={p.id}>
+                  <button
+                    onClick={() => setActive(p.id)}
+                    className={`flex w-full items-center gap-2 rounded-[9px] px-2.5 py-2 text-left text-[13px] transition-colors duration-150 ${
+                      p.id === active ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{p.name}</span>
                     {p.type === "llamacpp" && local?.server.running && (
-                      <span className="size-1.5 rounded-full bg-emerald-400" title="tem modelo carregado" />
+                      <span className="size-1.5 shrink-0 rounded-full bg-ok" title="Tem modelo carregado" />
                     )}
-                    <span className={`text-[10px] ${p.error && !(p.type === "llamacpp" && local) ? "text-red-300" : "text-faint"}`}>
+                    <span className={`shrink-0 font-mono text-[10.5px] tabular-nums ${off ? "text-err" : "text-faint"}`}>
                       {contar(p)}
                     </span>
-                  </span>
-                </button>
-              </li>
-            ))}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           <div className="flex min-w-0 flex-1 flex-col">
-            <label className="flex items-center gap-2 border-b border-line px-3 py-2 text-sm text-muted">
-              <Search className="size-3.5" />
+            <label className="flex items-center gap-2 border-b border-line px-3.5 py-2.5 text-faint focus-within:text-muted">
+              <Search className="size-3.5 shrink-0" />
               <input
                 autoFocus
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Buscar modelo"
-                className="w-full bg-transparent text-fg placeholder:text-faint focus:outline-none"
+                className="w-full bg-transparent text-[13px] text-fg placeholder:text-faint focus:outline-none"
               />
             </label>
-            <ul className="flex-1 overflow-y-auto p-1.5 text-sm">
-              {erro && <li className="px-2 py-2 text-xs text-red-300">{erro}</li>}
-              {prov?.error && !localAtivo && <li className="px-2 py-2 text-xs text-red-300">{prov.error}</li>}
-
-              {carrega && localAtivo && local.server.running && (
-                <li className="flex items-center gap-2 px-2.5 py-1.5 text-xs text-muted">
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />
-                  <span className="min-w-0 flex-1 truncate">{local.server.alias} está carregado</span>
-                  <button onClick={descarregar} className="shrink-0 text-faint hover:text-fg">
-                    descarregar
-                  </button>
-                </li>
-              )}
-              {localAtivo && local.image_busy && (
-                <li className="px-2 py-2 text-xs text-amber-300">
-                  Uma imagem está sendo gerada; os dois disputam a mesma VRAM.
-                </li>
-              )}
+            <ul className="flex-1 space-y-0.5 overflow-y-auto p-1.5">
+              {erro && <li className="px-2.5 py-2 text-[11.5px] leading-snug text-err">{erro}</li>}
+              {prov?.error && !localAtivo && <li className="px-2.5 py-2 text-[11.5px] leading-snug text-err">{prov.error}</li>}
 
               {localAtivo && daPasta.map((m) => {
                 const carregado = local.server.path === m.path;
                 const subindo = carregando === m.path;
                 const escolhido = active === props.provider && m.name === props.model;
                 const curta = !!props.minCtx && !!m.ctx && m.ctx < props.minCtx;
-                const marcado = carrega ? carregado : escolhido;
+                // Sem carga no envio, escolher É carregar: o marcado é o do ar. Com ela, o marcado é a escolha.
+                const marcado = carrega && !props.cargaNoEnvio ? carregado : escolhido;
                 return (
-                  <li key={m.path}>
+                  <li key={m.path} className={linha(marcado, carregado ? "ring-1 ring-ok/30 ring-inset" : "")}>
                     <button
-                      disabled={curta || !!carregando || (carrega && local.image_busy && !carregado)}
+                      disabled={curta || (!!carregando && !props.cargaNoEnvio)}
                       title={
                         curta
                           ? `Janela de ${m.ctx} tokens por requisição; o mínimo aqui é ${props.minCtx}. Aumente o contexto dele no painel IA local.`
-                          : carrega && !carregado ? `Carregar ${m.name}` : m.path
+                          : m.path
                       }
                       onClick={() => {
-                        if (!carrega) {
-                          props.onChange(active, m.name);  // só registra a escolha; carrega quando houver tarefa
-                          return setOpen(false);
-                        }
-                        if (!carregado) return void carregar(m.path);
-                        props.onChange(active, local.server.alias || m.name);
+                        if (carrega && !props.cargaNoEnvio && !carregado) return void carregar(m.path, true);
+                        props.onChange(active, carregado ? local.server.alias || m.name : m.name);
                         setOpen(false);
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[13px] disabled:opacity-40 ${
-                        marcado ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
-                      }`}
+                      className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-2.5 text-left disabled:opacity-40"
                     >
-                      {carrega && carregado && <span className="size-1.5 shrink-0 rounded-full bg-emerald-400" />}
-                      <span className="flex-1 truncate">{m.name}</span>
+                      <span
+                        className={`size-1.5 shrink-0 rounded-full ${
+                          carregado ? "bg-ok" : subindo ? "animate-pulse bg-info" : "bg-transparent"
+                        }`}
+                        aria-hidden
+                      />
+                      <span className={`min-w-0 flex-1 truncate font-mono text-[13px] ${carregado ? "text-fg" : ""}`}>{m.name}</span>
+                      {carregado && (
+                        <span className="shrink-0 font-mono text-[10.5px] tracking-[.06em] text-ok uppercase">na VRAM</span>
+                      )}
+                      {subindo && <span className="shrink-0 text-[11.5px] text-info">carregando…</span>}
                       {m.vision && (
-                        <span title="Visão: o projetor (mmproj) da pasta dele sobe junto" className="shrink-0 rounded border border-amber-500/50 p-0.5 text-amber-400">
-                          <Eye className="size-3" />
+                        <span title="Visão: o projetor (mmproj) da pasta dele sobe junto" className="shrink-0 text-faint group-hover:text-muted">
+                          <Eye className="size-3.5" />
                         </span>
                       )}
-                      {m.ctx ? (
-                        <span className={`shrink-0 font-sans text-[11px] ${curta ? "text-amber-300" : "text-faint"}`}>
-                          {fmtK(m.ctx)}{curta ? ` · mín ${fmtK(props.minCtx!)}` : ""}
-                        </span>
-                      ) : null}
-                      {carrega && (
-                        <span className="shrink-0 font-sans text-[11px] text-faint">
-                          {subindo ? "carregando…" : carregado ? "carregado" : "carregar"}
-                        </span>
-                      )}
-                      {marcado && <Check className="size-3.5 shrink-0" />}
+                      <span
+                        title={curta ? `Mínimo aqui: ${fmtK(props.minCtx!)}` : "Janela por requisição"}
+                        className={`w-9 shrink-0 text-right font-mono text-[11px] tabular-nums ${curta ? "text-warn" : "text-faint"}`}
+                      >
+                        {m.ctx ? fmtK(m.ctx) : ""}
+                      </span>
                     </button>
+                    {carrega && (
+                      <button
+                        onClick={() => (carregado ? void descarregar() : void carregar(m.path))}
+                        disabled={subindo || (!carregado && (curta || !!carregando || local.image_busy))}
+                        title={carregado ? "Descarregar: libera a VRAM" : subindo ? "Carregando…" : "Carregar na VRAM agora"}
+                        aria-label={carregado ? `Descarregar ${m.name}` : `Carregar ${m.name}`}
+                        className={`grid size-7 shrink-0 place-items-center rounded-[7px] transition-colors duration-150 hover:bg-surface hover:text-fg focus-visible:outline-1 focus-visible:outline-focus disabled:pointer-events-none disabled:opacity-40 ${
+                          carregado ? "text-ok" : "text-faint"
+                        }`}
+                      >
+                        {subindo ? (
+                          <span className="size-3 animate-spin rounded-full border-2 border-info/30 border-t-info" aria-hidden />
+                        ) : carregado ? (
+                          <Ejetar className="size-[15px]" />
+                        ) : (
+                          <Carregar className="size-[15px]" />
+                        )}
+                      </button>
+                    )}
+                    <span className="grid w-5 shrink-0 place-items-center">
+                      {marcado && <Check className="size-3.5 text-accent" />}
+                    </span>
                   </li>
                 );
               })}
               {localAtivo && !daPasta.length && (
-                <li className="px-2 py-2 text-xs text-muted">
+                <li className="px-2.5 py-2 text-[11.5px] leading-snug text-faint">
                   Nenhum .gguf{q ? " com esse nome" : ""} nas pastas de modelos. Baixe um no painel IA local.
                 </li>
               )}
@@ -276,28 +298,35 @@ export default function ModelPicker(props: {
               {!localAtivo && models.map((m) => {
                 const selected = active === props.provider && m === props.model;
                 return (
-                  <li key={m}>
+                  <li key={m} className={linha(selected)}>
                     <button
                       onClick={() => {
                         props.onChange(active, m);
                         setOpen(false);
                       }}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-[13px] ${
-                        selected ? "bg-raised text-fg" : "text-muted hover:bg-raised/60 hover:text-fg"
-                      }`}
+                      className="flex min-w-0 flex-1 items-center py-2 pl-2.5 text-left"
                     >
-                      <span className="flex-1 truncate">{m}</span>
-                      {selected && <Check className="size-3.5 shrink-0" />}
+                      <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{m}</span>
                     </button>
+                    <span className="grid w-5 shrink-0 place-items-center">
+                      {selected && <Check className="size-3.5 text-accent" />}
+                    </span>
                   </li>
                 );
               })}
               {prov && !localAtivo && !prov.error && !models.length && (
-                <li className="px-2 py-2 text-xs text-muted">
+                <li className="px-2.5 py-2 text-[11.5px] leading-snug text-faint">
                   Nenhum modelo{q ? " com esse nome" : ""}. Escolha quais aparecem em Configurações › Provedores.
                 </li>
               )}
             </ul>
+            {localAtivo && (local.image_busy || (carrega && props.cargaNoEnvio)) && (
+              <p className={`border-t border-line px-3.5 py-2 text-[11.5px] leading-snug ${local.image_busy ? "text-warn" : "text-faint"}`}>
+                {local.image_busy
+                  ? "Uma imagem está sendo gerada; os dois disputam a mesma VRAM."
+                  : "Escolher não carrega: o modelo sobe na VRAM no próximo envio."}
+              </p>
+            )}
           </div>
         </div>
       )}

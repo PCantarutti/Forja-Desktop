@@ -558,7 +558,16 @@ async def vigia_ociosidade(intervalo: float = 60) -> None:
             print(f"Forja: descarga por ociosidade falhou: {e}", flush=True)
 
 
-def recarregar_sob_demanda(spec: dict | None) -> bool:
-    """A conversa quer um modelo local e não há nenhum carregado (descarregado por ociosidade, ou o app
-    acabou de abrir): carregar de novo não derruba ninguém."""
-    return bool(spec) and gerenciavel(spec) and localai is not None and not localai.status().get("running")
+def recarregar_sob_demanda(spec: dict | None, exceto: object = None) -> bool:
+    """A conversa quer um modelo local que não é o do ar. Sem nada carregado (ociosidade, app recém-aberto)
+    carrega. Com outro carregado, troca: o seletor só registra a escolha e a carga fica para o envio. Só não
+    troca no meio de outra execução (`exceto` é a da própria mensagem): matar o servidor derrubaria ela."""
+    if not (spec and gerenciavel(spec) and localai is not None):
+        return False
+    st = localai.status()
+    if not st.get("running"):
+        return True
+    if st.get("alias") == spec.get("model") or localai._loading or localai.image_busy():
+        return False
+    from . import agent
+    return not any(r is not exceto and not r.finished and not r.approvals for r in list(agent.RUNS.values()))
