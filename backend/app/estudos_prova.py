@@ -14,6 +14,7 @@ resposta_modelo, rubrica [{criterio, pontos}].
 """
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
@@ -42,7 +43,7 @@ TETO_LOTE = 420          # segundos por chamada de geração, conferência ou co
 MATERIAL_TETO = 16_000   # material por lote
 RESUMO_TETO = 12_000     # resumo por lote
 EXEMPLO_TETO = 3_000     # trecho da prova anexada que vai como exemplo de estilo
-ESCONDIDO = ("correta", "explicacao", "por_alternativa", "resposta_modelo", "rubrica", "pagina", "verificada")
+ESCONDIDO = ("correta", "explicacao", "por_alternativa", "resposta_modelo", "rubrica", "pagina", "verificada", "desempate")
 
 QUESTOES_PROMPT = """Você é um professor que elabora questões de prova, no idioma do material.
 Escreva EXATAMENTE as questões pedidas, na ordem pedida, cada uma sobre o tópico e na dificuldade indicados.
@@ -61,8 +62,8 @@ Regras:
 - Cada questão cobra o assunto do tópico indicado, não o de outra disciplina.
 - Múltipla escolha: uma única correta; as erradas são plausíveis (erros comuns de aluno), do mesmo tamanho e estilo
   da correta. Nada de "todas as anteriores" nem "nenhuma das anteriores".
-- Alternativas numéricas bem separadas entre si (nunca 55°, 56°, 57°): as erradas saem de erros típicos de conta
-  ou de conceito.
+- Alternativas numéricas bem separadas entre si (nunca 55°, 56°, 57°) e nunca duas com o mesmo valor escrito de
+  outro jeito (30/55 e 6/11): as erradas saem de erros típicos de conta ou de conceito.
 - Confira o próprio comando (menor, maior, exceto, garante, aproximadamente): o gabarito atende exatamente o que
   foi pedido, e a explicação faz a conta inteira, com o arredondamento certo.
 - As alternativas serão embaralhadas: nas explicações, fale do conteúdo, nunca da letra.
@@ -280,6 +281,24 @@ def _bool(v) -> bool | None:
     return None
 
 
+NUMERO = re.compile(r"^\s*\$?\s*(-?\d+(?:[.,]\d+)?)\s*(?:/\s*(\d+(?:[.,]\d+)?))?\s*(%)?\s*\$?\s*([a-zA-Zµ°²³/·⁻¹\s]*)$")
+
+
+def _valor(alt: str) -> tuple | None:
+    """Valor de uma alternativa que é só número (com unidade): "6/11", "0,5", "50%", "40 m". Texto, None.
+    É para pegar duas alternativas iguais escritas diferente; a unidade entra na chave (5 m ≠ 5 s)."""
+    m = NUMERO.match(alt.replace("\\frac", ""))
+    if not m:
+        return None
+    try:
+        v = float(m.group(1).replace(",", ".")) / (float(m.group(2).replace(",", ".")) if m.group(2) else 1)
+    except ZeroDivisionError:
+        return None
+    if m.group(3):
+        v /= 100
+    return round(v, 6), re.sub(r"\s+", "", m.group(4) or "")
+
+
 def _letra(v, n: int) -> int | None:
     """Índice da alternativa: aceita 0..n-1 ou a letra."""
     if isinstance(v, bool):
@@ -314,6 +333,9 @@ def validar(q, tipo: str | None = None) -> tuple[dict | None, str]:
             return None, "alternativas faltando (são de 3 a 5)"
         if len({a.lower() for a in alts}) != len(alts):
             return None, "alternativas repetidas"
+        valores = [v for v in map(_valor, alts) if v is not None]
+        if len(valores) != len(set(valores)):
+            return None, "duas alternativas com o mesmo valor (ex.: 30/55 e 6/11)"
         correta = _letra(q.get("correta"), len(alts))
         if correta is None:
             return None, "sem a alternativa correta"
@@ -367,6 +389,11 @@ def _barras(texto: str) -> str:
 
 def _json(bruto: str, tipo: type = dict):
     return pesquisa._json(_barras(bruto or ""), tipo)
+
+
+def _marca(q: dict, r) -> str:
+    """A resposta como o aluno a vê: a letra (me) ou V/F."""
+    return LETRAS[r] if q["tipo"] == "me" else ("V" if r else "F")
 
 
 def _chave(enunciado: str) -> str:
@@ -499,13 +526,38 @@ async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, 
               .replace("PONTOS_DISC", str(PONTOS["disc"])).replace("BANCA", ENEM_PROMPT if cfg.get("enem") else "")
               .replace("ESTILO", ESTILO_PROMPT if cfg["estilo"] else ""))
     bruto = await pesquisa._perguntar(spec, system, user, run, effort="medio")
+    if lista_ := _questoes(bruto):
+        return lista_
+    # JSON torto (aspas sem escape no meio do texto, vírgula faltando...): uma segunda chance como no Design —
+    # o modelo vê o que mandou e o erro, e devolve o mesmo conteúdo como JSON válido. Sai mais barato e mais
+    # certeiro que pedir as questões de novo.
+    erro = _erro_json(bruto)
+    log.warning("estudos: lote de %d questão(ões) sem JSON legível (%d caracteres): %s", len(lote), len(bruto or ""), erro)
+    if not (bruto or "").strip() or run["cancelar"]:
+        return []
+    conserto = (f"{user}\n\nA sua resposta anterior, abaixo, não é um JSON válido ({erro}). Devolva SÓ o objeto JSON "
+                f"corrigido, com as mesmas questões; dentro das strings, aspas viram \\\" e cada barra do LaTeX vai "
+                f"dobrada (\\\\frac).\n\nResposta anterior:\n{split_think(bruto)[1][-14_000:]}")
+    return _questoes(await pesquisa._perguntar(spec, system, conserto, run, effort="baixo"))
+
+
+def _questoes(bruto: str) -> list:
     obj = _json(bruto)
     lista_ = obj.get("questoes") if isinstance(obj, dict) else None
-    lista_ = lista_ if isinstance(lista_, list) else (_json(bruto, list) or [])
-    if not lista_:   # é o que vira "não veio a questão": o fim da resposta no log diz se cortou ou veio torto
-        log.warning("estudos: lote de %d questão(ões) sem JSON legível (%d caracteres): %r",
-                    len(lote), len(bruto or ""), (bruto or "")[-600:])
-    return lista_
+    return lista_ if isinstance(lista_, list) else (_json(bruto, list) or [])
+
+
+def _erro_json(bruto: str) -> str:
+    """O que o json.loads diz e onde: é o que o modelo precisa para consertar (e o log para a gente)."""
+    texto = _barras(split_think(bruto or "")[1])
+    i, f = texto.find("{"), texto.rfind("}")
+    if i < 0 or f < i:
+        return "não há objeto JSON na resposta" + (" (cortada?)" if i >= 0 else "")
+    try:
+        json.loads(texto[i:f + 1], strict=False)
+        return "o JSON não tem a lista \"questoes\""
+    except json.JSONDecodeError as e:
+        return f"{e.msg}, perto de: {texto[i + max(0, e.pos - 60):i + e.pos + 60]!r}"
 
 
 async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento: int) -> dict[str, tuple]:
@@ -592,15 +644,35 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                         respostas = {}
                     if len(respostas) < len(conferir):
                         E._avisar(run, "Parte do gabarito não foi conferida pelo verificador.")
+                # Desempate: o verificador discordou do gabarito. Quem escreveu resolve às cegas (sem ver a
+                # resposta que deu); 2 votos no gabarito ficam. Um verificador só, e de outro modelo, descartava
+                # questão boa quando ele é que errava a conta.
+                disputadas = [limpa for _, limpa in novas if limpa["tipo"] != "disc"
+                              and respostas.get(limpa["id"], (None, ""))[0] not in (None, limpa["correta"])]
+                desempate: dict = {}
+                if disputadas and not run["cancelar"]:
+                    E._teto(run, TETO_LOTE)
+                    try:
+                        desempate = await _conferir(run, spec, disputadas, ctx, orcamento)
+                    except Exception:
+                        desempate = {}
                 for q, limpa in novas:
                     r, conta = respostas.get(limpa["id"], (None, ""))
-                    if limpa["tipo"] != "disc" and r is not None and r != limpa["correta"]:
-                        vistas.discard(_chave(limpa["enunciado"]))
-                        outra = (LETRAS[r] if limpa["tipo"] == "me" else ("V" if r else "F"))
-                        q.update(status="fila", motivo=f"o verificador chegou a outra resposta ({outra})"
-                                                       + (f": {conta}" if conta else ""))
-                        refazer.append(q)
-                        continue
+                    if any(limpa is x for x in disputadas):
+                        d, conta_d = desempate.get(limpa["id"], (None, ""))
+                        if d != limpa["correta"]:
+                            vistas.discard(_chave(limpa["enunciado"]))
+                            q.update(status="fila", motivo=f"o verificador chegou a outra resposta ({_marca(limpa, r)})"
+                                                           + (f": {conta}" if conta else "")
+                                                           + (f" · no desempate, {_marca(limpa, d)}" if d is not None else ""))
+                            run.setdefault("descartadas", []).append(
+                                {"id": q["id"], "rodada": rodada + 1, "enunciado": limpa["enunciado"][:800],
+                                 "alternativas": limpa.get("alternativas"), "gabarito": _marca(limpa, limpa["correta"]),
+                                 "verificador": _marca(limpa, r), "conta": conta, "desempate": _marca(limpa, d) if d is not None else "",
+                                 "conta_desempate": conta_d})
+                            refazer.append(q)
+                            continue
+                        limpa["desempate"] = _marca(limpa, r)   # o verificador votou nesta; os outros dois no gabarito
                     limpa["verificada"] = limpa["tipo"] != "disc" and r is not None
                     feitas[q["id"]] = limpa
                     q.update(status="ok", motivo="")

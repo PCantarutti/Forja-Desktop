@@ -142,6 +142,60 @@ def test_validar_cada_tipo_e_os_erros():
     assert P.validar(_me(1), "vf")[1] == "veio me no lugar de vf"
 
 
+def test_alternativas_com_o_mesmo_valor_sao_recusadas():
+    base = _me(1)
+    assert P.validar({**base, "alternativas": ["30/55", "6/11", "2/3", "5/8"]})[1].startswith("duas alternativas com o mesmo valor")
+    assert P.validar({**base, "alternativas": ["0,5", "50%", "1/3", "2"]})[1].startswith("duas alternativas")
+    assert P.validar({**base, "alternativas": ["5 m", "5 s", "10 m", "20 m"]})[0]   # unidades diferentes: valores diferentes
+    assert P.validar({**base, "alternativas": ["$\\frac{1}{2}$ de tudo", "metade", "um terço", "nada"]})[0]   # texto: não compara
+
+
+def _modelo_que_desempata(certo_para: set[str]):
+    """chat_stream falso: gera 2 ME; o verificador ("outro") erra todas; o desempate ("m") acerta as de `certo_para`."""
+    async def chat_stream(provider, model, messages, *a, **kw):
+        system, user = messages[0]["content"], messages[1]["content"]
+        if system.startswith("Você é um professor que elabora"):
+            yield ("content", json.dumps({"questoes": [_me(1), _me(2)]}))
+        else:
+            certo = _correto_do_prompt(user, re.findall(r"^\[(q\d+)\]", user, re.M))
+            resp = {i: (c if model == "m" and i in certo_para else "ABCD"[("ABCD".index(c) + 1) % 4]) for i, c in certo.items()}
+            yield ("content", json.dumps({"respostas": [{"id": i, "conta": f"conta de {model}", "resposta": r} for i, r in resp.items()]}))
+        yield ("done", {})
+    return chat_stream
+
+
+def test_desempate_salva_a_questao_quando_o_verificador_erra(monkeypatch):
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", _modelo_que_desempata({"q1"}))
+    pid = _gerar(_estudo(), {"me": 2}, ex_provider="fake", ex_model="outro")
+    e = _cheia(pid)
+    q1 = next(q for q in e["questoes"] if q["id"] == "q1")
+    assert q1["verificada"] and q1["desempate"]   # o gabarito ganhou de 2 a 1
+    assert "desempate" not in estudos.estado(pid)["questoes"][0]   # e a tela não vê o voto do verificador
+    assert [p["status"] for p in e["planejadas"]] == ["ok", "descartada"]
+    d = [x for x in e["descartadas"] if x["id"] == "q2"]
+    assert len(d) == 1 and d[0]["conta"] == "conta de outro"   # na 2ª rodada o falso repete a q1: cai como repetida and d[0]["conta_desempate"] == "conta de m"
+    assert d[0]["enunciado"].startswith("Questão 2") and d[0]["gabarito"] != d[0]["verificador"]
+
+
+def test_json_torto_ganha_uma_chance_de_conserto(monkeypatch):
+    pedidos: list[str] = []
+
+    async def chat_stream(provider, model, messages, *a, **kw):
+        system, user = messages[0]["content"], messages[1]["content"]
+        if system.startswith("Você é um professor que elabora"):
+            pedidos.append(user)
+            ok = json.dumps({"questoes": [_me(1)]})
+            yield ("content", ok if "não é um JSON válido" in user else ok.replace('"alternativas"', 'alternativas'))
+        else:
+            yield ("content", "{}")
+        yield ("done", {})
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", chat_stream)
+    pid = _gerar(_estudo(), {"me": 1})
+    assert len(pedidos) == 2 and "perto de" in pedidos[1] and "Resposta anterior" in pedidos[1]
+    assert len(_cheia(pid)["questoes"]) == 1
+
+
 def test_json_com_latex_de_barra_simples():
     bruto = '{"a": "$\\mathrm{CO_2}$, $\\frac{1}{2} \\times 3$, $\\sqrt{2}$, linha\\nquebra, \\"x\\", \\u00e9, \\\\alpha"}'
     assert P._json(bruto)["a"] == '$\\mathrm{CO_2}$, $\\frac{1}{2} \\times 3$, $\\sqrt{2}$, linha\nquebra, "x", é, \\alpha'
