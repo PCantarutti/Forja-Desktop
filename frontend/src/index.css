@@ -387,3 +387,6 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 
 /* Scrollbar discreta */
 * { scrollbar-width: thin; scrollbar-color: var(--color-line-strong) transparent; }
+
+/* faixa da seção aberta pelo mapa mental (Estudos) */
+@keyframes surgir { from { opacity: 0; transform: scaleY(.96); } to { opacity: 1; transform: none; } }

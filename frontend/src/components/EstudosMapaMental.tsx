@@ -8,7 +8,7 @@ const K_MIN = 0.25, K_MAX = 2.5, K_PISO = 0.7;
 
 /** O resumo como mapa mental: o tema no meio, os tópicos dos dois lados. Clicar no texto de um nó abre a seção
  *  no resumo; a bolinha na ponta abre e fecha o ramo. Roda do mouse dá zoom no cursor, arrastar move. */
-export default function EstudosMapaMental({ md, tema, onAbrir }: { md: string; tema: string; onAbrir: (ancora: number) => void }) {
+export default function EstudosMapaMental({ md, tema, onAbrir }: { md: string; tema: string; onAbrir: (ancora: number, texto: string) => void }) {
   const raiz = useMemo(() => arvore(md, tema), [md, tema]);
   const todos = useMemo(() => comFilhos(raiz), [raiz]);
   const [abertos, setAbertos] = useState<Set<string>>(() => new Set(todos));
@@ -154,11 +154,11 @@ export default function EstudosMapaMental({ md, tema, onAbrir }: { md: string; t
   );
 }
 
-function No({ n, onAbrir, onAlternar }: { n: NoMapa; onAbrir: (ancora: number) => void; onAlternar: (id: string) => void }) {
+function No({ n, onAbrir, onAlternar }: { n: NoMapa; onAbrir: (ancora: number, texto: string) => void; onAlternar: (id: string) => void }) {
   const cor = corDo(n.ramo);
   const raiz = n.nivel === 0, topico = n.nivel === 1;
   const fonte = fonteDe(n.nivel);
-  const abrir = () => (raiz ? undefined : onAbrir(n.ancora));
+  const abrir = () => (raiz ? undefined : onAbrir(n.ancora, n.texto));
   // a bolinha fica na ponta de fora do nó (onde os filhos saem)
   const bx = n.lado === -1 ? n.x - 9 : n.x + n.w + 9, by = n.y + n.h / 2;
   return (
@@ -182,7 +182,7 @@ function No({ n, onAbrir, onAlternar }: { n: NoMapa; onAbrir: (ancora: number) =
         </text>
       </g>
       {!raiz && n.filhos > 0 && (
-        <g role="button" tabIndex={0} aria-label={n.aberto ? `Fechar ${n.texto}` : `Abrir ${n.texto} (${n.filhos})`} className="cursor-pointer outline-none"
+        <g role="button" tabIndex={0} aria-label={n.aberto ? `Fechar ${n.texto}` : `Abrir ${n.texto} (${n.filhos})`} className="cursor-pointer outline-none [&:focus-visible>circle:last-of-type]:stroke-[3px]"
            onClick={() => onAlternar(n.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onAlternar(n.id); } }}>
           <title>{n.aberto ? "Fechar o ramo" : `Abrir: ${n.filhos} subtópico${n.filhos === 1 ? "" : "s"}`}</title>
           <circle cx={bx} cy={by} r={8} fill="var(--color-surface)" stroke={cor} strokeWidth={1.5} />

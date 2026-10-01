@@ -14,6 +14,7 @@ import Duvidas, { type Pendente } from "./EstudosDuvidas";
 import Revisao from "./EstudosRevisao";
 import Desempenho from "./EstudosDesempenho";
 import EstudosMapaMental from "./EstudosMapaMental";
+import { acharTitulo } from "./estudosMapa";
 import { PEDIDO_CLAUDE, type Modelos, btn, btnPrimary, card, gravarLocal, lerLocal as ler, motorDe, numeros, relogio, rotulo } from "./estudosUi";
 
 const KEY_PREFS = "forja.estudos.preferencias";
@@ -161,7 +162,8 @@ export default function EstudosView(props: {
 }) {
   const [projeto, setProjeto] = useState<EstudosProjeto | null>(null);
   const [mapa, setMapa] = useState(() => ler(KEY_PREFS + ".mapa", { v: false }).v);   // o resumo como mapa mental
-  const irDepois = useRef<number | null>(null);   // a seção que o clique no mapa pediu, aberta quando o texto voltar
+  // a seção pedida com o mapa na tela (clique num nó, ou o Sumário), aberta quando o texto voltar
+  const irDepois = useRef<{ i: number; titulos: string; texto?: string } | null>(null);
   const [estado, setEstado] = useState<EstudosEstado | null>(null);
   const [tema, setTema] = useState("");
   const [prefs, setPrefs] = useState<EstudosPreferencias>(() => ler(KEY_PREFS, PADRAO));
@@ -194,6 +196,14 @@ export default function EstudosView(props: {
   const convAtual = useRef(props.conv);
   const corte = useRef<AbortController | null>(null);
   const resumoRef = useRef<HTMLDivElement>(null);
+  // a faixa que marca a seção aberta pelo mapa ou pelo Sumário (some no próximo clique no texto)
+  const [destaque, setDestaque] = useState<{ top: number; height: number } | null>(null);
+  useEffect(() => {
+    if (!destaque) return;
+    const some = () => setDestaque(null);   // a janela mudou de largura: a faixa sairia do lugar
+    window.addEventListener("resize", some);
+    return () => window.removeEventListener("resize", some);
+  }, [destaque]);
   const arquivo = useRef<HTMLInputElement>(null);
   const aoErro = useRef(props.onError);
   aoErro.current = props.onError;
@@ -374,12 +384,19 @@ export default function EstudosView(props: {
     ouvir(mid);
   }
 
-  function irPara(i: number, titulos = "h2") {
-    const el = resumoRef.current?.querySelectorAll<HTMLElement>(titulos)[i];
+  function irPara(i: number, titulos = "h2", texto?: string) {
+    const todos = [...(resumoRef.current?.querySelectorAll<HTMLElement>(titulos) ?? [])];
+    // do mapa: confere pelo texto (a âncora é o palpite; o renderizador pode contar um título que a árvore não viu)
+    const el = todos[texto ? acharTitulo(todos.map((h) => h.textContent ?? ""), texto, i) : i];
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
-    // o título pisca de leve: depois do salto, o olho acha onde parou
-    el.animate([{ backgroundColor: "var(--color-accent-soft)" }, { backgroundColor: "transparent" }], { duration: 1800, easing: "ease-out" });
+    // a seção inteira fica destacada: o título e tudo até o próximo título do mesmo nível ou de cima
+    const nivel = Number(el.tagName[1]);
+    let fim: Element = el;
+    for (let x = el.nextElementSibling; x && !(/^H[1-6]$/.test(x.tagName) && Number(x.tagName[1]) <= nivel); x = x.nextElementSibling) fim = x;
+    const caixa = resumoRef.current!.getBoundingClientRect();
+    const a = el.getBoundingClientRect(), b = fim.getBoundingClientRect();
+    setDestaque({ top: a.top - caixa.top - 8, height: b.bottom - a.top + 16 });
   }
   function verMapa(v: boolean) {
     setMapa(v);
@@ -388,9 +405,9 @@ export default function EstudosView(props: {
   // do mapa para o texto: a seção abre depois que o texto voltou à tela
   useEffect(() => {
     if (mapa || irDepois.current == null) return;
-    const i = irDepois.current;
+    const { i, titulos, texto } = irDepois.current;
     irDepois.current = null;
-    requestAnimationFrame(() => irPara(i, "h2, h3, h4"));
+    requestAnimationFrame(() => irPara(i, titulos, texto));
   }, [mapa]);
 
   function copiar() {
@@ -725,11 +742,17 @@ export default function EstudosView(props: {
               </div>
             )}
             {estado?.texto && mapa && secoes.length > 1 && (
-              <EstudosMapaMental md={estado.texto} tema={estado.tema} onAbrir={(i) => { irDepois.current = i; verMapa(false); }} />
+              <EstudosMapaMental key={estado.message_id} md={estado.texto} tema={estado.tema}
+                                 onAbrir={(i, texto) => { irDepois.current = { i, titulos: "h2, h3, h4", texto }; verMapa(false); }} />
             )}
-            {estado?.texto && (!mapa || secoes.length < 2) && (
-              <div ref={resumoRef} onMouseUp={marcar} onKeyUp={marcar} className={`${card} px-6 py-5`}>
-                <Markdown text={matematica(estado.texto)} math />
+            {estado?.texto && (
+              <div ref={resumoRef} onMouseUp={marcar} onKeyUp={marcar} onMouseDown={() => setDestaque(null)}
+                   className={`${card} relative px-6 py-5 ${mapa && secoes.length > 1 ? "hidden" : ""}`}>
+                {destaque && (
+                  <div aria-hidden className="pointer-events-none absolute inset-x-2.5 animate-[surgir_.35s_ease-out] rounded-xl bg-accent-soft ring-1 ring-accent/35"
+                       style={{ top: destaque.top, height: destaque.height }} />
+                )}
+                <div className="relative"><Markdown text={matematica(estado.texto)} math /></div>
               </div>
             )}
 
@@ -819,7 +842,8 @@ export default function EstudosView(props: {
               <div className={`${card} text-xs`}>
                 <p className={`${rotulo} mb-1.5`}>Sumário</p>
                 {secoes.map((s, i) => (
-                  <button key={i} onClick={() => irPara(i)} className="block w-full truncate py-0.5 text-left text-muted hover:text-fg" title={s}>
+                  <button key={i} onClick={() => { if (mapa) { irDepois.current = { i, titulos: "h2" }; verMapa(false); } else irPara(i); }}
+                          className="block w-full truncate py-0.5 text-left text-muted hover:text-fg" title={s}>
                     {s}
                   </button>
                 ))}

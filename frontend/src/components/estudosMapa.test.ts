@@ -1,7 +1,25 @@
-// Mapa mental do resumo: `npm test` (node --test, sem dependência).
+// Mapa mental do resumo: `npm test` (node --test). A âncora é conferida com o parser do react-markdown (mdast).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { arvore, comFilhos, desenhar, limpar, paraMermaid } from "./estudosMapa.ts";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { gfmFromMarkdown } from "mdast-util-gfm";
+import { mathFromMarkdown } from "mdast-util-math";
+import { toString } from "mdast-util-to-string";
+import { gfm } from "micromark-extension-gfm";
+import { math } from "micromark-extension-math";
+import { type Ramo, acharTitulo, arvore, comFilhos, desenhar, limpar, paraMermaid } from "./estudosMapa.ts";
+
+/** Os h2/h3/h4 como a tela renderiza (o mesmo parser do react-markdown, com gfm e math), na ordem do documento. */
+function renderizados(md: string): string[] {
+  const out: string[] = [];
+  const andar = (n: any) => {
+    if (n.type === "heading" && n.depth >= 2 && n.depth <= 4) out.push(toString(n));
+    (n.children ?? []).forEach(andar);
+  };
+  andar(fromMarkdown(md, { extensions: [gfm(), math()], mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()] }));
+  return out;
+}
+const nos = (r: Ramo): Ramo[] => r.filhos.flatMap((f) => [f, ...nos(f)]);
 
 const MD = `# Física para o ENEM
 
@@ -61,4 +79,42 @@ test("desenho: dois lados, sem sobreposição, e fechar um ramo esconde os filho
 test("Mermaid: mindmap com a hierarquia, sem caracteres que viram forma", () => {
   const txt = paraMermaid(arvore("# Tema (geral)\n## A [x]\n### B\n"));
   assert.equal(txt, "mindmap\n  root((Tema geral))\n    A x\n      B");
+});
+
+test("a âncora bate com o título renderizado: setext, citação, lista, recuo, ~~~ e ```` com ``` dentro", () => {
+  const md = `# T
+## A
+Texto do parágrafo
+---
+## B
+> ### Atenção
+> cuidado
+- ### item de lista
+   ## C com recuo
+~~~bash
+## comentário de código
+~~~
+\`\`\`\`md
+\`\`\`js
+## dentro2
+\`\`\`
+\`\`\`\`
+## Óptica ##
+### 3 leis de Newton
+## Fontes de energia
+### Hidrelétrica
+## Fontes
+`;
+  const titulos = renderizados(md);
+  const r = arvore(md);
+  assert.deepEqual(nos(r).map((n) => n.texto), ["A", "B", "C com recuo", "Óptica", "3 leis de Newton", "Fontes de energia", "Hidrelétrica"]);
+  for (const n of nos(r)) {
+    assert.ok(limpar(titulos[n.ancora]).includes(n.texto), `âncora de "${n.texto}" aponta para "${titulos[n.ancora]}"`);
+    assert.equal(acharTitulo(titulos, n.texto, n.ancora), n.ancora);
+  }
+  // âncora errada (renderizador diferente): o texto acha o título certo, o mais perto do palpite
+  assert.equal(acharTitulo(["A", "B", "Exemplo", "C", "Exemplo"], "Exemplo", 3), 2);
+  assert.equal(acharTitulo(["A", "1.2 Lei de Snell"], "Lei de Snell", 0), 1);
+  assert.equal(acharTitulo(["A"], "não existe", 0), 0);
+  assert.equal(limpar("Razão \\frac{a}{b} e \\sqrt{2}"), "Razão a/b e √2");
 });

@@ -17,7 +17,7 @@ export type Ligacao = { id: string; d: string; ramo: number };
 export type Mapa = { nos: NoMapa[]; ligacoes: Ligacao[]; largura: number; altura: number };
 
 /** Seções que não são matéria: ficam fora do mapa (mas contam na âncora, porque a tela as renderiza). */
-const FORA = /^(fontes|refer[eê]ncias|bibliografia|revis[aã]o r[aá]pida)\b/i;
+const FORA = /^(fontes( consultadas)?|refer[eê]ncias( bibliogr[aá]ficas)?|bibliografia|revis[aã]o r[aá]pida)\s*:?$/i;   // "Fontes de energia" é matéria
 const SIMBOLO: Record<string, string> = {
   Delta: "Δ", delta: "δ", alpha: "α", beta: "β", gamma: "γ", Gamma: "Γ", lambda: "λ", mu: "μ", pi: "π", theta: "θ",
   rho: "ρ", sigma: "σ", Sigma: "Σ", omega: "ω", Omega: "Ω", phi: "φ", epsilon: "ε", eta: "η", tau: "τ", nu: "ν",
@@ -29,7 +29,10 @@ const SIMBOLO: Record<string, string> = {
 export function limpar(t: string): string {
   return t
     .replace(/^(#+\s*)+/, "")
-    .replace(/^(\d+(\.\d+)*[.)]?|[IVX]+[.)])\s+/, "")
+    .replace(/\s+#+\s*$/, "")                                   // "## Óptica ##": o fechamento opcional do ATX
+    .replace(/^(\d+(\.\d+)+\.?|\d+[.)]|[IVX]+[.)])\s+/, "")       // "3.1", "2." e "IV)" — "3 leis de Newton" fica
+    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, "$1/$2")
+    .replace(/\\sqrt\{([^}]*)\}/g, "√$1")
     .replace(/\\(?:mathrm|text|mathbf|textbf|operatorname|mathit)\{([^}]*)\}/g, "$1")
     // "\Delta s" é Δs (o espaço só separa o comando); "a \times b" continua com espaço
     .replace(/\\([a-zA-Z]+)( ?)/g, (_, c: string, esp: string) => (/^[α-ωΑ-Ω]$/.test(SIMBOLO[c] ?? "") ? SIMBOLO[c] : (SIMBOLO[c] ?? c) + esp))
@@ -40,15 +43,36 @@ export function limpar(t: string): string {
     .trim();
 }
 
-/** A árvore dos títulos. `tema` vale quando o resumo não tem "# " no topo. */
+const CERCA = /^ {0,3}(`{3,}|~{3,})/;
+const SETEXT = /^ {0,3}(=+|-+)\s*$/;
+const CONTAINER = /^ {0,3}(?:(?:>\s?)+|(?:[-*+]|\d+[.)])\s+)+/;   // citação e item de lista: o título de dentro também vira <hN>
+
+/** A árvore dos títulos. `tema` vale quando o resumo não tem "# " no topo. A `ancora` conta os h2/h3/h4 como o
+ *  renderizador conta (CommonMark): título dentro de citação ou de lista e o setext ("texto" + "---") entram na
+ *  conta, mas não viram nó; o que está em cerca de código (``` ou ~~~) não conta. O salto ainda confere pelo
+ *  texto (`acharTitulo`): a âncora é só o palpite. */
 export function arvore(md: string, tema = ""): Ramo {
   const raiz: Ramo = { id: "raiz", texto: "", nivel: 0, ancora: -1, filhos: [] };
   const pilha: Ramo[] = [raiz];
-  let cerca = false, ancora = -1, fora = false;
-  for (const linha of md.split("\n")) {
-    if (linha.trimStart().startsWith("```")) { cerca = !cerca; continue; }
-    const m = cerca ? null : /^(#{1,4})\s+(.+)$/.exec(linha);
+  let cerca = "", ancora = -1, fora = false, anterior = "";
+  for (const bruta of md.replace(/\r/g, "").split("\n")) {
+    const c = CERCA.exec(bruta);
+    if (cerca) {   // fecha só com a mesma marca, do mesmo tamanho ou maior, sem nada depois
+      if (c && c[1][0] === cerca[0] && c[1].length >= cerca.length && !bruta.trim().slice(c[1].length).trim()) cerca = "";
+      continue;
+    }
+    if (c) { cerca = c[1]; anterior = ""; continue; }
+    const paragrafo = anterior;
+    anterior = /^\s*$|^ {0,3}(#|>|[-*+] |\d+[.)] |\||<)/.test(bruta) ? "" : bruta;
+    if (paragrafo && SETEXT.exec(bruta)) {   // "Texto" + "---": um h2 (ou h1 com "===") que o modelo nem quis
+      if (bruta.trim()[0] === "-") ancora++;
+      anterior = "";
+      continue;
+    }
+    const dentro = CONTAINER.exec(bruta);
+    const m = /^ {0,3}(#{1,4})\s+(.+)$/.exec(dentro ? bruta.slice(dentro[0].length) : bruta);
     if (!m) continue;
+    if (dentro) { if (m[1].length > 1) ancora++; continue; }
     const n = m[1].length;
     if (n === 1) { raiz.texto ||= limpar(m[2]); continue; }
     ancora++;
@@ -63,6 +87,21 @@ export function arvore(md: string, tema = ""): Ramo {
   }
   raiz.texto = raiz.texto || limpar(tema) || "Resumo";
   return raiz;
+}
+
+/** Normaliza para comparar o texto do nó com o do título renderizado (sem acento de diferença de caixa, pontuação
+ *  e espaço; a numeração que o `limpar` tirou continua no título, por isso é "contém"). */
+export const normal = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+
+/** Qual dos títulos renderizados (h2/h3/h4, na ordem) é o do nó: os que contêm o texto do nó, o mais perto da
+ *  âncora; nenhum (fórmula no título, por exemplo) = a própria âncora. */
+export function acharTitulo(titulos: string[], texto: string, ancora: number): number {
+  const alvo = normal(texto);
+  let melhor = -1;
+  titulos.forEach((t, i) => {
+    if (alvo && normal(t).includes(alvo) && (melhor < 0 || Math.abs(i - ancora) < Math.abs(melhor - ancora))) melhor = i;
+  });
+  return melhor >= 0 ? melhor : ancora;
 }
 
 /** Todos os ids com filhos: o "abrir tudo". */
