@@ -215,6 +215,19 @@ def _glifos(texto: str) -> str:
     return GLIFO_ALTERNATIVA.sub(lambda m: "\n" + "ABCDE"[int(m.group(1))] + ") ", texto)
 
 
+TEXTO_POR_PAGINA = 300   # abaixo disto, em média, a página é imagem (prova escaneada)
+
+
+def _pouco_texto(texto: str) -> bool:
+    """PDF escaneado que ainda solta ALGUM texto — a marca d'água do site em cada página (pciconcursos), o
+    número da página — não é lido pelo pypdf, mas também não volta vazio: sem isto o OCR nunca rodava e a
+    prova de 12 páginas virava 12 linhas de marca d'água. Linha repetida em toda página não conta."""
+    paginas = max(1, len(MARCA_PAGINA.findall(texto)))
+    linhas = [l.strip() for l in texto.splitlines() if l.strip() and not MARCA_PAGINA.match(l.strip())]
+    repetidas = {l for l in set(linhas) if linhas.count(l) >= max(2, paginas // 2)}
+    return sum(len(l) for l in linhas if l not in repetidas) / paginas < TEXTO_POR_PAGINA
+
+
 def _amostra(texto: str, total: int, partes: int = 5) -> str:
     """`total` caracteres espalhados pelo texto inteiro, não só o começo: num simulado de 90 questões o começo
     é uma matéria só (o 2º dia do ENEM começa por Ciências da Natureza e deixa a Matemática para o fim)."""
@@ -231,11 +244,12 @@ def _extrair(arq: Path, dados: bytes) -> tuple[str, bool]:
         texto = dados.decode("utf-8", "ignore")
         return (_html_para_texto(texto) if ext in (".html", ".htm") else texto), False
     if ext in documentos.EXTRATORES:
-        if texto := documentos.extrair(arq):
-            return _glifos(texto), False
-        if ext == ".pdf":   # escaneado: OCR, que custa segundos por página
-            return documentos.extrair_ocr(arq) or "", True
-        return "", False
+        texto = documentos.extrair(arq) or ""
+        if ext == ".pdf" and _pouco_texto(texto):   # escaneado: OCR, que custa segundos por página
+            lido = documentos.extrair_ocr(arq) or ""
+            if len(lido) > 2 * len(texto):
+                return _glifos(lido), True
+        return _glifos(texto), False
     if ext in EXT_IMAGEM:   # foto de prova ou de caderno
         from . import ocr
         if not ocr.disponivel():

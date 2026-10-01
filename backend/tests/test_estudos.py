@@ -147,6 +147,20 @@ def test_pedacos_repetem_a_marca_da_pagina():
     assert "--- página 2 ---" in pedacos[-1]
 
 
+def test_pdf_escaneado_com_marca_dagua_passa_pelo_ocr(monkeypatch, tmp_path):
+    marca = "\n\n".join(f"--- página {i} ---\npcimarkpci MDAwMDo{'A' if i < 7 else 'B'}==\nwww.pciconcursos.com.br"
+                        for i in range(1, 13))
+    assert estudos._pouco_texto(f"12 página(s).\n\n{marca}")
+    assert not estudos._pouco_texto("\n\n".join(f"--- página {i} ---\nconteúdo da página {i}: " + "texto de verdade " * 30
+                                                for i in range(1, 4)))
+    lido = "\n\n".join(f"--- página {i} ---\nQuestão {i}: enunciado lido pelo OCR " * 5 for i in range(1, 13))
+    monkeypatch.setattr(estudos.documentos, "extrair", lambda arq: f"12 página(s).\n\n{marca}")
+    monkeypatch.setattr(estudos.documentos, "extrair_ocr", lambda arq: lido)
+    assert estudos._extrair(tmp_path / "prova.pdf", b"%PDF") == (lido, True)
+    monkeypatch.setattr(estudos.documentos, "extrair_ocr", lambda arq: None)   # sem OCR: fica o pouco que havia
+    assert estudos._extrair(tmp_path / "prova.pdf", b"%PDF")[1] is False
+
+
 def test_glifos_das_alternativas_viram_letras():
     assert estudos._glifos("vale:\n/L57840100m\n/L57842250m") == "vale:\n\nA) 100m\n\nC) 250m"
 
