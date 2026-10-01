@@ -156,31 +156,79 @@ def test_alternativas_com_o_mesmo_valor_sao_recusadas():
     assert P.validar({**base, "alternativas": ["$\\frac{1}{2}$ de tudo", "metade", "um terço", "nada"]})[0]   # texto: não compara
 
 
-def _modelo_que_desempata(certo_para: set[str]):
-    """chat_stream falso: gera 2 ME; o verificador ("outro") erra todas; o desempate ("m") acerta as de `certo_para`."""
+def _verificador_que_revê(convencido: set[str], chamadas: list):
+    """chat_stream falso: gera 2 ME; na 1ª olhada o verificador erra as duas; revendo com o argumento do autor,
+    é convencido nas de `convencido` e mantém o erro nas outras."""
     async def chat_stream(provider, model, messages, *a, **kw):
         system, user = messages[0]["content"], messages[1]["content"]
+        chamadas.append((system[:22], model))
         if system.startswith("Você é um professor que elabora"):
             yield ("content", json.dumps({"questoes": [_me(1), _me(2)]}))
         else:
+            revendo = system.startswith("Você conferiu questões")
             certo = _correto_do_prompt(user, re.findall(r"^\[(q\d+)\]", user, re.M))
-            resp = {i: (c if model == "m" and i in certo_para else "ABCD"[("ABCD".index(c) + 1) % 4]) for i, c in certo.items()}
-            yield ("content", json.dumps({"respostas": [{"id": i, "conta": f"conta de {model}", "resposta": r} for i, r in resp.items()]}))
+            errado = {i: "ABCD"[("ABCD".index(c) + 1) % 4] for i, c in certo.items()}
+            resp = {i: (certo[i] if revendo and i in convencido else errado[i]) for i in certo}
+            yield ("content", json.dumps({"respostas": [{"id": i, "conta": "revi" if revendo else "1ª conta", "resposta": r}
+                                                        for i, r in resp.items()]}))
         yield ("done", {})
     return chat_stream
 
 
-def test_desempate_salva_a_questao_quando_o_verificador_erra(monkeypatch):
-    monkeypatch.setattr(pesquisa.llm, "chat_stream", _modelo_que_desempata({"q1"}))
+def test_verificador_revê_com_o_argumento_do_autor(monkeypatch):
+    chamadas: list = []
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", _verificador_que_revê({"q1"}, chamadas))
     pid = _gerar(_estudo(), {"me": 2}, ex_provider="fake", ex_model="outro")
     e = _cheia(pid)
     q1 = next(q for q in e["questoes"] if q["id"] == "q1")
-    assert q1["verificada"] and q1["desempate"]   # o gabarito ganhou de 2 a 1
-    assert "desempate" not in estudos.estado(pid)["questoes"][0]   # e a tela não vê o voto do verificador
+    assert q1["verificada"] and q1["desempate"]   # foi convencido: a questão fica
+    assert "desempate" not in estudos.estado(pid)["questoes"][0]   # e a tela não vê a 1ª resposta dele
     assert [p["status"] for p in e["planejadas"]] == ["ok", "descartada"]
-    d = [x for x in e["descartadas"] if x["id"] == "q2"]
-    assert len(d) == 1 and d[0]["conta"] == "conta de outro"   # na 2ª rodada o falso repete a q1: cai como repetida and d[0]["conta_desempate"] == "conta de m"
-    assert d[0]["enunciado"].startswith("Questão 2") and d[0]["gabarito"] != d[0]["verificador"]
+    d = next(x for x in e["descartadas"] if x["id"] == "q2")
+    assert d["conta"] == "1ª conta" and d["conta_desempate"] == "revi" and d["gabarito"] != d["verificador"]
+    revisoes = [m for sist, m in chamadas if sist.startswith("Você conferiu")]
+    assert revisoes and set(revisoes) == {"outro"}   # quem revê é o verificador, não o autor
+
+
+def test_rever_mostra_o_argumento_do_autor_e_a_conta_do_verificador(monkeypatch):
+    vistos: list[str] = []
+
+    async def chat_stream(provider, model, messages, *a, **kw):
+        vistos.append(messages[1]["content"])
+        yield ("content", "{}")
+        yield ("done", {})
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", chat_stream)
+    q, _ = P.validar({**_me(1), "explicacao": "Ocorre no citosol, diz o autor."})
+    q["id"] = "q1"
+    run = {"cancelar": False, "t0": 0, "teto": 9e9, "stats": estudos.stats_novos({"model": "x", "provider": "x"},
+                                                                                {"model": "x", "provider": "x"})}
+    asyncio.run(P._rever(run, {"provider": "fake", "model": "outro"}, [q], {"q1": (0, "minha conta deu A", "")},
+                         {"itens": [], "web": []}, 10_000))
+    assert "O autor marcou B: Ocorre no citosol, diz o autor." in vistos[0] and "Você tinha marcado A: minha conta deu A" in vistos[0]
+
+
+def test_duas_certas_na_lista_do_verificador_e_defeito():
+    q, _ = P.validar(_me(1))
+    q["id"] = "q1"
+    obj = {"respostas": [{"id": "q1", "resposta": "B", "certas": ["B", "C"], "conta": "x"}]}
+    assert P._respostas(obj, [q])["q1"][2] == "mais de uma alternativa certa: B, C"
+    obj["respostas"][0]["certas"] = ["B"]
+    assert P._respostas(obj, [q])["q1"][2] == ""
+
+
+def test_mesma_resposta_em_duas_questoes_e_repeticao():
+    def me(enunciado, certa, outras=("Diagrama de classes", "Diagrama de atividades", "Diagrama de componentes")):
+        return P.validar({"tipo": "me", "enunciado": enunciado, "alternativas": [certa, *outras], "correta": 0,
+                          "explicacao": "porque sim."})[0]
+    a = me("Qual diagrama mostra a troca de mensagens no tempo?", "Diagrama de sequência")
+    b = me("Para a ordem cronológica das mensagens entre objetos, use o:", "Diagrama de sequência")
+    c = me("Qual característica da ISO 9126 trata de mudar de ambiente?", "Portabilidade", ("Usabilidade", "Eficiência", "Confiabilidade"))
+    d = me("Sobre a característica Portabilidade, é correto afirmar:", "Ser transferido para outro ambiente",
+           ("Ser fácil de aprender", "Usar pouca memória", "Não falhar"))
+    n = me("Quanto vale 2 + 1?", "3", ("4", "5", "6"))
+    assert P._mesma_resposta(b, [a]) and P._mesma_resposta(c, [d])
+    assert not P._mesma_resposta(a, [c]) and not P._mesma_resposta(n, [me("Quanto vale 6/2?", "3", ("1", "2", "4"))])
 
 
 def test_json_torto_ganha_uma_chance_de_conserto(monkeypatch):

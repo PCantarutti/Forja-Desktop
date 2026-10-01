@@ -90,8 +90,9 @@ ENEM_PROMPT = """- Padrão ENEM: cada questão abre com uma situação-problema 
 
 VERIFICAR_PROMPT = """Você resolve questões de prova sem ver o gabarito. Use o material abaixo e o que você sabe.
 Responda SÓ com um objeto JSON, sem texto antes nem depois:
-{"respostas": [{"id": "q1", "conta": "o raciocínio ou a conta, curto", "resposta": "B", "problema": ""}]}
+{"respostas": [{"id": "q1", "conta": "o raciocínio ou a conta, curto", "certas": ["B"], "resposta": "B", "problema": ""}]}
 - Primeiro "conta": resolva de verdade (a conta inteira, ou o porquê em uma ou duas frases); só depois a resposta.
+- "certas": julgue CADA alternativa e liste todas as que estão certas (múltipla escolha); o normal é uma só.
 - "problema": se a questão tiver defeito — pede o que os dados não dão (o mínimo de uma parábola voltada para
   baixo, por exemplo), nenhuma ou mais de uma alternativa certa, cita código, texto, tabela ou interface que não
   está no enunciado, ou o próprio enunciado já entrega a resposta —, diga qual em uma frase; sem defeito, deixe
@@ -446,6 +447,24 @@ def _palavras(texto: str) -> frozenset:
     return frozenset(PALAVRA.findall(_norm(texto)))
 
 
+def _mesma_resposta(q: dict, outras: list[dict]) -> bool:
+    """Duas questões da prova cuja resposta é o mesmo conceito ("Diagrama de sequência" duas vezes; "Portabilidade"
+    como resposta de uma e no enunciado da outra) cobram a mesma coisa. Só para resposta curta (até 4 palavras):
+    frase longa raramente se repete, e número ("3", "48") pode coincidir sem ser repetição."""
+    if q["tipo"] != "me":
+        return False
+    certa = _norm(q["alternativas"][q["correta"]]).strip(" .")
+    if not certa or len(certa.split()) > 4 or not re.search(r"[a-z]{4,}", certa):
+        return False
+    for x in outras:
+        if x["tipo"] != "me":
+            continue
+        dela = _norm(x["alternativas"][x["correta"]]).strip(" .")
+        if certa == dela or re.search(rf"\b{re.escape(certa)}\b", _norm(f"{x['enunciado']} {dela}")):
+            return True
+    return False
+
+
 def _parecida(q: dict, outras: list[frozenset], limite: float = 0.5) -> bool:
     """Mesma questão com outras palavras: muitas palavras em comum (Jaccard) entre o enunciado mais a resposta
     certa e o de outra. Pega "qual especificação cuida só da persistência? JPA" duas vezes na prova, e a questão
@@ -643,6 +662,10 @@ async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento:
             + (f"Páginas da web:\n{web.UNTRUSTED}{achados}\n\n" if achados else "")
             + "Questões:\n\n" + "\n\n".join(blocos))
     obj = _json(await pesquisa._perguntar(spec, VERIFICAR_PROMPT, user, run, effort="medio")) or {}
+    return _respostas(obj, qs)
+
+
+def _respostas(obj, qs: list[dict]) -> dict[str, tuple]:
     respostas = obj.get("respostas") if isinstance(obj, dict) else None
     if isinstance(respostas, dict):
         respostas = [{"id": k, "resposta": v} for k, v in respostas.items()]
@@ -652,9 +675,43 @@ async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento:
         q = por_id.get(str((r or {}).get("id") or "")) if isinstance(r, dict) else None
         if q:
             v = _letra(r.get("resposta"), len(q["alternativas"])) if q["tipo"] == "me" else _bool(r.get("resposta"))
-            if v is not None:
-                out[q["id"]] = (v, _txt(r.get("conta"), 300), _txt(r.get("problema"), 300))
+            if v is None:
+                continue
+            problema = _txt(r.get("problema"), 300)
+            certas = {x for x in (_letra(c, len(q["alternativas"])) for c in r.get("certas") or []) if x is not None} \
+                if q["tipo"] == "me" and isinstance(r.get("certas"), list) else set()
+            if not problema and len(certas) > 1:
+                problema = "mais de uma alternativa certa: " + ", ".join(LETRAS[x] for x in sorted(certas))
+            out[q["id"]] = (v, _txt(r.get("conta"), 300), problema)
     return out
+
+
+REVER_PROMPT = """Você conferiu questões de prova e chegou a uma resposta diferente da do autor. Veja de novo, agora com o
+argumento dele. Ele pode estar certo (você errou a conta ou leu mal o comando) ou errado (o gabarito dele não se
+sustenta). Decida pela matéria, não por quem falou. Use o material abaixo e o que você sabe.
+Responda SÓ com um objeto JSON, sem texto antes nem depois:
+{"respostas": [{"id": "q1", "conta": "por que esta é a certa, curto", "certas": ["B"], "resposta": "B", "problema": ""}]}
+- "certas": todas as alternativas certas; "problema": defeito da questão, se houver (duas certas, dado faltando...)."""
+
+
+async def _rever(run: dict, spec: dict, qs: list[dict], primeiras: dict, ctx: dict, orcamento: int) -> dict[str, tuple]:
+    """Segunda olhada do VERIFICADOR nas questões em que discordou, com a resposta e a explicação do autor ao lado
+    da conta que ele mesmo fez. No desempate pelo autor, ele reafirmava o próprio erro (Java "não converte" string
+    e número, 2 votos contra 1); o verificador, que costuma estar certo quando discorda, decide — e pode ser
+    convencido quando foi ele que leu mal."""
+    blocos = []
+    for q in qs:
+        r, conta, _ = primeiras[q["id"]]
+        opcoes = ("\n" + "\n".join(f"{LETRAS[i]}) {a}" for i, a in enumerate(q["alternativas"]))) if q["tipo"] == "me" \
+            else "\n(responda V ou F)"
+        blocos.append(f"[{q['id']}] {NOMES[q['tipo']]}\n{q['enunciado']}{opcoes}\n"
+                      f"O autor marcou {_marca(q, q['correta'])}: {q['explicacao']}\n"
+                      f"Você tinha marcado {_marca(q, r)}: {conta or '(sem conta)'}")
+    consulta = " ".join(q["topico"] for q in qs)
+    material = E._selecionar(ctx["itens"], consulta, min(MATERIAL_TETO, orcamento))
+    user = (f"Material:\n{web.UNTRUSTED}{material}\n\n" if material else "") + "Questões:\n\n" + "\n\n".join(blocos)
+    obj = _json(await pesquisa._perguntar(spec, REVER_PROMPT, user, run, effort="medio")) or {}
+    return _respostas(obj, qs)
 
 
 async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None:
@@ -693,6 +750,8 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                                                                 if x["tipo"] == "me" else ""))
                                                      for x in [*feitas.values(), *(l for _, l in novas)]]):   # e as do lote
                         limpa, motivo = None, "repete a ideia de outra questão desta prova"
+                    elif limpa and _mesma_resposta(limpa, [*feitas.values(), *(l for _, l in novas)]):
+                        limpa, motivo = None, "tem a mesma resposta de outra questão desta prova"
                     elif limpa and _parecida(limpa, ctx.get("_da_prova") or [], 0.45):
                         limpa, motivo = None, "parecida demais com uma questão da prova anexada (copiou)"
                     if not limpa:
@@ -718,16 +777,15 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                         respostas = {}
                     if len(respostas) < len(conferir):
                         E._avisar(run, "Parte do gabarito não foi conferida pelo verificador.")
-                # Desempate: o verificador discordou do gabarito. Quem escreveu resolve às cegas (sem ver a
-                # resposta que deu); 2 votos no gabarito ficam. Um verificador só, e de outro modelo, descartava
-                # questão boa quando ele é que errava a conta.
+                # Desempate: o verificador discordou do gabarito e olha de novo, agora vendo o argumento do
+                # autor (_rever). Se for convencido, a questão fica; se mantiver, ela é refeita.
                 disputadas = [limpa for _, limpa in novas if limpa["tipo"] != "disc"
                               and respostas.get(limpa["id"], (None, "", ""))[0] not in (None, limpa["correta"])]
                 desempate: dict = {}
                 if disputadas and not run["cancelar"]:
                     E._teto(run, TETO_LOTE)
                     try:
-                        desempate = await _conferir(run, spec, disputadas, ctx, orcamento)
+                        desempate = await _rever(run, verificador, disputadas, respostas, ctx, orcamento)
                     except Exception:
                         desempate = {}
                 for q, limpa in novas:
@@ -743,12 +801,13 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                         refazer.append(q)
                         continue
                     if any(limpa is x for x in disputadas):
-                        d, conta_d, _ = desempate.get(limpa["id"], (None, "", ""))
-                        if d != limpa["correta"]:
+                        d, conta_d, problema_d = desempate.get(limpa["id"], (None, "", ""))
+                        if d != limpa["correta"] or problema_d:
                             vistas.discard(_chave(limpa["enunciado"]))
                             q.update(status="fila", motivo=f"o verificador chegou a outra resposta ({_marca(limpa, r)})"
                                                            + (f": {conta}" if conta else "")
-                                                           + (f" · no desempate, {_marca(limpa, d)}" if d is not None else ""))
+                                                           + (f" · revendo, {_marca(limpa, d)}" if d is not None else "")
+                                                           + (f" ({problema_d})" if problema_d else ""))
                             run.setdefault("descartadas", []).append(
                                 {"id": q["id"], "rodada": rodada + 1, "enunciado": limpa["enunciado"][:800],
                                  "alternativas": limpa.get("alternativas"), "gabarito": _marca(limpa, limpa["correta"]),
@@ -756,7 +815,7 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                                  "conta_desempate": conta_d})
                             refazer.append(q)
                             continue
-                        limpa["desempate"] = _marca(limpa, r)   # o verificador votou nesta; os outros dois no gabarito
+                        limpa["desempate"] = _marca(limpa, r)   # a 1ª resposta do verificador, antes de ser convencido
                     limpa["verificada"] = limpa["tipo"] != "disc" and r is not None
                     feitas[q["id"]] = limpa
                     q.update(status="ok", motivo="")
