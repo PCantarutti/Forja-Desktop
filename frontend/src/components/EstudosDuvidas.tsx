@@ -20,6 +20,7 @@ export function ConversaDuvida(props: {
   pendente?: Pendente | null;   // pergunta que chegou de fora (trecho marcado no resumo): vai sozinha uma vez
   onPendenteUsado?: () => void;
   compacta?: boolean;           // dentro do cartão da questão: sem a caixa de prompt grande
+  extra?: React.ReactNode;      // o que fica à direita da caixa grande, antes de enviar (o seletor de modelo)
   dica?: boolean;               // modo treino: só o botão "Pedir uma dica" (até 3), sem as perguntas na tela
   onError: (e: string) => void;
 }) {
@@ -175,6 +176,7 @@ export function ConversaDuvida(props: {
             <RodapePrompt>
               <span className="text-xs text-faint">Dica: no resumo, selecione um trecho para pedir outra explicação.</span>
               <DireitaPrompt>
+                {props.extra}
                 <BotaoEnviar rodando={respondendo} onParar={parar} onEnviar={() => enviar(texto)} titulo="Perguntar" desabilitado={!texto.trim()} />
               </DireitaPrompt>
             </RodapePrompt>
@@ -191,7 +193,6 @@ export default function Duvidas(props: {
   projeto: EstudosProjeto;
   carimbo?: string;
   modelos: Modelos;
-  abas: React.ReactNode;
   botaoModelos: React.ReactNode;
   painelModelos: React.ReactNode | null;
   pendente: Pendente | null;
@@ -203,10 +204,6 @@ export default function Duvidas(props: {
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
-          <div className="flex items-center gap-2">
-            {props.abas}
-            <div className="ml-auto">{props.botaoModelos}</div>
-          </div>
           {props.painelModelos}
           {vazia && (
             <div className={`${card} text-xs text-muted`}>
@@ -218,7 +215,7 @@ export default function Duvidas(props: {
               </p>
             </div>
           )}
-          <ConversaDuvida conv={props.conv} fio="geral" carimbo={props.carimbo} modelos={props.modelos}
+          <ConversaDuvida conv={props.conv} fio="geral" carimbo={props.carimbo} modelos={props.modelos} extra={props.botaoModelos}
                           pendente={props.pendente} onPendenteUsado={props.onPendenteUsado} onError={props.onError}
                           sugestoes={vazia ? ["Quais são os pontos que mais caem?", "Me explique o tópico mais difícil", "Faça um resumo de 5 linhas"] : undefined} />
         </div>

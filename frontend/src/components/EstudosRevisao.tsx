@@ -166,9 +166,9 @@ export default function Revisao(props: {
   conv: number;
   projeto: EstudosProjeto;
   modelos: Modelos;
-  abas: React.ReactNode;
   botaoModelos: React.ReactNode;
   painelModelos: React.ReactNode | null;
+  onImersao?: (v: boolean) => void;   // na sessão de revisão a tela de fora esconde a fila de abas
   onError: (e: string) => void;
   onRecarregar: () => Promise<void> | void;
 }) {
@@ -176,7 +176,11 @@ export default function Revisao(props: {
   const [sessao, setSessao] = useState<EstudosItemRevisao[] | null>(null);
   const [quantos, setQuantos] = useState(20);
   const [viva, setViva] = useState<EstudosFlashcards | null>(null);
-  const [lista, setLista] = useState<"" | "erros" | "cartoes">("");
+  // a lista já abre no que tem coisa: um toggle fechado em cima de um espaço vazio parecia quebrado
+  const [lista, setLista] = useState<"" | "erros" | "cartoes">(() => {
+    const it = props.projeto.revisao.itens;
+    return it.some((x) => x.tipo === "erro") ? "erros" : it.some((x) => x.tipo === "cartao") ? "cartoes" : "";
+  });
   const corte = useRef<AbortController | null>(null);
   const ouvindo = useRef(0);
   const aoErro = useRef(props.onError);
@@ -221,6 +225,7 @@ export default function Revisao(props: {
     else api.get<EstudosFlashcards>(`/estudos/execucao/${g.message_id}`).then(setViva).catch(() => {}).finally(() => { ouvindo.current = 0; });
   }, [painel.geracoes]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => corte.current?.abort(), []);
+  useEffect(() => { props.onImersao?.(!!sessao); return () => props.onImersao?.(false); }, [sessao]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   function gerar() {
     if (gerando) return;
@@ -269,7 +274,6 @@ export default function Revisao(props: {
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
-          {!sessao && <div className="flex items-center gap-2">{props.abas}<div className="ml-auto">{props.botaoModelos}</div></div>}
           {!sessao && props.painelModelos}
 
           {sessao ? (
@@ -319,6 +323,7 @@ export default function Revisao(props: {
                            className="w-14 rounded-md border border-line bg-raised px-1.5 py-1 text-right font-mono text-fg focus:border-focus focus:outline-none" />
                     cartões
                   </label>
+                  {props.botaoModelos}
                   {gerando?.status === "rodando"
                     ? <button className={btn} onClick={parar}><X className="size-3.5" /> Parar</button>
                     : <button className={btnPrimary} disabled={!!gerando} onClick={gerar}>Gerar cartões</button>}

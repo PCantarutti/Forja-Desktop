@@ -19,7 +19,7 @@ function Grafico({ entregas }: { entregas: EstudosDesempenho["entregas"] }) {
       {[0, 5, 7, 10].map((v) => (
         <g key={v}>
           <line x1={PX} x2={W - PX} y1={y(v)} y2={y(v)} className={v === 7 ? "stroke-ok/40" : "stroke-line"} strokeDasharray={v === 7 ? "4 4" : undefined} />
-          <text x={PX - 8} y={y(v) + 3} textAnchor="end" className="fill-faint font-mono text-[9px]">{v}</text>
+          <text x={PX - 8} y={y(v) + 4} textAnchor="end" className="fill-faint font-mono text-[12px]">{v}</text>
         </g>
       ))}
       {n > 1 && <polyline fill="none" className="stroke-accent" strokeWidth={2}
@@ -148,7 +148,6 @@ function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: 
 export default function Desempenho(props: {
   conv: number;
   carimbo?: string;
-  abas: React.ReactNode;
   onProva: (p: ProvaPendente) => void;
   onIr: (aba: "resumo" | "revisao") => void;
   onError: (e: string) => void;
@@ -167,14 +166,16 @@ export default function Desempenho(props: {
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
-          {props.abas}
           {d && (
             <>
               <div className={`${card} flex flex-col gap-3`}>
                 <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
                   <div>
-                    <p className={rotulo}>última nota</p>
-                    <p className="mt-1 font-mono text-3xl font-semibold text-fg">{d.entregas.length ? nota(d.entregas.at(-1)!.nota) : "—"}</p>
+                    <p className={rotulo}>{d.entregas.at(-1)?.modo === "treino" ? "último treino" : "última prova"}</p>
+                    <p className="mt-1 font-mono text-4xl font-semibold text-fg">
+                      {d.entregas.length ? nota(d.entregas.at(-1)!.nota) : "—"}
+                      {!!d.entregas.length && <span className="text-lg text-faint"> / 10</span>}
+                    </p>
                   </div>
                   <div className="text-xs text-muted">
                     <p>{d.entregas.length} entrega(s) · média das provas {provas.length ? nota(media) : "—"}</p>

@@ -463,9 +463,9 @@ export default function Provas(props: {
   projeto: EstudosProjeto;
   carimbo?: string;
   modelos: Modelos;
-  abas: React.ReactNode;
   botaoModelos: React.ReactNode;
   painelModelos: React.ReactNode | null;
+  onImersao?: (v: boolean) => void;   // fazendo a prova: a tela de fora esconde a fila de abas
   onError: (e: string) => void;
   onRecarregar: () => Promise<void> | void;
   pendente?: ProvaPendente | null;
@@ -486,6 +486,7 @@ export default function Provas(props: {
 
   useEffect(() => gravarLocal(KEY_CONFIG, { ...cfg, instrucoes: undefined }), [cfg]);
   useEffect(() => () => corte.current?.abort(), []);
+  useEffect(() => { props.onImersao?.(vista.tipo === "fazer"); return () => props.onImersao?.(false); }, [vista.tipo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const topicosDisp = props.projeto.topicos ?? [];
   const escolhidos = (cfg.topicos ?? []).filter((t) => topicosDisp.includes(t));
@@ -641,12 +642,12 @@ export default function Provas(props: {
 
   const provas = [...props.projeto.provas].reverse();
   const resumoCfg = (c: EstudosProvaConfig) => (["me", "vf", "disc"] as const).filter((t) => c[t]).map((t) => `${c[t]} ${TIPO_CURTO[t]}`).join(" · ");
+  const pedidas = (c?: EstudosProvaConfig) => (c ? (c.me ?? 0) + (c.vf ?? 0) + (c.disc ?? 0) : 0);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        <div className="mx-auto flex max-w-4xl flex-col gap-3">
-          {vista.tipo !== "fazer" && props.abas}
+        <div className="mx-auto flex max-w-3xl flex-col gap-3">
 
           {vista.tipo === "fazer" && (
             <FazerProva prova={vista.prova} treino={vista.treino} onSair={() => setVista({ tipo: "lista" })}
@@ -699,7 +700,7 @@ export default function Provas(props: {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-medium text-fg">{p.titulo}</span>
                     <span className="text-faint">{quando(p.criado)} · {p.status === "rodando" ? "gerando…" : p.status === "aguardando"
-                      ? "esperando o Claude" : `${p.n} questões`}{p.config ? ` · ${resumoCfg(p.config)}` : ""}
+                      ? "esperando o Claude" : `${p.n}${pedidas(p.config) > p.n ? ` de ${pedidas(p.config)}` : ""} questões`}{p.config ? ` · ${resumoCfg(p.config)}` : ""}
                       {p.config?.tempo ? ` · ${p.config.tempo} min` : ""}{p.motor === "claude" ? " · feita pelo Claude" : ""}</span>
                     {p.status !== "pronto" && p.status !== "rodando" && p.status !== "aguardando" && (
                       <span className={p.status === "erro" ? "text-red-300" : "text-amber-300"}>{p.status}</span>
@@ -725,6 +726,7 @@ export default function Provas(props: {
                                 className="rounded-lg border border-line px-2.5 py-1 hover:border-focus hover:bg-raised">
                           <span className="text-faint">{i + 1}ª{t.modo === "treino" ? " treino" : ""} · </span>
                           <span className={`font-mono ${t.nota >= 7 ? "text-ok" : t.nota >= 5 ? "text-amber-300" : "text-red-300"}`}>{nota(t.nota)}</span>
+                          <span className="font-mono text-faint">/10</span>
                           <span className="text-faint"> · {quando(t.criado)}{t.status !== "pronto" ? ` · ${t.status}` : ""}</span>
                         </button>
                       ))}

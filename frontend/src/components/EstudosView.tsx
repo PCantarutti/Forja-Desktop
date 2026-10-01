@@ -52,9 +52,9 @@ const PADRAO: EstudosPreferencias = { nivel: "intermediario", objetivo: "entende
                                       extras: ["exemplos"], observacoes: "" };
 
 const PROFUNDIDADES: Opcao<EstudosEstado["profundidade"]>[] = [
-  { id: "rapida", label: "Web rápida", hint: "1 rodada, 3 páginas" },
-  { id: "normal", label: "Web normal", hint: "2 rodadas, 5 páginas por rodada" },
-  { id: "funda", label: "Web funda", hint: "4 rodadas, 8 páginas por rodada — demora" },
+  { id: "rapida", label: "Rápida", hint: "1 rodada, 3 páginas" },
+  { id: "normal", label: "Normal", hint: "2 rodadas, 5 páginas por rodada" },
+  { id: "funda", label: "Funda", hint: "4 rodadas, 8 páginas por rodada — demora" },
 ];
 
 const ETAPAS: { id: EstudosEstado["etapa"]; label: string }[] = [
@@ -180,6 +180,7 @@ export default function EstudosView(props: {
   const [terminou, setTerminou] = useState<EstudosEstado | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [aba, setAba] = useState<"resumo" | "provas" | "duvidas" | "revisao" | "desempenho">("resumo");
+  const [imersao, setImersao] = useState(false);   // fazendo prova ou revisando: a fila de abas sai da frente
   const [pendente, setPendente] = useState<Pendente | null>(null);   // trecho do resumo a explicar de outro jeito
   const [provaPendente, setProvaPendente] = useState<ProvaPendente | null>(null);   // a prova dos pontos fracos
   const [gerandoPdf, setGerandoPdf] = useState(false);
@@ -426,7 +427,7 @@ export default function EstudosView(props: {
 
 
   const painelModelos = (
-    <div className={`${card} mb-2 text-xs`}>
+    <div className={`${card} @container mb-2 text-xs`}>
       <div className="mb-2.5 flex items-center gap-2">
         <span className="font-medium text-fg">Quem faz o estudo</span>
         <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Motor">
@@ -442,7 +443,7 @@ export default function EstudosView(props: {
         </button>
       </div>
       {modelos.motor === "forja" ? (
-        <div className="grid gap-3 md:grid-cols-2">
+        <div className="grid gap-3 @xl:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <span className="text-muted">Resumo e prova</span>
             <div className="flex [&>div]:ml-0">
@@ -453,7 +454,7 @@ export default function EstudosView(props: {
           </div>
           <div className="flex flex-col gap-1.5">
             <span className="text-muted">Leitura e conferência</span>
-            <div className="flex items-center gap-2 [&>div]:ml-0">
+            <div className="flex flex-wrap items-center gap-2 [&>div]:ml-0">
               <div className="flex rounded-full border border-line p-0.5" role="radiogroup" aria-label="Leitura">
                 {([["auto", "Automática"], ["propria", "Escolher"]] as const).map(([id, nome]) => {
                   const ligado = (id === "propria") === !!modelos.extrator;
@@ -505,7 +506,7 @@ export default function EstudosView(props: {
     </button>
   );
   const abas = (
-    <div className="flex gap-1 self-start rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
+    <div className="flex gap-1 rounded-full border border-line p-0.5 text-xs" role="tablist" aria-label="Estudos">
       {([["resumo", "Resumo"], ["provas", `Provas${projeto?.provas.length ? ` · ${projeto.provas.length}` : ""}`],
          ["duvidas", `Dúvidas${projeto?.duvidas?.geral ? ` · ${projeto.duvidas.geral}` : ""}`],
          ["revisao", `Revisão${projeto?.revisao?.vencem ? ` · ${projeto.revisao.vencem}` : ""}`], ["desempenho", "Desempenho"]] as const).map(([id, nome]) => (
@@ -517,26 +518,38 @@ export default function EstudosView(props: {
     </div>
   );
 
+  // A fila de abas fica num topo fixo, no mesmo lugar em toda aba (cada aba tem a sua largura de conteúdo).
+  const quadro = (conteudo: React.ReactNode) => (
+    <div className="flex h-full min-h-0 flex-col">
+      {projeto && !imersao && (
+        <div className="shrink-0 px-5 pt-3">
+          <div className="mx-auto flex max-w-6xl justify-center">{abas}</div>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1 flex-col">{conteudo}</div>
+    </div>
+  );
+
   if (aba === "revisao" && props.conv !== null && projeto) {
-    return (
-      <Revisao conv={props.conv} projeto={projeto} modelos={modelos} abas={abas} botaoModelos={botaoModelos}
+    return quadro(
+      <Revisao conv={props.conv} projeto={projeto} modelos={modelos} botaoModelos={botaoModelos}
                painelModelos={painel === "modelos" ? painelModelos : null} onError={props.onError}
-               onRecarregar={() => carregar(props.conv)} />
+               onRecarregar={() => carregar(props.conv)} onImersao={setImersao} />,
     );
   }
 
   if (aba === "desempenho" && props.conv !== null && projeto) {
-    return (
-      <Desempenho conv={props.conv} carimbo={props.carimbo} abas={abas} onError={props.onError} onIr={setAba}
-                  onProva={(p) => { setProvaPendente(p); setAba("provas"); }} />
+    return quadro(
+      <Desempenho conv={props.conv} carimbo={props.carimbo} onError={props.onError} onIr={setAba}
+                  onProva={(p) => { setProvaPendente(p); setAba("provas"); }} />,
     );
   }
 
   if (aba === "duvidas" && props.conv !== null && projeto) {
-    return (
-      <Duvidas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos} abas={abas}
+    return quadro(
+      <Duvidas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos}
                botaoModelos={botaoModelos} painelModelos={painel === "modelos" ? painelModelos : null}
-               pendente={pendente} onPendenteUsado={() => setPendente(null)} onError={props.onError} />
+               pendente={pendente} onPendenteUsado={() => setPendente(null)} onError={props.onError} />,
     );
   }
 
@@ -558,15 +571,15 @@ export default function EstudosView(props: {
   }
 
   if (aba === "provas" && props.conv !== null && projeto) {
-    return (
-      <Provas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos} abas={abas}
+    return quadro(
+      <Provas conv={props.conv} projeto={projeto} carimbo={props.carimbo} modelos={modelos}
               botaoModelos={botaoModelos} painelModelos={painel === "modelos" ? painelModelos : null}
               onError={props.onError} onRecarregar={() => carregar(props.conv)}
-              pendente={provaPendente} onPendenteUsado={() => setProvaPendente(null)} />
+              pendente={provaPendente} onPendenteUsado={() => setProvaPendente(null)} onImersao={setImersao} />,
     );
   }
 
-  return (
+  return quadro(
     <div className={`flex h-full min-h-0 flex-col ${arrastando ? "ring-2 ring-accent/50 ring-inset" : ""}`}
          onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setArrastando(true); } }}
          onDragLeave={(e) => { if (e.currentTarget === e.target) setArrastando(false); }}
@@ -585,7 +598,6 @@ export default function EstudosView(props: {
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4" onScroll={() => selecao && setSelecao(null)}>
         <div className="mx-auto flex max-w-6xl flex-col items-start gap-3 xl:flex-row">
           <div className="flex w-full min-w-0 flex-1 flex-col gap-3">
-            {projeto && abas}
             {!estado && (
               <div className={`${card} text-xs text-muted`}>
                 <p className="text-sm text-fg">Seu material, um resumo feito para você estudar.</p>
