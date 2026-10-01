@@ -50,9 +50,16 @@ Mudança que só toca os arquivos "comuns" (a maioria) aplica sem conflito. Muda
 | `frontend/src/components/ServersPanel.tsx` | `runner` na resposta de `/api/servers` | `environment` |
 | `frontend/src/components/FolderPicker.tsx` | texto sobre `forja-picker.cmd` | sem esse texto |
 | `frontend/src/types.ts` | `RunnerStatus`, `exec_target` | `environment` |
+| `backend/app/main.py` (tela Estudos) | `/api/mcp/servidor` devolve `disponivel: false` (o nginx não repassa o `/mcp`): a tela esconde o motor "Claude via MCP"; `estudos.apagar` chamado nos dois caminhos de apagar conversa | sem o campo (Claude via MCP funciona); `estudos.apagar` dentro do `_limpar_disco` |
+| `frontend/src/api.ts` | `auth()` vazio (a fronteira é o nginx) | `auth()` com o token do Electron |
+| `docker-compose.yml`, `backend/Dockerfile` e `frontend/nginx.conf` (tela Estudos) | `TZ` + `tzdata` (o "hoje" da revisão e do cronograma é o do usuário); `client_max_body_size 30m` (material até 25 MB) | — |
 | raiz | `docker-compose.yml`, `*/Dockerfile`, `nginx.conf`, `searxng/`, `tools/` | `electron/`, `scripts/`, `package.json` |
 
 Tudo o que não está nessa lista — agente, ferramentas, aprovações, checkpoints, subagentes, MCP, navegador integrado, Settings, Sidebar, MessageView — é igual e deve continuar igual.
+
+A tela Estudos (`backend/app/estudos*.py`, `frontend/src/components/Estudos*.tsx`, `estudosUi.ts`, `estudosTexto.ts`
+e os testes) é **idêntica** nos dois: o que muda fica nas linhas acima. No web `mobile.avisa` é stub, então o
+lembrete do cronograma não sai (e a tela não fala dele).
 
 ## Quando um arquivo divergente precisar da mesma feature
 
