@@ -39,18 +39,24 @@ def _estudo(resumo=True) -> int:
     return conv
 
 
+def _unicas(i: int, prefixo: str) -> str:
+    """Palavras só desta questão: sem isto as falsas seriam a mesma questão e a checagem de semelhança as barraria."""
+    return " ".join(f"{prefixo}{i}{c}" for c in "abcdef")
+
+
 def _me(i, correta=1, alts=4):
-    return {"tipo": "me", "enunciado": f"Questão {i}: onde ocorre a glicólise, parte {i}?",
+    return {"tipo": "me", "enunciado": f"Questão {i}: onde ocorre a glicólise, {_unicas(i, 'termo')}?",
             "alternativas": [f"lugar {i}-{k}" for k in range(alts)], "correta": correta,
             "explicacao": "Ocorre no citosol.", "por_alternativa": [f"porque {k}" for k in range(alts)], "pagina": "p. 2"}
 
 
 def _vf(i, correta=True):
-    return {"tipo": "vf", "enunciado": f"Afirmação {i}: a glicólise dá 2 ATP.", "correta": correta, "explicacao": "Saldo 2."}
+    return {"tipo": "vf", "enunciado": f"Afirmação {i}: a glicólise dá 2 ATP, {_unicas(i, 'item')}.", "correta": correta,
+            "explicacao": "Saldo 2."}
 
 
 def _disc(i):
-    return {"tipo": "disc", "enunciado": f"Explique {i} por que a fermentação regenera NAD+.",
+    return {"tipo": "disc", "enunciado": f"Explique {i} por que a fermentação regenera NAD+, {_unicas(i, 'ponto')}.",
             "resposta_modelo": "Para a glicólise continuar.", "rubrica": [{"criterio": "cita NAD+", "pontos": 1},
                                                                          {"criterio": "cita glicólise", "pontos": 1}]}
 
@@ -194,6 +200,57 @@ def test_json_torto_ganha_uma_chance_de_conserto(monkeypatch):
     pid = _gerar(_estudo(), {"me": 1})
     assert len(pedidos) == 2 and "perto de" in pedidos[1] and "Resposta anterior" in pedidos[1]
     assert len(_cheia(pid)["questoes"]) == 1
+
+
+def test_alternativa_nenhuma_das_anteriores_e_letra_na_explicacao():
+    assert "anteriores" in P.validar({**_me(1), "alternativas": ["x", "y", "z", "Nenhuma das anteriores"]})[1]
+    assert "anteriores" in P.validar({**_me(1), "alternativas": ["x", "y", "z", "Todas as alternativas"]})[1]
+    q, _ = P.validar({**_me(1), "explicacao": "A alternativa 1 reflete a regra; a letra C também (alternativa B).",
+                      "por_alternativa": ["Errada: veja a alternativa D.", "", "", ""]})
+    assert q["explicacao"] == "A alternativa correta reflete a regra; a letra correta também (alternativa correta)."
+    assert q["por_alternativa"][0] == "Errada: veja a alternativa correta."
+    assert P._sem_letra("Alternativa correta: vitamina C.") == "Alternativa correta: vitamina C."   # C de vitamina fica
+
+
+def test_questao_parecida_com_outra_ou_com_a_do_pdf_e_refeita(monkeypatch):
+    jpa = {"tipo": "me", "enunciado": "Qual especificação Java EE é responsável exclusivamente pela persistência de dados?",
+           "alternativas": ["JPA", "JTA", "JSF", "EJB"], "correta": 0, "explicacao": "A JPA cuida da persistência."}
+    jpa2 = {**jpa, "enunciado": "Em uma aplicação Java EE, qual especificação é responsável exclusivamente pela persistência?"}
+    q1, _ = P.validar(jpa)
+    q2, _ = P.validar(jpa2)
+    assert P._parecida(q2, [P._palavras(f"{q1['enunciado']} JPA")])
+    assert not P._parecida(P.validar(_me(1))[0], [P._palavras(f"{q1['enunciado']} JPA")])
+    blocos = P._blocos_prova("Questão 1\nQual especificação Java EE é responsável exclusivamente pela persistência de "
+                             "dados?\nA) JPA\nB) JTA\nResolução\nA JPA.\nQuestão 2\nOutra coisa sobre redes e switches.")
+    assert len(blocos) == 2 and "resolucao" not in blocos[0]
+
+    lotes = {"n": 0}
+
+    async def chat_stream(provider, model, messages, *a, **kw):
+        system, user = messages[0]["content"], messages[1]["content"]
+        if system.startswith("Você é um professor que elabora"):
+            lotes["n"] += 1
+            yield ("content", json.dumps({"questoes": [jpa, jpa2]} if lotes["n"] == 1 else {"questoes": [_me(5)]}))
+        else:   # acerta: a letra da linha "JPA" ou "lugar N-1" de cada questão
+            ids = re.findall(r"^\[(q\d+)\]", user, re.M)
+            blocos = re.split(r"^\[q\d+\]", user, flags=re.M)[1:]
+            certo = {i: re.search(r"^([A-E])\) (JPA|lugar \d+-1)$", b, re.M).group(1) for i, b in zip(ids, blocos)}
+            yield ("content", json.dumps({"respostas": [{"id": i, "resposta": c} for i, c in certo.items()]}))
+        yield ("done", {})
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", chat_stream)
+    pid = _gerar(_estudo(), {"me": 2})
+    e = _cheia(pid)
+    assert lotes["n"] == 2 and [q["enunciado"][:10] for q in e["questoes"]] == [jpa["enunciado"][:10], "Questão 5:"]
+
+
+def test_area_casa_pelo_nome_inteiro_antes_da_primeira_palavra():
+    areas = [{"area": "Conhecimentos Gerais", "peso": 0.25}, {"area": "Conhecimentos Específicos", "peso": 0.75}]
+    casou = P._casar(["Governança de TI", "Atualidades"], {"Governança de TI": "Conhecimentos Específicos",
+                                                          "Atualidades": "Conhecimentos Gerais"}, areas)
+    assert casou == {"Governança de TI": "Conhecimentos Específicos", "Atualidades": "Conhecimentos Gerais"}
+    # sem a área no roteiro, a palavra que é de duas áreas não decide sozinha
+    assert P._casar(["Conhecimentos de redes"], {}, areas) == {"Conhecimentos de redes": None}
 
 
 def test_json_com_latex_de_barra_simples():

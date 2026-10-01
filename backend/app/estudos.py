@@ -116,7 +116,8 @@ PERFIL_PROMPT = """Você analisa uma prova ou simulado que o aluno anexou. O tex
 Responda SÓ com um objeto JSON, sem texto antes nem depois:
 {"banca": "", "formato": "", "alternativas": 0, "estilo": "", "topicos": [], "questoes": 0,
  "areas": [{"area": "", "peso": 0.0}]}
-- banca: quem fez a prova, se aparecer (ENEM, FUVEST, CESPE...); senão "".
+- banca: quem fez a prova, se aparecer (ENEM, FUVEST, CESPE...); senão "". O site de onde a prova foi
+  baixada (pciconcursos, qconcursos, tec concursos) NÃO é a banca.
 - formato: os tipos de questão (múltipla escolha, certo/errado, discursiva...).
 - alternativas: quantas alternativas por questão (0 se não houver).
 - estilo: 1 ou 2 frases sobre como os enunciados são escritos (texto-base longo, direto, cálculo...).

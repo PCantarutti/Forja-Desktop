@@ -66,7 +66,9 @@ Regras:
   outro jeito (30/55 e 6/11): as erradas saem de erros típicos de conta ou de conceito.
 - Confira o próprio comando (menor, maior, exceto, garante, aproximadamente): o gabarito atende exatamente o que
   foi pedido, e a explicação faz a conta inteira, com o arredondamento certo.
-- As alternativas serão embaralhadas: nas explicações, fale do conteúdo, nunca da letra.
+- As alternativas serão embaralhadas: nas explicações, fale do conteúdo, nunca da letra nem do número dela.
+- Tudo o que a questão usa (código, texto, tabela, interface, lei) está no próprio enunciado; e o enunciado não
+  entrega a resposta.
 - Verdadeiro ou falso: umas verdadeiras e outras falsas; a falsa tem um erro preciso, não é absurda.
 - Dificuldade: facil = lembrar um conceito; media = aplicar a uma situação; dificil = relacionar conceitos,
   interpretar dados ou calcular.
@@ -91,8 +93,9 @@ Responda SÓ com um objeto JSON, sem texto antes nem depois:
 {"respostas": [{"id": "q1", "conta": "o raciocínio ou a conta, curto", "resposta": "B", "problema": ""}]}
 - Primeiro "conta": resolva de verdade (a conta inteira, ou o porquê em uma ou duas frases); só depois a resposta.
 - "problema": se a questão tiver defeito — pede o que os dados não dão (o mínimo de uma parábola voltada para
-  baixo, por exemplo), nenhuma ou mais de uma alternativa certa, dado faltando —, diga qual em uma frase;
-  sem defeito, deixe vazio. Estilo e dificuldade não são defeito.
+  baixo, por exemplo), nenhuma ou mais de uma alternativa certa, cita código, texto, tabela ou interface que não
+  está no enunciado, ou o próprio enunciado já entrega a resposta —, diga qual em uma frase; sem defeito, deixe
+  vazio. Estilo e dificuldade não são defeito.
 - Leia o comando com cuidado (menor, maior, exceto, garante, aproximadamente): a resposta é a que atende
   exatamente o pedido.
 - Múltipla escolha: a letra da alternativa certa. Verdadeiro ou falso: "V" ou "F".
@@ -139,9 +142,16 @@ def _norm(s: str) -> str:
 
 def _casar(topicos: list[str], area_de: dict[str, str], areas: list[dict]) -> dict[str, str | None]:
     """{tópico: área da prova anexada} pela área que o roteiro deu ao tópico ou pelo título dele."""
+    primeiras = Counter(_norm(a["area"]).split()[0] for a in areas)
+
     def casa(t: str) -> str | None:
-        alvo = _norm(f"{area_de.get(t) or ''} {t}")
-        return next((a["area"] for a in areas if _norm(a["area"]).split()[0] in alvo), None)
+        propria, alvo = _norm(area_de.get(t) or ""), _norm(f"{area_de.get(t) or ''} {t}")
+        return (next((a["area"] for a in areas if _norm(a["area"]) == propria), None)       # a área que o roteiro deu
+                or next((a["area"] for a in areas if _norm(a["area"]) in alvo), None)      # o nome inteiro no título
+                # só a 1ª palavra, e só se ela não for de duas áreas: "Conhecimentos Gerais" e "Conhecimentos
+                # Específicos" casavam os dois com a primeira da lista
+                or next((a["area"] for a in areas if primeiras[_norm(a["area"]).split()[0]] == 1
+                         and _norm(a["area"]).split()[0] in alvo), None))
     return {t: casa(t) for t in topicos}
 
 
@@ -227,7 +237,8 @@ def _contexto(conv_id: int) -> dict:
             "topicos": topicos_ or [tema], "itens": itens, "web": web_, "perfil": perfil,
             "area_de": {t["titulo"]: t.get("area") or "" for t in e.get("topicos") or []},
             "enem": "enem" in _norm(perfil.get("banca") or "") or prefs["objetivo"] == "vestibular",
-            "simulado": _exemplo(simulado) if simulado else ""}
+            "simulado": _exemplo(simulado) if simulado else "",
+            "_da_prova": [b for m in mats if m["uso"] == "prova" for b in _blocos_prova(E._texto(conv_id, m))]}
 
 
 def _config(c: dict | None, ctx: dict) -> dict:
@@ -319,6 +330,16 @@ def _valor(alt: str) -> tuple | None:
     return round(v, 6), re.sub(r"\s+", "", m.group(4) or "")
 
 
+ANTERIORES = re.compile(r"(?i)\b(nenhuma|todas)\s+(das|as)\s+(anteriores|alternativas)\b|\bnenhum[ao]?\s+dos\s+anteriores\b")
+# "A alternativa 1 reflete...", "a letra C está correta", "(alternativa B)": depois do embaralhamento a letra
+# e o número não são mais os da tela; vira "a alternativa correta" / "esta alternativa".
+LETRA_NA_EXPLICACAO = re.compile(r"(?i)\b(a\s+)?(alternativa|op[çc][ãa]o|letra)\s+(\([A-E]\)|[A-E]|[0-4])(?!\w)")
+
+
+def _sem_letra(texto: str) -> str:
+    return LETRA_NA_EXPLICACAO.sub(lambda m: f"{m.group(1) or ''}{m.group(2)} correta", texto)
+
+
 def _letra(v, n: int) -> int | None:
     """Índice da alternativa: aceita 0..n-1 ou a letra."""
     if isinstance(v, bool):
@@ -353,6 +374,8 @@ def validar(q, tipo: str | None = None) -> tuple[dict | None, str]:
             return None, "alternativas faltando (são de 3 a 5)"
         if len({a.lower() for a in alts}) != len(alts):
             return None, "alternativas repetidas"
+        if any(ANTERIORES.search(a) for a in alts):
+            return None, "alternativa do tipo \"nenhuma/todas as anteriores\" (o embaralhamento a deixa sem sentido)"
         valores = [v for v in map(_valor, alts) if v is not None]
         if len(valores) != len(set(valores)):
             return None, "duas alternativas com o mesmo valor (ex.: 30/55 e 6/11)"
@@ -362,8 +385,8 @@ def validar(q, tipo: str | None = None) -> tuple[dict | None, str]:
         por = q.get("por_alternativa") or []
         if isinstance(por, dict):   # {"A": "...", ...}
             por = [por.get(LETRAS[i]) or por.get(LETRAS[i].lower()) or "" for i in range(len(alts))]
-        por = ([_txt(x, 1000) for x in por] + [""] * len(alts))[:len(alts)]
-        base["explicacao"] = base["explicacao"] or por[correta]
+        por = [_sem_letra(x) for x in ([_txt(x, 1000) for x in por] + [""] * len(alts))[:len(alts)]]
+        base["explicacao"] = _sem_letra(base["explicacao"]) or por[correta]
         if not base["explicacao"]:
             return None, "sem explicação"
         return {**base, "alternativas": alts, "correta": correta, "por_alternativa": por}, ""
@@ -414,6 +437,28 @@ def _json(bruto: str, tipo: type = dict):
 def _marca(q: dict, r) -> str:
     """A resposta como o aluno a vê: a letra (me) ou V/F."""
     return LETRAS[r] if q["tipo"] == "me" else ("V" if r else "F")
+
+
+PALAVRA = re.compile(r"[a-zà-ú0-9]{4,}")
+
+
+def _palavras(texto: str) -> frozenset:
+    return frozenset(PALAVRA.findall(_norm(texto)))
+
+
+def _parecida(q: dict, outras: list[frozenset], limite: float = 0.5) -> bool:
+    """Mesma questão com outras palavras: muitas palavras em comum (Jaccard) entre o enunciado mais a resposta
+    certa e o de outra. Pega "qual especificação cuida só da persistência? JPA" duas vezes na prova, e a questão
+    do PDF reescrita trocando os números. ponytail: palavras, não embedding."""
+    certa = q["alternativas"][q["correta"]] if q["tipo"] == "me" else ""
+    a = _palavras(f"{q['enunciado']} {certa}")
+    return bool(a) and any(len(a & b) / len(a | b) >= limite for b in outras if b)
+
+
+def _blocos_prova(texto: str) -> list[frozenset]:
+    """As questões da prova anexada (enunciado com as alternativas, sem a resolução), em palavras."""
+    marcas = [m.start() for m in QUESTAO.finditer(texto or "")]
+    return [_palavras(RESOLUCAO.split(texto[a:b], 1)[0]) for a, b in zip(marcas, marcas[1:] + [len(texto)])]
 
 
 def _chave(enunciado: str) -> str:
@@ -644,6 +689,12 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                     limpa, motivo = validar(brutas[i] if i < len(brutas) else None, q["tipo"])
                     if limpa and _chave(limpa["enunciado"]) in vistas:
                         limpa, motivo = None, "repetida"
+                    elif limpa and _parecida(limpa, [_palavras(f"{x['enunciado']} " + (x["alternativas"][x["correta"]]
+                                                                if x["tipo"] == "me" else ""))
+                                                     for x in [*feitas.values(), *(l for _, l in novas)]]):   # e as do lote
+                        limpa, motivo = None, "repete a ideia de outra questão desta prova"
+                    elif limpa and _parecida(limpa, ctx.get("_da_prova") or [], 0.45):
+                        limpa, motivo = None, "parecida demais com uma questão da prova anexada (copiou)"
                     if not limpa:
                         q.update(status="fila", motivo=motivo)
                         refazer.append(q)
