@@ -4,7 +4,7 @@ import type { EstudosVisao, EstudosVisaoMateria } from "../types";
 import { ArrowRight, Check, Copy } from "./icons";
 import { Markdown } from "./MessageView";
 import { matematica } from "./estudosTexto";
-import { btn, btnPrimary, card, corAcerto, rotulo } from "./estudosUi";
+import { btn, btnPrimary, card, corAcerto, corAcertoFundo, pilulaFraco, rotulo, trilho } from "./estudosUi";
 
 /** O "Tudo" lê a visão do objetivo uma vez e de novo quando o estudo muda (carimbo) ou o peso muda aqui. */
 function useVisao(conv: number, carimbo: string | undefined, onError: (e: string) => void) {
@@ -17,15 +17,6 @@ function useVisao(conv: number, carimbo: string | undefined, onError: (e: string
 }
 
 const pct = (a: number | null) => (a == null ? "—" : `${a}%`);
-
-function Numero(props: { rotulo: string; valor: string; dica?: string }) {
-  return (
-    <div className="rounded-xl bg-raised/60 px-3.5 py-3" title={props.dica}>
-      <p className="text-[11px] text-faint">{props.rotulo}</p>
-      <p className="mt-0.5 font-mono text-xl font-semibold text-fg">{props.valor}</p>
-    </div>
-  );
-}
 
 /** Peso da matéria, editável na própria linha (vale ao sair do campo ou no Enter). */
 function Peso({ m, conv, onMudou, onError }: { m: EstudosVisaoMateria; conv: number; onMudou: () => void; onError: (e: string) => void }) {
@@ -50,6 +41,44 @@ function Peso({ m, conv, onMudou, onError }: { m: EstudosVisaoMateria; conv: num
   );
 }
 
+/** Anel do acerto geral: o arco na cor do acerto e um traço na meta de 70%. */
+function Anel({ acerto }: { acerto: number | null }) {
+  const r = 38, c = 2 * Math.PI * r;
+  return (
+    <svg viewBox="0 0 92 92" className="size-[92px] shrink-0" aria-hidden>
+      <circle cx="46" cy="46" r={r} fill="none" strokeWidth="8" className="stroke-raised" />
+      {acerto != null && acerto > 0 && (
+        <circle cx="46" cy="46" r={r} fill="none" strokeWidth="8" strokeLinecap="round" transform="rotate(-90 46 46)"
+                strokeDasharray={`${(c * acerto) / 100} ${c}`} className={corAcerto(acerto).replace("bg-", "stroke-")} />
+      )}
+      {/* a meta: 70% do caminho, a partir do topo */}
+      <line x1="46" y1="2" x2="46" y2="14" strokeWidth="1.6" className="stroke-fg" transform={`rotate(${0.7 * 360} 46 46)`} />
+      <text x="46" y="46" textAnchor="middle" dominantBaseline="central" className="fill-fg font-mono text-[22px] font-semibold">
+        {acerto == null ? "—" : `${acerto}%`}
+      </text>
+    </svg>
+  );
+}
+
+/** Régua dos dias até a prova: hoje em accent, a prova em fg, um traço maior a cada 7 dias. */
+function Regua({ dias }: { dias: number }) {
+  const n = Math.min(dias, 120);   // ponytail: régua de até 120 dias; além disso cada barra já vira um fio
+  return (
+    <div className="mt-3">
+      <div className="flex h-[18px] items-end gap-0.5" aria-hidden>
+        {Array.from({ length: n + 1 }, (_, i) => (
+          <span key={i} className={`flex-1 rounded-[1px] ${
+            i === 0 ? "h-[18px] bg-accent" : i === n ? "h-[18px] bg-fg" : i % 7 === 0 ? "h-3 bg-line-strong" : "h-2 bg-line"}`} />
+        ))}
+      </div>
+      <div className="mt-1 flex justify-between font-mono text-[10.5px] text-faint"><span>hoje</span><span>prova</span></div>
+    </div>
+  );
+}
+
+const cardVisao = "rounded-xl border border-line bg-surface px-[18px] py-4";
+const colunas = "grid grid-cols-[minmax(0,1.7fr)_minmax(150px,1.3fr)_112px_70px_62px_88px] items-center gap-3.5";
+
 export function VisaoGeral(props: {
   conv: number; carimbo?: string; onError: (e: string) => void; onMudou: () => void;
   onAbrir: (materia: string) => void; onSimuladoFracos: () => void; onIr: (aba: "simulado" | "revisao" | "desempenho") => void;
@@ -59,47 +88,62 @@ export function VisaoGeral(props: {
   const fraca = v.materias.find((m) => m.id === v.fraca);
   const soma = v.materias.reduce((s, m) => s + m.peso, 0) || 1;
   const dias = v.plano?.data ? Math.ceil((new Date(`${v.plano.data}T00:00:00`).getTime() - Date.now()) / 86_400_000) : null;
+  const num = (n: number) => <span className={n ? "" : "text-faint"}>{n}</span>;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-      <div className="mx-auto flex max-w-4xl flex-col gap-3">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Numero rotulo="Acerto geral" valor={pct(v.acerto)} dica="Pontos sobre o máximo, somando as entregas de todas as matérias" />
-          <Numero rotulo="Entregas" valor={String(v.entregas)} />
-          <Numero rotulo="Revisar hoje" valor={String(v.vencem)} dica="Erros e cartões que vencem hoje, de todas as matérias" />
-          <Numero rotulo="Faltam" valor={dias != null && dias > 0 ? `${dias} dias` : "—"} dica={v.plano?.data ? `Prova em ${v.plano.data}` : "Marque a data da prova no cronograma (aba Desempenho)"} />
-        </div>
-
-        <div className={card}>
-          <div className="mb-2 flex items-center gap-2">
-            <p className={rotulo}>Por matéria</p>
-            <span className="ml-auto text-[11px] text-faint">acerto · peso · resumos · provas · no caderno de erros</span>
-          </div>
-          {v.materias.map((m) => (
-            <div key={m.id} role="button" onClick={() => props.onAbrir(m.id)} title={`Abrir ${m.nome}`}
-                 className="-mx-2 flex cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 text-xs hover:bg-raised/60">
-              <span className={`size-2 shrink-0 rounded-full ${corAcerto(m.acerto)}`} />
-              <span className="w-48 shrink-0 truncate text-[13px] text-fg">{m.nome}</span>
-              <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-raised" aria-hidden>
-                <div className={`h-full rounded-full ${corAcerto(m.acerto)}`} style={{ width: `${m.acerto ?? 0}%` }} />
+    <div className="min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
+      <div className="mx-auto flex max-w-[1060px] flex-col gap-3">
+        <div className="grid grid-cols-[1.2fr_1fr_1fr] gap-3">
+          <div className={`${cardVisao} flex flex-col`} title="Pontos sobre o máximo, somando as entregas de todas as matérias">
+            <p className={rotulo}>Acerto geral</p>
+            <div className="mt-2.5 flex items-center gap-4">
+              <Anel acerto={v.acerto} />
+              <div className="min-w-0">
+                <p className="text-[13px] text-fg-2"><span className="font-mono font-semibold text-fg">{v.entregas}</span> entregas</p>
+                <p className="mt-1 text-[12px] text-muted">
+                  Meta de 70% marcada no anel.{v.acerto != null && v.acerto < 70 ? ` Faltam ${70 - v.acerto} pontos.` : ""}
+                </p>
               </div>
-              <span className="w-10 shrink-0 text-right font-mono text-faint">{pct(m.acerto)}</span>
-              <span className="flex w-24 shrink-0 items-center justify-end gap-1.5 text-faint">
-                <Peso m={m} conv={props.conv} onMudou={() => { ler(); props.onMudou(); }} onError={props.onError} />
-                <span className="w-8 font-mono">{Math.round((100 * m.peso) / soma)}%</span>
-              </span>
-              <span className="w-28 shrink-0 text-right font-mono text-faint">{m.resumos.length} · {m.provas} · {m.erros}</span>
             </div>
-          ))}
+            <button className={`${btn} mt-3.5 self-start text-[12.5px]`} onClick={() => props.onIr("simulado")}>Simulado geral <ArrowRight className="size-3.5" /></button>
+          </div>
+
+          <div className={`${cardVisao} flex flex-col`} title={v.plano?.data ? `Prova em ${v.plano.data}` : "Marque a data da prova no cronograma (aba Desempenho)"}>
+            <p className={rotulo}>Faltam</p>
+            <div className="mt-2 flex items-baseline gap-1.5">
+              <span className="font-mono text-[30px] leading-none font-semibold text-fg">{dias != null && dias > 0 ? dias : "—"}</span>
+              {dias != null && dias > 0 && <span className="text-[14px] text-fg-2">dias</span>}
+              {v.plano?.data && <span className="ml-auto text-[12px] text-muted">prova {v.plano.data.split("-").reverse().join("/")}</span>}
+            </div>
+            {dias != null && dias > 0 && <Regua dias={dias} />}
+            <button className={`${btn} mt-3.5 self-start text-[12.5px]`} onClick={() => props.onIr("desempenho")}>
+              Desempenho e cronograma <ArrowRight className="size-3.5" />
+            </button>
+          </div>
+
+          <div className={`${cardVisao} flex flex-col`} title="Erros e cartões que vencem hoje, de todas as matérias">
+            <p className={rotulo}>Revisar hoje</p>
+            <div className="mt-2 flex items-baseline gap-1.5">
+              <span className="font-mono text-[30px] leading-none font-semibold text-fg">{v.vencem}</span>
+              <span className="text-[14px] text-fg-2">itens</span>
+            </div>
+            <p className="mt-2 text-[12px] text-muted">Erros e cartões que vencem hoje, de todas as matérias</p>
+            <button className={`${btn} mt-3.5 self-start text-[12.5px]`} onClick={() => props.onIr("revisao")}>Revisar tudo de hoje · {v.vencem}</button>
+          </div>
         </div>
 
         {fraca && (
-          <div className={`${card} flex flex-wrap items-center gap-3`}>
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-accent-line bg-accent-soft/50 px-[18px] py-4">
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-fg">Onde cada hora rende mais: {fraca.nome}</p>
-              <p className="mt-0.5 text-xs text-muted">
+              <p className={`${rotulo} text-accent-text!`}>Próximo passo</p>
+              <p className="mt-1 text-[15px] font-semibold text-fg">Onde cada hora rende mais: {fraca.nome}</p>
+              <p className="mt-0.5 text-[12.5px] text-muted">
                 {Math.round((100 * fraca.peso) / soma)}% do peso do objetivo e {fraca.acerto == null ? "nenhuma prova feita ainda" : `${fraca.acerto}% de acerto`}
-                {fraca.fracos.length ? ` · mais fracos: ${fraca.fracos.join(", ")}` : ""}
               </p>
+              {!!fraca.fracos.length && (
+                <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
+                  mais fracos: {fraca.fracos.map((t) => <span key={t} className={pilulaFraco}>{t}</span>)}
+                </p>
+              )}
             </div>
             <button className={btn} onClick={() => props.onAbrir(fraca.id)}>Abrir a matéria <ArrowRight className="size-3.5" /></button>
             <button className={btnPrimary} onClick={props.onSimuladoFracos} title="Simulado geral com mais questões das matérias fracas">
@@ -108,10 +152,58 @@ export function VisaoGeral(props: {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2 text-xs">
-          <button className={btn} onClick={() => props.onIr("simulado")}>Simulado geral <ArrowRight className="size-3.5" /></button>
-          <button className={btn} onClick={() => props.onIr("revisao")}>Revisar tudo de hoje · {v.vencem}</button>
-          <button className={btn} onClick={() => props.onIr("desempenho")}>Desempenho e cronograma</button>
+        <div className={cardVisao}>
+          <div className="mb-3 flex items-center gap-2">
+            <p className={rotulo}>Por matéria</p>
+            <span className="ml-auto text-[11.5px] text-faint">clique numa linha para abrir · o peso vale no simulado geral e no cronograma</span>
+          </div>
+          {!!v.materias.length && (
+            <>
+              <div className="flex h-[30px] gap-0.5 overflow-hidden rounded-lg">
+                {v.materias.map((m) => (
+                  <div key={m.id} title={`${m.nome}: ${Math.round((100 * m.peso) / soma)}% do peso`}
+                       className={`flex min-w-0 items-center gap-1.5 px-2 transition-[width] duration-[250ms] ${corAcertoFundo(m.acerto)}`}
+                       style={{ width: `${(100 * m.peso) / soma}%` }}>
+                    <span className={`size-1.5 shrink-0 rounded-full ${corAcerto(m.acerto)}`} />
+                    <span className="min-w-0 truncate text-[11.5px] text-fg-2">{m.nome}</span>
+                    <span className="shrink-0 font-mono text-[10.5px] text-muted">{Math.round((100 * m.peso) / soma)}%</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] text-faint">largura = peso no objetivo · cor = acerto (verde ≥ 70%, âmbar 50–69%, vermelho abaixo, cinza sem prova)</p>
+            </>
+          )}
+          <div className={`${colunas} mt-4 px-2.5 pb-1.5 font-mono text-[10.5px] tracking-[.06em] text-faint uppercase`}>
+            <span>Matéria</span><span>Acerto</span><span>Peso</span><span className="text-right">Resumos</span>
+            <span className="text-right">Provas</span><span className="text-right">Cad. erros</span>
+          </div>
+          {v.materias.map((m) => (
+            <div key={m.id} role="button" onClick={() => props.onAbrir(m.id)} title={`Abrir ${m.nome}`}
+                 className={`${colunas} cursor-pointer rounded-lg border-t border-raised px-2.5 py-2.5 hover:bg-raised/60`}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className={`size-2 shrink-0 rounded-full ${corAcerto(m.acerto)}`} />
+                  <span className="min-w-0 truncate text-[13.5px] text-fg">{m.nome}</span>
+                  {fraca?.id === m.id && <span className="shrink-0 rounded-[5px] bg-accent-soft px-1.5 py-px text-[10.5px] text-accent-text">prioridade</span>}
+                </div>
+                {!!m.fracos.length && <p className="mt-0.5 truncate pl-4 text-[11.5px] text-faint">fracos: {m.fracos.join(", ")}</p>}
+              </div>
+              <div className="flex items-center gap-2.5">
+                <div className={`relative h-1.5 min-w-0 flex-1 ${trilho}`} aria-hidden>
+                  <div className={`h-full rounded-full ${corAcerto(m.acerto)}`} style={{ width: `${m.acerto ?? 0}%` }} />
+                  <span className="absolute top-0 left-[70%] h-full w-px bg-faint" />
+                </div>
+                <span className="w-9 shrink-0 text-right font-mono text-[12px] text-fg-2">{pct(m.acerto)}</span>
+              </div>
+              <span className="flex items-center gap-1.5">
+                <Peso m={m} conv={props.conv} onMudou={() => { ler(); props.onMudou(); }} onError={props.onError} />
+                <span className="font-mono text-[11.5px] text-faint">{Math.round((100 * m.peso) / soma)}%</span>
+              </span>
+              <span className="text-right font-mono text-[12.5px] text-fg-2">{num(m.resumos.length)}</span>
+              <span className="text-right font-mono text-[12.5px] text-fg-2">{num(m.provas)}</span>
+              <span className={`text-right font-mono text-[12.5px] ${m.erros >= 10 ? "text-amber-300" : "text-fg-2"}`}>{num(m.erros)}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
