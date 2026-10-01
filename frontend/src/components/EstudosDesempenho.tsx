@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import type { EstudosDesempenho, EstudosPlano, EstudosTarefa } from "../types";
+import type { EstudosDesempenho, EstudosPlano, EstudosProjeto, EstudosTarefa } from "../types";
 import { ArrowRight, Check, Clock, Trash } from "./icons";
 import type { ProvaPendente } from "./EstudosProva";
 import { btn, btnPrimary, nota, rotulo } from "./estudosUi";
@@ -35,9 +35,12 @@ function Grafico({ entregas }: { entregas: EstudosDesempenho["entregas"] }) {
   );
 }
 
-function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: {
-  conv: number; plano: EstudosPlano | null; lembrete: boolean; onMudou: () => void; onProva: (p: ProvaPendente) => void;
-  onIr: (aba: "resumo" | "revisao", topico?: string) => void; onError: (e: string) => void;   // topico: o "ler" do cronograma
+type Feitos = NonNullable<EstudosProjeto["piloto"]>["feitos"];
+type Ir = (aba: "resumo" | "revisao" | "provas", topico?: string, mid?: number) => void;   // topico: o "ler" do cronograma
+
+function Cronograma({ conv, plano, lembrete, feitos, onMudou, onProva, onIr, onError }: {
+  conv: number; plano: EstudosPlano | null; lembrete: boolean; feitos: Feitos; onMudou: () => void; onProva: (p: ProvaPendente) => void;
+  onIr: Ir; onError: (e: string) => void;
 }) {
   // AAAA-MM-DD no fuso daqui (o toISOString é UTC: depois das 21h já seria amanhã)
   const [[hoje, amanha]] = useState(() => [new Date(), new Date(Date.now() + 86_400_000)].map((x) => x.toLocaleDateString("sv-SE")));
@@ -130,6 +133,17 @@ function Cronograma({ conv, plano, lembrete, onMudou, onProva, onIr, onError }: 
                       {t.feito && <Check className="size-3" />}
                     </button>
                     <span className={`min-w-0 flex-1 text-[12.5px] ${t.feito ? "text-faint line-through" : "text-fg"}`}>{t.texto}</span>
+                    {feitos[t.id] && (
+                      <span className="flex shrink-0 gap-2 text-[11px]" title="Feito pelo piloto automático">
+                        {feitos[t.id].resumo && t.tipo === "estudar" && (
+                          <button className="text-ok hover:underline" onClick={() => onIr("resumo", t.topico || undefined, feitos[t.id].resumo)}>resumo ✓</button>
+                        )}
+                        {feitos[t.id].prova && (
+                          <button className="text-ok hover:underline" onClick={() => onIr("provas", t.topico || undefined)}>prova ✓</button>
+                        )}
+                        {feitos[t.id].erro && <span className="text-amber-300" title={feitos[t.id].erro}>falhou</span>}
+                      </span>
+                    )}
                     <span className="font-mono text-faint">{t.minutos} min</span>
                     {d.dia === hoje && !t.feito && (
                       <button className="text-accent-text hover:underline"
@@ -156,8 +170,10 @@ export default function Desempenho(props: {
   conv: number;
   carimbo?: string;
   onProva: (p: ProvaPendente) => void;
-  onIr: (aba: "resumo" | "revisao", topico?: string) => void;   // topico: o "ler" do cronograma
+  onIr: Ir;
   onError: (e: string) => void;
+  piloto?: React.ReactNode;
+  feitos?: Feitos;
 }) {
   const [d, setD] = useState<EstudosDesempenho | null>(null);
   const carregar = useCallback(() => {
@@ -239,7 +255,9 @@ export default function Desempenho(props: {
                 </div>
               )}
 
+              {props.piloto}
               <Cronograma key={d.plano?.criado ?? "novo"} conv={props.conv} plano={d.plano} lembrete={d.lembrete} onMudou={carregar}
+                          feitos={props.feitos ?? {}}
                           onProva={props.onProva} onIr={props.onIr} onError={props.onError} />
             </>
           )}

@@ -82,6 +82,7 @@ const colunas = "grid grid-cols-[minmax(0,1.7fr)_minmax(150px,1.3fr)_112px_70px_
 export function VisaoGeral(props: {
   conv: number; carimbo?: string; onError: (e: string) => void; onMudou: () => void;
   onAbrir: (materia: string) => void; onSimuladoFracos: () => void; onIr: (aba: "simulado" | "revisao" | "desempenho") => void;
+  piloto?: React.ReactNode;
 }) {
   const [v, ler] = useVisao(props.conv, props.carimbo, props.onError);
   if (!v) return <p className="p-6 text-center text-xs text-faint">Lendo o objetivo…</p>;
@@ -151,6 +152,8 @@ export function VisaoGeral(props: {
             </button>
           </div>
         )}
+
+        {props.piloto}
 
         <div className={cardVisao}>
           <div className="mb-3 flex items-center gap-2">

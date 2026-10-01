@@ -16,6 +16,7 @@ import Desempenho from "./EstudosDesempenho";
 import Simulados from "./EstudosSimulados";
 import EstudosMapaMental from "./EstudosMapaMental";
 import EstudosMaterias from "./EstudosMaterias";
+import Piloto from "./EstudosPiloto";
 import { ResumoGeral, VisaoGeral } from "./EstudosTudo";
 import { LerEdital, TrazerEstudo } from "./EstudosObjetivo";
 import { acharTitulo } from "./estudosMapa";
@@ -207,7 +208,8 @@ export default function EstudosView(props: {
   const [selecao, setSelecao] = useState<{ texto: string; x: number; y: number } | null>(null);
   const statusAnterior = useRef("");
   const acompanhando = useRef(0);   // message_id ouvido por SSE; -1 = o POST de estudar está no ar
-  const escolhida = useRef(0);      // versão antiga aberta pelo seletor (0 = a mais recente)
+  const escolhida = useRef(0);
+  const abrirDepois = useRef(0);    // resumo a abrir quando a matéria nova carregar (o "resumo ✓" do cronograma)      // versão antiga aberta pelo seletor (0 = a mais recente)
   const convAtual = useRef(props.conv);
   const corte = useRef<AbortController | null>(null);
   const resumoRef = useRef<HTMLDivElement>(null);
@@ -269,6 +271,14 @@ export default function EstudosView(props: {
       const p = await api.get<EstudosProjeto>(`/estudos/${id}`);
       if (convAtual.current !== id || (p.materia ?? null) !== materiaAtual.current) return;   // trocou no meio
       setProjeto(p);
+      if (abrirDepois.current && p.resumos.some((r) => r.message_id === abrirDepois.current)) {
+        const mid = abrirDepois.current;
+        abrirDepois.current = 0;
+        escolhida.current = mid === p.resumos.at(-1)?.message_id ? 0 : mid;
+        statusAnterior.current = "";
+        ouvir(mid);
+        return;
+      }
       if (acompanhando.current || escolhida.current) return;   // o SSE (ou a versão escolhida) manda no resumo
       if (p.resumo) receber(p.resumo);
       else setEstado(null);
@@ -382,11 +392,16 @@ export default function EstudosView(props: {
   }
   const simuladoFracos = () => { setProvaPendente({ topicos: [], instrucoes: "" }); setAba("simulado"); };
   /** O "ler" do cronograma: a matéria do tópico ("Português · Crase"), com o tópico como tema do resumo. */
-  function irDoCronograma(a: "resumo" | "revisao", topico?: string) {
+  function irDoCronograma(a: "resumo" | "revisao" | "provas", topico?: string, mid?: number) {
     const [nome, ...resto] = (topico ?? "").split(" · ");
     const m = tudo && resto.length ? projeto?.materias.find((x) => x.nome === nome) : null;
+    const trocou = !!m && m.id !== materiaAtual.current;
     if (m) escolherMateria(m.id);
     setAba(a);
+    if (a === "resumo" && mid) {   // o resumo que o piloto fez: abre na aba do tópico dele
+      if (trocou) abrirDepois.current = mid; else abrirVersao(mid);
+      return;
+    }
     if (a === "resumo" && topico && (m || !estado)) setTema(m ? resto.join(" · ") : topico);
   }
 
@@ -467,6 +482,7 @@ export default function EstudosView(props: {
   async function estudar(texto?: string) {
     const t = (texto ?? tema).trim();
     if (!t || rodando) return;
+    if (projeto?.piloto?.ativo) return props.onError("O piloto automático está usando o modelo: pause ele (Visão geral ou Desempenho) para pedir outro resumo.");
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
     try {
       const id = await props.ensureConversation();
@@ -724,6 +740,11 @@ export default function EstudosView(props: {
       </span>
     </div>
   ) : null;
+  const corpoPiloto = { preferencias: prefs, web, profundidade, ...motorDe(modelos) };
+  const pilotoNode = projeto && props.conv !== null && (
+    <Piloto conv={props.conv} projeto={projeto} corpo={corpoPiloto} botaoModelos={botaoModelos}
+            onMudou={() => carregar(props.conv)} onError={props.onError} />
+  );
   const blocoTopicos = (
     <div className="flex flex-col gap-2.5">
       <div className="flex flex-wrap gap-1.5">
@@ -797,7 +818,7 @@ export default function EstudosView(props: {
   if (tudo && aba === "visao" && props.conv !== null && projeto) {
     return quadro(
       <VisaoGeral conv={props.conv} carimbo={props.carimbo} onError={props.onError} onMudou={() => carregar(props.conv)}
-                  onAbrir={abrirMateria} onSimuladoFracos={simuladoFracos} onIr={setAba} />,
+                  onAbrir={abrirMateria} onSimuladoFracos={simuladoFracos} onIr={setAba} piloto={pilotoNode} />,
     );
   }
 
@@ -833,6 +854,7 @@ export default function EstudosView(props: {
   if (aba === "desempenho" && props.conv !== null && projeto) {
     return quadro(
       <Desempenho conv={props.conv} carimbo={props.carimbo} onError={props.onError} onIr={irDoCronograma}
+                  piloto={pilotoNode} feitos={projeto?.piloto?.feitos ?? {}}
                   onProva={(p) => { setProvaPendente(p); setAba(tudo ? "simulado" : "provas"); }} />,
     );
   }

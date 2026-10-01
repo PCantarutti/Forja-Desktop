@@ -87,8 +87,8 @@ def test_percorre_o_cronograma_ate_a_data_com_resumo_e_prova_e_busca_por_materia
         await _ate_parar(conv)
     asyncio.run(main())
     # uma busca por matéria, na matéria dela; depois resumo → prova de cada tópico até o 2º dia (o 3º e o simulado ficam)
-    assert FEITO[:2] == [("busca", ms["pt"], "Prefeitura de Contagem Português prova anterior com gabarito"),
-                         ("busca", ms["rl"], "Prefeitura de Contagem Raciocínio prova anterior com gabarito")]
+    assert [(t, m) for t, m, _ in FEITO[:2]] == [("busca", ms["pt"]), ("busca", ms["rl"])]
+    assert "concurso Prefeitura de Contagem, parte de Português" in FEITO[0][2] and "nada de ENEM" in FEITO[0][2]
     assert FEITO[2:] == [("resumo", ms["pt"], "Crase"), ("prova", ms["pt"], "Prova só sobre o tópico: Crase."),
                          ("resumo", ms["rl"], "Porcentagem"), ("prova", ms["rl"], "Prova só sobre o tópico: Porcentagem.")]
     r = PIL.resumo(conv)

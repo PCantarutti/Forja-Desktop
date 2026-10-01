@@ -329,6 +329,13 @@ export type EstudosEstado = {
   stats: PesquisaEstado["stats"];
 };
 
+/** O piloto automático do objetivo. feitos: tarefa do cronograma → o resumo e a prova que ele gerou. */
+export type EstudosPiloto = {
+  ativo: boolean; ate: string; fase: string; aviso: string; questoes: number; total: number; prontos: number;
+  atual: { etapa: string; tarefa?: string; topico?: string; mid?: number } | null;
+  feitos: Record<string, { resumo?: number; prova?: number; erro?: string }>;
+};
+
 export type EstudosProjeto = {
   id: number;
   titulo: string;
@@ -347,6 +354,7 @@ export type EstudosProjeto = {
   ranking: EstudosRanking | null;
   busca: EstudosBusca | null;
   edital?: EstudosEdital | null;   // a última leitura de edital do objetivo
+  piloto?: EstudosPiloto;
 };
 
 /** Uma questão real do simulado, conferida: a letra da IA (às cegas) contra a oficial. */

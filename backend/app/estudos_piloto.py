@@ -124,6 +124,14 @@ async def _rodar_item(conv_id: int, materia: str | None, f, *args) -> tuple[int,
     return msg["id"], await _esperar(msg["id"])
 
 
+def _pedido(titulo: str, cargo: str, materia: str) -> str:
+    """O pedido da busca: o concurso e o cargo por extenso, e a recusa explícita a outro exame — só "Contagem"
+    + "Raciocínio Lógico" trouxe apostila de princípio da contagem, e "Conhecimentos Específicos" trouxe o ENEM."""
+    alvo = f"{titulo}" + (f", cargo {cargo}" if cargo and cargo.lower() not in titulo.lower() else "")
+    return (f"Provas anteriores (caderno de questões e gabarito) do concurso {alvo}" + (f", parte de {materia}" if materia else "")
+            + ". Só deste concurso ou da mesma banca e cargo; nada de ENEM, vestibular, apostila ou outro exame.")[:300]
+
+
 def _parou(conv_id: int) -> bool:
     return not ler(conv_id)["ativo"]
 
@@ -137,6 +145,8 @@ async def _laco(conv_id: int) -> None:
     # 1. provas reais de cada matéria, uma vez cada
     with db.session() as s:
         titulo = E._conv(s, conv_id).title
+    from . import estudos_edital
+    cargo = ((estudos_edital.ultima(conv_id) or {}).get("cargo") or "").strip()
     for m in E.materias(conv_id) or [{"id": "", "nome": ""}]:   # sem matérias: uma busca do objetivo inteiro
         if _parou(conv_id):
             return
@@ -145,8 +155,7 @@ async def _laco(conv_id: int) -> None:
         _mudar(conv_id, fase=f"buscando provas anteriores{' de ' + m['nome'] if m['nome'] else ''}",
                atual={"etapa": "busca", "materia": m["id"]})
         try:
-            mid, st = await _rodar_item(conv_id, m["id"] or None, estudos_busca.start,
-                                        f"{titulo} {m['nome']} prova anterior com gabarito".replace("  ", " ")[:300], *motor)
+            mid, st = await _rodar_item(conv_id, m["id"] or None, estudos_busca.start, _pedido(titulo, cargo, m["nome"]), *motor)
         except Exception as e:   # busca é extra: falhou, segue para o cronograma
             log.warning("piloto %s: busca de %s falhou: %s", conv_id, m["nome"], e)
             mid, st = 0, "erro"
