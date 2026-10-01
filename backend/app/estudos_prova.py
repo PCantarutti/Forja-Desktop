@@ -14,6 +14,7 @@ resposta_modelo, rubrica [{criterio, pontos}].
 """
 from __future__ import annotations
 
+import logging
 import random
 import re
 import time
@@ -26,6 +27,8 @@ from . import db, estudos as E, mirror, pesquisa, web
 from .agent import _save
 from .parsing import split_think
 from .tools import ToolError
+
+log = logging.getLogger(__name__)
 
 TIPOS = ("me", "vf", "disc")
 NOMES = {"me": "múltipla escolha", "vf": "verdadeiro ou falso", "disc": "discursiva"}
@@ -349,6 +352,23 @@ def _embaralhar(q: dict, rnd: random.Random) -> None:
     q["correta"] = ordem.index(q["correta"])
 
 
+# LaTeX dentro de JSON: o modelo escreve \mathrm{CO_2} com uma barra só. "\m" é escape inválido e derruba o
+# lote inteiro no json.loads; pior, "\frac" e "\times" são escapes VÁLIDOS (\f e \t) e a fórmula vira caractere
+# de controle sem erro nenhum. Antes de ler: barra dobrada fica como está; barra de escape inválido, ou de
+# comando LaTeX que começa com b/f/n/r/t/u, ganha a segunda barra. "\n" de quebra de linha continua quebra.
+COMANDOS = ("beta|bar|binom|bmod|bf|boldsymbol|big|Big|frac|forall|nu|neq|nabla|neg|ni|not|nolimits|rho|right|rangle|"
+            "rceil|rfloor|rm|times|text|textrm|textbf|textit|theta|tau|tan|tanh|to|tilde|top|triangle|underline|uparrow")
+BARRA = re.compile(r'(\\\\)|\\(?=(?:' + COMANDOS + r')(?![a-zA-Z])|[^"\\/bfnrtu]|u(?![0-9a-fA-F]{4}))')
+
+
+def _barras(texto: str) -> str:
+    return BARRA.sub(lambda m: m.group(1) or "\\\\", texto)
+
+
+def _json(bruto: str, tipo: type = dict):
+    return pesquisa._json(_barras(bruto or ""), tipo)
+
+
 def _chave(enunciado: str) -> str:
     return re.sub(r"\W+", " ", enunciado.lower()).strip()[:160]
 
@@ -479,9 +499,13 @@ async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, 
               .replace("PONTOS_DISC", str(PONTOS["disc"])).replace("BANCA", ENEM_PROMPT if cfg.get("enem") else "")
               .replace("ESTILO", ESTILO_PROMPT if cfg["estilo"] else ""))
     bruto = await pesquisa._perguntar(spec, system, user, run, effort="medio")
-    obj = pesquisa._json(bruto)
+    obj = _json(bruto)
     lista_ = obj.get("questoes") if isinstance(obj, dict) else None
-    return lista_ if isinstance(lista_, list) else (pesquisa._json(bruto, list) or [])
+    lista_ = lista_ if isinstance(lista_, list) else (_json(bruto, list) or [])
+    if not lista_:   # é o que vira "não veio a questão": o fim da resposta no log diz se cortou ou veio torto
+        log.warning("estudos: lote de %d questão(ões) sem JSON legível (%d caracteres): %r",
+                    len(lote), len(bruto or ""), (bruto or "")[-600:])
+    return lista_
 
 
 async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento: int) -> dict[str, tuple]:
@@ -498,7 +522,7 @@ async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento:
     user = ((f"Material:\n{web.UNTRUSTED}{material}\n\n" if material else "")
             + (f"Páginas da web:\n{web.UNTRUSTED}{achados}\n\n" if achados else "")
             + "Questões:\n\n" + "\n\n".join(blocos))
-    obj = pesquisa._json(await pesquisa._perguntar(spec, VERIFICAR_PROMPT, user, run, effort="medio")) or {}
+    obj = _json(await pesquisa._perguntar(spec, VERIFICAR_PROMPT, user, run, effort="medio")) or {}
     respostas = obj.get("respostas") if isinstance(obj, dict) else None
     if isinstance(respostas, dict):
         respostas = [{"id": k, "resposta": v} for k, v in respostas.items()]
@@ -709,7 +733,7 @@ async def _corrigir(run: dict, spec: dict) -> None:
                 continue
             E._teto(run, TETO_LOTE)
             try:
-                obj = pesquisa._json(await pesquisa._perguntar(spec, CORRIGIR_PROMPT, _usuario_correcao(q, c["resposta"]), run)) or {}
+                obj = _json(await pesquisa._perguntar(spec, CORRIGIR_PROMPT, _usuario_correcao(q, c["resposta"]), run)) or {}
             except Exception as e:
                 obj = {}
                 E._avisar(run, f"A correção de uma discursiva falhou: {e.__class__.__name__}.")

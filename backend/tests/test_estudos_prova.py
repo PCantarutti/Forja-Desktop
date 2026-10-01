@@ -142,6 +142,25 @@ def test_validar_cada_tipo_e_os_erros():
     assert P.validar(_me(1), "vf")[1] == "veio me no lugar de vf"
 
 
+def test_json_com_latex_de_barra_simples():
+    bruto = '{"a": "$\\mathrm{CO_2}$, $\\frac{1}{2} \\times 3$, $\\sqrt{2}$, linha\\nquebra, \\"x\\", \\u00e9, \\\\alpha"}'
+    assert P._json(bruto)["a"] == '$\\mathrm{CO_2}$, $\\frac{1}{2} \\times 3$, $\\sqrt{2}$, linha\nquebra, "x", é, \\alpha'
+
+
+def test_lote_com_latex_de_barra_simples_nao_se_perde(monkeypatch):
+    async def latex(provider, model, messages, *a, **kw):
+        if messages[0]["content"].startswith("Você é um professor que elabora"):
+            q = json.dumps({**_me(1), "explicacao": "XX"}, ensure_ascii=False).replace("XX", "Saldo de $\\\\frac{4}{2}$ ATP")
+            yield ("content", '{"questoes": [' + q.replace("\\\\frac", "\\frac") + "]}")   # barra simples, como o modelo faz
+        else:
+            yield ("content", "{}")
+        yield ("done", {})
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", latex)
+    pid = _gerar(_estudo(), {"me": 1})
+    assert _cheia(pid)["questoes"][0]["explicacao"] == "Saldo de $\\frac{4}{2}$ ATP"
+
+
 def test_embaralhar_mantem_a_correta_certa():
     import random
     q, _ = P.validar(_me(1, correta=2))
