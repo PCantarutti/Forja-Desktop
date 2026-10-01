@@ -329,7 +329,20 @@ export default function EstudosView(props: {
   const abrirMateria = (m: string) => { escolherMateria(m); setAba("resumo"); };
   // painel do objetivo por cima das abas: ler o edital, trazer um estudo antigo
   const [objetivo, setObjetivo] = useState<"" | "edital" | "trazer">("");
-  useEffect(() => setObjetivo(""), [props.conv]);
+  // "Começar pelo edital" no estudo que ainda não existe: a conversa nasce e o painel do edital abre nela
+  const abrirEdital = useRef(false);
+  useEffect(() => { setObjetivo(abrirEdital.current ? "edital" : ""); abrirEdital.current = false; }, [props.conv]);
+  async function comecarPeloEdital() {
+    if (props.conv !== null) return setObjetivo("edital");
+    abrirEdital.current = true;
+    try {
+      await props.ensureConversation();
+      props.onConversationChanged();
+    } catch (e: any) {
+      abrirEdital.current = false;
+      props.onError(e.message);
+    }
+  }
   const doEdital = projeto?.materias.find((m) => m.id === materia)?.topicos ?? [];
   const simuladoFracos = () => { setProvaPendente({ topicos: [], instrucoes: "" }); setAba("simulado"); };
   /** O "ler" do cronograma: a matéria do tópico ("Português · Crase"), com o tópico como tema do resumo. */
@@ -773,6 +786,12 @@ export default function EstudosView(props: {
                   no tom que você escolher, citando a página de onde tirou cada coisa. Prova anexada vira o perfil do
                   que cai: o resumo dá prioridade a isso.
                 </p>
+                {!projeto?.materias.length && (
+                  <button className={`${btn} mt-3`} onClick={comecarPeloEdital}
+                          title="Cole o link da página do concurso: as matérias, o peso de cada uma e o plano até a prova">
+                    <Clipboard className="size-3.5" /> Começar pelo edital do concurso
+                  </button>
+                )}
                 {!!doEdital.length && (
                   <div className="mt-3 border-t border-line pt-2.5">
                     <p className="mb-1.5 text-faint">Do edital · toque num tópico para pedir o resumo dele</p>
