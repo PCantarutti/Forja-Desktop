@@ -1,6 +1,13 @@
 // Token desta execução do app, exigido pelo backend nas rotas /api. Ausente quando a UI abre
 // numa aba comum do navegador (dev com Vite) — e ali o backend também não exige.
-const auth = (): Record<string, string> => (window.forja?.token ? { "X-Forja-Token": window.forja.token } : {});
+export const auth = (): Record<string, string> => ({
+  ...(window.forja?.token ? { "X-Forja-Token": window.forja.token } : {}),
+  ...(materiaEstudos ? { "X-Forja-Materia": materiaEstudos } : {}),
+});
+// A matéria aberta na tela Estudos: toda chamada leva (o backend só lê em /api/estudos), e as abas filtram e marcam
+// por ela sem passar nada adiante. null = "Tudo". ponytail: global de módulo, só uma tela Estudos por janela.
+let materiaEstudos: string | null = null;
+export const setMateriaEstudos = (m: string | null) => { materiaEstudos = m; };
 // <img src> e link de download não mandam header: levam o token neste cookie (sem Max-Age, morre com o
 // app, como o próprio token). Strict: página de outro site não consegue fazer o navegador mandá-lo.
 if (window.forja?.token) document.cookie = `forja_token=${window.forja.token}; path=/api; SameSite=Strict`;
@@ -46,6 +53,15 @@ export async function uploadReferencia(file: File, video = false): Promise<strin
   const r = await fetch(`/api/imagens/referencia${video ? "?video=true" : ""}`, { method: "POST", body: form, headers: auth() });
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
   return (await r.json()).path;
+}
+
+/** Arquivo para uma rota que recebe multipart `file` (o material da tela Estudos). */
+export async function enviarArquivo<T>(path: string, file: File): Promise<T> {
+  const form = new FormData();
+  form.append("file", file);
+  const r = await fetch(`/api${path}`, { method: "POST", body: form, headers: auth() });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+  return r.json();
 }
 
 /** Lê um SSE via fetch (EventSource não faz POST nem aceita AbortSignal). Chama onEvent a cada `data:`. */

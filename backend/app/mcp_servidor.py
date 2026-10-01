@@ -418,7 +418,10 @@ INSTRUCOES = (
     "validate_feature encerra a funcionalidade. Achou um bug ou "
     "melhoria? issue_create com arquivo, linha e trecho real. Use forja_note para contar o progresso ao usuário "
     "no painel do Forja em cada etapa. Se um resultado trouxer '[Mensagem do usuário…]', ela vale como pedido "
-    "dele: leve em conta antes de seguir.")
+    "dele: leve em conta antes de seguir. "
+    "Tela Estudos (não precisa de `path`): ferramentas estudos_* — crie a matéria, anexe material, leia por "
+    "páginas (com as figuras do PDF: estudos_ver_figura), pesquise com a sua própria busca, grave o resumo, a prova (com ou sem figura) e flashcards, corrija discursivas, responda dúvidas e dicas, veja o desempenho e monte o cronograma; estudos_pedidos traz "
+    "o que o usuário pediu na tela com o motor \"Claude (MCP)\".")
 
 
 def _servidor():
@@ -536,6 +539,125 @@ def _servidor():
             return "ERRO: o controle pelo Claude está desligado no Forja (Configurações › MCP)."
         conv, _ = espelho(path)
         return "\n---\n".join(caixa(conv)) or "Nenhuma mensagem nova do usuário."
+
+    # Tela Estudos: o Claude pensa e escreve, o Forja guarda e mostra ao vivo (PC e celular). Chamam o
+    # estudos.py direto, sem Run do agente: nada aqui mexe em arquivo do usuário.
+    from . import estudos
+
+    @mcp.tool()
+    async def estudos_listar() -> str:
+        """Os estudos (matérias) da tela Estudos do Forja, mais recentes primeiro."""
+        return estudos.mcp_listar()
+
+    @mcp.tool()
+    async def estudos_criar(tema: str) -> str:
+        """Cria um estudo novo na tela Estudos e devolve o id dele."""
+        return estudos.mcp_criar(tema)
+
+    @mcp.tool()
+    async def estudos_abrir(estudo_id: int) -> str:
+        """Material anexado, último resumo, preferências do aluno e o formato que a tela espera."""
+        return await asyncio.to_thread(estudos.mcp_abrir, estudo_id)
+
+    @mcp.tool()
+    async def estudos_ler_material(material_id: int, inicio: int = 1, fim: int = 0) -> str:
+        """Texto de um material: páginas inicio..fim (ou a parte `inicio`, se não tiver páginas). Até 40 mil
+        caracteres por chamada; o fim do resultado diz de onde continuar."""
+        return await asyncio.to_thread(estudos.mcp_ler_material, material_id, inicio, fim)
+
+    @mcp.tool()
+    async def estudos_ver_figura(estudo_id: int, figura: str):
+        """Mostra uma figura recortada do PDF do material ("<material>:<figura>", da lista no fim do
+        estudos_ler_material). Olhe antes de escrever uma questão com ela."""
+        from mcp.server.fastmcp import Image
+        from . import estudos_figuras
+        from .tools import ToolError
+        try:
+            legenda, png = await asyncio.to_thread(estudos_figuras.mcp_ver, estudo_id, figura)
+        except ToolError as e:
+            return f"ERRO: {e}"
+        return [legenda, Image(data=png, format="png")]
+
+    @mcp.tool()
+    async def estudos_anexar(estudo_id: int, caminho: str = "", texto: str = "", nome: str = "") -> str:
+        """Anexa material ao estudo: um arquivo do disco (`caminho` absoluto: PDF, DOCX, PPTX, TXT, MD, imagem...)
+        ou um `texto`. O Forja extrai o texto (com OCR se preciso) e mostra na tela."""
+        return await asyncio.to_thread(estudos.mcp_anexar, estudo_id, caminho, texto, nome)
+
+    @mcp.tool()
+    async def estudos_salvar_resumo(markdown: str, estudo_id: int = 0, pedido_id: int = 0, tema: str = "",
+                                    fontes: list[dict] | None = None, modelo: str = "") -> str:
+        """Grava o resumo em Markdown (formato em estudos_abrir). Com `pedido_id` atende um pedido da tela;
+        sem ele, cria um resumo novo no `estudo_id`. `fontes` = [{titulo, url}] das páginas da web usadas;
+        `modelo` = o seu nome (aparece na tela)."""
+        return estudos.mcp_salvar_resumo(markdown, estudo_id, pedido_id, tema, fontes, modelo)
+
+    @mcp.tool()
+    async def estudos_ler_resumo(estudo_id: int, resumo_id: int = 0) -> str:
+        """O resumo do estudo em Markdown (o último, ou o `resumo_id`): base para montar a prova."""
+        return await asyncio.to_thread(estudos.mcp_ler_resumo, estudo_id, resumo_id)
+
+    @mcp.tool()
+    async def estudos_salvar_prova(questoes: list[dict], estudo_id: int = 0, pedido_id: int = 0, titulo: str = "",
+                                   modelo: str = "") -> str:
+        """Grava uma prova (formato das questões no pedido, em estudos_pedidos). Com `pedido_id` atende o pedido da
+        tela; sem ele, cria a prova no `estudo_id`. Se alguma questão vier errada, nada é gravado e o resultado diz
+        o que corrigir. `modelo` = o seu nome (aparece na tela)."""
+        from . import estudos_prova
+        return estudos_prova.mcp_salvar_prova(questoes, estudo_id, pedido_id, titulo, modelo)
+
+    @mcp.tool()
+    async def estudos_corrigir(tentativa_id: int, correcoes: list[dict]) -> str:
+        """Nota das discursivas de uma entrega: correcoes = [{questao_id, pontos, feedback}] (pedido em estudos_pedidos)."""
+        from . import estudos_prova
+        return estudos_prova.mcp_corrigir(tentativa_id, correcoes)
+
+    @mcp.tool()
+    async def estudos_ver_prova(prova_id: int) -> str:
+        """Uma prova inteira, com gabarito e explicações, e as entregas dela com o que o aluno respondeu."""
+        from . import estudos_prova
+        return estudos_prova.mcp_ver_prova(prova_id)
+
+    @mcp.tool()
+    async def estudos_responder_duvida(duvida_id: int, resposta: str, modelo: str = "") -> str:
+        """Responde uma dúvida do aluno pedida na tela Estudos (o pedido, com a questão e o contexto, vem em
+        estudos_pedidos). `resposta` em Markdown; `modelo` = o seu nome."""
+        from . import estudos_duvidas
+        return estudos_duvidas.mcp_responder(duvida_id, resposta, modelo)
+
+    @mcp.tool()
+    async def estudos_salvar_flashcards(cartoes: list[dict], conv_id: int = 0, pedido_id: int = 0, modelo: str = "") -> str:
+        """Grava flashcards num estudo: cartoes = [{frente, verso, topico}]. Com `pedido_id` atende um pedido da
+        tela (estudos_pedidos); sem ele, use `conv_id`. Cartão repetido (mesma frente) fica de fora."""
+        from . import estudos_revisao
+        return estudos_revisao.mcp_salvar(cartoes, conv_id, pedido_id, modelo)
+
+    @mcp.tool()
+    async def estudos_desempenho(conv_id: int) -> str:
+        """Notas de cada entrega, acerto por tópico, pontos fracos, revisão (erros e cartões que vencem hoje) e o
+        cronograma do estudo."""
+        from . import estudos_revisao
+        return estudos_revisao.mcp_desempenho(conv_id)
+
+    @mcp.tool()
+    async def estudos_cronograma(conv_id: int, data: str, minutos: int = 60) -> str:
+        """Monta (ou refaz) o plano diário até a data da prova (AAAA-MM-DD), com `minutos` de estudo por dia:
+        um tópico por dia, os fracos mais vezes, revisão diária e um simulado por semana e na véspera."""
+        from . import estudos_revisao
+        try:
+            p = estudos_revisao.planejar(conv_id, data, minutos)
+        except Exception as e:
+            return f"ERRO: {e}"
+        from . import mobile
+        aviso = ", e o celular avisa o do dia" if mobile.devices() else ""   # no Forja web não há celular
+        return (f"Cronograma de {len(p['dias'])} dia(s) até {p['data']} gravado: aparece na aba Desempenho{aviso}."
+                + estudos._aviso_pedidos())
+
+    @mcp.tool()
+    async def estudos_pedidos(espera: int = 60) -> str:
+        """Pedidos que o usuário fez na tela Estudos com o motor "Claude (MCP)", com tudo o que é preciso para
+        atendê-los. Sem pedido, espera até `espera` segundos (máx. 100) por um novo."""
+        return await estudos.mcp_pedidos(espera)
 
     return mcp
 

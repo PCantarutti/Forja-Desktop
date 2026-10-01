@@ -76,7 +76,9 @@ export const Recolher = base(<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" /
 export const Expandir = base(<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />);
 // Design: aba (prancheta com régua).
 export const Mira = base(<path d="M5 3l6 16 2.2-6.8L20 10z" />);   // inspecionar elemento
-export const Prancheta = base(<><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></>);
+export const Lampada = base(<><path d="M9 18h6" /><path d="M10 22h4" /><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2z" /></>);
+export const Livro = base(<><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4H9a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H3.5A1.5 1.5 0 0 1 2 16.5z" /><path d="M22 5.5A1.5 1.5 0 0 0 20.5 4H15a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h6.5a1.5 1.5 0 0 0 1.5-1.5z" /></>);
+export const Prancheta =base(<><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></>);
 // Vídeo: aba, player e composer.
 export const Film = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></>);
 export const Play = ({ className = "size-4" }: P) => (

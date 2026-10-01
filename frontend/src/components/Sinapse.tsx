@@ -37,10 +37,12 @@ const corta = (s: string, n: number) => {
 const relogio = (seg: number) =>
   `${String(Math.floor(seg / 60)).padStart(2, "0")}:${String(Math.floor(seg % 60)).padStart(2, "0")}`;
 
-/** Posição da ramificação de uma rodada: fatias iguais de um círculo, começando no topo. */
-function posSub(i: number, total: number) {
-  const fatias = Math.max(6, total);
-  const ang = (i / fatias) * Math.PI * 2 - Math.PI / 2;
+/** Posição da ramificação de uma rodada: fatias iguais de um círculo, começando no topo. Com ramos
+ *  nomeados (poucos, fixos), leque na metade de cima, da esquerda para a direita: o rótulo do centro
+ *  fica embaixo, livre. */
+function posSub(i: number, total: number, leque = false) {
+  const ang = leque ? Math.PI + (total > 1 ? i * Math.PI / (total - 1) : Math.PI / 2)
+    : (i / Math.max(6, total)) * Math.PI * 2 - Math.PI / 2;
   return { x: CX + Math.cos(ang) * RAIO_SUB, y: CY + Math.sin(ang) * RAIO_SUB, ang };
 }
 
@@ -54,9 +56,15 @@ function posFolha(sub: { x: number; y: number }, idx: number) {
   return { x: sub.x + Math.cos(ang) * r, y: sub.y + Math.sin(ang) * r };
 }
 
-export default function Sinapse({ estado }: { estado: PesquisaEstado }) {
-  const rodadas = Math.max(estado.rodadas.length, 1);
-  const subs = Array.from({ length: Math.min(rodadas, MAX_SUBS) }, (_, i) => posSub(i, rodadas));
+type Retrato = Pick<PesquisaEstado, "status" | "fontes" | "rodadas" | "pergunta" | "fase" | "rodada" | "rodadas_total" | "stats">;
+
+/** `ramos`/`fase`/`meta`: a tela Estudos usa o mesmo grafo com os seus ramos (material, web, tópicos),
+ *  a legenda da etapa dela e a sua linha de números; sem eles, é o da Pesquisa (R1, R2… por rodada). */
+export default function Sinapse({ estado, ramos, fase, meta }: {
+  estado: Retrato; ramos?: string[]; fase?: string; meta?: React.ReactNode;
+}) {
+  const rodadas = Math.max(ramos?.length ?? estado.rodadas.length, 1);
+  const subs = Array.from({ length: Math.min(rodadas, MAX_SUBS) }, (_, i) => posSub(i, rodadas, !!ramos));
   const porRodada = new Map<number, number>();
 
   return (
@@ -78,14 +86,21 @@ export default function Sinapse({ estado }: { estado: PesquisaEstado }) {
             {subs.map((s, i) => (
               <g key={`s${i}`}>
                 <circle cx={s.x} cy={s.y} r={7} className="sin-sub sin-novo" />
-                <text
+                {ramos ? (
+                  // nome do ramo no meio da aresta (por fora ficaria em cima das folhas)
+                  <text x={CX + Math.cos(s.ang) * 44 + (Math.abs(Math.cos(s.ang)) < 0.3 ? 6 : 0)}
+                        y={CY + Math.sin(s.ang) * 44 - (Math.abs(Math.cos(s.ang)) < 0.3 ? 0 : 7)}
+                        textAnchor={Math.abs(Math.cos(s.ang)) < 0.3 ? "start" : "middle"} className="sin-rotulo sin-rotulo-sub">
+                    {ramos[i]}
+                  </text>
+                ) : <text
                   x={CX + Math.cos(s.ang) * (RAIO_SUB + 14)}
                   y={CY + Math.sin(s.ang) * (RAIO_SUB + 14) + 3}
                   textAnchor={Math.cos(s.ang) > 0.15 ? "start" : Math.cos(s.ang) < -0.15 ? "end" : "middle"}
                   className="sin-rotulo sin-rotulo-sub"
                 >
                   R{i + 1}
-                </text>
+                </text>}
               </g>
             ))}
             {(() => {
@@ -101,13 +116,15 @@ export default function Sinapse({ estado }: { estado: PesquisaEstado }) {
               });
             })()}
             <circle cx={CX} cy={CY} r={11} className="sin-raiz" />
-            <text x={CX} y={CY + 28} textAnchor="middle" className="sin-rotulo">{corta(estado.pergunta, 30)}</text>
+            {/* no leque, os ramos laterais passam à altura do centro: o título desce para longe das folhas */}
+            <text x={CX} y={CY + (ramos ? 50 : 28)} textAnchor="middle" className="sin-rotulo">{corta(estado.pergunta, 30)}</text>
           </g>
           <circle cx={CX} cy={CY} r={6} className="sin-pulso" />
         </svg>
       </div>
       <div className="sin-meta">
-        <span className="sin-fase">{FASES[estado.fase] ?? estado.fase}</span>
+        <span className="sin-fase">{fase ?? FASES[estado.fase] ?? estado.fase}</span>
+        {meta ?? <>
         <span className="sin-sep">·</span>
         <span>rodada <b>{estado.rodada || 0}</b> de {estado.rodadas_total || "?"}</span>
         <span className="sin-sep">·</span>
@@ -122,6 +139,7 @@ export default function Sinapse({ estado }: { estado: PesquisaEstado }) {
         )}
         <span className="sin-sep">·</span>
         <span>{relogio(estado.stats.segundos)}</span>
+        </>}
       </div>
     </div>
   );
