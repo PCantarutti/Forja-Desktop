@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, streamSSE } from "../api";
+import { api, auth, streamSSE } from "../api";
 import type { EstudosBusca, EstudosPlacarSimulado, EstudosProjeto, EstudosQuestaoReal, EstudosSimulado } from "../types";
-import { ArrowRight, Check, ExternalLink, Globe, Refresh, Search, Trash, X } from "./icons";
+import { ArrowRight, Check, ExternalLink, Globe, Image, Refresh, Search, Trash, X } from "./icons";
 import { type Modelos, btn, btnPrimary, card, motorDe, numeros, rotulo } from "./estudosUi";
 
-type Fonte = "pdf" | "material" | "colar";
+type Fonte = "pdf" | "material" | "colar" | "imagem";
 const ETAPA: Record<string, string> = {
   lendo: "Recortando as questões", classificando: "Classificando por assunto", resolvendo: "Resolvendo às cegas",
   ranking: "Juntando o que mais cai", buscando: "Buscando na web", escolhendo: "Escolhendo os PDFs", baixando: "Baixando e conferindo",
@@ -116,6 +116,37 @@ export default function Simulados(props: {
     if (viva) await api.post(`/estudos/execucao/${viva.message_id}/cancelar`, {}).catch(() => {});
   }
 
+  // Gabarito por imagem: os prints vão para um modelo que enxerga, que só anota (numa chamada à parte, sem a prova);
+  // o texto vira material do estudo e a conferência segue com ele, como com um gabarito em PDF
+  const [lendoImagem, setLendoImagem] = useState("");
+  async function lerImagens(files: File[]) {
+    if (!form || !files.length) return;
+    const fd = new FormData();
+    files.forEach((f) => fd.append("files", f));
+    const m = motorDe(props.modelos);
+    fd.append("provider", m.provider);
+    fd.append("model", m.model);
+    setLendoImagem(`lendo ${files.length} imagem${files.length === 1 ? "" : "ns"}…`);
+    try {
+      const r = await fetch(`/api/estudos/${props.conv}/gabarito/imagem`, { method: "POST", body: fd, headers: auth() });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail ?? `HTTP ${r.status}`);
+      await recarregar.current();
+      setForm((f) => f && { ...f, fonte: "material", outro: j.material.id });
+      setLendoImagem(`${j.questoes} respostas lidas por ${j.modelo}: ${j.blocos.map((b: { rotulo: string; n: number }) => `${b.rotulo} (${b.n})`).join(", ")}`);
+    } catch (e: any) {
+      setLendoImagem("");
+      aoErro.current(e.message);
+    }
+  }
+
+  async function trocarBloco(id: number, bloco: string) {
+    try {
+      setDetalhe(await api.post<EstudosSimulado>(`/estudos/simulado/${id}/gabarito`, { bloco }));
+      await recarregar.current();
+    } catch (e: any) { aoErro.current(e.message); }
+  }
+
   async function virarProva(id: number) {
     try {
       await api.post(`/estudos/simulado/${id}/prova`, {});
@@ -190,7 +221,8 @@ export default function Simulados(props: {
                     <div className="flex flex-col gap-2 rounded-xl bg-raised/50 p-3 text-xs">
                       <span className={rotulo}>De onde vem o gabarito oficial</span>
                       <div className="flex flex-wrap gap-3" role="radiogroup">
-                        {([["pdf", "Do próprio PDF (\"Resposta: C\")"], ["material", "De outro material"], ["colar", "Colar o gabarito"]] as const).map(([id, nome]) => (
+                        {([["pdf", "Do próprio PDF (\"Resposta: C\")"], ["material", "De outro material"], ["colar", "Colar o gabarito"],
+                           ["imagem", "Imagem (print ou foto)"]] as const).map(([id, nome]) => (
                           <label key={id} className="flex items-center gap-1.5 text-fg">
                             <input type="radio" name="fonte" checked={form.fonte === id} onChange={() => setForm({ ...form, fonte: id })} /> {nome}
                           </label>
@@ -203,6 +235,17 @@ export default function Simulados(props: {
                           {p.materiais.filter((x) => x.id !== m.id).map((x) => <option key={x.id} value={x.id}>{x.nome}</option>)}
                         </select>
                       )}
+                      {form.fonte === "imagem" && (
+                        <div className="flex flex-col gap-1.5">
+                          <label className={`${btn} cursor-pointer self-start`}>
+                            <Image className="size-3.5" /> Escolher as imagens do gabarito
+                            <input type="file" accept="image/*" multiple hidden onChange={(e) => { lerImagens(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
+                          </label>
+                          <span className="text-faint">
+                            {lendoImagem || "Pode ser o gabarito inteiro, com vários cargos e versões: um modelo que enxerga anota em texto, separado da prova; o modelo de cima precisa enxergar (Qwen3.6, Gemma 4…)."}
+                          </span>
+                        </div>
+                      )}
                       {form.fonte === "colar" && (
                         <textarea rows={3} value={form.texto} onChange={(e) => setForm({ ...form, texto: e.target.value })}
                                   placeholder="91 C  92 A  93 D … (número e letra; anulada = X)"
@@ -211,7 +254,7 @@ export default function Simulados(props: {
                       <div className="flex justify-end gap-2">
                         <button className={btn} onClick={() => setForm(null)}>Cancelar</button>
                         <button className={btnPrimary} onClick={conferir}
-                                disabled={ocupado || (form.fonte === "material" && !form.outro) || (form.fonte === "colar" && form.texto.trim().length < 3)}>
+                                disabled={ocupado || form.fonte === "imagem" || (form.fonte === "material" && !form.outro) || (form.fonte === "colar" && form.texto.trim().length < 3)}>
                           Conferir
                         </button>
                       </div>
@@ -219,7 +262,8 @@ export default function Simulados(props: {
                   )}
                   {analise?.material_id === m.id && <Andamento a={analise} onParar={parar} />}
                   {ultima && aberta === ultima.message_id && detalhe?.message_id === ultima.message_id && (
-                    <Resultado d={detalhe} so={so} onSo={setSo} onProva={() => (detalhe.prova_id ? props.onIrProvas() : virarProva(detalhe.message_id))}
+                    <Resultado d={detalhe} so={so} onSo={setSo} onBloco={(b) => trocarBloco(detalhe.message_id, b)}
+                               onProva={() => (detalhe.prova_id ? props.onIrProvas() : virarProva(detalhe.message_id))}
                                onApagar={() => apagar(detalhe.message_id)} />
                   )}
                 </div>
@@ -289,8 +333,8 @@ function Parte({ nome, a, t, dica }: { nome: string; a: number; t: number; dica:
   );
 }
 
-function Resultado({ d, so, onSo, onProva, onApagar }: { d: EstudosSimulado; so: "divergencias" | "todas"; onSo: (v: "divergencias" | "todas") => void;
-                                                       onProva: () => void; onApagar: () => void }) {
+function Resultado({ d, so, onSo, onProva, onApagar, onBloco }: { d: EstudosSimulado; so: "divergencias" | "todas"; onSo: (v: "divergencias" | "todas") => void;
+                                                       onProva: () => void; onApagar: () => void; onBloco: (id: string) => void }) {
   // conferência que parou no meio (erro, cancelada) não tem placar inteiro: tudo com valor padrão
   const pl: EstudosPlacarSimulado = { questoes: 0, com_gabarito: 0, resolvidas: 0, acertos: 0, em_branco: 0, por_area: [],
     so_texto: { resolvidas: 0, acertos: 0 }, figura_vista: { resolvidas: 0, acertos: 0 }, figura_faltou: { resolvidas: 0, acertos: 0 },
@@ -305,6 +349,19 @@ function Resultado({ d, so, onSo, onProva, onApagar }: { d: EstudosSimulado; so:
         <span className="text-muted">a IA acertou <b className="text-fg">{pl.acertos}</b> de {pl.resolvidas} · {d.stats.escritor}</span>
         <span className="text-faint">gabarito: {d.gabarito || "do PDF"} · {pl.com_gabarito} de {pl.questoes} questões têm gabarito</span>
       </div>
+      {d.bloco && (
+        // gabarito com vários cargos/versões: qual bloco valeu, por quê, e trocar (sem resolver de novo)
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line px-3 py-2">
+          <span className={rotulo}>Bloco do gabarito</span>
+          <select value={d.bloco.id} onChange={(e) => onBloco(e.target.value)} disabled={d.status === "rodando"}
+                  title={`${d.bloco.total} blocos no gabarito; os números são quantas respostas da IA batem com cada um`}
+                  className="min-w-0 max-w-full rounded-[9px] border border-line bg-surface px-2 py-1 text-fg focus:border-focus focus:outline-none">
+            {!d.bloco.id && <option value="">escolha o bloco da sua prova</option>}
+            {d.bloco.opcoes.map((o) => <option key={o.id} value={o.id}>{o.rotulo}{o.de ? ` — bate ${o.iguais} de ${o.de}` : ""}</option>)}
+          </select>
+          {d.bloco.motivo && <span className="text-faint">{d.bloco.motivo}</span>}
+        </div>
+      )}
       <div className="flex flex-col gap-1.5">
         <Parte nome="Só texto" a={pl.so_texto?.acertos ?? 0} t={pl.so_texto?.resolvidas ?? 0}
                dica="Questões em que tudo está no texto: é o que diz da capacidade do modelo nesta prova" />
