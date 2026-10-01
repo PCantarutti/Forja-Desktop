@@ -343,9 +343,12 @@ export default function Revisao(props: {
                         <div className="line-clamp-2 text-fg [&_.md]:text-[13px] [&_p]:my-0">
                           <Markdown text={matematica(x.tipo === "erro" ? x.questao.enunciado : x.frente)} math />
                         </div>
-                        <p className="mt-0.5 text-faint">
-                          {x.tipo === "erro" ? x.prova : x.verso.slice(0, 120)}{x.topico ? ` · ${x.topico}` : ""}
-                        </p>
+                        {x.tipo === "cartao" && (
+                          <div className="mt-0.5 line-clamp-2 text-muted [&_.md]:text-xs [&_.md]:text-muted [&_p]:my-0">
+                            <Markdown text={matematica(x.verso)} math />
+                          </div>
+                        )}
+                        <p className="mt-0.5 text-faint">{x.tipo === "erro" ? `${x.prova} · ` : ""}{x.topico}</p>
                       </div>
                       <span className={`shrink-0 font-mono ${x.dominada ? "text-ok" : x.vence ? "text-amber-300" : "text-faint"}`}
                             title={`Caixa ${x.caixa} de 5 · ${x.acertos} acerto(s), ${x.erros} erro(s)`}>

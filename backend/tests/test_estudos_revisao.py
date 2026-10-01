@@ -152,6 +152,11 @@ def test_gera_cartoes_do_resumo_e_dos_erros_sem_repetir(monkeypatch):
     assert "Onde ocorre a glicólise?,No citosol.,Glicólise" in csv.splitlines()
 
 
+def test_anki_recebe_formula_no_formato_dele():
+    assert R._mathjax(r"Vértice: $x_v = -b/2a$ e $$\Delta = b^2 - 4ac$$; custa R$ 300 e R$ 400.") == \
+        r"Vértice: \(x_v = -b/2a\) e \[\Delta = b^2 - 4ac\]; custa R$ 300 e R$ 400."
+
+
 def test_lote_sem_json_vira_erro_e_apagar_cartao(monkeypatch):
     _fake(monkeypatch, "não sei fazer isso")
     conv = _estudo()

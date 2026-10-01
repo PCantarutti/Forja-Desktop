@@ -19,6 +19,7 @@ import csv
 import html
 import io
 import logging
+import re
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -194,12 +195,21 @@ def apagar_cartao(conv_id: int, cartao_id: str) -> dict:
     return {"ok": True}
 
 
+BLOCO = re.compile(r"\$\$(.+?)\$\$", re.S)
+EM_LINHA = re.compile(r"(?<![\w\\$])\$(?!\s)([^$\n]+?)(?<!\s)\$")   # "R$ 300" fica: tem letra antes
+
+
+def _mathjax(texto: str) -> str:
+    r"""O Anki desenha fórmula em \( \) e \[ \] (MathJax), não em $."""
+    return EM_LINHA.sub(r"\\(\1\\)", BLOCO.sub(r"\\[\1\\]", texto))
+
+
 def anki_csv(conv_id: int) -> str:
     """frente,verso,tópico — o Anki importa direto (Arquivo › Importar; campos separados por vírgula)."""
     buf = io.StringIO()
     w = csv.writer(buf)
     for c in cartoes(conv_id):
-        w.writerow([c["frente"], c["verso"], (c.get("topico") or "").replace(" ", "_")])
+        w.writerow([_mathjax(c["frente"]), _mathjax(c["verso"]), (c.get("topico") or "").replace(" ", "_")])
     return buf.getvalue()
 
 
@@ -564,7 +574,8 @@ def mcp_desempenho(conv_id: int) -> str:
     except ToolError as err:
         return f"ERRO: {err}"
     linhas = [f"Desempenho do estudo {conv_id}"]
-    linhas += [f"- {e['titulo']} ({e['modo']}): nota {e['nota']:g} · {e['acertos']}/{e['n']} certas · {e['criado'][:10]}"
+    linhas += [f"- {e['titulo']} ({e['modo']}): nota {e['nota']:g} · {e['acertos']}/{e['n']} certas · "
+               f"{datetime.fromisoformat(e['criado']).astimezone():%d/%m %H:%M}" if e["criado"] else ""
                for e in d["entregas"]] or ["(nenhuma entrega ainda)"]
     linhas.append("Por tópico (todas as entregas):")
     linhas += [f"- {t['topico']}: " + (f"{round(100 * t['pct'])}% ({t['pontos']:g}/{t['max']:g})" if t["pct"] is not None
