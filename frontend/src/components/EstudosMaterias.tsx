@@ -2,18 +2,7 @@ import { useState } from "react";
 import { api } from "../api";
 import type { EstudosMateria, EstudosProjeto } from "../types";
 import { Edit, Plus, Trash } from "./icons";
-import { rotulo } from "./estudosUi";
-
-/** O ponto de cada matéria: verde ≥ 70% de acerto, âmbar 50–69%, vermelho abaixo; cinza sem entrega. */
-export const corAcerto = (a: number | null) =>
-  a == null ? "bg-faint/50" : a >= 70 ? "bg-emerald-400" : a >= 50 ? "bg-amber-400" : "bg-rose-400";
-
-/** Acerto do objetivo inteiro: as entregas de todas as matérias, pesadas pelo número de entregas. */
-export function acertoGeral(ms: EstudosMateria[]): number | null {
-  const com = ms.filter((m) => m.acerto != null && m.entregas);
-  const n = com.reduce((s, m) => s + m.entregas, 0);
-  return n ? Math.round(com.reduce((s, m) => s + (m.acerto ?? 0) * m.entregas, 0) / n) : null;
-}
+import { acertoGeral, corAcerto, rotulo } from "./estudosUi";
 
 /** Coluna "Tudo + matérias" do objetivo. Trocar de matéria troca o filtro de todas as abas. */
 export default function EstudosMaterias(props: {

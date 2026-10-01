@@ -3,9 +3,8 @@ import { api } from "../api";
 import type { EstudosVisao, EstudosVisaoMateria } from "../types";
 import { ArrowRight, Check, Copy } from "./icons";
 import { Markdown } from "./MessageView";
-import { corAcerto } from "./EstudosMaterias";
 import { matematica } from "./estudosTexto";
-import { btn, btnPrimary, card, rotulo } from "./estudosUi";
+import { btn, btnPrimary, card, corAcerto, rotulo } from "./estudosUi";
 
 /** O "Tudo" lê a visão do objetivo uma vez e de novo quando o estudo muda (carimbo) ou o peso muda aqui. */
 function useVisao(conv: number, carimbo: string | undefined, onError: (e: string) => void) {
