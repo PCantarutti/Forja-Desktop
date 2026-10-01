@@ -71,6 +71,8 @@ Regras:
 - Dificuldade: facil = lembrar um conceito; media = aplicar a uma situação; dificil = relacionar conceitos,
   interpretar dados ou calcular.
 - Discursiva: rubrica com 2 a 4 critérios que somam PONTOS_DISC pontos.
+- Números no padrão brasileiro: vírgula decimal (0,5), ponto nos milhares (1.200).
+- Não repita a ideia nem a conta de outra questão desta prova.
 - Fórmulas em LaTeX ($...$); fórmula química em \\mathrm ($\\mathrm{CO_2}$).
 BANCA
 ESTILO"""
@@ -81,12 +83,16 @@ ESTILO_PROMPT = ("- Imite o estilo da prova que o aluno anexou (perfil e exemplo
 # Padrão da banca, quando a prova é ENEM (pelo perfil do simulado) ou o objetivo do aluno é vestibular/ENEM.
 ENEM_PROMPT = """- Padrão ENEM: cada questão abre com uma situação-problema (cotidiano, ciência, tecnologia, ambiente) de
   3 a 6 linhas e termina no comando. O aluno não tem calculadora: use números que fecham à mão e, se a conta
-  precisar de seno, logaritmo ou raiz não exata, dê o valor no enunciado."""
+  precisar de seno, cosseno, logaritmo ou raiz não exata, dê o valor no enunciado (ex.: "use √3 ≈ 1,7"). Nada
+  de equação de grau maior que 2 nem de "resolver numericamente": quem resolve é o aluno, com lápis."""
 
 VERIFICAR_PROMPT = """Você resolve questões de prova sem ver o gabarito. Use o material abaixo e o que você sabe.
 Responda SÓ com um objeto JSON, sem texto antes nem depois:
-{"respostas": [{"id": "q1", "conta": "o raciocínio ou a conta, curto", "resposta": "B"}]}
+{"respostas": [{"id": "q1", "conta": "o raciocínio ou a conta, curto", "resposta": "B", "problema": ""}]}
 - Primeiro "conta": resolva de verdade (a conta inteira, ou o porquê em uma ou duas frases); só depois a resposta.
+- "problema": se a questão tiver defeito — pede o que os dados não dão (o mínimo de uma parábola voltada para
+  baixo, por exemplo), nenhuma ou mais de uma alternativa certa, dado faltando —, diga qual em uma frase;
+  sem defeito, deixe vazio. Estilo e dificuldade não são defeito.
 - Leia o comando com cuidado (menor, maior, exceto, garante, aproximadamente): a resposta é a que atende
   exatamente o pedido.
 - Múltipla escolha: a letra da alternativa certa. Verdadeiro ou falso: "V" ou "F".
@@ -131,6 +137,14 @@ def _norm(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", s.lower()) if not unicodedata.combining(c))
 
 
+def _casar(topicos: list[str], area_de: dict[str, str], areas: list[dict]) -> dict[str, str | None]:
+    """{tópico: área da prova anexada} pela área que o roteiro deu ao tópico ou pelo título dele."""
+    def casa(t: str) -> str | None:
+        alvo = _norm(f"{area_de.get(t) or ''} {t}")
+        return next((a["area"] for a in areas if _norm(a["area"]).split()[0] in alvo), None)
+    return {t: casa(t) for t in topicos}
+
+
 def _pesos(topicos: list[str], area_de: dict[str, str], areas: list[dict]) -> dict[str, float]:
     """Peso de cada tópico na prova: o peso da área dele na prova anexada, dividido entre os tópicos da área
     (Matemática com metade das questões e 2 tópicos: 0,25 cada). O tópico casa com a área pela área que o
@@ -139,11 +153,7 @@ def _pesos(topicos: list[str], area_de: dict[str, str], areas: list[dict]) -> di
     if not areas:
         return igual
 
-    def casa(t: str) -> str | None:
-        alvo = _norm(f"{area_de.get(t) or ''} {t}")
-        return next((a["area"] for a in areas if _norm(a["area"]).split()[0] in alvo), None)
-
-    da = {t: casa(t) for t in topicos}
+    da = _casar(topicos, area_de, areas)
     if not any(da.values()):
         return igual
     peso = {a["area"]: a["peso"] for a in areas}
@@ -153,15 +163,24 @@ def _pesos(topicos: list[str], area_de: dict[str, str], areas: list[dict]) -> di
     return {t: out.get(t, media) for t in topicos}   # tópico sem área: o peso médio, nem some nem domina
 
 
-def _sequencia(topicos: list[str], pesos: dict[str, float], n: int) -> list[str]:
-    """`n` tópicos na proporção dos pesos e intercalados (rodízio ponderado suave): A A B A A B, não A A A A B B."""
-    atual, soma, out = {t: 0.0 for t in topicos}, sum(pesos[t] for t in topicos) or 1.0, []
+def _sequencia(topicos: list[str], pesos: dict[str, float], n: int, grupos: dict[str, str] | None = None) -> list[str]:
+    """`n` tópicos na proporção dos pesos e intercalados (rodízio ponderado suave): A A B A A B, não A A A A B B.
+
+    Com `grupos` (a área de cada tópico), o rodízio é entre as ÁREAS e, dentro de cada uma, os tópicos se
+    revezam: 10 questões, metade Matemática (2 tópicos) e metade Ciências (4 tópicos) dão 5 e 5. Por tópico,
+    o arredondamento dava 6 e 4 (os tópicos de peso maior levavam as sobras)."""
+    grupos = grupos or {t: t for t in topicos}
+    chaves = list(dict.fromkeys(grupos[t] for t in topicos))
+    peso = {g: sum(pesos[t] for t in topicos if grupos[t] == g) for g in chaves}
+    membros = {g: [t for t in topicos if grupos[t] == g] for g in chaves}
+    atual, soma, vez, out = {g: 0.0 for g in chaves}, sum(peso.values()) or 1.0, Counter(), []
     for _ in range(n):
-        for t in topicos:
-            atual[t] += pesos[t]
-        escolhido = max(topicos, key=lambda t: atual[t])
-        atual[escolhido] -= soma
-        out.append(escolhido)
+        for g in chaves:
+            atual[g] += peso[g]
+        g = max(chaves, key=lambda c: atual[c])
+        atual[g] -= soma
+        out.append(membros[g][vez[g] % len(membros[g])])
+        vez[g] += 1
     return out
 
 
@@ -227,6 +246,7 @@ def _config(c: dict | None, ctx: dict) -> dict:
             # proporção das áreas da prova anexada (o simulado do ENEM é metade Matemática): vale com ou sem
             # o "estilo", porque é o que cai, não o jeito de escrever
             "pesos": _pesos(topicos_, ctx.get("area_de") or {}, ctx["perfil"].get("areas") or []),
+            "grupos": {t: a or t for t, a in _casar(topicos_, ctx.get("area_de") or {}, ctx["perfil"].get("areas") or []).items()},
             "estilo": bool(c.get("estilo")) and bool(ctx["simulado"] or ctx["perfil"]),
             "enem": bool(ctx.get("enem")),
             "tempo": max(0, min(E._int(c.get("tempo")), 600)),   # minutos; 0 = sem cronômetro
@@ -237,7 +257,7 @@ def _config(c: dict | None, ctx: dict) -> dict:
 def _planejar(cfg: dict) -> list[dict]:
     """Uma entrada por questão pedida, na ordem da prova, com os tópicos na proporção dos pesos."""
     tipos = [t for t in TIPOS for _ in range(cfg[t])]
-    seq = _sequencia(cfg["topicos"], cfg.get("pesos") or {t: 1.0 for t in cfg["topicos"]}, len(tipos))
+    seq = _sequencia(cfg["topicos"], cfg.get("pesos") or {t: 1.0 for t in cfg["topicos"]}, len(tipos), cfg.get("grupos"))
     return [{"id": f"q{i + 1}", "tipo": tipo, "topico": seq[i],
              "dificuldade": MISTA[i % len(MISTA)] if cfg["dificuldade"] == "mista" else cfg["dificuldade"],
              "status": "fila", "motivo": ""} for i, tipo in enumerate(tipos)]
@@ -508,7 +528,8 @@ def _estilo_user(ctx: dict, cfg: dict) -> str:
             + (f"\nExemplo:\n{web.UNTRUSTED}{ctx['simulado']}" if ctx["simulado"] else ""))
 
 
-async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, orcamento: int) -> list:
+async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, orcamento: int,
+                 ja: list[str] | None = None) -> list:
     topicos = list(dict.fromkeys(q["topico"] for q in lote))
     resumo = "\n\n".join(f"## {t}\n{ctx['secoes'][t]}" for t in topicos if t in ctx["secoes"])[:RESUMO_TETO]
     material = E._selecionar(ctx["itens"], " ".join(topicos), min(MATERIAL_TETO, orcamento))
@@ -521,6 +542,8 @@ async def _gerar(run: dict, spec: dict, lote: list[dict], ctx: dict, cfg: dict, 
             + (f"\nResumo dos tópicos:\n{resumo}\n" if resumo else "")
             + (f"\nMaterial do aluno:\n{web.UNTRUSTED}{material}\n" if material else "")
             + (f"\nPáginas da web lidas na pesquisa do resumo:\n{web.UNTRUSTED}{achados}\n" if achados else "")
+            + ("\nQuestões que a prova já tem (não repita a ideia nem a conta de nenhuma):\n"
+               + "\n".join(f"- {e[:160]}" for e in ja) + "\n" if ja else "")
             + _estilo_user(ctx, cfg))
     system = (QUESTOES_PROMPT.replace("ALT_N", str(cfg["alternativas"])).replace("ULTIMA", str(cfg["alternativas"] - 1))
               .replace("PONTOS_DISC", str(PONTOS["disc"])).replace("BANCA", ENEM_PROMPT if cfg.get("enem") else "")
@@ -561,8 +584,8 @@ def _erro_json(bruto: str) -> str:
 
 
 async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento: int) -> dict[str, tuple]:
-    """{id: (resposta, conta)} do verificador — índice (me) ou bool (vf), e o raciocínio que ele mostrou antes
-    de responder. Quem ele não respondeu fica de fora."""
+    """{id: (resposta, conta, problema)} do verificador — índice (me) ou bool (vf), o raciocínio que ele mostrou
+    antes de responder e o defeito que viu na questão (vazio se nenhum). Quem ele não respondeu fica de fora."""
     blocos = []
     for q in qs:
         opcoes = ("\n" + "\n".join(f"{LETRAS[i]}) {a}" for i, a in enumerate(q["alternativas"]))) if q["tipo"] == "me" \
@@ -585,7 +608,7 @@ async def _conferir(run: dict, spec: dict, qs: list[dict], ctx: dict, orcamento:
         if q:
             v = _letra(r.get("resposta"), len(q["alternativas"])) if q["tipo"] == "me" else _bool(r.get("resposta"))
             if v is not None:
-                out[q["id"]] = (v, _txt(r.get("conta"), 300))
+                out[q["id"]] = (v, _txt(r.get("conta"), 300), _txt(r.get("problema"), 300))
     return out
 
 
@@ -610,7 +633,7 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                     q["status"] = "gerando"
                 E._gravar(run)
                 try:
-                    brutas = await _gerar(run, spec, lote, ctx, cfg, orcamento)
+                    brutas = await _gerar(run, spec, lote, ctx, cfg, orcamento, [x["enunciado"] for x in feitas.values()])
                 except Exception as e:
                     brutas = []
                     E._avisar(run, f"Um lote falhou: {e.__class__.__name__}.")
@@ -648,7 +671,7 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                 # resposta que deu); 2 votos no gabarito ficam. Um verificador só, e de outro modelo, descartava
                 # questão boa quando ele é que errava a conta.
                 disputadas = [limpa for _, limpa in novas if limpa["tipo"] != "disc"
-                              and respostas.get(limpa["id"], (None, ""))[0] not in (None, limpa["correta"])]
+                              and respostas.get(limpa["id"], (None, "", ""))[0] not in (None, limpa["correta"])]
                 desempate: dict = {}
                 if disputadas and not run["cancelar"]:
                     E._teto(run, TETO_LOTE)
@@ -657,9 +680,19 @@ async def _rodar(run: dict, spec: dict, verificador: dict | None = None) -> None
                     except Exception:
                         desempate = {}
                 for q, limpa in novas:
-                    r, conta = respostas.get(limpa["id"], (None, ""))
+                    r, conta, problema = respostas.get(limpa["id"], (None, "", ""))
+                    if problema:   # questão quebrada não se salva no voto: volta para ser escrita de novo
+                        vistas.discard(_chave(limpa["enunciado"]))
+                        q.update(status="fila", motivo=f"o verificador viu um defeito: {problema}")
+                        run.setdefault("descartadas", []).append(
+                            {"id": q["id"], "rodada": rodada + 1, "enunciado": limpa["enunciado"][:800],
+                             "alternativas": limpa.get("alternativas"), "gabarito": _marca(limpa, limpa["correta"]),
+                             "verificador": _marca(limpa, r) if r is not None else "", "conta": conta,
+                             "problema": problema, "desempate": "", "conta_desempate": ""})
+                        refazer.append(q)
+                        continue
                     if any(limpa is x for x in disputadas):
-                        d, conta_d = desempate.get(limpa["id"], (None, ""))
+                        d, conta_d, _ = desempate.get(limpa["id"], (None, "", ""))
                         if d != limpa["correta"]:
                             vistas.discard(_chave(limpa["enunciado"]))
                             q.update(status="fila", motivo=f"o verificador chegou a outra resposta ({_marca(limpa, r)})"

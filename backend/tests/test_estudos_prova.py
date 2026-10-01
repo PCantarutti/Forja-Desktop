@@ -307,6 +307,54 @@ def test_pesos_seguem_as_areas_da_prova_anexada():
     assert P._pesos(["Outro"], {}, areas) == {"Outro": 1.0}          # nenhum casou: todos iguais
 
 
+def test_divisao_por_area_antes_do_topico():
+    # o caso do simulado: 4 tópicos de Ciências, 2 de Matemática, metade/metade -> 5 e 5 (por tópico dava 6 e 4)
+    topicos = ["Cinemática", "Química", "Óptica", "Funções", "Probabilidade", "Malária"]
+    area_de = {"Funções": "Matemática", "Probabilidade": "Matemática"} | {t: "Ciências da Natureza" for t in
+                                                                         ("Cinemática", "Química", "Óptica", "Malária")}
+    areas = [{"area": "Ciências da Natureza", "peso": 0.5}, {"area": "Matemática", "peso": 0.5}]
+    pesos = P._pesos(topicos, area_de, areas)
+    grupos = {t: a or t for t, a in P._casar(topicos, area_de, areas).items()}
+    seq = P._sequencia(topicos, pesos, 10, grupos)
+    from collections import Counter
+    n = Counter(grupos[t] for t in seq)
+    assert n == {"Ciências da Natureza": 5, "Matemática": 5}
+    assert Counter(seq)["Funções"] in (2, 3) and Counter(seq)["Cinemática"] >= 1   # dentro da área, revezam
+    assert P._sequencia(["A", "B"], {"A": 1, "B": 1}, 4) == ["A", "B", "A", "B"]   # sem grupos: como antes
+
+
+def test_verificador_que_ve_defeito_manda_reescrever(monkeypatch):
+    vez = {"n": 0}
+
+    async def chat_stream(provider, model, messages, *a, **kw):
+        system, user = messages[0]["content"], messages[1]["content"]
+        if system.startswith("Você é um professor que elabora"):
+            vez["n"] += 1
+            yield ("content", json.dumps({"questoes": [_me(vez["n"])]}))
+        else:
+            ids = re.findall(r"^\[(q\d+)\]", user, re.M)
+            certo = _correto_do_prompt(user, ids)
+            problema = "pede o mínimo de uma parábola voltada para baixo" if vez["n"] == 1 else ""
+            yield ("content", json.dumps({"respostas": [{"id": i, "conta": "x", "resposta": c, "problema": problema}
+                                                        for i, c in certo.items()]}))
+        yield ("done", {})
+
+    monkeypatch.setattr(pesquisa.llm, "chat_stream", chat_stream)
+    pid = _gerar(_estudo(), {"me": 1})
+    e = _cheia(pid)
+    assert vez["n"] == 2 and e["questoes"][0]["enunciado"].startswith("Questão 2")   # a 1ª foi reescrita
+    assert e["descartadas"][0]["problema"] == "pede o mínimo de uma parábola voltada para baixo"
+
+
+def test_lote_seguinte_sabe_o_que_a_prova_ja_tem(monkeypatch):
+    _fake(monkeypatch, verificar=_correto_do_prompt)
+    _gerar(_estudo(), {"me": 6})   # dois lotes: 5 + 1
+    gerar = [u for u, s in zip(USUARIO, SISTEMA) if s.startswith("Você é um professor que elabora")]
+    assert "Questões que a prova já tem" not in gerar[0]
+    assert "Questões que a prova já tem" in gerar[1] and "Questão 10: onde ocorre" in gerar[1]
+    assert "vírgula decimal" in SISTEMA[0] and "grau maior que 2" in SISTEMA[0]   # o _estudo é ENEM
+
+
 def test_areas_do_perfil_viram_pesos_da_prova(monkeypatch):
     conv = _estudo()
     with db.session() as s:
