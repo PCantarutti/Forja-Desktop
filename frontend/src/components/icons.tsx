@@ -80,6 +80,7 @@ export const Lampada = base(<><path d="M9 18h6" /><path d="M10 22h4" /><path d="
 export const Livro = base(<><path d="M2 5.5A1.5 1.5 0 0 1 3.5 4H9a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H3.5A1.5 1.5 0 0 1 2 16.5z" /><path d="M22 5.5A1.5 1.5 0 0 0 20.5 4H15a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h6.5a1.5 1.5 0 0 0 1.5-1.5z" /></>);
 export const Prancheta =base(<><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M9 21V9" /></>);
 // Vídeo: aba, player e composer.
+export const Onda = base(<path d="M3 12h2M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0" />);
 export const Film = base(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></>);
 export const Play = ({ className = "size-4" }: P) => (
   <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden>

@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response,
                                StreamingResponse)
 from pydantic import BaseModel
@@ -30,7 +30,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import design_modelos, design_repo, design_revisao
+from . import design_modelos, design_repo, design_revisao, tts
 
 
 settings.apply()
@@ -111,7 +111,7 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
 # inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
 # navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
-TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/")
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/tts/arquivo")
 SUFIXO_SEM_TOKEN = ("/relatorio",)
 
 
@@ -445,7 +445,7 @@ async def get_activity():
     for r in list(estudos._RUNS.values()):   # e o resumo/prova da tela Estudos (dúvida não: viraria "Estudo pronto")
         if r.get("tipo") != "duvida":
             entrada(r["conv_id"])["running"] = True
-    for c in lotes.pendentes():
+    for c in [*lotes.pendentes(), *tts.pendentes()]:
         entrada(c)["running"] = True
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
@@ -1219,6 +1219,67 @@ async def local_image_model(body: LoadBody):
         return await asyncio.to_thread(localai.save_image_params, body.path, body.params)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+# ------------------------------------------------------------------ Voz (texto para fala, tts.py)
+
+def _tts(f, *a):
+    try:
+        return f(*a)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/tts")
+def tts_estado():
+    return {**tts.estado(), "modelos": tts.modelos(), "vozes": tts.vozes(), "arquiteturas": tts.ARQUITETURAS}
+
+
+@app.post("/api/tts/instalar")
+def tts_instalar():
+    return _tts(tts.instalar)
+
+
+@app.post("/api/tts/modelos")
+def tts_modelo(body: dict):
+    return _tts(tts.salvar_modelo, body)
+
+
+@app.delete("/api/tts/modelos")
+def tts_modelo_apagar(nome: str):
+    return tts.apagar_modelo(nome)
+
+
+@app.post("/api/tts/vozes")
+async def tts_voz(nome: str = Form(...), texto: str = Form(""), file: UploadFile = File(...)):
+    return _tts(tts.salvar_voz, nome, texto, file.filename or "", await file.read())
+
+
+@app.delete("/api/tts/vozes/{vid}")
+def tts_voz_apagar(vid: str):
+    return tts.apagar_voz(vid)
+
+
+@app.post("/api/tts/{conv_id}/gerar")
+async def tts_gerar(conv_id: int, body: dict):
+    return await asyncio.to_thread(_tts, tts.gerar, conv_id, str(body.get("texto") or ""), str(body.get("modelo") or ""),
+                                   str(body.get("voz") or ""), float(body.get("velocidade") or 1.0),
+                                   int(body.get("passos") or 32), int(body.get("semente", -1)),
+                                   bool(body.get("sem_silencio")))
+
+
+@app.post("/api/tts/cancelar/{message_id}")
+def tts_cancelar(message_id: int):
+    tts.cancelar(message_id)
+    return {"ok": True}
+
+
+@app.get("/api/tts/arquivo")
+def tts_arquivo(path: str):
+    try:
+        return FileResponse(tts.servivel(path))
+    except ToolError:
+        raise HTTPException(404, "Áudio não encontrado")
 
 
 @app.get("/api/local/image/file")
@@ -3063,8 +3124,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudos"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design ou estudos")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudos", "tts"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design, estudos ou tts")
     if not folder and kind in ("agent", "maestro"):
         folder = config.WORKSPACE_PADRAO  # None: a pasta é escolhida antes do 1º envio (start_run barra)
     with db.session() as s:

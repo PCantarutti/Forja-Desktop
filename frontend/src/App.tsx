@@ -9,6 +9,7 @@ import ImagensView from "./components/ImagensView";
 import VideoView from "./components/VideoView";
 import CompararView from "./components/CompararView";
 import PesquisaView from "./components/PesquisaView";
+import TtsView from "./components/TtsView";
 import EstudosView from "./components/EstudosView";
 import DesignView from "./components/DesignView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
@@ -2533,6 +2534,14 @@ export default function App() {
             ensureConversation={ensureConversation}
             provider={settings.provider}
             model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
+          />
+        ) : section === "tts" ? (
+          <TtsView
+            conv={currentId}
+            carimbo={activity.lista}
+            ensureConversation={ensureConversation}
             onError={setError}
             onConversationChanged={refreshConversations}
           />
