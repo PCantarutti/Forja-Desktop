@@ -101,7 +101,8 @@ def main() -> int:
         from f5_tts.api import F5TTS
         tts = F5TTS(model=a.arquitetura, ckpt_file=ckpt, vocab_file=vocab, device=a.dispositivo)
         diz("FASE", f"gerando ({tts.device})" + ("" if a.ref_texto else " · transcrevendo a referência"))
-        wav, sr, _ = tts.infer(ref_file=ref, ref_text=a.ref_texto, gen_text=texto, show_info=lambda *x: None,
+        wav, sr, _ = tts.infer(ref_file=ref, ref_text=normalizar(a.ref_texto, a.minusculas, a.numeros) if a.ref_texto else "",
+                               gen_text=texto, show_info=lambda *x: None,
                                progress=Progresso, speed=a.velocidade, nfe_step=a.passos,
                                seed=None if a.semente < 0 else a.semente, remove_silence=a.sem_silencio,
                                file_wave=a.saida)
