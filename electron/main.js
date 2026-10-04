@@ -636,7 +636,9 @@ async function vigiaSono() {
   if (!precisa && port) {
     try {
       const r = await fetch(`http://127.0.0.1:${port}/api/activity`, { headers: { "x-forja-token": token } });
-      precisa = (await r.json()).conversations.some((c) => c.running);
+      const atividade = await r.json();
+      // `acordado`: automação da tela Conteúdo marcada para mais tarde (o vídeo das 3h não sai com o PC dormindo)
+      precisa = atividade.conversations.some((c) => c.running) || Boolean(atividade.acordado);
     } catch {
       precisa = bloqueioSono !== null; // backend sem responder agora: mantém como estava
     }

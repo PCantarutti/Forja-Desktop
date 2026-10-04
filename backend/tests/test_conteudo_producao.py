@@ -1,0 +1,241 @@
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+from app import config, conteudo, conteudo_producao as P, conteudo_roteiros as R, db, mirror
+from app.agent import _save
+from app.tools import ToolError
+
+# Claude falso: lê o pedido do stdin, conta como o stream-json do claude -p e escreve o .mp4 pedido.
+FALSO = r'''
+import json, os, re, sys, time
+pedido = sys.stdin.read()
+modo = os.environ.get("CLAUDE_FALSO", "ok")
+open(".forja/pedido-recebido.md", "w", encoding="utf-8").write(pedido)
+open(".forja/argv.json", "w").write(json.dumps(sys.argv[1:]))
+def ev(e): print(json.dumps(e), flush=True)
+ev({"type": "system", "subtype": "init"})
+ev({"type": "assistant", "message": {"content": [{"type": "text", "text": "Lendo o roteiro."},
+    {"type": "tool_use", "name": "Bash", "input": {"command": "npx remotion render X"}}]}})
+ev({"type": "user", "message": {"content": [{"type": "tool_result", "is_error": True,
+    "content": "This command requires approval"}]}})
+if modo == "lento":
+    time.sleep(30)
+slug = re.search(r"VIDEO: out/(\S+)\.mp4", pedido).group(1)
+if modo != "sem-video":
+    os.makedirs("out", exist_ok=True)
+    open("out/f_hook.png", "wb").write(b"png")
+    open(f"out/{slug}.mp4", "wb").write(b"mp4falso")
+ev({"type": "result", "subtype": "error_during_execution" if modo == "erro" else "success",
+    "is_error": modo == "erro", "result": f"Pronto.\nVIDEO: out/{slug}.mp4", "total_cost_usd": 1.23, "num_turns": 7,
+    "permission_denials": [{"tool_name": "PowerShell", "tool_input": {"command": "python -c 1"}}]})
+'''
+
+
+@pytest.fixture(autouse=True)
+def ambiente(tmp_path, monkeypatch):
+    monkeypatch.setattr(mirror, "ROOT", tmp_path / "conversas")
+    estilos, projeto, saida = tmp_path / "estilos", tmp_path / "youtube", tmp_path / "Desktop"
+    for d in (estilos, projeto, saida):
+        d.mkdir()
+    (estilos / "alerta-tech.md").write_text("# Estilo\n\nUrgente.\n", encoding="utf-8")
+    (estilos / "README.md").write_text("# Estilos\n", encoding="utf-8")
+    falso = tmp_path / "claude_falso.py"
+    falso.write_text(FALSO, encoding="utf-8")
+    with db.session() as s:
+        s.query(db.AppSetting).filter(db.AppSetting.key == conteudo.CHAVE).delete()
+        s.query(db.Conversation).filter(db.Conversation.kind == conteudo.KIND).delete()
+        s.commit()
+    conteudo.salvar_pastas({"pasta_estilos": str(estilos), "pasta_projeto": str(projeto), "pasta_saida": str(saida)})
+    monkeypatch.setattr(P, "achar_claude", lambda: "claude-falso")
+    real = P.argv
+    monkeypatch.setattr(P, "argv", lambda claude, pastas: [sys.executable, str(falso), *real(claude, pastas)[1:]])
+    P._RUNS.clear()
+    yield {"projeto": projeto, "saida": saida, "estilos": estilos}
+    P._RUNS.clear()
+
+
+def _aprovado(formato="vertical") -> tuple[int, int, dict]:
+    cid = conteudo.salvar_especificacao({"nome": "IA", "tema": "riscos", "estilo": "alerta-tech", "formato": formato})["id"]
+    r = R.normalizar([{"titulo": "OpenAI", "titulo_youtube": "A OpenAI parou tudo 🚨", "descricao": "Desc.",
+                       "noticia": {"resumo": "fato", "fontes": [{"titulo": "Fortune", "url": "https://fortune.com/x"}]},
+                       "cenas": [{"id": "hook", "texto": "A OpenAI parou."}]}], [])[0]
+    mid = _save(cid, role="assistant", name=R.NOME, status="ok",
+                meta={R.CHAVE: {"roteiros": [r], "estilo": "alerta-tech", "formato": formato}}).id
+    R.marcar(mid, r["id"], "aprovado")
+    return cid, mid, r
+
+
+async def _ate_o_fim(cid: int, **kw) -> dict:
+    est = P.iniciar(cid, **kw)
+    for _ in range(600):
+        if est["id"] not in P._RUNS:
+            break
+        await asyncio.sleep(0.05)
+    return P.estado(est["id"])
+
+
+def test_producao_completa(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, mid, r = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    assert est["status"] == "ok", est["aviso"]
+    entregue = Path(est["entregue"])
+    assert entregue.parent == ambiente["saida"] and entregue.read_bytes() == b"mp4falso"
+    assert entregue.name.endswith("-a-openai-parou-tudo.mp4")
+    txt = entregue.with_suffix(".txt").read_text(encoding="utf-8")
+    assert "A OpenAI parou tudo" in txt and "https://fortune.com/x" in txt
+    assert est["custo_usd"] == 1.23 and est["turnos"] == 7 and est["ferramentas"] == 1
+    assert est["negados"][0] == "This command requires approval" and est["negados"][1] == "PowerShell: python -c 1"
+    assert any(l.startswith("🔧 Bash") for l in est["log"])
+    assert R.estado(mid)["roteiros"][0]["status"] == "produzido"          # saiu da fila de aprovados
+    assert R.aprovado(cid) is None
+
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "1080x1920" in pedido and "vertical 9:16" in pedido and "alerta-tech.md" in pedido and "README.md" in pedido
+    assert f"producao/{est['id']}/roteiro.json" in pedido
+    args = json.loads((ambiente["projeto"] / ".forja" / "argv.json").read_text())
+    assert args[:6] == ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"]
+    assert "Bash(npx remotion *)" in args and "PowerShell(python scripts/*)" in args and "--add-dir" in args
+    assert "`python scripts/*`" in pedido   # o Claude sabe o que pode rodar e não gasta turno testando
+    assert "Bash" not in args   # nunca o Bash inteiro, só os prefixos da lista
+
+
+def test_horizontal_no_pedido(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado("horizontal")
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "1920x1080" in pedido and "horizontal 16:9" in pedido
+
+
+def test_erro_do_claude(monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "erro")
+    cid, mid, r = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    assert est["status"] == "erro" and "erro" in est["aviso"]
+    assert R.estado(mid)["roteiros"][0]["status"] == "aprovado"           # continua na fila
+
+
+def test_sem_video(monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "sem-video")
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    assert est["status"] == "erro" and ".mp4" in est["aviso"]
+
+
+def test_cancelar(monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "lento")
+
+    async def rodar():
+        est = P.iniciar(_aprovado()[0])
+        await asyncio.sleep(1.5)
+        P.cancelar(est["id"])
+        for _ in range(200):
+            if est["id"] not in P._RUNS:
+                break
+            await asyncio.sleep(0.05)
+        return P.estado(est["id"])
+
+    est = asyncio.run(rodar())
+    assert est["status"] == "cancelado"
+
+
+def test_validacoes(ambiente):
+    cid = conteudo.salvar_especificacao({"nome": "x", "tema": "y", "estilo": "alerta-tech"})["id"]
+    with pytest.raises(ToolError, match="aprovado"):
+        P.iniciar(cid)
+    conteudo.salvar_pastas({"pasta_projeto": ""})
+    with pytest.raises(ToolError, match="projeto"):
+        P.iniciar(cid)
+
+
+def test_uma_producao_por_vez(monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "lento")
+
+    async def rodar():
+        cid = _aprovado()[0]
+        est = P.iniciar(cid)
+        with pytest.raises(ToolError, match="Já tem"):
+            P.iniciar(cid)
+        P.cancelar(est["id"])
+        while est["id"] in P._RUNS:
+            await asyncio.sleep(0.05)
+
+    asyncio.run(rodar())
+
+
+def test_regras_bash_e_achar_claude(tmp_path, monkeypatch):
+    assert P.regras_bash(["npm run *", "ffmpeg -version", " "]) == \
+        ["Bash(npm run *)", "PowerShell(npm run *)", "Bash(ffmpeg -version)", "PowerShell(ffmpeg -version)"]
+    shim = tmp_path / "npm" / "claude.cmd"
+    exe = tmp_path / "npm" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+    exe.parent.mkdir(parents=True)
+    shim.write_text("@echo off")
+    exe.write_text("")
+    monkeypatch.undo()   # o achar_claude de verdade
+    monkeypatch.setattr(P.shutil, "which", lambda nome: str(shim))
+    with db.session() as s:
+        s.query(db.AppSetting).filter(db.AppSetting.key == conteudo.CHAVE).delete()
+        s.commit()
+    assert P.achar_claude() == str(exe)
+
+
+def test_reap():
+    cid, _, _ = _aprovado()
+    mid = _save(cid, role="assistant", name=P.NOME, status="running", meta={P.CHAVE: {"fase": "trabalhando"}}).id
+    assert P.reap() >= 1
+    assert P.estado(mid)["status"] == "erro"
+
+
+def test_login_expirado_vira_aviso_claro(monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "erro")
+    falso_result = "Failed to authenticate: OAuth session expired and could not be refreshed"
+    assert P.LOGIN_RE.search(falso_result)
+    assert not P.LOGIN_RE.search("Render falhou: composição não existe")
+
+
+def test_testar_claude(monkeypatch, tmp_path):
+    respostas = {"ok": b'{"is_error": false, "result": "OK"}',
+                 "login": b'{"is_error": true, "result": "Failed to authenticate: OAuth session expired"}'}
+    for chave, saida in respostas.items():
+        monkeypatch.setattr(P.subprocess, "run", lambda *a, saida=saida, **k: type("R", (), {"stdout": saida, "stderr": b""})())
+        r = P.testar_claude()
+        assert r["ok"] is (chave == "ok")
+        if chave == "login":
+            assert "/login" in r["mensagem"]
+
+
+def test_conta_do_claude_vai_no_ambiente(ambiente, monkeypatch, tmp_path):
+    monkeypatch.setenv("FORJA_TOKEN", "segredo")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "herdado-nao-vale")
+    assert "CLAUDE_CONFIG_DIR" not in P.ambiente_claude() and "FORJA_TOKEN" not in P.ambiente_claude()
+    conta = tmp_path / ".claude-gabi"
+    conteudo.salvar_pastas({"claude_conta": str(conta)})
+    assert conta.is_dir() and P.ambiente_claude()["CLAUDE_CONFIG_DIR"] == str(conta)
+    with pytest.raises(ToolError, match="caminho completo"):
+        conteudo.salvar_pastas({"claude_conta": "relativa"})
+
+
+def test_frames_soltos_e_rota_do_video(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    projeto = ambiente["projeto"]
+    assert not list((projeto / "out").glob("*.png"))                         # out/ só com o vídeo
+    assert (projeto / ".forja" / "producao" / str(est["id"]) / "frames" / "f_hook.png").is_file()
+    pedido = (projeto / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert f".forja/producao/{est['id']}/frames/" in pedido and "nunca em `out/`" in pedido
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    monkeypatch.setattr(config, "API_TOKEN", "token-de-teste")   # nos testes ele vem vazio (sem fronteira)
+    c = TestClient(app)
+    r = c.get(f"/api/conteudo/video/{est['id']}", cookies={"forja_token": config.API_TOKEN})
+    assert r.status_code == 200 and r.content == b"mp4falso" and r.headers["content-type"] == "video/mp4"
+    assert TestClient(app).get(f"/api/conteudo/video/{est['id']}").status_code == 403    # cliente sem cookie: nada
+    Path(est["entregue"]).unlink()
+    assert c.get(f"/api/conteudo/video/{est['id']}", cookies={"forja_token": config.API_TOKEN}).status_code == 404

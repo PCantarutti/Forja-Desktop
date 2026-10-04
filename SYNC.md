@@ -55,6 +55,7 @@ Mudança que só toca os arquivos "comuns" (a maioria) aplica sem conflito. Muda
 | `backend/app/main.py` (rota `/api/estudos-figura`) | só a rota (sem token) | a rota e o prefixo em `TOKEN_FORA_DO_HEADER` (é um `<img>`: vale o cookie e o `?t=` do celular) |
 | `frontend/src/api.ts` | `auth()` vazio (a fronteira é o nginx) | `auth()` com o token do Electron |
 | `docker-compose.yml`, `backend/Dockerfile` e `frontend/nginx.conf` (tela Estudos) | `TZ` + `tzdata` (o "hoje" da revisão e do cronograma é o do usuário); `client_max_body_size 30m` (material até 25 MB) | — |
+| tela Conteúdo (E18): `backend/app/conteudo*.py`, `frontend/src/components/Conteudo*.tsx`, as rotas `/api/conteudo/*` do `main.py`, o `kind` `conteudo` e as ferramentas `conteudo_*` do `mcp_servidor.py` | não existe (a produção depende do `claude -p` local) | existe |
 | raiz | `docker-compose.yml`, `*/Dockerfile`, `nginx.conf`, `searxng/`, `tools/` | `electron/`, `scripts/`, `package.json` |
 
 Tudo o que não está nessa lista — agente, ferramentas, aprovações, checkpoints, subagentes, MCP, navegador integrado, Settings, Sidebar, MessageView — é igual e deve continuar igual.
