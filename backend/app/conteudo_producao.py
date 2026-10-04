@@ -72,18 +72,43 @@ Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
 
 # ------------------------------------------------------------------ ambiente
 
-def achar_claude() -> str:
-    """O executável do Claude Code. O `claude` do npm é um atalho .cmd: o .exe de verdade fica ao lado,
-    e chamá-lo direto evita o cmd.exe no meio (aspas, %, &)."""
-    escolhido = (conteudo.pastas().get("claude_cli") or "").strip()
-    if escolhido:
-        return escolhido if Path(escolhido).is_file() else ""
+def _versao(texto: str) -> tuple[int, ...]:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", texto or "")
+    return tuple(int(x) for x in m.groups()) if m else (0,)
+
+
+def _candidatos() -> list[tuple[tuple[int, ...], str]]:
+    """(versão, exe) de cada Claude Code do PC: o do npm (versão pelo --version) e os que o app Claude Desktop
+    traz em %APPDATA%\\Claude*\\claude-code\\<versão>\\<hash>\\claude.exe (versão no caminho)."""
+    out = []
     achado = shutil.which("claude") or ""
     if achado.lower().endswith((".cmd", ".ps1")) or (achado and not Path(achado).suffix):
         exe = Path(achado).parent / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
-        if exe.is_file():
-            return str(exe)
-    return achado if achado.lower().endswith(".exe") or (achado and sys.platform != "win32") else ""
+        achado = str(exe) if exe.is_file() else ""
+    if achado and (achado.lower().endswith(".exe") or sys.platform != "win32"):
+        try:
+            r = subprocess.run([achado, "--version"], capture_output=True, timeout=20, **native.popen_kwargs())
+            out.append((_versao(r.stdout.decode("utf-8", "replace")), achado))
+        except (subprocess.TimeoutExpired, OSError):
+            out.append(((0,), achado))
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        for exe in Path(appdata).glob("Claude*/claude-code/*/*/claude.exe"):
+            out.append((_versao(exe.parent.parent.name), str(exe)))
+    return out
+
+
+def achar_claude() -> str:
+    """O Claude Code que a produção usa: o caminho dos Ajustes, se houver; senão o MAIS NOVO do PC.
+
+    O do npm pode ficar velho (2.1.233 não roda o Opus 5.5, que pede 2.1.280+) enquanto o app Desktop traz um
+    recente — e o caminho do app muda a cada atualização, então fixar à mão quebraria. O login é o mesmo
+    (pasta da conta do Claude Code), então qualquer um deles serve."""
+    escolhido = (conteudo.pastas().get("claude_cli") or "").strip()
+    if escolhido:
+        return escolhido if Path(escolhido).is_file() else ""
+    candidatos = _candidatos()
+    return max(candidatos)[1] if candidatos else ""
 
 
 def regras_bash(comandos: list[str]) -> list[str]:
@@ -100,9 +125,19 @@ def regras_bash(comandos: list[str]) -> list[str]:
     return out
 
 
+def modelo_e_esforco(pastas: dict) -> list[str]:
+    """--model e --effort escolhidos nos Ajustes (vazio = o padrão do Claude Code)."""
+    a = []
+    if pastas.get("claude_modelo"):
+        a += ["--model", pastas["claude_modelo"]]
+    if pastas.get("claude_esforco"):
+        a += ["--effort", pastas["claude_esforco"]]
+    return a
+
+
 def argv(claude: str, pastas: dict) -> list[str]:
     a = [claude, "-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
-         "--allowedTools", *FERRAMENTAS, *regras_bash(pastas["comandos"])]
+         *modelo_e_esforco(pastas), "--allowedTools", *FERRAMENTAS, *regras_bash(pastas["comandos"])]
     if pastas.get("pasta_estilos"):
         a += ["--add-dir", pastas["pasta_estilos"]]
     return a
@@ -131,7 +166,8 @@ def testar_claude() -> dict:
         return {"ok": False, "mensagem": "Claude Code não encontrado neste PC."}
     try:
         env = ambiente_claude()
-        r = subprocess.run([claude, "-p", "--output-format", "json"], input="Responda só: OK".encode(),
+        r = subprocess.run([claude, "-p", "--output-format", "json", *modelo_e_esforco(conteudo.pastas())],
+                           input="Responda só: OK".encode(),
                            capture_output=True, timeout=120, env=env, **native.popen_kwargs())
         d = json.loads(r.stdout.decode("utf-8", "replace") or "{}")
     except subprocess.TimeoutExpired:
@@ -146,6 +182,9 @@ def testar_claude() -> dict:
         st = subprocess.run([claude, "auth", "status"], capture_output=True, timeout=30, env=env, **native.popen_kwargs())
         info = json.loads(st.stdout.decode("utf-8", "replace") or "{}")
         conta = f" com a conta {info.get('email')}" + (f" (plano {info['subscriptionType']})" if info.get("subscriptionType") else "")
+        modelo = (d.get("modelUsage") or {}) and next(iter(d["modelUsage"]), "")
+        if modelo:
+            conta += f", modelo {modelo}"
     except (subprocess.TimeoutExpired, ValueError, OSError):
         pass
     return {"ok": True, "mensagem": f"Claude Code respondendo{conta}."}

@@ -99,6 +99,7 @@ def test_producao_completa(ambiente, monkeypatch):
     assert f"producao/{est['id']}/roteiro.json" in pedido
     args = json.loads((ambiente["projeto"] / ".forja" / "argv.json").read_text())
     assert args[:6] == ["-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits"]
+    assert args[6:10] == ["--model", "claude-opus-5-5", "--effort", "medium"]   # o padrão: Opus 5.5 no esforço médio
     assert "Bash(npx remotion *)" in args and "PowerShell(python scripts/*)" in args and "--add-dir" in args
     assert "`python scripts/*`" in pedido   # o Claude sabe o que pode rodar e não gasta turno testando
     assert "Bash" not in args   # nunca o Bash inteiro, só os prefixos da lista
@@ -178,10 +179,20 @@ def test_regras_bash_e_achar_claude(tmp_path, monkeypatch):
     exe.write_text("")
     monkeypatch.undo()   # o achar_claude de verdade
     monkeypatch.setattr(P.shutil, "which", lambda nome: str(shim))
+    monkeypatch.setattr(P.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": b"2.1.233 (Claude Code)"})())
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     with db.session() as s:
         s.query(db.AppSetting).filter(db.AppSetting.key == conteudo.CHAVE).delete()
         s.commit()
-    assert P.achar_claude() == str(exe)
+    assert P.achar_claude() == str(exe)                      # só o do npm
+    novo = tmp_path / "appdata" / "Claude-Gabi" / "claude-code" / "2.1.286" / "635c1867224a" / "claude.exe"
+    velho = tmp_path / "appdata" / "Claude" / "claude-code" / "2.1.84" / "aa" / "claude.exe"
+    for f in (novo, velho):
+        f.parent.mkdir(parents=True)
+        f.write_text("")
+    assert P.achar_claude() == str(novo)                     # o mais novo ganha (2.1.286 > 2.1.233 > 2.1.84)
+    conteudo.salvar_pastas({"claude_cli": str(exe)})
+    assert P.achar_claude() == str(exe)                      # o caminho dos Ajustes manda
 
 
 def test_reap():
@@ -239,3 +250,13 @@ def test_frames_soltos_e_rota_do_video(ambiente, monkeypatch):
     assert TestClient(app).get(f"/api/conteudo/video/{est['id']}").status_code == 403    # cliente sem cookie: nada
     Path(est["entregue"]).unlink()
     assert c.get(f"/api/conteudo/video/{est['id']}", cookies={"forja_token": config.API_TOKEN}).status_code == 404
+
+
+def test_modelo_e_esforco_validos():
+    salvo = conteudo.salvar_pastas({"claude_modelo": "opus", "claude_esforco": "high"})
+    assert P.modelo_e_esforco(salvo) == ["--model", "opus", "--effort", "high"]
+    assert P.modelo_e_esforco(conteudo.salvar_pastas({"claude_modelo": "", "claude_esforco": ""})) == []
+    with pytest.raises(ToolError, match="Esforço"):
+        conteudo.salvar_pastas({"claude_esforco": "turbo"})
+    with pytest.raises(ToolError, match="Modelo"):
+        conteudo.salvar_pastas({"claude_modelo": "opus; rm -rf"})

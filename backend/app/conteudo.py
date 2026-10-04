@@ -35,6 +35,11 @@ FORMATOS = {
 HORA_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 # Comandos que o Claude pode rodar sozinho na produção (etapa 3). Editável na tela.
+# Quem edita o vídeo: modelo e esforço passados ao `claude -p` (--model / --effort).
+CLAUDE_MODELO_PADRAO = "claude-opus-5-5"
+ESFORCOS = ("low", "medium", "high", "xhigh", "max")
+MODELO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,80}$")
+
 COMANDOS_PADRAO = ["npm run *", "npx remotion *", "npx tsc*", "python scripts/*", "node scripts/*", "ffmpeg *", "ffprobe *"]
 
 MODELO_PADRAO = """# Estilo: `<nome-do-estilo>`
@@ -85,7 +90,7 @@ def pastas() -> dict:
         linha = s.get(db.AppSetting, CHAVE)
         salvo = dict(linha.value) if linha and isinstance(linha.value, dict) else {}
     return {"pasta_estilos": "", "pasta_projeto": "", "pasta_saida": _area_de_trabalho(),
-            "comandos": list(COMANDOS_PADRAO), **salvo}
+            "comandos": list(COMANDOS_PADRAO), "claude_modelo": CLAUDE_MODELO_PADRAO, "claude_esforco": "medium", **salvo}
 
 
 def _pasta(valor: str, rotulo: str, obrigatoria: bool = False) -> str:
@@ -121,6 +126,16 @@ def salvar_pastas(dados: dict) -> dict:
         if conta:
             Path(conta).mkdir(parents=True, exist_ok=True)
         novo["claude_conta"] = conta
+    if "claude_modelo" in dados:   # vazio = o padrão do Claude Code (sem --model)
+        modelo = str(dados["claude_modelo"] or "").strip()
+        if modelo and not MODELO_RE.match(modelo):
+            raise ToolError("Modelo do Claude inválido (ex.: claude-opus-5-5, opus, sonnet).")
+        novo["claude_modelo"] = modelo
+    if "claude_esforco" in dados:
+        esforco = str(dados["claude_esforco"] or "").strip()
+        if esforco and esforco not in ESFORCOS:
+            raise ToolError("Esforço do Claude inválido: low, medium, high, xhigh ou max.")
+        novo["claude_esforco"] = esforco
     if "comandos" in dados:
         cmds = [str(c).strip()[:200] for c in (dados["comandos"] or []) if str(c).strip()]
         if len(cmds) > 50:

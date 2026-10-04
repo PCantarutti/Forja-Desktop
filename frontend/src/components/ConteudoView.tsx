@@ -16,7 +16,7 @@ const rotulo = "text-[12px] font-medium text-muted";
 
 const MOTOR_CLAUDE = "claude-mcp";   // o mesmo literal de estudos.MOTOR_CLAUDE no backend
 
-type Pastas = { pasta_estilos: string; pasta_projeto: string; pasta_saida: string; comandos: string[]; claude_cli?: string; claude_conta?: string };
+type Pastas = { pasta_estilos: string; pasta_projeto: string; pasta_saida: string; comandos: string[]; claude_cli?: string; claude_conta?: string; claude_modelo?: string; claude_esforco?: string };
 type Estilo = { nome: string; resumo: string; atualizado: string };
 type Modo = "desligada" | "aprovacao" | "automatico";
 type Spec = {
@@ -290,6 +290,29 @@ function PastasPainel(props: { pastas: Pastas; primeira: boolean; onError: (m: s
         <CampoPasta rotulo="Entrega dos vídeos prontos" valor={p.pasta_saida} onChange={(v) => setP({ ...p, pasta_saida: v })}
                     ajuda="Para onde o .mp4 final é copiado. Padrão: Área de Trabalho." />
         <ClaudeCli valor={p.claude_cli ?? ""} onChange={(v) => setP({ ...p, claude_cli: v })} />
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1">
+            <span className={rotulo}>Modelo do Claude que edita</span>
+            <input className={campo} list="modelos-claude" value={p.claude_modelo ?? ""} placeholder="padrão do Claude Code"
+                   onChange={(e) => setP({ ...p, claude_modelo: e.target.value })} />
+            <datalist id="modelos-claude">
+              <option value="claude-opus-5-5">Opus 5.5</option>
+              <option value="claude-sonnet-5-5">Sonnet 5.5</option>
+              <option value="claude-fable-5-1">Fable 5.1</option>
+            </datalist>
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className={rotulo}>Esforço</span>
+            <select className={campo} value={p.claude_esforco ?? ""} onChange={(e) => setP({ ...p, claude_esforco: e.target.value })}>
+              <option value="">padrão do Claude Code</option>
+              <option value="low">baixo</option>
+              <option value="medium">médio</option>
+              <option value="high">alto</option>
+              <option value="xhigh">muito alto</option>
+              <option value="max">máximo</option>
+            </select>
+          </label>
+        </div>
         <CampoPasta rotulo="Pasta da conta do Claude (opcional)" valor={p.claude_conta ?? ""}
                     onChange={(v) => setP({ ...p, claude_conta: v })}
                     ajuda="Para produzir com outra conta do Claude Code (CLAUDE_CONFIG_DIR). Vazio = a conta do terminal. Depois de salvar, faça o login nela uma vez (veja abaixo) e use Testar Claude." />
@@ -336,7 +359,7 @@ function ClaudeCli(props: { valor: string; onChange: (v: string) => void }) {
       )}
       <span className={`text-[11.5px] ${achado === "" && !props.valor ? "text-amber-300" : "text-faint"}`}>
         {achado === null ? "Procurando…" : achado
-          ? "Encontrado no PC. Deixe vazio para usar este; ele precisa estar logado (rode claude uma vez no terminal)."
+          ? "O mais novo do PC (npm ou o que vem com o app Claude Desktop). Deixe vazio para seguir sempre o mais novo; precisa estar logado (rode claude uma vez no terminal)."
           : "Não encontrado. Instale com npm i -g @anthropic-ai/claude-code ou informe o caminho do claude.exe."}
       </span>
     </label>
