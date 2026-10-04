@@ -55,7 +55,8 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
 ## Como
 - Este diretório é o projeto Remotion. Antes de criar algo, veja como os vídeos anteriores foram feitos aqui
   (CLAUDE.md, README, scripts/ e src/) e reaproveite: narração, legendas, efeitos e componentes.
-- Crie uma composição nova para este vídeo; não altere nem quebre as composições que já existem.
+- Crie uma composição nova para este vídeo; não altere nem quebre as composições que já existem. Não edite
+  arquivos de outras composições nem para exportar algo: para reaproveitar, importe o que já é exportado ou copie.
 - Não baixe nada da internet. Use o que já está no projeto (efeitos, fontes, logos) ou desenhe em código.
 - Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
   corrija texto cortado ou sobreposto.
@@ -71,6 +72,50 @@ Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
 
 
 # ------------------------------------------------------------------ ambiente
+
+REVISAO = """Você vai REVISAR, sozinho, um vídeo que já foi produzido neste projeto. Ninguém vai responder perguntas.
+
+## O vídeo
+- Versão atual: `{video_atual}` (versão {versao_atual}). Pedido original: `{pedido_original}`; roteiro: `{roteiro_json}`.
+- {retomada}Se não lembrar como ele foi feito, ache a composição que renderiza esse arquivo (tabela "Vídeos já feitos"
+  do README de estilos e `src/Root.tsx`).
+
+## O que mudar
+{pedidos}
+
+## Como
+- Mude só o que foi pedido; o resto fica igual (inclusive a narração, salvo pedido explícito sobre ela).
+- Altere os arquivos da composição DESTE vídeo; não edite arquivos de outras composições.
+- Tempos são do vídeo final (em segundos); as imagens são o quadro naquele instante com a marcação em vermelho por cima.
+- Confira os pontos pedidos com `npx remotion still`, salvando em `{frames}/` (nunca em `out/`).
+- Renderize a nova versão em `out/{slug}.mp4`, sem sobrescrever a anterior.
+- Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
+  Rode cada um sozinho: sem `cd x &&`, sem `;` e sem pipe para comando fora da lista. Para ler arquivos e imagens, use Read.
+
+Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
+"""
+
+USO_CHAVE = "conteudo_uso"   # AppSetting: último rate_limit_event que o Claude Code mandou
+
+
+def _salvar_uso(info: dict) -> None:
+    """Guarda o uso do plano (janela de 5 h e semanal) que o Claude Code informa durante cada execução."""
+    janelas = {k: {"uso": float(v.get("utilization") or 0), "renova": v.get("resetsAt")}
+               for k, v in (info.get("unifiedWindows") or {}).items() if isinstance(v, dict)}
+    if not janelas:
+        return
+    dados = {"janelas": janelas, "status": info.get("status") or "", "excedente": bool(info.get("isUsingOverage")),
+             "atualizado": datetime.now().isoformat(timespec="seconds")}
+    with db.session() as s:
+        s.merge(db.AppSetting(key=USO_CHAVE, value=dados))
+        s.commit()
+
+
+def uso() -> dict:
+    with db.session() as s:
+        linha = s.get(db.AppSetting, USO_CHAVE)
+        return dict(linha.value) if linha and isinstance(linha.value, dict) else {}
+
 
 def _versao(texto: str) -> tuple[int, ...]:
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", texto or "")
@@ -166,10 +211,21 @@ def testar_claude() -> dict:
         return {"ok": False, "mensagem": "Claude Code não encontrado neste PC."}
     try:
         env = ambiente_claude()
-        r = subprocess.run([claude, "-p", "--output-format", "json", *modelo_e_esforco(conteudo.pastas())],
+        r = subprocess.run([claude, "-p", "--output-format", "stream-json", "--verbose", *modelo_e_esforco(conteudo.pastas())],
                            input="Responda só: OK".encode(),
                            capture_output=True, timeout=120, env=env, **native.popen_kwargs())
-        d = json.loads(r.stdout.decode("utf-8", "replace") or "{}")
+        d = {}
+        for linha in r.stdout.decode("utf-8", "replace").splitlines():   # o uso do plano vem num evento à parte
+            try:
+                ev = json.loads(linha)
+            except ValueError:
+                continue
+            if ev.get("type") == "rate_limit_event":
+                _salvar_uso(ev.get("rate_limit_info") or {})
+            elif ev.get("type") == "result":
+                d = ev
+        if not d:
+            raise ValueError("sem evento result")
     except subprocess.TimeoutExpired:
         return {"ok": False, "mensagem": "O Claude Code não respondeu em 2 minutos."}
     except ValueError:
@@ -400,6 +456,8 @@ def _executar(run: dict, pedido: str) -> dict:
                 run["negados"] = (run["negados"] + [neg])[-20:]
             if ev.get("type") == "result":
                 final = ev
+            elif ev.get("type") == "rate_limit_event":
+                _salvar_uso(ev.get("rate_limit_info") or {})
             if time.monotonic() - ultimo > GRAVAR_A_CADA:
                 ultimo = time.monotonic()
                 _patch(run["message_id"], **_publico(run))
@@ -470,7 +528,16 @@ async def _rodar(run: dict, pedido: str) -> None:
     try:
         final = await asyncio.to_thread(_executar, run, pedido)
         await asyncio.to_thread(_recolher_frames, run)
-        run.update(custo_usd=final.get("total_cost_usd"), turnos=final.get("num_turns"))
+        run.update(custo_usd=final.get("total_cost_usd"), turnos=final.get("num_turns"),
+                   sessao=final.get("session_id") or run.get("sessao") or "")   # a revisão retoma esta sessão
+        if run.get("_retomou") and final.get("is_error") and re.search(r"conversation|session", str(final.get("result")), re.I):
+            # sessão do Claude que já não existe (outra conta, limpeza): refaz sem retomar — o pedido se basta
+            run["log"] = run["log"] + ["↻ a sessão anterior não existe mais; refazendo sem retomar"]
+            run["_argv"] = [a for i, a in enumerate(run["_argv"]) if a != "--resume" and run["_argv"][i - 1] != "--resume"]
+            run["_retomou"] = False
+            final = await asyncio.to_thread(_executar, run, pedido)
+            await asyncio.to_thread(_recolher_frames, run)
+            run.update(custo_usd=final.get("total_cost_usd"), turnos=final.get("num_turns"), sessao=final.get("session_id") or "")
         for d in final.get("permission_denials") or []:   # a lista oficial do Claude Code, no evento final
             cmd = str((d.get("tool_input") or {}).get("command") or d.get("tool_name") or "")[:200]
             if cmd and not any(cmd in n for n in run["negados"]):
@@ -488,7 +555,8 @@ async def _rodar(run: dict, pedido: str) -> None:
         else:
             run["video"] = str(video)
             run["entregue"] = await asyncio.to_thread(_entregar, run, video)
-            conteudo_roteiros.marcar_produzido(run["rodada_id"], run["roteiro_id"], run["entregue"])
+            if not run.get("revisao_de"):   # revisão: o roteiro já tinha virado vídeo na 1ª versão
+                conteudo_roteiros.marcar_produzido(run["rodada_id"], run["roteiro_id"], run["entregue"])
             status = "ok"
     except Exception as e:   # nada pode deixar a produção presa em "running"
         run["aviso"] = f"{e.__class__.__name__}: {e}"[:300]
@@ -499,7 +567,116 @@ async def _rodar(run: dict, pedido: str) -> None:
         _RUNS.pop(run["message_id"], None)
         try:
             from . import mobile
-            await asyncio.to_thread(mobile.avisa, "Vídeo pronto" if status == "ok" else "Produção não terminou",
+            pronto = f"Versão {run.get('versao', 1)} pronta" if run.get("revisao_de") else "Vídeo pronto"
+            await asyncio.to_thread(mobile.avisa, pronto if status == "ok" else "Produção não terminou",
                                     run["titulo"] if status == "ok" else run["aviso"], run["conv_id"])
         except Exception:
             pass
+
+
+# ------------------------------------------------------------------ revisão (nova versão de um vídeo pronto)
+
+MAX_PEDIDOS = 20
+MAX_IMAGEM = 8 * 1024 * 1024
+
+
+def _seg(v) -> float:
+    try:
+        return max(0.0, round(float(v), 2))
+    except (TypeError, ValueError):
+        raise ToolError("Tempo inválido no pedido de mudança.")
+
+
+def _tempo(t: float) -> str:
+    return f"{int(t // 60)}:{t % 60:05.2f}".replace(".", ",")
+
+
+def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
+    """O usuário marcou quadros (com desenho) e trechos do vídeo pronto: o Claude retoma a sessão que fez o vídeo,
+    muda só isso e renderiza uma versão nova (a anterior fica)."""
+    import base64
+
+    anterior = estado(message_id)
+    if anterior.get("status") != "ok" or not anterior.get("entregue"):
+        raise ToolError("Só dá para revisar um vídeo que ficou pronto.")
+    geral = str(geral or "").strip()[:4000]
+    limpos = []
+    for p in (pedidos or [])[:MAX_PEDIDOS]:
+        if not isinstance(p, dict):
+            continue
+        comentario = str(p.get("comentario") or "").strip()[:2000]
+        if not comentario:
+            raise ToolError("Todo pedido de mudança precisa de um comentário dizendo o que mudar.")
+        if p.get("tipo") == "quadro":
+            imagem = str(p.get("imagem") or "")
+            dados = base64.b64decode(imagem.split(",", 1)[-1]) if imagem else b""
+            if dados and (len(dados) > MAX_IMAGEM or not dados.startswith(b"\x89PNG")):
+                raise ToolError("Imagem do quadro inválida (precisa ser PNG de até 8 MB).")
+            limpos.append({"tipo": "quadro", "tempo": _seg(p.get("tempo")), "comentario": comentario, "_png": dados})
+        elif p.get("tipo") == "trecho":
+            ini, fim = sorted((_seg(p.get("inicio")), _seg(p.get("fim"))))
+            limpos.append({"tipo": "trecho", "inicio": ini, "fim": fim, "comentario": comentario})
+    if not limpos and not geral:
+        raise ToolError("Diga o que mudar: marque um quadro, um trecho ou escreva uma mudança geral.")
+
+    pastas = conteudo.pastas()
+    projeto = pastas["pasta_projeto"]
+    claude = achar_claude()
+    if not claude:
+        raise ToolError("Não achei o Claude Code neste PC.")
+    job_anterior = Path(projeto) / ".forja" / "producao" / str(message_id)
+    if not (job_anterior / "roteiro.json").is_file():
+        raise ToolError("Os arquivos da produção anterior sumiram de .forja/producao no projeto.")
+    versao = int(anterior.get("versao") or 1) + 1
+    raiz = re.sub(r"-v\d+$", "", anterior["slug"])
+    slug = f"{raiz}-v{versao}"
+
+    with _TRAVA:
+        if _RUNS:
+            raise ToolError("Já tem um vídeo sendo produzido; espere terminar ou cancele.")
+        base = {k: anterior.get(k) for k in ("roteiro_id", "rodada_id", "titulo", "estilo", "formato")}
+        base.update(slug=slug, versao=versao, revisao_de=message_id, sessao=anterior.get("sessao") or "",
+                    pedidos=[{k: v for k, v in x.items() if not k.startswith("_")} for x in limpos], geral=geral,
+                    fase="preparando", log=[], aviso="", ferramentas=0, negados=[], video="", entregue="",
+                    custo_usd=None, turnos=None, segundos=0.0)
+        msg = _save(anterior["conv_id"], role="assistant", name=NOME, content="", status="running", meta={CHAVE: base})
+        run = _RUNS[msg.id] = {**base, "message_id": msg.id, "conv_id": anterior["conv_id"], "cancelar": False,
+                               "t0": time.monotonic()}
+
+    job = Path(projeto) / ".forja" / "producao" / str(msg.id)
+    (job / "anotacoes").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(job_anterior / "roteiro.json", job / "roteiro.json")
+    linhas = []
+    for i, x in enumerate(limpos, 1):
+        if x["tipo"] == "quadro":
+            onde = f"[quadro em {_tempo(x['tempo'])}]"
+            if x["_png"]:
+                img = job / "anotacoes" / f"q{i}.png"
+                img.write_bytes(x["_png"])
+                onde += f" — veja `{img.relative_to(projeto).as_posix()}` (o que está em vermelho é o que mudar)"
+        else:
+            onde = f"[trecho de {_tempo(x['inicio'])} a {_tempo(x['fim'])}]"
+        linhas.append(f"{i}. {onde}: {x['comentario']}")
+    if geral:
+        linhas.append(f"{len(linhas) + 1}. [no vídeo todo]: {geral}")
+    video_atual = Path(anterior.get("video") or "")
+    pedido = REVISAO.format(
+        video_atual=(video_atual.relative_to(projeto).as_posix() if video_atual.is_file() and Path(projeto) in video_atual.parents
+                     else f"out/{anterior['slug']}.mp4"),
+        versao_atual=versao - 1,
+        pedido_original=(job_anterior / "pedido.md").relative_to(projeto).as_posix(),
+        roteiro_json=(job / "roteiro.json").relative_to(projeto).as_posix(),
+        retomada="Esta conversa é a mesma em que você fez o vídeo, então você já sabe onde ficam os arquivos. " if base["sessao"] else "",
+        pedidos="\n".join(linhas), frames=(job / "frames").relative_to(projeto).as_posix(), slug=slug,
+        comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)")
+    (job / "pedido.md").write_text(pedido, encoding="utf-8")
+    a = argv(claude, pastas)
+    if base["sessao"]:
+        i = a.index("-p")   # logo antes do -p: o executável (e o que vier antes dele) fica intacto
+        a[i:i] = ["--resume", base["sessao"]]
+    run["_job"], run["_argv"], run["_projeto"], run["_pastas"], run["_retomou"] = job, a, projeto, pastas, bool(base["sessao"])
+
+    t = asyncio.create_task(_rodar(run, pedido))
+    _TAREFAS.add(t)
+    t.add_done_callback(_TAREFAS.discard)
+    return estado(msg.id)

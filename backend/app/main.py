@@ -2428,6 +2428,18 @@ def conteudo_video(message_id: int):
     return FileResponse(caminho, media_type="video/mp4")
 
 
+@app.post("/api/conteudo/producao/{message_id}/revisar")
+async def conteudo_revisar(message_id: int, body: dict):
+    """Pedidos de mudança (quadros desenhados e trechos) num vídeo pronto: o Claude faz a próxima versão."""
+    return _conteudo(conteudo_producao.revisar, message_id, (body or {}).get("pedidos") or [], (body or {}).get("geral") or "")
+
+
+@app.get("/api/conteudo/uso")
+def conteudo_uso():
+    """Uso do plano do Claude (janelas de 5 h e semanal), o último que o Claude Code informou."""
+    return conteudo_producao.uso()
+
+
 @app.get("/api/conteudo/claude")
 def conteudo_claude():
     """Onde está o Claude Code que a produção vai usar ("" = não achou)."""

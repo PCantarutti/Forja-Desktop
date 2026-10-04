@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { Copy, Film, Square } from "./icons";
+import { Copy, Edit, Film, Square } from "./icons";
+import ConteudoRevisao from "./ConteudoRevisao";
 import { VideoPlayer } from "./VideoPlayer";
 
 // Coluna do vídeo no painel da especificação: o vídeo pronto no player da tela Vídeo, a produção ao vivo
@@ -21,7 +22,11 @@ type Producao = {
   custo_usd: number | null;
   turnos: number | null;
   segundos: number;
+  versao?: number;
+  revisao_de?: number;
 };
+
+const rotuloVersao = (p: Producao) => ((p.versao ?? 1) > 1 ? `v${p.versao} · ` : "");
 
 const relogio = (seg: number) => {
   const h = Math.floor(seg / 3600), m = Math.floor((seg % 3600) / 60), s = Math.floor(seg % 60);
@@ -44,6 +49,7 @@ const STATUS: Record<Producao["status"], { rotulo: string; cor: string }> = {
 export default function ConteudoProducao(props: { conv: number; carimbo?: string; onError: (msg: string) => void }) {
   const [lista, setLista] = useState<Producao[]>([]);
   const [escolhida, setEscolhida] = useState<number | null>(null);
+  const [revisando, setRevisando] = useState<Producao | null>(null);
 
   const carregar = useCallback(async () => {
     try {
@@ -69,7 +75,7 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
     <section className="flex min-w-0 flex-col gap-4">
       <h2 className="text-[13px] font-semibold text-fg">Vídeo</h2>
       {viva && <AoVivo p={viva} onCancelar={() => api.post(`/conteudo/producao/${viva.id}/cancelar`, {}).then(carregar)} />}
-      {noPlayer ? <Player p={noPlayer} /> : !viva && (
+      {noPlayer ? <Player p={noPlayer} onRevisar={viva ? undefined : () => setRevisando(noPlayer)} /> : !viva && (
         <div className="flex aspect-[9/16] max-h-[440px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong px-8 text-center">
           <Film className="size-6 text-faint" />
           <p className="text-[13px] text-muted">O vídeo aparece aqui quando a primeira produção terminar.</p>
@@ -87,7 +93,10 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
                           noPlayer?.id === p.id ? "bg-accent-soft" : ""}`}>
                   <span className={`mt-1.5 size-2 shrink-0 rounded-full ${STATUS[p.status].cor} ${p.status === "rodando" ? "animate-pulse" : ""}`} />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12.5px] text-fg">{p.titulo}</span>
+                    <span className="block truncate text-[12.5px] text-fg">
+                      {(p.versao ?? 1) > 1 && <span className="mr-1.5 font-mono text-[11px] text-accent-text">v{p.versao}</span>}
+                      {p.titulo}
+                    </span>
                     <span className="block text-[11.5px] text-faint">
                       {dataCurta(p.criado)} · {STATUS[p.status].rotulo} · {relogio(p.segundos)}
                     </span>
@@ -99,11 +108,15 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
           </ul>
         </div>
       )}
+      {revisando && (
+        <ConteudoRevisao p={revisando} onError={props.onError} onFechar={() => setRevisando(null)}
+                         onEnviado={() => { setRevisando(null); carregar(); }} />
+      )}
     </section>
   );
 }
 
-function Player(props: { p: Producao }) {
+function Player(props: { p: Producao; onRevisar?: () => void }) {
   const { p } = props;
   const [copiado, setCopiado] = useState(false);
   const vertical = p.formato !== "horizontal";
@@ -113,7 +126,7 @@ function Player(props: { p: Producao }) {
                    className={`rounded-xl border border-line bg-black ${vertical ? "mx-auto" : ""}`}
                    style={{ aspectRatio: vertical ? 9 / 16 : 16 / 9, width: vertical ? "min(100%, 300px)" : "100%" }} />
       <div className="flex flex-col gap-1">
-        <span className="text-[13.5px] font-medium leading-snug text-fg">{p.titulo}</span>
+        <span className="text-[13.5px] font-medium leading-snug text-fg">{rotuloVersao(p)}{p.titulo}</span>
         <span className="text-[11.5px] text-faint">
           {dataCurta(p.criado)} · feito em {relogio(p.segundos)}{p.turnos ? ` · ${p.turnos} turnos do Claude` : ""}
         </span>
@@ -123,6 +136,12 @@ function Player(props: { p: Producao }) {
           <Copy className="size-3.5" />
           <span className="max-w-[300px] truncate font-mono">{copiado ? "caminho copiado" : p.entregue}</span>
         </button>
+        {props.onRevisar && (
+          <button onClick={props.onRevisar}
+                  className="mt-1.5 inline-flex items-center justify-center gap-1.5 rounded-[9px] border border-line-strong px-3 py-1.5 text-[13px] text-fg hover:border-focus hover:bg-raised">
+            <Edit className="size-4" /> Pedir mudanças
+          </button>
+        )}
       </div>
     </div>
   );
@@ -136,7 +155,9 @@ function AoVivo(props: { p: Producao; onCancelar: () => void }) {
     <div className="flex flex-col gap-2.5 rounded-xl border border-info/40 bg-info/5 p-3.5">
       <div className="flex items-center gap-2">
         <span className="size-2 animate-pulse rounded-full bg-info" />
-        <span className="text-[12.5px] font-medium text-info">{p.fase === "preparando" ? "Preparando" : "Claude produzindo"}</span>
+        <span className="text-[12.5px] font-medium text-info">
+          {p.fase === "preparando" ? "Preparando" : (p.versao ?? 1) > 1 ? `Claude fazendo a versão ${p.versao}` : "Claude produzindo"}
+        </span>
         <span className="ml-auto font-mono text-[12px] text-muted">{relogio(p.segundos)}</span>
       </div>
       <span className="text-[13px] leading-snug text-fg">{p.titulo}</span>

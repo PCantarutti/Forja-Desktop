@@ -12,12 +12,17 @@ from app.tools import ToolError
 # Claude falso: lê o pedido do stdin, conta como o stream-json do claude -p e escreve o .mp4 pedido.
 FALSO = r'''
 import json, os, re, sys, time
-pedido = sys.stdin.read()
+pedido = sys.stdin.buffer.read().decode("utf-8")
 modo = os.environ.get("CLAUDE_FALSO", "ok")
 open(".forja/pedido-recebido.md", "w", encoding="utf-8").write(pedido)
 open(".forja/argv.json", "w").write(json.dumps(sys.argv[1:]))
 def ev(e): print(json.dumps(e), flush=True)
 ev({"type": "system", "subtype": "init"})
+ev({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "isUsingOverage": False,
+    "unifiedWindows": {"five_hour": {"utilization": 0.17, "resetsAt": 1791168000}, "seven_day": {"utilization": 0.02, "resetsAt": 1791619200}}}})
+if modo == "sem-sessao" and "--resume" in sys.argv:
+    ev({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "No conversation found with session ID: sess-1"})
+    sys.exit(1)
 ev({"type": "assistant", "message": {"content": [{"type": "text", "text": "Lendo o roteiro."},
     {"type": "tool_use", "name": "Bash", "input": {"command": "npx remotion render X"}}]}})
 ev({"type": "user", "message": {"content": [{"type": "tool_result", "is_error": True,
@@ -30,7 +35,7 @@ if modo != "sem-video":
     open("out/f_hook.png", "wb").write(b"png")
     open(f"out/{slug}.mp4", "wb").write(b"mp4falso")
 ev({"type": "result", "subtype": "error_during_execution" if modo == "erro" else "success",
-    "is_error": modo == "erro", "result": f"Pronto.\nVIDEO: out/{slug}.mp4", "total_cost_usd": 1.23, "num_turns": 7,
+    "is_error": modo == "erro", "result": f"Pronto.\nVIDEO: out/{slug}.mp4", "total_cost_usd": 1.23, "num_turns": 7, "session_id": "sess-1",
     "permission_denials": [{"tool_name": "PowerShell", "tool_input": {"command": "python -c 1"}}]})
 '''
 
@@ -210,8 +215,9 @@ def test_login_expirado_vira_aviso_claro(monkeypatch):
 
 
 def test_testar_claude(monkeypatch, tmp_path):
-    respostas = {"ok": b'{"is_error": false, "result": "OK"}',
-                 "login": b'{"is_error": true, "result": "Failed to authenticate: OAuth session expired"}'}
+    uso = b'{"type": "rate_limit_event", "rate_limit_info": {"unifiedWindows": {"five_hour": {"utilization": 0.4, "resetsAt": 1}}}}'
+    respostas = {"ok": uso + b'\n{"type": "result", "is_error": false, "result": "OK"}',
+                 "login": b'{"type": "result", "is_error": true, "result": "Failed to authenticate: OAuth session expired"}'}
     for chave, saida in respostas.items():
         monkeypatch.setattr(P.subprocess, "run", lambda *a, saida=saida, **k: type("R", (), {"stdout": saida, "stderr": b""})())
         r = P.testar_claude()
@@ -260,3 +266,73 @@ def test_modelo_e_esforco_validos():
         conteudo.salvar_pastas({"claude_esforco": "turbo"})
     with pytest.raises(ToolError, match="Modelo"):
         conteudo.salvar_pastas({"claude_modelo": "opus; rm -rf"})
+
+
+PNG = "data:image/png;base64," + __import__("base64").b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 64).decode()
+
+
+def _v1(monkeypatch) -> dict:
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    return asyncio.run(_ate_o_fim(cid))
+
+
+async def _revisao_ate_o_fim(mid: int, pedidos, geral="") -> dict:
+    est = P.revisar(mid, pedidos, geral)
+    for _ in range(600):
+        if est["id"] not in P._RUNS:
+            break
+        await asyncio.sleep(0.05)
+    return P.estado(est["id"])
+
+
+def test_uso_do_plano_salvo(monkeypatch):
+    v1 = _v1(monkeypatch)
+    u = P.uso()
+    assert v1["status"] == "ok" and u["janelas"]["five_hour"]["uso"] == 0.17 and u["janelas"]["seven_day"]["renova"] == 1791619200
+
+
+def test_revisao_faz_v2_retomando_a_sessao(ambiente, monkeypatch):
+    v1 = _v1(monkeypatch)
+    assert v1["sessao"] == "sess-1"
+    v2 = asyncio.run(_revisao_ate_o_fim(v1["id"], [
+        {"tipo": "quadro", "tempo": 12.4, "comentario": "Troque a cor do título", "imagem": PNG},
+        {"tipo": "trecho", "inicio": 20, "fim": 18.5, "comentario": "Corte mais rápido aqui"},
+    ], geral="Música um pouco mais baixa"))
+    assert v2["status"] == "ok", v2["aviso"]
+    assert v2["versao"] == 2 and v2["revisao_de"] == v1["id"] and v2["slug"].endswith("-v2")
+    assert Path(v2["entregue"]).name.endswith("-v2.mp4") and Path(v1["entregue"]).is_file()   # a v1 continua lá
+    projeto = ambiente["projeto"]
+    pedido = (projeto / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "Troque a cor do título" in pedido and "0:12,40" in pedido and "trecho de 0:18,50 a 0:20,00" in pedido
+    assert f".forja/producao/{v2['id']}/anotacoes/q1.png" in pedido and "Música um pouco mais baixa" in pedido
+    assert (projeto / ".forja" / "producao" / str(v2["id"]) / "anotacoes" / "q1.png").read_bytes().startswith(b"\x89PNG")
+    args = json.loads((projeto / ".forja" / "argv.json").read_text())
+    assert args[:2] == ["--resume", "sess-1"]
+    assert [x["tipo"] for x in v2["pedidos"]] == ["quadro", "trecho"] and "_png" not in v2["pedidos"][0]
+    # e a v3 sai da v2
+    v3 = asyncio.run(_revisao_ate_o_fim(v2["id"], [], geral="Título maior"))
+    assert v3["versao"] == 3 and v3["slug"].endswith("-v3") and "-v2-v3" not in v3["slug"]
+
+
+def test_revisao_sem_sessao_refaz_sem_retomar(monkeypatch):
+    v1 = _v1(monkeypatch)
+    monkeypatch.setenv("CLAUDE_FALSO", "sem-sessao")
+    v2 = asyncio.run(_revisao_ate_o_fim(v1["id"], [], geral="Título maior"))
+    assert v2["status"] == "ok", v2["aviso"]
+    assert any(l.startswith("↻") for l in v2["log"])
+
+
+def test_revisao_valida(monkeypatch):
+    v1 = _v1(monkeypatch)
+    with pytest.raises(ToolError, match="Diga o que mudar"):
+        P.revisar(v1["id"], [], "")
+    with pytest.raises(ToolError, match="comentário"):
+        P.revisar(v1["id"], [{"tipo": "trecho", "inicio": 1, "fim": 2, "comentario": " "}])
+    with pytest.raises(ToolError, match="PNG"):
+        P.revisar(v1["id"], [{"tipo": "quadro", "tempo": 1, "comentario": "x", "imagem": "data:image/png;base64,QUJD"}])
+    monkeypatch.setenv("CLAUDE_FALSO", "erro")
+    cid, _, _ = _aprovado()
+    falhou = asyncio.run(_ate_o_fim(cid))
+    with pytest.raises(ToolError, match="ficou pronto"):
+        P.revisar(falhou["id"], [], "x")

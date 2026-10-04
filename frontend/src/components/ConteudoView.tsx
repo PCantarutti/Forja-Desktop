@@ -172,6 +172,7 @@ export default function ConteudoView(props: {
                 )}
             </p>
           </div>
+          <UsoClaude carimbo={props.carimbo} />
           {props.conv !== null && !global && (
             <div className="flex shrink-0 items-center gap-2">
               <button className={btn} disabled={!!disparando} onClick={() => disparar("roteiros")}>
@@ -226,6 +227,59 @@ export default function ConteudoView(props: {
 }
 
 const Ponto = () => <span className="size-[3px] rounded-full bg-faint" aria-hidden />;
+
+type Uso = { janelas?: Record<string, { uso: number; renova: number | null }>; atualizado?: string };
+const JANELAS: [string, string][] = [["five_hour", "5 h"], ["seven_day", "semana"]];
+
+const renovaEm = (s: number | null) => {
+  if (!s) return "";
+  const d = new Date(s * 1000), hoje = new Date();
+  return d.toDateString() === hoje.toDateString() ? d.toTimeString().slice(0, 5)
+    : `${d.toLocaleDateString(undefined, { weekday: "short" })} ${d.toTimeString().slice(0, 5)}`;
+};
+
+/** Uso do plano do Claude: o último que o Claude Code informou (em cada produção e no "Testar Claude"). */
+function UsoClaude(props: { carimbo?: string }) {
+  const [uso, setUso] = useState<Uso | null>(null);
+  const [atualizando, setAtualizando] = useState(false);
+  const carregar = useCallback(() => api.get<Uso>("/conteudo/uso").then(setUso).catch(() => {}), []);
+  useEffect(() => { carregar(); }, [carregar, props.carimbo]);
+  async function atualizar() {
+    setAtualizando(true);
+    try {
+      await api.post("/conteudo/claude/testar", {});
+      await carregar();
+    } finally {
+      setAtualizando(false);
+    }
+  }
+  const janelas = JANELAS.filter(([k]) => uso?.janelas?.[k]);
+  return (
+    <div className="flex shrink-0 items-center gap-3 rounded-[10px] border border-line px-3 py-1.5"
+         title={uso?.atualizado ? `Uso do plano do Claude, informado às ${uso.atualizado.slice(11, 16)}` : "Uso do plano do Claude"}>
+      <span className="text-[11.5px] font-medium text-muted">Claude</span>
+      {janelas.length === 0 && <span className="text-[11.5px] text-faint">uso ainda desconhecido</span>}
+      {janelas.map(([k, rotulo]) => {
+        const j = uso!.janelas![k];
+        const pct = Math.round(j.uso * 100);
+        const cor = pct >= 85 ? "bg-err" : pct >= 60 ? "bg-warn" : "bg-ok";
+        return (
+          <span key={k} className="flex items-center gap-1.5 text-[11.5px] text-muted" title={`Renova ${renovaEm(j.renova)}`}>
+            {rotulo}
+            <span className="h-1.5 w-14 overflow-hidden rounded-full bg-raised">
+              <span className={`block h-full rounded-full ${cor}`} style={{ width: `${Math.max(3, pct)}%` }} />
+            </span>
+            <span className="font-mono tabular-nums text-fg">{pct}%</span>
+          </span>
+        );
+      })}
+      <button className="rounded-md p-0.5 text-faint hover:bg-raised hover:text-fg disabled:animate-spin" disabled={atualizando}
+              onClick={atualizar} title="Atualizar agora (faz uma pergunta mínima ao Claude)">
+        <Refresh className="size-3.5" />
+      </button>
+    </div>
+  );
+}
 
 function Aba(props: { ativa: boolean; desabilitada?: boolean; onClick: () => void; children: React.ReactNode }) {
   return (

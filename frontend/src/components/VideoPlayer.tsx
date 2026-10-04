@@ -14,6 +14,8 @@ export type VideoPlayerApi = {
   /** O quadro na tela, em PNG no tamanho real do vídeo ("usar como início", "salvar quadro"). */
   capturar: () => Promise<Blob | null>;
   pausar: () => void;
+  /** Onde o vídeo está, em segundos (marcar um trecho ou o quadro de um pedido de mudança). */
+  tempo: () => number;
 };
 
 const VELOCIDADES = [0.25, 0.5, 1, 1.5, 2];
@@ -255,6 +257,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   }, []);
 
   useImperativeHandle(ref, () => ({
+    tempo: () => video.current?.currentTime ?? 0,
     pausar: () => {
       video.current?.pause();
       outro.current?.pause();
@@ -555,7 +558,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           )}
           <span className="mx-1.5 h-4 w-px bg-white/10" aria-hidden />
           {props.audio ? (
-            <span className="font-mono text-[11px] tabular-nums text-fg">
+            <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-fg">
               {relogio(t)}<span className="text-muted"> / {relogio(dur)}</span>
             </span>
           ) : (
@@ -564,7 +567,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
               <span className="text-muted"> / {total}</span>
             </span>
           )}
-          {!props.compacto && (
+          {!props.compacto && !props.audio && (
             <span className="ml-2.5 hidden text-[11px] tabular-nums text-muted sm:inline">
               {segundos(t)} · {fps} fps{dims[0] ? ` · ${dims[0]}×${dims[1]}` : ""}
             </span>
