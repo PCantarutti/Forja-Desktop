@@ -109,7 +109,7 @@ function Player(props: { p: Producao }) {
   const vertical = p.formato !== "horizontal";
   return (
     <div className="flex flex-col gap-2.5">
-      <VideoPlayer key={p.id} src={`/api/conteudo/video/${p.id}`} fps={30} compacto
+      <VideoPlayer key={p.id} src={`/api/conteudo/video/${p.id}`} fps={30} compacto audio
                    className={`rounded-xl border border-line bg-black ${vertical ? "mx-auto" : ""}`}
                    style={{ aspectRatio: vertical ? 9 / 16 : 16 / 9, width: vertical ? "min(100%, 300px)" : "100%" }} />
       <div className="flex flex-col gap-1">
