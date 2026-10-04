@@ -27,6 +27,7 @@ if modo == "lento":
 slug = re.search(r"VIDEO: out/(\S+)\.mp4", pedido).group(1)
 if modo != "sem-video":
     os.makedirs("out", exist_ok=True)
+    open("out/f_hook.png", "wb").write(b"png")
     open(f"out/{slug}.mp4", "wb").write(b"mp4falso")
 ev({"type": "result", "subtype": "error_during_execution" if modo == "erro" else "success",
     "is_error": modo == "erro", "result": f"Pronto.\nVIDEO: out/{slug}.mp4", "total_cost_usd": 1.23, "num_turns": 7,
@@ -217,3 +218,24 @@ def test_conta_do_claude_vai_no_ambiente(ambiente, monkeypatch, tmp_path):
     assert conta.is_dir() and P.ambiente_claude()["CLAUDE_CONFIG_DIR"] == str(conta)
     with pytest.raises(ToolError, match="caminho completo"):
         conteudo.salvar_pastas({"claude_conta": "relativa"})
+
+
+def test_frames_soltos_e_rota_do_video(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    projeto = ambiente["projeto"]
+    assert not list((projeto / "out").glob("*.png"))                         # out/ só com o vídeo
+    assert (projeto / ".forja" / "producao" / str(est["id"]) / "frames" / "f_hook.png").is_file()
+    pedido = (projeto / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert f".forja/producao/{est['id']}/frames/" in pedido and "nunca em `out/`" in pedido
+
+    from fastapi.testclient import TestClient
+    from app.main import app
+    monkeypatch.setattr(config, "API_TOKEN", "token-de-teste")   # nos testes ele vem vazio (sem fronteira)
+    c = TestClient(app)
+    r = c.get(f"/api/conteudo/video/{est['id']}", cookies={"forja_token": config.API_TOKEN})
+    assert r.status_code == 200 and r.content == b"mp4falso" and r.headers["content-type"] == "video/mp4"
+    assert TestClient(app).get(f"/api/conteudo/video/{est['id']}").status_code == 403    # cliente sem cookie: nada
+    Path(est["entregue"]).unlink()
+    assert c.get(f"/api/conteudo/video/{est['id']}", cookies={"forja_token": config.API_TOKEN}).status_code == 404

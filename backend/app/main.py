@@ -116,7 +116,7 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
 # inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
 # navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
-TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/")
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/conteudo/video/")
 SUFIXO_SEM_TOKEN = ("/relatorio",)
 
 
@@ -2416,6 +2416,16 @@ def conteudo_editar_roteiro(message_id: int, roteiro_id: str, body: dict):
 @app.get("/api/conteudo/especificacoes/{conv_id}/agenda")
 def conteudo_agenda_estado(conv_id: int):
     return _conteudo(conteudo_agenda.estado, conv_id)
+
+
+@app.get("/api/conteudo/video/{message_id}")
+def conteudo_video(message_id: int):
+    """O vídeo entregue por uma produção, para o player da tela Conteúdo (é um <video>: vale o cookie)."""
+    try:
+        caminho = conteudo_producao.video_entregue(message_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(caminho, media_type="video/mp4")
 
 
 @app.get("/api/conteudo/claude")

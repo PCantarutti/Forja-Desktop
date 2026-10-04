@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import Confirma from "./Confirma";
-import { Check, Edit, Eye, FolderOpen, Plus, Trash } from "./icons";
+import { Check, Edit, Eye, FolderOpen, Gear, Play, Plus, Refresh, Trash } from "./icons";
 import { Markdown } from "./MessageView";
 import ModelPicker from "./ModelPicker";
 import ConteudoRoteiros from "./ConteudoRoteiros";
@@ -9,8 +9,8 @@ import ConteudoProducao from "./ConteudoProducao";
 
 // Repetidas por view para a aba viajar inteira num cherry-pick (mesmo motivo do PesquisaView).
 const card = "rounded-xl border border-line bg-surface p-3.5";
-const btn = "inline-flex items-center gap-1.5 rounded-[9px] border border-line-strong px-3 py-1.5 text-fg hover:border-focus hover:bg-raised disabled:opacity-40";
-const btnPrimary = "inline-flex items-center gap-1.5 rounded-[9px] border border-accent bg-accent px-3 py-1.5 font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
+const btn = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[9px] border border-line-strong px-3 py-1.5 text-[13px] text-fg hover:border-focus hover:bg-raised disabled:opacity-40";
+const btnPrimary = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[9px] border border-accent bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
 const campo = "w-full rounded-lg border border-line bg-raised px-2.5 py-1.5 text-[13px] text-fg focus:border-focus focus:outline-none";
 const rotulo = "text-[12px] font-medium text-muted";
 
@@ -46,7 +46,6 @@ const MODOS: { id: Modo; label: string; hint: string }[] = [
   { id: "automatico", label: "Automático", hint: "No 2º horário pesquisa, escolhe o melhor roteiro sozinho e produz o vídeo." },
 ];
 
-type Aba = "spec" | "roteiros" | "producao" | "estilos" | "pastas";
 
 type Trilha = { dia?: string; etapa?: string; aviso?: string; escolhido?: string };
 type Agenda = { modo: Modo; r: Trilha; p: Trilha; proximas: { r?: string; p?: string } };
@@ -82,6 +81,10 @@ function LinhaTrilha(props: { rotulo: string; t: Trilha; proxima?: string }) {
 }
 const KEY_ABA = "forja.conteudo.aba";
 
+// Painel = a especificação em uso (vídeo + roteiros); Especificação = o formulário dela. Estilos e Ajustes valem
+// para todas as especificações, por isso ficam à parte, no canto.
+type Vista = "painel" | "spec" | "estilos" | "ajustes";
+
 export default function ConteudoView(props: {
   conv: number | null;
   carimbo?: string;
@@ -91,10 +94,17 @@ export default function ConteudoView(props: {
   onConversationChanged: () => void;
   onAbrir: (id: number) => void;
 }) {
-  const [aba, setAbaState] = useState<Aba>(() => (localStorage.getItem(KEY_ABA) as Aba) || "spec");
+  const [vista, setVistaState] = useState<Vista>(() => {
+    const salva = localStorage.getItem(KEY_ABA);
+    return salva === "spec" || salva === "estilos" || salva === "ajustes" ? salva : "painel";
+  });
   const [pastas, setPastas] = useState<Pastas | null>(null);
   const [estilos, setEstilos] = useState<Estilo[]>([]);
-  const setAba = (a: Aba) => { setAbaState(a); localStorage.setItem(KEY_ABA, a); };
+  const [cab, setCab] = useState<Spec | null>(null);
+  const [agenda, setAgenda] = useState<Agenda | null>(null);
+  const [pulso, setPulso] = useState(0);   // ação do cabeçalho: painel recarrega na hora, sem esperar o carimbo
+  const [disparando, setDisparando] = useState("");
+  const setVista = (a: Vista) => { setVistaState(a); localStorage.setItem(KEY_ABA, a); };
 
   const carregarEstilos = useCallback(async () => {
     try {
@@ -110,44 +120,120 @@ export default function ConteudoView(props: {
   useEffect(() => {
     if (pastas?.pasta_estilos) carregarEstilos();
   }, [pastas?.pasta_estilos, carregarEstilos]);
+  useEffect(() => {
+    if (props.conv === null) { setCab(null); setAgenda(null); return; }
+    Promise.all([api.get<Spec>(`/conteudo/especificacoes/${props.conv}`), api.get<Agenda>(`/conteudo/especificacoes/${props.conv}/agenda`)])
+      .then(([s, a]) => { setCab(s); setAgenda(a); })
+      .catch(() => {});
+  }, [props.conv, props.carimbo, pulso]);
+
+  async function disparar(qual: "roteiros" | "producao") {
+    setDisparando(qual);
+    try {
+      await api.post(`/conteudo/especificacoes/${props.conv}/${qual}`, {});
+      setPulso((n) => n + 1);
+      if (vista !== "painel") setVista("painel");
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setDisparando("");
+    }
+  }
 
   if (!pastas) return <div className="flex-1" />;
   const semPasta = !pastas.pasta_estilos;
-  const abaReal: Aba = semPasta ? "pastas" : aba;
+  const global = vista === "estilos" || vista === "ajustes";
+  const atual: Vista = semPasta ? "ajustes" : props.conv === null && !global ? "spec" : vista;
+  const carimbo = `${props.carimbo ?? ""}-${pulso}`;
+  const formato = cab?.formato === "horizontal" ? "Horizontal 16:9" : "Vertical 9:16";
+  const modo = MODOS.find((m) => m.id === cab?.automacao.modo)?.label ?? "Manual";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-1 border-b border-line px-5 py-2 text-[13px]">
-        {([["spec", "Especificação"], ["roteiros", "Roteiros"], ["producao", "Produção"], ["estilos", "Estilos"]] as const).map(([id, label]) => (
-          <button key={id} disabled={semPasta || ((id === "roteiros" || id === "producao") && props.conv === null)}
-                  title={(id === "roteiros" || id === "producao") && props.conv === null ? "Crie ou abra uma especificação" : undefined}
-                  className={`rounded-lg px-3 py-1.5 ${abaReal === id ? "bg-raised text-fg" : "text-muted hover:text-fg"} disabled:opacity-40`}
-                  onClick={() => setAba(id)}>
-            {label}
-          </button>
-        ))}
-        <button className={`ml-auto inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 ${abaReal === "pastas" ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
-                onClick={() => setAba("pastas")}>
-          <FolderOpen className="size-4" /> Pastas
-        </button>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        {abaReal === "pastas" ? (
-          <PastasPainel pastas={pastas} primeira={semPasta} onError={props.onError}
-                        onSalvo={(p) => { setPastas(p); if (semPasta) setAba("estilos"); }} />
-        ) : abaReal === "roteiros" && props.conv !== null ? (
-          <ConteudoRoteiros conv={props.conv} carimbo={props.carimbo} onError={props.onError}
-                            onProduzindo={() => setAba("producao")} />
-        ) : abaReal === "producao" && props.conv !== null ? (
-          <ConteudoProducao conv={props.conv} carimbo={props.carimbo} onError={props.onError} />
-        ) : abaReal === "estilos" ? (
-          <EstilosPainel estilos={estilos} recarregar={carregarEstilos} provider={props.provider} model={props.model}
-                         onError={props.onError} />
+      <header className="border-b border-line px-6 pt-5">
+        <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-[19px] font-semibold tracking-[-0.01em] text-fg">
+              {atual === "estilos" ? "Estilos" : atual === "ajustes" ? "Ajustes do Conteúdo"
+                : props.conv === null ? "Nova especificação" : cab?.nome ?? "…"}
+            </h1>
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] text-muted">
+              {atual === "estilos" ? <span>Guias de roteiro, voz e visual — valem para todas as especificações.</span>
+                : atual === "ajustes" ? <span>Pastas, Claude Code e o que ele pode rodar sozinho.</span>
+                : props.conv === null ? <span>Descreva um tema do canal; o Forja pesquisa e escreve os roteiros dele.</span>
+                : cab && (
+                  <>
+                    <span>{cab.estilo || "sem estilo"}</span><Ponto />
+                    <span>{formato}</span><Ponto />
+                    <span>automação {modo.toLowerCase()}</span>
+                    {agenda?.proximas.r && <><Ponto /><span>roteiros {quandoFica(agenda.proximas.r)}</span></>}
+                    {agenda?.proximas.p && <><Ponto /><span>vídeo {quandoFica(agenda.proximas.p)}</span></>}
+                  </>
+                )}
+            </p>
+          </div>
+          {props.conv !== null && !global && (
+            <div className="flex shrink-0 items-center gap-2">
+              <button className={btn} disabled={!!disparando} onClick={() => disparar("roteiros")}>
+                <Refresh className="size-4" /> Pesquisar roteiros
+              </button>
+              <button className={btnPrimary} disabled={!!disparando} onClick={() => disparar("producao")}
+                      title="O Claude Code monta e renderiza o roteiro escolhido">
+                <Play className="size-4" /> Produzir o escolhido
+              </button>
+            </div>
+          )}
+        </div>
+        <nav className="mt-4 flex items-end gap-1 text-[13px]">
+          {props.conv !== null && ([["painel", "Painel"], ["spec", "Especificação"]] as const).map(([id, label]) => (
+            <Aba key={id} ativa={atual === id} desabilitada={semPasta} onClick={() => setVista(id)}>{label}</Aba>
+          ))}
+          {props.conv === null && <Aba ativa={atual === "spec"} desabilitada={semPasta} onClick={() => setVista("spec")}>Especificação</Aba>}
+          <div className="ml-auto flex items-end gap-1">
+            <Aba ativa={atual === "estilos"} desabilitada={semPasta} onClick={() => setVista("estilos")}>
+              <Edit className="size-3.5" /> Estilos
+            </Aba>
+            <Aba ativa={atual === "ajustes"} onClick={() => setVista("ajustes")}>
+              <Gear className="size-3.5" /> Ajustes
+            </Aba>
+          </div>
+        </nav>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {atual === "ajustes" ? (
+          <div className="px-6 py-5">
+            <PastasPainel pastas={pastas} primeira={semPasta} onError={props.onError}
+                          onSalvo={(p) => { setPastas(p); if (semPasta) setVista("estilos"); }} />
+          </div>
+        ) : atual === "estilos" ? (
+          <div className="px-6 py-5">
+            <EstilosPainel estilos={estilos} recarregar={carregarEstilos} provider={props.provider} model={props.model}
+                           onError={props.onError} />
+          </div>
+        ) : atual === "painel" && props.conv !== null ? (
+          <div className="mx-auto grid max-w-[1400px] items-start gap-x-8 gap-y-6 px-6 py-5 lg:grid-cols-[minmax(280px,340px)_1fr]">
+            <ConteudoProducao conv={props.conv} carimbo={carimbo} onError={props.onError} />
+            <ConteudoRoteiros conv={props.conv} carimbo={carimbo} onError={props.onError} onProduzindo={() => setPulso((n) => n + 1)} />
+          </div>
         ) : (
-          <SpecPainel {...props} estilos={estilos} irParaEstilos={() => setAba("estilos")} />
+          <div className="px-6 py-5">
+            <SpecPainel {...props} estilos={estilos} irParaEstilos={() => setVista("estilos")} />
+          </div>
         )}
       </div>
     </div>
+  );
+}
+
+const Ponto = () => <span className="size-[3px] rounded-full bg-faint" aria-hidden />;
+
+function Aba(props: { ativa: boolean; desabilitada?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button disabled={props.desabilitada} onClick={props.onClick} aria-current={props.ativa ? "page" : undefined}
+            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 pb-2.5 pt-1 transition-colors disabled:opacity-40 ${
+              props.ativa ? "border-accent text-fg" : "border-transparent text-muted hover:text-fg"}`}>
+      {props.children}
+    </button>
   );
 }
 
@@ -189,7 +275,7 @@ function PastasPainel(props: { pastas: Pastas; primeira: boolean; onError: (m: s
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
       {props.primeira && (
         <div className={`${card} text-[13px] text-muted`}>
           Para começar, escolha a pasta onde ficam os <b className="text-fg">estilos</b> dos vídeos (arquivos .md).
@@ -319,9 +405,8 @@ function SpecPainel(props: {
   }
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
       <div className={`${card} flex flex-col gap-3.5`}>
-        <div className="text-[15px] font-semibold text-fg">{props.conv === null ? "Nova especificação" : spec.nome || "Especificação"}</div>
         <label className="flex flex-col gap-1">
           <span className={rotulo}>Nome</span>
           <input className={campo} value={spec.nome} placeholder="Notícias de IA" onChange={(e) => muda({ nome: e.target.value })} />
@@ -563,7 +648,7 @@ function EstilosPainel(props: {
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl gap-4">
+    <div className="mx-auto flex w-full max-w-6xl gap-4">
       <div className="flex w-64 shrink-0 flex-col gap-2">
         <button className={btn} onClick={comecarNovo}><Plus className="size-4" /> Novo estilo</button>
         {props.estilos.map((e) => (

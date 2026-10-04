@@ -57,7 +57,8 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   (CLAUDE.md, README, scripts/ e src/) e reaproveite: narração, legendas, efeitos e componentes.
 - Crie uma composição nova para este vídeo; não altere nem quebre as composições que já existem.
 - Não baixe nada da internet. Use o que já está no projeto (efeitos, fontes, logos) ou desenhe em código.
-- Confira frames com `npx remotion still` antes do render final; corrija texto cortado ou sobreposto.
+- Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
+  corrija texto cortado ou sobreposto.
 - Renderize o vídeo final em `out/{slug}.mp4`.
 - Se a pasta de estilos tiver um README com a tabela "Vídeos já feitos", acrescente este vídeo nela.
 - Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
@@ -280,7 +281,8 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         estilo_md=(est_dir / f"{estilo}.md").as_posix(),
         readme=f" e `{(est_dir / 'README.md').as_posix()}`" if (est_dir / "README.md").is_file() else "",
         formato_rotulo=fmt["rotulo"], largura=fmt["largura"], altura=fmt["altura"], slug=slug,
-        comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)")
+        comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
+        frames=(job / "frames").relative_to(projeto).as_posix())
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
     run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, argv(claude, pastas), projeto, pastas
 
@@ -385,6 +387,31 @@ def _video(run: dict, final: dict) -> Path | None:
     return max(novos, key=lambda p: p.stat().st_mtime) if novos else None
 
 
+def _recolher_frames(run: dict) -> int:
+    """Frames de conferência que o Claude salvou em out/ mesmo assim: vão para a pasta da produção.
+    out/ é onde moram os vídeos; png solto ali só polui (move, nunca apaga)."""
+    out, destino = Path(run["_projeto"]) / "out", run["_job"] / "frames"
+    if not out.is_dir():
+        return 0
+    inicio = time.time() - (time.monotonic() - run["t0"])
+    n = 0
+    for png in out.glob("*.png"):
+        if png.stat().st_mtime >= inicio:
+            destino.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(png), str(destino / png.name))
+            n += 1
+    return n
+
+
+def video_entregue(message_id: int) -> Path:
+    """O .mp4 que a produção entregou, para o player da tela (só o arquivo que ela mesma registrou)."""
+    p = estado(message_id)
+    caminho = Path(p.get("entregue") or "")
+    if p.get("status") != "ok" or caminho.suffix.lower() != ".mp4" or not caminho.is_file():
+        raise ToolError("Vídeo não encontrado (foi movido ou apagado da pasta de entrega?).")
+    return caminho
+
+
 def _entregar(run: dict, video: Path) -> str:
     """Copia o vídeo e um .txt com título, descrição e fontes para a pasta de entrega."""
     saida = Path(run["_pastas"]["pasta_saida"] or video.parent)
@@ -403,6 +430,7 @@ async def _rodar(run: dict, pedido: str) -> None:
     status = "erro"
     try:
         final = await asyncio.to_thread(_executar, run, pedido)
+        await asyncio.to_thread(_recolher_frames, run)
         run.update(custo_usd=final.get("total_cost_usd"), turnos=final.get("num_turns"))
         for d in final.get("permission_denials") or []:   # a lista oficial do Claude Code, no evento final
             cmd = str((d.get("tool_input") or {}).get("command") or d.get("tool_name") or "")[:200]
