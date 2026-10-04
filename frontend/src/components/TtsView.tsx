@@ -245,7 +245,7 @@ export default function TtsView(props: {
                 </div>
               ))}
             </>
-          ) : <p className="text-[12px] text-faint">Nenhuma voz. Envie 5 a 12 s de fala limpa.</p>}
+          ) : <p className="text-[12px] text-faint">Nenhuma voz. Envie 5 a 12 s de fala humana limpa: a saída copia o timbre e a qualidade da referência (voz sintética vira saída robótica).</p>}
         </Secao>
         {novaVoz && (
           <div className="flex flex-col gap-2 rounded-[10px] border border-line bg-surface p-3">
