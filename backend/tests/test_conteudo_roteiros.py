@@ -176,3 +176,35 @@ def test_reap():
 def test_ferramentas_mcp_registradas():
     nomes = {t.name for t in asyncio.run(mcp_servidor.SERVIDOR.list_tools())}
     assert {"conteudo_pedidos", "conteudo_salvar_roteiros"} <= nomes
+
+
+
+def test_garante_modelo_cai_para_carga_leve_sem_vram(monkeypatch):
+    import asyncio
+    from app import conteudo_roteiros as R, modelctl
+    from app.tools import ToolError
+    cargas = []
+
+    async def ensure(spec, out=None, cancel=None, temporario=None):
+        cargas.append(temporario)
+        if len(cargas) < 3:
+            raise ToolError("llama-server saiu com código 1. ErrorOutOfDeviceMemory")
+        yield {"type": "model", "phase": "ready"}
+
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: True)
+    monkeypatch.setattr(modelctl, "ensure", ensure)
+    monkeypatch.setattr(R, "ESPERA_VRAM", 0)
+    asyncio.run(R.garante_modelo({"provider": "local", "model": "q"}))
+    assert cargas == [None, R.CARGA_LEVE, R.CARGA_LEVE]
+
+    cargas.clear()
+    async def outro(spec, out=None, cancel=None, temporario=None):
+        cargas.append(temporario)
+        raise ToolError("Modelo não encontrado")
+        yield
+    monkeypatch.setattr(modelctl, "ensure", outro)
+    try:
+        asyncio.run(R.garante_modelo({"provider": "local", "model": "q"}))
+    except ToolError:
+        pass
+    assert cargas == [None]   # erro que não é de VRAM não insiste

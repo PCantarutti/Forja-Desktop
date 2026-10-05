@@ -219,11 +219,30 @@ def iniciar(conv_id: int) -> dict:
 
 # ------------------------------------------------------------------ execução
 
+# Carga mais leve para quando a VRAM não deu: pesquisa não precisa de visão nem de 131k de contexto, e um slot
+# basta. Vale só para esta carga (não mexe nos ajustes salvos do modelo).
+CARGA_LEVE = {"mmproj": "", "parallel": 1, "ubatch": 512, "ctx": 65536}
+ESPERA_VRAM = 90   # segundos: logo depois do boot, Steam/Discord/navegadores ainda estão ocupando a placa
+SEM_VRAM = re.compile(r"OutOfDeviceMemory|failed to allocate|out of memory|GB de VRAM|saiu com código", re.I)
+
+
 async def garante_modelo(spec: dict) -> None:
-    """Modelo local (llama.cpp do Forja): carrega se não estiver no ar. Na automação ninguém clica em "carregar"."""
-    if modelctl.gerenciavel(spec):
-        async for _ in modelctl.ensure(spec):
-            pass
+    """Modelo local (llama.cpp do Forja): carrega se não estiver no ar. Na automação ninguém clica em "carregar".
+
+    Faltou VRAM (o PC acabou de ligar e outros programas pegaram a placa): tenta a carga leve; ainda faltando,
+    espera um pouco e tenta de novo. Outro erro sobe direto."""
+    if not modelctl.gerenciavel(spec):
+        return
+    for tentativa, temporario in enumerate((None, CARGA_LEVE, CARGA_LEVE)):
+        if tentativa == 2:
+            await asyncio.sleep(ESPERA_VRAM)
+        try:
+            async for _ in modelctl.ensure(spec, temporario=temporario):
+                pass
+            return
+        except ToolError as e:
+            if tentativa == 2 or not SEM_VRAM.search(str(e)):
+                raise
 
 
 async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
