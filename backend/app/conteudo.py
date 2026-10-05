@@ -275,7 +275,12 @@ def limpar_markdown(texto: str) -> str:
 def _spec_padrao() -> dict:
     return {"tema": "", "palavras_chave": [], "fontes": [], "dias": 3, "estilo": "", "roteiros": 3, "formato": "vertical",
             "motor": {"provider": "", "model": ""}, "observacoes": "",
-            "automacao": {"modo": "desligada", "hora_roteiros": "19:00", "hora_producao": "03:00"}}
+            "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
+                          "hora_producao": "03:00", "ativado_em": ""}}
+
+
+def agora() -> datetime:   # os testes trocam o relógio por aqui (o mesmo da agenda)
+    return datetime.now()
 
 
 def _lista(v, limite: int, tam: int = 120) -> list[str]:
@@ -319,16 +324,33 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
         m = d["motor"] if isinstance(d["motor"], dict) else {}
         spec["motor"] = {"provider": str(m.get("provider") or "")[:60], "model": str(m.get("model") or "")[:300]}
     if "automacao" in d:
-        a = {**spec["automacao"], **(d["automacao"] if isinstance(d["automacao"], dict) else {})}
-        if a.get("modo") not in MODOS:
-            raise ToolError("Modo de automação inválido.")
-        for k in ("hora_roteiros", "hora_producao"):
-            if not HORA_RE.match(str(a.get(k) or "")):
-                raise ToolError("Horário inválido: use HH:MM (ex.: 03:00).")
-        spec["automacao"] = {k: a[k] for k in ("modo", "hora_roteiros", "hora_producao")}
+        spec["automacao"] = _automacao(spec["automacao"], d["automacao"] if isinstance(d["automacao"], dict) else {})
     if not spec["tema"]:
         raise ToolError("Descreva o tema da especificação.")
     return spec
+
+
+def _automacao(antes: dict, novo: dict) -> dict:
+    """Modo, dias da semana (0 = segunda) e horários. `ativado_em` marca quando a agenda mudou: horário de antes
+    disso não conta como "perdido" (ligar a automação às 10h não pergunta pelo das 7h)."""
+    a = {**antes, **novo}
+    if a.get("modo") not in MODOS:
+        raise ToolError("Modo de automação inválido.")
+    if "hora_producao" in novo and "horarios" not in novo:   # quem manda o formato antigo (um horário só)
+        a["horarios"] = [novo["hora_producao"]]
+    horarios = a.get("horarios") if isinstance(a.get("horarios"), list) else [a.get("hora_producao") or "03:00"]
+    horarios = sorted({str(h) for h in horarios})
+    if not horarios or len(horarios) > 8 or not all(HORA_RE.match(h) for h in horarios + [str(a.get("hora_roteiros") or "")]):
+        raise ToolError("Horário inválido: use HH:MM (ex.: 03:00), de 1 a 8 horários.")
+    dias = a.get("dias") if isinstance(a.get("dias"), list) else list(range(7))
+    dias = sorted({_inteiro(x, -1) for x in dias} & set(range(7)))
+    if not dias and a["modo"] != "desligada":
+        raise ToolError("Escolha pelo menos um dia da semana.")
+    out = {"modo": a["modo"], "dias": dias, "horarios": horarios, "hora_roteiros": a["hora_roteiros"],
+           "hora_producao": horarios[0]}
+    mudou = any(out[k] != antes.get(k) for k in ("modo", "dias", "horarios", "hora_roteiros"))
+    out["ativado_em"] = agora().isoformat(timespec="seconds") if mudou or not antes.get("ativado_em") else antes["ativado_em"]
+    return out
 
 
 def _msg_spec(s, conv_id: int) -> db.Message | None:
@@ -345,6 +367,9 @@ def _conv(s, conv_id: int) -> db.Conversation:
 
 def _dict(c: db.Conversation, m: db.Message | None) -> dict:
     spec = {**_spec_padrao(), **(((m.meta or {}).get("especificacao")) if m else {})}
+    auto = spec["automacao"]
+    if "horarios" not in auto:   # especificação salva antes dos dias/horários: um horário só, todo dia
+        spec["automacao"] = {**_spec_padrao()["automacao"], **auto, "horarios": [auto.get("hora_producao") or "03:00"]}
     return {"id": c.id, "nome": c.title, **spec, "atualizado": c.updated_at.isoformat() if c.updated_at else None}
 
 

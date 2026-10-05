@@ -22,7 +22,7 @@ from datetime import date
 
 from sqlalchemy import select
 
-from . import config, conteudo, db, pesquisa
+from . import config, conteudo, db, pesquisa, modelctl
 from .agent import _save
 from .parsing import split_think
 from .tools import ToolError
@@ -195,6 +195,8 @@ def iniciar(conv_id: int) -> dict:
     if not (motor["provider"] and motor["model"]):
         raise ToolError("Escolha o modelo que pesquisa e escreve os roteiros (na especificação).")
     extrator, escritor = pesquisa._modelos(motor["provider"], motor["model"])
+    if modelctl.gerenciavel(escritor) and modelctl.gerenciavel(extrator):
+        extrator = escritor   # um llama-server só: dois modelos locais se trocariam a cada fonte lida
     base["stats"].update(extrator=extrator["model"], escritor=escritor["model"])
     msg = _save(conv_id, role="assistant", name=NOME, content="", status="running", meta={CHAVE: base})
     run = _RUNS[msg.id] = {**base, "message_id": msg.id, "conv_id": conv_id, "cancelar": False,
@@ -208,9 +210,17 @@ def iniciar(conv_id: int) -> dict:
 
 # ------------------------------------------------------------------ execução
 
+async def garante_modelo(spec: dict) -> None:
+    """Modelo local (llama.cpp do Forja): carrega se não estiver no ar. Na automação ninguém clica em "carregar"."""
+    if modelctl.gerenciavel(spec):
+        async for _ in modelctl.ensure(spec):
+            pass
+
+
 async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
     status = "erro"
     try:
+        await garante_modelo(escritor)
         await pesquisa._planejar(run, escritor, PORTE["buscas"])
         consultas = run["plano"]["buscas"]
         limite = asyncio.Semaphore(pesquisa.LEITURAS_PARALELAS)

@@ -33,23 +33,30 @@ type Spec = {
   formato: "vertical" | "horizontal";
   motor: { provider: string; model: string };
   observacoes: string;
-  automacao: { modo: Modo; hora_roteiros: string; hora_producao: string };
+  automacao: { modo: Modo; dias: number[]; horarios: string[]; hora_roteiros: string; hora_producao?: string; ativado_em?: string };
 };
 
 const SPEC_VAZIA: Spec = {
   nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, formato: "vertical",
   motor: { provider: "", model: "" }, observacoes: "",
-  automacao: { modo: "desligada", hora_roteiros: "19:00", hora_producao: "03:00" },
+  automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00" },
 };
 
 const MODOS: { id: Modo; label: string; hint: string }[] = [
   { id: "desligada", label: "Manual", hint: "Você dispara a pesquisa e a produção quando quiser." },
   { id: "aprovacao", label: "Aprovação", hint: "Gera os roteiros no 1º horário; você escolhe um e ele é produzido no 2º." },
-  { id: "automatico", label: "Automático", hint: "No horário, pesquisa, escolhe o melhor roteiro sozinho e produz o vídeo." },
+  { id: "automatico", label: "Automático", hint: "Em cada horário pesquisa, escolhe o melhor roteiro e o Claude entrega o vídeo. Sem nenhuma pergunta." },
 ];
 
 type Trilha = { dia?: string; etapa?: string; aviso?: string; escolhido?: string };
-type Agenda = { modo: Modo; r: Trilha; p: Trilha; proximas: { r?: string; p?: string } };
+type Perdido = { trilha: "r" | "p"; slot: string; desde: string };
+type Agenda = { modo: Modo; r: Trilha; p: Trilha; proximas: { r?: string; p?: string }; perdido?: Perdido | null };
+type AgendaItem = Agenda & { id: number; nome: string; estilo: string; automacao: Spec["automacao"]; motor: Spec["motor"] };
+
+const DIAS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
+const DIAS_CURTOS = ["S", "T", "Q", "Q", "S", "S", "D"];
+const resumoDias = (d: number[]) => d.length === 7 ? "todo dia" : d.join() === "0,1,2,3,4" ? "seg a sex"
+  : d.join() === "5,6" ? "fim de semana" : d.map((i) => DIAS[i]).join(", ");
 
 const ETAPAS: Record<string, string> = {
   roteiros: "pesquisando e escrevendo roteiros", fila: "esperando outra produção terminar",
@@ -113,7 +120,7 @@ const KEY_PAINEL = "forja.conteudo.painel";
 
 // Painel = a especificação em uso (vídeo + roteiros). Estilos e Ajustes valem para todas as especificações.
 // A especificação em si mora no painel da direita, como os Parâmetros da Imagem e do Vídeo.
-type Vista = "painel" | "estilos" | "ajustes";
+type Vista = "painel" | "agenda" | "estilos" | "ajustes";
 
 export default function ConteudoView(props: {
   conv: number | null;
@@ -126,7 +133,7 @@ export default function ConteudoView(props: {
 }) {
   const [vista, setVistaState] = useState<Vista>(() => {
     const salva = localStorage.getItem(KEY_ABA);
-    return salva === "estilos" || salva === "ajustes" ? salva : "painel";
+    return salva === "agenda" || salva === "estilos" || salva === "ajustes" ? salva : "painel";
   });
   const [painel, setPainelState] = useState(() => localStorage.getItem(KEY_PAINEL) !== "0");
   const [pastas, setPastas] = useState<Pastas | null>(null);
@@ -182,7 +189,7 @@ export default function ConteudoView(props: {
       <div className="@container/main flex min-w-0 flex-1 flex-col">
         <div className="flex shrink-0 items-center gap-2.5 border-b border-line px-4 py-2">
           <Segmentado rotulo="Seção do Conteúdo" valor={atual} onValor={setVista} desabilitado={semPasta}
-                      opcoes={[["painel", nova ? "Nova" : "Painel"], ["estilos", "Estilos"], ["ajustes", "Ajustes"]]} />
+                      opcoes={[["painel", nova ? "Nova" : "Painel"], ["agenda", "Agenda"], ["estilos", "Estilos"], ["ajustes", "Ajustes"]]} />
           <div className="flex min-w-0 flex-1 justify-center overflow-hidden">
             <UsoClaude carimbo={props.carimbo} />
           </div>
@@ -216,6 +223,8 @@ export default function ConteudoView(props: {
           {atual === "ajustes" ? (
             <PastasPainel pastas={pastas} primeira={semPasta} onError={props.onError}
                           onSalvo={(p) => { setPastas(p); if (semPasta) setVista("estilos"); }} />
+          ) : atual === "agenda" ? (
+            <AgendaPainel carimbo={carimbo} onError={props.onError} onAbrir={(id) => { props.onAbrir(id); setVista("painel"); }} />
           ) : atual === "estilos" ? (
             <EstilosPainel estilos={estilos} pasta={pastas.pasta_estilos} recarregar={carregarEstilos}
                            provider={props.provider} model={props.model} onError={props.onError} />
@@ -223,6 +232,11 @@ export default function ConteudoView(props: {
             <Boasvindas />
           ) : (
             <div className="mx-auto grid max-w-[1280px] items-start gap-x-8 gap-y-6 px-5 py-4 @3xl:grid-cols-[minmax(260px,320px)_1fr]">
+              {agenda?.perdido && (
+                <div className="@3xl:col-span-2">
+                  <AvisoPerdido conv={props.conv!} perdido={agenda.perdido} onError={props.onError} onFeito={() => setPulso((n) => n + 1)} />
+                </div>
+              )}
               <ConteudoProducao conv={props.conv!} carimbo={carimbo} onError={props.onError} />
               <ConteudoRoteiros conv={props.conv!} carimbo={carimbo} onError={props.onError} onProduzindo={() => setPulso((n) => n + 1)} />
             </div>
@@ -433,6 +447,8 @@ function PastasPainel(props: { pastas: Pastas; primeira: boolean; onError: (m: s
         )}
       </Secao>
 
+      <ServicoAjuste onError={props.onError} />
+
       <Secao titulo="Comandos liberados">
         <Caixa rotulo="Um por linha; * vale qualquer coisa">
           <textarea className={`${caixaMono} h-32 resize-y leading-relaxed`} value={comandos} spellCheck={false}
@@ -485,6 +501,220 @@ function ClaudeCli(props: { valor: string; onChange: (v: string) => void }) {
           : "Não encontrado. Instale com npm i -g @anthropic-ai/claude-code ou informe o caminho do claude.exe."}
       </span>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ agenda */
+
+function DiasSemana(props: { dias: number[]; onDias: (d: number[]) => void }) {
+  return (
+    <div className="grid grid-cols-7 gap-1" role="group" aria-label="Dias da semana">
+      {DIAS_CURTOS.map((d, i) => {
+        const on = props.dias.includes(i);
+        return (
+          <button key={i} aria-pressed={on} title={DIAS[i]} aria-label={DIAS[i]}
+                  onClick={() => props.onDias(on ? props.dias.filter((x) => x !== i) : [...props.dias, i].sort())}
+                  className={`h-[30px] rounded-[7px] border font-mono text-[11.5px] ${
+                    on ? "border-accent-line bg-accent-soft text-accent-text" : "border-line bg-surface text-faint hover:text-fg"}`}>
+            {d}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Horarios(props: { rotulo: string; horarios: string[]; onHorarios: (h: string[]) => void }) {
+  const h = props.horarios;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {h.map((hora, i) => (
+        <span key={i} className="flex items-center rounded-[8px] border border-line bg-surface pl-2.5 focus-within:border-focus">
+          <span className="mr-2 text-[10.5px] text-faint">{i === 0 ? props.rotulo : "e às"}</span>
+          <input type="time" value={hora} aria-label={`Horário ${i + 1}`}
+                 onChange={(e) => props.onHorarios(h.map((x, j) => (j === i ? e.target.value : x)))}
+                 className="w-[64px] bg-transparent py-1.5 font-mono text-[12.5px] text-fg outline-none" />
+          {h.length > 1 ? (
+            <button onClick={() => props.onHorarios(h.filter((_, j) => j !== i))} aria-label={`Tirar ${hora}`}
+                    className="grid size-7 place-items-center text-faint hover:text-fg"><X className="size-3" /></button>
+          ) : <span className="w-2" />}
+        </span>
+      ))}
+      {h.length < 8 && (
+        <button onClick={() => props.onHorarios([...h, "19:00"])}
+                className="inline-flex items-center gap-1 rounded-[8px] border border-dashed border-line-strong px-2.5 text-[11.5px] text-muted hover:text-fg">
+          <Plus className="size-3" /> horário
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Horário perdido: o Forja estava desligado e pergunta se ainda roda (o celular recebeu o mesmo aviso). */
+function AvisoPerdido(props: { conv: number; nome?: string; perdido: Perdido; onFeito: () => void; onError: (m: string) => void }) {
+  const [ocupado, setOcupado] = useState(false);
+  async function responder(acao: "rodar" | "pular") {
+    setOcupado(true);
+    try {
+      await api.post(`/conteudo/especificacoes/${props.conv}/agenda/perdido`, { acao });
+      props.onFeito();
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setOcupado(false);
+    }
+  }
+  const hora = props.perdido.slot.slice(11, 16);
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] border border-warn/40 bg-warn/10 px-3.5 py-2.5">
+      <span className="size-1.5 shrink-0 rounded-full bg-warn" />
+      <span className="min-w-0 flex-1 text-[12.5px] text-fg-2">
+        {props.nome && <b className="font-medium text-fg">{props.nome}: </b>}
+        o Forja estava desligado às <span className="font-mono">{hora}</span> e {props.perdido.trilha === "r" ? "a pesquisa" : "o vídeo"} de
+        hoje não rodou.
+      </span>
+      <span className="flex gap-1.5">
+        <button className={btn} disabled={ocupado} onClick={() => responder("pular")}>Pular</button>
+        <button className={btnPrimary} disabled={ocupado} onClick={() => responder("rodar")}><Play className="size-3.5" /> Rodar agora</button>
+      </span>
+    </div>
+  );
+}
+
+function AgendaPainel(props: { carimbo?: string; onAbrir: (id: number) => void; onError: (m: string) => void }) {
+  const [itens, setItens] = useState<AgendaItem[] | null>(null);
+  const [svc, setSvc] = useState<Servico | null>(null);
+  const [pulso, setPulso] = useState(0);
+  useEffect(() => {
+    api.get<AgendaItem[]>("/conteudo/agenda").then(setItens).catch((e) => props.onError(e.message));
+    api.get<Servico>("/conteudo/servico").then(setSvc).catch(() => setSvc(null));
+  }, [props.carimbo, pulso]);
+  useEffect(() => {   // o andamento (pesquisa, fila, produção) muda sem carimbo: pergunta a cada 5 s
+    const t = setInterval(() => setPulso((n) => n + 1), 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function ligar(it: AgendaItem, ligado: boolean) {
+    try {
+      await api.put(`/conteudo/especificacoes/${it.id}`, { automacao: { ...it.automacao, modo: ligado ? "automatico" : "desligada" } });
+      setPulso((n) => n + 1);
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+
+  if (!itens) return null;
+  const ativas = itens.filter((i) => i.modo !== "desligada");
+  return (
+    <div className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-5 py-6">
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-1">
+        <div className="flex flex-1 flex-col gap-1">
+          <h2 className="text-[16px] font-semibold text-fg">Agenda</h2>
+          <p className="max-w-[62ch] text-[12.5px] leading-relaxed text-muted">
+            Cada especificação ativa roda sozinha nos dias e horários dela: pesquisa as novidades, escolhe o roteiro de
+            maior confiança e o Claude Code entrega o vídeo pronto. Uma pesquisa e um vídeo por vez; o resto espera na fila.
+          </p>
+        </div>
+        <span className="font-mono text-[11px] text-faint">{ativas.length} de {itens.length} ativas</span>
+      </div>
+
+      {itens.filter((i) => i.perdido).map((i) => (
+        <AvisoPerdido key={i.id} conv={i.id} nome={i.nome} perdido={i.perdido!} onError={props.onError} onFeito={() => setPulso((n) => n + 1)} />
+      ))}
+
+      <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-[10px] border border-line bg-surface">
+        {itens.map((i) => {
+          const ligado = i.modo !== "desligada";
+          const t = i.p;
+          const rodando = ["roteiros", "espera", "fila", "produzindo"].includes(t.etapa ?? "");
+          return (
+            <li key={i.id} className="flex items-center gap-3 px-4 py-3">
+              <button role="switch" aria-checked={ligado} aria-label={`${ligado ? "Desligar" : "Ligar"} a automação de ${i.nome}`}
+                      onClick={() => ligar(i, !ligado)}
+                      className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${ligado ? "bg-accent" : "bg-line-strong"}`}>
+                <span className={`absolute top-0.5 size-4 rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,.4)] transition-[left] ${ligado ? "left-[18px]" : "left-0.5"}`} />
+              </button>
+              <button className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left" onClick={() => props.onAbrir(i.id)}>
+                <span className="truncate text-[13.5px] font-medium text-fg hover:underline">{i.nome}</span>
+                <span className="truncate text-[11.5px] text-faint">
+                  {ligado ? `${resumoDias(i.automacao.dias)} · ${i.automacao.horarios.join(", ")}${i.modo === "aprovacao" ? " · com aprovação" : ""}` : "desligada"}
+                  {" · "}{i.estilo || "sem estilo"} · {i.motor.provider === "claude-mcp" ? "Claude (MCP)" : i.motor.model || "sem modelo"}
+                </span>
+              </button>
+              <span className="hidden shrink-0 flex-col items-end gap-0.5 text-right text-[11.5px] sm:flex">
+                {rodando ? (
+                  <span className="flex items-center gap-1.5 text-info"><span className="size-1.5 animate-pulse rounded-full bg-info" />{ETAPAS[t.etapa!] ?? t.etapa}</span>
+                ) : ligado && i.proximas.p ? (
+                  <span className="text-fg-2">próxima {quandoFica(i.proximas.p)}</span>
+                ) : null}
+                {!rodando && t.etapa && (
+                  <span className={t.etapa === "falhou" ? "text-err" : "text-faint"} title={t.aviso || t.escolhido}>
+                    última ({t.dia?.slice(8, 10)}/{t.dia?.slice(5, 7)}): {ETAPAS[t.etapa] ?? t.etapa}
+                  </span>
+                )}
+              </span>
+            </li>
+          );
+        })}
+        {itens.length === 0 && <li className="px-4 py-6 text-center text-[12.5px] text-muted">Nenhuma especificação ainda. Crie uma em “Nova”.</li>}
+      </ul>
+
+      {svc?.suportado && (
+        <div className="flex items-center gap-3 rounded-[10px] border border-line px-4 py-3">
+          <span className={`size-1.5 shrink-0 rounded-full ${svc.desta_pasta ? "bg-ok" : "bg-faint"}`} />
+          <span className="flex-1 text-[12.5px] text-muted">
+            {svc.desta_pasta ? "Roda ao ligar o PC, mesmo antes de entrar na conta."
+              : "Hoje só roda com o Forja aberto ou na bandeja. Para rodar ao ligar o PC, sem login, instale o serviço em Ajustes."}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type Servico = { suportado: boolean; instalado: boolean; desta_pasta?: boolean; pasta?: string };
+
+/** Ajustes › Ao ligar o PC: a tarefa do Windows que sobe o Forja sem janela antes do login. */
+function ServicoAjuste(props: { onError: (m: string) => void }) {
+  const [svc, setSvc] = useState<Servico | null>(null);
+  const [aberto, setAberto] = useState(false);
+  const carregar = useCallback(() => api.get<Servico>("/conteudo/servico").then(setSvc).catch(() => setSvc(null)), []);
+  useEffect(() => { carregar(); }, [carregar]);
+  useEffect(() => {   // o instalador roda numa janela à parte: confere de tempos em tempos enquanto ela pode estar aberta
+    if (!aberto) return;
+    const t = setInterval(carregar, 3000);
+    const fim = setTimeout(() => setAberto(false), 180_000);
+    return () => { clearInterval(t); clearTimeout(fim); };
+  }, [aberto, carregar]);
+  if (!svc?.suportado) return null;
+  async function abrir(acao: "instalar" | "remover") {
+    try {
+      await api.post(`/conteudo/servico/${acao}`, {});
+      setAberto(true);
+    } catch (e: any) {
+      props.onError(e.message);
+    }
+  }
+  return (
+    <Secao titulo="Ao ligar o PC">
+      <div className="flex flex-col gap-2.5 rounded-[10px] border border-line bg-surface px-3.5 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className={`size-1.5 shrink-0 rounded-full ${svc.desta_pasta ? "bg-ok" : svc.instalado ? "bg-warn" : "bg-faint"}`} />
+          <span className="flex-1 text-[13px] text-fg">
+            {svc.desta_pasta ? "Instalado: as automações rodam ao ligar o PC, sem login"
+              : svc.instalado ? "Instalado para outra pasta de dados" : "Não instalado"}
+          </span>
+          {svc.instalado && <button className={btn} onClick={() => abrir("remover")}>Remover</button>}
+          {!svc.desta_pasta && <button className={btnPrimary} onClick={() => abrir("instalar")}>Instalar</button>}
+        </div>
+        <span className={ajuda}>
+          Uma tarefa do Windows sobe o Forja sem janela 30 s depois de ligar, ainda na tela de bloqueio, e ele cuida da
+          agenda. Ao instalar, o Windows pede permissão de administrador e a senha da sua conta (guardada pelo
+          Agendador de Tarefas; o Forja não a vê). Quando você entrar e abrir o Forja, a janela usa esse mesmo backend.
+        </span>
+        {aberto && <span className="text-[11.5px] text-info">Termine na janela do Windows que abriu; esta tela se atualiza sozinha.</span>}
+      </div>
+    </Secao>
   );
 }
 
@@ -664,18 +894,17 @@ function SpecPainel(props: {
                       opcoes={MODOS.map((m) => [m.id, m.label])} />
           <span className={ajuda}>{MODOS.find((m) => m.id === spec.automacao.modo)?.hint}</span>
           {spec.automacao.modo !== "desligada" && (
-            <div className="grid grid-cols-2 gap-1.5">
+            <>
+              <DiasSemana dias={spec.automacao.dias} onDias={(dias) => mudaAuto({ dias })} />
               {spec.automacao.modo === "aprovacao" && (
                 <Caixa rotulo="Roteiros às">
                   <input type="time" className={caixaMono} value={spec.automacao.hora_roteiros}
                          onChange={(e) => mudaAuto({ hora_roteiros: e.target.value })} />
                 </Caixa>
               )}
-              <Caixa rotulo="Vídeo às">
-                <input type="time" className={caixaMono} value={spec.automacao.hora_producao}
-                       onChange={(e) => mudaAuto({ hora_producao: e.target.value })} />
-              </Caixa>
-            </div>
+              <Horarios rotulo={spec.automacao.modo === "aprovacao" ? "Vídeo às" : "Roda às"} horarios={spec.automacao.horarios}
+                        onHorarios={(horarios) => mudaAuto({ horarios })} />
+            </>
           )}
           {agenda && agenda.modo !== "desligada" && !sujo && (
             <div className="flex flex-col gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-2">
@@ -686,8 +915,8 @@ function SpecPainel(props: {
           )}
           {spec.automacao.modo !== "desligada" && (
             <span className={ajuda}>
-              Precisa do Forja aberto (pode ficar na bandeja); o PC não suspende, a tela pode apagar. Aberto mais de 3 h
-              depois do horário, aquele dia é pulado.
+              Precisa do Forja no ar: aberto, na bandeja ou no serviço sem login (Ajustes). O PC não suspende. Se ele
+              estava desligado no horário, o Forja avisa no celular e pergunta se ainda roda.
             </span>
           )}
         </Secao>
