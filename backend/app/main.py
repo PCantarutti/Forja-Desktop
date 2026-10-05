@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import base64
 import hashlib
 import json
@@ -2445,7 +2446,7 @@ def servico_sair():
         raise HTTPException(400, "Este backend não é o serviço sem janela.")
     if conteudo_agenda.ocupado():
         raise HTTPException(409, "O serviço está no meio de uma automação.")
-    asyncio.get_running_loop().call_later(0.3, servico.sair)
+    threading.Timer(0.3, servico.sair).start()   # depois de a resposta sair (o Electron espera o 200)
     return {"ok": True}
 
 

@@ -271,3 +271,16 @@ def test_api_agenda_geral_e_perdido(mundo):
     assert c.post(f"/api/conteudo/especificacoes/{cid}/agenda/perdido", json={"acao": "pular"}).json()["perdido"] is None
     assert c.get("/api/servico").json()["servico"] is False
     assert c.post("/api/servico/sair").status_code == 400
+
+
+def test_servico_sair_agenda_saida(mundo, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import config, servico
+    from app.main import app
+    saiu = []
+    monkeypatch.setattr(servico, "eh_servico", lambda: True)
+    monkeypatch.setattr(servico, "sair", lambda: saiu.append(1))
+    c = TestClient(app, headers={"x-forja-token": config.API_TOKEN, "origin": "http://testserver"})
+    assert c.post("/api/servico/sair").json() == {"ok": True}
+    import time; time.sleep(0.5)
+    assert saiu == [1]
