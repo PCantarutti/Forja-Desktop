@@ -514,7 +514,9 @@ def _entregar(run: dict, video: Path) -> str:
     saida = Path(run["_pastas"]["pasta_saida"] or video.parent)
     saida.mkdir(parents=True, exist_ok=True)
     destino = saida / f"{run['slug']}.mp4"
-    shutil.copy2(video, destino)
+    # Entrega na própria pasta do render (out/): copiar o arquivo sobre ele mesmo dá WinError 32 no Windows.
+    if not (destino.exists() and os.path.samefile(video, destino)):
+        shutil.copy2(video, destino)
     roteiro = json.loads((run["_job"] / "roteiro.json").read_text(encoding="utf-8"))
     fontes = "\n".join(f"- {f['titulo']}: {f['url']}" for f in (roteiro.get("noticia") or {}).get("fontes") or [])
     destino.with_suffix(".txt").write_text(

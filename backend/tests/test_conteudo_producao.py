@@ -336,3 +336,16 @@ def test_revisao_valida(monkeypatch):
     falhou = asyncio.run(_ate_o_fim(cid))
     with pytest.raises(ToolError, match="ficou pronto"):
         P.revisar(falhou["id"], [], "x")
+
+
+def test_entrega_na_propria_pasta_do_render(ambiente, monkeypatch):
+    """Pasta de entrega = out/ do projeto (onde o Remotion grava): não copia sobre si mesmo (WinError 32)."""
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    (ambiente["projeto"] / "out").mkdir()
+    conteudo.salvar_pastas({**conteudo.pastas(), "pasta_saida": str(ambiente["projeto"] / "out")})
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    assert est["status"] == "ok", est["aviso"]
+    entregue = Path(est["entregue"])
+    assert entregue.parent == ambiente["projeto"] / "out" and entregue.read_bytes() == b"mp4falso"
+    assert entregue.with_suffix(".txt").is_file()
