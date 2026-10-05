@@ -475,3 +475,16 @@ def test_pedido_manda_checar_fatos(ambiente, monkeypatch):
     asyncio.run(_ate_o_fim(cid))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "CHECAGEM DE FATOS" in pedido and "plataformas" in pedido and '"CORREÇÃO:"' in pedido
+
+
+
+def test_duracao_minima_no_pedido(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    conteudo.salvar_especificacao({"duracao_min": 60}, cid)
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "Duração mínima: 60 s" in pedido and "ffprobe" in pedido
+    assert conteudo.especificacao(cid)["duracao_min"] == 60
+    assert conteudo.salvar_especificacao({"duracao_min": -5}, cid)["duracao_min"] == 0
+    assert "pelo menos 60 s" in R.regra_duracao(60) and R.regra_duracao(0) == ""

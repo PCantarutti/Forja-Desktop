@@ -30,6 +30,7 @@ type Spec = {
   dias: number;
   estilo: string;
   roteiros: number;
+  duracao_min: number;
   formato: "vertical" | "horizontal";
   motor: { provider: string; model: string };
   observacoes: string;
@@ -37,7 +38,7 @@ type Spec = {
 };
 
 const SPEC_VAZIA: Spec = {
-  nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, formato: "vertical",
+  nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, duracao_min: 0, formato: "vertical",
   motor: { provider: "", model: "" }, observacoes: "",
   automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00", produzir: true },
 };
@@ -877,6 +878,14 @@ function SpecPainel(props: {
             <Caixa rotulo="Roteiros por vez">
               <input type="number" min={1} max={10} value={spec.roteiros} onChange={(e) => muda({ roteiros: Number(e.target.value) })}
                      className={`${caixaMono} font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`} />
+            </Caixa>
+            <Caixa rotulo="Duração mínima do vídeo" className="col-span-2">
+              <span className="flex items-baseline gap-1">
+                <input type="number" min={0} max={1800} step={5} value={spec.duracao_min ?? 0}
+                       onChange={(e) => muda({ duracao_min: Number(e.target.value) })}
+                       className={`${caixaMono} w-12 font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`} />
+                <span className="text-[11px] text-faint">segundos · 0 = sem mínimo (Shorts: 60)</span>
+              </span>
             </Caixa>
           </div>
           <Segmentado rotulo="Quem pesquisa e escreve" cheio valor={claude ? "claude" : "forja"}

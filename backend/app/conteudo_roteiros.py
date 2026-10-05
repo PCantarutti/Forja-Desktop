@@ -35,6 +35,17 @@ PORTE = pesquisa.PRESETS["normal"]
 RODADAS = 2
 TETO = 900                      # segundos de coleta; a escrita ganha pesquisa.TETO_RELATORIO a mais
 PALAVRAS_POR_SEGUNDO = 2.4      # voz do estilo alerta-tech (+32%): 150 palavras ≈ 62 s
+
+
+def regra_duracao(segundos: int) -> str:
+    """A linha do prompt do roteirista para a duração mínima da especificação (vazio = sem mínimo)."""
+    if not segundos:
+        return ""
+    palavras = round(segundos * PALAVRAS_POR_SEGUNDO * 1.05)   # folga: a voz às vezes corre mais
+    return (f"\n\nDURAÇÃO MÍNIMA: cada roteiro precisa durar pelo menos {segundos} s narrado — no mínimo {palavras} "
+            f"palavras somando todas as cenas (a voz fala ~{PALAVRAS_POR_SEGUNDO} palavras por segundo). Se a notícia for "
+            "curta, aprofunde com fatos dos achados (contexto, números, por que importa, o que vem depois) ou inclua mais "
+            "itens; nunca repita frase nem encha linguiça.")
 MAX_ESPERA = 100
 
 _RUNS: dict[int, dict] = {}
@@ -309,7 +320,7 @@ async def _escrever(run: dict, spec: dict, escritor: dict) -> list[dict]:
     estilo = conteudo.ler_estilo(spec["estilo"])["texto"]
     uteis = [f for f in run["fontes"] if f["status"] == "util"]
     system = ROTEIROS_PROMPT.format(n=spec["roteiros"], dias=spec["dias"], hoje=date.today().isoformat(),
-                                    formato=conteudo.FORMATOS[spec["formato"]]["rotulo"])
+                                    formato=conteudo.FORMATOS[spec["formato"]]["rotulo"]) + regra_duracao(spec.get("duracao_min") or 0)
     user = (f"GUIA DE ESTILO ({spec['estilo']}):\n\n{estilo}\n\n"
             f"ESPECIFICAÇÃO:\nTema: {spec['tema']}\n" + (f"Observações: {spec['observacoes']}\n" if spec["observacoes"] else "")
             + f"\nACHADOS:\n\n{pesquisa._achados(run)}")
@@ -518,8 +529,8 @@ def _bloco(p: dict) -> str:
         f"GUIA DE ESTILO ({spec['estilo']}), siga à risca:",
         estilo,
         "",
-        ROTEIROS_PROMPT.format(n=p["n"], dias=p["dias"], hoje=date.today().isoformat(),
-                               formato=conteudo.FORMATOS[spec["formato"]]["rotulo"])
+        (ROTEIROS_PROMPT.format(n=p["n"], dias=p["dias"], hoje=date.today().isoformat(),
+                                formato=conteudo.FORMATOS[spec["formato"]]["rotulo"]) + regra_duracao(spec.get("duracao_min") or 0))
         .replace("ACHADOS de uma pesquisa na web, numerados [1], [2]...", "resultado da SUA pesquisa na web"),
         "",
         f"Quando terminar: conteudo_salvar_roteiros(pedido_id={p['pedido_id']}, roteiros=[...], "

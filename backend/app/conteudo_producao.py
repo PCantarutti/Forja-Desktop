@@ -52,7 +52,7 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   como está, sem reescrever. Título, notícia e fontes também estão lá.
 - Estilo: leia `{estilo_md}`{readme} e siga à risca (voz, legenda, visual, áudio).
 - Formato: {formato_rotulo}, composição de {largura}x{altura}.
-
+{duracao}
 ## Como
 - Este diretório é o projeto Remotion. Antes de criar algo, veja como os vídeos anteriores foram feitos aqui
   (CLAUDE.md, README, scripts/ e src/) e reaproveite: narração, legendas, efeitos e componentes.
@@ -441,6 +441,10 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         estilo_md=(est_dir / f"{estilo}.md").as_posix(),
         readme=f" e `{(est_dir / 'README.md').as_posix()}`" if (est_dir / "README.md").is_file() else "",
         formato_rotulo=fmt["rotulo"], largura=fmt["largura"], altura=fmt["altura"], slug=slug,
+        duracao=(f"- Duração mínima: {spec['duracao_min']} s (o vídeo final, capa incluída). Confira com ffprobe; se ficar abaixo,\n"
+                 "  acrescente antes do CTA UMA cena com mais um fato verificado da notícia (narração nova no mesmo padrão)\n"
+                 "  — nunca silêncio, cena parada ou fala esticada — e conte na resposta final, numa linha \"CORREÇÃO:\".\n"
+                 if spec.get("duracao_min") else ""),
         comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
         frames=(job / "frames").relative_to(projeto).as_posix(), youtube=(job / "youtube.txt").relative_to(projeto).as_posix(),
         midia=MIDIA if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)

@@ -325,8 +325,10 @@ def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[
         return [f"{cid}: roteiros prontos ({len(roteiros)})"]
     limite = (agora() - timedelta(days=conteudo.especificacao(cid)["dias"])).date().isoformat()
     recente = lambda x: (x.get("noticia") or {}).get("data", "") >= limite or not (x.get("noticia") or {}).get("data")
-    # notícia dentro do período vence a antiga; depois, a confiança. Empate: o primeiro, que o modelo pôs na frente
-    melhor = max(roteiros, key=lambda x: (recente(x), x.get("confianca") or 0))
+    minimo = conteudo.especificacao(cid).get("duracao_min") or 0
+    # notícia dentro do período vence a antiga; depois, quem atinge a duração mínima; depois, a confiança.
+    # Empate: o primeiro, que o modelo pôs na frente
+    melhor = max(roteiros, key=lambda x: (recente(x), (x.get("segundos") or 0) >= minimo, x.get("confianca") or 0))
     conteudo_roteiros.marcar(rod["id"], melhor["id"], "aprovado")
     titulo = melhor["titulo_youtube"] or melhor["titulo"]
     if not conteudo.especificacao(cid)["automacao"].get("produzir", True):

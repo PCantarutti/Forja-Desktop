@@ -274,6 +274,7 @@ def limpar_markdown(texto: str) -> str:
 
 def _spec_padrao() -> dict:
     return {"tema": "", "palavras_chave": [], "fontes": [], "dias": 3, "estilo": "", "roteiros": 3, "formato": "vertical",
+            "duracao_min": 0,
             "motor": {"provider": "", "model": ""}, "observacoes": "",
             "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
                           "hora_producao": "03:00", "produzir": True, "ativado_em": ""}}
@@ -311,6 +312,8 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
         spec["dias"] = max(1, min(30, _inteiro(d["dias"], 3)))
     if "roteiros" in d:
         spec["roteiros"] = max(1, min(10, _inteiro(d["roteiros"], 3)))
+    if "duracao_min" in d:   # segundos; 0 = sem mínimo (Shorts que saíam com menos de 1 min)
+        spec["duracao_min"] = max(0, min(1800, _inteiro(d["duracao_min"], 0)))
     if "estilo" in d:
         estilo = str(d["estilo"] or "").strip().lower()
         if estilo and (not NOME_RE.match(estilo) or estilo in RESERVADOS):
