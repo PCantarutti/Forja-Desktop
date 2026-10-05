@@ -35,7 +35,7 @@ if modo != "sem-video":
     open("out/f_hook.png", "wb").write(b"png")
     open(f"out/{slug}.mp4", "wb").write(b"mp4falso")
 ev({"type": "result", "subtype": "error_during_execution" if modo == "erro" else "success",
-    "is_error": modo == "erro", "result": f"Pronto.\nVIDEO: out/{slug}.mp4", "total_cost_usd": 1.23, "num_turns": 7, "session_id": "sess-1",
+    "is_error": modo == "erro", "result": ("Pronto.\nMÍDIA: yt-dlp não está instalado; mande o arquivo do trailer.\n" if modo == "midia" else "Pronto.\n") + f"VIDEO: out/{slug}.mp4", "total_cost_usd": 1.23, "num_turns": 7, "session_id": "sess-1",
     "permission_denials": [{"tool_name": "PowerShell", "tool_input": {"command": "python -c 1"}}]})
 '''
 
@@ -366,3 +366,16 @@ def test_pedido_ensina_midia_real_quando_o_projeto_tem_o_script(ambiente, monkey
     asyncio.run(_ate_o_fim(cid2))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "python scripts/midia.py steam" in pedido and "nunca o\n  áudio original" in pedido and "Não baixe nada" not in pedido
+
+
+
+def test_revisao_com_midia_real_no_pedido_e_aviso_do_que_faltou(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    (ambiente["projeto"] / "scripts").mkdir()
+    (ambiente["projeto"] / "scripts" / "midia.py").write_text("", encoding="utf-8")
+    v1 = _v1(monkeypatch)
+    monkeypatch.setenv("CLAUDE_FALSO", "midia")
+    v2 = asyncio.run(_revisao_ate_o_fim(v1["id"], [], geral="Coloque um trecho do trailer https://youtu.be/abc de 0:10 a 0:15"))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "python scripts/midia.py" in pedido and "Link no pedido: use ESSE link" in pedido and '"MÍDIA:"' in pedido
+    assert v2["status"] == "ok" and v2["aviso"] == "Mídia: yt-dlp não está instalado; mande o arquivo do trailer."

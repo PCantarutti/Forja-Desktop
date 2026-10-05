@@ -100,7 +100,7 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
                     <span className="block text-[11.5px] text-faint">
                       {dataCurta(p.criado)} · {STATUS[p.status].rotulo} · {relogio(p.segundos)}
                     </span>
-                    {p.aviso && p.status !== "ok" && <span className="mt-0.5 block text-[11.5px] text-warn">{p.aviso}</span>}
+                    {p.aviso && <span className="mt-0.5 block text-[11.5px] text-warn">{p.aviso}</span>}
                   </span>
                 </button>
               </li>

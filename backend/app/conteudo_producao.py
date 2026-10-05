@@ -86,6 +86,15 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   descrição. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.
 """
 
+# Revisão que pede material real ("põe um trecho do trailer", "mostra a apresentação", um link colado no pedido).
+MIDIA_REVISAO = """- Pedido que fala em vídeo, trecho, trailer, gameplay, apresentação, foto ou print "real" = buscar mídia real com
+  `python scripts/midia.py`. Link no pedido: use ESSE link (`youtube <link> --de --ate` para vídeo, `imagem <link>` para
+  imagem), no trecho de tempo que ele indicar (sem tempo, escolha o que mostra o que a cena fala). Sem link: procure a
+  fonte oficial (`steam`, `nasa`, ou o link oficial que você souber). Se não der para conseguir (sem fonte oficial,
+  yt-dlp ausente, download negado), não invente nem troque por outra coisa: mantenha a cena e explique na resposta
+  final, numa linha começando com "MÍDIA:", o que faltou e o que a pessoa pode fazer (ex.: mandar o link).
+"""
+
 # ------------------------------------------------------------------ ambiente
 
 REVISAO = """Você vai REVISAR, sozinho, um vídeo que já foi produzido neste projeto. Ninguém vai responder perguntas.
@@ -104,7 +113,7 @@ REVISAO = """Você vai REVISAR, sozinho, um vídeo que já foi produzido neste p
 - Tempos são do vídeo final (em segundos); as imagens são o quadro naquele instante com a marcação em vermelho por cima.
 - Confira os pontos pedidos com `npx remotion still`, salvando em `{frames}/` (nunca em `out/`).
 - Renderize a nova versão em `out/{slug}.mp4`, sem sobrescrever a anterior.
-- Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
+{midia}- Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
   Rode cada um sozinho: sem `cd x &&`, sem `;` e sem pipe para comando fora da lista. Para ler arquivos e imagens, use Read.
 
 Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
@@ -575,6 +584,9 @@ async def _rodar(run: dict, pedido: str) -> None:
             run["entregue"] = await asyncio.to_thread(_entregar, run, video)
             if not run.get("revisao_de"):   # revisão: o roteiro já tinha virado vídeo na 1ª versão
                 conteudo_roteiros.marcar_produzido(run["rodada_id"], run["roteiro_id"], run["entregue"])
+            # mídia real pedida que não deu para conseguir: o Claude explica numa linha "MÍDIA:", que vira o aviso
+            if m := re.search(r"^\W*M[ÍI]DIA:\s*(.+)$", str(final.get("result") or ""), re.M | re.I):
+                run["aviso"] = ("Mídia: " + m.group(1).strip())[:400]
             status = "ok"
     except Exception as e:   # nada pode deixar a produção presa em "running"
         run["aviso"] = f"{e.__class__.__name__}: {e}"[:300]
@@ -587,7 +599,8 @@ async def _rodar(run: dict, pedido: str) -> None:
             from . import mobile
             pronto = f"Versão {run.get('versao', 1)} pronta" if run.get("revisao_de") else "Vídeo pronto"
             await asyncio.to_thread(mobile.avisa, pronto if status == "ok" else "Produção não terminou",
-                                    run["titulo"] if status == "ok" else run["aviso"], run["conv_id"])
+                                    (run["titulo"] + (f" · {run['aviso']}" if run.get("aviso") else "")) if status == "ok"
+                                    else run["aviso"], run["conv_id"])
         except Exception:
             pass
 
@@ -686,7 +699,8 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
         roteiro_json=(job / "roteiro.json").relative_to(projeto).as_posix(),
         retomada="Esta conversa é a mesma em que você fez o vídeo, então você já sabe onde ficam os arquivos. " if base["sessao"] else "",
         pedidos="\n".join(linhas), frames=(job / "frames").relative_to(projeto).as_posix(), slug=slug,
-        comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)")
+        comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
+        midia=(MIDIA + MIDIA_REVISAO) if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
     a = argv(claude, pastas)
     if base["sessao"]:

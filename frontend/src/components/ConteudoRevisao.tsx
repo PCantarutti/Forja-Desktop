@@ -119,7 +119,7 @@ export default function ConteudoRevisao(props: {
                 <button className="ml-auto text-faint hover:text-fg" onClick={() => setTrecho((t) => ({ ...t, inicio: null, fim: null }))}>limpar</button>
               </div>
             )}
-            <textarea className={`${campo} h-16`} value={trecho.comentario} placeholder="Ex.: deixe essa parte mais rápida, troque a animação…"
+            <textarea className={`${campo} h-16`} value={trecho.comentario} placeholder="Ex.: troque a animação por um trecho real do trailer (cole o link, se tiver)"
                       onChange={(e) => setTrecho((t) => ({ ...t, comentario: e.target.value }))} />
             <button className={btn} disabled={!trechoPronto}
                     onClick={() => {
@@ -160,7 +160,7 @@ export default function ConteudoRevisao(props: {
 
           <section className="flex flex-col gap-2">
             <h3 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">No vídeo todo</h3>
-            <textarea className={`${campo} h-20`} value={geral} placeholder="Ex.: música mais baixa, legenda maior, cores mais quentes…"
+            <textarea className={`${campo} h-20`} value={geral} placeholder="Ex.: música mais baixa; ou mostre 5 s do trailer oficial (cole o link do vídeo, se tiver)"
                       onChange={(e) => setGeral(e.target.value)} />
           </section>
         </div>
