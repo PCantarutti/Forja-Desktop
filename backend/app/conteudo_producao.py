@@ -86,7 +86,8 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   variável): no fim, o Forja apaga de `public/midia/` todo arquivo que o código não cita (trailers inteiros, referências).
 - Ordem para cada cena que fala de algo concreto: (1) trecho de vídeo oficial que MOSTRA aquilo; (2) não tendo, uma
   IMAGEM oficial — procure com WebSearch/WebFetch no site oficial (ex.: as screenshots e artes da página do jogo, o
-  newswire ou o kit de imprensa da empresa), pegue o endereço da imagem e baixe com `midia.py imagem <url>`; (3) só então o
+  newswire ou o kit de imprensa da empresa), pegue o endereço da imagem e baixe com `midia.py imagem <url>` (no máximo 3 candidatas por cena, escolhidas pelo
+  nome e pela descrição da galeria: abrir cada imagem custa caro); (3) só então o
   motion design do estilo.
 - Imagem (ou vídeo) que não tem o formato do vídeo — ex.: screenshot 16:9 num vídeo vertical — NÃO estique para cobrir
   a tela (corta a maior parte e vira um borrão ampliado): mostre inteira na largura, num quadro com borda/sombra, e
@@ -720,7 +721,10 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
         if _RUNS:
             raise ToolError("Já tem um vídeo sendo produzido; espere terminar ou cancele.")
         base = {k: anterior.get(k) for k in ("roteiro_id", "rodada_id", "titulo", "estilo", "formato")}
-        base.update(slug=slug, versao=versao, revisao_de=message_id, sessao=anterior.get("sessao") or "",
+        # Retoma a sessão só da 1ª versão: cada revisão carregava o histórico inteiro das anteriores e o custo subia
+        # a cada volta (US$ 5 → 7,8 → 10,3 nas v4–v6). O pedido aponta composição, roteiro e arquivos: dá para seguir sem.
+        sessao = (anterior.get("sessao") or "") if (anterior.get("versao") or 1) == 1 else ""
+        base.update(slug=slug, versao=versao, revisao_de=message_id, sessao=sessao,
                     pedidos=[{k: v for k, v in x.items() if not k.startswith("_")} for x in limpos], geral=geral,
                     fase="preparando", log=[], aviso="", ferramentas=0, negados=[], video="", entregue="",
                     custo_usd=None, turnos=None, segundos=0.0)

@@ -313,6 +313,7 @@ def test_revisao_faz_v2_retomando_a_sessao(ambiente, monkeypatch):
     # e a v3 sai da v2
     v3 = asyncio.run(_revisao_ate_o_fim(v2["id"], [], geral="Título maior"))
     assert v3["versao"] == 3 and v3["slug"].endswith("-v3") and "-v2-v3" not in v3["slug"]
+    assert "--resume" not in json.loads((projeto / ".forja" / "argv.json").read_text())   # só a v2 retoma a sessão da v1
 
 
 def test_revisao_sem_sessao_refaz_sem_retomar(monkeypatch):
