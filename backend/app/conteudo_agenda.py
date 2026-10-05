@@ -1,22 +1,29 @@
-"""E18 etapa 4: agendador da tela Conteúdo (as automações das especificações).
+"""E18: agendador da tela Conteúdo (as automações das especificações).
 
-Dois modos, por especificação:
-- aprovacao: no `hora_roteiros` pesquisa e escreve os roteiros e avisa o celular; no `hora_producao` produz o
-  roteiro que o usuário aprovou (sem aprovado, avisa e não faz nada);
-- automatico: no `hora_producao` pesquisa, aprova sozinho o roteiro de maior confiança e produz.
+Dois modos, por especificação, nos dias da semana marcados (`dias`, 0 = segunda):
+- aprovacao: no `hora_roteiros` pesquisa e escreve os roteiros e avisa o celular; em cada um dos `horarios`
+  produz o roteiro que o usuário aprovou (sem aprovado, avisa e não faz nada);
+- automatico: em cada um dos `horarios` pesquisa, aprova sozinho o roteiro de maior confiança e produz. Nenhuma
+  pergunta no caminho: é o modo 100% automático. Com `produzir` desligado, para depois de escolher: o roteiro fica
+  aprovado ("pronto") e o celular avisa; o vídeo sai quando a pessoa tocar em gerar.
 
-Cada trilha (r = roteiros, p = produção) roda no máximo uma vez por dia e só dentro de uma janela depois do
-horário: o Forja aberto às 10h não dispara a produção das 3h (o usuário pode estar usando o PC). Estado no
-AppSetting `conteudo_agenda`: {conv_id: {"r": {...}, "p": {...}}}, então o app reiniciado no meio continua.
+Cada horário de cada dia é um "slot" e roda no máximo uma vez. O slot só dispara sozinho até TOLERANCIA depois do
+horário (o laço passa a cada 30 s, então com o Forja no ar ele nunca atrasa isso). Se o Forja estava fora do ar
+(PC desligado, app fechado) e voltou depois, o slot vira "perdido": o Forja avisa no celular e na tela e pergunta
+se ainda roda — nada de vídeo de surpresa horas depois. Slot de outro dia não acumula.
 
-Enquanto houver automação ligada o /api/activity diz `acordado` e o Electron segura o sono do PC: dormindo
-às 3h, nada roda.
+Estado no AppSetting `conteudo_agenda`: {conv_id: {"r": {...}, "p": {...}, "perdido": {...}}}, então o app
+reiniciado no meio continua. Enquanto houver automação ligada o PC não dorme: o /api/activity diz `acordado`
+(o Electron segura o sono) e o próprio backend pede o mesmo ao Windows (rodando sem janela, como serviço, não há
+Electron para isso).
 """
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import logging
-from datetime import datetime, timedelta
+import sys
+from datetime import date, datetime, timedelta
 
 from . import conteudo, conteudo_producao, conteudo_roteiros, db
 from .tools import ToolError
@@ -24,10 +31,11 @@ from .tools import ToolError
 log = logging.getLogger(__name__)
 
 CHAVE = "conteudo_agenda"
-JANELA = timedelta(hours=3)          # quanto depois do horário ainda vale disparar
+TOLERANCIA = timedelta(minutes=15)    # quanto depois do horário ainda dispara sozinho; depois disso, pergunta
 ESPERA_ROTEIROS = timedelta(hours=3)  # roteiros que não ficam prontos nisso viram falha
-ESPERA_FILA = timedelta(hours=6)      # produção esperando outra terminar
+ESPERA_FILA = timedelta(hours=6)      # produção (ou pesquisa) esperando outra terminar
 TIQUE = 30                            # segundos
+OCUPADA = ("roteiros", "espera", "fila", "produzindo")
 
 
 def agora() -> datetime:   # os testes trocam o relógio por aqui
@@ -42,52 +50,99 @@ def _todos() -> dict:
         return dict(linha.value) if linha and isinstance(linha.value, dict) else {}
 
 
-def _grava(conv_id: int, trilha: str, **campos) -> dict:
+def _salva(conv_id: int, mexe) -> dict:
     with db.session() as s:
         linha = s.get(db.AppSetting, CHAVE)
         dados = dict(linha.value) if linha and isinstance(linha.value, dict) else {}
         conv = dict(dados.get(str(conv_id)) or {})
-        conv[trilha] = {**(conv.get(trilha) or {}), **campos}
+        mexe(conv)
         dados[str(conv_id)] = conv
         s.merge(db.AppSetting(key=CHAVE, value=dados))
         s.commit()
-        return conv[trilha]
+        return conv
+
+
+def _grava(conv_id: int, trilha: str, **campos) -> dict:
+    def mexe(conv):
+        conv[trilha] = {**(conv.get(trilha) or {}), **campos}
+    return _salva(conv_id, mexe)[trilha]
+
+
+def _perdido(conv_id: int, valor: dict | None) -> None:
+    def mexe(conv):
+        if valor:
+            conv["perdido"] = valor
+        else:
+            conv.pop("perdido", None)
+    _salva(conv_id, mexe)
+
+
+# ------------------------------------------------------------------ horários
+
+def _horario(hora: str, dia: date | datetime) -> datetime:
+    h, m = (int(x) for x in hora.split(":"))
+    return datetime(dia.year, dia.month, dia.day, h, m)
+
+
+def _chave(slot: datetime) -> str:
+    return slot.isoformat(timespec="minutes")
+
+
+def _trilhas(a: dict) -> dict[str, list[str]]:
+    """Que horas cada trilha roda: r = só roteiros (aprovação), p = produção (ou tudo, no automático)."""
+    if a["modo"] == "automatico":
+        return {"p": a["horarios"]}
+    if a["modo"] == "aprovacao":
+        return {"r": [a["hora_roteiros"]], "p": a["horarios"]}
+    return {}
+
+
+def _slots(a: dict, horas: list[str], dia: date) -> list[datetime]:
+    return sorted(_horario(h, dia) for h in horas) if dia.weekday() in a["dias"] else []
+
+
+def _ativado(a: dict) -> datetime:
+    try:
+        return datetime.fromisoformat(a.get("ativado_em") or "")
+    except ValueError:
+        return datetime.min
+
+
+def _devido(a: dict, horas: list[str], t: dict) -> datetime | None:
+    """O último slot de hoje que já passou e ainda não foi tratado (nem rodado, nem perguntado, nem pulado)."""
+    agora_ = agora()
+    passados = [s for s in _slots(a, horas, agora_.date()) if s <= agora_ and s >= _ativado(a)]
+    if not passados or _chave(passados[-1]) <= (t.get("slot") or ""):
+        return None
+    return passados[-1]
+
+
+def _proxima(a: dict, horas: list[str], t: dict) -> datetime | None:
+    agora_ = agora()
+    for n in range(8):
+        for s in _slots(a, horas, (agora_ + timedelta(days=n)).date()):
+            if s > agora_ - TOLERANCIA and _chave(s) > (t.get("slot") or "") and s >= _ativado(a):
+                return s
+    return None
 
 
 def estado(conv_id: int) -> dict:
-    """O que a tela mostra: o que já rodou hoje e quando é a próxima vez."""
+    """O que a tela mostra: o que já rodou, quando é a próxima vez e se tem horário perdido esperando resposta."""
     spec = conteudo.especificacao(conv_id)
     a = spec["automacao"]
     e = _todos().get(str(conv_id)) or {}
     proximas = {}
-    if a["modo"] != "desligada":
-        horarios = {"p": a["hora_producao"]} if a["modo"] == "automatico" else \
-            {"r": a["hora_roteiros"], "p": a["hora_producao"]}
-        for trilha, hora in horarios.items():
-            proximas[trilha] = _proxima(hora, (e.get(trilha) or {}).get("dia")).isoformat(timespec="minutes")
-    return {"modo": a["modo"], "r": e.get("r") or {}, "p": e.get("p") or {}, "proximas": proximas}
-
-
-def _horario(hora: str, dia: datetime) -> datetime:
-    h, m = (int(x) for x in hora.split(":"))
-    return dia.replace(hour=h, minute=m, second=0, microsecond=0)
-
-
-def _proxima(hora: str, feito_em: str | None) -> datetime:
-    agora_ = agora()
-    alvo = _horario(hora, agora_)
-    if alvo < agora_ - JANELA or feito_em == alvo.date().isoformat():
-        alvo += timedelta(days=1)
-    return alvo
-
-
-def _vence(hora: str, trilha: dict) -> str | None:
-    """Dia (ISO) que dispara agora, ou None. Vale o horário de hoje dentro da janela."""
-    agora_ = agora()
-    alvo = _horario(hora, agora_)
-    if alvo <= agora_ <= alvo + JANELA and trilha.get("dia") != alvo.date().isoformat():
-        return alvo.date().isoformat()
-    return None
+    for trilha, horas in _trilhas(a).items():
+        if s := _proxima(a, horas, e.get(trilha) or {}):
+            proximas[trilha] = _chave(s)
+    perdido = e.get("perdido") if a["modo"] != "desligada" else None
+    p = e.get("p") or {}
+    pronto = None   # roteiro que o automático escolheu e deixou para a pessoa gerar (some quando vira vídeo)
+    if p.get("etapa") == "pronto" and (achado := conteudo_roteiros.aprovado(conv_id)):
+        rid, roteiro = achado[0], achado[1]
+        pronto = {"rodada": rid, "roteiro": roteiro["id"], "titulo": roteiro.get("titulo_youtube") or roteiro.get("titulo")}
+    return {"modo": a["modo"], "r": e.get("r") or {}, "p": p, "proximas": proximas,
+            "perdido": perdido or None, "pronto": pronto}
 
 
 def ligadas() -> list[dict]:
@@ -100,6 +155,22 @@ def acordado() -> bool:
         return bool(ligadas())
     except Exception:
         return False
+
+
+def ocupado() -> bool:
+    """Alguma automação no meio do caminho (pesquisa, fila ou produção): o serviço sem janela não pode sair."""
+    return any((e.get(t) or {}).get("etapa") in OCUPADA for e in _todos().values() for t in ("r", "p"))
+
+
+def _segura_sono(sim: bool) -> None:
+    """O backend pede ao Windows para não dormir (ES_SYSTEM_REQUIRED; a tela pode apagar). Vale para a thread que
+    chama — a do laço do app, que vive o tempo todo."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | (0x00000001 if sim else 0))
+    except Exception:
+        pass
 
 
 def _avisa(titulo: str, texto: str, conv_id: int) -> None:
@@ -122,7 +193,9 @@ def tique() -> list[str]:
     """Um passo de cada automação. Devolve o que fez (para log e testes). Roda no loop do app: os disparos
     (roteiros, produção) criam tasks nele, e o resto é banco e decisão — rápido."""
     feito = []
-    for spec in ligadas():
+    specs = ligadas()
+    _segura_sono(bool(specs))
+    for spec in specs:
         try:
             feito += _passo(spec)
         except Exception as e:   # uma especificação com problema não para as outras
@@ -134,45 +207,96 @@ def tique() -> list[str]:
 def _passo(spec: dict) -> list[str]:
     cid, a = spec["id"], spec["automacao"]
     e = _todos().get(str(cid)) or {}
-    r, p = e.get("r") or {}, e.get("p") or {}
     feito = []
-
-    if a["modo"] == "aprovacao":
-        if dia := _vence(a["hora_roteiros"], r):
-            feito.append(_iniciar_roteiros(cid, "r", dia))
-        elif r.get("etapa") == "roteiros":
-            feito += _acompanhar_roteiros(cid, "r", r, aprovar=False)
-        if dia := _vence(a["hora_producao"], p):
-            achado = conteudo_roteiros.aprovado(cid)
-            if not achado:
-                _grava(cid, "p", dia=dia, etapa="feito", aviso="Nenhum roteiro aprovado para hoje.")
-                _avisa(f"Conteúdo: {spec['nome']}", "Nenhum roteiro aprovado: o vídeo de hoje não foi produzido.", cid)
-                feito.append(f"{cid}: sem aprovado")
-            else:
-                _grava(cid, "p", dia=dia, etapa="fila", desde=agora().isoformat(), aviso="")
-                feito.append(_produzir(cid, "p"))
-        elif p.get("etapa") in ("fila", "produzindo"):
-            feito += _acompanhar_producao(cid, "p", p)
-
-    elif a["modo"] == "automatico":
-        if dia := _vence(a["hora_producao"], p):
-            feito.append(_iniciar_roteiros(cid, "p", dia))
-        elif p.get("etapa") == "roteiros":
-            feito += _acompanhar_roteiros(cid, "p", p, aprovar=True)
-        elif p.get("etapa") in ("fila", "produzindo"):
-            feito += _acompanhar_producao(cid, "p", p)
+    for trilha, horas in _trilhas(a).items():
+        t = e.get(trilha) or {}
+        if t.get("etapa") in OCUPADA:
+            feito += _acompanhar(spec, trilha, t)
+            t = (_todos().get(str(cid)) or {}).get(trilha) or {}
+        slot = _devido(a, horas, t)
+        if not slot:
+            continue
+        chave = _chave(slot)
+        if t.get("etapa") in OCUPADA:   # a vez anterior ainda está rodando: este horário fica para trás
+            _grava(cid, trilha, slot=chave)
+            feito.append(f"{cid}: {chave} pulado, a anterior ainda roda")
+        elif agora() - slot <= TOLERANCIA:
+            _perdido(cid, None)   # horário novo rodando: a pergunta sobre um anterior perde o sentido
+            feito.append(_disparar(spec, trilha, chave))
+        else:
+            _grava(cid, trilha, slot=chave)
+            _perdido(cid, {"trilha": trilha, "slot": chave, "desde": agora().isoformat(timespec="seconds")})
+            hora = chave[11:16]
+            o_que = "a pesquisa de roteiros" if trilha == "r" else "o vídeo"
+            _avisa(f"Conteúdo: {spec['nome']}",
+                   f"O Forja estava desligado às {hora} e {o_que} de hoje não rodou. Abra o Conteúdo para rodar agora ou pular.", cid)
+            feito.append(f"{cid}: {chave} perdido")
     return feito
 
 
-def _iniciar_roteiros(cid: int, trilha: str, dia: str) -> str:
+def _disparar(spec: dict, trilha: str, chave: str) -> str:
+    cid, a = spec["id"], spec["automacao"]
+    if trilha == "r" or a["modo"] == "automatico":
+        return _iniciar_roteiros(cid, trilha, chave)
+    achado = conteudo_roteiros.aprovado(cid)
+    if not achado:
+        _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="feito", aviso="Nenhum roteiro aprovado para este horário.")
+        _avisa(f"Conteúdo: {spec['nome']}", "Nenhum roteiro aprovado: o vídeo deste horário não foi produzido.", cid)
+        return f"{cid}: sem aprovado"
+    _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="fila", desde=agora().isoformat(), aviso="", escolhido="")
+    return _produzir(cid, trilha)
+
+
+def responder_perdido(conv_id: int, acao: str) -> dict:
+    """A resposta à pergunta do horário perdido: "rodar" agora ou "pular"."""
+    if acao not in ("rodar", "pular"):
+        raise ToolError("Ação inválida: rodar ou pular.")
+    spec = conteudo.especificacao(conv_id)
+    p = (_todos().get(str(conv_id)) or {}).get("perdido")
+    if not p:
+        raise ToolError("Não tem horário perdido esperando resposta.")
+    _perdido(conv_id, None)
+    if acao == "rodar":
+        t = (_todos().get(str(conv_id)) or {}).get(p["trilha"]) or {}
+        if t.get("etapa") in OCUPADA:
+            raise ToolError("Esta especificação já está rodando agora.")
+        log.info("conteudo: %s", _disparar(spec, p["trilha"], p["slot"]))
+    return estado(conv_id)
+
+
+def _pesquisa_rodando() -> bool:
+    return any(r.get("status") == "rodando" for r in conteudo_roteiros._RUNS.values())
+
+
+def _iniciar_roteiros(cid: int, trilha: str, chave: str) -> str:
+    # Uma pesquisa por vez: com o modelo local, duas ao mesmo tempo dividem a GPU e as duas ficam lentas.
+    if _pesquisa_rodando():
+        t = (_todos().get(str(cid)) or {}).get(trilha) or {}
+        desde = t.get("desde") if t.get("etapa") == "espera" else agora().isoformat()
+        _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="espera", desde=desde, aviso="", escolhido="")
+        return f"{cid}: pesquisa na fila"
     try:
         rod = conteudo_roteiros.iniciar(cid)
     except ToolError as e:
-        _grava(cid, trilha, dia=dia, etapa="falhou", aviso=str(e))
+        _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="falhou", aviso=str(e))
         _avisa("Conteúdo: automação parou", str(e), cid)
         return f"{cid}: roteiros não começaram ({e})"
-    _grava(cid, trilha, dia=dia, etapa="roteiros", rodada=rod["id"], desde=agora().isoformat(), aviso="")
+    _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="roteiros", rodada=rod["id"], desde=agora().isoformat(),
+           aviso="", escolhido="")
     return f"{cid}: roteiros {rod['id']}"
+
+
+def _acompanhar(spec: dict, trilha: str, t: dict) -> list[str]:
+    cid = spec["id"]
+    if t["etapa"] == "espera":
+        if agora() - datetime.fromisoformat(t["desde"]) > ESPERA_FILA:
+            _grava(cid, trilha, etapa="falhou", aviso="Outra pesquisa ocupou a máquina por tempo demais.")
+            return [f"{cid}: fila da pesquisa estourou"]
+        return [] if _pesquisa_rodando() else [_iniciar_roteiros(cid, trilha, t["slot"])]
+    if t["etapa"] == "roteiros":
+        aprovar = trilha == "p"   # no automático a trilha p faz tudo; na aprovação, r só escreve
+        return _acompanhar_roteiros(cid, trilha, t, aprovar)
+    return _acompanhar_producao(cid, trilha, t)
 
 
 def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[str]:
@@ -199,9 +323,17 @@ def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[
         _grava(cid, trilha, etapa="feito", aviso="")
         _avisa("Roteiros prontos para aprovar", f"{len(roteiros)} roteiro(s) novos. Aprove um até o horário da produção.", cid)
         return [f"{cid}: roteiros prontos ({len(roteiros)})"]
-    melhor = max(roteiros, key=lambda x: x.get("confianca") or 0)   # empate: o primeiro, que o modelo pôs na frente
+    limite = (agora() - timedelta(days=conteudo.especificacao(cid)["dias"])).date().isoformat()
+    recente = lambda x: (x.get("noticia") or {}).get("data", "") >= limite or not (x.get("noticia") or {}).get("data")
+    # notícia dentro do período vence a antiga; depois, a confiança. Empate: o primeiro, que o modelo pôs na frente
+    melhor = max(roteiros, key=lambda x: (recente(x), x.get("confianca") or 0))
     conteudo_roteiros.marcar(rod["id"], melhor["id"], "aprovado")
-    _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=melhor["titulo_youtube"] or melhor["titulo"])
+    titulo = melhor["titulo_youtube"] or melhor["titulo"]
+    if not conteudo.especificacao(cid)["automacao"].get("produzir", True):
+        _grava(cid, trilha, etapa="pronto", escolhido=titulo, aviso="")
+        _avisa("Roteiro pronto para gerar", f"{titulo} — abra o Conteúdo e toque em gerar o vídeo.", cid)
+        return [f"{cid}: aprovado {melhor['id']}", f"{cid}: pronto para gerar"]
+    _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=titulo)
     return [f"{cid}: aprovado {melhor['id']}", _produzir(cid, trilha)]
 
 
@@ -234,11 +366,13 @@ def _acompanhar_producao(cid: int, trilha: str, t: dict) -> list[str]:
 
 async def vigia() -> None:
     """No lifespan: um tique a cada 30 s. O primeiro espera o app subir."""
+    from . import servico
     await asyncio.sleep(20)
     while True:
         try:
             for linha in tique():
                 log.info("conteudo: %s", linha)
+            servico.talvez_sair()
         except Exception:
             log.exception("conteudo: tique da agenda falhou")
         await asyncio.sleep(TIQUE)

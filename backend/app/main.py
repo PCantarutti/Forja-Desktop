@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import base64
 import hashlib
 import json
@@ -24,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                kvcache, localai, lotes, lsp, metricas,
-               mcp_client, memory, mirror, mobile, native, pesquisa, design, estudos, conteudo, conteudo_roteiros, conteudo_producao, conteudo_agenda, design_html, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, design, estudos, conteudo, conteudo_roteiros, conteudo_producao, conteudo_agenda, servico, servico_instalar, design_html, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -45,6 +46,7 @@ async def lifespan(_app):
         print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
+    servico.trava(config.DATA_DIR)  # um backend por pasta de dados: o serviço sem janela e a janela nunca juntos
     localai.reap_orphan()
     taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
     estudos.reap()  # resumo de estudo que ficou rodando numa queda anterior
@@ -2330,6 +2332,7 @@ async def conteudo_gerar_estilo(body: EstiloGerarBody):
     base = _conteudo(conteudo.modelo)
     system, user = conteudo.prompt_gerar_estilo(body.descricao, base)
     try:
+        await conteudo_roteiros.garante_modelo({"provider": body.provider, "model": body.model})
         texto = await pesquisa._perguntar({"provider": body.provider, "model": body.model}, system, user, None, "medio")
     except llm.LLMError as e:
         raise HTTPException(502, str(e))
@@ -2418,6 +2421,46 @@ def conteudo_agenda_estado(conv_id: int):
     return _conteudo(conteudo_agenda.estado, conv_id)
 
 
+@app.post("/api/conteudo/especificacoes/{conv_id}/agenda/perdido")
+def conteudo_agenda_perdido(conv_id: int, body: dict):
+    """Horário perdido (Forja estava desligado): {"acao": "rodar" | "pular"}."""
+    return _conteudo(conteudo_agenda.responder_perdido, conv_id, str((body or {}).get("acao") or ""))
+
+
+@app.get("/api/conteudo/agenda")
+def conteudo_agenda_geral():
+    """Todas as especificações com a agenda de cada uma (a vista Agenda do PC e do celular)."""
+    return [{"id": s["id"], "nome": s["nome"], "automacao": s["automacao"], "estilo": s["estilo"],
+             "motor": s["motor"], **conteudo_agenda.estado(s["id"])} for s in conteudo.especificacoes()]
+
+
+@app.get("/api/servico")
+def servico_estado():
+    """Se este backend é o serviço sem janela (o Electron decide se usa este ou sobe o seu)."""
+    return servico.estado()
+
+
+@app.post("/api/servico/sair")
+def servico_sair():
+    if not servico.eh_servico():
+        raise HTTPException(400, "Este backend não é o serviço sem janela.")
+    if conteudo_agenda.ocupado():
+        raise HTTPException(409, "O serviço está no meio de uma automação.")
+    threading.Timer(0.3, servico.sair).start()   # depois de a resposta sair (o Electron espera o 200)
+    return {"ok": True}
+
+
+@app.get("/api/conteudo/servico")
+def conteudo_servico():
+    return servico_instalar.estado()
+
+
+@app.post("/api/conteudo/servico/{acao}")
+def conteudo_servico_acao(acao: str):
+    """Instala ou remove a tarefa do Windows. Abre o PowerShell como administrador (o UAC e a senha são do usuário)."""
+    return _conteudo(servico_instalar.abrir, acao)
+
+
 @app.get("/api/conteudo/video/{message_id}")
 def conteudo_video(message_id: int):
     """O vídeo entregue por uma produção, para o player da tela Conteúdo (é um <video>: vale o cookie)."""
@@ -2426,6 +2469,18 @@ def conteudo_video(message_id: int):
     except ToolError as e:
         raise HTTPException(404, str(e))
     return FileResponse(caminho, media_type="video/mp4")
+
+
+@app.post("/api/conteudo/producao/{message_id}/revisar")
+async def conteudo_revisar(message_id: int, body: dict):
+    """Pedidos de mudança (quadros desenhados e trechos) num vídeo pronto: o Claude faz a próxima versão."""
+    return _conteudo(conteudo_producao.revisar, message_id, (body or {}).get("pedidos") or [], (body or {}).get("geral") or "")
+
+
+@app.get("/api/conteudo/uso")
+def conteudo_uso():
+    """Uso do plano do Claude (janelas de 5 h e semanal), o último que o Claude Code informou."""
+    return conteudo_producao.uso()
 
 
 @app.get("/api/conteudo/claude")

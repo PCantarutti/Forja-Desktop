@@ -35,6 +35,11 @@ FORMATOS = {
 HORA_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 # Comandos que o Claude pode rodar sozinho na produção (etapa 3). Editável na tela.
+# Quem edita o vídeo: modelo e esforço passados ao `claude -p` (--model / --effort).
+CLAUDE_MODELO_PADRAO = "claude-opus-5-5"
+ESFORCOS = ("low", "medium", "high", "xhigh", "max")
+MODELO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,80}$")
+
 COMANDOS_PADRAO = ["npm run *", "npx remotion *", "npx tsc*", "python scripts/*", "node scripts/*", "ffmpeg *", "ffprobe *"]
 
 MODELO_PADRAO = """# Estilo: `<nome-do-estilo>`
@@ -85,7 +90,7 @@ def pastas() -> dict:
         linha = s.get(db.AppSetting, CHAVE)
         salvo = dict(linha.value) if linha and isinstance(linha.value, dict) else {}
     return {"pasta_estilos": "", "pasta_projeto": "", "pasta_saida": _area_de_trabalho(),
-            "comandos": list(COMANDOS_PADRAO), **salvo}
+            "comandos": list(COMANDOS_PADRAO), "claude_modelo": CLAUDE_MODELO_PADRAO, "claude_esforco": "medium", **salvo}
 
 
 def _pasta(valor: str, rotulo: str, obrigatoria: bool = False) -> str:
@@ -121,6 +126,16 @@ def salvar_pastas(dados: dict) -> dict:
         if conta:
             Path(conta).mkdir(parents=True, exist_ok=True)
         novo["claude_conta"] = conta
+    if "claude_modelo" in dados:   # vazio = o padrão do Claude Code (sem --model)
+        modelo = str(dados["claude_modelo"] or "").strip()
+        if modelo and not MODELO_RE.match(modelo):
+            raise ToolError("Modelo do Claude inválido (ex.: claude-opus-5-5, opus, sonnet).")
+        novo["claude_modelo"] = modelo
+    if "claude_esforco" in dados:
+        esforco = str(dados["claude_esforco"] or "").strip()
+        if esforco and esforco not in ESFORCOS:
+            raise ToolError("Esforço do Claude inválido: low, medium, high, xhigh ou max.")
+        novo["claude_esforco"] = esforco
     if "comandos" in dados:
         cmds = [str(c).strip()[:200] for c in (dados["comandos"] or []) if str(c).strip()]
         if len(cmds) > 50:
@@ -260,7 +275,12 @@ def limpar_markdown(texto: str) -> str:
 def _spec_padrao() -> dict:
     return {"tema": "", "palavras_chave": [], "fontes": [], "dias": 3, "estilo": "", "roteiros": 3, "formato": "vertical",
             "motor": {"provider": "", "model": ""}, "observacoes": "",
-            "automacao": {"modo": "desligada", "hora_roteiros": "19:00", "hora_producao": "03:00"}}
+            "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
+                          "hora_producao": "03:00", "produzir": True, "ativado_em": ""}}
+
+
+def agora() -> datetime:   # os testes trocam o relógio por aqui (o mesmo da agenda)
+    return datetime.now()
 
 
 def _lista(v, limite: int, tam: int = 120) -> list[str]:
@@ -304,16 +324,33 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
         m = d["motor"] if isinstance(d["motor"], dict) else {}
         spec["motor"] = {"provider": str(m.get("provider") or "")[:60], "model": str(m.get("model") or "")[:300]}
     if "automacao" in d:
-        a = {**spec["automacao"], **(d["automacao"] if isinstance(d["automacao"], dict) else {})}
-        if a.get("modo") not in MODOS:
-            raise ToolError("Modo de automação inválido.")
-        for k in ("hora_roteiros", "hora_producao"):
-            if not HORA_RE.match(str(a.get(k) or "")):
-                raise ToolError("Horário inválido: use HH:MM (ex.: 03:00).")
-        spec["automacao"] = {k: a[k] for k in ("modo", "hora_roteiros", "hora_producao")}
+        spec["automacao"] = _automacao(spec["automacao"], d["automacao"] if isinstance(d["automacao"], dict) else {})
     if not spec["tema"]:
         raise ToolError("Descreva o tema da especificação.")
     return spec
+
+
+def _automacao(antes: dict, novo: dict) -> dict:
+    """Modo, dias da semana (0 = segunda) e horários. `ativado_em` marca quando a agenda mudou: horário de antes
+    disso não conta como "perdido" (ligar a automação às 10h não pergunta pelo das 7h)."""
+    a = {**antes, **novo}
+    if a.get("modo") not in MODOS:
+        raise ToolError("Modo de automação inválido.")
+    if "hora_producao" in novo and "horarios" not in novo:   # quem manda o formato antigo (um horário só)
+        a["horarios"] = [novo["hora_producao"]]
+    horarios = a.get("horarios") if isinstance(a.get("horarios"), list) else [a.get("hora_producao") or "03:00"]
+    horarios = sorted({str(h) for h in horarios})
+    if not horarios or len(horarios) > 8 or not all(HORA_RE.match(h) for h in horarios + [str(a.get("hora_roteiros") or "")]):
+        raise ToolError("Horário inválido: use HH:MM (ex.: 03:00), de 1 a 8 horários.")
+    dias = a.get("dias") if isinstance(a.get("dias"), list) else list(range(7))
+    dias = sorted({_inteiro(x, -1) for x in dias} & set(range(7)))
+    if not dias and a["modo"] != "desligada":
+        raise ToolError("Escolha pelo menos um dia da semana.")
+    out = {"modo": a["modo"], "dias": dias, "horarios": horarios, "hora_roteiros": a["hora_roteiros"],
+           "hora_producao": horarios[0], "produzir": a.get("produzir", True) is not False}
+    mudou = any(out[k] != antes.get(k) for k in ("modo", "dias", "horarios", "hora_roteiros"))
+    out["ativado_em"] = agora().isoformat(timespec="seconds") if mudou or not antes.get("ativado_em") else antes["ativado_em"]
+    return out
 
 
 def _msg_spec(s, conv_id: int) -> db.Message | None:
@@ -330,6 +367,10 @@ def _conv(s, conv_id: int) -> db.Conversation:
 
 def _dict(c: db.Conversation, m: db.Message | None) -> dict:
     spec = {**_spec_padrao(), **(((m.meta or {}).get("especificacao")) if m else {})}
+    auto = spec["automacao"]
+    if "horarios" not in auto:   # especificação salva antes dos dias/horários: um horário só, todo dia
+        spec["automacao"] = {**_spec_padrao()["automacao"], **auto, "horarios": [auto.get("hora_producao") or "03:00"]}
+    spec["automacao"].setdefault("produzir", True)
     return {"id": c.id, "nome": c.title, **spec, "atualizado": c.updated_at.isoformat() if c.updated_at else None}
 
 

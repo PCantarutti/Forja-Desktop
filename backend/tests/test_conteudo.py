@@ -136,7 +136,9 @@ def test_criar_e_editar_especificacao(pasta):
 
     editada = conteudo.salvar_especificacao({"roteiros": 5, "automacao": {"modo": "aprovacao"}}, spec["id"])
     assert editada["roteiros"] == 5 and editada["tema"] == "lançamentos e riscos de IA"   # o resto fica
-    assert editada["automacao"] == {"modo": "aprovacao", "hora_roteiros": "19:00", "hora_producao": "03:00"}
+    auto = editada["automacao"]
+    assert {k: auto[k] for k in ("modo", "hora_roteiros", "hora_producao", "horarios", "dias")} ==         {"modo": "aprovacao", "hora_roteiros": "19:00", "hora_producao": "03:00", "horarios": ["03:00"], "dias": list(range(7))}
+    assert auto["ativado_em"]
     assert [e["id"] for e in conteudo.especificacoes()] == [spec["id"]]
 
 
