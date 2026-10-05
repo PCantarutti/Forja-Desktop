@@ -37,7 +37,8 @@ NOME = "producao"
 TETO = 3 * 3600          # segundos; um vídeo longo com render pode levar bem mais que um Short
 GRAVAR_A_CADA = 4.0      # segundos entre gravações do estado (o log anda mais rápido que isso)
 MAX_LOG = 300
-FERRAMENTAS = ["Read", "Edit", "Write", "MultiEdit", "Glob", "Grep", "TodoWrite"]
+# WebSearch/WebFetch: achar a imagem oficial (screenshots do site, newswire, kit de imprensa) quando o vídeo não tem a cena
+FERRAMENTAS = ["Read", "Edit", "Write", "MultiEdit", "Glob", "Grep", "TodoWrite", "WebSearch", "WebFetch"]
 ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
 
 _RUNS: dict[int, dict] = {}
@@ -83,6 +84,11 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   Tudo cai em `public/midia/<assunto>/` com `creditos.json`; use com `staticFile()` e `<OffthreadVideo muted>`/`<Img>`,
   SEMPRE com o caminho completo escrito no código (`staticFile("midia/gta-6/yt-20-25.mp4")`, nunca montado com
   variável): no fim, o Forja apaga de `public/midia/` todo arquivo que o código não cita (trailers inteiros, referências).
+- Ordem para cada cena que fala de algo concreto: (1) trecho de vídeo oficial que MOSTRA aquilo; (2) não tendo, uma
+  IMAGEM oficial — procure com WebSearch/WebFetch no site oficial (ex.: as screenshots e artes da página do jogo, o
+  newswire ou o kit de imprensa da empresa), pegue o endereço da imagem e baixe com `midia.py imagem <url>`; use em tela
+  cheia com zoom lento (Ken Burns) e o texto por cima; (3) só então o motion design do estilo. Imagem de site de notícia
+  ou de fã não serve, a não ser que seja a própria imagem oficial republicada e você ache a original.
 - Regras da mídia real: só fonte oficial (nunca vídeo de youtuber, streamer ou fã); cada trecho com até ~6 s; nunca o
   áudio original; crédito pequeno na tela enquanto aparece ("Trailer: <dono> / Steam") e todos os créditos no fim da
   descrição. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.

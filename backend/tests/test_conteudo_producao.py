@@ -396,3 +396,15 @@ def test_limpar_midia_apaga_o_que_o_video_nao_usa(tmp_path):
     assert sorted(f.relative_to(m).as_posix() for f in m.rglob("*") if f.is_file()) == ["gta-6/creditos.json", "gta-6/yt-20-25.mp4"]
     assert not (m / "outro").exists()   # pasta só com o creditos.json some junto
     assert P.limpar_midia(tmp_path / "nada") == (0, 0)
+
+
+def test_pedido_prefere_imagem_oficial_antes_do_motion_design(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    (ambiente["projeto"] / "scripts").mkdir()
+    (ambiente["projeto"] / "scripts" / "midia.py").write_text("", encoding="utf-8")
+    cid, _, _ = _aprovado()
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "IMAGEM oficial" in pedido and "midia.py imagem <url>" in pedido
+    args = json.loads((ambiente["projeto"] / ".forja" / "argv.json").read_text())
+    assert "WebSearch" in args and "WebFetch" in args
