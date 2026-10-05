@@ -52,6 +52,7 @@ horizontal (vídeo longo, com mais contexto e mais cenas).
 
 Regras:
 - Use só fatos que estão nos achados. Número, data, nome e citação só entram se estiverem numa fonte que você cita.
+- Plataformas, datas e preços exatamente como a fonte diz; nunca deduza (um jogo exclusivo não vira multiplataforma).
 - Só entra o que aconteceu nos últimos {dias} dias (hoje é {hoje}). Fato mais antigo só como contexto de uma
   notícia nova, nunca como a novidade. Data incerta: confiança no máximo 3.
 - Nunca acuse pessoa ou empresa de algo que a fonte não diz; opinião vira pergunta.

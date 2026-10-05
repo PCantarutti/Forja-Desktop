@@ -466,3 +466,12 @@ def test_pedido_render_em_primeiro_plano(ambiente, monkeypatch):
     asyncio.run(_ate_o_fim(cid))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "PRIMEIRO PLANO" in pedido and "run_in_background" in pedido
+
+
+
+def test_pedido_manda_checar_fatos(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "CHECAGEM DE FATOS" in pedido and "plataformas" in pedido and '"CORREÇÃO:"' in pedido

@@ -61,6 +61,10 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
 {midia}- CAPA NO INÍCIO (regra fixa): o vídeo abre com a capa (thumb) do estilo, ~1,2 s parada, SEM narração nem legenda, e
   transição para o conteúdo; use `ComCapa` de `src/Short/capa.tsx` se existir (veja a seção "Capa no início" do estilo).
   Exporte também a capa: `npx remotion still <Composição> out/{slug}-capa.jpg --frame=15`.
+- CHECAGEM DE FATOS antes de montar: o roteiro foi escrito por outro modelo e pode errar. Confira na fonte oficial
+  (WebSearch/WebFetch) os fatos objetivos que vão para a tela ou para a fala — plataformas (página oficial do jogo e
+  de cada loja; nunca deduzir), datas, preços, números. Errado = corrija a cena (fala e tela) só no necessário e conte
+  na resposta final, numa linha começando com "CORREÇÃO:", o que mudou e a fonte.
 - Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
   corrija texto cortado ou sobreposto.
 - Renderize o vídeo final em `out/{slug}.mp4` em PRIMEIRO PLANO e espere terminar (nunca em segundo plano /
@@ -687,8 +691,10 @@ async def _rodar(run: dict, pedido: str) -> None:
             if not run.get("revisao_de"):   # revisão: o roteiro já tinha virado vídeo na 1ª versão
                 conteudo_roteiros.marcar_produzido(run["rodada_id"], run["roteiro_id"], run["entregue"])
             # mídia real pedida que não deu para conseguir: o Claude explica numa linha "MÍDIA:", que vira o aviso
-            if m := re.search(r"^\W*M[ÍI]DIA:\s*(.+)$", str(final.get("result") or ""), re.M | re.I):
-                run["aviso"] = ("Mídia: " + m.group(1).strip())[:400]
+            avisos = [f"{r.group(1).capitalize()}: {r.group(2).strip()}"
+                      for r in re.finditer(r"^\W*(M[ÍI]DIA|CORRE[ÇC][ÃA]O):\s*(.+)$", str(final.get("result") or ""), re.M | re.I)]
+            if avisos:   # mídia que faltou e fatos do roteiro corrigidos: aparecem na produção e no aviso do celular
+                run["aviso"] = " · ".join(avisos)[:600]
             status = "ok"
     except Exception as e:   # nada pode deixar a produção presa em "running"
         run["aviso"] = f"{e.__class__.__name__}: {e}"[:300]
