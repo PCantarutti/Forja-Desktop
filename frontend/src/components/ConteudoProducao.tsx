@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import { Copy, Edit, Film, Square } from "./icons";
 import ConteudoRevisao from "./ConteudoRevisao";
-import { VideoPlayer } from "./VideoPlayer";
+import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
 
 // Coluna do vídeo no painel da especificação: o vídeo pronto no player da tela Vídeo, a produção ao vivo
 // enquanto o Claude trabalha, e o histórico logo abaixo (clicar numa produção pronta troca o vídeo do player).
@@ -119,10 +119,11 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
 function Player(props: { p: Producao; onRevisar?: () => void }) {
   const { p } = props;
   const [copiado, setCopiado] = useState(false);
+  const player = useRef<VideoPlayerApi>(null);
   const vertical = p.formato !== "horizontal";
   return (
     <div className="flex flex-col gap-2.5">
-      <VideoPlayer key={p.id} src={`/api/conteudo/video/${p.id}`} fps={30} compacto audio
+      <VideoPlayer key={p.id} ref={player} src={`/api/conteudo/video/${p.id}`} fps={30} compacto audio
                    className={`rounded-[10px] border border-line bg-black ${vertical ? "mx-auto" : ""}`}
                    style={{ aspectRatio: vertical ? 9 / 16 : 16 / 9, width: vertical ? "min(100%, 300px)" : "100%" }} />
       <div className="flex flex-col gap-1">
@@ -137,7 +138,7 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
           <span className="max-w-[300px] truncate font-mono">{copiado ? "caminho copiado" : p.entregue}</span>
         </button>
         {props.onRevisar && (
-          <button onClick={props.onRevisar}
+          <button onClick={() => { player.current?.pausar(); props.onRevisar?.(); }}   // o editor abre o mesmo vídeo: dois tocando juntos
                   className="mt-2 inline-flex h-[32px] items-center justify-center gap-1.5 rounded-[7px] border border-line-strong text-[12.5px] text-fg hover:border-focus hover:bg-raised">
             <Edit className="size-3.5" /> Pedir mudanças
           </button>

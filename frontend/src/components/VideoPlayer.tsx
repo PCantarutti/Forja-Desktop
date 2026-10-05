@@ -101,7 +101,12 @@ type Props = {
   /** Vídeo com som (os da tela Conteúdo, narrados): começa com áudio, tem botão de som, conta o tempo em
    *  m:ss em vez do quadro e não repete sozinho. Sem isto é o player dos clipes mudos do Wan. */
   audio?: boolean;
+  /** Trechos marcados na linha do tempo (pedir mudanças): `atual` é o que está sendo escolhido agora, com `fim`
+   *  ainda vazio enquanto só o início foi marcado; os outros são os já adicionados, mais apagados. */
+  trechos?: { inicio: number; fim: number | null; atual?: boolean }[];
 };
+
+export type Trecho = NonNullable<Props["trechos"]>[number];
 
 export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlayer(props, ref) {
   const caixa = useRef<HTMLDivElement>(null);
@@ -519,6 +524,19 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
               </div>
             )}
           </div>
+          {!props.compacto && dur > 0 && props.trechos?.map((x, i) => {
+            const a = Math.min(x.inicio, x.fim ?? x.inicio) / dur, b = Math.max(x.inicio, x.fim ?? x.inicio) / dur;
+            const cor = x.atual ? "border-amber-300 bg-amber-300/35" : "border-sky-300/70 bg-sky-300/20";
+            return x.fim === null ? (
+              <span key={i} className="pointer-events-none absolute -inset-y-1.5 w-0.5 -translate-x-1/2 rounded-full bg-amber-300 shadow-[0_0_0_1px_rgba(0,0,0,.5)]"
+                    style={{ left: `${a * 100}%` }} title="Início do trecho">
+                <span className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-amber-300" />
+              </span>
+            ) : (
+              <span key={i} className={`pointer-events-none absolute -inset-y-1 rounded-[3px] border-x-2 ${cor}`}
+                    style={{ left: `${a * 100}%`, width: `max(4px, ${(b - a) * 100}%)` }} title="Trecho marcado" />
+            );
+          })}
           {props.marcas && !props.compacto && (
             <>
               <span className="absolute -top-1 left-0 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-emerald-400" title="Quadro inicial dado" />

@@ -68,11 +68,19 @@ export default function ConteudoRevisao(props: {
   }
 
   const trechoPronto = trecho.inicio !== null && trecho.fim !== null && trecho.comentario.trim();
+  // Na linha do tempo: os trechos já adicionados (apagados) e o que está sendo marcado (âmbar; só o início, uma
+  // bandeira). Marcou só o fim: vira bandeira também, até o início entrar.
+  const faixas = [
+    ...pedidos.flatMap((x) => (x.tipo === "trecho" ? [{ inicio: x.inicio, fim: x.fim }] : [])),
+    ...(trecho.inicio !== null || trecho.fim !== null
+      ? [{ inicio: (trecho.inicio ?? trecho.fim)!, fim: trecho.inicio !== null && trecho.fim !== null ? trecho.fim : null, atual: true }]
+      : []),
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex bg-scrim backdrop-blur-[2px]" role="dialog" aria-label="Pedir mudanças no vídeo">
       <div className="flex min-w-0 flex-1 items-center justify-center p-6">
-        <VideoPlayer ref={player} src={`/api/conteudo/video/${p.id}`} fps={30} audio
+        <VideoPlayer ref={player} src={`/api/conteudo/video/${p.id}`} fps={30} audio trechos={faixas}
                      className="rounded-xl border border-line bg-black shadow-popover"
                      style={{ aspectRatio: vertical ? 9 / 16 : 16 / 9,
                               width: vertical ? "min(100%, calc((100vh - 64px) * 9 / 16))" : "min(100%, calc((100vh - 64px) * 16 / 9))" }} />
@@ -102,6 +110,15 @@ export default function ConteudoRevisao(props: {
               <button className={btn} onClick={() => marcar("inicio")}>Início{trecho.inicio !== null ? `: ${relogio(trecho.inicio)}` : ""}</button>
               <button className={btn} onClick={() => marcar("fim")}>Fim{trecho.fim !== null ? `: ${relogio(trecho.fim)}` : ""}</button>
             </div>
+            {(trecho.inicio !== null || trecho.fim !== null) && (
+              <div className="flex items-center gap-2 text-[11.5px] text-muted">
+                <span className="size-2 rotate-45 rounded-[2px] bg-amber-300" />
+                {trecho.inicio !== null && trecho.fim !== null
+                  ? `${relogio(Math.min(trecho.inicio, trecho.fim))} até ${relogio(Math.max(trecho.inicio, trecho.fim))} · ${Math.abs(trecho.fim - trecho.inicio).toFixed(1).replace(".", ",")} s`
+                  : `Agora marque o ${trecho.inicio === null ? "início" : "fim"} na linha do tempo`}
+                <button className="ml-auto text-faint hover:text-fg" onClick={() => setTrecho((t) => ({ ...t, inicio: null, fim: null }))}>limpar</button>
+              </div>
+            )}
             <textarea className={`${campo} h-16`} value={trecho.comentario} placeholder="Ex.: deixe essa parte mais rápida, troque a animação…"
                       onChange={(e) => setTrecho((t) => ({ ...t, comentario: e.target.value }))} />
             <button className={btn} disabled={!trechoPronto}
