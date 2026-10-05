@@ -129,26 +129,22 @@ export default function ConteudoRoteiros(props: {
     }
   }
 
-  const ocupada = rodadas.some((r) => r.status === "rodando" || r.status === "aguardando");
 
   return (
     <section className="flex min-w-0 flex-col gap-4">
       <div className="flex items-center gap-3">
-        <h2 className="text-[13px] font-semibold text-fg">Roteiros</h2>
-        <button className={`${acaoPeq} ml-auto`} disabled={disparando || ocupada} onClick={gerar}>
-          <Refresh className="size-3.5" /> Pesquisar novos
-        </button>
+        <h2 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Roteiros</h2>
       </div>
 
       {carregou && rodadas.length === 0 && (
-        <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line-strong px-5 py-6">
+        <div className="flex flex-col items-start gap-3 rounded-[10px] border border-dashed border-line-strong px-5 py-6">
           <p className="max-w-[60ch] text-[13px] leading-relaxed text-muted">
             A pesquisa procura as novidades do tema na web e escreve roteiros prontos no estilo escolhido, cada um com a
             notícia, as fontes e uma nota de confiança dos fatos.
           </p>
           <button onClick={gerar} disabled={disparando}
-                  className="inline-flex items-center gap-1.5 rounded-[9px] border border-accent bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-            <Refresh className="size-4" /> Pesquisar e escrever roteiros
+                  className="inline-flex h-[30px] items-center gap-1.5 rounded-[7px] bg-accent px-3 text-xs font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
+            <Refresh className="size-3.5" /> Pesquisar e escrever roteiros
           </button>
         </div>
       )}
@@ -181,8 +177,8 @@ function Rodada(props: {
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-faint">
-        <span className="font-medium text-muted">{dataCurta(r.criado)}</span>
+      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-faint">
+        <span className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-muted">{dataCurta(r.criado)}</span>
         <span>· {motor}</span>
         {r.fontes.length > 0 && (
           <button className="inline-flex items-center gap-0.5 hover:text-fg" onClick={() => setVerFontes(!verFontes)}>
@@ -198,7 +194,7 @@ function Rodada(props: {
       {r.aviso && !viva && <p className="text-[12px] text-warn">{r.aviso}</p>}
 
       {verFontes && (
-        <ul className="flex flex-col gap-1 rounded-lg border border-line px-3 py-2 text-[12px]">
+        <ul className="flex flex-col gap-1 rounded-[8px] border border-line bg-surface px-3 py-2 text-[12px]">
           {r.fontes.map((f) => (
             <li key={f.id} className="flex items-center gap-2">
               <span className={`size-1.5 shrink-0 rounded-full ${f.status === "util" ? "bg-ok" : f.status === "erro" ? "bg-err" : "bg-faint"}`} />
@@ -229,7 +225,7 @@ function Pesquisando(props: { r: Rodada; onCancelar: () => void }) {
   const { r } = props;
   const atual = ETAPAS.findIndex((e) => e.id === r.fase);
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-info/40 bg-info/5 p-3.5">
+    <div className="flex flex-col gap-2.5 rounded-[10px] border border-info/40 bg-info/5 p-3.5">
       {r.status === "aguardando" ? (
         <p className="text-[12.5px] leading-relaxed text-fg">
           Pedido na fila do Claude. Numa sessão do Claude Code ou do Claude Desktop conectada ao Forja, peça:
@@ -276,7 +272,7 @@ function CartaoRoteiro(props: {
   const descartado = x.status === "descartado";
 
   return (
-    <article className={`rounded-xl border transition-colors ${
+    <article className={`rounded-[10px] border transition-colors ${
       escolhido ? "border-ok/60 bg-ok/[0.04]" : "border-line bg-surface"} ${descartado ? "opacity-60" : ""}`}>
       <div className="flex gap-3 p-3.5">
         <button disabled={produzido || descartado} onClick={() => props.onStatus(escolhido ? "novo" : "aprovado")}
@@ -286,7 +282,7 @@ function CartaoRoteiro(props: {
           {escolhido && <Check className="size-3" />}
         </button>
         <button className="min-w-0 flex-1 text-left" onClick={() => setAberto(!aberto)} aria-expanded={aberto}>
-          <h3 className="text-[14px] font-semibold leading-snug text-fg">{x.titulo_youtube || x.titulo}</h3>
+          <h3 className="text-[13.5px] font-semibold leading-snug text-fg">{x.titulo_youtube || x.titulo}</h3>
           <p className={`mt-1 text-[12.5px] leading-relaxed text-muted ${aberto ? "" : "line-clamp-2"}`}>{x.ideia}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-faint">
             <span className="inline-flex items-center gap-1.5" title={x.motivo_confianca}>

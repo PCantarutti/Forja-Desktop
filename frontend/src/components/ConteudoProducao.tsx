@@ -73,24 +73,24 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
 
   return (
     <section className="flex min-w-0 flex-col gap-4">
-      <h2 className="text-[13px] font-semibold text-fg">Vídeo</h2>
+      <h2 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Vídeo</h2>
       {viva && <AoVivo p={viva} onCancelar={() => api.post(`/conteudo/producao/${viva.id}/cancelar`, {}).then(carregar)} />}
       {noPlayer ? <Player p={noPlayer} onRevisar={viva ? undefined : () => setRevisando(noPlayer)} /> : !viva && (
-        <div className="flex aspect-[9/16] max-h-[440px] flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong px-8 text-center">
+        <div className="mx-auto flex aspect-[9/16] w-[min(100%,300px)] flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-line-strong px-8 text-center">
           <Film className="size-6 text-faint" />
           <p className="text-[13px] text-muted">O vídeo aparece aqui quando a primeira produção terminar.</p>
-          <p className="text-[12px] text-faint">Escolha um roteiro ao lado e clique em “Produzir o escolhido”.</p>
+          <p className="text-[12px] text-faint">Escolha um roteiro e clique em “Produzir o escolhido”.</p>
         </div>
       )}
       {lista.length > 0 && (
         <div className="flex flex-col">
-          <h3 className="mb-1.5 text-[12px] font-medium text-muted">Produções</h3>
-          <ul className="flex flex-col divide-y divide-line rounded-xl border border-line">
+          <h3 className="mb-2 font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Produções <span className="ml-1 tracking-normal">{lista.length}</span></h3>
+          <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-[10px] border border-line bg-surface">
             {lista.map((p) => (
               <li key={p.id}>
                 <button disabled={p.status !== "ok"} onClick={() => setEscolhida(p.id)}
                         className={`flex w-full items-start gap-2.5 px-3 py-2.5 text-left transition-colors enabled:hover:bg-raised ${
-                          noPlayer?.id === p.id ? "bg-accent-soft" : ""}`}>
+                          noPlayer?.id === p.id ? "bg-raised" : ""}`}>
                   <span className={`mt-1.5 size-2 shrink-0 rounded-full ${STATUS[p.status].cor} ${p.status === "rodando" ? "animate-pulse" : ""}`} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] text-fg">
@@ -123,7 +123,7 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
   return (
     <div className="flex flex-col gap-2.5">
       <VideoPlayer key={p.id} src={`/api/conteudo/video/${p.id}`} fps={30} compacto audio
-                   className={`rounded-xl border border-line bg-black ${vertical ? "mx-auto" : ""}`}
+                   className={`rounded-[10px] border border-line bg-black ${vertical ? "mx-auto" : ""}`}
                    style={{ aspectRatio: vertical ? 9 / 16 : 16 / 9, width: vertical ? "min(100%, 300px)" : "100%" }} />
       <div className="flex flex-col gap-1">
         <span className="text-[13.5px] font-medium leading-snug text-fg">{rotuloVersao(p)}{p.titulo}</span>
@@ -138,8 +138,8 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
         </button>
         {props.onRevisar && (
           <button onClick={props.onRevisar}
-                  className="mt-1.5 inline-flex items-center justify-center gap-1.5 rounded-[9px] border border-line-strong px-3 py-1.5 text-[13px] text-fg hover:border-focus hover:bg-raised">
-            <Edit className="size-4" /> Pedir mudanças
+                  className="mt-2 inline-flex h-[32px] items-center justify-center gap-1.5 rounded-[7px] border border-line-strong text-[12.5px] text-fg hover:border-focus hover:bg-raised">
+            <Edit className="size-3.5" /> Pedir mudanças
           </button>
         )}
       </div>
@@ -152,7 +152,7 @@ function AoVivo(props: { p: Producao; onCancelar: () => void }) {
   const fim = useRef<HTMLDivElement>(null);
   useEffect(() => { fim.current?.scrollIntoView({ block: "nearest" }); }, [p.log.length]);
   return (
-    <div className="flex flex-col gap-2.5 rounded-xl border border-info/40 bg-info/5 p-3.5">
+    <div className="flex flex-col gap-2.5 rounded-[10px] border border-info/40 bg-info/5 p-3.5">
       <div className="flex items-center gap-2">
         <span className="size-2 animate-pulse rounded-full bg-info" />
         <span className="text-[12.5px] font-medium text-info">

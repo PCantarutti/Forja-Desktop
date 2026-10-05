@@ -7,9 +7,9 @@ import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
 // trecho (início e fim) com um pedido, e uma mudança geral. O Claude retoma a sessão que fez o vídeo, enxerga as
 // imagens marcadas e renderiza a próxima versão (a anterior fica).
 
-const btn = "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[9px] border border-line-strong px-3 py-1.5 text-[13px] text-fg hover:border-focus hover:bg-raised disabled:opacity-40";
-const btnPrimary = "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-[9px] border border-accent bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-fg hover:brightness-110 disabled:opacity-40";
-const campo = "w-full rounded-lg border border-line bg-raised px-2.5 py-1.5 text-[13px] text-fg focus:border-focus focus:outline-none";
+const btn = "inline-flex h-[30px] items-center justify-center gap-1.5 whitespace-nowrap rounded-[7px] border border-line-strong px-2.5 text-xs text-fg hover:border-focus hover:bg-raised disabled:pointer-events-none disabled:opacity-40";
+const btnPrimary = "inline-flex h-[32px] items-center justify-center gap-1.5 whitespace-nowrap rounded-[7px] bg-accent px-3 text-[12.5px] font-medium text-accent-fg hover:brightness-110 disabled:pointer-events-none disabled:opacity-40";
+const campo = "w-full rounded-[8px] border border-line bg-surface px-2.5 py-1.5 text-[13px] text-fg placeholder:text-faint focus:border-focus focus:outline-none";
 
 type Producao = { id: number; titulo: string; formato: "vertical" | "horizontal"; versao?: number };
 type Pedido =
@@ -91,13 +91,13 @@ export default function ConteudoRevisao(props: {
 
         <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
           <section className="flex flex-col gap-2">
-            <h3 className="text-[12px] font-medium text-muted">Num quadro</h3>
+            <h3 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Num quadro</h3>
             <p className="text-[12px] leading-relaxed text-faint">Pause onde está o que quer mudar, circule ou risque por cima e diga o que fazer.</p>
             <button className={btn} onClick={desenharAqui}><Edit className="size-4" /> Desenhar neste quadro</button>
           </section>
 
           <section className="flex flex-col gap-2">
-            <h3 className="text-[12px] font-medium text-muted">Num trecho</h3>
+            <h3 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Num trecho</h3>
             <div className="grid grid-cols-2 gap-2">
               <button className={btn} onClick={() => marcar("inicio")}>Início{trecho.inicio !== null ? `: ${relogio(trecho.inicio)}` : ""}</button>
               <button className={btn} onClick={() => marcar("fim")}>Fim{trecho.fim !== null ? `: ${relogio(trecho.fim)}` : ""}</button>
@@ -116,7 +116,7 @@ export default function ConteudoRevisao(props: {
 
           {pedidos.length > 0 && (
             <section className="flex flex-col gap-2">
-              <h3 className="text-[12px] font-medium text-muted">Pedidos ({pedidos.length})</h3>
+              <h3 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Pedidos ({pedidos.length})</h3>
               <ul className="flex flex-col gap-2">
                 {pedidos.map((x, i) => (
                   <li key={i} className="flex gap-2.5 rounded-lg border border-line bg-surface p-2">
@@ -142,7 +142,7 @@ export default function ConteudoRevisao(props: {
           )}
 
           <section className="flex flex-col gap-2">
-            <h3 className="text-[12px] font-medium text-muted">No vídeo todo</h3>
+            <h3 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">No vídeo todo</h3>
             <textarea className={`${campo} h-20`} value={geral} placeholder="Ex.: música mais baixa, legenda maior, cores mais quentes…"
                       onChange={(e) => setGeral(e.target.value)} />
           </section>
