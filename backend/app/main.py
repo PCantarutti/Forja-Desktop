@@ -77,8 +77,11 @@ async def lifespan(_app):
     vivas.add(task)
     if mobile.lan_quer():  # celular na rede local, ligado na aba Celular
         await mobile.liga_lan(_app)
+    lan = asyncio.create_task(mobile.vigia_lan(_app))  # porta presa (app reiniciando na atualização): tenta de novo
+    vivas.add(lan)
     async with mcp_servidor.gerente():  # /mcp: o Claude controlando o Forja (E17); o gerente vive com o app
         yield
+    lan.cancel()
     await mobile.desliga_lan()
     task.cancel()
     vigia.cancel()  # laço sem fim: sem o cancel o gather abaixo esperava para sempre
