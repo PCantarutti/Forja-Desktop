@@ -434,5 +434,5 @@ def test_pedido_exige_fundo_borrado_e_aceita_fonte_primaria(ambiente, monkeypatc
     cid, _, _ = _aprovado()
     asyncio.run(_ate_o_fim(cid))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
-    assert "JANELA COM FUNDO BORRADO" in pedido and "MESMO vídeo/imagem em tela cheia" in pedido
+    assert "FOCO EM JANELA" in pedido and "MESMO vídeo/imagem em tela cheia" in pedido and "ILUSTRAÇÃO DE FUNDO" in pedido
     assert "PRIMÁRIA da notícia" in pedido and "o projeto do port" in pedido

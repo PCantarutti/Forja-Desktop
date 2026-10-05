@@ -98,9 +98,14 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   preencha o fundo com a mesma imagem desfocada e escurecida. Zoom lento de no máximo ~10%, escurecimento leve (até
   ~30%) e nada desenhado por cima que a esconda: quem vê tem que reconhecer na hora o que ela mostra. Confira no still. Imagem de site de notícia
   ou de fã não serve, a não ser que seja a própria imagem oficial republicada e você ache a original.
-- JANELA COM FUNDO BORRADO (regra fixa): todo vídeo ou imagem real mostrado numa janela/quadro (não em tela cheia)
-  tem por trás o MESMO vídeo/imagem em tela cheia, bem borrado (blur forte, ~40 px) e escurecido, tocando junto (mesmo
-  arquivo e mesmo ponto de início). Nunca janela sobre fundo liso ou sobre o fundo desenhado do estilo.
+- Dois modos de usar mídia real; escolha um por cena:
+  - ILUSTRAÇÃO DE FUNDO (o padrão, como no vídeo das novidades do GTA 6): o vídeo só ilustra o que a narração fala.
+    Ele toca em tela cheia por trás da cena, escurecido (~40–50%, blur leve opcional), e o motion design do estilo
+    (número, título, chips, contador, legenda) continua por cima, legível. Imagem parada aqui pede zoom lento.
+  - FOCO EM JANELA (quando o vídeo É o assunto: o trailer do jogo listado, a demo do port rodando, o anúncio): o vídeo
+    aparece numa janela/quadro com borda, e por trás dela o MESMO vídeo/imagem em tela cheia, bem borrado (blur forte,
+    ~40 px) e escurecido, tocando junto (mesmo arquivo e mesmo ponto de início). Nunca janela sobre fundo liso ou sobre o
+    fundo desenhado do estilo (como no vídeo dos 4 jogos da semana).
 - Fonte: oficial ou PRIMÁRIA da notícia — a dona do jogo/produto OU quem fez a coisa noticiada (o projeto do port, o
   pesquisador, o estúdio, o perfil oficial de quem anunciou). Se a notícia é sobre algo que alguém fez (ex.: um port
   rodando no PC), mostre o vídeo de QUEM FEZ mostrando aquilo, não só o trailer original do jogo.
