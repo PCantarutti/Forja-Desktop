@@ -67,6 +67,10 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   Para ler ou procurar arquivos use as ferramentas Read, Glob e Grep, não o terminal.
 - Comando negado é regra, não erro: siga sem ele (faça de outro jeito ou simplifique).
 
+- Escreva em `{youtube}` o texto para publicar: 1ª linha só o título (até 60 caracteres, o do roteiro ou melhor),
+  linha em branco, e a descrição final pronta para colar no YouTube — a do roteiro, ajustada ao que o vídeo mostra, com
+  os créditos de toda mídia real usada (ex.: "Imagens: Rockstar Games") e as fontes no fim.
+
 Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
 """
 
@@ -128,6 +132,10 @@ REVISAO = """Você vai REVISAR, sozinho, um vídeo que já foi produzido neste p
 - Renderize a nova versão em `out/{slug}.mp4`, sem sobrescrever a anterior.
 {midia}- Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
   Rode cada um sozinho: sem `cd x &&`, sem `;` e sem pipe para comando fora da lista. Para ler arquivos e imagens, use Read.
+
+- Escreva em `{youtube}` o texto para publicar: 1ª linha só o título (até 60 caracteres, o do roteiro ou melhor),
+  linha em branco, e a descrição final pronta para colar no YouTube — a do roteiro, ajustada ao que o vídeo mostra, com
+  os créditos de toda mídia real usada (ex.: "Imagens: Rockstar Games") e as fontes no fim.
 
 Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
 """
@@ -414,7 +422,7 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         readme=f" e `{(est_dir / 'README.md').as_posix()}`" if (est_dir / "README.md").is_file() else "",
         formato_rotulo=fmt["rotulo"], largura=fmt["largura"], altura=fmt["altura"], slug=slug,
         comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
-        frames=(job / "frames").relative_to(projeto).as_posix(),
+        frames=(job / "frames").relative_to(projeto).as_posix(), youtube=(job / "youtube.txt").relative_to(projeto).as_posix(),
         midia=MIDIA if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
     run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, argv(claude, pastas), projeto, pastas
@@ -589,12 +597,37 @@ def _entregar(run: dict, video: Path) -> str:
     # Entrega na própria pasta do render (out/): copiar o arquivo sobre ele mesmo dá WinError 32 no Windows.
     if not (destino.exists() and os.path.samefile(video, destino)):
         shutil.copy2(video, destino)
-    roteiro = json.loads((run["_job"] / "roteiro.json").read_text(encoding="utf-8"))
-    fontes = "\n".join(f"- {f['titulo']}: {f['url']}" for f in (roteiro.get("noticia") or {}).get("fontes") or [])
-    destino.with_suffix(".txt").write_text(
-        f"TÍTULO\n{roteiro.get('titulo_youtube') or roteiro.get('titulo')}\n\nDESCRIÇÃO\n{roteiro.get('descricao') or ''}\n\n"
-        f"FONTES\n{fontes}\n", encoding="utf-8")
+    titulo, descricao = _publicacao_do_job(run["_job"])
+    destino.with_suffix(".txt").write_text(f"TÍTULO\n{titulo}\n\nDESCRIÇÃO\n{descricao}\n", encoding="utf-8")
     return str(destino)
+
+
+def _publicacao_do_job(job: Path) -> tuple[str, str]:
+    """(título, descrição) para o YouTube: o que o Claude escreveu em youtube.txt (com os créditos da mídia que usou);
+    sem ele, o do roteiro com as fontes no fim."""
+    arq = job / "youtube.txt"
+    if arq.is_file():
+        titulo, _, descricao = arq.read_text(encoding="utf-8").strip().partition("\n")
+        if titulo.strip():
+            return titulo.strip(), descricao.strip()
+    roteiro = json.loads((job / "roteiro.json").read_text(encoding="utf-8"))
+    descricao = (roteiro.get("descricao") or "").strip()
+    fontes = [f for f in (roteiro.get("noticia") or {}).get("fontes") or [] if f.get("url") and f["url"] not in descricao]
+    if fontes:
+        descricao += "\n\n📚 Fontes\n" + "\n".join(f"- {f['titulo']}: {f['url']}" for f in fontes)
+    return (roteiro.get("titulo_youtube") or roteiro.get("titulo") or "").strip(), descricao.strip()
+
+
+def publicacao(message_id: int) -> dict:
+    """Título e descrição prontos para colar no YouTube (botões de copiar no PC e no celular)."""
+    p = estado(message_id)
+    if p.get("status") != "ok":
+        raise ToolError("Esta produção não terminou.")
+    job = Path(conteudo.pastas()["pasta_projeto"]) / ".forja" / "producao" / str(message_id)
+    if not (job / "roteiro.json").is_file():
+        raise ToolError("Não achei o roteiro desta produção na pasta do projeto.")
+    titulo, descricao = _publicacao_do_job(job)
+    return {"titulo": titulo, "descricao": descricao}
 
 
 async def _rodar(run: dict, pedido: str) -> None:
@@ -757,6 +790,7 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
         roteiro_json=(job / "roteiro.json").relative_to(projeto).as_posix(),
         retomada="Esta conversa é a mesma em que você fez o vídeo, então você já sabe onde ficam os arquivos. " if base["sessao"] else "",
         pedidos="\n".join(linhas), frames=(job / "frames").relative_to(projeto).as_posix(), slug=slug,
+        youtube=(job / "youtube.txt").relative_to(projeto).as_posix(),
         comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
         midia=(MIDIA + MIDIA_REVISAO) if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")

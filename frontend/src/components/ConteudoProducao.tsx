@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import { Copy, Edit, Film, Square } from "./icons";
+import { Check, Copy, Edit, Film, Square } from "./icons";
 import ConteudoRevisao from "./ConteudoRevisao";
 import { VideoPlayer, type VideoPlayerApi } from "./VideoPlayer";
 
@@ -137,6 +137,7 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
           <Copy className="size-3.5" />
           <span className="max-w-[300px] truncate font-mono">{copiado ? "caminho copiado" : p.entregue}</span>
         </button>
+        <ParaYoutube id={p.id} />
         {props.onRevisar && (
           <button onClick={() => { player.current?.pausar(); props.onRevisar?.(); }}   // o editor abre o mesmo vídeo: dois tocando juntos
                   className="mt-2 inline-flex h-[32px] items-center justify-center gap-1.5 rounded-[7px] border border-line-strong text-[12.5px] text-fg hover:border-focus hover:bg-raised">
@@ -144,6 +145,41 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Título e descrição prontos para colar no YouTube (com os créditos da mídia real que o Claude usou). */
+function ParaYoutube(props: { id: number }) {
+  const [pub, setPub] = useState<{ titulo: string; descricao: string } | null>(null);
+  const [aberto, setAberto] = useState(false);
+  const [copiado, setCopiado] = useState("");
+  useEffect(() => {
+    setPub(null);
+    api.get<{ titulo: string; descricao: string }>(`/conteudo/producao/${props.id}/publicacao`).then(setPub).catch(() => setPub(null));
+  }, [props.id]);
+  if (!pub) return null;
+  const copiar = (oque: "titulo" | "descricao") => {
+    navigator.clipboard.writeText(pub[oque]);
+    setCopiado(oque);
+    setTimeout(() => setCopiado(""), 1400);
+  };
+  const botao = (oque: "titulo" | "descricao", rotulo: string) => (
+    <button onClick={() => copiar(oque)}
+            className="inline-flex h-[26px] items-center gap-1 rounded-[6px] border border-line px-2 text-[11.5px] text-muted hover:border-line-strong hover:text-fg">
+      {copiado === oque ? <Check className="size-3.5 text-ok" /> : <Copy className="size-3.5" />} {copiado === oque ? "Copiado" : rotulo}
+    </button>
+  );
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-line bg-surface p-3">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Para o YouTube</span>
+        <span className="ml-auto flex gap-1.5">{botao("titulo", "Título")}{botao("descricao", "Descrição")}</span>
+      </div>
+      <p className="text-[13px] font-medium leading-snug text-fg">{pub.titulo}</p>
+      <button className="text-left" onClick={() => setAberto(!aberto)} title={aberto ? "Recolher" : "Ver a descrição inteira"}>
+        <p className={`whitespace-pre-line text-[12px] leading-relaxed text-muted ${aberto ? "" : "line-clamp-3"}`}>{pub.descricao}</p>
+      </button>
     </div>
   );
 }

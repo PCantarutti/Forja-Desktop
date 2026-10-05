@@ -2430,6 +2430,12 @@ def conteudo_agenda_perdido(conv_id: int, body: dict):
     return _conteudo(conteudo_agenda.responder_perdido, conv_id, str((body or {}).get("acao") or ""))
 
 
+@app.get("/api/conteudo/producao/{message_id}/publicacao")
+def conteudo_publicacao(message_id: int):
+    """Título e descrição do vídeo pronto, para copiar e postar no YouTube."""
+    return _conteudo(conteudo_producao.publicacao, message_id)
+
+
 @app.get("/api/conteudo/agenda")
 def conteudo_agenda_geral():
     """Todas as especificações com a agenda de cada uma (a vista Agenda do PC e do celular)."""

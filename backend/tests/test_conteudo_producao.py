@@ -409,3 +409,18 @@ def test_pedido_prefere_imagem_oficial_antes_do_motion_design(ambiente, monkeypa
     assert "IMAGEM oficial" in pedido and "midia.py imagem <url>" in pedido and "NÃO estique para cobrir" in pedido
     args = json.loads((ambiente["projeto"] / ".forja" / "argv.json").read_text())
     assert "WebSearch" in args and "WebFetch" in args
+
+
+
+def test_publicacao_titulo_e_descricao_para_o_youtube(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    pub = P.publicacao(est["id"])                       # sem youtube.txt: o do roteiro, com as fontes no fim
+    assert pub["titulo"] == "A OpenAI parou tudo 🚨" and pub["descricao"].startswith("Desc.") and "https://fortune.com/x" in pub["descricao"]
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert f".forja/producao/{est['id']}/youtube.txt" in pedido and "créditos de toda mídia real" in pedido
+    job = ambiente["projeto"] / ".forja" / "producao" / str(est["id"])
+    (job / "youtube.txt").write_text("Título do Claude 🎮\n\nDescrição final.\n\nImagens: Rockstar Games", encoding="utf-8")
+    pub = P.publicacao(est["id"])
+    assert pub == {"titulo": "Título do Claude 🎮", "descricao": "Descrição final.\n\nImagens: Rockstar Games"}
