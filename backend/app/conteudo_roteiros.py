@@ -34,7 +34,7 @@ STATUS = ("novo", "aprovado", "descartado", "produzido")
 PORTE = pesquisa.PRESETS["normal"]
 RODADAS = 2
 TETO = 900                      # segundos de coleta; a escrita ganha pesquisa.TETO_RELATORIO a mais
-PALAVRAS_POR_SEGUNDO = 2.4      # voz do estilo alerta-tech (+32%): 150 palavras ≈ 62 s
+PALAVRAS_POR_SEGUNDO = 3.0      # medido nos vídeos prontos (Edge TTS +32%, com as pausas): 150 palavras ≈ 50 s, não 62
 
 
 def regra_duracao(segundos: int) -> str:
