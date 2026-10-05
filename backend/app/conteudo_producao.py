@@ -76,6 +76,7 @@ SEM_MIDIA = "- Não baixe nada da internet. Use o que já está no projeto (efei
 MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pessoa pública), e motion design para números,
   gráficos, listas e texto. Para buscar mídia use SÓ `python scripts/midia.py` (veja `--help`); não baixe por outro meio:
   - `python scripts/midia.py steam "<nome do jogo>"`: trailer oficial (sem áudio) + capturas + capa da loja Steam;
+  - `python scripts/midia.py nasa "<busca>"`: fotos e vídeos da biblioteca da NASA (missões, lançamentos, telescópios);
   - `python scripts/midia.py cortar <trailer> --de S --ate S`: trecho curto e mudo para a cena;
   - `python scripts/midia.py imagem <url> --pasta <assunto> --credito "<dono>"`: imagem de fonte oficial (blog, site,
     kit de imprensa da empresa); `youtube <url do canal oficial> --de S --ate S --credito "<dono>"` se estiver disponível.
