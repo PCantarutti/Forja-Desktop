@@ -299,3 +299,18 @@ def test_automatico_so_prepara(mundo):
     assert A.tique() == [] and not A.ocupado()   # parado esperando a pessoa: não segura o serviço nem a fila
     R.marcar_produzido(est["pronto"]["rodada"], roteiros[1]["id"], "out/v.mp4")
     assert A.estado(cid)["pronto"] is None        # virou vídeo (gerado pela pessoa): o aviso some
+
+
+def test_servico_sem_dpapi_nao_despareia_nem_apaga_chaves(monkeypatch, tmp_path):
+    from app import config, mobile, segredo, servico, settings
+    monkeypatch.setattr(servico, "eh_servico", lambda: True)
+    f = tmp_path / "mobile_token"
+    f.write_text("dpapi:QUJD", encoding="utf-8")   # cifrado por uma sessão que esta não abre
+    monkeypatch.setattr(mobile, "_token_file", lambda: f)
+    monkeypatch.setattr(mobile, "_atual", None)
+    monkeypatch.setattr(segredo, "_dpapi", lambda dados, cifrar: (_ for _ in ()).throw(OSError("S4U")))
+    monkeypatch.setattr(segredo, "falhou", False)
+    assert mobile.token() and f.read_text(encoding="utf-8") == "dpapi:QUJD"   # não regravou: celular segue pareado
+    assert segredo.falhou
+    with pytest.raises(settings.SettingsError, match="sem login"):
+        settings.update({"providers": []})

@@ -745,8 +745,9 @@ function ServicoAjuste(props: { onError: (m: string) => void }) {
         </div>
         <span className={ajuda}>
           Uma tarefa do Windows sobe o Forja sem janela 30 s depois de ligar, ainda na tela de bloqueio, e ele cuida da
-          agenda. Ao instalar, o Windows pede permissão de administrador e a senha da sua conta (guardada pelo
-          Agendador de Tarefas; o Forja não a vê). Quando você entrar e abrir o Forja, a janela usa esse mesmo backend.
+          agenda. Ao instalar, o Windows pede permissão de administrador; nenhuma senha é guardada (funciona com
+          Windows Hello). Até você entrar na conta, modelos de nuvem com chave (Ollama Cloud) não abrem: use modelo
+          local nas especificações automáticas. Quando você entrar e abrir o Forja, a janela usa esse mesmo backend.
         </span>
         {aberto && <span className="text-[11.5px] text-info">Termine na janela do Windows que abriu; esta tela se atualiza sozinha.</span>}
       </div>

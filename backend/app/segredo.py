@@ -50,7 +50,14 @@ def decifrar(texto: str) -> str:
         return texto or ""
     if _dpapi is None:
         return ""  # cifrado no Windows e lido em outro sistema: não há como abrir
+    global falhou
     try:
         return _dpapi(base64.b64decode(texto[len(PREFIXO):]), False).decode("utf-8")
     except (OSError, ValueError):
+        falhou = True
         return ""  # outra conta do Windows (ou perfil restaurado em outra máquina): a chave precisa ser digitada de novo
+
+
+# Algum segredo não abriu nesta execução. No serviço sem janela (tarefa S4U, sem senha guardada) é o normal: o
+# Windows não libera o DPAPI antes do login. Aí quem chama não pode tratar "" como "não existe" e regravar por cima.
+falhou = False

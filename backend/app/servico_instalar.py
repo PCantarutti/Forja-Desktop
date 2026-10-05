@@ -1,8 +1,8 @@
 """A tarefa agendada que sobe o serviço sem janela quando o Windows liga (servico.py).
 
-Gatilho "ao iniciar o sistema" exige administrador e "rodar sem login" exige a senha da conta: por isso o botão só
-abre o instalar_servico.ps1 num PowerShell elevado — o UAC e a senha (Get-Credential, guardada pelo Agendador de
-Tarefas do Windows) ficam com o usuário; o Forja nunca vê a senha.
+Gatilho "ao iniciar o sistema" exige administrador: por isso o botão só abre o instalar_servico.ps1 num PowerShell
+elevado, e o UAC fica com o usuário. A tarefa é S4U (sem senha guardada): com conta Microsoft e "só Windows Hello"
+ligado, o Windows recusa a senha. Preço do S4U: segredos DPAPI (chaves de nuvem) não abrem antes do login.
 """
 from __future__ import annotations
 

@@ -390,6 +390,10 @@ def validate(patch: dict, current: dict) -> dict:
 
 
 def update(patch: dict) -> dict:
+    from . import segredo, servico
+    if "providers" in patch and servico.eh_servico() and segredo.falhou:
+        raise SettingsError("O Forja está rodando sem login e não consegue abrir as chaves guardadas. Feche e abra o "
+                            "Forja depois de entrar na conta para mudar os provedores (senão as chaves seriam apagadas).")
     values = validate(patch, load())
     with db.session() as s:
         for key in patch:

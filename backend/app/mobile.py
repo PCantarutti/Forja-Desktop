@@ -49,8 +49,12 @@ def token() -> str:
             f.write_text(segredo.cifrar(secrets.token_hex(32)), encoding="utf-8")
         guardado = f.read_text(encoding="utf-8").strip()
         _atual = segredo.decifrar(guardado)
-        if not _atual:  # cifrado por outra conta do Windows: não abre, e o celular pareia de novo
-            return rotate()
+        if not _atual:
+            from . import servico
+            if servico.eh_servico():   # sem login (S4U) o token não abre: nunca despareia; o celular volta no login
+                _atual = secrets.token_hex(32)   # ponytail: só em memória, ninguém pareado conhece
+                return _atual
+            return rotate()   # cifrado por outra conta do Windows: não abre, e o celular pareia de novo
         if guardado == _atual:  # arquivo de antes da cifra: regrava cifrado, com o mesmo token
             f.write_text(segredo.cifrar(_atual), encoding="utf-8")
     return _atual
