@@ -100,7 +100,10 @@ def _main() -> None:
     sys.stdout = sys.stderr = saida
     print(f"\n--- servico {time.strftime('%Y-%m-%d %H:%M:%S')} pid {os.getpid()} porta {args.port}", flush=True)
 
-    trava(pasta)   # antes de abrir o banco: sem a trava, não toca em nada
+    # antes de abrir o banco. Pelo módulo `app.servico` (este arquivo roda como __main__): é o mesmo que o lifespan
+    # do app chama, e ele vê que a trava já é deste processo
+    from app import servico
+    servico.trava(pasta)
     info = pasta / ARQUIVO
     info.write_text(json.dumps({"pid": os.getpid(), "port": args.port, "token": token}), encoding="utf-8")
     try:

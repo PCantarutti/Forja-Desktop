@@ -42,29 +42,38 @@ _TAREFAS: set[asyncio.Task] = set()
 
 ROTEIROS_PROMPT = """Você é roteirista de vídeos curtos (Shorts) de um canal brasileiro.
 Recebe o GUIA DE ESTILO do canal, a ESPECIFICAÇÃO do tema e os ACHADOS de uma pesquisa na web, numerados [1], [2]...
-Escreva exatamente {n} roteiros, cada um sobre uma notícia ou fato diferente dos achados, seguindo à risca o guia
-(tom, tamanho, estrutura de cenas, regras de escrita e checagem).
+Escreva exatamente {n} roteiros, seguindo à risca o guia (tom, tamanho, estrutura de cenas, regras de escrita e
+checagem). Se o guia pede formato lista ("N novidades", "N coisas"), cada item da lista é uma notícia DIFERENTE dos
+achados, com fonte própria — nunca uma notícia só fatiada em itens; e o número dito no gancho é o número de itens.
+Se não for lista, cada roteiro é sobre uma notícia diferente. Roteiros diferentes entre si: outro ângulo ou outras
+notícias.
 O vídeo é {formato}. Se o guia não disser o tamanho, use 140 a 170 palavras no vertical e 900 a 1500 no
 horizontal (vídeo longo, com mais contexto e mais cenas).
 
 Regras:
 - Use só fatos que estão nos achados. Número, data, nome e citação só entram se estiverem numa fonte que você cita.
-- Prefira o que aconteceu nos últimos {dias} dias (hoje é {hoje}). Data incerta baixa a confiança.
+- Só entra o que aconteceu nos últimos {dias} dias (hoje é {hoje}). Fato mais antigo só como contexto de uma
+  notícia nova, nunca como a novidade. Data incerta: confiança no máximo 3.
 - Nunca acuse pessoa ou empresa de algo que a fonte não diz; opinião vira pergunta.
-- O texto de cada cena é exatamente o que o narrador fala, sem indicação de câmera.
+- `texto` de cada cena é exatamente o que o narrador fala: sem indicação de câmera e sem marcação de fonte ([1],
+  [NASA]) — fontes vão em noticia.fontes e na descrição.
+- `visual` de cada cena diz o que aparece na tela, concreto: o número ou palavra em destaque, o elemento a desenhar,
+  o gráfico, a comparação. É o roteiro de edição de quem monta o vídeo.
 
 Responda SÓ com um objeto JSON, sem texto antes nem depois:
 {{"roteiros": [{{
   "titulo": "nome curto interno",
   "ideia": "2 a 3 frases com o ângulo do vídeo",
   "noticia": {{"resumo": "o fato em 2 a 4 frases", "data": "AAAA-MM-DD ou vazio", "fontes": [1, 3]}},
-  "cenas": [{{"id": "hook", "texto": "fala do narrador"}}, {{"id": "cta", "texto": "..."}}],
+  "cenas": [{{"id": "hook", "texto": "fala do narrador", "visual": "o que aparece na tela"}}, {{"id": "cta", "texto": "...", "visual": "..."}}],
   "titulo_youtube": "título pronto para publicar",
   "descricao": "descrição pronta para o YouTube, com as fontes no fim",
   "confianca": 4,
   "motivo_confianca": "por que a nota (1 a 5) nos fatos"
 }}]}}
 Ids de cena: curtos, minúsculos, sem espaço (hook, contexto, virada, cta...)."""
+
+FONTE_NA_FALA = re.compile(r"\s*\[(?:\d+(?:\s*,\s*\d+)*|[A-Za-zÀ-ú .&/-]{2,30})\]")   # [1], [1, 3], [NASA]
 
 REFORCO = "\n\nATENÇÃO: a resposta anterior não era um JSON válido. Responda só com o objeto JSON pedido."
 
@@ -328,7 +337,10 @@ def normalizar(bruto, fontes: list[dict]) -> list[dict]:
             while cid in vistos:
                 cid += "-2"
             vistos.add(cid)
-            cenas.append({"id": cid, "texto": _texto(c.get("texto"), 1200)})
+            cena = {"id": cid, "texto": _texto(FONTE_NA_FALA.sub("", str(c.get("texto"))), 1200)}
+            if visual := _texto(c.get("visual"), 400):
+                cena["visual"] = visual
+            cenas.append(cena)
         if not cenas:
             continue
         noticia = r.get("noticia") if isinstance(r.get("noticia"), dict) else {}

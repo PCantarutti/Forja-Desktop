@@ -47,7 +47,7 @@ _TRAVA = threading.Lock()
 PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ninguém vai responder perguntas: decida e siga.
 
 ## O que produzir
-- Roteiro aprovado: `{roteiro_json}` (cenas com `id` e `texto`). A narração usa o texto de cada cena EXATAMENTE
+- Roteiro aprovado: `{roteiro_json}` (cenas com `id`, `texto` e, quando houver, `visual` — a sugestão do que mostrar na tela). A narração usa o texto de cada cena EXATAMENTE
   como está, sem reescrever. Título, notícia e fontes também estão lá.
 - Estilo: leia `{estilo_md}`{readme} e siga à risca (voz, legenda, visual, áudio).
 - Formato: {formato_rotulo}, composição de {largura}x{altura}.

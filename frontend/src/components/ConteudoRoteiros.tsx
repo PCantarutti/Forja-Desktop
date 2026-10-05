@@ -9,7 +9,7 @@ const campo = "w-full rounded-lg border border-line bg-raised px-2.5 py-1.5 text
 const acaoPeq = "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] text-muted hover:bg-raised hover:text-fg disabled:pointer-events-none disabled:opacity-40";
 
 type Fonte = { id: string; url: string; titulo: string; status: string };
-type Cena = { id: string; texto: string };
+type Cena = { id: string; texto: string; visual?: string };
 type StatusRoteiro = "novo" | "aprovado" | "descartado" | "produzido";
 type Roteiro = {
   id: string;
@@ -333,7 +333,10 @@ function CartaoRoteiro(props: {
                 {x.cenas.map((c) => (
                   <li key={c.id} className="grid grid-cols-[88px_1fr] gap-3">
                     <span className="truncate pt-0.5 font-mono text-[11px] text-faint">{c.id}</span>
-                    <span className="max-w-[72ch] leading-relaxed text-fg">{c.texto}</span>
+                    <span className="flex max-w-[72ch] flex-col gap-0.5">
+                      <span className="leading-relaxed text-fg">{c.texto}</span>
+                      {c.visual && <span className="text-[11.5px] leading-snug text-faint">tela: {c.visual}</span>}
+                    </span>
                   </li>
                 ))}
               </ol>

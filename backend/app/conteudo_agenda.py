@@ -317,7 +317,10 @@ def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[
         _grava(cid, trilha, etapa="feito", aviso="")
         _avisa("Roteiros prontos para aprovar", f"{len(roteiros)} roteiro(s) novos. Aprove um até o horário da produção.", cid)
         return [f"{cid}: roteiros prontos ({len(roteiros)})"]
-    melhor = max(roteiros, key=lambda x: x.get("confianca") or 0)   # empate: o primeiro, que o modelo pôs na frente
+    limite = (agora() - timedelta(days=conteudo.especificacao(cid)["dias"])).date().isoformat()
+    recente = lambda x: (x.get("noticia") or {}).get("data", "") >= limite or not (x.get("noticia") or {}).get("data")
+    # notícia dentro do período vence a antiga; depois, a confiança. Empate: o primeiro, que o modelo pôs na frente
+    melhor = max(roteiros, key=lambda x: (recente(x), x.get("confianca") or 0))
     conteudo_roteiros.marcar(rod["id"], melhor["id"], "aprovado")
     _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=melhor["titulo_youtube"] or melhor["titulo"])
     return [f"{cid}: aprovado {melhor['id']}", _produzir(cid, trilha)]
