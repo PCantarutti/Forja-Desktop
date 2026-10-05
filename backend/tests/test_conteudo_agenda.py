@@ -284,3 +284,18 @@ def test_servico_sair_agenda_saida(mundo, monkeypatch):
     assert c.post("/api/servico/sair").json() == {"ok": True}
     import time; time.sleep(0.5)
     assert saiu == [1]
+
+
+def test_automatico_so_prepara(mundo):
+    cid = _spec("automatico", produzir=False)
+    assert conteudo.especificacao(cid)["automacao"]["produzir"] is False
+    mundo["relogio"].vai("2026-10-05T03:01")
+    A.tique()
+    roteiros = mundo["termina"](mundo["chamadas"]["roteiros"][0], [3, 5])
+    assert A.tique() == [f"{cid}: aprovado {roteiros[1]['id']}", f"{cid}: pronto para gerar"]
+    assert mundo["chamadas"]["producao"] == [] and mundo["avisos"][-1][0] == "Roteiro pronto para gerar"
+    est = A.estado(cid)
+    assert est["p"]["etapa"] == "pronto" and est["pronto"]["roteiro"] == roteiros[1]["id"]
+    assert A.tique() == [] and not A.ocupado()   # parado esperando a pessoa: não segura o serviço nem a fila
+    R.marcar_produzido(est["pronto"]["rodada"], roteiros[1]["id"], "out/v.mp4")
+    assert A.estado(cid)["pronto"] is None        # virou vídeo (gerado pela pessoa): o aviso some

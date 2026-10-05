@@ -4,7 +4,8 @@ Dois modos, por especificação, nos dias da semana marcados (`dias`, 0 = segund
 - aprovacao: no `hora_roteiros` pesquisa e escreve os roteiros e avisa o celular; em cada um dos `horarios`
   produz o roteiro que o usuário aprovou (sem aprovado, avisa e não faz nada);
 - automatico: em cada um dos `horarios` pesquisa, aprova sozinho o roteiro de maior confiança e produz. Nenhuma
-  pergunta no caminho: é o modo 100% automático.
+  pergunta no caminho: é o modo 100% automático. Com `produzir` desligado, para depois de escolher: o roteiro fica
+  aprovado ("pronto") e o celular avisa; o vídeo sai quando a pessoa tocar em gerar.
 
 Cada horário de cada dia é um "slot" e roda no máximo uma vez. O slot só dispara sozinho até TOLERANCIA depois do
 horário (o laço passa a cada 30 s, então com o Forja no ar ele nunca atrasa isso). Se o Forja estava fora do ar
@@ -135,8 +136,13 @@ def estado(conv_id: int) -> dict:
         if s := _proxima(a, horas, e.get(trilha) or {}):
             proximas[trilha] = _chave(s)
     perdido = e.get("perdido") if a["modo"] != "desligada" else None
-    return {"modo": a["modo"], "r": e.get("r") or {}, "p": e.get("p") or {}, "proximas": proximas,
-            "perdido": perdido or None}
+    p = e.get("p") or {}
+    pronto = None   # roteiro que o automático escolheu e deixou para a pessoa gerar (some quando vira vídeo)
+    if p.get("etapa") == "pronto" and (achado := conteudo_roteiros.aprovado(conv_id)):
+        rid, roteiro = achado[0], achado[1]
+        pronto = {"rodada": rid, "roteiro": roteiro["id"], "titulo": roteiro.get("titulo_youtube") or roteiro.get("titulo")}
+    return {"modo": a["modo"], "r": e.get("r") or {}, "p": p, "proximas": proximas,
+            "perdido": perdido or None, "pronto": pronto}
 
 
 def ligadas() -> list[dict]:
@@ -322,7 +328,12 @@ def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[
     # notícia dentro do período vence a antiga; depois, a confiança. Empate: o primeiro, que o modelo pôs na frente
     melhor = max(roteiros, key=lambda x: (recente(x), x.get("confianca") or 0))
     conteudo_roteiros.marcar(rod["id"], melhor["id"], "aprovado")
-    _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=melhor["titulo_youtube"] or melhor["titulo"])
+    titulo = melhor["titulo_youtube"] or melhor["titulo"]
+    if not conteudo.especificacao(cid)["automacao"].get("produzir", True):
+        _grava(cid, trilha, etapa="pronto", escolhido=titulo, aviso="")
+        _avisa("Roteiro pronto para gerar", f"{titulo} — abra o Conteúdo e toque em gerar o vídeo.", cid)
+        return [f"{cid}: aprovado {melhor['id']}", f"{cid}: pronto para gerar"]
+    _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=titulo)
     return [f"{cid}: aprovado {melhor['id']}", _produzir(cid, trilha)]
 
 

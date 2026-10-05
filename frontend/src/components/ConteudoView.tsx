@@ -33,24 +33,25 @@ type Spec = {
   formato: "vertical" | "horizontal";
   motor: { provider: string; model: string };
   observacoes: string;
-  automacao: { modo: Modo; dias: number[]; horarios: string[]; hora_roteiros: string; hora_producao?: string; ativado_em?: string };
+  automacao: { modo: Modo; dias: number[]; horarios: string[]; hora_roteiros: string; produzir: boolean; hora_producao?: string; ativado_em?: string };
 };
 
 const SPEC_VAZIA: Spec = {
   nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, formato: "vertical",
   motor: { provider: "", model: "" }, observacoes: "",
-  automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00" },
+  automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00", produzir: true },
 };
 
 const MODOS: { id: Modo; label: string; hint: string }[] = [
   { id: "desligada", label: "Manual", hint: "Você dispara a pesquisa e a produção quando quiser." },
   { id: "aprovacao", label: "Aprovação", hint: "Gera os roteiros no 1º horário; você escolhe um e ele é produzido no 2º." },
-  { id: "automatico", label: "Automático", hint: "Em cada horário pesquisa, escolhe o melhor roteiro e o Claude entrega o vídeo. Sem nenhuma pergunta." },
+  { id: "automatico", label: "Automático", hint: "Em cada horário pesquisa e escolhe o melhor roteiro sozinho." },
 ];
 
 type Trilha = { dia?: string; etapa?: string; aviso?: string; escolhido?: string };
 type Perdido = { trilha: "r" | "p"; slot: string; desde: string };
-type Agenda = { modo: Modo; r: Trilha; p: Trilha; proximas: { r?: string; p?: string }; perdido?: Perdido | null };
+type Pronto = { rodada: number; roteiro: string; titulo: string };
+type Agenda = { modo: Modo; r: Trilha; p: Trilha; proximas: { r?: string; p?: string }; perdido?: Perdido | null; pronto?: Pronto | null };
 type AgendaItem = Agenda & { id: number; nome: string; estilo: string; automacao: Spec["automacao"]; motor: Spec["motor"] };
 
 const DIAS = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"];
@@ -60,7 +61,8 @@ const resumoDias = (d: number[]) => d.length === 7 ? "todo dia" : d.join() === "
 
 const ETAPAS: Record<string, string> = {
   roteiros: "pesquisando e escrevendo roteiros", fila: "esperando outra produção terminar",
-  produzindo: "produzindo o vídeo", feito: "concluído", falhou: "não terminou",
+  produzindo: "produzindo o vídeo", feito: "concluído", falhou: "não terminou", pronto: "roteiro pronto para gerar",
+  espera: "esperando outra pesquisa",
 };
 
 function quandoFica(iso?: string): string {
@@ -235,6 +237,11 @@ export default function ConteudoView(props: {
               {agenda?.perdido && (
                 <div className="@3xl:col-span-2">
                   <AvisoPerdido conv={props.conv!} perdido={agenda.perdido} onError={props.onError} onFeito={() => setPulso((n) => n + 1)} />
+                </div>
+              )}
+              {agenda?.pronto && (
+                <div className="@3xl:col-span-2">
+                  <AvisoPronto conv={props.conv!} pronto={agenda.pronto} onError={props.onError} onFeito={() => setPulso((n) => n + 1)} />
                 </div>
               )}
               <ConteudoProducao conv={props.conv!} carimbo={carimbo} onError={props.onError} />
@@ -581,6 +588,32 @@ function AvisoPerdido(props: { conv: number; nome?: string; perdido: Perdido; on
   );
 }
 
+/** O automático escolheu o roteiro e parou (modo "Deixa pronto"): um toque gera o vídeo. */
+function AvisoPronto(props: { conv: number; nome?: string; pronto: Pronto; onFeito: () => void; onError: (m: string) => void }) {
+  const [ocupado, setOcupado] = useState(false);
+  async function gerar() {
+    setOcupado(true);
+    try {
+      await api.post(`/conteudo/especificacoes/${props.conv}/producao`, { message_id: props.pronto.rodada, roteiro_id: props.pronto.roteiro });
+      props.onFeito();
+    } catch (e: any) {
+      props.onError(e.message);
+    } finally {
+      setOcupado(false);
+    }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[10px] border border-accent-line bg-accent-soft px-3.5 py-2.5">
+      <Check className="size-4 shrink-0 text-accent-text" />
+      <span className="min-w-0 flex-1 text-[12.5px] text-fg-2">
+        {props.nome && <b className="font-medium text-fg">{props.nome}: </b>}
+        roteiro pronto — <span className="text-fg">{props.pronto.titulo}</span>
+      </span>
+      <button className={btnPrimary} disabled={ocupado} onClick={gerar}><Play className="size-3.5" /> Gerar o vídeo</button>
+    </div>
+  );
+}
+
 function AgendaPainel(props: { carimbo?: string; onAbrir: (id: number) => void; onError: (m: string) => void }) {
   const [itens, setItens] = useState<AgendaItem[] | null>(null);
   const [svc, setSvc] = useState<Servico | null>(null);
@@ -621,6 +654,9 @@ function AgendaPainel(props: { carimbo?: string; onAbrir: (id: number) => void; 
       {itens.filter((i) => i.perdido).map((i) => (
         <AvisoPerdido key={i.id} conv={i.id} nome={i.nome} perdido={i.perdido!} onError={props.onError} onFeito={() => setPulso((n) => n + 1)} />
       ))}
+      {itens.filter((i) => i.pronto).map((i) => (
+        <AvisoPronto key={i.id} conv={i.id} nome={i.nome} pronto={i.pronto!} onError={props.onError} onFeito={() => setPulso((n) => n + 1)} />
+      ))}
 
       <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-[10px] border border-line bg-surface">
         {itens.map((i) => {
@@ -637,7 +673,7 @@ function AgendaPainel(props: { carimbo?: string; onAbrir: (id: number) => void; 
               <button className="flex min-w-0 flex-1 flex-col items-start gap-0.5 text-left" onClick={() => props.onAbrir(i.id)}>
                 <span className="truncate text-[13.5px] font-medium text-fg hover:underline">{i.nome}</span>
                 <span className="truncate text-[11.5px] text-faint">
-                  {ligado ? `${resumoDias(i.automacao.dias)} · ${i.automacao.horarios.join(", ")}${i.modo === "aprovacao" ? " · com aprovação" : ""}` : "desligada"}
+                  {ligado ? `${resumoDias(i.automacao.dias)} · ${i.automacao.horarios.join(", ")}${i.modo === "aprovacao" ? " · com aprovação" : i.automacao.produzir === false ? " · deixa pronto" : ""}` : "desligada"}
                   {" · "}{i.estilo || "sem estilo"} · {i.motor.provider === "claude-mcp" ? "Claude (MCP)" : i.motor.model || "sem modelo"}
                 </span>
               </button>
@@ -893,6 +929,18 @@ function SpecPainel(props: {
           <Segmentado rotulo="Automação" cheio valor={spec.automacao.modo} onValor={(m) => mudaAuto({ modo: m })}
                       opcoes={MODOS.map((m) => [m.id, m.label])} />
           <span className={ajuda}>{MODOS.find((m) => m.id === spec.automacao.modo)?.hint}</span>
+          {spec.automacao.modo === "automatico" && (
+            <>
+              <Segmentado rotulo="Depois de escolher o roteiro" cheio valor={spec.automacao.produzir ? "gera" : "pronto"}
+                          onValor={(v) => mudaAuto({ produzir: v === "gera" })}
+                          opcoes={[["gera", "Gera o vídeo"], ["pronto", "Deixa pronto"]]} />
+              <span className={ajuda}>
+                {spec.automacao.produzir
+                  ? "O Claude produz o vídeo logo em seguida, sem nenhuma pergunta."
+                  : "Para no roteiro escolhido e avisa no celular; o vídeo sai quando você tocar em gerar."}
+              </span>
+            </>
+          )}
           {spec.automacao.modo !== "desligada" && (
             <>
               <DiasSemana dias={spec.automacao.dias} onDias={(dias) => mudaAuto({ dias })} />

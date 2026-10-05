@@ -276,7 +276,7 @@ def _spec_padrao() -> dict:
     return {"tema": "", "palavras_chave": [], "fontes": [], "dias": 3, "estilo": "", "roteiros": 3, "formato": "vertical",
             "motor": {"provider": "", "model": ""}, "observacoes": "",
             "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
-                          "hora_producao": "03:00", "ativado_em": ""}}
+                          "hora_producao": "03:00", "produzir": True, "ativado_em": ""}}
 
 
 def agora() -> datetime:   # os testes trocam o relógio por aqui (o mesmo da agenda)
@@ -347,7 +347,7 @@ def _automacao(antes: dict, novo: dict) -> dict:
     if not dias and a["modo"] != "desligada":
         raise ToolError("Escolha pelo menos um dia da semana.")
     out = {"modo": a["modo"], "dias": dias, "horarios": horarios, "hora_roteiros": a["hora_roteiros"],
-           "hora_producao": horarios[0]}
+           "hora_producao": horarios[0], "produzir": a.get("produzir", True) is not False}
     mudou = any(out[k] != antes.get(k) for k in ("modo", "dias", "horarios", "hora_roteiros"))
     out["ativado_em"] = agora().isoformat(timespec="seconds") if mudou or not antes.get("ativado_em") else antes["ativado_em"]
     return out
@@ -370,6 +370,7 @@ def _dict(c: db.Conversation, m: db.Message | None) -> dict:
     auto = spec["automacao"]
     if "horarios" not in auto:   # especificação salva antes dos dias/horários: um horário só, todo dia
         spec["automacao"] = {**_spec_padrao()["automacao"], **auto, "horarios": [auto.get("hora_producao") or "03:00"]}
+    spec["automacao"].setdefault("produzir", True)
     return {"id": c.id, "nome": c.title, **spec, "atualizado": c.updated_at.isoformat() if c.updated_at else None}
 
 
