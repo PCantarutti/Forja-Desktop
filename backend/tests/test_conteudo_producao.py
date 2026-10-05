@@ -243,7 +243,7 @@ def test_frames_soltos_e_rota_do_video(ambiente, monkeypatch):
     est = asyncio.run(_ate_o_fim(cid))
     projeto = ambiente["projeto"]
     assert not list((projeto / "out").glob("*.png"))                         # out/ só com o vídeo
-    assert (projeto / ".forja" / "producao" / str(est["id"]) / "frames" / "f_hook.png").is_file()
+    assert not (projeto / ".forja" / "producao" / str(est["id"]) / "frames").exists()   # saem de out/ e somem no fim
     pedido = (projeto / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert f".forja/producao/{est['id']}/frames/" in pedido and "nunca em `out/`" in pedido
 
@@ -379,3 +379,20 @@ def test_revisao_com_midia_real_no_pedido_e_aviso_do_que_faltou(ambiente, monkey
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "python scripts/midia.py" in pedido and "Link no pedido: use ESSE link" in pedido and '"MÍDIA:"' in pedido
     assert v2["status"] == "ok" and v2["aviso"] == "Mídia: yt-dlp não está instalado; mande o arquivo do trailer."
+
+
+
+def test_limpar_midia_apaga_o_que_o_video_nao_usa(tmp_path):
+    proj = tmp_path / "youtube"
+    (proj / "src" / "Gta").mkdir(parents=True)
+    m = proj / "public" / "midia"
+    for f in ("gta-6/trailer-1.mp4", "gta-6/yt-20-25.mp4", "gta-6/ref-360p-0-90.mp4", "gta-6/creditos.json",
+              "outro/captura-1.jpg", "outro/creditos.json"):
+        (m / f).parent.mkdir(parents=True, exist_ok=True)
+        (m / f).write_bytes(b"x" * 1000)
+    (proj / "src" / "Gta" / "scenes.tsx").write_text('<OffthreadVideo src={staticFile("midia/gta-6/yt-20-25.mp4")} muted />', encoding="utf-8")
+    n, tam = P.limpar_midia(proj)
+    assert n == 3 and tam == 3000
+    assert sorted(f.relative_to(m).as_posix() for f in m.rglob("*") if f.is_file()) == ["gta-6/creditos.json", "gta-6/yt-20-25.mp4"]
+    assert not (m / "outro").exists()   # pasta só com o creditos.json some junto
+    assert P.limpar_midia(tmp_path / "nada") == (0, 0)

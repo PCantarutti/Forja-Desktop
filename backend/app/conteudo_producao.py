@@ -80,7 +80,9 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   - `python scripts/midia.py cortar <trailer> --de S --ate S`: trecho curto e mudo para a cena;
   - `python scripts/midia.py imagem <url> --pasta <assunto> --credito "<dono>"`: imagem de fonte oficial (blog, site,
     kit de imprensa da empresa); `youtube <url do canal oficial> --de S --ate S --credito "<dono>"` se estiver disponível.
-  Tudo cai em `public/midia/<assunto>/` com `creditos.json`; use com `staticFile()` e `<OffthreadVideo muted>`/`<Img>`.
+  Tudo cai em `public/midia/<assunto>/` com `creditos.json`; use com `staticFile()` e `<OffthreadVideo muted>`/`<Img>`,
+  SEMPRE com o caminho completo escrito no código (`staticFile("midia/gta-6/yt-20-25.mp4")`, nunca montado com
+  variável): no fim, o Forja apaga de `public/midia/` todo arquivo que o código não cita (trailers inteiros, referências).
 - Regras da mídia real: só fonte oficial (nunca vídeo de youtuber, streamer ou fã); cada trecho com até ~6 s; nunca o
   áudio original; crédito pequeno na tela enquanto aparece ("Trailer: <dono> / Steam") e todos os créditos no fim da
   descrição. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.
@@ -525,6 +527,40 @@ def _recolher_frames(run: dict) -> int:
     return n
 
 
+FONTES_DO_VIDEO = (".ts", ".tsx", ".js", ".jsx", ".json", ".mjs", ".css")
+
+
+def limpar_midia(projeto: Path) -> tuple[int, int]:
+    """Apaga de public/midia/ o que nenhum arquivo de src/ cita pelo caminho: trailers inteiros, cópias de
+    referência, capturas que não entraram, sobras de download. O que a composição usa fica (o Pedir mudanças
+    renderiza de novo e precisa dos trechos). Pasta que fica vazia (ou só com o creditos.json) sai junto.
+    Devolve (arquivos apagados, bytes)."""
+    midia = projeto / "public" / "midia"
+    if not midia.is_dir():
+        return 0, 0
+    citado = "\n".join(f.read_text(encoding="utf-8", errors="ignore") for f in (projeto / "src").rglob("*")
+                       if f.is_file() and f.suffix.lower() in FONTES_DO_VIDEO)
+    n = tam = 0
+    for arq in sorted(midia.rglob("*")):
+        if not arq.is_file() or arq.name == "creditos.json":
+            continue
+        if arq.relative_to(projeto / "public").as_posix() in citado:
+            continue
+        try:
+            tam += arq.stat().st_size
+            arq.unlink()
+            n += 1
+        except OSError:   # em uso agora (preview do Remotion aberto): fica para a próxima
+            pass
+    for pasta in sorted((d for d in midia.rglob("*") if d.is_dir()), key=lambda d: -len(d.parts)):
+        resto = [f for f in pasta.iterdir()]
+        if all(f.name == "creditos.json" for f in resto):
+            for f in resto:
+                f.unlink()
+            pasta.rmdir()
+    return n, tam
+
+
 def video_entregue(message_id: int) -> Path:
     """O .mp4 que a produção entregou, para o player da tela (só o arquivo que ela mesma registrou)."""
     p = estado(message_id)
@@ -591,6 +627,14 @@ async def _rodar(run: dict, pedido: str) -> None:
     except Exception as e:   # nada pode deixar a produção presa em "running"
         run["aviso"] = f"{e.__class__.__name__}: {e}"[:300]
     finally:
+        try:   # o que foi baixado e não ficou no vídeo não fica no PC
+            n, tam = await asyncio.to_thread(limpar_midia, Path(run["_projeto"]))
+            if n:
+                run["log"] = run["log"] + [f"🧹 apaguei {n} arquivo(s) de mídia que não ficaram no vídeo ({tam / 2 ** 20:.0f} MB)"]
+            if status == "ok":   # os quadros de conferência do Claude só serviam durante a produção
+                shutil.rmtree(run["_job"] / "frames", ignore_errors=True)
+        except Exception:
+            pass
         run["fase"] = "pronto"
         run["segundos"] = round(time.monotonic() - run["t0"], 1)
         _patch(run["message_id"], status=status, **_publico(run))
