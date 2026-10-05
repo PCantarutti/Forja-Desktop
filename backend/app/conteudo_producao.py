@@ -58,7 +58,10 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   (CLAUDE.md, README, scripts/ e src/) e reaproveite: narração, legendas, efeitos e componentes.
 - Crie uma composição nova para este vídeo; não altere nem quebre as composições que já existem. Não edite
   arquivos de outras composições nem para exportar algo: para reaproveitar, importe o que já é exportado ou copie.
-{midia}- Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
+{midia}- CAPA NO INÍCIO (regra fixa): o vídeo abre com a capa (thumb) do estilo, ~1,2 s parada, SEM narração nem legenda, e
+  transição para o conteúdo; use `ComCapa` de `src/Short/capa.tsx` se existir (veja a seção "Capa no início" do estilo).
+  Exporte também a capa: `npx remotion still <Composição> out/{slug}-capa.jpg --frame=15`.
+- Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
   corrija texto cortado ou sobreposto.
 - Renderize o vídeo final em `out/{slug}.mp4`.
 - Se a pasta de estilos tiver um README com a tabela "Vídeos já feitos", acrescente este vídeo nela.
@@ -608,6 +611,9 @@ def _entregar(run: dict, video: Path) -> str:
     # Entrega na própria pasta do render (out/): copiar o arquivo sobre ele mesmo dá WinError 32 no Windows.
     if not (destino.exists() and os.path.samefile(video, destino)):
         shutil.copy2(video, destino)
+    capa = video.with_name(f"{video.stem}-capa.jpg")   # a thumb que o Claude exporta (vídeo longo: sobe à parte)
+    if capa.is_file() and not (saida / capa.name).exists():
+        shutil.copy2(capa, saida / capa.name)
     titulo, descricao = _publicacao_do_job(run["_job"])
     destino.with_suffix(".txt").write_text(f"TÍTULO\n{titulo}\n\nDESCRIÇÃO\n{descricao}\n", encoding="utf-8")
     return str(destino)

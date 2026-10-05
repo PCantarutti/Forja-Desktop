@@ -436,3 +436,12 @@ def test_pedido_exige_fundo_borrado_e_aceita_fonte_primaria(ambiente, monkeypatc
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "FOCO EM JANELA" in pedido and "MESMO vídeo/imagem em tela cheia" in pedido and "ILUSTRAÇÃO DE FUNDO" in pedido
     assert "PRIMÁRIA da notícia" in pedido and "o projeto do port" in pedido
+
+
+
+def test_pedido_pede_capa_no_inicio(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "CAPA NO INÍCIO" in pedido and "SEM narração" in pedido and f"out/{est['slug']}-capa.jpg" in pedido
