@@ -424,3 +424,15 @@ def test_publicacao_titulo_e_descricao_para_o_youtube(ambiente, monkeypatch):
     (job / "youtube.txt").write_text("Título do Claude 🎮\n\nDescrição final.\n\nImagens: Rockstar Games", encoding="utf-8")
     pub = P.publicacao(est["id"])
     assert pub == {"titulo": "Título do Claude 🎮", "descricao": "Descrição final.\n\nImagens: Rockstar Games"}
+
+
+
+def test_pedido_exige_fundo_borrado_e_aceita_fonte_primaria(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    (ambiente["projeto"] / "scripts").mkdir()
+    (ambiente["projeto"] / "scripts" / "midia.py").write_text("", encoding="utf-8")
+    cid, _, _ = _aprovado()
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "JANELA COM FUNDO BORRADO" in pedido and "MESMO vídeo/imagem em tela cheia" in pedido
+    assert "PRIMÁRIA da notícia" in pedido and "o projeto do port" in pedido

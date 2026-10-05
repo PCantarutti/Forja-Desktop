@@ -98,7 +98,13 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   preencha o fundo com a mesma imagem desfocada e escurecida. Zoom lento de no máximo ~10%, escurecimento leve (até
   ~30%) e nada desenhado por cima que a esconda: quem vê tem que reconhecer na hora o que ela mostra. Confira no still. Imagem de site de notícia
   ou de fã não serve, a não ser que seja a própria imagem oficial republicada e você ache a original.
-- Regras da mídia real: só fonte oficial (nunca vídeo de youtuber, streamer ou fã); cada trecho com até ~6 s; nunca o
+- JANELA COM FUNDO BORRADO (regra fixa): todo vídeo ou imagem real mostrado numa janela/quadro (não em tela cheia)
+  tem por trás o MESMO vídeo/imagem em tela cheia, bem borrado (blur forte, ~40 px) e escurecido, tocando junto (mesmo
+  arquivo e mesmo ponto de início). Nunca janela sobre fundo liso ou sobre o fundo desenhado do estilo.
+- Fonte: oficial ou PRIMÁRIA da notícia — a dona do jogo/produto OU quem fez a coisa noticiada (o projeto do port, o
+  pesquisador, o estúdio, o perfil oficial de quem anunciou). Se a notícia é sobre algo que alguém fez (ex.: um port
+  rodando no PC), mostre o vídeo de QUEM FEZ mostrando aquilo, não só o trailer original do jogo.
+- Regras da mídia real: nunca reação, compilação ou reupload de youtuber, streamer ou fã; cada trecho com até ~6 s; nunca o
   áudio original; crédito pequeno na tela enquanto aparece ("Trailer: <dono> / Steam") e todos os créditos no fim da
   descrição. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.
 """
