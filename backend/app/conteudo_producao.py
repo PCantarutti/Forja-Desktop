@@ -63,7 +63,8 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   Exporte também a capa: `npx remotion still <Composição> out/{slug}-capa.jpg --frame=15`.
 - Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
   corrija texto cortado ou sobreposto.
-- Renderize o vídeo final em `out/{slug}.mp4`.
+- Renderize o vídeo final em `out/{slug}.mp4` em PRIMEIRO PLANO e espere terminar (nunca em segundo plano /
+  run_in_background): a produção acaba quando você responde, e um render ainda rodando fica pela metade.
 - Se a pasta de estilos tiver um README com a tabela "Vídeos já feitos", acrescente este vídeo nela.
 - Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
   Rode cada um sozinho: sem `cd x &&`, sem `;` e sem pipe para comando fora da lista (`| tail`, `| head`...).
@@ -143,7 +144,8 @@ REVISAO = """Você vai REVISAR, sozinho, um vídeo que já foi produzido neste p
 - Altere os arquivos da composição DESTE vídeo; não edite arquivos de outras composições.
 - Tempos são do vídeo final (em segundos); as imagens são o quadro naquele instante com a marcação em vermelho por cima.
 - Confira os pontos pedidos com `npx remotion still`, salvando em `{frames}/` (nunca em `out/`).
-- Renderize a nova versão em `out/{slug}.mp4`, sem sobrescrever a anterior.
+- Renderize a nova versão em `out/{slug}.mp4`, sem sobrescrever a anterior, em PRIMEIRO PLANO e esperando terminar
+  (nunca em segundo plano / run_in_background: a revisão acaba quando você responde).
 {midia}- Comandos de terminal permitidos (o resto é negado na hora, não insista): {comandos}.
   Rode cada um sozinho: sem `cd x &&`, sem `;` e sem pipe para comando fora da lista. Para ler arquivos e imagens, use Read.
 
@@ -531,17 +533,20 @@ def _executar(run: dict, pedido: str) -> dict:
 
 
 def _video(run: dict, final: dict) -> Path | None:
-    """O .mp4 que o Claude disse ter feito; sem a linha VIDEO:, o mais novo de out/ desde o início."""
-    projeto = Path(run["_projeto"])
+    """O .mp4 desta produção: o que o Claude disse (linha VIDEO:) ou, sem ela, o out/<slug>.mp4 pedido.
+    Nunca "o mais novo de out/": em 2026-10-05 isso pegou um vídeo de OUTRO trabalho renderizado no mesmo minuto e o
+    copiou por cima da v5 do Bloodborne. E só vale arquivo modificado durante esta produção."""
+    projeto = Path(run["_projeto"]).resolve()
+    inicio = time.time() - (time.monotonic() - run["t0"])
+    candidatos = []
     m = re.search(r"VIDEO:\s*(\S+\.mp4)", str(final.get("result") or ""))
     if m:
-        p = (projeto / m.group(1)).resolve()
-        if p.is_file() and p.stat().st_size > 0 and projeto.resolve() in p.parents:
-            return p
-    inicio = time.time() - (time.monotonic() - run["t0"])
-    novos = [p for p in (projeto / "out").glob("*.mp4") if p.stat().st_mtime >= inicio and p.stat().st_size > 0] \
-        if (projeto / "out").is_dir() else []
-    return max(novos, key=lambda p: p.stat().st_mtime) if novos else None
+        candidatos.append((projeto / m.group(1)).resolve())
+    candidatos.append(projeto / "out" / f"{run['slug']}.mp4")
+    for c in candidatos:
+        if c.is_file() and c.stat().st_size > 0 and projeto in c.parents and c.stat().st_mtime >= inicio:
+            return c
+    return None
 
 
 def _recolher_frames(run: dict) -> int:

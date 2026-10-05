@@ -445,3 +445,24 @@ def test_pedido_pede_capa_no_inicio(ambiente, monkeypatch):
     est = asyncio.run(_ate_o_fim(cid))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "CAPA NO INÍCIO" in pedido and "SEM narração" in pedido and f"out/{est['slug']}-capa.jpg" in pedido
+
+
+
+def test_video_nunca_pega_mp4_de_outro_trabalho(tmp_path):
+    import time
+    proj = tmp_path / "youtube"
+    (proj / "out").mkdir(parents=True)
+    run = {"_projeto": str(proj), "slug": "bloodborne-v5", "t0": time.monotonic() - 5}
+    (proj / "out" / "exemplo-gta.mp4").write_bytes(b"outro")      # outro trabalho, renderizado agora
+    assert P._video(run, {"result": "Render em andamento; aviso quando terminar."}) is None
+    (proj / "out" / "bloodborne-v5.mp4").write_bytes(b"certo")
+    assert P._video(run, {"result": "sem a linha"}).name == "bloodborne-v5.mp4"
+    assert P._video(run, {"result": "VIDEO: out/exemplo-gta.mp4"}).name == "exemplo-gta.mp4"   # o Claude disse: vale
+
+
+def test_pedido_render_em_primeiro_plano(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "PRIMEIRO PLANO" in pedido and "run_in_background" in pedido
