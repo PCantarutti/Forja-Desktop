@@ -349,3 +349,20 @@ def test_entrega_na_propria_pasta_do_render(ambiente, monkeypatch):
     entregue = Path(est["entregue"])
     assert entregue.parent == ambiente["projeto"] / "out" and entregue.read_bytes() == b"mp4falso"
     assert entregue.with_suffix(".txt").is_file()
+
+
+def test_pedido_ensina_midia_real_quando_o_projeto_tem_o_script(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "Não baixe nada da internet" in pedido and "midia.py" not in pedido   # projeto sem o script: regra antiga
+    (ambiente["projeto"] / "scripts").mkdir()
+    (ambiente["projeto"] / "scripts" / "midia.py").write_text("", encoding="utf-8")
+    cid2 = conteudo.salvar_especificacao({"nome": "Games", "tema": "jogos", "estilo": "alerta-tech"})["id"]
+    r = R.normalizar([{"titulo": "x", "cenas": [{"id": "a", "texto": "b"}]}], [])
+    mid = _save(cid2, role="assistant", name=R.NOME, status="ok", meta={R.CHAVE: {"roteiros": r}}).id
+    R.marcar(mid, r[0]["id"], "aprovado")
+    asyncio.run(_ate_o_fim(cid2))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "python scripts/midia.py steam" in pedido and "nunca o\n  áudio original" in pedido and "Não baixe nada" not in pedido

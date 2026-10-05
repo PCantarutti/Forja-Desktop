@@ -57,8 +57,7 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   (CLAUDE.md, README, scripts/ e src/) e reaproveite: narração, legendas, efeitos e componentes.
 - Crie uma composição nova para este vídeo; não altere nem quebre as composições que já existem. Não edite
   arquivos de outras composições nem para exportar algo: para reaproveitar, importe o que já é exportado ou copie.
-- Não baixe nada da internet. Use o que já está no projeto (efeitos, fontes, logos) ou desenhe em código.
-- Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
+{midia}- Confira frames com `npx remotion still` antes do render final, salvando em `{frames}/` (nunca em `out/`);
   corrija texto cortado ou sobreposto.
 - Renderize o vídeo final em `out/{slug}.mp4`.
 - Se a pasta de estilos tiver um README com a tabela "Vídeos já feitos", acrescente este vídeo nela.
@@ -70,6 +69,21 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
 Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
 """
 
+
+# Com scripts/midia.py no projeto (trailers e capturas da Steam, imagens oficiais, cortes sem áudio), o Claude
+# ilustra com material real em vez de só motion design. Sem ele, a regra antiga: nada da internet.
+SEM_MIDIA = "- Não baixe nada da internet. Use o que já está no projeto (efeitos, fontes, logos) ou desenhe em código.\n"
+MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pessoa pública), e motion design para números,
+  gráficos, listas e texto. Para buscar mídia use SÓ `python scripts/midia.py` (veja `--help`); não baixe por outro meio:
+  - `python scripts/midia.py steam "<nome do jogo>"`: trailer oficial (sem áudio) + capturas + capa da loja Steam;
+  - `python scripts/midia.py cortar <trailer> --de S --ate S`: trecho curto e mudo para a cena;
+  - `python scripts/midia.py imagem <url> --pasta <assunto> --credito "<dono>"`: imagem de fonte oficial (blog, site,
+    kit de imprensa da empresa); `youtube <url do canal oficial> --de S --ate S --credito "<dono>"` se estiver disponível.
+  Tudo cai em `public/midia/<assunto>/` com `creditos.json`; use com `staticFile()` e `<OffthreadVideo muted>`/`<Img>`.
+- Regras da mídia real: só fonte oficial (nunca vídeo de youtuber, streamer ou fã); cada trecho com até ~6 s; nunca o
+  áudio original; crédito pequeno na tela enquanto aparece ("Trailer: <dono> / Steam") e todos os créditos no fim da
+  descrição. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.
+"""
 
 # ------------------------------------------------------------------ ambiente
 
@@ -377,7 +391,8 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         readme=f" e `{(est_dir / 'README.md').as_posix()}`" if (est_dir / "README.md").is_file() else "",
         formato_rotulo=fmt["rotulo"], largura=fmt["largura"], altura=fmt["altura"], slug=slug,
         comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
-        frames=(job / "frames").relative_to(projeto).as_posix())
+        frames=(job / "frames").relative_to(projeto).as_posix(),
+        midia=MIDIA if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
     run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, argv(claude, pastas), projeto, pastas
 
