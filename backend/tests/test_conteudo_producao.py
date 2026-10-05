@@ -405,6 +405,6 @@ def test_pedido_prefere_imagem_oficial_antes_do_motion_design(ambiente, monkeypa
     cid, _, _ = _aprovado()
     asyncio.run(_ate_o_fim(cid))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
-    assert "IMAGEM oficial" in pedido and "midia.py imagem <url>" in pedido
+    assert "IMAGEM oficial" in pedido and "midia.py imagem <url>" in pedido and "NÃO estique para cobrir" in pedido
     args = json.loads((ambiente["projeto"] / ".forja" / "argv.json").read_text())
     assert "WebSearch" in args and "WebFetch" in args

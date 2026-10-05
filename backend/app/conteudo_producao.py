@@ -86,8 +86,12 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   variável): no fim, o Forja apaga de `public/midia/` todo arquivo que o código não cita (trailers inteiros, referências).
 - Ordem para cada cena que fala de algo concreto: (1) trecho de vídeo oficial que MOSTRA aquilo; (2) não tendo, uma
   IMAGEM oficial — procure com WebSearch/WebFetch no site oficial (ex.: as screenshots e artes da página do jogo, o
-  newswire ou o kit de imprensa da empresa), pegue o endereço da imagem e baixe com `midia.py imagem <url>`; use em tela
-  cheia com zoom lento (Ken Burns) e o texto por cima; (3) só então o motion design do estilo. Imagem de site de notícia
+  newswire ou o kit de imprensa da empresa), pegue o endereço da imagem e baixe com `midia.py imagem <url>`; (3) só então o
+  motion design do estilo.
+- Imagem (ou vídeo) que não tem o formato do vídeo — ex.: screenshot 16:9 num vídeo vertical — NÃO estique para cobrir
+  a tela (corta a maior parte e vira um borrão ampliado): mostre inteira na largura, num quadro com borda/sombra, e
+  preencha o fundo com a mesma imagem desfocada e escurecida. Zoom lento de no máximo ~10%, escurecimento leve (até
+  ~30%) e nada desenhado por cima que a esconda: quem vê tem que reconhecer na hora o que ela mostra. Confira no still. Imagem de site de notícia
   ou de fã não serve, a não ser que seja a própria imagem oficial republicada e você ache a original.
 - Regras da mídia real: só fonte oficial (nunca vídeo de youtuber, streamer ou fã); cada trecho com até ~6 s; nunca o
   áudio original; crédito pequeno na tela enquanto aparece ("Trailer: <dono> / Steam") e todos os créditos no fim da
