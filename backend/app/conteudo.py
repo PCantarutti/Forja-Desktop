@@ -33,6 +33,9 @@ FORMATOS = {
     "horizontal": {"largura": 1920, "altura": 1080, "rotulo": "horizontal 16:9 (YouTube, vídeo longo)"},
 }
 HORA_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+# Voz da narração: a que o estilo manda, Edge TTS (grátis), ElevenLabs (créditos; dá para validar antes com o Edge) ou
+# uma voz da tela Voz do próprio Forja (modelo + voz de referência cadastrados lá).
+VOZ_MOTORES = ("estilo", "edge", "elevenlabs", "forja")
 
 # Comandos que o Claude pode rodar sozinho na produção (etapa 3). Editável na tela.
 # Quem edita o vídeo: modelo e esforço passados ao `claude -p` (--model / --effort).
@@ -281,6 +284,7 @@ def _spec_padrao() -> dict:
             "duracao_min": 0, "tipo": "serie",
             "profundidade": "normal", "pesquisa_rodadas": 2, "pesquisa_minutos": 15,
             "motor": {"provider": "", "model": ""}, "observacoes": "",
+            "voz": {"motor": "estilo", "validar_edge": True, "modelo": "", "voz": ""},
             "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
                           "hora_producao": "03:00", "produzir": True, "ativado_em": ""}}
 
@@ -344,6 +348,14 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
     if "motor" in d:
         m = d["motor"] if isinstance(d["motor"], dict) else {}
         spec["motor"] = {"provider": str(m.get("provider") or "")[:60], "model": str(m.get("model") or "")[:300]}
+    if "voz" in d:
+        v = {**_spec_padrao()["voz"], **spec.get("voz", {}), **(d["voz"] if isinstance(d["voz"], dict) else {})}
+        if v["motor"] not in VOZ_MOTORES:
+            raise ToolError("Voz inválida: estilo, edge, elevenlabs ou forja.")
+        spec["voz"] = {"motor": v["motor"], "validar_edge": bool(v["validar_edge"]),
+                       "modelo": str(v["modelo"] or "")[:200], "voz": str(v["voz"] or "")[:200]}
+        if spec["voz"]["motor"] == "forja" and not spec["voz"]["voz"]:
+            raise ToolError("Escolha a voz do Forja (tela Voz).")
     if "automacao" in d:
         spec["automacao"] = _automacao(spec["automacao"], d["automacao"] if isinstance(d["automacao"], dict) else {})
     if spec["tipo"] == "unico":   # vídeo único não se repete: nunca entra na agenda
@@ -394,6 +406,7 @@ def _dict(c: db.Conversation, m: db.Message | None) -> dict:
     if "horarios" not in auto:   # especificação salva antes dos dias/horários: um horário só, todo dia
         spec["automacao"] = {**_spec_padrao()["automacao"], **auto, "horarios": [auto.get("hora_producao") or "03:00"]}
     spec["automacao"].setdefault("produzir", True)
+    spec["voz"] = {**_spec_padrao()["voz"], **(spec.get("voz") or {})}
     return {"id": c.id, "nome": c.title, **spec, "atualizado": c.updated_at.isoformat() if c.updated_at else None}
 
 

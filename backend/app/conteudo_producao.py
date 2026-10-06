@@ -28,7 +28,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from . import conteudo, conteudo_roteiros, db, native
+from . import conteudo, conteudo_roteiros, db, native, tts
 from .agent import _save
 from .tools import ToolError
 
@@ -52,7 +52,7 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   como está, sem reescrever. Título, notícia e fontes também estão lá.
 - Estilo: leia `{estilo_md}`{readme} e siga à risca (voz, legenda, visual, áudio).
 - Formato: {formato_rotulo}, composição de {largura}x{altura}.
-{duracao}
+{voz}{duracao}
 ## Como
 - Este diretório é o projeto Remotion. Antes de criar algo, veja como os vídeos anteriores foram feitos aqui
   (CLAUDE.md, README, scripts/ e src/) e reaproveite: narração, legendas, efeitos e componentes.
@@ -118,8 +118,7 @@ MIDIA = """- Ilustre com material REAL quando ajudar (jogo, produto, lugar, pess
   pesquisador, o estúdio, o perfil oficial de quem anunciou). Se a notícia é sobre algo que alguém fez (ex.: um port
   rodando no PC), mostre o vídeo de QUEM FEZ mostrando aquilo, não só o trailer original do jogo.
 - Regras da mídia real: nunca reação, compilação ou reupload de youtuber, streamer ou fã; cada trecho com até ~6 s; nunca o
-  áudio original; crédito pequeno na tela enquanto aparece ("Trailer: <dono> / Steam") e todos os créditos no fim da
-  descrição. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.
+  áudio original; todos os créditos no fim da descrição ("Trailer: <dono> / Steam"); crédito na tela só se o estilo pedir. Sem mídia oficial disponível (ex.: jogo só de console), siga com motion design: não invente nem improvise.
 """
 
 # Revisão que pede material real ("põe um trecho do trailer", "mostra a apresentação", um link colado no pedido).
@@ -159,6 +158,57 @@ REVISAO = """Você vai REVISAR, sozinho, um vídeo que já foi produzido neste p
 
 Na última linha da sua resposta final escreva só: VIDEO: out/{slug}.mp4
 """
+
+# ------------------------------------------------------------------ voz da narração (campo "voz" da especificação)
+
+_PAUSAS = ("  Mantenha as marcações de pausa do estilo (`[pausa]`, `[pausa longa]`) no texto que vai ao narrate.py: o script\n"
+           "  converte para o motor escolhido.\n")
+_SO_UMA = ("  Antes de gerar todas as cenas, gere UMA (`python scripts/narrate.py <video> elevenlabs --so=<cena>`) e confira no log\n"
+           "  o custo informado; o cache por cena impede pagar duas vezes pelo mesmo texto.\n")
+
+
+def instrucoes_voz(voz: dict | None, fase: str = "") -> str:
+    """O trecho do pedido que diz qual voz usar. fase="validacao": ElevenLabs com validação, esta é a versão Edge."""
+    v = {**conteudo._spec_padrao()["voz"], **(voz or {})}
+    m = v["motor"]
+    if m == "estilo":
+        return ""
+    if m == "edge" or (m == "elevenlabs" and fase == "validacao"):
+        txt = "- Voz: Edge TTS (grátis), mesmo que o estilo diga outra: `python scripts/narrate.py <video>` (o motor padrão).\n"
+        if m == "elevenlabs":
+            txt += ("  Esta é a VERSÃO DE VALIDAÇÃO: a voz final com ElevenLabs vem depois, quando a pessoa aprovar este vídeo.\n"
+                    "  Não gaste créditos do ElevenLabs agora. Deixe tudo pronto para trocar só a voz: mesmo texto, mesmas cenas.\n")
+        return txt + _PAUSAS
+    if m == "elevenlabs":
+        return ("- Voz: ElevenLabs — `python scripts/narrate.py <video> elevenlabs` (a chave e a voz ficam no .env do projeto).\n"
+                + _SO_UMA + _PAUSAS +
+                "  Se o narrate.py não tiver o motor elevenlabs ou a chave faltar, siga com o Edge e avise numa linha \"VOZ:\".\n")
+    return (f"- Voz: a voz do próprio Forja (tela Voz: modelo \"{v['modelo'] or 'o primeiro cadastrado'}\", voz \"{v['voz']}\") —\n"
+            "  `python scripts/narrate.py <video> forja`. O Forja está de pé nesta máquina e o ambiente já traz FORJA_TTS_URL,\n"
+            "  FORJA_TTS_TOKEN, FORJA_TTS_MODELO e FORJA_TTS_VOZ. Contrato: POST {FORJA_TTS_URL}/api/tts/falar com o header\n"
+            "  `x-forja-token: <FORJA_TTS_TOKEN>` e o JSON {texto, modelo, voz, palavras: true} → {arquivo (WAV neste PC), duracao,\n"
+            "  palavras: [[palavra, início_ms, fim_ms], ...]}. Uma cena leva de 30 s a 1 min: gere cada uma uma vez só.\n"
+            "  Se o narrate.py não tiver o motor forja, acrescente seguindo esse contrato (grava o áudio da cena e devolve\n"
+            "  as palavras com tempo, como o motor do Edge). Pausa: gere cada trecho entre marcações à parte e emende com silêncio.\n"
+            + _PAUSAS)
+
+
+def ambiente_voz(voz: dict | None) -> dict:
+    """Variáveis que o narrate.py usa para falar com a voz do Forja (token próprio só do /api/tts/falar)."""
+    v = voz or {}
+    if v.get("motor") != "forja":
+        return {}
+    from .mcp_servidor import url_base
+    return {"FORJA_TTS_URL": url_base(), "FORJA_TTS_TOKEN": tts.TOKEN_FALAR,
+            "FORJA_TTS_MODELO": v.get("modelo") or "", "FORJA_TTS_VOZ": v.get("voz") or ""}
+
+
+VOZ_FINAL = ("Troque a narração pela voz FINAL com ElevenLabs. Esta versão foi aprovada com o Edge TTS; agora:\n"
+             "   - rode `python scripts/narrate.py <video> elevenlabs` para o MESMO texto de cada cena (com as mesmas marcações\n"
+             "     de pausa). Gere primeiro UMA cena com `--so=<cena>` e confira o custo no log; depois o resto (o cache não cobra\n"
+             "     de novo pelo que já foi gerado). Antes, guarde a narração do Edge numa pasta de backup (`<pasta>-edge`).\n"
+             "   - a timeline muda de tempo: as animações ancoradas por palavra se ajustam; confira com stills e corrija o que sobrar;\n"
+             "   - não mude visual nem texto; refaça a legenda .srt e os tempos dos capítulos da descrição.")
 
 USO_CHAVE = "conteudo_uso"   # AppSetting: último rate_limit_event que o Claude Code mandou
 
@@ -418,6 +468,8 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
     estilo = rodada.get("estilo") or spec["estilo"]
     conteudo.ler_estilo(estilo)   # estilo apagado: avisa agora
     formato = rodada.get("formato") or spec["formato"]
+    voz = spec.get("voz") or {}
+    validar = voz.get("motor") == "elevenlabs" and voz.get("validar_edge")
 
     with _TRAVA:   # duas produções ao mesmo tempo disputariam CPU, GPU e o mesmo projeto
         if _RUNS:
@@ -426,7 +478,8 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         base = {"roteiro_id": roteiro["id"], "rodada_id": message_id, "titulo": roteiro.get("titulo_youtube") or roteiro["titulo"],
                 "estilo": estilo, "formato": formato, "slug": slug, "fase": "preparando", "log": [], "aviso": "",
                 "ferramentas": 0, "negados": [], "video": "", "entregue": "", "custo_usd": None, "turnos": None,
-                "segundos": 0.0}
+                "segundos": 0.0, "voz": "edge" if validar else (voz.get("motor") or "estilo"),
+                "voz_final": "pendente" if validar else ""}
         msg = _save(conv_id, role="assistant", name=NOME, content="", status="running", meta={CHAVE: base})
         run = _RUNS[msg.id] = {**base, "message_id": msg.id, "conv_id": conv_id, "cancelar": False, "t0": time.monotonic()}
 
@@ -441,6 +494,7 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         estilo_md=(est_dir / f"{estilo}.md").as_posix(),
         readme=f" e `{(est_dir / 'README.md').as_posix()}`" if (est_dir / "README.md").is_file() else "",
         formato_rotulo=fmt["rotulo"], largura=fmt["largura"], altura=fmt["altura"], slug=slug,
+        voz=instrucoes_voz(voz, "validacao" if validar else ""),
         duracao=(f"- Duração mínima: {spec['duracao_min']} s (o vídeo final, capa incluída). Confira com ffprobe; se ficar abaixo,\n"
                  "  acrescente antes do CTA UMA cena com mais um fato verificado da notícia (narração nova no mesmo padrão)\n"
                  "  — nunca silêncio, cena parada ou fala esticada — e conte na resposta final, numa linha \"CORREÇÃO:\".\n"
@@ -450,6 +504,7 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         midia=MIDIA if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
     run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, argv(claude, pastas), projeto, pastas
+    run["_env"] = ambiente_voz(voz)
 
     t = asyncio.create_task(_rodar(run, pedido))
     _TAREFAS.add(t)
@@ -494,6 +549,7 @@ def _executar(run: dict, pedido: str) -> dict:
     erros = open(run["_job"] / "claude.err.log", "w", encoding="utf-8")
     try:
         env = ambiente_claude(run["_pastas"])   # sem o token do Forja, com a conta escolhida
+        env.update(run.get("_env") or {})        # voz do Forja: só o token do /api/tts/falar
         proc = subprocess.Popen(run["_argv"], cwd=run["_projeto"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=erros, env=env, **native.popen_kwargs())
         run["_proc"] = proc
@@ -785,7 +841,7 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
     with _TRAVA:
         if _RUNS:
             raise ToolError("Já tem um vídeo sendo produzido; espere terminar ou cancele.")
-        base = {k: anterior.get(k) for k in ("roteiro_id", "rodada_id", "titulo", "estilo", "formato")}
+        base = {k: anterior.get(k) for k in ("roteiro_id", "rodada_id", "titulo", "estilo", "formato", "voz", "voz_final")}
         # Retoma a sessão só da 1ª versão: cada revisão carregava o histórico inteiro das anteriores e o custo subia
         # a cada volta (US$ 5 → 7,8 → 10,3 nas v4–v6). O pedido aponta composição, roteiro e arquivos: dá para seguir sem.
         sessao = (anterior.get("sessao") or "") if (anterior.get("versao") or 1) == 1 else ""
@@ -831,8 +887,23 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
         i = a.index("-p")   # logo antes do -p: o executável (e o que vier antes dele) fica intacto
         a[i:i] = ["--resume", base["sessao"]]
     run["_job"], run["_argv"], run["_projeto"], run["_pastas"], run["_retomou"] = job, a, projeto, pastas, bool(base["sessao"])
+    spec_voz = (conteudo.especificacao(anterior["conv_id"]).get("voz") or {}) if anterior.get("conv_id") else {}
+    run["_env"] = ambiente_voz(spec_voz)
 
     t = asyncio.create_task(_rodar(run, pedido))
     _TAREFAS.add(t)
     t.add_done_callback(_TAREFAS.discard)
     return estado(msg.id)
+
+
+def voz_final(message_id: int) -> dict:
+    """Vídeo validado com o Edge (especificação com ElevenLabs + validar): faz a próxima versão só trocando a voz."""
+    anterior = estado(message_id)
+    if anterior.get("voz_final") != "pendente":
+        raise ToolError("Este vídeo não está esperando a voz final.")
+    novo = revisar(message_id, [], VOZ_FINAL)
+    _patch(novo["id"], voz="elevenlabs", voz_final="")
+    _patch(message_id, voz_final="feita")
+    if novo["id"] in _RUNS:
+        _RUNS[novo["id"]].update(voz="elevenlabs", voz_final="")
+    return estado(novo["id"])

@@ -24,6 +24,8 @@ type Producao = {
   segundos: number;
   versao?: number;
   revisao_de?: number;
+  voz?: string;          // edge | elevenlabs | forja | estilo
+  voz_final?: string;    // "pendente": versão de validação com o Edge, esperando a voz final do ElevenLabs
 };
 
 const rotuloVersao = (p: Producao) => ((p.versao ?? 1) > 1 ? `v${p.versao} · ` : "");
@@ -75,7 +77,9 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
     <section className="flex min-w-0 flex-col gap-4">
       <h2 className="font-mono text-[10.5px] font-medium uppercase tracking-[.08em] text-faint">Vídeo</h2>
       {viva && <AoVivo p={viva} onCancelar={() => api.post(`/conteudo/producao/${viva.id}/cancelar`, {}).then(carregar)} />}
-      {noPlayer ? <Player p={noPlayer} onRevisar={viva ? undefined : () => setRevisando(noPlayer)} /> : !viva && (
+      {noPlayer ? <Player p={noPlayer} onRevisar={viva ? undefined : () => setRevisando(noPlayer)}
+                          onVozFinal={viva ? undefined : () => api.post(`/conteudo/producao/${noPlayer.id}/voz-final`, {}).then(carregar)
+                            .catch((e: any) => props.onError(e.message))} /> : !viva && (
         <div className="mx-auto flex aspect-[9/16] w-[min(100%,300px)] flex-col items-center justify-center gap-2 rounded-[10px] border border-dashed border-line-strong px-8 text-center">
           <Film className="size-6 text-faint" />
           <p className="text-[13px] text-muted">O vídeo aparece aqui quando a primeira produção terminar.</p>
@@ -116,9 +120,11 @@ export default function ConteudoProducao(props: { conv: number; carimbo?: string
   );
 }
 
-function Player(props: { p: Producao; onRevisar?: () => void }) {
+function Player(props: { p: Producao; onRevisar?: () => void; onVozFinal?: () => void }) {
   const { p } = props;
   const [copiado, setCopiado] = useState(false);
+  const [confirmando, setConfirmando] = useState(false);   // gasta créditos: dois cliques
+  useEffect(() => setConfirmando(false), [p.id]);
   const player = useRef<VideoPlayerApi>(null);
   const vertical = p.formato !== "horizontal";
   return (
@@ -130,6 +136,7 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
         <span className="text-[13.5px] font-medium leading-snug text-fg">{rotuloVersao(p)}{p.titulo}</span>
         <span className="text-[11.5px] text-faint">
           {dataCurta(p.criado)} · feito em {relogio(p.segundos)}{p.turnos ? ` · ${p.turnos} turnos do Claude` : ""}
+          {p.voz && p.voz !== "estilo" ? ` · voz: ${({ edge: "Edge", elevenlabs: "ElevenLabs", forja: "Forja" } as Record<string, string>)[p.voz] ?? p.voz}` : ""}
         </span>
         <button className="group flex items-center gap-1.5 self-start rounded-md py-0.5 text-[11.5px] text-muted hover:text-fg"
                 title="Copiar o caminho do arquivo"
@@ -138,6 +145,17 @@ function Player(props: { p: Producao; onRevisar?: () => void }) {
           <span className="max-w-[300px] truncate font-mono">{copiado ? "caminho copiado" : p.entregue}</span>
         </button>
         <ParaYoutube id={p.id} />
+        {p.voz_final === "pendente" && (
+          <div className="mt-2 flex flex-col gap-1.5 rounded-[8px] border border-accent-line bg-accent-soft px-3 py-2.5">
+            <span className="text-[12px] text-fg">Versão de validação com o Edge. Aprovou? Troque só a voz pela do ElevenLabs.</span>
+            {props.onVozFinal && (
+              <button onClick={() => { if (!confirmando) { setConfirmando(true); return; } setConfirmando(false); props.onVozFinal?.(); }}
+                      className="inline-flex h-[30px] items-center justify-center gap-1.5 rounded-[7px] bg-accent px-3 text-[12.5px] font-medium text-accent-fg hover:brightness-110">
+                {confirmando ? "Clique de novo: gasta créditos do ElevenLabs" : "Gerar voz final (ElevenLabs)"}
+              </button>
+            )}
+          </div>
+        )}
         {props.onRevisar && (
           <button onClick={() => { player.current?.pausar(); props.onRevisar?.(); }}   // o editor abre o mesmo vídeo: dois tocando juntos
                   className="mt-2 inline-flex h-[32px] items-center justify-center gap-1.5 rounded-[7px] border border-line-strong text-[12.5px] text-fg hover:border-focus hover:bg-raised">

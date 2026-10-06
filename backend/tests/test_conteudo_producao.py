@@ -16,6 +16,7 @@ pedido = sys.stdin.buffer.read().decode("utf-8")
 modo = os.environ.get("CLAUDE_FALSO", "ok")
 open(".forja/pedido-recebido.md", "w", encoding="utf-8").write(pedido)
 open(".forja/argv.json", "w").write(json.dumps(sys.argv[1:]))
+open(".forja/env.json", "w").write(json.dumps({k: v for k, v in os.environ.items() if k.startswith("FORJA_")}))
 def ev(e): print(json.dumps(e), flush=True)
 ev({"type": "system", "subtype": "init"})
 ev({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "isUsingOverage": False,
@@ -488,3 +489,89 @@ def test_duracao_minima_no_pedido(ambiente, monkeypatch):
     assert conteudo.especificacao(cid)["duracao_min"] == 60
     assert conteudo.salvar_especificacao({"duracao_min": -5}, cid)["duracao_min"] == 0
     assert "pelo menos 60 s" in R.regra_duracao(60) and R.regra_duracao(0) == ""
+
+
+# ------------------------------------------------------------------ voz da narração
+
+def test_voz_do_estilo_nao_muda_o_pedido(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "- Voz:" not in pedido and est["voz"] == "estilo" and est["voz_final"] == ""
+    assert json.loads((ambiente["projeto"] / ".forja" / "env.json").read_text()) == {}   # nenhum FORJA_* vaza
+
+
+def test_voz_edge_e_elevenlabs_no_pedido(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    conteudo.salvar_especificacao({"voz": {"motor": "elevenlabs", "validar_edge": False}}, cid)
+    est = asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "narrate.py <video> elevenlabs" in pedido and "--so=<cena>" in pedido and "[pausa]" in pedido
+    assert est["voz"] == "elevenlabs" and est["voz_final"] == ""
+
+
+def test_elevenlabs_com_validacao_faz_edge_e_depois_a_voz_final(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    assert conteudo.especificacao(cid)["voz"] == {"motor": "estilo", "validar_edge": True, "modelo": "", "voz": ""}
+    conteudo.salvar_especificacao({"voz": {"motor": "elevenlabs"}}, cid)   # validar_edge vem ligado por padrão
+    v1 = asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "Edge TTS" in pedido and "VERSÃO DE VALIDAÇÃO" in pedido and "narrate.py <video> elevenlabs" not in pedido
+    assert v1["voz"] == "edge" and v1["voz_final"] == "pendente"
+    with pytest.raises(ToolError, match="não está esperando"):
+        P.voz_final(_aprovado_sem_validacao(monkeypatch))
+
+    async def final():
+        est = P.voz_final(v1["id"])
+        for _ in range(600):
+            if est["id"] not in P._RUNS:
+                break
+            await asyncio.sleep(0.05)
+        return P.estado(est["id"])
+    v2 = asyncio.run(final())
+    assert v2["status"] == "ok", v2["aviso"]
+    assert v2["voz"] == "elevenlabs" and v2["voz_final"] == "" and v2["versao"] == 2
+    assert P.estado(v1["id"])["voz_final"] == "feita"
+    pedido2 = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "voz FINAL com ElevenLabs" in pedido2 and "--so=<cena>" in pedido2 and "-edge" in pedido2
+    with pytest.raises(ToolError, match="não está esperando"):
+        P.voz_final(v1["id"])   # não gera duas vezes
+
+
+def _aprovado_sem_validacao(monkeypatch) -> int:
+    """Um vídeo pronto com a voz do estilo (que não espera voz final)."""
+    P._RUNS.clear()
+    cid, _, _ = _aprovado()
+    return asyncio.run(_ate_o_fim(cid))["id"]
+
+
+def test_voz_do_forja_no_pedido_e_no_ambiente(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    monkeypatch.setenv("FORJA_PORT", "8799")
+    cid, _, _ = _aprovado()
+    with pytest.raises(ToolError, match="Escolha a voz do Forja"):
+        conteudo.salvar_especificacao({"voz": {"motor": "forja"}}, cid)
+    with pytest.raises(ToolError, match="Voz inválida"):
+        conteudo.salvar_especificacao({"voz": {"motor": "sapi"}}, cid)
+    conteudo.salvar_especificacao({"voz": {"motor": "forja", "modelo": "Fish Audio S2-pro", "voz": "narrador"}}, cid)
+    est = asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "narrate.py <video> forja" in pedido and "/api/tts/falar" in pedido and "Fish Audio S2-pro" in pedido
+    env = json.loads((ambiente["projeto"] / ".forja" / "env.json").read_text())
+    from app import tts
+    assert env == {"FORJA_TTS_URL": "http://127.0.0.1:8799", "FORJA_TTS_TOKEN": tts.TOKEN_FALAR,
+                   "FORJA_TTS_MODELO": "Fish Audio S2-pro", "FORJA_TTS_VOZ": "narrador"}
+    assert est["voz"] == "forja"
+
+
+def test_credito_de_midia_so_na_descricao(ambiente, monkeypatch):
+    (ambiente["projeto"] / "scripts").mkdir()
+    (ambiente["projeto"] / "scripts" / "midia.py").write_text("", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    cid, _, _ = _aprovado()
+    asyncio.run(_ate_o_fim(cid))
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "crédito na tela só se o estilo pedir" in pedido and "crédito pequeno na tela" not in pedido

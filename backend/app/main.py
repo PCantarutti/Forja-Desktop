@@ -142,6 +142,7 @@ async def fronteira(request, call_next):
         token = token or request.cookies.get("forja_token") or request.query_params.get("t")
     if (config.API_TOKEN and path.startswith("/api/") and not path.endswith(SUFIXO_SEM_TOKEN)
             and not path.startswith("/api/design-janela/")   # a chave do link é a autorização
+            and not (path == "/api/tts/falar" and token == tts.TOKEN_FALAR)   # narração da tela Conteúdo
             and token not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
@@ -1283,6 +1284,17 @@ async def tts_gerar(conv_id: int, body: dict):
         return await asyncio.to_thread(tts.gerar, conv_id, body)
     except imagegen.ModeloCarregado as e:
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/tts/falar")
+async def tts_falar(body: dict):
+    """Narração de vídeo (tela Conteúdo → narrate.py do projeto): fala com uma voz da tela Voz, sem conversa, e devolve
+    o WAV e o tempo de cada palavra. Aceita o token próprio (tts.TOKEN_FALAR) além do da API."""
+    try:
+        return await asyncio.to_thread(tts.falar, str(body.get("texto") or ""), str(body.get("modelo") or ""),
+                                       str(body.get("voz") or ""), bool(body.get("palavras", True)), int(body.get("semente", -1)))
     except ToolError as e:
         raise HTTPException(400, str(e))
 
@@ -2572,6 +2584,12 @@ def conteudo_video(message_id: int):
 async def conteudo_revisar(message_id: int, body: dict):
     """Pedidos de mudança (quadros desenhados e trechos) num vídeo pronto: o Claude faz a próxima versão."""
     return _conteudo(conteudo_producao.revisar, message_id, (body or {}).get("pedidos") or [], (body or {}).get("geral") or "")
+
+
+@app.post("/api/conteudo/producao/{message_id}/voz-final")
+async def conteudo_voz_final(message_id: int):
+    """Versão validada com o Edge: o Claude troca só a narração pela do ElevenLabs e renderiza de novo."""
+    return _conteudo(conteudo_producao.voz_final, message_id)
 
 
 @app.get("/api/conteudo/uso")

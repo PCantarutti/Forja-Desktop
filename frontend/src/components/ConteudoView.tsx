@@ -38,10 +38,21 @@ type Spec = {
   formato: "vertical" | "horizontal";
   motor: { provider: string; model: string };
   observacoes: string;
+  voz: Voz;
   automacao: { modo: Modo; dias: number[]; horarios: string[]; hora_roteiros: string; produzir: boolean; hora_producao?: string; ativado_em?: string };
 };
 
 type Profundidade = "rapida" | "normal" | "funda" | "personalizado";
+// Voz da narração (o mesmo de conteudo.VOZ_MOTORES): a do estilo, Edge (grátis), ElevenLabs (créditos; validar antes
+// com o Edge) ou uma voz da tela Voz do Forja.
+type Voz = { motor: "estilo" | "edge" | "elevenlabs" | "forja"; validar_edge: boolean; modelo: string; voz: string };
+const VOZ_VAZIA: Voz = { motor: "estilo", validar_edge: true, modelo: "", voz: "" };
+const VOZES: { id: Voz["motor"]; label: string; hint: string }[] = [
+  { id: "estilo", label: "A do estilo", hint: "Usa a voz que o arquivo do estilo indica." },
+  { id: "edge", label: "Edge TTS (grátis)", hint: "Voz da Microsoft, sem custo. Boa para validar e para Shorts." },
+  { id: "elevenlabs", label: "ElevenLabs", hint: "Mais natural; gasta créditos da conta (chave e voz no .env do projeto de vídeo)." },
+  { id: "forja", label: "Voz do Forja", hint: "Um modelo e uma voz da tela Voz, gerados neste PC (sem custo; mais lento)." },
+];
 // Os mesmos portes da tela Pesquisa profunda (PRESETS do backend); minutos = o tempo que a escolha sugere.
 const PROFUNDIDADES: { id: Profundidade; label: string; minutos: number; hint: string }[] = [
   { id: "rapida", label: "Rápida", minutos: 5, hint: "1 rodada, 3 páginas, leitura curta de cada página" },
@@ -53,7 +64,7 @@ const PROFUNDIDADES: { id: Profundidade; label: string; minutos: number; hint: s
 const SPEC_VAZIA: Spec = {
   nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, duracao_min: 0, formato: "vertical",
   tipo: "serie", profundidade: "normal", pesquisa_rodadas: 2, pesquisa_minutos: 15,
-  motor: { provider: "", model: "" }, observacoes: "",
+  motor: { provider: "", model: "" }, observacoes: "", voz: VOZ_VAZIA,
   automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00", produzir: true },
 };
 
@@ -819,11 +830,19 @@ function SpecPainel(props: {
       setSpec({ ...SPEC_VAZIA, motor: { provider: props.provider, model: props.model } });
       return;
     }
-    api.get<Spec>(`/conteudo/especificacoes/${props.conv}`).then(setSpec).catch((e) => props.onError(e.message));
+    api.get<Spec>(`/conteudo/especificacoes/${props.conv}`).then((s) => setSpec({ ...s, voz: { ...VOZ_VAZIA, ...(s.voz || {}) } }))
+      .catch((e) => props.onError(e.message));
   }, [props.conv, props.carimbo]);
 
   const muda = (patch: Partial<Spec>) => { setSpec((s) => ({ ...s, ...patch })); setSujo(true); };
   const mudaAuto = (patch: Partial<Spec["automacao"]>) => muda({ automacao: { ...spec.automacao, ...patch } });
+  const mudaVoz = (patch: Partial<Voz>) => muda({ voz: { ...spec.voz, ...patch } });
+  // modelos e vozes da tela Voz, só quando a escolha é a voz do Forja
+  const [tts, setTts] = useState<{ modelos: { nome: string }[]; vozes: { id: string; nome: string }[] } | null>(null);
+  useEffect(() => {
+    if (spec.voz?.motor !== "forja" || tts) return;
+    api.get<{ modelos: { nome: string }[]; vozes: { id: string; nome: string }[] }>("/tts").then(setTts).catch(() => setTts({ modelos: [], vozes: [] }));
+  }, [spec.voz?.motor]);
   const claude = spec.motor.provider === MOTOR_CLAUDE;
   const nova = props.conv === null;
   const unico = spec.tipo === "unico";
@@ -980,6 +999,40 @@ function SpecPainel(props: {
               {props.estilos.map((e) => <option key={e.nome} value={e.nome}>{e.nome}</option>)}
             </select>
           </Caixa>
+          <Caixa rotulo="Voz da narração">
+            <select className={`${campoCaixa} -ml-1 cursor-pointer`} value={spec.voz.motor}
+                    onChange={(e) => mudaVoz({ motor: e.target.value as Voz["motor"] })}>
+              {VOZES.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+            </select>
+          </Caixa>
+          <span className={ajuda}>{VOZES.find((v) => v.id === spec.voz.motor)?.hint}</span>
+          {spec.voz.motor === "elevenlabs" && (
+            <label className="flex cursor-pointer items-start gap-2 text-[12px] text-fg">
+              <input type="checkbox" className="mt-0.5 accent-[var(--accent)]" checked={spec.voz.validar_edge}
+                     onChange={(e) => mudaVoz({ validar_edge: e.target.checked })} />
+              <span>
+                Gerar antes uma versão com o Edge para validar
+                <span className={`block ${ajuda}`}>Só gasta créditos quando você aprovar o vídeo e clicar em “Gerar voz final”.</span>
+              </span>
+            </label>
+          )}
+          {spec.voz.motor === "forja" && (
+            <div className="grid grid-cols-2 gap-1.5">
+              <Caixa rotulo="Modelo">
+                <select className={`${campoCaixa} -ml-1 cursor-pointer`} value={spec.voz.modelo} onChange={(e) => mudaVoz({ modelo: e.target.value })}>
+                  <option value="">o primeiro</option>
+                  {(tts?.modelos || []).map((m) => <option key={m.nome} value={m.nome}>{m.nome}</option>)}
+                </select>
+              </Caixa>
+              <Caixa rotulo="Voz">
+                <select className={`${campoCaixa} -ml-1 cursor-pointer`} value={spec.voz.voz} onChange={(e) => mudaVoz({ voz: e.target.value })}>
+                  <option value="">escolha…</option>
+                  {(tts?.vozes || []).map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
+                </select>
+              </Caixa>
+              {tts && !tts.vozes.length && <span className={`col-span-2 ${ajuda}`}>Nenhuma voz na tela Voz ainda: adicione uma lá.</span>}
+            </div>
+          )}
           <Caixa rotulo="Observações para o roteirista">
             <textarea className={`${campoCaixa} h-[58px] resize-none leading-relaxed`} value={spec.observacoes}
                       placeholder="Evitar boatos sem fonte; preferir o que afeta o Brasil…"

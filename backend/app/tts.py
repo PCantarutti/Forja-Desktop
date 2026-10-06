@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,9 @@ _lock = threading.Lock()  # ponytail: uma geração por vez numa trava global; f
 _rodando: dict[int, int] = {}  # conv_id -> gerações pendentes (o /api/activity acende a bolinha)
 _instalando: dict[str, dict] = {}
 _motor: dict = {}  # o processo de pé: proc, chave, nome, dispositivo, ultimo (uso), ocupado
+# Token só do POST /api/tts/falar: a produção da tela Conteúdo passa este (e não o da API inteira) ao Claude Code,
+# que roda o narrate.py do projeto de vídeo com "voz do Forja". Muda a cada vez que o backend sobe.
+TOKEN_FALAR = secrets.token_urlsafe(24)
 
 
 # ------------------------------------------------------------------ runtime
@@ -574,7 +578,7 @@ def _argv(m: dict) -> list[str]:
     return ["--arquitetura", m["arquitetura"], "--ckpt", m.get("ckpt", ""), "--vocab", m.get("vocab", "")]
 
 
-def _ler_ate(proc, fim: tuple[str, ...], mid: int, voz: str = "") -> str:
+def _ler_ate(proc, fim: tuple[str, ...], mid: int, voz: str = "", extra: dict | None = None) -> str:
     """Lê o stdout do motor até uma linha de `fim`, levando FASE/PROGRESSO à mensagem. O processo morto (cancelado,
     sem memória) acaba o laço: devolve as últimas linhas soltas, que dizem o porquê."""
     outras: list[str] = []
@@ -589,6 +593,11 @@ def _ler_ate(proc, fim: tuple[str, ...], mid: int, voz: str = "") -> str:
                 pass
         elif linha.startswith("TRANSCRICAO ") and voz:
             _transcrita(voz, linha[12:])
+        elif linha.startswith("PALAVRAS ") and extra is not None:
+            try:
+                extra["palavras"] = json.loads(linha[9:])
+            except ValueError:
+                pass
         elif linha.startswith(fim):
             return linha
         elif linha:
@@ -735,6 +744,62 @@ def _rodar(conv_id: int, mid: int, job: dict, texto: str, m: dict, v: dict, p: d
         if _motor:
             _motor.update(ocupado=False, ultimo=time.time())
         _rodando[conv_id] = _rodando.get(conv_id, 1) - 1
+
+
+def _estimar(texto: str, duracao: float) -> list[list]:
+    """Sem os tempos do Whisper (motor sem suporte): reparte a duração pelas palavras, proporcional ao tamanho."""
+    ws = texto.split()
+    total = sum(len(w) + 1 for w in ws) or 1
+    out, t = [], 0.0
+    for w in ws:
+        d = duracao * 1000 * (len(w) + 1) / total
+        out.append([w, round(t), round(t + d * 0.9)])
+        t += d
+    return out
+
+
+def falar(texto: str, modelo: str = "", voz: str = "", palavras: bool = True, semente: int = -1) -> dict:
+    """Fala sem conversa da tela Voz (narração de vídeo da tela Conteúdo, chamada pelo narrate.py do projeto). Devolve o
+    WAV e o tempo de cada palavra, que o vídeo usa para sincronizar animação e legenda. Uma geração por vez (a trava)."""
+    texto = str(texto or "").strip()
+    if not texto:
+        raise ToolError("Texto vazio.")
+    ms = modelos()
+    m = next((x for x in ms if x["nome"] == modelo), None) if modelo else (ms[0] if ms else None)
+    if not m:
+        raise ToolError(f"Modelo de voz não encontrado: {modelo or '(nenhum cadastrado)'}.")
+    if not instalado(m["motor"]):
+        raise ToolError(f"Falta o motor {MOTORES[m['motor']]['nome']}: instale na tela Voz.")
+    vs = vozes()
+    v = next((x for x in vs if voz in (x["id"], x["nome"])), None) if voz else (vs[0] if vs else None)
+    if not v:
+        raise ToolError(f"Voz de referência não encontrada: {voz or '(nenhuma cadastrada)'}.")
+    with _lock:
+        if not (_motor.get("proc") and _motor["proc"].poll() is None):
+            from .lotes import _liberar_vram
+            _liberar_vram(True)  # produção de madrugada: ninguém para confirmar; o LLM local sai da VRAM
+        m = _local(m, 0, {})
+        proc = _subir(m, 0)
+        _motor.update(ocupado=True)
+        try:
+            saida = SAIDA / "conteudo" / f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}.wav"
+            saida.parent.mkdir(parents=True, exist_ok=True)
+            pedido = {**PARAMS[m["motor"]], "semente": int(semente), **{k: m[k] for k in ("minusculas", "numeros") if k in m},
+                      "texto": texto, "ref": v["caminho"], "ref_texto": v.get("texto", ""), "saida": str(saida),
+                      "palavras": bool(palavras)}
+            proc.stdin.write(json.dumps(pedido, ensure_ascii=False) + "\n")
+            proc.stdin.flush()
+            extra: dict = {}
+            linha = _ler_ate(proc, ("OK", "ERRO"), 0, v["id"], extra)
+            if not linha.startswith("OK"):
+                if proc.poll() is not None or "DEVICE_LOST" in linha:
+                    descarregar()
+                raise ToolError(linha[5:] or "O motor de voz falhou.")
+            duracao = float(linha.split()[1])
+        finally:
+            _motor.update(ocupado=False, ultimo=time.time())
+    return {"arquivo": str(saida), "duracao": duracao, "voz": v["nome"], "modelo": m["nome"],
+            "palavras": extra.get("palavras") or _estimar(texto, duracao) if palavras else []}
 
 
 def cancelar(mid: int) -> None:

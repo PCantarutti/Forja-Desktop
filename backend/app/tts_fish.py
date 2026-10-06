@@ -4,9 +4,10 @@ que atende pedidos até ser derrubado. Roda no venv do motor (RUNTIMES/tts/fish/
     python tts_fish.py --modelo <dono/repo do Hugging Face | pasta local> [--dispositivo cuda|xpu|cpu] [--contexto 4096]
 
 Carregar leva mais de um minuto; por isso o processo fica de pé e tts.py o derruba depois de um tempo parado.
-Pedidos chegam no stdin, um JSON por linha: {ref, ref_texto, texto, saida, temperatura, top_p, semente}.
+Pedidos chegam no stdin, um JSON por linha: {ref, ref_texto, texto, saida, temperatura, top_p, semente, palavras}.
 Respostas no stdout, por linhas: "PRONTO <dispositivo> <bf16 | int8 em N camadas>" ao subir; por pedido, "FASE <texto>",
-"PROGRESSO <0..1>", "TRANSCRICAO <texto>" (referência sem texto: o Whisper transcreveu) e, no fim, "OK <segundos> <semente>"
+"PROGRESSO <0..1>", "TRANSCRICAO <texto>" (referência sem texto: o Whisper transcreveu), "PALAVRAS <json>" (com
+"palavras": true, o tempo de cada palavra do áudio gerado, [[palavra, início_ms, fim_ms], ...]) e, no fim, "OK <segundos> <semente>"
 ou "ERRO <mensagem>". Erro ao subir: "ERRO" e sai.
 
 Memória: pesos bf16 + cache de atenção do tamanho de --contexto. Se não couber na GPU, as camadas lineares grandes do
@@ -29,6 +30,7 @@ PEDACO = 280  # caracteres por geração: ~15-20 s de fala, cabe com folga num c
 REF_MAX_S = 15.0  # referência mais longa é recortada: o Fish usa ela inteira como prompt (15 min = ~19 mil tokens)
 REF_MIN_S = 8.0   # o corte cai no ponto mais silencioso entre REF_MIN_S e REF_MAX_S (fim de frase, não meio de palavra)
 MARGEM_GB = 2.5  # cache de atenção (~0,6 GB em 4096), ativações e folga; VRAM no limite dá device lost na Arc
+_ASR: list = []  # o Whisper carregado uma vez (CPU): narração de vídeo pede o tempo das palavras de cada cena
 
 
 def diz(tipo: str, texto: str = "") -> None:
@@ -182,6 +184,9 @@ def main() -> int:
             with torch.inference_mode():
                 wav = codec.from_indices(torch.cat(codes, dim=1).long()[None])[0, 0].float().numpy()
             sf.write(q["saida"], wav, codec.sample_rate)
+            if q.get("palavras"):  # narração de vídeo (tela Conteúdo): as animações sincronizam pela palavra falada
+                diz("FASE", "marcando o tempo das palavras")
+                diz("PALAVRAS", json.dumps(palavras(q["saida"], sf), ensure_ascii=False))
             diz("PROGRESSO", "1")
             diz("OK", f"{len(wav) / codec.sample_rate:.2f} {semente} {time.time() - t0:.1f}")
         except Exception as e:
@@ -211,16 +216,38 @@ def recortar(caminho: str, sf) -> tuple[str, float]:
     return str(saida), corte / sr
 
 
-def transcrever(caminho: str, sf) -> str:
-    """Uma vez por voz (tts.py guarda o texto), sempre na CPU: na GPU ele disputaria a VRAM com o modelo de pé.
-    return_timestamps: acima de 30 s o Whisper só transcreve em modo longo (a referência já vem recortada, é folga)."""
+def _audio16k(caminho: str, sf):
     import librosa
-    from transformers import pipeline
     dados, sr = sf.read(caminho, dtype="float32", always_2d=True)
     # 16 kHz aqui: a conversão interna do pipeline estraga 44,1 kHz (um MP3 de narração virou "Продолжение следует...")
-    mono = librosa.resample(dados.mean(axis=1), orig_sr=sr, target_sr=16000) if sr != 16000 else dados.mean(axis=1)
-    asr = pipeline("automatic-speech-recognition", "openai/whisper-large-v3-turbo", device="cpu")
-    return asr({"raw": mono, "sampling_rate": 16000}, return_timestamps=True)["text"].strip()
+    return librosa.resample(dados.mean(axis=1), orig_sr=sr, target_sr=16000) if sr != 16000 else dados.mean(axis=1)
+
+
+def _whisper():
+    """Sempre na CPU: na GPU ele disputaria a VRAM com o modelo de pé. Carrega uma vez por processo."""
+    if not _ASR:
+        from transformers import pipeline
+        _ASR.append(pipeline("automatic-speech-recognition", "openai/whisper-large-v3-turbo", device="cpu"))
+    return _ASR[0]
+
+
+def transcrever(caminho: str, sf) -> str:
+    """Uma vez por voz (tts.py guarda o texto). return_timestamps: acima de 30 s o Whisper só transcreve em modo longo
+    (a referência já vem recortada, é folga)."""
+    return _whisper()({"raw": _audio16k(caminho, sf), "sampling_rate": 16000}, return_timestamps=True)["text"].strip()
+
+
+def palavras(caminho: str, sf) -> list[list]:
+    """Tempo de cada palavra do áudio gerado ([palavra, início_ms, fim_ms]). O texto exato vem do pedido (quem chama
+    casa as palavras pela ordem); daqui só interessam os tempos."""
+    r = _whisper()({"raw": _audio16k(caminho, sf), "sampling_rate": 16000}, return_timestamps="word")
+    out = []
+    for c in r.get("chunks") or []:
+        ini, fim = c.get("timestamp") or (None, None)
+        if ini is None:
+            continue
+        out.append([c["text"].strip(), round(ini * 1000), round((fim if fim is not None else ini + 0.3) * 1000)])
+    return out
 
 
 def quantizar(model, torch, falta_gb: float) -> int:
