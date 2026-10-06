@@ -224,7 +224,7 @@ export const SECOES: { id: Section; label: string; title: string; icon: React.Re
   { id: "pesquisa", label: "Pesquisa", title: "Pesquisa profunda", icon: <Search className="size-[18px]" /> },
   { id: "design", label: "Design", title: "Design (sites e apresentações)", icon: <Prancheta className="size-[18px]" /> },
   { id: "estudos", label: "Estudos", title: "Estudos (resumo e prova do seu material)", icon: <Livro className="size-[18px]" /> },
-  { id: "tts", label: "Voz", title: "Voz (texto para fala, F5-TTS)", icon: <Onda className="size-[18px]" /> },
+  { id: "tts", label: "Voz", title: "Voz (texto para fala)", icon: <Onda className="size-[18px]" /> },
 ];
 
 /** Trilho de seções à esquerda (60 px), sempre visível. Com a lista de conversas escondida, mostra o
