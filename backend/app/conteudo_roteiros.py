@@ -31,9 +31,7 @@ CHAVE = "roteiros"
 NOME = "roteiros"               # Message.name das rodadas
 MOTOR_CLAUDE = "claude-mcp"     # o mesmo literal de estudos.MOTOR_CLAUDE
 STATUS = ("novo", "aprovado", "descartado", "produzido")
-PORTE = pesquisa.PRESETS["normal"]
-RODADAS = 2
-TETO = 900                      # segundos de coleta; a escrita ganha pesquisa.TETO_RELATORIO a mais
+LONGO = 240                     # segundos de duração mínima a partir dos quais cada roteiro sai numa chamada própria
 PALAVRAS_POR_SEGUNDO = 3.0      # medido nos vídeos prontos (Edge TTS +32%, com as pausas): 150 palavras ≈ 50 s, não 62
 
 
@@ -51,21 +49,17 @@ MAX_ESPERA = 100
 _RUNS: dict[int, dict] = {}
 _TAREFAS: set[asyncio.Task] = set()
 
-ROTEIROS_PROMPT = """Você é roteirista de vídeos curtos (Shorts) de um canal brasileiro.
+ROTEIROS_PROMPT = """Você é roteirista de vídeos (Shorts e vídeos longos) de um canal brasileiro.
 Recebe o GUIA DE ESTILO do canal, a ESPECIFICAÇÃO do tema e os ACHADOS de uma pesquisa na web, numerados [1], [2]...
 Escreva exatamente {n} roteiros, seguindo à risca o guia (tom, tamanho, estrutura de cenas, regras de escrita e
-checagem). Se o guia pede formato lista ("N novidades", "N coisas"), cada item da lista é uma notícia DIFERENTE dos
-achados, com fonte própria — nunca uma notícia só fatiada em itens; e o número dito no gancho é o número de itens.
-Se não for lista, cada roteiro é sobre uma notícia diferente. Roteiros diferentes entre si: outro ângulo ou outras
-notícias.
+checagem). {variacao}
 O vídeo é {formato}. Se o guia não disser o tamanho, use 140 a 170 palavras no vertical e 900 a 1500 no
 horizontal (vídeo longo, com mais contexto e mais cenas).
 
 Regras:
 - Use só fatos que estão nos achados. Número, data, nome e citação só entram se estiverem numa fonte que você cita.
 - Plataformas, datas e preços exatamente como a fonte diz; nunca deduza (um jogo exclusivo não vira multiplataforma).
-- Só entra o que aconteceu nos últimos {dias} dias (hoje é {hoje}). Fato mais antigo só como contexto de uma
-  notícia nova, nunca como a novidade. Data incerta: confiança no máximo 3.
+{tempo}
 - Nunca acuse pessoa ou empresa de algo que a fonte não diz; opinião vira pergunta.
 - `texto` de cada cena é exatamente o que o narrador fala: sem indicação de câmera e sem marcação de fonte ([1],
   [NASA]) — fontes vão em noticia.fontes e na descrição.
@@ -174,8 +168,46 @@ def cancelar(message_id: int) -> dict:
 
 # ------------------------------------------------------------------ disparo
 
+VARIACAO = {
+    "serie": ('Se o guia pede formato lista ("N novidades", "N coisas"), cada item da lista é uma notícia DIFERENTE dos\n'
+              "achados, com fonte própria — nunca uma notícia só fatiada em itens; e o número dito no gancho é o número de\n"
+              "itens. Se não for lista, cada roteiro é sobre uma notícia diferente. Roteiros diferentes entre si: outro\n"
+              "ângulo ou outras notícias."),
+    "unico": ("É um vídeo ÚNICO sobre o tema da especificação, não a notícia da semana: cada roteiro cobre o tema inteiro,\n"
+              "com profundidade (contexto, como funciona, números, exemplos, consequências), e os roteiros são versões\n"
+              "alternativas do mesmo vídeo, com ângulo ou estrutura diferente. Os campos `noticia` descrevem o tema."),
+}
+TEMPO = {
+    "serie": ("- Só entra o que aconteceu nos últimos {dias} dias (hoje é {hoje}). Fato mais antigo só como contexto de uma\n"
+              "  notícia nova, nunca como a novidade. Data incerta: confiança no máximo 3."),
+    "unico": ("- Hoje é {hoje}. Fato atemporal vale; o que é recente vai com a data, e dado que muda com o tempo (preço,\n"
+              "  recorde, versão) usa o mais novo dos achados."),
+}
+
+
+def prompt_roteiros(spec: dict, n: int) -> str:
+    """O system do roteirista: série (notícias do período) ou vídeo único (o tema a fundo), mais a duração mínima."""
+    tipo = "unico" if spec.get("tipo") == "unico" else "serie"
+    return ROTEIROS_PROMPT.format(
+        n=n, formato=conteudo.FORMATOS[spec["formato"]]["rotulo"], variacao=VARIACAO[tipo],
+        tempo=TEMPO[tipo].format(dias=spec["dias"], hoje=date.today().isoformat()),
+    ) + regra_duracao(spec.get("duracao_min") or 0)
+
+
+def porte(spec: dict) -> tuple[dict, int, int]:
+    """Preset da Pesquisa profunda, rodadas e teto (s) da coleta, pela especificação."""
+    prof = spec.get("profundidade") if spec.get("profundidade") in pesquisa.PRESETS else "normal"
+    p = pesquisa.PRESETS[prof]
+    rodadas = (spec.get("pesquisa_rodadas") or 2) if prof == "personalizado" else p["rodadas"]
+    return p, rodadas, (spec.get("pesquisa_minutos") or 15) * 60
+
+
 def _pergunta(spec: dict) -> str:
-    partes = [f"Notícias e novidades dos últimos {spec['dias']} dias sobre: {spec['tema']}"]
+    if spec.get("tipo") == "unico":
+        partes = [f"Pesquisa a fundo para um vídeo sobre: {spec['tema']}. Contexto, como funciona, dados, exemplos e "
+                  "o estado atual."]
+    else:
+        partes = [f"Notícias e novidades dos últimos {spec['dias']} dias sobre: {spec['tema']}"]
     if spec["palavras_chave"]:
         partes.append(f"Palavras-chave: {', '.join(spec['palavras_chave'])}.")
     return " ".join(partes)
@@ -219,9 +251,11 @@ def iniciar(conv_id: int) -> dict:
     if modelctl.gerenciavel(escritor) and modelctl.gerenciavel(extrator):
         extrator = escritor   # um llama-server só: dois modelos locais se trocariam a cada fonte lida
     base["stats"].update(extrator=extrator["model"], escritor=escritor["model"])
+    p, rodadas, teto = porte(spec)
+    base.update(profundidade=spec.get("profundidade") or "normal", rodadas_total=rodadas, teto_segundos=teto)
     msg = _save(conv_id, role="assistant", name=NOME, content="", status="running", meta={CHAVE: base})
     run = _RUNS[msg.id] = {**base, "message_id": msg.id, "conv_id": conv_id, "cancelar": False,
-                           "t0": time.monotonic(), "teto": TETO, "lidas": set(), "porte": PORTE,
+                           "t0": time.monotonic(), "teto": teto, "lidas": set(), "porte": p,
                            "erro_busca": "", "gravar": _gravar, "status": "rodando"}
     t = asyncio.create_task(_rodar(run, spec, extrator, escritor))
     _TAREFAS.add(t)   # o loop só guarda referência fraca: sem esta, a task pode sumir no meio
@@ -261,17 +295,18 @@ async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
     status = "erro"
     try:
         await garante_modelo(escritor)
-        await pesquisa._planejar(run, escritor, PORTE["buscas"])
+        p = run["porte"]
+        await pesquisa._planejar(run, escritor, p["buscas"])
         consultas = run["plano"]["buscas"]
         limite = asyncio.Semaphore(pesquisa.LEITURAS_PARALELAS)
         extrai = asyncio.Semaphore(
             1 if config.PROVIDERS.get(extrator["provider"], {}).get("type") == "llamacpp" else 3)
-        for n in range(1, RODADAS + 1):
+        for n in range(1, run["rodadas_total"] + 1):
             if pesquisa._acabou(run) or not consultas:
                 break
             run["rodada"] = n
             resultados = await pesquisa._buscar(run, consultas)
-            novas = pesquisa._escolher(run, resultados, PORTE["fontes"])
+            novas = pesquisa._escolher(run, resultados, p["fontes"])
             if not novas:
                 break
             run["fontes"] += novas
@@ -286,8 +321,8 @@ async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
             await asyncio.gather(*(uma(f) for f in novas))
             run["stats"].update(fontes=len(run["fontes"]), rodadas=n,
                                 uteis=sum(f["status"] == "util" for f in run["fontes"]))
-            if n < RODADAS and not pesquisa._acabou(run):
-                consultas = await pesquisa._novas_buscas(run, escritor, PORTE["buscas"])
+            if n < run["rodadas_total"] and not pesquisa._acabou(run):
+                consultas = await pesquisa._novas_buscas(run, escritor, p["buscas"])
 
         if run["cancelar"]:
             status, run["aviso"] = "cancelado", "Pesquisa interrompida."
@@ -319,18 +354,29 @@ async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
 async def _escrever(run: dict, spec: dict, escritor: dict) -> list[dict]:
     estilo = conteudo.ler_estilo(spec["estilo"])["texto"]
     uteis = [f for f in run["fontes"] if f["status"] == "util"]
-    system = ROTEIROS_PROMPT.format(n=spec["roteiros"], dias=spec["dias"], hoje=date.today().isoformat(),
-                                    formato=conteudo.FORMATOS[spec["formato"]]["rotulo"]) + regra_duracao(spec.get("duracao_min") or 0)
     user = (f"GUIA DE ESTILO ({spec['estilo']}):\n\n{estilo}\n\n"
             f"ESPECIFICAÇÃO:\nTema: {spec['tema']}\n" + (f"Observações: {spec['observacoes']}\n" if spec["observacoes"] else "")
             + f"\nACHADOS:\n\n{pesquisa._achados(run)}")
-    for tentativa in range(2):
-        texto = await pesquisa._perguntar(escritor, system + (REFORCO if tentativa else ""), user, run, "alto")
-        if roteiros := normalizar(texto, [{"titulo": f["titulo"], "url": f["url"]} for f in uteis]):
-            return roteiros[:spec["roteiros"]]
-        if pesquisa._acabou(run):
-            break
-    return []
+    fontes = [{"titulo": f["titulo"], "url": f["url"]} for f in uteis]
+    # Vídeo longo: três roteiros de 10 min numa resposta só saíam com metade do tamanho (o modelo divide o fôlego).
+    # Um por chamada, cada um com o tempo inteiro da escrita, e o anterior listado para não repetir o ângulo.
+    longo = (spec.get("duracao_min") or 0) >= LONGO
+    feitos: list[dict] = []
+    for _ in range(spec["roteiros"] if longo else 1):
+        n = 1 if longo else spec["roteiros"]
+        extra = ("\n\nJÁ ESCRITOS (faça outro ângulo ou outra estrutura):\n" + "\n".join(f"- {r['titulo']}: {r['ideia']}" for r in feitos)
+                 if feitos else "")
+        if longo:
+            run["teto"] = (time.monotonic() - run["t0"]) + pesquisa.TETO_RELATORIO
+        for tentativa in range(2):
+            texto = await pesquisa._perguntar(escritor, prompt_roteiros(spec, n) + (REFORCO if tentativa else ""),
+                                              user + extra, run, "alto")
+            if roteiros := normalizar(texto, fontes):
+                feitos += roteiros[:n]
+                break
+            if pesquisa._acabou(run):
+                break
+    return feitos[:spec["roteiros"]]
 
 
 # ------------------------------------------------------------------ roteiros
@@ -529,8 +575,7 @@ def _bloco(p: dict) -> str:
         f"GUIA DE ESTILO ({spec['estilo']}), siga à risca:",
         estilo,
         "",
-        (ROTEIROS_PROMPT.format(n=p["n"], dias=p["dias"], hoje=date.today().isoformat(),
-                                formato=conteudo.FORMATOS[spec["formato"]]["rotulo"]) + regra_duracao(spec.get("duracao_min") or 0))
+        prompt_roteiros(spec, p["n"])
         .replace("ACHADOS de uma pesquisa na web, numerados [1], [2]...", "resultado da SUA pesquisa na web"),
         "",
         f"Quando terminar: conteudo_salvar_roteiros(pedido_id={p['pedido_id']}, roteiros=[...], "

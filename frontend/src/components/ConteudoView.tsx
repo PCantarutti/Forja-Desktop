@@ -31,14 +31,28 @@ type Spec = {
   estilo: string;
   roteiros: number;
   duracao_min: number;
+  tipo: "serie" | "unico";
+  profundidade: Profundidade;
+  pesquisa_rodadas: number;
+  pesquisa_minutos: number;
   formato: "vertical" | "horizontal";
   motor: { provider: string; model: string };
   observacoes: string;
   automacao: { modo: Modo; dias: number[]; horarios: string[]; hora_roteiros: string; produzir: boolean; hora_producao?: string; ativado_em?: string };
 };
 
+type Profundidade = "rapida" | "normal" | "funda" | "personalizado";
+// Os mesmos portes da tela Pesquisa profunda (PRESETS do backend); minutos = o tempo que a escolha sugere.
+const PROFUNDIDADES: { id: Profundidade; label: string; minutos: number; hint: string }[] = [
+  { id: "rapida", label: "Rápida", minutos: 5, hint: "1 rodada, 3 páginas, leitura curta de cada página" },
+  { id: "normal", label: "Normal", minutos: 15, hint: "2 rodadas, 5 páginas por rodada" },
+  { id: "funda", label: "Funda", minutos: 30, hint: "4 rodadas, 8 páginas por rodada, leitura longa — para vídeo longo" },
+  { id: "personalizado", label: "Personalizado", minutos: 30, hint: "Você escolhe as rodadas; leitura no tamanho da Funda" },
+];
+
 const SPEC_VAZIA: Spec = {
   nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, duracao_min: 0, formato: "vertical",
+  tipo: "serie", profundidade: "normal", pesquisa_rodadas: 2, pesquisa_minutos: 15,
   motor: { provider: "", model: "" }, observacoes: "",
   automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00", produzir: true },
 };
@@ -812,6 +826,7 @@ function SpecPainel(props: {
   const mudaAuto = (patch: Partial<Spec["automacao"]>) => muda({ automacao: { ...spec.automacao, ...patch } });
   const claude = spec.motor.provider === MOTOR_CLAUDE;
   const nova = props.conv === null;
+  const unico = spec.tipo === "unico";
 
   async function salvar() {
     setSalvando(true);
@@ -848,10 +863,16 @@ function SpecPainel(props: {
 
       <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-4 pb-4 pt-1.5">
         <Secao titulo="Tema">
+          <Segmentado rotulo="Tipo" cheio valor={unico ? "unico" : "serie"} onValor={(tipo) => muda({ tipo })}
+                      opcoes={[["serie", "Série (agenda)"], ["unico", "Vídeo único"]]} />
+          <span className={ajuda}>
+            {unico ? "Um vídeo sobre um tema, a fundo e sem prazo de notícia. Não entra na agenda nem se repete."
+                   : "Novidades do tema que se repetem: pode rodar sozinha pela agenda."}
+          </span>
           <Caixa rotulo="Nome">
             <input className={campoCaixa} value={spec.nome} placeholder="Notícias de IA" onChange={(e) => muda({ nome: e.target.value })} />
           </Caixa>
-          <Caixa rotulo="Do que é o canal">
+          <Caixa rotulo={unico ? "Tema do vídeo" : "Do que é o canal"}>
             <textarea className={`${campoCaixa} h-[74px] resize-none leading-relaxed`} value={spec.tema}
                       placeholder="Lançamentos, riscos e polêmicas de IA que afetam o público geral"
                       onChange={(e) => muda({ tema: e.target.value })} />
@@ -868,14 +889,14 @@ function SpecPainel(props: {
                    onChange={(e) => muda({ fontes: e.target.value.split(",").map((x) => x.trimStart()) })} />
           </Caixa>
           <div className="grid grid-cols-2 gap-1.5">
-            <Caixa rotulo="Novidades dos últimos">
+            {!unico && <Caixa rotulo="Novidades dos últimos">
               <span className="flex items-baseline gap-1">
                 <input type="number" min={1} max={30} value={spec.dias} onChange={(e) => muda({ dias: Number(e.target.value) })}
                        className={`${caixaMono} w-10 font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`} />
                 <span className="text-[11px] text-faint">dias</span>
               </span>
-            </Caixa>
-            <Caixa rotulo="Roteiros por vez">
+            </Caixa>}
+            <Caixa rotulo={unico ? "Versões do roteiro" : "Roteiros por vez"} className={unico ? "col-span-2" : ""}>
               <input type="number" min={1} max={10} value={spec.roteiros} onChange={(e) => muda({ roteiros: Number(e.target.value) })}
                      className={`${caixaMono} font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`} />
             </Caixa>
@@ -888,6 +909,37 @@ function SpecPainel(props: {
               </span>
             </Caixa>
           </div>
+          {!claude && (
+            <>
+              <Caixa rotulo="Profundidade da pesquisa">
+                <select className={`${campoCaixa} -ml-1 cursor-pointer`} value={spec.profundidade}
+                        onChange={(e) => {
+                          const p = PROFUNDIDADES.find((x) => x.id === e.target.value)!;
+                          muda({ profundidade: p.id, pesquisa_minutos: p.minutos });
+                        }}>
+                  {PROFUNDIDADES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                </select>
+              </Caixa>
+              <span className={ajuda}>{PROFUNDIDADES.find((p) => p.id === spec.profundidade)?.hint}</span>
+              <div className="grid grid-cols-2 gap-1.5">
+                {spec.profundidade === "personalizado" && (
+                  <Caixa rotulo="Rodadas de busca">
+                    <input type="number" min={1} max={8} value={spec.pesquisa_rodadas}
+                           onChange={(e) => muda({ pesquisa_rodadas: Number(e.target.value) })}
+                           className={`${caixaMono} font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`} />
+                  </Caixa>
+                )}
+                <Caixa rotulo="Tempo máximo" className={spec.profundidade === "personalizado" ? "" : "col-span-2"}>
+                  <span className="flex items-baseline gap-1">
+                    <input type="number" min={1} max={120} value={spec.pesquisa_minutos}
+                           onChange={(e) => muda({ pesquisa_minutos: Number(e.target.value) })}
+                           className={`${caixaMono} w-10 font-medium [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none`} />
+                    <span className="text-[11px] text-faint">min de pesquisa</span>
+                  </span>
+                </Caixa>
+              </div>
+            </>
+          )}
           <Segmentado rotulo="Quem pesquisa e escreve" cheio valor={claude ? "claude" : "forja"}
                       onValor={(v) => muda({ motor: v === "claude" ? { provider: MOTOR_CLAUDE, model: "Claude (MCP)" } : { provider: props.provider, model: props.model } })}
                       opcoes={[["forja", "Modelo do Forja"], ["claude", "Claude (MCP)"]]} />
@@ -935,7 +987,7 @@ function SpecPainel(props: {
           </Caixa>
         </Secao>
 
-        <Secao titulo="Automação">
+        {!unico && <Secao titulo="Automação">
           <Segmentado rotulo="Automação" cheio valor={spec.automacao.modo} onValor={(m) => mudaAuto({ modo: m })}
                       opcoes={MODOS.map((m) => [m.id, m.label])} />
           <span className={ajuda}>{MODOS.find((m) => m.id === spec.automacao.modo)?.hint}</span>
@@ -977,7 +1029,7 @@ function SpecPainel(props: {
               estava desligado no horário, o Forja avisa no celular e pergunta se ainda roda.
             </span>
           )}
-        </Secao>
+        </Secao>}
       </div>
 
       <div className="flex shrink-0 items-center gap-3 border-t border-line px-4 py-3">

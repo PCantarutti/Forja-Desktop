@@ -272,9 +272,14 @@ def limpar_markdown(texto: str) -> str:
 
 # ------------------------------------------------------------------ especificações
 
+TIPOS = ("serie", "unico")
+PROFUNDIDADES = ("rapida", "normal", "funda", "personalizado")   # as chaves de pesquisa.PRESETS
+
+
 def _spec_padrao() -> dict:
     return {"tema": "", "palavras_chave": [], "fontes": [], "dias": 3, "estilo": "", "roteiros": 3, "formato": "vertical",
-            "duracao_min": 0,
+            "duracao_min": 0, "tipo": "serie",
+            "profundidade": "normal", "pesquisa_rodadas": 2, "pesquisa_minutos": 15,
             "motor": {"provider": "", "model": ""}, "observacoes": "",
             "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
                           "hora_producao": "03:00", "produzir": True, "ativado_em": ""}}
@@ -314,6 +319,19 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
         spec["roteiros"] = max(1, min(10, _inteiro(d["roteiros"], 3)))
     if "duracao_min" in d:   # segundos; 0 = sem mínimo (Shorts que saíam com menos de 1 min)
         spec["duracao_min"] = max(0, min(1800, _inteiro(d["duracao_min"], 0)))
+    if "tipo" in d:   # série = notícias que se repetem pela agenda; único = um vídeo só sobre um tema, fora da agenda
+        if d["tipo"] not in TIPOS:
+            raise ToolError("Tipo inválido: serie ou unico.")
+        spec["tipo"] = d["tipo"]
+    # quanto pesquisar: os mesmos portes da tela Pesquisa profunda (rodadas e tempo só valem no personalizado/teto)
+    if "profundidade" in d:
+        if d["profundidade"] not in PROFUNDIDADES:
+            raise ToolError("Profundidade inválida: rapida, normal, funda ou personalizado.")
+        spec["profundidade"] = d["profundidade"]
+    if "pesquisa_rodadas" in d:
+        spec["pesquisa_rodadas"] = max(1, min(8, _inteiro(d["pesquisa_rodadas"], 2)))
+    if "pesquisa_minutos" in d:
+        spec["pesquisa_minutos"] = max(1, min(120, _inteiro(d["pesquisa_minutos"], 15)))
     if "estilo" in d:
         estilo = str(d["estilo"] or "").strip().lower()
         if estilo and (not NOME_RE.match(estilo) or estilo in RESERVADOS):
@@ -328,6 +346,8 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
         spec["motor"] = {"provider": str(m.get("provider") or "")[:60], "model": str(m.get("model") or "")[:300]}
     if "automacao" in d:
         spec["automacao"] = _automacao(spec["automacao"], d["automacao"] if isinstance(d["automacao"], dict) else {})
+    if spec["tipo"] == "unico":   # vídeo único não se repete: nunca entra na agenda
+        spec["automacao"] = {**spec["automacao"], "modo": "desligada"}
     if not spec["tema"]:
         raise ToolError("Descreva o tema da especificação.")
     return spec

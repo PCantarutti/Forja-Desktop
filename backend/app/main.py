@@ -2440,7 +2440,8 @@ def conteudo_publicacao(message_id: int):
 def conteudo_agenda_geral():
     """Todas as especificações com a agenda de cada uma (a vista Agenda do PC e do celular)."""
     return [{"id": s["id"], "nome": s["nome"], "automacao": s["automacao"], "estilo": s["estilo"],
-             "motor": s["motor"], **conteudo_agenda.estado(s["id"])} for s in conteudo.especificacoes()]
+             "motor": s["motor"], **conteudo_agenda.estado(s["id"])} for s in conteudo.especificacoes()
+            if s.get("tipo") != "unico"]
 
 
 @app.get("/api/servico")

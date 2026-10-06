@@ -208,3 +208,39 @@ def test_garante_modelo_cai_para_carga_leve_sem_vram(monkeypatch):
     except ToolError:
         pass
     assert cargas == [None]   # erro que não é de VRAM não insiste
+
+
+def test_video_unico_fora_da_agenda_e_prompt_do_tema(monkeypatch):
+    chamados = _fakes(monkeypatch)
+    cid = _spec(tipo="unico", automacao={"modo": "automatico"})
+    spec = conteudo.especificacao(cid)
+    assert spec["tipo"] == "unico" and spec["automacao"]["modo"] == "desligada"   # único nunca entra na agenda
+    from app import main
+    assert all(i["id"] != cid for i in main.conteudo_agenda_geral())
+    est = asyncio.run(_rodar_ate_o_fim(cid))
+    assert est["status"] == "ok" and est["pergunta"].startswith("Pesquisa a fundo para um vídeo sobre")
+    system = chamados[0][0]
+    assert "vídeo ÚNICO" in system and "últimos" not in system
+    with pytest.raises(ToolError):
+        conteudo.salvar_especificacao({"tipo": "mensal"}, cid)
+
+
+def test_profundidade_da_pesquisa_vem_da_especificacao(monkeypatch):
+    _fakes(monkeypatch)
+    cid = _spec(profundidade="personalizado", pesquisa_rodadas=5, pesquisa_minutos=40)
+    p, rodadas, teto = R.porte(conteudo.especificacao(cid))
+    assert p is __import__("app.pesquisa", fromlist=["x"]).PRESETS["personalizado"] and rodadas == 5 and teto == 2400
+    p, rodadas, teto = R.porte(conteudo.especificacao(_spec(profundidade="funda")))
+    assert rodadas == 4 and p["fontes"] == 8
+    assert R.porte(conteudo.especificacao(_spec()))[1:] == (2, 900)   # padrão = o de antes (normal, 15 min)
+    est = asyncio.run(_rodar_ate_o_fim(cid))
+    assert est["rodadas_total"] == 5 and est["teto_segundos"] == 2400
+
+
+def test_video_longo_um_roteiro_por_chamada(monkeypatch):
+    um = json.dumps({"roteiros": [ROTEIRO]})
+    chamados = _fakes(monkeypatch, [um, json.dumps({"roteiros": [{**ROTEIRO, "titulo": "Outro"}]})])
+    est = asyncio.run(_rodar_ate_o_fim(_spec(duracao_min=600)))
+    assert est["status"] == "ok" and [r["titulo"] for r in est["roteiros"]] == ["OpenAI pausa", "Outro"]
+    assert len(chamados) == 2 and "exatamente 1 roteiros" in chamados[0][0]
+    assert "JÁ ESCRITOS" in chamados[1][1] and "OpenAI pausa" in chamados[1][1]
