@@ -20,11 +20,14 @@ import json
 import random
 import re
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
 
 PEDACO = 280  # caracteres por geração: ~15-20 s de fala, cabe com folga num contexto de 4096
+REF_MAX_S = 15.0  # referência mais longa é recortada: o Fish usa ela inteira como prompt (15 min = ~19 mil tokens)
+REF_MIN_S = 8.0   # o corte cai no ponto mais silencioso entre REF_MIN_S e REF_MAX_S (fim de frase, não meio de palavra)
 MARGEM_GB = 2.5  # cache de atenção (~0,6 GB em 4096), ativações e folga; VRAM no limite dá device lost na Arc
 
 
@@ -150,11 +153,15 @@ def main() -> int:
         try:
             t0 = time.time()
             ref_texto = q.get("ref_texto", "").strip()
-            if q.get("ref") and not ref_texto:
+            ref, segundos_ref = (recortar(q["ref"], sf) if q.get("ref") else ("", 0.0))
+            # a transcrição de um áudio longo inteiro (digitada pela pessoa) não casa com o trecho recortado
+            if segundos_ref and len(ref_texto.split()) > 4 * segundos_ref:
+                ref_texto = ""
+            if ref and not ref_texto:
                 diz("FASE", "transcrevendo a referência")
-                ref_texto = transcrever(q["ref"], sf)
+                ref_texto = transcrever(ref, sf)
                 diz("TRANSCRICAO", ref_texto)
-            prompt = [encode_audio(q["ref"], codec, "cpu")] if q.get("ref") else None
+            prompt = [encode_audio(ref, codec, "cpu")] if ref else None
             semente = int(q.get("semente", -1))
             semente = semente if semente >= 0 else random.randint(0, 2**31 - 1)
             torch.manual_seed(semente)
@@ -186,12 +193,34 @@ def main() -> int:
     return 0
 
 
+def recortar(caminho: str, sf) -> tuple[str, float]:
+    """Referência acima de REF_MAX_S vira só o começo, cortado no trecho mais silencioso entre REF_MIN_S e REF_MAX_S.
+    Devolve (arquivo a usar, segundos do recorte; 0 = usou o original)."""
+    dados, sr = sf.read(caminho, dtype="float32", always_2d=True)
+    mono = dados.mean(axis=1)
+    if len(mono) <= REF_MAX_S * sr:
+        return caminho, 0.0
+    janela, ini = int(0.02 * sr), int(REF_MIN_S * sr)
+    trecho = mono[ini:int(REF_MAX_S * sr)]
+    n = len(trecho) // janela
+    energia = (trecho[:n * janela].reshape(n, janela) ** 2).mean(axis=1)
+    corte = ini + int(energia.argmin()) * janela + janela // 2
+    saida = Path(tempfile.mkdtemp()) / "referencia.wav"
+    sf.write(str(saida), mono[:corte], sr)
+    diz("FASE", f"referência de {len(mono) / sr:.0f} s: usando os primeiros {corte / sr:.1f} s")
+    return str(saida), corte / sr
+
+
 def transcrever(caminho: str, sf) -> str:
-    """Uma vez por voz (tts.py guarda o texto), sempre na CPU: na GPU ele disputaria a VRAM com o modelo de pé."""
+    """Uma vez por voz (tts.py guarda o texto), sempre na CPU: na GPU ele disputaria a VRAM com o modelo de pé.
+    return_timestamps: acima de 30 s o Whisper só transcreve em modo longo (a referência já vem recortada, é folga)."""
+    import librosa
     from transformers import pipeline
     dados, sr = sf.read(caminho, dtype="float32", always_2d=True)
+    # 16 kHz aqui: a conversão interna do pipeline estraga 44,1 kHz (um MP3 de narração virou "Продолжение следует...")
+    mono = librosa.resample(dados.mean(axis=1), orig_sr=sr, target_sr=16000) if sr != 16000 else dados.mean(axis=1)
     asr = pipeline("automatic-speech-recognition", "openai/whisper-large-v3-turbo", device="cpu")
-    return asr({"raw": dados.mean(axis=1), "sampling_rate": sr})["text"].strip()
+    return asr({"raw": mono, "sampling_rate": 16000}, return_timestamps=True)["text"].strip()
 
 
 def quantizar(model, torch, falta_gb: float) -> int:
