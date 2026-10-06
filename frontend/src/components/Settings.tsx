@@ -553,8 +553,12 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
 
   const acao = (fn: Promise<unknown>) => fn.then(recarrega).catch((e: any) => props.onError(e.message));
 
-  const bloco = (kind: "llama" | "sd" | "ffmpeg" | "comfy", titulo: string, descricao: string) => {
+  const bloco = (kind: "llama" | "sd" | "ffmpeg" | "comfy" | "tts_fish" | "tts_f5", titulo: string, descricao: string) => {
     const r = st.runtimes[kind];
+    if (!r) return null;
+    // um pacote só, montado para a GPU desta máquina: sem escolha de build nem pasta personalizada
+    const fixo = kind === "comfy" || kind.startsWith("tts_");
+    const voz = kind.startsWith("tts_");
     return (
       <Field key={kind} label={titulo} hint={descricao}>
         <div className="space-y-2">
@@ -575,7 +579,7 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
               ))}
             </select>
           </div>
-          {kind !== "comfy" && (
+          {!fixo && (
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted">Personalizado</span>
               <span
@@ -604,17 +608,19 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
             {r.backends.map((b: string) => {
               const tem = r.available.some((a: any) => a.backend === b);
               if (kind === "comfy" && tem) return null; // versão fixa: não há o que atualizar
+              if (voz && r.instalando) return <span key={b} className="text-xs text-muted">instalando…</span>;
               return (
                 <button
                   key={b}
                   className={btn}
                   onClick={() => acao(api.post("/local/runtime", { kind, backend: b }))}
-                  title={kind === "comfy" ? `Pacote portátil oficial para a sua GPU (${b}), com Python e PyTorch: ~${((r.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB.` : kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
+                  title={voz ? (tem ? "Refaz o ambiente do zero (o cache evita baixar tudo de novo)" : `Python próprio com PyTorch para a sua GPU (${b}): ~${((r.mb ?? 0) / 1000).toFixed(0)} GB, na pasta ${r.pasta}.`) : kind === "comfy" ? `Pacote portátil oficial para a sua GPU (${b}), com Python e PyTorch: ~${((r.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB.` : kind === "ffmpeg" ? "Build LGPL do BtbN (~80 MB): lê e grava o vídeo; o ESRGAN roda no sd.cpp, na GPU." : b === "cuda" ? "NVIDIA. Baixa também o runtime da NVIDIA (~370 MB)." : b === "vulkan" ? "Qualquer GPU: NVIDIA, AMD e Intel." : "Sem GPU: roda na CPU."}
                 >
-                  {kind === "comfy" ? `Baixar (~${((r.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB)` : kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
+                  {voz ? (tem ? "Reinstalar" : `Baixar (~${((r.mb ?? 0) / 1000).toFixed(0)} GB)`) : kind === "comfy" ? `Baixar (~${((r.mb ?? 0) / 1000).toFixed(1).replace(".", ",")} GB)` : kind === "ffmpeg" ? (tem ? "Atualizar" : "Baixar") : tem ? `Atualizar ${b}` : `Baixar ${b}`}
                 </button>
               );
             })}
+            {voz && r.installed && !r.instalando && <RemoverRuntime onRemover={() => acao(api.post(`/tts/remover/${kind.slice(4)}`))} />}
           </div>
         </div>
       </Field>
@@ -627,13 +633,15 @@ function RuntimeTab(props: { onError: (e: string) => void }) {
       {bloco("sd", "Motor de imagem e vídeo (stable-diffusion.cpp)", "Mesma ideia, para gerar imagem e vídeo (e o ESRGAN da ampliação).")}
       {bloco("ffmpeg", "Motor de ampliação de vídeo (ffmpeg)", "Separa os quadros, junta de volta com o áudio e interpola o movimento. Só existe o build de CPU: o pesado (ESRGAN) é na GPU pelo sd.cpp.")}
       {bloco("comfy", "Motor de ampliação por IA pesada (ComfyUI)", "SeedVR2, DAT/HAT/SwinIR e o Redesenhar com um checkpoint SD 1.5/SDXL. O pacote é o da marca da sua GPU, numa versão fixa testada; roda só enquanto amplia e libera a VRAM no fim.")}
+      {bloco("tts_fish", "Motor de voz Fish Audio (S2-pro e afins)", "Clona a voz de um áudio de referência e aceita emoção entre colchetes no texto. Python próprio com PyTorch para a sua GPU; o modelo fica na memória entre um áudio e outro e sai depois de 5 min parado.")}
+      {bloco("tts_f5", "Motor de voz F5-TTS / E2-TTS", "O F5 oficial ou qualquer fine-tune dele (há em pt-br). Mais leve que o Fish; mesmo esquema de Python próprio.")}
       {!!st.jobs?.filter((j: any) => j.kind === "runtime").length && (
         <div className="space-y-1 text-xs text-muted">
           {st.jobs
             .filter((j: any) => j.kind === "runtime")
             .map((j: any) => (
               <p key={j.id}>
-                {j.name}: {j.status === "running" ? `${j.total ? Math.round((j.done / j.total) * 100) : 0}%` : j.status}
+                {j.name}: {j.status === "running" ? (j.total ? `${Math.round((j.done / j.total) * 100)}%` : j.detail || "começando…") : j.status}
                 {j.error ? ` — ${j.error}` : ""}
               </p>
             ))}
@@ -2596,5 +2604,18 @@ function UmModeloSo({ s, set }: { s: AppSettings; set: <K extends keyof AppSetti
         Usar {m.model} nos Workers
       </button>
     </div>
+  );
+}
+/** Remover em dois cliques: apaga a pasta do motor (Python, PyTorch e pacotes); reinstalar baixa de novo. */
+function RemoverRuntime(props: { onRemover: () => void }) {
+  const [certeza, setCerteza] = useState(false);
+  return certeza ? (
+    <span className="flex items-center gap-2 text-xs">
+      <span className="text-muted">Apagar o motor do disco?</span>
+      <button className="rounded-[9px] bg-err px-3 py-1 font-semibold text-white hover:brightness-110" onClick={props.onRemover}>Remover</button>
+      <button className={btn} onClick={() => setCerteza(false)}>Cancelar</button>
+    </span>
+  ) : (
+    <button className={btn} title="Apaga o motor do disco (os modelos baixados e as vozes ficam)" onClick={() => setCerteza(true)}>Remover</button>
   );
 }

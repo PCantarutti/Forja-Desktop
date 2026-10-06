@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Modal } from "./Modal";
-import type { Hardware, HfFile, HfModel, HfRepo } from "../types";
+import type { Hardware, HfFile, HfModel, HfRepo, KindBusca } from "../types";
 import { Markdown } from "./MessageView";
 import { Check, Copy, Download, Search, X } from "./icons";
 import SelosModo from "./SelosModo";
@@ -74,10 +74,10 @@ function quando(iso: string): string {
 
 /** Busca de modelos no Hugging Face: lista à esquerda, ficha do modelo à direita. */
 export default function ModelSearch(props: {
-  kind: "text" | "image" | "video" | "ampliar";
+  kind: KindBusca;
   destino: string;
   hardware?: Hardware;
-  onKind: (k: "text" | "image" | "video" | "ampliar") => void;
+  onKind: (k: KindBusca) => void;
   onDownload: (repo: string, file: string, subpasta?: string) => void;
   onClose: () => void;
   onError: (e: string) => void;
@@ -91,8 +91,8 @@ export default function ModelSearch(props: {
   const [baixados, setBaixados] = useState<string[]>([]);
   const pedido = useRef(0);
 
-  // vídeo: vazio = "wan"; ampliação: vazio = os de referência. A lista já abre cheia.
-  const semTermo = props.kind === "video" || props.kind === "ampliar";
+  // vídeo: vazio = "wan"; ampliação e voz: vazio = os de referência. A lista já abre cheia.
+  const semTermo = props.kind === "video" || props.kind === "ampliar" || props.kind === "voz";
   async function buscar() {
     if (q.trim().length < 2 && !semTermo) return;
     const meu = ++pedido.current;
@@ -144,14 +144,14 @@ export default function ModelSearch(props: {
             autoFocus
             className="min-w-0 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-faint"
             placeholder={props.kind === "text" ? "Buscar modelos no Hugging Face…" : props.kind === "image" ? "Buscar modelos de imagem…"
-              : props.kind === "ampliar" ? "Buscar ampliadores (esrgan, 4x, seedvr2…)" : "Buscar modelos de vídeo (Wan)…"}
+              : props.kind === "ampliar" ? "Buscar ampliadores (esrgan, 4x, seedvr2…)" : props.kind === "voz" ? "Buscar modelos de voz (s2-pro, f5, pt-br…)" : "Buscar modelos de vídeo (Wan)…"}
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && buscar()}
             spellCheck={false}
           />
           <div className="flex shrink-0 gap-0.5 rounded-[9px] border border-line bg-surface p-0.5">
-            {(["text", "image", "video", "ampliar"] as const).map((k) => (
+            {(["text", "image", "video", "ampliar", "voz"] as const).map((k) => (
               <button
                 key={k}
                 onClick={() => {
@@ -161,7 +161,7 @@ export default function ModelSearch(props: {
                 }}
                 className={`rounded-[7px] px-2.5 py-1 ${props.kind === k ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
               >
-                {k === "text" ? "chat" : k === "image" ? "imagem" : k === "video" ? "vídeo" : "ampliação"}
+                {k === "text" ? "chat" : k === "image" ? "imagem" : k === "video" ? "vídeo" : k === "voz" ? "voz" : "ampliação"}
               </button>
             ))}
           </div>
@@ -200,7 +200,9 @@ export default function ModelSearch(props: {
             {buscando && <p className="p-3 text-faint">buscando…</p>}
             {!buscando && lista === null && (
               <p className="p-3 text-faint">
-                {props.kind === "ampliar"
+                {props.kind === "voz"
+                  ? "Só aparecem os que a tela Voz roda, conferidos pelos arquivos do repositório: Fish Audio no formato do S2-pro e checkpoints do F5-TTS (o oficial e os fine-tunes, como os em pt-br). Versões quantizadas (fp8, 4 bits, GGUF) ficam de fora."
+                  : props.kind === "ampliar"
                   ? "Só aparecem os que o Forja roda, conferidos pelo conteúdo do arquivo: ESRGAN (pelo sd-cli), DAT/HAT/SwinIR/SPAN/PLKSR e compactos (pelo ComfyUI) e SeedVR2 (difusão, pelo ComfyUI)."
                   : semTermo ? "Só aparecem os Wan, que é o que o stable-diffusion.cpp gera em vídeo." : "Digite o que procura e aperte Enter. Ex.: qwen3, gemma, sdxl."}
               </p>
@@ -256,7 +258,7 @@ export default function ModelSearch(props: {
                   {repo.ctx_train > 0 && props.kind === "text" && <span className={chip}>CTX {milhares(repo.ctx_train)}</span>}
                   {repo.license && <span className={chip}>{repo.license}</span>}
                   <span className="rounded-[5px] bg-accent-soft px-1.5 py-0.5 font-mono text-[11px] text-accent-text">
-                    {props.kind === "text" ? "GGUF" : props.kind === "image" ? "imagem" : props.kind === "video" ? "vídeo" : "ampliação"}
+                    {props.kind === "text" ? "GGUF" : props.kind === "image" ? "imagem" : props.kind === "video" ? "vídeo" : props.kind === "voz" ? "voz" : "ampliação"}
                   </span>
                 </div>
 
@@ -291,20 +293,25 @@ export default function ModelSearch(props: {
                 <div className="mt-4">
                   <div className="flex items-center gap-2">
                     <p className="flex-1 text-muted">Opções de download ({repo.files.length}) · do menor para o maior</p>
-                    <span className="truncate text-faint" title={props.destino}>
-                      para {props.destino}
+                    <span className="truncate text-faint" title={props.kind === "voz" ? "Fora das pastas de modelos: o .safetensors de voz não pode aparecer como modelo de imagem" : props.destino}>
+                      {props.kind === "voz" ? "para a pasta da tela Voz · entra cadastrado lá" : `para ${props.destino}`}
                     </span>
                   </div>
                   <div className="mt-1.5 flex flex-col gap-1">
                     {!repo.files.length && <p className="text-faint">Nenhum arquivo compatível neste repositório.</p>}
-                    {repo.files.map((f) => (
-                      <div key={f.path} className={`flex items-center gap-2 rounded-[9px] border px-2.5 py-1.5 ${cabe(f.size, props.hardware).tom || "border-line"}`}>
+                    {repo.files.map((f) => {
+                      // voz: o motor cuida da memória (int8 no que faltar); a régua de GGUF não vale aqui
+                      const memoria = props.kind === "voz" ? { tom: "", cor: "text-muted", dica: "", rotulo: "" } : cabe(f.size, props.hardware);
+                      return (
+                      <div key={f.path} className={`flex items-center gap-2 rounded-[9px] border px-2.5 py-1.5 ${memoria.tom || "border-line"}`}>
                         {f.quant && <span className={`${chip} shrink-0`}>{f.quant}</span>}
                         {f.tipo && (
                           <span className={`${chip} shrink-0`} title={f.tipo === "seedvr2" ? "Difusão: mais detalhe, minutos por imagem (precisa do ComfyUI)"
                             : f.tipo === "spandrel" ? "DAT, HAT, SwinIR e afins: segundos por imagem, mais fiel que o ESRGAN (precisa do ComfyUI)"
-                            : f.tipo === "vae" ? "Peça do SeedVR2: vai junto do modelo" : "Rápido: segundos por imagem"}>
-                            {f.tipo === "seedvr2" ? "SeedVR2 · ComfyUI" : f.tipo === "spandrel" ? "DAT/HAT · ComfyUI" : f.tipo === "vae" ? "VAE do SeedVR2" : "ESRGAN · sd-cli"}
+                            : f.tipo === "vae" ? "Peça do SeedVR2: vai junto do modelo" : f.tipo === "fish" ? "Clona a voz da referência; aceita [emoção] no texto. Motor Fish Audio"
+                            : f.tipo === "f5" ? `Checkpoint do F5-TTS (arquitetura ${f.arquitetura ?? "?"}). O vocab.txt do repositório vai junto` : "Rápido: segundos por imagem"}>
+                            {f.tipo === "seedvr2" ? "SeedVR2 · ComfyUI" : f.tipo === "spandrel" ? "DAT/HAT · ComfyUI" : f.tipo === "vae" ? "VAE do SeedVR2"
+                              : f.tipo === "fish" ? "Fish Audio" : f.tipo === "f5" ? `F5 · ${f.arquitetura ?? ""}` : "ESRGAN · sd-cli"}
                           </span>
                         )}
                         {f.papel && f.papel !== "modelo" && (
@@ -312,12 +319,12 @@ export default function ModelSearch(props: {
                             {({ vae: "VAE", t5xxl: "codificador", clip_vision: "CLIP Vision", high_noise_model: "HighNoise" } as Record<string, string>)[f.papel] ?? f.papel}
                           </span>
                         )}
-                        <span className="min-w-0 flex-1 truncate text-fg" title={f.path}>
-                          {f.path.split("/").pop()}
+                        <span className="min-w-0 flex-1 truncate text-fg" title={f.path || f.nome}>
+                          {f.nome ?? f.path.split("/").pop()}
                           {f.shards > 1 ? ` · ${f.shards} partes` : ""}
                         </span>
-                        <span className={`flex shrink-0 items-center gap-1.5 ${cabe(f.size, props.hardware).cor}`} title={cabe(f.size, props.hardware).dica}>
-                          {cabe(f.size, props.hardware).rotulo && <span className="text-[11px]">{cabe(f.size, props.hardware).rotulo}</span>}
+                        <span className={`flex shrink-0 items-center gap-1.5 ${memoria.cor}`} title={memoria.dica}>
+                          {memoria.rotulo && <span className="text-[11px]">{memoria.rotulo}</span>}
                           <span className="font-mono">{tamanho(f.size)}</span>
                         </span>
                         <button
@@ -329,7 +336,8 @@ export default function ModelSearch(props: {
                           {baixados.includes(f.path) ? "baixando" : "Baixar"}
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 

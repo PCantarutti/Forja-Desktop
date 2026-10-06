@@ -836,7 +836,9 @@ export type RuntimeInfo = {
   backends: string[]; // o que dá para baixar
   available: { backend: string; exe: string; version: string }[]; // o que já está no disco
   chosen: string; // escolhido à mão em Configurações › Runtime ("" = automático)
-  mb?: number; // ComfyUI: o tamanho do download (o pacote da marca da GPU)
+  mb?: number; // ComfyUI e motores de voz: o tamanho do download
+  pasta?: string; // motores de voz: onde ficam
+  instalando?: string; // motores de voz: id do job da instalação em curso
 };
 
 /** Memória da máquina: é o que diz se um modelo cabe na GPU, na RAM, ou em lugar nenhum. */
@@ -851,7 +853,7 @@ export type Hardware = {
 
 export type LocalState = {
   aviso_padroes?: boolean;  // E4: padrões de cache novos, avisar uma vez
-  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo; ffmpeg: RuntimeInfo; comfy: RuntimeInfo };
+  runtimes: { llama: RuntimeInfo; sd: RuntimeInfo; ffmpeg: RuntimeInfo; comfy: RuntimeInfo; tts_fish?: RuntimeInfo; tts_f5?: RuntimeInfo };
   models: LocalModel[];
   server: {
     running: boolean;
@@ -927,7 +929,9 @@ export type HfRepo = {
   readme: string;
 };
 export type HfFile = { path: string; size: number; quant: string; shards: number; papel?: string;
-  tipo?: "esrgan" | "seedvr2" | "spandrel" | "vae"; subpasta?: string }; // tipo/subpasta: só na busca de ampliação
+  tipo?: "esrgan" | "seedvr2" | "spandrel" | "vae" | "fish" | "f5"; subpasta?: string; // tipo/subpasta: ampliação e voz
+  nome?: string; arquitetura?: string }; // voz: o Fish baixa o repo inteiro (path ""), o rótulo vem em `nome`
+export type KindBusca = "text" | "image" | "video" | "ampliar" | "voz";
 
 // ------------------------------------------------------------------ Maestro
 // A Maestro planeja e verifica; os Workers implementam. O estado real vive no SQLite do backend

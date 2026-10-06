@@ -4,7 +4,8 @@ import type { Message } from "../types";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { campoPrompt } from "./Composer";
 import { BarraTopo, Caixa, numeroCaixa, Secao } from "./ImagensView";
-import { Check, Download, Edit, Pause, Play, Plus, Refresh, Trash, X } from "./icons";
+import { Check, Download, Edit, Pause, Play, Plus, Refresh, Search, Trash, X } from "./icons";
+import ModelSearch from "./ModelSearch";
 import Saudacao from "./Saudacao";
 
 // Tela Voz: texto para fala com motores plugáveis (backend/app/tts.py): F5-TTS/E2-TTS e Fish Audio. Cada motor tem o
@@ -13,14 +14,18 @@ import Saudacao from "./Saudacao";
 // do topo, falas no meio, composer embaixo e o painel Parâmetros à direita.
 
 type Motor = "f5" | "fish";
-type Modelo = { nome: string; motor: Motor; modelo?: string; arquitetura?: string; ckpt?: string; vocab?: string; minusculas?: boolean; numeros?: string };
+type Modelo = {
+  nome: string; motor: Motor; modelo?: string; arquitetura?: string; ckpt?: string; vocab?: string; minusculas?: boolean; numeros?: string;
+  a_baixar?: boolean; // ainda não está no disco: desce na primeira geração
+};
 type Voz = { id: string; nome: string; texto: string; caminho: string };
 type InfoMotor = { nome: string; instalado: boolean; gb: number; instalando: string };
 type Estado = {
   motores: Record<Motor, InfoMotor>; gpu: string; backend: string; modelos: Modelo[]; vozes: Voz[]; arquiteturas: string[];
   carregado: { nome: string; dispositivo: string } | null;
+  baixando: Job[]; // downloads de modelo de voz pela janela de modelos
 };
-type Job = { id: string; status: string; detail: string; error: string };
+type Job = { id: string; status: string; detail: string; error: string; name?: string; done?: number; total?: number };
 
 const POLL_MS = 1500;
 const audioUrl = (p: string) => `/api/tts/arquivo?path=${encodeURIComponent(p)}`;
@@ -42,6 +47,7 @@ const RODAPE: Record<Motor, string> = {
   f5: "O modelo fica na memória entre um áudio e outro e sai sozinho depois de 5 min parado.",
 };
 
+const gb = (n = 0) => (n / 2 ** 30).toFixed(1).replace(".", ",");
 const relogio = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
 // ---------------------------------------------------------------- tocador
@@ -244,13 +250,14 @@ export default function TtsView(props: {
   const [editando, setEditando] = useState<Modelo | null>(null);
   const [novaVoz, setNovaVoz] = useState<{ nome: string; texto: string; file: File | null } | null>(null);
   const [apagandoVoz, setApagandoVoz] = useState("");
+  const [procurando, setProcurando] = useState(false);
   const [vram, setVram] = useState("");  // 409: o que ocupa a GPU; Gerar repete com confirm=true se a pessoa aceitar
   const campoTexto = useRef<HTMLTextAreaElement>(null);
   const arquivoVoz = useRef<HTMLInputElement>(null);
   const fim = useRef<HTMLDivElement>(null);
   const { onError } = props;
 
-  const instalando = estado ? Object.values(estado.motores).some((m) => m.instalando) : false;
+  const instalando = estado ? Object.values(estado.motores).some((m) => m.instalando) || estado.baixando.some((j) => j.status === "running") : false;
   const carregarEstado = useCallback(async () => {
     try {
       const e = await api.get<Estado>("/tts");
@@ -494,6 +501,16 @@ export default function TtsView(props: {
         </div>
       </div>
 
+      {procurando && (
+        <ModelSearch
+          kind="voz"
+          destino=""
+          onKind={() => {}}
+          onDownload={(repo, file) => api.post("/local/download", { repo, file, kind: "voz" }).then(carregarEstado).catch((e) => onError(e.message))}
+          onClose={() => { setProcurando(false); carregarEstado(); }}
+          onError={onError}
+        />
+      )}
       {painel && (
         <aside className="flex w-[300px] shrink-0 flex-col overflow-hidden border-l border-line bg-side text-xs">
           <div className="flex items-center gap-2 px-4 pt-4 pb-1.5">
@@ -524,7 +541,7 @@ export default function TtsView(props: {
                         <span className="flex min-w-0 flex-1 flex-col">
                           <span className={`truncate text-[12.5px] ${ativo ? "text-fg" : "text-muted"}`}>{x.nome}</span>
                           <span className={`truncate text-[10.5px] ${inst ? "text-faint" : "text-warn"}`}>
-                            {estado.motores[x.motor]?.nome}{inst ? "" : " · motor não instalado"}
+                            {estado.motores[x.motor]?.nome}{inst ? (x.a_baixar ? " · baixa na 1ª geração" : "") : " · motor não instalado"}
                           </span>
                         </span>
                         <button onClick={(e) => { e.stopPropagation(); setEditando({ ...x }); }} aria-label={`Editar ${x.nome}`}
@@ -536,7 +553,28 @@ export default function TtsView(props: {
                   })}
                 </div>
               )}
-              {!estado.modelos.length && !editando && <p className="text-[11.5px] leading-relaxed text-faint">Nenhum modelo. Em Adicionar há sugestões prontas.</p>}
+              {!estado.modelos.length && !editando && <p className="text-[11.5px] leading-relaxed text-faint">Nenhum modelo. Em Adicionar há sugestões prontas, ou procure um no Hugging Face.</p>}
+              {estado.baixando.map((j) => (
+                <div key={j.id} className="flex flex-col gap-1">
+                  <div className="flex items-baseline gap-2 text-[11.5px]">
+                    <span className="min-w-0 flex-1 truncate text-fg-2" title={j.name}>{j.name?.replace(/ \(voz\)$/, "")}</span>
+                    <span className={`shrink-0 font-mono text-[11px] ${j.error ? "text-diff-del-fg" : "text-faint"}`}>
+                      {j.error ? "falhou" : j.status === "running" ? (j.total ? `${gb(j.done)} de ${gb(j.total)} GB` : "começando…") : "pronto · cadastrado"}
+                    </span>
+                  </div>
+                  {j.status === "running" && (
+                    <div className="h-[3px] overflow-hidden rounded-full bg-line">
+                      <div className="h-full rounded-full bg-accent transition-[width] duration-500" style={{ width: `${j.total ? Math.max(2, ((j.done ?? 0) / j.total) * 100) : 2}%` }} />
+                    </div>
+                  )}
+                  {j.error && <p className="text-[11px] text-diff-del-fg">{j.error}</p>}
+                </div>
+              ))}
+              {!editando && (
+                <button onClick={() => setProcurando(true)} className={`${linkPainel} inline-flex items-center gap-1.5 self-start`}>
+                  <Search className="size-3" /> Procurar modelos de voz no Hugging Face
+                </button>
+              )}
               {editando && (
                 <div className="flex flex-col gap-2 rounded-[10px] border border-line-strong p-2.5">
                   <div className="flex flex-wrap gap-1">

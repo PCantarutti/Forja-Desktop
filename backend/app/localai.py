@@ -519,8 +519,8 @@ def find_exe(kind: str) -> Path | None:
 
 def set_runtime(kind: str, backend: str) -> dict:
     """Troca o motor sem reinstalar nada: CPU, Vulkan e CUDA convivem lado a lado no disco."""
-    if kind == "comfy":
-        return runtimes()  # um pacote só, o da marca da GPU: não há o que trocar
+    if kind == "comfy" or kind.startswith("tts_"):
+        return runtimes()  # um pacote só (a marca da GPU / o PyTorch dela): não há o que trocar
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
     if backend and not exe_em(kind, backend):
@@ -597,6 +597,9 @@ def runtimes() -> dict:
                      "available": instalados, "chosen": escolha.get(kind, ""),
                      "custom_dir": str(custom_dir(kind) or "")}
     out["comfy"] = _runtime_comfy()
+    from . import tts
+    for motor in tts.MOTORES:  # os motores da tela Voz: tts_fish, tts_f5
+        out[f"tts_{motor}"] = tts.runtime_info(motor)
     return out
 
 
@@ -644,6 +647,9 @@ def install_runtime(kind: str, backend: str) -> dict:
     if kind == "comfy":
         from . import comfy
         return comfy.instalar()  # versão fixa, o pacote da marca da GPU (o `backend` não escolhe nada)
+    if kind.startswith("tts_"):
+        from . import tts
+        return tts.instalar(kind[4:])  # o PyTorch da GPU detectada (o `backend` não escolhe nada)
     if kind not in EXE:
         raise ToolError(f"Runtime desconhecido: {kind}")
     if backend == CUSTOM:
@@ -2144,6 +2150,9 @@ def search(q: str, kind: str = "text", limit: int = 20, sort: str = "relevancia"
     if kind == "ampliar":
         from .ampliar import buscar_hf
         return buscar_hf(q, sort, limit)
+    if kind == "voz":
+        from .tts import buscar_hf as buscar_voz
+        return buscar_voz(q, sort, limit)
     tipo = ({"pipeline_tag": "text-to-image"} if kind == "image" else {} if kind == "video"
             else {"filter": "gguf"})
     if kind == "video":
@@ -2286,6 +2295,9 @@ def files(repo: str, kind: str = "text") -> list[dict]:
     if kind == "ampliar":
         from .ampliar import arquivos_hf
         return arquivos_hf(repo)
+    if kind == "voz":
+        from .tts import arquivos_hf as arquivos_voz
+        return arquivos_voz(repo)
     exts = WEIGHTS if kind in ("image", "video", "lora") else (".gguf",)
     r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True,
                   headers=hf_headers(), params={"recursive": "true"})

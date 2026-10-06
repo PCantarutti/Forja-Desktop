@@ -711,6 +711,7 @@ class DownloadBody(BaseModel):
     file: str
     folder: str = ""
     subpasta: str = ""  # ampliação: "Ampliação (ESRGAN)" / "(SeedVR2)", como o catálogo (o VAE fica junto)
+    kind: str = ""  # "voz": vai para a pasta da tela Voz (tts.baixar), não para as pastas de modelos
 
 
 class PathsBody(BaseModel):
@@ -1029,6 +1030,8 @@ async def local_repo(repo: str, kind: str = "text"):
 @app.post("/api/local/download")
 async def local_download(body: DownloadBody):
     try:
+        if body.kind == "voz":
+            return await asyncio.to_thread(tts.baixar, body.repo, body.file)
         return await asyncio.to_thread(localai.download, body.repo, body.file, body.folder, body.subpasta)
     except ToolError as e:
         raise HTTPException(400, str(e))
@@ -1268,6 +1271,12 @@ async def tts_gerar(conv_id: int, body: dict):
         raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/tts/remover/{motor}")
+def tts_remover(motor: str):
+    _tts(tts.remover, motor)
+    return {"ok": True}
 
 
 @app.post("/api/tts/descarregar")

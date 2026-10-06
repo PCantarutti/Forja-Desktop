@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { ImageOpts, ImageParams, Inference, InferenceView, Job, LlamaParams, LocalModel, OpcaoLlama, LocalState, ModelView,
-  VideoKit } from "../types";
+  VideoKit, KindBusca } from "../types";
 import { Check, ChevronDown, Download, ExternalLink, Film, FolderOpen, Search, Square, Trash, X } from "./icons";
 import Confirma from "./Confirma";
 import ModelSearch from "./ModelSearch";
@@ -1632,7 +1632,7 @@ function Inferencia(props: { st: LocalState; chatModel?: string; onError: (e: st
 // ---------------------------------------------------------------- aba Baixar
 
 function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: string) => void }) {
-  const [kind, setKind] = useState<"text" | "image" | "video" | "ampliar">("text");
+  const [kind, setKind] = useState<KindBusca>("text");
   const [buscando, setBuscando] = useState(false);
   // Se a pasta salva saiu da lista (removida), cai na primeira em vez de deixar o select vazio.
   const [destino, setDestino] = useState(
@@ -1658,7 +1658,7 @@ function Downloader(props: { st: LocalState; onDone: () => void; onError: (e: st
 
   function baixar(repo: string, file: string, subpasta = "") {
     api
-      .post("/local/download", { repo, file, folder: destino, subpasta })
+      .post("/local/download", { repo, file, folder: destino, subpasta, kind: kind === "voz" ? "voz" : "" })
       .then(props.onDone)
       .catch((e) => props.onError(e.message));
   }

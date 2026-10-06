@@ -73,6 +73,31 @@ def instalado(motor: str) -> bool:
     return _py(motor).is_file() and (PASTA / motor / "pronto").is_file()
 
 
+def runtime_info(motor: str) -> dict:
+    """O motor no formato de localai.runtimes() (Configurações › Runtime): um "backend" só, o PyTorch da GPU detectada."""
+    b = BACKEND.get(comfy.gpu(), "cpu")
+    rotulo = {"auto": "cuda", "xpu": "xpu", "cpu": "cpu"}[b]
+    pronto = instalado(motor)
+    feito = (PASTA / motor / "pronto").read_text("utf-8").strip() if pronto else ""
+    job = _instalando.get(motor)
+    return {"installed": pronto, "exe": str(_py(motor)) if pronto else "", "backend": rotulo if pronto else "",
+            "backends": [rotulo], "chosen": "", "mb": MOTORES[motor]["gb"] * 1000, "pasta": str(PASTA / motor),
+            "available": [{"backend": rotulo, "exe": str(_py(motor)), "version": f"instalado em {feito}"}] if pronto else [],
+            "instalando": job["id"] if job and job["status"] == "running" else ""}
+
+
+def remover(motor: str) -> None:
+    """Apaga o runtime do motor (o venv e o código). Python e cache do uv ficam: são divididos entre os motores."""
+    if motor not in MOTORES:
+        raise ToolError("Motor desconhecido: " + ", ".join(MOTORES))
+    job = _instalando.get(motor)
+    if job and job["status"] == "running":
+        raise ToolError("Espere a instalação terminar.")
+    if _motor.get("chave", ("",))[0] == motor:
+        liberar_gpu()  # gerando: recusa; parado: o processo sai e solta os arquivos
+    shutil.rmtree(PASTA / motor, ignore_errors=True)
+
+
 def estado() -> dict:
     g = comfy.gpu()
     motores = {}
@@ -81,7 +106,10 @@ def estado() -> dict:
         motores[k] = {"nome": m["nome"], "instalado": instalado(k), "gb": m["gb"],
                       "instalando": job["id"] if job and job["status"] == "running" else ""}
     vivo = _motor.get("proc") and _motor["proc"].poll() is None
-    return {"motores": motores, "gpu": g, "backend": BACKEND.get(g, "cpu"), "modelos": modelos(), "vozes": vozes(),
+    # downloads de modelo de voz (janela de modelos ou a 1ª geração não entram aqui: esta tem a barra na própria fala)
+    baixando = [{k: j[k] for k in ("id", "name", "done", "total", "status", "error", "detail")}
+                for j in downloads.list_jobs() if j["kind"] == "modelo" and j["name"].endswith("(voz)")]
+    return {"motores": motores, "baixando": baixando, "gpu": g, "backend": BACKEND.get(g, "cpu"), "modelos": modelos(), "vozes": vozes(),
             "arquiteturas": ARQUITETURAS, "carregado": {"nome": _motor["nome"], "dispositivo": _motor["dispositivo"]}
             if vivo else None}
 
@@ -205,7 +233,17 @@ def _gravar(d: dict) -> None:
 
 
 def modelos() -> list[dict]:
-    return [{"motor": "f5", **m} for m in _ler().get("modelos") or []]  # os de antes do Fish não tinham motor
+    """Os cadastrados; `a_baixar`: o modelo ainda não está no disco (desce na primeira geração)."""
+    out = []
+    for m in _ler().get("modelos") or []:
+        m = {"motor": "f5", **m}  # os de antes do Fish não tinham motor
+        if m["motor"] == "fish":
+            falta = not Path(m["modelo"]).is_dir() and not (_pasta_repo(m["modelo"]) / ".completo").is_file()
+        else:
+            falta = any(m.get(c, "").startswith("hf://") and not (_pasta_repo("/".join(m[c][5:].split("/")[:2]))
+                        / "/".join(m[c][5:].split("/")[2:])).is_file() for c in ("ckpt", "vocab"))
+        out.append({**m, "a_baixar": falta})
+    return out
 
 
 def salvar_modelo(m: dict) -> list[dict]:
@@ -300,6 +338,206 @@ def servivel(path: str) -> Path:
     if not f.is_relative_to(DADOS.resolve()) or f.suffix.lower() not in EXT_AUDIO or not f.is_file():
         raise ToolError("Arquivo não encontrado.")
     return f
+
+
+# ------------------------------------------------------------------ modelos no Hugging Face
+
+MODELOS = DADOS / "modelos"  # fora das pastas de modelos: o .safetensors de voz não pode virar "modelo de imagem"
+CKPT_F5 = re.compile(r"(^|/)model_(\d+|last)\.(pt|safetensors)$", re.I)
+QUANTIZADO = re.compile(r"fp8|nf4|4bit|8bit|bnb|w4a16|nvfp4|int8|gguf|mlx|onnx", re.I)  # o fish-speech carrega bf16/fp16
+FORA_FISH = (".gitattributes", ".md", ".png", ".jpg", ".jpeg", ".gif", ".webp")
+BUSCA_PADRAO = ["fishaudio", "fish-speech", "s2-pro", "f5-tts", "f5 tts"]
+
+
+def _arvore(repo: str) -> list[tuple[str, int]]:
+    from .localai import HF, hf_headers
+    import httpx
+    r = httpx.get(f"{HF}/api/models/{repo}/tree/main", timeout=20, follow_redirects=True, headers=hf_headers(),
+                  params={"recursive": "true"})
+    if r.status_code in (401, 403):
+        raise ToolError("Repositório restrito (gated): aceite os termos no site do Hugging Face e ponha o seu token em "
+                        "Configurações › Pastas.")
+    if r.status_code >= 400:
+        raise ToolError(f"Hugging Face respondeu {r.status_code} para {repo}.")
+    return [(f["path"], f.get("size") or (f.get("lfs") or {}).get("size") or 0) for f in r.json() if f.get("type") == "file"]
+
+
+def formato(nomes: list[str]) -> str:
+    """Pelo conteúdo do repositório: "fish" (codec + pesos do fish-speech), "f5" (checkpoint model_N/model_last) ou ""."""
+    baixo = [n.lower() for n in nomes]
+    # o layout do S2 (o que o fish-speech fixado em FISH_COMMIT carrega): o S1-mini e o 1.5 usam tokenizer.tiktoken e
+    # outro codec, e falhariam ao carregar
+    if (any(n.endswith("codec.pth") for n in baixo) and any(n.endswith("tokenizer.json") for n in baixo)
+            and any(n.rsplit("/", 1)[-1].startswith("model") and n.endswith(".safetensors") for n in baixo)):
+        return "fish"
+    return "f5" if any(CKPT_F5.search(n) for n in nomes) else ""
+
+
+def _arquitetura(caminho: str) -> str:
+    c = caminho.lower()
+    return "E2TTS_Base" if "e2" in c else "F5TTS_v1_Base" if "v1" in c else "F5TTS_Base"
+
+
+def arquivos_hf(repo: str) -> list[dict]:
+    """As opções de download de um repo de voz: o Fish é o repositório inteiro (codec, pesos, tokenizer, config);
+    o F5 é um checkpoint (o vocab.txt do repo vai junto)."""
+    arv = _arvore(repo)
+    fmt = formato([p for p, _ in arv])
+    if fmt == "fish":
+        uteis = [(p, s) for p, s in arv if not p.lower().endswith(FORA_FISH)]
+        return [{"path": "", "size": sum(s for _, s in uteis), "quant": "", "shards": 1, "tipo": "fish", "papel": "modelo",
+                 "nome": f"Modelo inteiro · {len(uteis)} arquivos"}]
+    if fmt == "f5":
+        return sorted(({"path": p, "size": s, "quant": "", "shards": 1, "tipo": "f5", "papel": "modelo",
+                        "arquitetura": _arquitetura(f"{repo}/{p}")} for p, s in arv if CKPT_F5.search(p)),
+                      key=lambda f: (f["size"], f["path"]))
+    return []
+
+
+def buscar_hf(q: str, sort: str = "relevancia", limite: int = 20) -> list[dict]:
+    """Repositórios que algum motor da tela Voz roda, conferidos pelos nomes dos arquivos (a busca do HF devolve a
+    lista com full=true, sem uma consulta por repo). Quantizados (fp8, 4 bits, GGUF, MLX) ficam de fora."""
+    import httpx
+    from .localai import HF, ORDENS, _tags, hf_headers
+    ordem = ORDENS.get(sort, "") or ("" if q.strip() else "downloads")
+    vistos: dict[str, dict] = {}
+    # com termo: também só os marcados como texto-para-fala ("pt-br" sozinho são milhares de repos de outra coisa)
+    consultas = ([{"search": q.strip(), "pipeline_tag": "text-to-speech"}, {"search": q.strip()}] if q.strip()
+                 else [{"search": t} for t in BUSCA_PADRAO])
+    for consulta in consultas:
+        r = httpx.get(f"{HF}/api/models", timeout=20, follow_redirects=True, headers=hf_headers(),
+                      params={**consulta, "limit": 40, "full": "true", **({"sort": ordem, "direction": -1} if ordem else {})})
+        if r.status_code >= 400:
+            raise ToolError(f"Hugging Face respondeu {r.status_code}.")
+        for m in r.json():
+            if QUANTIZADO.search(m["id"]) or any(QUANTIZADO.fullmatch(t) for t in m.get("tags") or []):
+                continue
+            fmt = formato([s.get("rfilename", "") for s in m.get("siblings") or []])
+            if fmt:
+                vistos.setdefault(m["id"], {**m, "_fmt": fmt})
+    saida = [{"id": m["id"], "author": m.get("author", ""), "downloads": m.get("downloads", 0), "likes": m.get("likes", 0),
+              "updated": m.get("lastModified", ""), "gated": bool(m.get("gated")), "tags": _tags(m.get("tags") or []),
+              "variante_nome": MOTORES[m["_fmt"]]["nome"]} for m in vistos.values()]
+    if not ORDENS.get(sort):  # relevância: com vários termos juntos, a do HF se perde; os mais baixados primeiro
+        saida.sort(key=lambda m: -m["downloads"])
+    return saida[:limite]
+
+
+def _pasta_repo(repo: str) -> Path:
+    return MODELOS / repo.replace("/", "--")
+
+
+def _baixar_arquivos(repo: str, arquivos: list[tuple[str, int]], dest: Path, job: dict) -> None:
+    """Baixa mantendo as subpastas, com retomada (o .part fica se a rede cair) e a barra no job. `job` pode ser o de
+    uma geração: cancelá-la para o download."""
+    from .downloads import _fetch, update
+    from .localai import HF, hf_headers
+    total = sum(s for _, s in arquivos)
+    update(job["id"], total=total, done=0)
+    base = 0
+    for caminho, tamanho in arquivos:
+        alvo = dest / caminho
+        if alvo.is_file() and (not tamanho or alvo.stat().st_size == tamanho):
+            base += tamanho
+            update(job["id"], done=base)
+            continue
+        update(job["id"], detail=caminho)
+        _fetch(f"{HF}/{repo}/resolve/main/{caminho}?download=true", alvo, job, base, total, hf_headers())
+        base += tamanho
+
+
+def _arquivos_do_download(repo: str, path: str) -> tuple[str, list[tuple[str, int]]]:
+    arv = _arvore(repo)
+    fmt = formato([p for p, _ in arv])
+    if not fmt:
+        raise ToolError(f"{repo} não é um modelo que a tela Voz roda (nem Fish Audio, nem checkpoint F5).")
+    if fmt == "fish":
+        return fmt, [(p, s) for p, s in arv if not p.lower().endswith(FORA_FISH)]
+    ckpt = next(((p, s) for p, s in arv if p == path), None)
+    if not ckpt:
+        raise ToolError(f"Checkpoint {path} não encontrado em {repo}.")
+    pasta = path.rsplit("/", 1)[0] + "/" if "/" in path else ""
+    vocab = next(((p, s) for p, s in arv if p == f"{pasta}vocab.txt"), None) or next(((p, s) for p, s in arv if p == "vocab.txt"), None)
+    return fmt, [ckpt] + ([vocab] if vocab else [])
+
+
+def baixar(repo: str, path: str = "") -> dict:
+    """Download pela janela de modelos (aba voz): no fim o modelo entra cadastrado na tela Voz."""
+    fmt, arquivos = _arquivos_do_download(repo, path)
+    job = downloads.create("modelo", f"{repo}{'/' + Path(path).name if path else ''} (voz)")
+
+    def correr() -> None:
+        try:
+            dest = _pasta_repo(repo)
+            _baixar_arquivos(repo, arquivos, dest, job)
+            if fmt == "fish":
+                (dest / ".completo").write_text(time.strftime("%Y-%m-%d %H:%M"), "utf-8")
+                novo = {"nome": repo.split("/")[-1], "motor": "fish", "modelo": str(dest)}
+            else:
+                vocab = next((str(dest / p) for p, _ in arquivos if p.endswith("vocab.txt")), "")
+                novo = {"nome": f"{repo.split('/')[-1]} · {Path(path).stem}", "motor": "f5", "arquitetura": _arquitetura(f"{repo}/{path}"),
+                        "ckpt": str(dest / path), "vocab": vocab, "minusculas": False, "numeros": ""}
+            with _cfg:
+                d = _ler()
+                lista = d.get("modelos") or []
+                if not any(x.get("modelo") == novo.get("modelo") and x.get("ckpt") == novo.get("ckpt") for x in lista):
+                    nomes = {x["nome"] for x in lista}
+                    while novo["nome"] in nomes:
+                        novo["nome"] += " (2)"
+                    d["modelos"] = lista + [novo]
+                    _gravar(d)
+            downloads.finish(job["id"], result=str(dest))
+        except Exception as e:
+            if not downloads.cancelled(job["id"]):
+                downloads.finish(job["id"], error=str(e) if isinstance(e, ToolError) else f"{e.__class__.__name__}: {e}")
+    threading.Thread(target=correr, daemon=True).start()
+    return job
+
+
+def _local(m: dict, mid: int, job: dict) -> dict:
+    """O modelo com os arquivos no disco: repositório do HF (Fish) ou hf://dono/repo/arquivo (F5) que ainda não foram
+    baixados descem aqui, com a barra na mensagem da geração."""
+    pedidos: list[tuple[str, str, str]] = []  # (campo, repo, caminho no repo)
+    if m["motor"] == "fish" and not Path(m["modelo"]).is_dir():
+        if (_pasta_repo(m["modelo"]) / ".completo").is_file():
+            return {**m, "modelo": str(_pasta_repo(m["modelo"]))}
+        pedidos.append(("modelo", m["modelo"], ""))
+    for campo in ("ckpt", "vocab") if m["motor"] == "f5" else ():
+        v = m.get(campo, "")
+        if v.startswith("hf://"):
+            partes = v[5:].split("/")
+            repo, caminho = "/".join(partes[:2]), "/".join(partes[2:])
+            if (_pasta_repo(repo) / caminho).is_file():
+                m = {**m, campo: str(_pasta_repo(repo) / caminho)}
+            else:
+                pedidos.append((campo, repo, caminho))
+    if not pedidos:
+        return m
+    fim = threading.Event()
+
+    def barra() -> None:
+        while not fim.wait(1):
+            if job.get("total"):
+                gb = lambda n: f"{n / 2**30:.1f}".replace(".", ",")
+                _patch(mid, fase=f"baixando o modelo · {gb(job['done'])} de {gb(job['total'])} GB",
+                       progresso=job["done"] / job["total"])
+    threading.Thread(target=barra, daemon=True).start()
+    try:
+        for campo, repo, caminho in pedidos:
+            dest = _pasta_repo(repo)
+            if campo == "modelo":
+                _, arquivos = _arquivos_do_download(repo, "")
+                _baixar_arquivos(repo, arquivos, dest, job)
+                (dest / ".completo").write_text(time.strftime("%Y-%m-%d %H:%M"), "utf-8")
+                m = {**m, "modelo": str(dest)}
+            else:
+                tamanho = next((s for p, s in _arvore(repo) if p == caminho), 0)
+                _baixar_arquivos(repo, [(caminho, tamanho)], dest, job)
+                m = {**m, campo: str(dest / caminho)}
+    finally:
+        fim.set()
+        _patch(mid, progresso=None)
+    return m
 
 
 # ------------------------------------------------------------------ o motor de pé
@@ -462,6 +700,7 @@ def _rodar(conv_id: int, mid: int, job: dict, texto: str, m: dict, v: dict, p: d
             fim = threading.Event()
             vigia = threading.Thread(target=cancela, daemon=True)
             vigia.start()
+            m = _local(m, mid, job)  # repo do HF ainda não baixado: desce aqui, com a barra na mensagem
             proc = _subir(m, mid)
             _motor.update(ocupado=True)
             saida = SAIDA / str(conv_id) / f"{mid}.wav"
