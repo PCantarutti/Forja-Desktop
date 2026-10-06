@@ -226,8 +226,11 @@ def _audio16k(caminho: str, sf):
 def _whisper():
     """Sempre na CPU: na GPU ele disputaria a VRAM com o modelo de pé. Carrega uma vez por processo."""
     if not _ASR:
+        import torch
         from transformers import pipeline
-        _ASR.append(pipeline("automatic-speech-recognition", "openai/whisper-large-v3-turbo", device="cpu"))
+        # float32: o config do modelo pede float16, que na CPU é ~15x mais lento (3 s de áudio: 270 s → 15 s)
+        _ASR.append(pipeline("automatic-speech-recognition", "openai/whisper-large-v3-turbo", device="cpu",
+                             dtype=torch.float32))
     return _ASR[0]
 
 
