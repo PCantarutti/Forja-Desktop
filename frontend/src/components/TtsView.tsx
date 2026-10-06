@@ -470,7 +470,7 @@ export default function TtsView(props: {
               />
               <div className="mt-2.5 flex items-center gap-3 border-t border-line pt-2.5 text-xs">
                 {/* uma linha só: em janela estreita as tags rolam de lado em vez de empurrar o Gerar para baixo */}
-                <div className="flex min-w-0 flex-1 gap-0.5 overflow-x-auto [scrollbar-width:none]">
+                <div className="flex min-w-0 flex-1 gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {m?.motor === "fish" && TAGS.map((tag) => (
                     <button key={tag} onClick={() => inserirTag(tag)} title={`Inserir ${tag} no cursor`}
                             className="shrink-0 rounded-[7px] px-1.5 py-1 font-mono text-[11px] text-faint hover:bg-raised hover:text-fg">
