@@ -75,6 +75,7 @@ function quando(iso: string): string {
 /** Busca de modelos no Hugging Face: lista à esquerda, ficha do modelo à direita. */
 export default function ModelSearch(props: {
   kind: KindBusca;
+  kinds?: KindBusca[]; // as abas que aparecem (a tela Voz abre só com "voz")
   destino: string;
   hardware?: Hardware;
   onKind: (k: KindBusca) => void;
@@ -151,7 +152,7 @@ export default function ModelSearch(props: {
             spellCheck={false}
           />
           <div className="flex shrink-0 gap-0.5 rounded-[9px] border border-line bg-surface p-0.5">
-            {(["text", "image", "video", "ampliar", "voz"] as const).map((k) => (
+            {(props.kinds ?? (["text", "image", "video", "ampliar", "voz"] as const)).map((k) => (
               <button
                 key={k}
                 onClick={() => {

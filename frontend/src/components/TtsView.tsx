@@ -19,7 +19,7 @@ type Modelo = {
   a_baixar?: boolean; // ainda não está no disco: desce na primeira geração
 };
 type Voz = { id: string; nome: string; texto: string; caminho: string };
-type InfoMotor = { nome: string; instalado: boolean; gb: number; instalando: string };
+type InfoMotor = { nome: string; instalado: boolean; gb: number; instalando: string; instalavel: boolean }; // instalavel: no Docker, quem instala é o Forja Desktop
 type Estado = {
   motores: Record<Motor, InfoMotor>; gpu: string; backend: string; modelos: Modelo[]; vozes: Voz[]; arquiteturas: string[];
   carregado: { nome: string; dispositivo: string } | null;
@@ -380,14 +380,16 @@ export default function TtsView(props: {
     <CartaoEstado
       tom={erroInstalar ? "erro" : "neutro"}
       titulo={`Falta o motor ${info.nome}`}
-      acoes={info.instalando ? undefined : (
+      acoes={info.instalando || !info.instalavel ? undefined : (
         <button className={botaoEstadoPrimario} onClick={() => api.post(`/tts/instalar/${m.motor}`).then(carregarEstado).catch((e) => onError(e.message))}>
           {erroInstalar ? "Tentar de novo" : "Instalar motor"}
         </button>
       )}>
       {info.instalando ? (
         <span className="font-mono text-[11.5px]">{jobMotor?.detail || "começando…"}</span>
-      ) : erroInstalar ? erroInstalar : (
+      ) : erroInstalar ? erroInstalar : !info.instalavel ? (
+        "Aqui no Docker o motor roda no Windows, pelo forja-runner, e quem instala é o Forja Desktop desta máquina: Configurações › Runtime › Motor de voz."
+      ) : (
         `Um Python próprio com PyTorch (${aceleracao}, pela GPU ${estado.gpu}), uns ${info.gb} GB na pasta de runtimes. Os pesos do modelo baixam na primeira geração.`
       )}
     </CartaoEstado>
@@ -505,9 +507,10 @@ export default function TtsView(props: {
       {procurando && (
         <ModelSearch
           kind="voz"
+          kinds={["voz"]}
           destino=""
           onKind={() => {}}
-          onDownload={(repo, file) => api.post("/local/download", { repo, file, kind: "voz" }).then(carregarEstado).catch((e) => onError(e.message))}
+          onDownload={(repo, file) => api.post("/tts/baixar", { repo, file }).then(carregarEstado).catch((e) => onError(e.message))}
           onClose={() => { setProcurando(false); carregarEstado(); }}
           onError={onError}
         />

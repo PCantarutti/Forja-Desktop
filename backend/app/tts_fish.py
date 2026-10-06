@@ -54,11 +54,41 @@ def pedacos(texto: str, limite: int = PEDACO) -> list[str]:
     return [p for p in out if p]
 
 
+def pedidos(fila: str, ocioso: int):
+    """Os pedidos, um JSON por vez. Sem `fila`: uma linha por pedido no stdin (o Forja Desktop). Com `fila`: arquivos
+    <id>.json numa pasta, na ordem do nome (o Forja no Docker, que sobe o motor no Windows pelo forja-runner, sem
+    stdin); cada um é anunciado com "PEDIDO <id>" no log e apagado depois de atendido. Parado `ocioso` segundos com a
+    fila vazia, o processo sai sozinho (a VRAM volta)."""
+    if not fila:
+        for linha in sys.stdin:
+            if linha.strip():
+                yield json.loads(linha)
+        return
+    pasta, parado = Path(fila), time.time()
+    while time.time() - parado < ocioso:
+        prontos = sorted(pasta.glob("*.json"))
+        if not prontos:
+            time.sleep(0.3)
+            continue
+        f = prontos[0]
+        try:
+            q = json.loads(f.read_text("utf-8"))
+        except (OSError, ValueError):
+            time.sleep(0.2)  # ainda sendo escrito
+            continue
+        f.unlink(missing_ok=True)
+        diz("PEDIDO", f.stem)
+        yield q
+        parado = time.time()
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--modelo", required=True)
     p.add_argument("--dispositivo", default="")
     p.add_argument("--contexto", type=int, default=4096)
+    p.add_argument("--fila", default="")  # pasta de pedidos (modo do Docker, sem stdin)
+    p.add_argument("--ocioso", type=int, default=300)  # só com --fila: sai depois disso sem pedido
     a = p.parse_args()
     try:
         import soundfile as sf
@@ -116,11 +146,8 @@ def main() -> int:
         diz("ERRO", f"{e.__class__.__name__}: {e}"[:500].replace("\n", " "))
         return 1
 
-    for linha in sys.stdin:
-        if not linha.strip():
-            continue
+    for q in pedidos(a.fila, a.ocioso):
         try:
-            q = json.loads(linha)
             t0 = time.time()
             ref_texto = q.get("ref_texto", "").strip()
             if q.get("ref") and not ref_texto:

@@ -103,7 +103,7 @@ def estado() -> dict:
     motores = {}
     for k, m in MOTORES.items():
         job = _instalando.get(k)
-        motores[k] = {"nome": m["nome"], "instalado": instalado(k), "gb": m["gb"],
+        motores[k] = {"nome": m["nome"], "instalado": instalado(k), "gb": m["gb"], "instalavel": True,
                       "instalando": job["id"] if job and job["status"] == "running" else ""}
     vivo = _motor.get("proc") and _motor["proc"].poll() is None
     # downloads de modelo de voz (janela de modelos ou a 1ª geração não entram aqui: esta tem a barra na própria fala)

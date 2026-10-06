@@ -1287,6 +1287,15 @@ async def tts_gerar(conv_id: int, body: dict):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/tts/baixar")
+async def tts_baixar(body: dict):
+    """Modelo de voz do Hugging Face (a janela de busca, aba voz): baixa e cadastra na tela Voz."""
+    try:
+        return await asyncio.to_thread(tts.baixar, str(body.get("repo") or ""), str(body.get("file") or ""))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/tts/remover/{motor}")
 def tts_remover(motor: str):
     _tts(tts.remover, motor)
