@@ -267,6 +267,8 @@ class GpuOcupada(imagegen.ModeloCarregado):
 
 def _liberar_vram(confirm: bool) -> None:
     """LLM na VRAM: sem confirmação a tela pergunta (409); com ela, descarrega."""
+    from . import tts
+    tts.liberar_gpu()  # o motor da tela Voz parado sai sem perguntar (recarrega sozinho no próximo áudio)
     st = localai.status()
     if not confirm and (outros := projeto.gpu_alheia(st.get("pid"))):
         raise GpuOcupada(f"Outro programa está usando a GPU: {', '.join(outros)}, provavelmente outra janela "

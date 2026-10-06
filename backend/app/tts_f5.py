@@ -1,20 +1,21 @@
-"""Uma fala do começo ao fim com um modelo da família F5-TTS/E2-TTS: carrega, gera o WAV e sai (a VRAM volta toda).
-Roda no Python do runtime de voz (RUNTIMES/tts/venv, com torch e f5-tts), chamado por tts.py.
+"""Motor F5-TTS/E2-TTS da tela Voz: um processo com o modelo carregado, atendendo pedidos até ser derrubado.
+Roda no venv do motor (RUNTIMES/tts/f5/venv, com torch e f5-tts), chamado por tts.py. Mesmo protocolo do tts_fish.py.
 
-    python tts_job.py --arquitetura F5TTS_v1_Base [--ckpt <arquivo|hf://repo/arq>] [--vocab <arquivo|hf://...>]
-                      --ref <áudio> [--ref-texto <texto>] --texto <arquivo .txt> --saida <wav>
-                      [--velocidade 1.0] [--passos 32] [--semente N] [--sem-silencio] [--minusculas] [--numeros pt_BR]
+    python tts_f5.py --arquitetura F5TTS_v1_Base [--ckpt <arquivo|hf://repo/arq>] [--vocab <arquivo|hf://...>] [--dispositivo cpu]
 
-Sem --ckpt, o checkpoint oficial da arquitetura (baixado do Hugging Face na 1ª vez). Sem --ref-texto, o Whisper
-transcreve a referência. Fala com quem chamou por linhas no stdout: "FASE <texto>", "PROGRESSO <0..1>" e, no fim,
-"OK <segundos> <semente>" ou "ERRO <mensagem>".
+Sem --ckpt, o checkpoint oficial da arquitetura. Pedidos no stdin, um JSON por linha: {ref, ref_texto, texto, saida,
+velocidade, passos, semente, sem_silencio, minusculas, numeros}. Respostas no stdout: "PRONTO <dispositivo>", e por
+pedido "FASE", "PROGRESSO <0..1>", "OK <segundos de áudio> <semente> <segundos gastos>" ou "ERRO <mensagem>".
+Referência sem texto: o Whisper do próprio F5 transcreve.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -64,31 +65,9 @@ def main() -> int:
     p.add_argument("--arquitetura", default="F5TTS_v1_Base")
     p.add_argument("--ckpt", default="")
     p.add_argument("--vocab", default="")
-    p.add_argument("--ref", required=True)
-    p.add_argument("--ref-texto", default="")
-    p.add_argument("--texto", required=True)
-    p.add_argument("--saida", required=True)
-    p.add_argument("--velocidade", type=float, default=1.0)
-    p.add_argument("--passos", type=int, default=32)
-    p.add_argument("--semente", type=int, default=-1)
-    p.add_argument("--sem-silencio", action="store_true")
-    p.add_argument("--minusculas", action="store_true")
-    p.add_argument("--numeros", default="")
     p.add_argument("--dispositivo", default=None)  # cpu/cuda/xpu; sem: o F5 escolhe
     a = p.parse_args()
     try:
-        texto = normalizar(Path(a.texto).read_text("utf-8").strip(), a.minusculas, a.numeros)
-        if not texto:
-            raise ValueError("Texto vazio.")
-        ref = a.ref
-        if Path(ref).suffix.lower() != ".wav":
-            # o pydub do F5 só lê WAV sem ffmpeg; o soundfile lê mp3/flac/ogg
-            import soundfile as sf
-            dados, sr = sf.read(ref)
-            ref = str(Path(tempfile.mkdtemp()) / "ref.wav")
-            sf.write(ref, dados, sr)
-        ckpt, vocab = local(a.ckpt), local(a.vocab)
-        diz("FASE", "carregando o modelo")
         import soundfile as sf
         import torch
         import torchaudio
@@ -98,20 +77,43 @@ def main() -> int:
             dados, sr = sf.read(caminho, dtype="float32", always_2d=True)
             return torch.from_numpy(dados.T.copy()), sr
         torchaudio.load = carregar
+        ckpt, vocab = local(a.ckpt), local(a.vocab)
+        diz("FASE", "carregando o modelo")
         from f5_tts.api import F5TTS
         tts = F5TTS(model=a.arquitetura, ckpt_file=ckpt, vocab_file=vocab, device=a.dispositivo)
-        diz("FASE", f"gerando ({tts.device})" + ("" if a.ref_texto else " · transcrevendo a referência"))
-        wav, sr, _ = tts.infer(ref_file=ref, ref_text=normalizar(a.ref_texto, a.minusculas, a.numeros) if a.ref_texto else "",
-                               gen_text=texto, show_info=lambda *x: None,
-                               progress=Progresso, speed=a.velocidade, nfe_step=a.passos,
-                               seed=None if a.semente < 0 else a.semente, remove_silence=a.sem_silencio,
-                               file_wave=a.saida)
-        diz("OK", f"{len(wav) / sr:.2f} {tts.seed}")
-        return 0
+        diz("PRONTO", tts.device)
     except Exception as e:
         traceback.print_exc(file=sys.stdout)
         diz("ERRO", f"{e.__class__.__name__}: {e}"[:500].replace("\n", " "))
         return 1
+
+    for linha in sys.stdin:
+        if not linha.strip():
+            continue
+        try:
+            q = json.loads(linha)
+            t0 = time.time()
+            minus, nums = bool(q.get("minusculas")), str(q.get("numeros") or "")
+            texto = normalizar(q["texto"].strip(), minus, nums)
+            ref = q["ref"]
+            if Path(ref).suffix.lower() != ".wav":
+                # o pydub do F5 só lê WAV sem ffmpeg; o soundfile lê mp3/flac/ogg
+                dados, sr = sf.read(ref)
+                ref = str(Path(tempfile.mkdtemp()) / "ref.wav")
+                sf.write(ref, dados, sr)
+            ref_texto = q.get("ref_texto", "").strip()
+            diz("FASE", "gerando" + ("" if ref_texto else " · transcrevendo a referência"))
+            semente = int(q.get("semente", -1))
+            wav, sr, _ = tts.infer(ref_file=ref, ref_text=normalizar(ref_texto, minus, nums) if ref_texto else "",
+                                   gen_text=texto, show_info=lambda *x: None, progress=Progresso,
+                                   speed=float(q.get("velocidade", 1.0)), nfe_step=int(q.get("passos", 32)),
+                                   seed=None if semente < 0 else semente, remove_silence=bool(q.get("sem_silencio")),
+                                   file_wave=q["saida"])
+            diz("OK", f"{len(wav) / sr:.2f} {tts.seed} {time.time() - t0:.1f}")
+        except Exception as e:
+            traceback.print_exc(file=sys.stdout)
+            diz("ERRO", f"{e.__class__.__name__}: {e}"[:500].replace("\n", " "))
+    return 0
 
 
 if __name__ == "__main__":

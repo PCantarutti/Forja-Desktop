@@ -2019,6 +2019,8 @@ def load(path: str, patch: dict | None = None, temporario: dict | None = None) -
     if image_busy():
         raise ToolError("Uma imagem está sendo gerada agora. Espere terminar para carregar um modelo — "
                         "os dois disputam a mesma VRAM.")
+    from . import tts
+    tts.liberar_gpu()  # o motor da tela Voz parado sai; gerando, recusa como a imagem
     exe = find_exe("llama")
     if not exe:
         raise ToolError("llama.cpp não instalado. Baixe o runtime no painel IA local.")

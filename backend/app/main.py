@@ -1232,12 +1232,12 @@ def _tts(f, *a):
 
 @app.get("/api/tts")
 def tts_estado():
-    return {**tts.estado(), "modelos": tts.modelos(), "vozes": tts.vozes(), "arquiteturas": tts.ARQUITETURAS}
+    return tts.estado()
 
 
-@app.post("/api/tts/instalar")
-def tts_instalar():
-    return _tts(tts.instalar)
+@app.post("/api/tts/instalar/{motor}")
+def tts_instalar(motor: str):
+    return _tts(tts.instalar, motor)
 
 
 @app.post("/api/tts/modelos")
@@ -1262,10 +1262,18 @@ def tts_voz_apagar(vid: str):
 
 @app.post("/api/tts/{conv_id}/gerar")
 async def tts_gerar(conv_id: int, body: dict):
-    return await asyncio.to_thread(_tts, tts.gerar, conv_id, str(body.get("texto") or ""), str(body.get("modelo") or ""),
-                                   str(body.get("voz") or ""), float(body.get("velocidade") or 1.0),
-                                   int(body.get("passos") or 32), int(body.get("semente", -1)),
-                                   bool(body.get("sem_silencio")))
+    try:
+        return await asyncio.to_thread(tts.gerar, conv_id, body)
+    except imagegen.ModeloCarregado as e:
+        raise HTTPException(409, str(e))  # a tela pergunta se pode descarregar e repete com confirm=true
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/tts/descarregar")
+def tts_descarregar():
+    _tts(tts.liberar_gpu)
+    return {"ok": True}
 
 
 @app.post("/api/tts/cancelar/{message_id}")
