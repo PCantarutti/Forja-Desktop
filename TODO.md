@@ -2322,6 +2322,48 @@ Forja, no PC e no celular.
 
 ---
 
+## E18: Conteúdo — roteiros e vídeos para o canal, produzidos pelo Claude
+
+**Ideia:** uma seção "Conteúdo" para automatizar um canal de vídeos curtos/longos. O usuário descreve os temas
+(especificações) e os estilos; o Forja pesquisa as novidades, escreve vários roteiros prontos e manda o Claude
+Code (`claude -p`) montar e renderizar o vídeo no projeto Remotion do usuário — de madrugada, sem supervisão.
+
+**Decisões do usuário (2026-10-04):**
+- modelo dos roteiros escolhido na página (provedor do Forja ou Claude via MCP);
+- estilos são os `.md` de uma pasta escolhida (no PC dele, `C:\Projetos\youtube\estilos`), sem cópia no banco;
+  estilo novo pelo Forja segue o `_modelo.md` da pasta;
+- os dois modos de automação: aprovação (ele aprova um roteiro à noite) e automático;
+- Claude de madrugada só com lista de comandos (nunca `--dangerously-skip-permissions`);
+- formato por especificação: vertical 9:16 (Shorts/Reels/TikTok) ou horizontal 16:9 (YouTube longo).
+
+**Etapas (worktree `feat/conteudo`, validação em `C:\Projetos\Forja\.devconteudo`, porta 8799):**
+1. [x] Pastas, estilos e especificações (`conteudo.py`, `ConteudoView.tsx`). Especificação = conversa
+   `kind="conteudo"` com os campos no `meta["especificacao"]` de uma mensagem `event`.
+2. [x] Pesquisa → roteiros (`conteudo_roteiros.py`, `ConteudoRoteiros.tsx`): etapas do `pesquisa.py` com o
+   gancho `run["gravar"]` e uma escrita final em JSON; motor "Claude (MCP)" pelas ferramentas
+   `conteudo_pedidos`/`conteudo_salvar_roteiros`. Um aprovado por especificação.
+   Validado com `gpt-oss:120b` do ollama-cloud: 10 fontes, 2 roteiros em 73 s.
+3. [x] Produção (`conteudo_producao.py`, `ConteudoProducao.tsx`): `claude.exe` real (o `claude` do npm é
+   atalho .cmd), pedido pela entrada padrão, `--permission-mode acceptEdits`, `--allowedTools` com os
+   prefixos da lista (`Bash(npm run:*)`...), `--add-dir` da pasta de estilos, stream-json com log na tela,
+   uma por vez, PC acordado, teto de 3 h; entrega do .mp4 + .txt (título/descrição/fontes) na pasta de
+   entrega. "Testar Claude" na aba Pastas (login expirado derrubou a 1ª tentativa real). Regras **glob** para
+   `Bash` e `PowerShell` (testado no 2.1.233: `Bash(python scripts/:*)` nega `python scripts/x.py`, e no Windows
+   ele roda comando pelas duas ferramentas). Conta própria opcional por `CLAUDE_CONFIG_DIR`.
+   Validado de verdade: vídeo de 46,9 s em ~8 min, 66 turnos, sem intervenção.
+4. [x] Agendador (`conteudo_agenda.py`, laço no lifespan; aprovação: roteiros no horário A, produção do aprovado no B; automático: tudo no B,
+   escolhendo o roteiro de maior confiança) + aviso no celular. Uma vez por dia por trilha, janela de 3 h depois
+   do horário, fila de 6 h. `acordado` no /api/activity faz o Electron segurar o sono enquanto houver
+   automação ligada. Validado na instância: disparou sozinho no minuto marcado.
+5. [x] Celular (forja-mobile, worktree `C:\Projetos\fmc`, branch `feat/conteudo`): seção Conteúdo na gaveta
+   (`src/Conteudo.tsx`) com especificações, roteiros (aprovar/descartar/produzir agora, notícia e fontes),
+   produção ao vivo e próximos horários; carimbo `lista` a cada 3 s. Tocar no aviso abre a tela da
+   especificação (`kindDe`). `revoga.ts`: aviso avulso do PC (sem call_id/run_id) ganha id próprio — antes
+   todos eram `fim-` e um apagava o outro. Validado no Galaxy A54 contra a `.devconteudo`: celular→PC em 2,9 s,
+   PC→celular em < 4 s, aviso abrindo a tela certa.
+
+**Só no desktop:** o `claude -p` local não existe no Docker; a seção não vai para o forja-web.
+
 ## Notas da revisão (2026-09-25, só leitura)
 
 | Sistema | Nota | Onde o plano ataca |

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import base64
 import hashlib
 import json
@@ -24,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                kvcache, localai, lotes, lsp, metricas,
-               mcp_client, memory, mirror, mobile, native, pesquisa, design, estudos, design_html, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, design, estudos, conteudo, conteudo_roteiros, conteudo_producao, conteudo_agenda, servico, servico_instalar, design_html, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -45,9 +46,12 @@ async def lifespan(_app):
         print("Forja: aviso — este Python é o da Microsoft Store, e o Windows redireciona as gravações em "
               "%APPDATA% para LocalCache. Os dados acima NÃO estarão no caminho impresso. Use um Python do "
               "python.org ou do uv para desenvolver.", flush=True)
+    servico.trava(config.DATA_DIR)  # um backend por pasta de dados: o serviço sem janela e a janela nunca juntos
     localai.reap_orphan()
     taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
     estudos.reap()  # resumo de estudo que ficou rodando numa queda anterior
+    conteudo_roteiros.reap()  # pesquisa de roteiros (Conteúdo) que ficou rodando numa queda anterior
+    conteudo_producao.reap()  # produção de vídeo (claude -p) que o fechamento do app interrompeu
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
     lotes.limpar_descartadas()  # imagens reprovadas que já passaram do prazo
     lotes.limpar_referencias()  # cópias coladas que nenhuma mensagem cita (nunca usadas, ou de versão antiga)
@@ -62,6 +66,8 @@ async def lifespan(_app):
     from . import estudos_revisao
     lembrete = asyncio.create_task(estudos_revisao.vigia())  # Estudos: o aviso do dia no celular, de hora em hora
     vivas.add(lembrete)
+    agenda = asyncio.create_task(conteudo_agenda.vigia())  # Conteúdo (E18): roteiros e vídeos nos horários marcados
+    vivas.add(agenda)
     from . import estudos_piloto
     estudos_piloto.retomar()  # Estudos: piloto que estava rodando quando o app fechou (o item interrompido é refeito)
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
@@ -71,12 +77,16 @@ async def lifespan(_app):
     vivas.add(task)
     if mobile.lan_quer():  # celular na rede local, ligado na aba Celular
         await mobile.liga_lan(_app)
+    lan = asyncio.create_task(mobile.vigia_lan(_app))  # porta presa (app reiniciando na atualização): tenta de novo
+    vivas.add(lan)
     async with mcp_servidor.gerente():  # /mcp: o Claude controlando o Forja (E17); o gerente vive com o app
         yield
+    lan.cancel()
     await mobile.desliga_lan()
     task.cancel()
     vigia.cancel()  # laço sem fim: sem o cancel o gather abaixo esperava para sempre
     lembrete.cancel()
+    agenda.cancel()
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
@@ -111,7 +121,7 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
 # inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
 # navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
-TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/tts/arquivo")
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/conteudo/video/", "/api/tts/arquivo")
 SUFIXO_SEM_TOKEN = ("/relatorio",)
 
 
@@ -447,6 +457,8 @@ async def get_activity():
             entrada(r["conv_id"])["running"] = True
     for c in [*lotes.pendentes(), *tts.pendentes()]:
         entrada(c)["running"] = True
+    for c in conteudo_roteiros.ativos() + conteudo_producao.ativos():   # pesquisa e produção da tela Conteúdo
+        entrada(c)["running"] = True
     for a in subagents.ativas():
         entrada(a["conversation_id"])["subagents"] += 1
     vivos = 0
@@ -486,7 +498,9 @@ async def get_activity():
     # alias: o modelo que o llama-server tem agora (carregado pelo celular ou pela API): o seletor acompanha
     from . import autonomo  # trabalho autônomo por conversa: ligado num aparelho, o outro acompanha
     return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
-            "lista": f"{n}-{maior}-{ultima}", "board": quadro, "autonomo": autonomo.ligadas()}
+            "lista": f"{n}-{maior}-{ultima}", "board": quadro, "autonomo": autonomo.ligadas(),
+            # Conteúdo (E18): com automação marcada o Electron segura o sono do PC — dormindo às 3h, nada roda
+            "acordado": conteudo_agenda.acordado()}
 
 
 # ------------------------------------------------------------------ board de issues (E15)
@@ -2347,6 +2361,254 @@ def pesquisa_discutir(message_id: int):
         raise HTTPException(400, str(e))
 
 
+# ------------------------------------------------------------------ conteúdo (E18)
+
+
+def _conteudo(fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/conteudo/pastas")
+def conteudo_pastas():
+    return conteudo.pastas()
+
+
+@app.put("/api/conteudo/pastas")
+def conteudo_salvar_pastas(body: dict):
+    return _conteudo(conteudo.salvar_pastas, body or {})
+
+
+@app.get("/api/conteudo/estilos")
+def conteudo_estilos():
+    return _conteudo(conteudo.estilos)
+
+
+@app.get("/api/conteudo/estilos-modelo")
+def conteudo_modelo():
+    return {"texto": _conteudo(conteudo.modelo)}
+
+
+class EstiloBody(BaseModel):
+    texto: str = ""
+    novo: bool = False
+    indice: dict = {}               # para_que, tom, duracao: a linha do README da pasta
+
+
+class EstiloGerarBody(BaseModel):
+    descricao: str = ""
+    provider: str = ""
+    model: str = ""
+
+
+@app.post("/api/conteudo/estilos-gerar")
+async def conteudo_gerar_estilo(body: EstiloGerarBody):
+    """O modelo escolhido preenche o _modelo.md da pasta a partir de uma descrição (nada é gravado)."""
+    if not body.descricao.strip():
+        raise HTTPException(400, "Descreva o estilo que você quer.")
+    if not (body.provider and body.model):
+        raise HTTPException(400, "Escolha um modelo para gerar o estilo.")
+    base = _conteudo(conteudo.modelo)
+    system, user = conteudo.prompt_gerar_estilo(body.descricao, base)
+    try:
+        await conteudo_roteiros.garante_modelo({"provider": body.provider, "model": body.model})
+        texto = await pesquisa._perguntar({"provider": body.provider, "model": body.model}, system, user, None, "medio")
+    except llm.LLMError as e:
+        raise HTTPException(502, str(e))
+    if not texto.strip():
+        raise HTTPException(502, "O modelo não devolveu nada.")
+    return {"texto": conteudo.limpar_markdown(split_think(texto)[1])}
+
+
+@app.get("/api/conteudo/estilos/{nome}")
+def conteudo_ler_estilo(nome: str):
+    return _conteudo(conteudo.ler_estilo, nome)
+
+
+@app.put("/api/conteudo/estilos/{nome}")
+def conteudo_salvar_estilo(nome: str, body: EstiloBody):
+    return _conteudo(conteudo.salvar_estilo, nome, body.texto, body.novo, body.indice)
+
+
+@app.delete("/api/conteudo/estilos/{nome}")
+def conteudo_apagar_estilo(nome: str):
+    _conteudo(conteudo.apagar_estilo, nome)
+    return {"ok": True}
+
+
+@app.get("/api/conteudo/especificacoes")
+def conteudo_especificacoes():
+    return conteudo.especificacoes()
+
+
+@app.get("/api/conteudo/especificacoes/{conv_id}")
+def conteudo_especificacao(conv_id: int):
+    return _conteudo(conteudo.especificacao, conv_id)
+
+
+@app.post("/api/conteudo/especificacoes")
+def conteudo_criar_especificacao(body: dict):
+    return _conteudo(conteudo.salvar_especificacao, body or {})
+
+
+@app.put("/api/conteudo/especificacoes/{conv_id}")
+def conteudo_salvar_especificacao(conv_id: int, body: dict):
+    return _conteudo(conteudo.salvar_especificacao, body or {}, conv_id)
+
+
+@app.get("/api/conteudo/especificacoes/{conv_id}/roteiros")
+def conteudo_listar_roteiros(conv_id: int):
+    return _conteudo(conteudo_roteiros.listar, conv_id)
+
+
+@app.post("/api/conteudo/especificacoes/{conv_id}/roteiros")
+async def conteudo_gerar_roteiros(conv_id: int):
+    """Pesquisa as novidades do tema e escreve os roteiros (ou deixa o pedido para o Claude via MCP)."""
+    return _conteudo(conteudo_roteiros.iniciar, conv_id)
+
+
+@app.get("/api/conteudo/roteiros/{message_id}/stream")
+async def conteudo_roteiros_stream(message_id: int):
+    async def stream():
+        while True:
+            try:
+                est = conteudo_roteiros.estado(message_id)
+            except ToolError as e:
+                yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+                return
+            yield f"data: {json.dumps(est, ensure_ascii=False, default=str)}\n\n"
+            if est["status"] != "rodando":
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/api/conteudo/roteiros/{message_id}/cancelar")
+def conteudo_cancelar_roteiros(message_id: int):
+    return conteudo_roteiros.cancelar(message_id)
+
+
+@app.put("/api/conteudo/roteiros/{message_id}/{roteiro_id}")
+def conteudo_editar_roteiro(message_id: int, roteiro_id: str, body: dict):
+    return _conteudo(conteudo_roteiros.editar, message_id, roteiro_id, body or {})
+
+
+@app.get("/api/conteudo/especificacoes/{conv_id}/agenda")
+def conteudo_agenda_estado(conv_id: int):
+    return _conteudo(conteudo_agenda.estado, conv_id)
+
+
+@app.post("/api/conteudo/especificacoes/{conv_id}/agenda/perdido")
+def conteudo_agenda_perdido(conv_id: int, body: dict):
+    """Horário perdido (Forja estava desligado): {"acao": "rodar" | "pular"}."""
+    return _conteudo(conteudo_agenda.responder_perdido, conv_id, str((body or {}).get("acao") or ""))
+
+
+@app.get("/api/conteudo/producao/{message_id}/publicacao")
+def conteudo_publicacao(message_id: int):
+    """Título e descrição do vídeo pronto, para copiar e postar no YouTube."""
+    return _conteudo(conteudo_producao.publicacao, message_id)
+
+
+@app.get("/api/conteudo/agenda")
+def conteudo_agenda_geral():
+    """Todas as especificações com a agenda de cada uma (a vista Agenda do PC e do celular)."""
+    return [{"id": s["id"], "nome": s["nome"], "automacao": s["automacao"], "estilo": s["estilo"],
+             "motor": s["motor"], **conteudo_agenda.estado(s["id"])} for s in conteudo.especificacoes()
+            if s.get("tipo") != "unico"]
+
+
+@app.get("/api/servico")
+def servico_estado():
+    """Se este backend é o serviço sem janela (o Electron decide se usa este ou sobe o seu)."""
+    return servico.estado()
+
+
+@app.post("/api/servico/sair")
+def servico_sair():
+    if not servico.eh_servico():
+        raise HTTPException(400, "Este backend não é o serviço sem janela.")
+    if conteudo_agenda.ocupado():
+        raise HTTPException(409, "O serviço está no meio de uma automação.")
+    threading.Timer(0.3, servico.sair).start()   # depois de a resposta sair (o Electron espera o 200)
+    return {"ok": True}
+
+
+@app.get("/api/conteudo/servico")
+def conteudo_servico():
+    return servico_instalar.estado()
+
+
+@app.post("/api/conteudo/servico/{acao}")
+def conteudo_servico_acao(acao: str):
+    """Instala ou remove a tarefa do Windows. Abre o PowerShell como administrador (o UAC e a senha são do usuário)."""
+    return _conteudo(servico_instalar.abrir, acao)
+
+
+@app.get("/api/conteudo/video/{message_id}")
+def conteudo_video(message_id: int):
+    """O vídeo entregue por uma produção, para o player da tela Conteúdo (é um <video>: vale o cookie)."""
+    try:
+        caminho = conteudo_producao.video_entregue(message_id)
+    except ToolError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(caminho, media_type="video/mp4")
+
+
+@app.post("/api/conteudo/producao/{message_id}/revisar")
+async def conteudo_revisar(message_id: int, body: dict):
+    """Pedidos de mudança (quadros desenhados e trechos) num vídeo pronto: o Claude faz a próxima versão."""
+    return _conteudo(conteudo_producao.revisar, message_id, (body or {}).get("pedidos") or [], (body or {}).get("geral") or "")
+
+
+@app.get("/api/conteudo/uso")
+def conteudo_uso():
+    """Uso do plano do Claude (janelas de 5 h e semanal), o último que o Claude Code informou."""
+    return conteudo_producao.uso()
+
+
+@app.get("/api/conteudo/claude")
+def conteudo_claude():
+    """Onde está o Claude Code que a produção vai usar ("" = não achou)."""
+    return {"caminho": conteudo_producao.achar_claude()}
+
+
+@app.post("/api/conteudo/claude/testar")
+async def conteudo_testar_claude():
+    return await asyncio.to_thread(conteudo_producao.testar_claude)
+
+
+@app.get("/api/conteudo/especificacoes/{conv_id}/producao")
+def conteudo_listar_producao(conv_id: int):
+    return _conteudo(conteudo_producao.listar, conv_id)
+
+
+@app.post("/api/conteudo/especificacoes/{conv_id}/producao")
+async def conteudo_produzir(conv_id: int, body: dict | None = None):
+    """Manda o Claude Code produzir o vídeo: o roteiro indicado ou o aprovado da especificação."""
+    b = body or {}
+    return _conteudo(conteudo_producao.iniciar, conv_id, b.get("message_id"), b.get("roteiro_id"))
+
+
+@app.get("/api/conteudo/producao/{message_id}")
+def conteudo_estado_producao(message_id: int):
+    return _conteudo(conteudo_producao.estado, message_id)
+
+
+@app.post("/api/conteudo/producao/{message_id}/cancelar")
+def conteudo_cancelar_producao(message_id: int):
+    return conteudo_producao.cancelar(message_id)
+
+
+@app.post("/api/conteudo/roteiros/{message_id}/{roteiro_id}/status")
+def conteudo_marcar_roteiro(message_id: int, roteiro_id: str, body: dict):
+    return _conteudo(conteudo_roteiros.marcar, message_id, roteiro_id, str((body or {}).get("status") or ""))
+
+
 # ------------------------------------------------------------------ estudos
 
 
@@ -3141,8 +3403,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudos", "tts"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design, estudos ou tts")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudos", "conteudo", "tts"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design, estudos, conteudo ou tts")
     if not folder and kind in ("agent", "maestro"):
         folder = config.WORKSPACE_PADRAO  # None: a pasta é escolhida antes do 1º envio (start_run barra)
     with db.session() as s:

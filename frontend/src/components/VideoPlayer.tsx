@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Pause, Pip, Play, QuadroAntes, QuadroDepois, Repetir, TelaCheia, Teclado, X } from "./icons";
+import { Mudo, Pause, Pip, Play, QuadroAntes, QuadroDepois, Repetir, Som, TelaCheia, Teclado, X } from "./icons";
 
 /** Player dos vídeos do Wan: clipes de 2 a 5 s, sem áudio, que a pessoa examina quadro a quadro.
  *
@@ -14,6 +14,8 @@ export type VideoPlayerApi = {
   /** O quadro na tela, em PNG no tamanho real do vídeo ("usar como início", "salvar quadro"). */
   capturar: () => Promise<Blob | null>;
   pausar: () => void;
+  /** Onde o vídeo está, em segundos (marcar um trecho ou o quadro de um pedido de mudança). */
+  tempo: () => number;
 };
 
 const VELOCIDADES = [0.25, 0.5, 1, 1.5, 2];
@@ -35,6 +37,7 @@ export const ATALHOS: [string, string][] = [
 ];
 
 const segundos = (t: number) => `${t.toFixed(2).replace(".", ",")} s`;
+const relogio = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 // ---------------------------------------------------------------- miniaturas da linha do tempo
 
@@ -95,7 +98,15 @@ type Props = {
   style?: React.CSSProperties;
   onTelaCheia?: () => void;
   comparar?: ComparaVideo | null;
+  /** Vídeo com som (os da tela Conteúdo, narrados): começa com áudio, tem botão de som, conta o tempo em
+   *  m:ss em vez do quadro e não repete sozinho. Sem isto é o player dos clipes mudos do Wan. */
+  audio?: boolean;
+  /** Trechos marcados na linha do tempo (pedir mudanças): `atual` é o que está sendo escolhido agora, com `fim`
+   *  ainda vazio enquanto só o início foi marcado; os outros são os já adicionados, mais apagados. */
+  trechos?: { inicio: number; fim: number | null; atual?: boolean }[];
 };
+
+export type Trecho = NonNullable<Props["trechos"]>[number];
 
 export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlayer(props, ref) {
   const caixa = useRef<HTMLDivElement>(null);
@@ -104,7 +115,8 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   const [tocando, setTocando] = useState(false);
   const [t, setT] = useState(0);
   const [dur, setDur] = useState(0);
-  const [loop, setLoop] = useState(true);
+  const [loop, setLoop] = useState(!props.audio);
+  const [mudo, setMudo] = useState(!props.audio);
   const [vel, setVel] = useState(1);
   const [fotos, setFotos] = useState<string[]>([]);
   const [sobre, setSobre] = useState<number | null>(null); // fração da linha do tempo sob o mouse
@@ -250,6 +262,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
   }, []);
 
   useImperativeHandle(ref, () => ({
+    tempo: () => video.current?.currentTime ?? 0,
     pausar: () => {
       video.current?.pause();
       outro.current?.pause();
@@ -341,7 +354,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
           ref={video}
           src={props.src}
           loop={loop}
-          muted
+          muted={mudo}
           playsInline
           autoPlay={props.autoPlay}
           preload="auto"
@@ -511,6 +524,19 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
               </div>
             )}
           </div>
+          {!props.compacto && dur > 0 && props.trechos?.map((x, i) => {
+            const a = Math.min(x.inicio, x.fim ?? x.inicio) / dur, b = Math.max(x.inicio, x.fim ?? x.inicio) / dur;
+            const cor = x.atual ? "border-amber-300 bg-amber-300/35" : "border-sky-300/70 bg-sky-300/20";
+            return x.fim === null ? (
+              <span key={i} className="pointer-events-none absolute -inset-y-1.5 w-0.5 -translate-x-1/2 rounded-full bg-amber-300 shadow-[0_0_0_1px_rgba(0,0,0,.5)]"
+                    style={{ left: `${a * 100}%` }} title="Início do trecho">
+                <span className="absolute -top-1 left-1/2 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-amber-300" />
+              </span>
+            ) : (
+              <span key={i} className={`pointer-events-none absolute -inset-y-1 rounded-[3px] border-x-2 ${cor}`}
+                    style={{ left: `${a * 100}%`, width: `max(4px, ${(b - a) * 100}%)` }} title="Trecho marcado" />
+            );
+          })}
           {props.marcas && !props.compacto && (
             <>
               <span className="absolute -top-1 left-0 size-2 -translate-x-1/2 rotate-45 rounded-[2px] bg-emerald-400" title="Quadro inicial dado" />
@@ -528,7 +554,7 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
             >
               {miniatura && <img src={miniatura} alt="" className="block h-[72px] w-auto" />}
               <div className="px-2 py-1 text-center text-[10px] tabular-nums text-white/80">
-                {segundos(sobre * dur)} · quadro {Math.min(total, Math.floor(sobre * total) + 1)}/{total}
+                {props.audio ? relogio(sobre * dur) : <>{segundos(sobre * dur)} · quadro {Math.min(total, Math.floor(sobre * total) + 1)}/{total}</>}
               </div>
             </div>
           )}
@@ -549,16 +575,28 @@ export const VideoPlayer = forwardRef<VideoPlayerApi, Props>(function VideoPlaye
             </>
           )}
           <span className="mx-1.5 h-4 w-px bg-white/10" aria-hidden />
-          <span className="font-mono text-[11px] tabular-nums text-fg" title={`${segundos(t)} de ${segundos(dur)}`}>
-            {String(quadro + 1).padStart(String(total).length, "0")}
-            <span className="text-muted"> / {total}</span>
-          </span>
-          {!props.compacto && (
+          {props.audio ? (
+            <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-fg">
+              {relogio(t)}<span className="text-muted"> / {relogio(dur)}</span>
+            </span>
+          ) : (
+            <span className="font-mono text-[11px] tabular-nums text-fg" title={`${segundos(t)} de ${segundos(dur)}`}>
+              {String(quadro + 1).padStart(String(total).length, "0")}
+              <span className="text-muted"> / {total}</span>
+            </span>
+          )}
+          {!props.compacto && !props.audio && (
             <span className="ml-2.5 hidden text-[11px] tabular-nums text-muted sm:inline">
               {segundos(t)} · {fps} fps{dims[0] ? ` · ${dims[0]}×${dims[1]}` : ""}
             </span>
           )}
           <div className="ml-auto flex items-center gap-1">
+            {props.audio && (
+              <button className={`${botao} ${mudo ? "text-muted" : ""}`} onClick={() => setMudo((m) => !m)}
+                      title={mudo ? "Ligar o som" : "Tirar o som"} aria-pressed={!mudo}>
+                {mudo ? <Mudo className="size-4" /> : <Som className="size-4" />}
+              </button>
+            )}
             {!props.compacto && (
               <button
                 className={`h-7 min-w-11 rounded-lg border px-2 font-mono text-[11px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sky-400/60 ${

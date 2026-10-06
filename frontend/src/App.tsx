@@ -12,6 +12,7 @@ import PesquisaView from "./components/PesquisaView";
 import TtsView from "./components/TtsView";
 import EstudosView from "./components/EstudosView";
 import DesignView from "./components/DesignView";
+import ConteudoView from "./components/ConteudoView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
 import ChangesPanel, { type ChangesAction } from "./components/ChangesPanel";
 import TerminalPanel from "./components/TerminalPanel";
@@ -2488,6 +2489,16 @@ export default function App() {
             model={settings.model}
             onError={setError}
             onConversationChanged={refreshConversations}
+          />
+        ) : section === "conteudo" ? (
+          <ConteudoView
+            conv={currentId}
+            carimbo={activity.lista}
+            provider={settings.provider}
+            model={settings.model}
+            onError={setError}
+            onConversationChanged={refreshConversations}
+            onAbrir={(id) => irParaConversa(id, "conteudo")}
           />
         ) : section === "design" ? (
           <DesignView

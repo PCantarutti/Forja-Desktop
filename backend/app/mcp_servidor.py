@@ -659,6 +659,22 @@ def _servidor():
         atendê-los. Sem pedido, espera até `espera` segundos (máx. 100) por um novo."""
         return await estudos.mcp_pedidos(espera)
 
+    # Tela Conteúdo (E18): roteiros pedidos com o motor "Claude (MCP)". O Claude pesquisa com a própria busca.
+    from . import conteudo_roteiros
+
+    @mcp.tool()
+    async def conteudo_pedidos(espera: int = 60) -> str:
+        """Pedidos de roteiro que o usuário fez na tela Conteúdo com o motor "Claude (MCP)": tema, guia de estilo
+        e o formato da resposta. Sem pedido, espera até `espera` segundos (máx. 100) por um novo."""
+        return await conteudo_roteiros.mcp_pedidos(espera)
+
+    @mcp.tool()
+    async def conteudo_salvar_roteiros(pedido_id: int, roteiros: list[dict], fontes: list[dict] | None = None,
+                                       modelo: str = "") -> str:
+        """Grava os roteiros de um pedido da tela Conteúdo. `roteiros` no formato do pedido; `fontes` = [{titulo, url}]
+        das páginas que você usou (noticia.fontes de cada roteiro aponta para elas por número, 1 = a primeira)."""
+        return await asyncio.to_thread(conteudo_roteiros.mcp_salvar, pedido_id, roteiros, fontes, modelo)
+
     return mcp
 
 

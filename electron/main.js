@@ -37,7 +37,8 @@ let backend = null;
 let port = 0;
 // Token desta execução: o backend só atende /api com ele no header. Fecha a porta para outro
 // processo (ou outro usuário) da mesma máquina, que alcança 127.0.0.1 tão bem quanto o app.
-const token = crypto.randomBytes(32).toString("hex");
+let token = crypto.randomBytes(32).toString("hex");   // vira o do serviço sem janela, se a janela adotar um
+let adotado = false;   // usando o backend do serviço sem janela (servico.py) em vez de um próprio
 let mainWindow = null;
 let tray = null;
 let host = null; // views do navegador integrado (BrowserHost)
@@ -224,7 +225,7 @@ function stopBackend() {
 async function waitForBackend(timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!backend) throw new Error(`o backend não subiu. Log: ${LOG_FILE}`);
+    if (!backend && !adotado) throw new Error(`o backend não subiu. Log: ${LOG_FILE}`);
     try {
       const r = await fetch(`http://127.0.0.1:${port}/api/config`, { headers: { "x-forja-token": token } });
       if (r.ok) return;
@@ -234,6 +235,39 @@ async function waitForBackend(timeoutMs = 60000) {
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error(`o backend não respondeu em ${timeoutMs / 1000}s. Log: ${LOG_FILE}`);
+}
+
+/** O serviço sem janela (tarefa "Forja Automatico", sobe com o Windows antes do login) pode estar no ar com os
+ *  mesmos dados. No meio de uma automação, a janela usa ele (devolve {port, token}); ocioso, pede para ele sair e
+ *  a janela sobe o seu backend, com tudo (o navegador nativo precisa do CDP desta janela). Nunca os dois juntos. */
+async function servicoSemJanela() {
+  let info;
+  try {
+    info = JSON.parse(fs.readFileSync(path.join(USER_DATA, "servico.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  const base = `http://127.0.0.1:${info.port}`;
+  const headers = { "x-forja-token": info.token };
+  try {
+    const st = await (await fetch(`${base}/api/servico`, { headers, signal: AbortSignal.timeout(3000) })).json();
+    if (!st.servico) return null;
+    if (st.ocupado) return { port: info.port, token: info.token };
+    const r = await fetch(`${base}/api/servico/sair`, { method: "POST", headers });
+    if (r.status === 409) return { port: info.port, token: info.token };   // começou algo agora há pouco
+  } catch {
+    return null;   // arquivo velho de um serviço que já morreu
+  }
+  for (let i = 0; i < 150; i++) {   // até 30 s para descarregar o modelo e soltar a trava do banco
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+      await fetch(`${base}/api/servico`, { headers, signal: AbortSignal.timeout(500) });
+    } catch {
+      await new Promise((r) => setTimeout(r, 800));
+      return null;
+    }
+  }
+  return { port: info.port, token: info.token };   // não saiu: melhor usar ele do que brigar pelo banco
 }
 
 // ------------------------------------------------------------------ zoom
@@ -608,8 +642,15 @@ if (!app.requestSingleInstanceLock()) {
     syncAutoStart();
     try {
       // Porta fixa quando dá: o `tailscale serve` do celular (aba Celular) aponta para ela.
-      port = Number(process.env.FORJA_PORT) || (await freePort(PORTA_PADRAO));
-      startBackend(await cdpEndpoint());
+      const servico = await servicoSemJanela();
+      if (servico) {
+        port = servico.port;
+        token = servico.token;
+        adotado = true;
+      } else {
+        port = Number(process.env.FORJA_PORT) || (await freePort(PORTA_PADRAO));
+        startBackend(await cdpEndpoint());
+      }
       await waitForBackend();
       // --hidden: subiu junto com o Windows e fica só na bandeja até o usuário chamar.
       const hidden = process.argv.includes("--hidden") && prefs.closeToTray;
@@ -636,7 +677,9 @@ async function vigiaSono() {
   if (!precisa && port) {
     try {
       const r = await fetch(`http://127.0.0.1:${port}/api/activity`, { headers: { "x-forja-token": token } });
-      precisa = (await r.json()).conversations.some((c) => c.running);
+      const atividade = await r.json();
+      // `acordado`: automação da tela Conteúdo marcada para mais tarde (o vídeo das 3h não sai com o PC dormindo)
+      precisa = atividade.conversations.some((c) => c.running) || Boolean(atividade.acordado);
     } catch {
       precisa = bloqueioSono !== null; // backend sem responder agora: mantém como estava
     }

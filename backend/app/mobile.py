@@ -49,8 +49,12 @@ def token() -> str:
             f.write_text(segredo.cifrar(secrets.token_hex(32)), encoding="utf-8")
         guardado = f.read_text(encoding="utf-8").strip()
         _atual = segredo.decifrar(guardado)
-        if not _atual:  # cifrado por outra conta do Windows: não abre, e o celular pareia de novo
-            return rotate()
+        if not _atual:
+            from . import servico
+            if servico.eh_servico():   # sem login (S4U) o token não abre: nunca despareia; o celular volta no login
+                _atual = secrets.token_hex(32)   # ponytail: só em memória, ninguém pareado conhece
+                return _atual
+            return rotate()   # cifrado por outra conta do Windows: não abre, e o celular pareia de novo
         if guardado == _atual:  # arquivo de antes da cifra: regrava cifrado, com o mesmo token
             f.write_text(segredo.cifrar(_atual), encoding="utf-8")
     return _atual
@@ -204,8 +208,22 @@ def _porteiro(app):
     return asgi
 
 
-async def liga_lan(app) -> None:
-    """Sobe o listener da LAN (idempotente). Porta ocupada = fica desligado e loga."""
+async def vigia_lan(app, intervalo: float = 5.0) -> None:
+    """Mantém a rede local no ar enquanto ela estiver ligada na aba Celular. A porta pode estar presa por alguns
+    segundos quando o app reinicia na atualização (o processo antigo ainda saindo): uma tentativa só deixava a LAN
+    desligada até alguém mexer, o celular perdia o PC e a pessoa gerava QR novo à toa (o token nem tinha mudado)."""
+    avisou = False
+    while True:
+        if lan_quer() and not _lan:
+            await liga_lan(app, avisar=not avisou)
+            avisou = avisou or not _lan
+        elif _lan:
+            avisou = False
+        await asyncio.sleep(intervalo if lan_quer() and not _lan else 30)
+
+
+async def liga_lan(app, avisar: bool = True) -> None:
+    """Sobe o listener da LAN (idempotente). Porta ocupada = fica desligado e loga (o vigia_lan tenta de novo)."""
     if _lan:
         return
     import contextlib
@@ -218,7 +236,8 @@ async def liga_lan(app) -> None:
         sock.bind(("0.0.0.0", LAN_PORTA))
     except OSError as e:
         sock.close()
-        print(f"Forja: rede local indisponível — porta {LAN_PORTA}: {e}", flush=True)
+        if avisar:
+            print(f"Forja: rede local indisponível — porta {LAN_PORTA}: {e} (tentando de novo)", flush=True)
         return
     server = uvicorn.Server(uvicorn.Config(_porteiro(app), lifespan="off", log_level="warning", access_log=False))
     server.capture_signals = contextlib.nullcontext  # Ctrl+C/SIGTERM são do servidor principal
