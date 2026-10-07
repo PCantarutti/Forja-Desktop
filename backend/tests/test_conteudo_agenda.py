@@ -357,3 +357,18 @@ def test_producao_que_falha_tenta_mais_uma_vez(mundo):
     assert mundo["chamadas"]["producao"] == [cid, cid]
     assert A.tique() == [f"{cid}: produção erro"]                 # a 2ª também falhou: desiste
     assert A._todos()[str(cid)]["p"]["etapa"] == "falhou"
+
+
+def test_pesquisa_que_nem_comeca_usa_pauta_guardada(mundo, monkeypatch):
+    cid = _spec("automatico")
+    antiga = _save(cid, role="assistant", name=R.NOME, status="running", meta={R.CHAVE: {"roteiros": []}}).id
+    guardados = mundo["termina"](antiga, [3])
+
+    def sem_modelo(cid, ampliar=False):
+        raise ToolError("Escolha o modelo que pesquisa e escreve os roteiros (na especificação).")
+    monkeypatch.setattr(R, "iniciar", sem_modelo)
+    mundo["relogio"].vai("2026-10-05T03:00")
+    linhas = A.tique()
+    assert linhas[0].startswith(f"{cid}: pauta guardada (Escolha o modelo") and linhas[0].endswith(f"{cid}: produção 999")
+    assert R.aprovado(cid)[1]["id"] == guardados[0]["id"]
+    assert A._todos()[str(cid)]["p"]["dia"] == "2026-10-05" and A.tique() == []   # o slot não dispara de novo

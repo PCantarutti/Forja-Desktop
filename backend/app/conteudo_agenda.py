@@ -282,6 +282,10 @@ def _iniciar_roteiros(cid: int, trilha: str, chave: str, tentativa: int | None =
     try:
         rod = conteudo_roteiros.iniciar(cid, ampliar=bool(tentativa))
     except ToolError as e:
+        # automático (trilha p): a pesquisa nem começou (modelo ausente, sem VRAM) — uma pauta guardada ainda salva o dia
+        _grava(cid, trilha, slot=chave, dia=chave[:10])
+        if trilha == "p" and (guardada := _pauta_guardada(cid, trilha, str(e))):
+            return " · ".join(guardada)
         _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="falhou", aviso=str(e))
         _avisa("Conteúdo: automação parou", str(e), cid)
         return f"{cid}: roteiros não começaram ({e})"
@@ -346,15 +350,21 @@ def _melhor(cid: int, roteiros: list[dict]) -> dict:
 def _plano_b(cid: int, trilha: str, t: dict, aviso: str) -> list[str] | None:
     """A pesquisa do dia não rendeu (busca vazia, nada novo, JSON ruim, tudo repetido). Antes de desistir: 1) a melhor
     pauta guardada de rodadas anteriores; 2) uma 2ª pesquisa com o dobro da janela de dias. Só no automático."""
-    guardadas = conteudo_roteiros.reserva(cid)
-    if guardadas:
-        melhor = _melhor(cid, [x for _, x in guardadas])
-        mid = next(m for m, x in guardadas if x["id"] == melhor["id"])
-        log.info("conteudo: %s sem roteiro novo (%s); usando pauta guardada %s", cid, aviso, melhor["id"])
-        return [f"{cid}: pauta guardada ({aviso})", *_aprovar_e_seguir(cid, trilha, mid, melhor, f"Pauta guardada: {aviso}")]
+    if (guardada := _pauta_guardada(cid, trilha, aviso)):
+        return guardada
     if not t.get("tentativa"):
         return [f"{cid}: 2ª pesquisa ({aviso})", _iniciar_roteiros(cid, trilha, t["slot"], 1)]
     return None
+
+
+def _pauta_guardada(cid: int, trilha: str, aviso: str) -> list[str] | None:
+    guardadas = conteudo_roteiros.reserva(cid)
+    if not guardadas:
+        return None
+    melhor = _melhor(cid, [x for _, x in guardadas])
+    mid = next(m for m, x in guardadas if x["id"] == melhor["id"])
+    log.info("conteudo: %s sem roteiro novo (%s); usando pauta guardada %s", cid, aviso, melhor["id"])
+    return [f"{cid}: pauta guardada ({aviso})", *_aprovar_e_seguir(cid, trilha, mid, melhor, f"Pauta guardada: {aviso}")]
 
 
 def _aprovar_e_seguir(cid: int, trilha: str, rodada: int, melhor: dict, nota: str = "") -> list[str]:
