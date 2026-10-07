@@ -15,10 +15,12 @@ da mesma especificação: é ele que a produção da madrugada pega (etapa 4).
 from __future__ import annotations
 
 import asyncio
+import difflib
 import re
 import secrets
 import time
-from datetime import date
+import unicodedata
+from datetime import date, timedelta
 
 from sqlalchemy import select
 
@@ -222,9 +224,12 @@ def _contexto(spec: dict) -> str:
     return "\n".join(linhas)
 
 
-def iniciar(conv_id: int) -> dict:
-    """Começa uma rodada para a especificação. Devolve o estado inicial."""
+def iniciar(conv_id: int, ampliar: bool = False) -> dict:
+    """Começa uma rodada para a especificação. Devolve o estado inicial. ampliar: a 2ª tentativa da agenda, com o
+    dobro da janela de dias (semana fraca de notícias, busca que voltou vazia)."""
     spec = conteudo.especificacao(conv_id)
+    if ampliar:
+        spec = {**spec, "dias": spec["dias"] * 2}
     if not spec["estilo"]:
         raise ToolError("Escolha o estilo da especificação antes de gerar roteiros.")
     conteudo.ler_estilo(spec["estilo"])   # estilo apagado da pasta: avisa agora, não no fim da pesquisa
@@ -356,7 +361,7 @@ async def _escrever(run: dict, spec: dict, escritor: dict) -> list[dict]:
     uteis = [f for f in run["fontes"] if f["status"] == "util"]
     user = (f"GUIA DE ESTILO ({spec['estilo']}):\n\n{estilo}\n\n"
             f"ESPECIFICAÇÃO:\nTema: {spec['tema']}\n" + (f"Observações: {spec['observacoes']}\n" if spec["observacoes"] else "")
-            + f"\nACHADOS:\n\n{pesquisa._achados(run)}")
+            + bloco_feitos(spec) + f"\nACHADOS:\n\n{pesquisa._achados(run)}")
     fontes = [{"titulo": f["titulo"], "url": f["url"]} for f in uteis]
     # Vídeo longo: três roteiros de 10 min numa resposta só saíam com metade do tamanho (o modelo divide o fôlego).
     # Um por chamada, cada um com o tempo inteiro da escrita, e o anterior listado para não repetir o ângulo.
@@ -376,7 +381,81 @@ async def _escrever(run: dict, spec: dict, escritor: dict) -> list[dict]:
                 break
             if pesquisa._acabou(run):
                 break
-    return feitos[:spec["roteiros"]]
+    return tirar_repetidos(spec, feitos[:spec["roteiros"]])
+
+
+# ------------------------------------------------------------------ o que já virou vídeo (sem repetir pauta)
+
+def _norm(s: str) -> str:
+    s = unicodedata.normalize("NFKD", str(s or "").lower()).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+
+def _urls(x: dict) -> set[str]:
+    return {f["url"].split("#")[0].rstrip("/") for f in (x.get("noticia") or {}).get("fontes") or []
+            if isinstance(f, dict) and f.get("url")}
+
+
+def feitos(conv_id: int, limite: int = 40) -> list[dict]:
+    """Roteiros desta especificação que já viraram vídeo, o mais novo primeiro."""
+    with db.session() as s:
+        ms = sorted(_roteiros_da_conversa(s, conv_id), key=lambda m: -m.id)
+        out = [x for m in ms for x in ((m.meta or {}).get(CHAVE) or {}).get("roteiros") or [] if x.get("status") == "produzido"]
+    return out[:limite]
+
+
+def repetido(x: dict, ja: list[dict]) -> dict | None:
+    """O vídeo já feito que conta a mesma notícia: metade ou mais das fontes iguais, ou título quase igual."""
+    urls, titulo = _urls(x), _norm(x.get("titulo"))
+    for f in ja:
+        comum = urls & _urls(f)
+        if comum and len(comum) * 2 >= len(urls):
+            return f
+        if titulo and difflib.SequenceMatcher(None, titulo, _norm(f.get("titulo"))).ratio() >= 0.8:
+            return f
+    return None
+
+
+def bloco_feitos(spec: dict) -> str:
+    """Para o prompt (série): o que já virou vídeo, para o roteirista buscar outra notícia ou outro ângulo."""
+    if spec.get("tipo") == "unico" or not spec.get("id"):
+        return ""
+    ja = feitos(spec["id"], 25)
+    if not ja:
+        return ""
+    linhas = [f"- {x['titulo']}" + (f" ({x['noticia']['data']})" if (x.get("noticia") or {}).get("data") else "") for x in ja]
+    return ("\nJÁ VIRARAM VÍDEO neste canal (não repita a mesma notícia; só volte a um assunto destes se houver fato NOVO, "
+            "e diga qual):\n" + "\n".join(linhas) + "\n")
+
+
+def tirar_repetidos(spec: dict, roteiros: list[dict]) -> list[dict]:
+    """Série: roteiro que repete um vídeo já feito vai como descartado, com o motivo (a tela mostra; a agenda pula)."""
+    if spec.get("tipo") == "unico" or not spec.get("id"):
+        return roteiros
+    ja = feitos(spec["id"])
+    for x in roteiros:
+        if (f := repetido(x, ja)):
+            x.update(status="descartado", repetido=f["titulo"])
+    return roteiros
+
+
+def reserva(conv_id: int) -> list[tuple[int, dict]]:
+    """Pautas guardadas: roteiros novos (nunca aprovados) de rodadas anteriores, ainda dentro do dobro da janela de dias
+    e que não repetem vídeo feito. A agenda usa quando a pesquisa do dia falha."""
+    spec = conteudo.especificacao(conv_id)
+    limite = (date.today() - timedelta(days=2 * spec["dias"])).isoformat()
+    ja = feitos(conv_id)
+    out = []
+    with db.session() as s:
+        for m in sorted(_roteiros_da_conversa(s, conv_id), key=lambda m: -m.id):
+            if m.status != "ok":
+                continue
+            criado = m.created_at.date().isoformat() if m.created_at else ""
+            for x in ((m.meta or {}).get(CHAVE) or {}).get("roteiros") or []:
+                data = (x.get("noticia") or {}).get("data") or criado
+                if x.get("status") == "novo" and data[:10] >= limite and not repetido(x, ja):
+                    out.append((m.id, dict(x)))
+    return out
 
 
 # ------------------------------------------------------------------ roteiros
@@ -574,7 +653,7 @@ def _bloco(p: dict) -> str:
         "",
         f"GUIA DE ESTILO ({spec['estilo']}), siga à risca:",
         estilo,
-        "",
+        bloco_feitos(spec),
         prompt_roteiros(spec, p["n"])
         .replace("ACHADOS de uma pesquisa na web, numerados [1], [2]...", "resultado da SUA pesquisa na web"),
         "",
@@ -599,7 +678,9 @@ def mcp_salvar(pedido_id: int, roteiros: list, fontes: list | None = None, model
             return f"ERRO: o pedido {pedido_id} não está esperando roteiros (já foi atendido ou cancelado)."
     lista = [{"titulo": _texto(f.get("titulo") or f.get("url"), 200), "url": str(f.get("url"))[:500]}
              for f in (fontes or []) if isinstance(f, dict) and str(f.get("url") or "").startswith("http")]
-    feitos = normalizar(roteiros, lista)
+    with db.session() as s:
+        conv_id = s.get(db.Message, pedido_id).conversation_id
+    feitos = tirar_repetidos({**conteudo.especificacao(conv_id), "id": conv_id}, normalizar(roteiros, lista))
     if not feitos:
         return ("ERRO: nenhum roteiro válido. Cada roteiro precisa de `cenas` com {id, texto}; "
                 "veja o formato no pedido (conteudo_pedidos).")

@@ -37,9 +37,10 @@ def mundo(tmp_path, monkeypatch):
 
     estado_rodada = {}
 
-    def iniciar_roteiros(cid):
+    def iniciar_roteiros(cid, ampliar=False):
         mid = _save(cid, role="assistant", name=R.NOME, status="running", meta={R.CHAVE: {"roteiros": []}}).id
         chamadas["roteiros"].append(mid)
+        chamadas.setdefault("ampliar", []).append(ampliar)
         return {"id": mid}
 
     def termina_rodada(mid, confiancas):
@@ -216,14 +217,23 @@ def test_roteiros_falharam_avisa(mundo):
     cid = _spec("automatico")
     mundo["relogio"].vai("2026-10-05T03:00")
     A.tique()
-    mid = mundo["chamadas"]["roteiros"][0]
-    with db.session() as s:
-        m = s.get(db.Message, mid)
-        m.status, m.meta = "erro", {R.CHAVE: {"aviso": "busca fora do ar", "roteiros": []}}
-        s.commit()
+    def falha(mid):
+        with db.session() as s:
+            m = s.get(db.Message, mid)
+            m.status, m.meta = "erro", {R.CHAVE: {"aviso": "busca fora do ar", "roteiros": []}}
+            s.commit()
+    falha(mundo["chamadas"]["roteiros"][0])
+    # 1ª falha, sem pauta guardada: pesquisa de novo, com o dobro da janela de dias
+    segunda = A.tique()
+    assert segunda[0] == f"{cid}: 2ª pesquisa (busca fora do ar)" and mundo["chamadas"]["ampliar"] == [False, True]
+    falha(mundo["chamadas"]["roteiros"][1])
     assert A.tique() == [f"{cid}: roteiros falharam"]
     assert mundo["avisos"][-1] == ("Conteúdo: sem roteiros hoje", "busca fora do ar")
     assert mundo["chamadas"]["producao"] == []
+    # o slot do dia seguinte começa com as segundas chances zeradas
+    mundo["relogio"].vai("2026-10-06T03:00")
+    A.tique()
+    assert mundo["chamadas"]["ampliar"][-1] is False
 
 
 def test_roteiros_demorados_estouram(mundo):
@@ -314,3 +324,36 @@ def test_servico_sem_dpapi_nao_despareia_nem_apaga_chaves(monkeypatch, tmp_path)
     assert segredo.falhou
     with pytest.raises(settings.SettingsError, match="sem login"):
         settings.update({"providers": []})
+
+
+def test_pesquisa_falhou_usa_pauta_guardada(mundo):
+    cid = _spec("automatico")
+    # rodada de ontem: dois roteiros que ninguém usou
+    antiga = _save(cid, role="assistant", name=R.NOME, status="running", meta={R.CHAVE: {"roteiros": []}}).id
+    guardados = mundo["termina"](antiga, [2, 4])
+    mundo["relogio"].vai("2026-10-05T03:00")
+    A.tique()
+    mid = mundo["chamadas"]["roteiros"][0]
+    with db.session() as s:
+        m = s.get(db.Message, mid)
+        m.status, m.meta = "erro", {R.CHAVE: {"aviso": "nada novo", "roteiros": []}}
+        s.commit()
+    linhas = A.tique()
+    assert linhas[0] == f"{cid}: pauta guardada (nada novo)" and linhas[-1] == f"{cid}: produção 999"
+    assert R.aprovado(cid)[1]["id"] == guardados[1]["id"]          # a de maior confiança
+    assert A._todos()[str(cid)]["p"]["aviso"] == "Pauta guardada: nada novo"
+    assert mundo["chamadas"]["ampliar"] == [False]                # não precisou pesquisar de novo
+
+
+def test_producao_que_falha_tenta_mais_uma_vez(mundo):
+    cid = _spec("automatico")
+    mundo["relogio"].vai("2026-10-05T03:00")
+    A.tique()
+    mundo["termina"](mundo["chamadas"]["roteiros"][0], [5])
+    A.tique()
+    assert mundo["chamadas"]["producao"] == [cid]
+    mundo["producao"]["status"] = "erro"
+    assert A.tique() == [f"{cid}: produção falhou, 2ª tentativa", f"{cid}: produção 999"]
+    assert mundo["chamadas"]["producao"] == [cid, cid]
+    assert A.tique() == [f"{cid}: produção erro"]                 # a 2ª também falhou: desiste
+    assert A._todos()[str(cid)]["p"]["etapa"] == "falhou"

@@ -268,7 +268,11 @@ def _pesquisa_rodando() -> bool:
     return any(r.get("status") == "rodando" for r in conteudo_roteiros._RUNS.values())
 
 
-def _iniciar_roteiros(cid: int, trilha: str, chave: str) -> str:
+def _iniciar_roteiros(cid: int, trilha: str, chave: str, tentativa: int | None = 0) -> str:
+    """tentativa: 0 = slot novo (zera as segundas chances), 1 = a 2ª pesquisa, ampliada; None = retomar da fila."""
+    if tentativa is not None:
+        _grava(cid, trilha, tentativa=tentativa, tentou_producao=False)
+    tentativa = (_todos().get(str(cid)) or {}).get(trilha, {}).get("tentativa", 0)
     # Uma pesquisa por vez: com o modelo local, duas ao mesmo tempo dividem a GPU e as duas ficam lentas.
     if _pesquisa_rodando():
         t = (_todos().get(str(cid)) or {}).get(trilha) or {}
@@ -276,7 +280,7 @@ def _iniciar_roteiros(cid: int, trilha: str, chave: str) -> str:
         _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="espera", desde=desde, aviso="", escolhido="")
         return f"{cid}: pesquisa na fila"
     try:
-        rod = conteudo_roteiros.iniciar(cid)
+        rod = conteudo_roteiros.iniciar(cid, ampliar=bool(tentativa))
     except ToolError as e:
         _grava(cid, trilha, slot=chave, dia=chave[:10], etapa="falhou", aviso=str(e))
         _avisa("Conteúdo: automação parou", str(e), cid)
@@ -292,7 +296,7 @@ def _acompanhar(spec: dict, trilha: str, t: dict) -> list[str]:
         if agora() - datetime.fromisoformat(t["desde"]) > ESPERA_FILA:
             _grava(cid, trilha, etapa="falhou", aviso="Outra pesquisa ocupou a máquina por tempo demais.")
             return [f"{cid}: fila da pesquisa estourou"]
-        return [] if _pesquisa_rodando() else [_iniciar_roteiros(cid, trilha, t["slot"])]
+        return [] if _pesquisa_rodando() else [_iniciar_roteiros(cid, trilha, t["slot"], None)]
     if t["etapa"] == "roteiros":
         aprovar = trilha == "p"   # no automático a trilha p faz tudo; na aprovação, r só escreve
         return _acompanhar_roteiros(cid, trilha, t, aprovar)
@@ -315,7 +319,10 @@ def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[
         return [f"{cid}: roteiros cancelados"]
     roteiros = [x for x in rod.get("roteiros") or [] if x["status"] == "novo"]
     if rod["status"] != "ok" or not roteiros:
-        aviso = rod.get("aviso") or "A pesquisa não gerou roteiros."
+        aviso = rod.get("aviso") or ("Os roteiros repetiam vídeos já feitos." if rod.get("roteiros") else
+                                     "A pesquisa não gerou roteiros.")
+        if aprovar and (plano_b := _plano_b(cid, trilha, t, aviso)):
+            return plano_b
         _grava(cid, trilha, etapa="falhou", aviso=aviso)
         _avisa("Conteúdo: sem roteiros hoje", aviso, cid)
         return [f"{cid}: roteiros falharam"]
@@ -323,19 +330,43 @@ def _acompanhar_roteiros(cid: int, trilha: str, t: dict, aprovar: bool) -> list[
         _grava(cid, trilha, etapa="feito", aviso="")
         _avisa("Roteiros prontos para aprovar", f"{len(roteiros)} roteiro(s) novos. Aprove um até o horário da produção.", cid)
         return [f"{cid}: roteiros prontos ({len(roteiros)})"]
-    limite = (agora() - timedelta(days=conteudo.especificacao(cid)["dias"])).date().isoformat()
+    return _aprovar_e_seguir(cid, trilha, rod["id"], _melhor(cid, roteiros))
+
+
+def _melhor(cid: int, roteiros: list[dict]) -> dict:
+    spec = conteudo.especificacao(cid)
+    limite = (agora() - timedelta(days=spec["dias"])).date().isoformat()
     recente = lambda x: (x.get("noticia") or {}).get("data", "") >= limite or not (x.get("noticia") or {}).get("data")
-    minimo = conteudo.especificacao(cid).get("duracao_min") or 0
+    minimo = spec.get("duracao_min") or 0
     # notícia dentro do período vence a antiga; depois, quem atinge a duração mínima; depois, a confiança.
     # Empate: o primeiro, que o modelo pôs na frente
-    melhor = max(roteiros, key=lambda x: (recente(x), (x.get("segundos") or 0) >= minimo, x.get("confianca") or 0))
-    conteudo_roteiros.marcar(rod["id"], melhor["id"], "aprovado")
+    return max(roteiros, key=lambda x: (recente(x), (x.get("segundos") or 0) >= minimo, x.get("confianca") or 0))
+
+
+def _plano_b(cid: int, trilha: str, t: dict, aviso: str) -> list[str] | None:
+    """A pesquisa do dia não rendeu (busca vazia, nada novo, JSON ruim, tudo repetido). Antes de desistir: 1) a melhor
+    pauta guardada de rodadas anteriores; 2) uma 2ª pesquisa com o dobro da janela de dias. Só no automático."""
+    guardadas = conteudo_roteiros.reserva(cid)
+    if guardadas:
+        melhor = _melhor(cid, [x for _, x in guardadas])
+        mid = next(m for m, x in guardadas if x["id"] == melhor["id"])
+        log.info("conteudo: %s sem roteiro novo (%s); usando pauta guardada %s", cid, aviso, melhor["id"])
+        return [f"{cid}: pauta guardada ({aviso})", *_aprovar_e_seguir(cid, trilha, mid, melhor, f"Pauta guardada: {aviso}")]
+    if not t.get("tentativa"):
+        return [f"{cid}: 2ª pesquisa ({aviso})", _iniciar_roteiros(cid, trilha, t["slot"], 1)]
+    return None
+
+
+def _aprovar_e_seguir(cid: int, trilha: str, rodada: int, melhor: dict, nota: str = "") -> list[str]:
+    conteudo_roteiros.marcar(rodada, melhor["id"], "aprovado")
     titulo = melhor["titulo_youtube"] or melhor["titulo"]
+    if nota:
+        _grava(cid, trilha, aviso=nota)
     if not conteudo.especificacao(cid)["automacao"].get("produzir", True):
-        _grava(cid, trilha, etapa="pronto", escolhido=titulo, aviso="")
+        _grava(cid, trilha, etapa="pronto", escolhido=titulo, aviso=nota)
         _avisa("Roteiro pronto para gerar", f"{titulo} — abra o Conteúdo e toque em gerar o vídeo.", cid)
         return [f"{cid}: aprovado {melhor['id']}", f"{cid}: pronto para gerar"]
-    _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=titulo)
+    _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=titulo, aviso=nota)
     return [f"{cid}: aprovado {melhor['id']}", _produzir(cid, trilha)]
 
 
@@ -361,6 +392,10 @@ def _acompanhar_producao(cid: int, trilha: str, t: dict) -> list[str]:
     prod = conteudo_producao.estado(t["producao"])
     if prod["status"] == "rodando":
         return []
+    if prod["status"] == "erro" and not t.get("tentou_producao"):
+        # falha que pode ser passageira (rede, Claude ocupado): o roteiro segue aprovado, tenta mais uma vez
+        _grava(cid, trilha, tentou_producao=True, aviso=f"2ª tentativa: {prod.get('aviso') or 'a 1ª não terminou'}")
+        return [f"{cid}: produção falhou, 2ª tentativa", _produzir(cid, trilha)]
     # o aviso de "vídeo pronto"/"não terminou" já sai da própria produção
     _grava(cid, trilha, etapa="feito" if prod["status"] == "ok" else "falhou", aviso=prod.get("aviso") or "")
     return [f"{cid}: produção {prod['status']}"]

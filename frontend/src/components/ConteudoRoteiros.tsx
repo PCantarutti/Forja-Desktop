@@ -24,6 +24,7 @@ type Roteiro = {
   motivo_confianca: string;
   palavras: number;
   segundos: number;
+  repetido?: string;   // título do vídeo já feito que este roteiro repetia (sai descartado sozinho)
 };
 type Rodada = {
   id: number;
@@ -292,6 +293,7 @@ function CartaoRoteiro(props: {
             {x.noticia.data && <span>notícia de {x.noticia.data}</span>}
             {escolhido && <span className="font-medium text-ok">escolhido para o próximo vídeo</span>}
             {produzido && <span className="font-medium text-info">virou vídeo</span>}
+            {x.repetido && <span className="text-warn">repete o vídeo “{x.repetido}”</span>}
           </div>
         </button>
         <ChevronDown className={`mt-1 size-4 shrink-0 text-faint transition-transform ${aberto ? "rotate-180" : ""}`} />
