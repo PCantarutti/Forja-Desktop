@@ -68,6 +68,16 @@ Regras:
 - `visual` de cada cena diz o que aparece na tela, concreto: o número ou palavra em destaque, o elemento a desenhar,
   o gráfico, a comparação. É o roteiro de edição de quem monta o vídeo.
 
+Retenção (vale junto com o guia; se o guia disser diferente, vale o guia):
+- A 1ª frase é o gancho (até ~3 s): o fato mais surpreendente, uma pergunta concreta ou uma promessa clara. Nada de
+  "olá", "neste vídeo" ou "você sabia" vazio.
+- Abra uma curiosidade cedo e só feche perto do fim; tenha uma virada no meio ("só que…", "mas tem um detalhe").
+- Frases curtas, uma ideia por frase; cada cena dá um motivo para ver a próxima. Nada de enrolação nem resumo repetido.
+- Feche com uma pergunta ligada ao tema, para comentar (nunca só "se inscreva").
+Título: o nome que as pessoas buscam logo no começo (empresa, produto, jogo, pessoa), menos de 60 caracteres,
+curiosidade ou conflito claro, sem prometer o que o vídeo não mostra. Dê 3 opções diferentes em `titulos` (a melhor
+primeiro, igual a `titulo_youtube`).
+
 Responda SÓ com um objeto JSON, sem texto antes nem depois:
 {{"roteiros": [{{
   "titulo": "nome curto interno",
@@ -75,6 +85,7 @@ Responda SÓ com um objeto JSON, sem texto antes nem depois:
   "noticia": {{"resumo": "o fato em 2 a 4 frases", "data": "AAAA-MM-DD ou vazio", "fontes": [1, 3]}},
   "cenas": [{{"id": "hook", "texto": "fala do narrador", "visual": "o que aparece na tela"}}, {{"id": "cta", "texto": "...", "visual": "..."}}],
   "titulo_youtube": "título pronto para publicar",
+  "titulos": ["o mesmo título_youtube", "opção 2", "opção 3"],
   "descricao": "descrição pronta para o YouTube, com as fontes no fim",
   "confianca": 4,
   "motivo_confianca": "por que a nota (1 a 5) nos fatos"
@@ -340,6 +351,10 @@ async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
             _gravar(run)
             run["teto"] = (time.monotonic() - run["t0"]) + pesquisa.TETO_RELATORIO
             run["roteiros"] = await _escrever(run, spec, escritor)
+            if run["roteiros"]:
+                run["fase"] = "avaliando"
+                _gravar(run)
+                await julgar(run, spec, escritor)
             status = "ok" if run["roteiros"] else "erro"
             if not run["roteiros"]:
                 run["aviso"] = "O modelo não devolveu roteiros num formato que dê para ler. Tente outro modelo."
@@ -382,6 +397,57 @@ async def _escrever(run: dict, spec: dict, escritor: dict) -> list[dict]:
             if pesquisa._acabou(run):
                 break
     return tirar_repetidos(spec, feitos[:spec["roteiros"]])
+
+
+# ------------------------------------------------------------------ juiz (outro olhar antes de escolher)
+
+JUIZ_PROMPT = """Você é editor-chefe de um canal brasileiro de vídeos e não escreveu estes roteiros. Recebe os ACHADOS da
+pesquisa e os ROTEIROS numerados. Dê a cada roteiro notas de 1 a 5, sendo exigente (5 é raro, 3 é mediano):
+- gancho: a 1ª frase prende nos primeiros 3 segundos?
+- retencao: abre curiosidade, tem virada, ritmo sem enrolação, motivo para ver até o fim?
+- clareza: um leigo entende de primeira?
+- fatos: tudo o que o roteiro afirma (número, data, nome, plataforma) está nos achados? Afirmação sem apoio = nota baixa.
+- interesse: o público do canal clicaria neste assunto e neste título hoje?
+Responda SÓ com JSON, sem texto antes nem depois:
+{"notas": [{"n": 1, "gancho": 4, "retencao": 3, "clareza": 5, "fatos": 5, "interesse": 4,
+"comentario": "uma frase: o principal problema ou a maior força"}]}"""
+CRITERIOS = {"gancho": 1.5, "retencao": 1.5, "clareza": 1.0, "fatos": 1.5, "interesse": 1.5}
+
+
+def _nota(bruta: dict) -> dict | None:
+    try:
+        n = {k: max(1, min(5, int(bruta[k]))) for k in CRITERIOS}
+    except (KeyError, TypeError, ValueError):
+        return None
+    total = sum(n[k] * p for k, p in CRITERIOS.items()) / sum(CRITERIOS.values())
+    return {**n, "total": round(total, 1), "comentario": _texto(bruta.get("comentario"), 300)}
+
+
+async def julgar(run: dict, spec: dict, escritor: dict) -> None:
+    """Uma chamada a mais, com o olhar de editor: notas de gancho, retenção, clareza, fatos e interesse em cada roteiro
+    novo (x["nota"]). A agenda escolhe por elas. Se o juiz falhar, fica sem nota e vale a confiança do escritor."""
+    novos = [x for x in run["roteiros"] if x["status"] == "novo"]
+    if not novos:
+        return
+    texto = "\n\n".join(f"ROTEIRO {i}: {x['titulo_youtube'] or x['titulo']}\n" + "\n".join(c["texto"] for c in x["cenas"])
+                         for i, x in enumerate(novos, 1))
+    run["teto"] = (time.monotonic() - run["t0"]) + pesquisa.TETO_RELATORIO
+    try:
+        resposta = await pesquisa._perguntar(escritor, JUIZ_PROMPT, f"ACHADOS:\n\n{pesquisa._achados(run)}\n\n{texto}",
+                                             run, "medio")
+    except Exception:   # o juiz é extra: sem ele, a rodada segue
+        return
+    dados = pesquisa._json(split_think(resposta)[1]) or {}
+    for bruta in dados.get("notas") or [] if isinstance(dados, dict) else []:
+        if isinstance(bruta, dict) and isinstance(bruta.get("n"), int) and 1 <= bruta["n"] <= len(novos):
+            if (nota := _nota(bruta)):
+                novos[bruta["n"] - 1]["nota"] = nota
+
+
+def pontos(x: dict) -> tuple:
+    """Para escolher entre roteiros: fatos não fracos, depois a nota do juiz (ou a confiança do escritor, sem juiz)."""
+    nota = x.get("nota") or {}
+    return (nota.get("fatos", 3) > 2, nota.get("total") or x.get("confianca") or 0, x.get("confianca") or 0)
 
 
 # ------------------------------------------------------------------ o que já virou vídeo (sem repetir pauta)
@@ -468,6 +534,16 @@ def _texto(v, limite: int) -> str:
     return re.sub(r"[ \t]+", " ", str(v or "")).strip()[:limite]
 
 
+def _titulos(r: dict) -> list[str]:
+    """Até 3 opções de título, sem repetir, com o titulo_youtube primeiro."""
+    out = []
+    for t in [r.get("titulo_youtube"), *(r.get("titulos") if isinstance(r.get("titulos"), list) else [])]:
+        t = _texto(t, 100)
+        if t and t not in out:
+            out.append(t)
+    return out[:3]
+
+
 def normalizar(bruto, fontes: list[dict]) -> list[dict]:
     """Roteiros do modelo (texto com JSON, dict ou lista) no formato da tela. Fonte citada por número
     vira {titulo, url} da lista `fontes` (1 = a primeira); URL solta também vale."""
@@ -521,6 +597,7 @@ def normalizar(bruto, fontes: list[dict]) -> list[dict]:
                         "fontes": citadas[:8]},
             "cenas": cenas[:40],   # vídeo longo tem bem mais cenas que um Short
             "titulo_youtube": _texto(r.get("titulo_youtube"), 100),
+            "titulos": _titulos(r),
             "descricao": str(r.get("descricao") or "").strip()[:5000],
             "confianca": confianca, "motivo_confianca": _texto(r.get("motivo_confianca"), 500),
             "palavras": palavras, "segundos": round(palavras / PALAVRAS_POR_SEGUNDO),

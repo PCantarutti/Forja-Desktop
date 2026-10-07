@@ -169,12 +169,12 @@ function Player(props: { p: Producao; onRevisar?: () => void; onVozFinal?: () =>
 
 /** Título e descrição prontos para colar no YouTube (com os créditos da mídia real que o Claude usou). */
 function ParaYoutube(props: { id: number }) {
-  const [pub, setPub] = useState<{ titulo: string; descricao: string } | null>(null);
+  const [pub, setPub] = useState<{ titulo: string; descricao: string; titulos?: string[] } | null>(null);
   const [aberto, setAberto] = useState(false);
   const [copiado, setCopiado] = useState("");
   useEffect(() => {
     setPub(null);
-    api.get<{ titulo: string; descricao: string }>(`/conteudo/producao/${props.id}/publicacao`).then(setPub).catch(() => setPub(null));
+    api.get<{ titulo: string; descricao: string; titulos?: string[] }>(`/conteudo/producao/${props.id}/publicacao`).then(setPub).catch(() => setPub(null));
   }, [props.id]);
   if (!pub) return null;
   const copiar = (oque: "titulo" | "descricao") => {
@@ -195,6 +195,14 @@ function ParaYoutube(props: { id: number }) {
         <span className="ml-auto flex gap-1.5">{botao("titulo", "Título")}{botao("descricao", "Descrição")}</span>
       </div>
       <p className="text-[13px] font-medium leading-snug text-fg">{pub.titulo}</p>
+      {(pub.titulos?.length ?? 0) > 0 && (   // para o teste A/B de título do YouTube (ou trocar depois de uns dias)
+        <div className="flex flex-col gap-0.5 text-[12px] text-muted">
+          <span className="text-[11px] text-faint">Outras opções (toque para copiar):</span>
+          {pub.titulos!.map((t) => (
+            <button key={t} className="text-left hover:text-fg" onClick={() => navigator.clipboard.writeText(t)}>· {t}</button>
+          ))}
+        </div>
+      )}
       <button className="text-left" onClick={() => setAberto(!aberto)} title={aberto ? "Recolher" : "Ver a descrição inteira"}>
         <p className={`whitespace-pre-line text-[12px] leading-relaxed text-muted ${aberto ? "" : "line-clamp-3"}`}>{pub.descricao}</p>
       </button>

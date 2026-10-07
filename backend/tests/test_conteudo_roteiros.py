@@ -38,7 +38,7 @@ def _spec(**extra) -> int:
                                           "motor": {"provider": "p", "model": "m"}, **extra})["id"]
 
 
-def _fakes(monkeypatch, roteiros_resposta=None):
+def _fakes(monkeypatch, roteiros_resposta=None, juiz=""):
     chamados = []
     respostas = iter(roteiros_resposta or [json.dumps({"roteiros": [ROTEIRO, {**ROTEIRO, "titulo": "Segundo"}]})])
 
@@ -53,6 +53,9 @@ def _fakes(monkeypatch, roteiros_resposta=None):
         elif system.startswith("Você é roteirista"):
             chamados.append((system, user))
             out = next(respostas)
+        elif system.startswith("Você é editor-chefe"):
+            chamados.append((system, user))
+            out = juiz
         else:
             out = ""
         yield "content", out
@@ -242,5 +245,37 @@ def test_video_longo_um_roteiro_por_chamada(monkeypatch):
     chamados = _fakes(monkeypatch, [um, json.dumps({"roteiros": [{**ROTEIRO, "titulo": "Outro"}]})])
     est = asyncio.run(_rodar_ate_o_fim(_spec(duracao_min=600)))
     assert est["status"] == "ok" and [r["titulo"] for r in est["roteiros"]] == ["OpenAI pausa", "Outro"]
+    chamados = [c for c in chamados if c[0].startswith("Você é roteirista")]
     assert len(chamados) == 2 and "exatamente 1 roteiros" in chamados[0][0]
     assert "JÁ ESCRITOS" in chamados[1][1] and "OpenAI pausa" in chamados[1][1]
+
+
+# ------------------------------------------------------------------ juiz, retenção e títulos
+
+def test_juiz_da_nota_e_titulos_saem_normalizados(monkeypatch):
+    juiz = json.dumps({"notas": [
+        {"n": 1, "gancho": 2, "retencao": 2, "clareza": 4, "fatos": 5, "interesse": 2, "comentario": "gancho fraco"},
+        {"n": 2, "gancho": 5, "retencao": 4, "clareza": 4, "fatos": 1, "interesse": 5, "comentario": "inventa número"},
+        {"n": 9, "gancho": 5}]})
+    roteiros = json.dumps({"roteiros": [{**ROTEIRO, "titulo_youtube": "A", "titulos": ["A", "B", "B", "C", "D"]},
+                                        {**ROTEIRO, "titulo": "Segundo"}]})
+    chamados = _fakes(monkeypatch, [roteiros], juiz)
+    est = asyncio.run(_rodar_ate_o_fim(_spec()))
+    a, b = est["roteiros"]
+    assert a["titulos"] == ["A", "B", "C"]                                   # sem repetir, o título_youtube primeiro, até 3
+    assert a["nota"] == {"gancho": 2, "retencao": 2, "clareza": 4, "fatos": 5, "interesse": 2, "total": 2.9,
+                         "comentario": "gancho fraco"}
+    assert b["nota"]["fatos"] == 1
+    system, user = chamados[0]
+    assert "Retenção" in system and "`titulos`" in system                  # regras de retenção no roteirista
+    juiz_sys, juiz_user = chamados[-1]
+    assert juiz_sys.startswith("Você é editor-chefe") and "ACHADOS" in juiz_user and "ROTEIRO 2" in juiz_user
+    # fatos fracos perdem mesmo com nota total maior; sem juiz vale a confiança
+    assert max([a, b], key=R.pontos) is a
+    assert R.pontos({"confianca": 4}) == (True, 4, 4)
+
+
+def test_juiz_que_falha_nao_derruba_a_rodada(monkeypatch):
+    _fakes(monkeypatch, juiz="não sei avaliar")
+    est = asyncio.run(_rodar_ate_o_fim(_spec()))
+    assert est["status"] == "ok" and all("nota" not in x for x in est["roteiros"])

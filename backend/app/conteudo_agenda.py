@@ -342,9 +342,9 @@ def _melhor(cid: int, roteiros: list[dict]) -> dict:
     limite = (agora() - timedelta(days=spec["dias"])).date().isoformat()
     recente = lambda x: (x.get("noticia") or {}).get("data", "") >= limite or not (x.get("noticia") or {}).get("data")
     minimo = spec.get("duracao_min") or 0
-    # notícia dentro do período vence a antiga; depois, quem atinge a duração mínima; depois, a confiança.
-    # Empate: o primeiro, que o modelo pôs na frente
-    return max(roteiros, key=lambda x: (recente(x), (x.get("segundos") or 0) >= minimo, x.get("confianca") or 0))
+    # notícia dentro do período vence a antiga; depois, quem atinge a duração mínima; depois, fatos não fracos e a
+    # nota do juiz (sem juiz, a confiança do escritor). Empate: o primeiro, que o modelo pôs na frente
+    return max(roteiros, key=lambda x: (recente(x), (x.get("segundos") or 0) >= minimo, *conteudo_roteiros.pontos(x)))
 
 
 def _plano_b(cid: int, trilha: str, t: dict, aviso: str) -> list[str] | None:

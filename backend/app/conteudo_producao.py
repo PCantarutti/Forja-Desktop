@@ -60,7 +60,9 @@ PEDIDO = """Você vai produzir sozinho um vídeo completo e renderizado. Ningué
   arquivos de outras composições nem para exportar algo: para reaproveitar, importe o que já é exportado ou copie.
 {midia}- CAPA NO INÍCIO (regra fixa): o vídeo abre com a capa (thumb) do estilo, ~1,2 s parada, SEM narração nem legenda, e
   transição para o conteúdo; use `ComCapa` de `src/Short/capa.tsx` se existir (veja a seção "Capa no início" do estilo).
-  Exporte também a capa: `npx remotion still <Composição> out/{slug}-capa.jpg --frame=15`.
+  Exporte também a capa: `npx remotion still <Composição> out/{slug}-capa.jpg --frame=15`, e uma capa ALTERNATIVA
+  para teste A/B em `out/{slug}-capa-b.jpg` (mesma identidade do estilo, outra frase curta ou outro enquadramento;
+  a mesma composição com uma prop, sem mudar o vídeo).
 - CHECAGEM DE FATOS antes de montar: o roteiro foi escrito por outro modelo e pode errar. Confira na fonte oficial
   (WebSearch/WebFetch) os fatos objetivos que vão para a tela ou para a fala — plataformas (página oficial do jogo e
   de cada loja; nunca deduzir), datas, preços, números. Errado = corrija a cena (fala e tela) só no necessário e conte
@@ -680,9 +682,10 @@ def _entregar(run: dict, video: Path) -> str:
     # Entrega na própria pasta do render (out/): copiar o arquivo sobre ele mesmo dá WinError 32 no Windows.
     if not (destino.exists() and os.path.samefile(video, destino)):
         shutil.copy2(video, destino)
-    capa = video.with_name(f"{video.stem}-capa.jpg")   # a thumb que o Claude exporta (vídeo longo: sobe à parte)
-    if capa.is_file() and not (saida / capa.name).exists():
-        shutil.copy2(capa, saida / capa.name)
+    for sufixo in ("-capa.jpg", "-capa-b.jpg"):   # a thumb que o Claude exporta e a alternativa do teste A/B
+        capa = video.with_name(video.stem + sufixo)
+        if capa.is_file() and not (saida / capa.name).exists():
+            shutil.copy2(capa, saida / capa.name)
     titulo, descricao = _publicacao_do_job(run["_job"])
     destino.with_suffix(".txt").write_text(f"TÍTULO\n{titulo}\n\nDESCRIÇÃO\n{descricao}\n", encoding="utf-8")
     return str(destino)
@@ -713,7 +716,8 @@ def publicacao(message_id: int) -> dict:
     if not (job / "roteiro.json").is_file():
         raise ToolError("Não achei o roteiro desta produção na pasta do projeto.")
     titulo, descricao = _publicacao_do_job(job)
-    return {"titulo": titulo, "descricao": descricao}
+    alternativos = json.loads((job / "roteiro.json").read_text(encoding="utf-8")).get("titulos") or []
+    return {"titulo": titulo, "descricao": descricao, "titulos": [t for t in alternativos if t != titulo][:3]}
 
 
 async def _rodar(run: dict, pedido: str) -> None:

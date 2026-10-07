@@ -372,3 +372,21 @@ def test_pesquisa_que_nem_comeca_usa_pauta_guardada(mundo, monkeypatch):
     assert linhas[0].startswith(f"{cid}: pauta guardada (Escolha o modelo") and linhas[0].endswith(f"{cid}: produção 999")
     assert R.aprovado(cid)[1]["id"] == guardados[0]["id"]
     assert A._todos()[str(cid)]["p"]["dia"] == "2026-10-05" and A.tique() == []   # o slot não dispara de novo
+
+
+def test_automatico_escolhe_pela_nota_do_editor(mundo):
+    cid = _spec("automatico")
+    mundo["relogio"].vai("2026-10-05T03:00")
+    A.tique()
+    mid = mundo["chamadas"]["roteiros"][0]
+    roteiros = R.normalizar([{"titulo": t, "confianca": c, "cenas": [{"id": "a", "texto": "b"}]}
+                             for t, c in (("confiante", 5), ("bom de gancho", 3), ("inventa", 4))], [])
+    roteiros[0]["nota"] = {"total": 3.0, "fatos": 5}
+    roteiros[1]["nota"] = {"total": 4.4, "fatos": 4}
+    roteiros[2]["nota"] = {"total": 4.9, "fatos": 2}     # nota alta, mas fatos fracos: perde
+    with db.session() as s:
+        m = s.get(db.Message, mid)
+        m.status, m.meta = "ok", {R.CHAVE: {"roteiros": roteiros}}
+        s.commit()
+    A.tique()
+    assert R.aprovado(cid)[1]["titulo"] == "bom de gancho"

@@ -24,7 +24,9 @@ type Roteiro = {
   motivo_confianca: string;
   palavras: number;
   segundos: number;
-  repetido?: string;   // título do vídeo já feito que este roteiro repetia (sai descartado sozinho)
+  repetido?: string;
+  titulos?: string[];   // opções de título (a 1ª é o titulo_youtube)
+  nota?: Nota;          // do juiz (outro olhar sobre o roteiro); a automação escolhe por ela   // título do vídeo já feito que este roteiro repetia (sai descartado sozinho)
 };
 type Rodada = {
   id: number;
@@ -44,7 +46,10 @@ const ETAPAS = [
   { id: "buscando", rotulo: "Buscar" },
   { id: "lendo", rotulo: "Ler fontes" },
   { id: "escrevendo", rotulo: "Escrever" },
+  { id: "avaliando", rotulo: "Avaliar" },
 ];
+type Nota = { gancho: number; retencao: number; clareza: number; fatos: number; interesse: number; total: number; comentario: string };
+const CRITERIOS: [keyof Nota, string][] = [["gancho", "gancho"], ["retencao", "retenção"], ["clareza", "clareza"], ["fatos", "fatos"], ["interesse", "interesse"]];
 const CONFIANCA = ["", "muito baixa", "baixa", "média", "boa", "alta"];
 const corConfianca = (n: number) => (n >= 4 ? "bg-ok" : n <= 2 ? "bg-err" : "bg-warn");
 
@@ -289,6 +294,13 @@ function CartaoRoteiro(props: {
             <span className="inline-flex items-center gap-1.5" title={x.motivo_confianca}>
               <span className={`size-1.5 rounded-full ${corConfianca(x.confianca)}`} /> confiança {CONFIANCA[x.confianca]}
             </span>
+            {x.nota && (
+              <span className={x.nota.fatos <= 2 ? "text-err" : "text-fg-2"}
+                    title={`${CRITERIOS.map(([k, r]) => `${r} ${x.nota![k]}`).join(" · ")}
+${x.nota.comentario}`}>
+                nota do editor {x.nota.total.toLocaleString("pt-BR")}{x.nota.fatos <= 2 ? " · fatos fracos" : ""}
+              </span>
+            )}
             <span>~{x.segundos}s</span>
             {x.noticia.data && <span>notícia de {x.noticia.data}</span>}
             {escolhido && <span className="font-medium text-ok">escolhido para o próximo vídeo</span>}
@@ -316,6 +328,19 @@ function CartaoRoteiro(props: {
             )}
             {x.motivo_confianca && <p className="text-[11.5px] text-faint">Por que a nota: {x.motivo_confianca}</p>}
           </div>
+          {x.nota && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[11.5px] font-medium text-muted">Nota do editor: {x.nota.total.toLocaleString("pt-BR")}</span>
+              <span className="text-[12px] text-fg-2">{CRITERIOS.map(([k, r]) => `${r} ${x.nota![k]}`).join(" · ")}</span>
+              {x.nota.comentario && <p className="max-w-[72ch] text-[12px] text-faint">{x.nota.comentario}</p>}
+            </div>
+          )}
+          {(x.titulos?.length ?? 0) > 1 && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[11.5px] font-medium text-muted">Opções de título</span>
+              <ol className="list-decimal pl-5 text-[12.5px] text-fg">{x.titulos!.map((t) => <li key={t}>{t}</li>)}</ol>
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <span className="text-[11.5px] font-medium text-muted">Narração ({x.palavras} palavras)</span>

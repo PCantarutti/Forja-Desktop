@@ -424,7 +424,8 @@ def test_publicacao_titulo_e_descricao_para_o_youtube(ambiente, monkeypatch):
     job = ambiente["projeto"] / ".forja" / "producao" / str(est["id"])
     (job / "youtube.txt").write_text("Título do Claude 🎮\n\nDescrição final.\n\nImagens: Rockstar Games", encoding="utf-8")
     pub = P.publicacao(est["id"])
-    assert pub == {"titulo": "Título do Claude 🎮", "descricao": "Descrição final.\n\nImagens: Rockstar Games"}
+    assert pub == {"titulo": "Título do Claude 🎮", "descricao": "Descrição final.\n\nImagens: Rockstar Games",
+                   "titulos": ["A OpenAI parou tudo 🚨"]}   # o título do roteiro vira opção quando o Claude escolhe outro
 
 
 
