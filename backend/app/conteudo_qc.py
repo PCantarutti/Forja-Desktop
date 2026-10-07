@@ -25,10 +25,13 @@ CONGELADO = 10.0    # s
 
 
 def _exe(nome: str) -> str:
-    exe = localai.find_exe(nome) or shutil.which(nome)
-    if not exe:
-        raise FileNotFoundError(f"Falta o {nome}")
-    return str(exe)
+    """ffmpeg/ffprobe: o runtime do Forja (o find_exe só conhece o ffmpeg; o ffprobe mora ao lado dele) ou o PATH."""
+    ff = localai.find_exe("ffmpeg")
+    if ff and (ao_lado := Path(ff).with_name(nome + Path(ff).suffix)).is_file():
+        return str(ao_lado)
+    if exe := shutil.which(nome):
+        return exe
+    raise FileNotFoundError(f"Falta o {nome}")
 
 
 def _mmss(t: float) -> str:
@@ -101,7 +104,7 @@ def conferir(video: Path, formato: str = "vertical", duracao_min: int = 0, previ
     """{ok, problemas, medidas}. Sem ffmpeg ou com erro na medição: ok com aviso (a conferência não trava a entrega)."""
     try:
         m = medir(video)
-    except (OSError, ValueError, subprocess.SubprocessError) as e:
+    except Exception as e:   # a conferência é extra: qualquer falha vira aviso, nunca trava a entrega
         return {"ok": True, "problemas": [], "aviso": f"Conferência automática não rodou: {e}"[:200]}
     p = problemas(m, formato, duracao_min, prevista)
     return {"ok": not p, "problemas": p, "medidas": {k: m[k] for k in ("duracao", "largura", "altura", "lufs", "pico")}}

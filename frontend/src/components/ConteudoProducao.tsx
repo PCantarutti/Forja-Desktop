@@ -316,7 +316,9 @@ function AoVivo(props: { p: Producao; onCancelar: () => void }) {
       <div className="flex items-center gap-2">
         <span className="size-2 animate-pulse rounded-full bg-info" />
         <span className="text-[12.5px] font-medium text-info">
-          {p.fase === "preparando" ? "Preparando" : (p.versao ?? 1) > 1 ? `Claude fazendo a versão ${p.versao}` : "Claude produzindo"}
+          {p.fase === "preparando" ? "Preparando"
+            : p.fase?.startsWith("aguardando") ? "Aguardando uma sessão do Claude (MCP)"
+            : (p.versao ?? 1) > 1 ? `Claude fazendo a versão ${p.versao}` : "Claude produzindo"}
         </span>
         <span className="ml-auto font-mono text-[12px] text-muted">{relogio(p.segundos)}</span>
       </div>

@@ -777,8 +777,8 @@ async def _rodar(run: dict, pedido: str) -> None:
         if status == "ok":
             try:
                 bom = await conferir_e_corrigir(run)
-            except Exception:   # a conferência é extra: nunca impede a entrega nem o aviso
-                pass
+            except Exception as e:   # a conferência é extra: nunca impede a entrega nem o aviso — mas aparece no card
+                _patch(run["message_id"], qc={"ok": True, "problemas": [], "aviso": f"Conferência não rodou: {e}"[:200]})
             if bom:   # vídeo com problema não sobe: a versão corrigida pela conferência sobe quando ficar boa
                 _publicar_sozinho(run)
         try:

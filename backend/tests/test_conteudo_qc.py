@@ -49,3 +49,11 @@ def test_mede_um_video_sintetico_de_verdade(tmp_path, monkeypatch):
     assert m["lufs"] < -20 and any(3.5 < a < 4.5 for a, _ in m["preto"]) and any(3.5 < a < 4.5 for a, _ in m["silencio"])
     p = Q.conferir(video, "vertical")["problemas"]
     assert any("Volume baixo" in x for x in p) and any("Tela preta" in x for x in p) and any("Silêncio" in x for x in p)
+
+
+def test_ffprobe_mora_ao_lado_do_ffmpeg_do_forja(monkeypatch, tmp_path):
+    # o find_exe do Forja só conhece o ffmpeg (pedir "ffprobe" dava KeyError e a conferência não rodava)
+    (tmp_path / "ffmpeg.exe").write_bytes(b"")
+    (tmp_path / "ffprobe.exe").write_bytes(b"")
+    monkeypatch.setattr(Q.localai, "find_exe", lambda nome: tmp_path / "ffmpeg.exe" if nome == "ffmpeg" else {}[nome])
+    assert Q._exe("ffprobe") == str(tmp_path / "ffprobe.exe") and Q._exe("ffmpeg") == str(tmp_path / "ffmpeg.exe")
