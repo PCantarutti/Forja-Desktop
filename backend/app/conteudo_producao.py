@@ -28,7 +28,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from . import conteudo, conteudo_roteiros, db, native, tts
+from . import conteudo, conteudo_qc, conteudo_roteiros, db, native, tts
 from .agent import _save
 from .tools import ToolError
 
@@ -775,9 +775,17 @@ async def _rodar(run: dict, pedido: str) -> None:
         run["segundos"] = round(time.monotonic() - run["t0"], 1)
         _patch(run["message_id"], status=status, **_publico(run))
         _RUNS.pop(run["message_id"], None)
+        bom = True
+        if status == "ok":
+            try:
+                bom = await conferir_e_corrigir(run)
+            except Exception:   # a conferência é extra: nunca impede a entrega nem o aviso
+                pass
         try:
             from . import mobile
             pronto = f"Versão {run.get('versao', 1)} pronta" if run.get("revisao_de") else "Vídeo pronto"
+            if not bom:
+                pronto += " com problema" + ("" if run.get("qc_auto") else " (corrigindo sozinho)")
             await asyncio.to_thread(mobile.avisa, pronto if status == "ok" else "Produção não terminou",
                                     (run["titulo"] + (f" · {run['aviso']}" if run.get("aviso") else "")) if status == "ok"
                                     else run["aviso"], run["conv_id"])
@@ -911,3 +919,46 @@ def voz_final(message_id: int) -> dict:
     if novo["id"] in _RUNS:
         _RUNS[novo["id"]].update(voz="elevenlabs", voz_final="")
     return estado(novo["id"])
+
+
+# ------------------------------------------------------------------ conferência automática do vídeo pronto
+
+QC_PEDIDO = ("CONFERÊNCIA AUTOMÁTICA: a medição do vídeo pronto (ffmpeg) achou estes problemas:\n{lista}\n"
+             "   Corrija só isso, sem mudar texto, voz nem visual que está certo, renderize de novo e confira com\n"
+             "   ffprobe/ffmpeg (volume: `python scripts/normalizar.py` se o projeto tiver).")
+
+
+async def conferir_e_corrigir(run: dict) -> bool:
+    """Mede o vídeo entregue (conteudo_qc, numa thread). Com problema: grava no estado e pede UMA revisão automática
+    ao Claude (a revisão feita por este pedido não pede outra). Devolve se o vídeo está bom para publicar."""
+    qc = await asyncio.to_thread(_medir, run)
+    _patch(run["message_id"], qc=qc)
+    if qc["ok"] or run.get("qc_auto"):
+        return qc["ok"]
+    _corrigir(run["message_id"], qc)   # no laço do asyncio: a revisão agenda a tarefa dela aqui
+    return False
+
+
+def _medir(run: dict) -> dict:
+    try:
+        roteiro = json.loads((run["_job"] / "roteiro.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError):
+        roteiro = {}
+    spec_min = 0
+    try:
+        spec_min = conteudo.especificacao(run["conv_id"]).get("duracao_min") or 0
+    except ToolError:
+        pass
+    return conteudo_qc.conferir(Path(run["entregue"]), run.get("formato") or "vertical", spec_min,
+                                float(roteiro.get("segundos") or 0))
+
+
+def _corrigir(mid: int, qc: dict) -> None:
+    try:
+        novo = revisar(mid, [], QC_PEDIDO.format(lista="\n".join(f"   - {x}" for x in qc["problemas"])))
+        _patch(novo["id"], qc_auto=True)
+        if novo["id"] in _RUNS:
+            _RUNS[novo["id"]]["qc_auto"] = True
+        _patch(mid, qc={**qc, "revisao": novo["id"]})
+    except ToolError as e:   # sem sessão, outra produção rodando…: fica o aviso, sem revisão
+        _patch(mid, qc={**qc, "aviso": f"Revisão automática não começou: {e}"[:200]})

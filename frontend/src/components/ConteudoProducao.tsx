@@ -25,6 +25,8 @@ type Producao = {
   versao?: number;
   revisao_de?: number;
   voz?: string;          // edge | elevenlabs | forja | estilo
+  qc?: Qc;               // conferência automática do vídeo pronto (ffmpeg)
+  qc_auto?: boolean;     // esta versão é a correção automática da conferência
   voz_final?: string;    // "pendente": versão de validação com o Edge, esperando a voz final do ElevenLabs
 };
 
@@ -144,6 +146,7 @@ function Player(props: { p: Producao; onRevisar?: () => void; onVozFinal?: () =>
           <Copy className="size-3.5" />
           <span className="max-w-[300px] truncate font-mono">{copiado ? "caminho copiado" : p.entregue}</span>
         </button>
+        <Conferencia p={p} />
         <ParaYoutube id={p.id} />
         {p.voz_final === "pendente" && (
           <div className="mt-2 flex flex-col gap-1.5 rounded-[8px] border border-accent-line bg-accent-soft px-3 py-2.5">
@@ -163,6 +166,34 @@ function Player(props: { p: Producao; onRevisar?: () => void; onVozFinal?: () =>
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+type Qc = { ok: boolean; problemas: string[]; revisao?: number; aviso?: string; medidas?: { duracao: number; lufs: number | null } };
+
+/** Resultado da conferência automática: o que a medição achou e se já tem uma versão corrigindo. */
+function Conferencia(props: { p: Producao }) {
+  const qc = props.p.qc;
+  if (!qc) return null;
+  if (qc.ok) {
+    const m = qc.medidas;
+    return (
+      <span className="text-[11.5px] text-faint">
+        ✓ conferido{m ? ` · ${relogio(m.duracao)}${m.lufs != null ? ` · ${m.lufs.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} LUFS` : ""}` : ""}
+        {qc.aviso ? ` · ${qc.aviso}` : ""}
+      </span>
+    );
+  }
+  return (
+    <div className="mt-1 flex flex-col gap-1 rounded-[8px] border border-warn/50 bg-warn/[0.06] px-3 py-2.5 text-[12px]">
+      <span className="font-medium text-warn">A conferência automática achou {qc.problemas.length === 1 ? "um problema" : `${qc.problemas.length} problemas`}</span>
+      <ul className="list-disc pl-4 text-fg-2">{qc.problemas.map((x) => <li key={x}>{x}</li>)}</ul>
+      <span className="text-muted">
+        {qc.revisao ? "O Claude já está fazendo a versão corrigida (aparece em Produções)."
+          : props.p.qc_auto ? "Esta já era a correção automática: confira e peça mudanças se precisar."
+          : qc.aviso ?? ""}
+      </span>
     </div>
   );
 }

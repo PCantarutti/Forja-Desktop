@@ -57,6 +57,8 @@ def ambiente(tmp_path, monkeypatch):
         s.commit()
     conteudo.salvar_pastas({"pasta_estilos": str(estilos), "pasta_projeto": str(projeto), "pasta_saida": str(saida)})
     monkeypatch.setattr(P, "achar_claude", lambda: "claude-falso")
+    # o .mp4 do Claude falso não é vídeo de verdade: a conferência automática tem testes próprios
+    monkeypatch.setattr(P.conteudo_qc, "conferir", lambda *a, **k: {"ok": True, "problemas": []})
     real = P.argv
     monkeypatch.setattr(P, "argv", lambda claude, pastas: [sys.executable, str(falso), *real(claude, pastas)[1:]])
     P._RUNS.clear()
@@ -576,3 +578,33 @@ def test_credito_de_midia_so_na_descricao(ambiente, monkeypatch):
     asyncio.run(_ate_o_fim(cid))
     pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
     assert "crédito na tela só se o estilo pedir" in pedido and "crédito pequeno na tela" not in pedido
+
+
+# ------------------------------------------------------------------ conferência automática
+
+def test_conferencia_com_problema_pede_uma_revisao_automatica(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    chamadas = []
+
+    def conferir(video, formato, duracao_min, prevista):
+        chamadas.append((Path(video).name, formato))
+        return {"ok": False, "problemas": ["Volume baixo: -24.0 LUFS (o alvo é -14). Normalize o áudio."]}
+    monkeypatch.setattr(P.conteudo_qc, "conferir", conferir)
+    cid, _, _ = _aprovado()
+
+    async def tudo():   # um laço só: a conferência roda depois que a produção sai da fila
+        v1 = await _ate_o_fim(cid)
+        for _ in range(400):
+            qc = P.estado(v1["id"]).get("qc") or {}
+            if qc.get("revisao") and qc["revisao"] not in P._RUNS and len(chamadas) == 2:
+                return qc
+            await asyncio.sleep(0.02)
+        return qc
+    qc = asyncio.run(tudo())
+    assert qc["ok"] is False and qc.get("revisao"), qc
+    assert chamadas[0][1] == "vertical"
+    v2 = P.estado(qc["revisao"])
+    pedido = (ambiente["projeto"] / ".forja" / "pedido-recebido.md").read_text(encoding="utf-8")
+    assert "CONFERÊNCIA AUTOMÁTICA" in pedido and "Volume baixo" in pedido
+    assert v2["status"] == "ok" and v2["qc_auto"] is True and v2["qc"]["ok"] is False
+    assert "revisao" not in v2["qc"] and len(chamadas) == 2      # a revisão automática não pede outra: sem laço
