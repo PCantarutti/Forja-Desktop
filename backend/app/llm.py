@@ -404,6 +404,7 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
         async for ev in impl(provider, model, messages, tools, num_ctx, extra):
             if embutido and ev[0] == "done" and isinstance(ev[1], dict):
                 modelctl.registra_uso(slot, ev[1].get("timings"))
+            ULTIMO_USO["t"] = time.monotonic()   # gerando conta como uso: uma resposta longa não é "ociosidade"
             yield ev
         ULTIMO_USO["t"] = time.monotonic()
     except httpx.HTTPError as e:

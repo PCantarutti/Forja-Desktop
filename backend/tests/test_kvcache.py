@@ -189,3 +189,41 @@ def test_aviso_dos_padroes_novos_aparece_uma_vez_e_desfazer_volta_o_f16(monkeypa
     localai.visto_padroes_e4(desfazer=True)
     assert not localai.aviso_padroes_e4()
     assert localai.read_config()["defaults"] == {"cache_type_k": "f16", "cache_type_v": "f16", "kv_unified": False}
+
+
+def test_pesquisa_do_conteudo_e_outras_telas_seguram_o_modelo(monkeypatch):
+    # 2026-10-07: a pesquisa funda do Conteúdo (roteiros do Algoritmia) teve o modelo derrubado por "ociosidade" no meio
+    from app import comparar, conteudo_roteiros, design, estudos, pesquisa
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "m"})
+    monkeypatch.setattr(localai, "image_busy", lambda: False)
+    monkeypatch.setattr(localai, "_loading", {})
+    monkeypatch.setattr(config, "DESCARREGAR_OCIOSO_MIN", 15)
+    monkeypatch.setitem(llm.ULTIMO_USO, "t", time.monotonic() - 16 * 60)
+    monkeypatch.setattr(agent, "RUNS", {})
+    for m in (comparar, conteudo_roteiros, design, estudos, pesquisa):
+        monkeypatch.setattr(m, "_RUNS", {})
+    assert modelctl.precisa_descarregar()
+    for m in (comparar, conteudo_roteiros, design, estudos, pesquisa):
+        monkeypatch.setattr(m, "_RUNS", {1: {}})
+        assert not modelctl.precisa_descarregar(), m.__name__
+        monkeypatch.setattr(m, "_RUNS", {})
+
+
+def test_resposta_longa_conta_como_uso(monkeypatch):
+    # cada pedaço da resposta renova o "último uso": uma geração de 20 min não vira ociosidade
+    async def stream(*a, **k):
+        for _ in range(3):
+            yield "content", "x"
+    monkeypatch.setattr(llm, "_openai_stream", stream)
+    monkeypatch.setattr(llm, "_reasoning", lambda *a, **k: asyncio.sleep(0))
+    monkeypatch.setattr(llm, "_inference", lambda *a, **k: None)
+    monkeypatch.setattr(llm, "spec", lambda p: {"type": "openai"})
+    monkeypatch.setattr(llm, "servidor_local_externo", lambda p: False)
+    vistos = []
+
+    async def roda():
+        async for _ in llm.chat_stream("p", "m", [{"role": "user", "content": "oi"}], None, 4096):
+            vistos.append(llm.ULTIMO_USO["t"])
+            llm.ULTIMO_USO["t"] = 0   # finge que muito tempo passou entre os pedaços
+    asyncio.run(roda())
+    assert all(t > 0 for t in vistos)
