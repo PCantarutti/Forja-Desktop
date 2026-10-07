@@ -28,7 +28,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from . import conteudo, conteudo_qc, conteudo_roteiros, db, native, tts, youtube
+from . import config, conteudo, conteudo_qc, conteudo_roteiros, db, native, tts, youtube
 from .agent import _save
 from .tools import ToolError
 
@@ -451,10 +451,7 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
     projeto = pastas["pasta_projeto"]
     if not projeto or not Path(projeto).is_dir():
         raise ToolError("Escolha a pasta do projeto de vídeo (aba Pastas).")
-    claude = achar_claude()
-    if not claude:
-        raise ToolError("Não achei o Claude Code neste PC. Instale com `npm i -g @anthropic-ai/claude-code` "
-                        "e faça login uma vez rodando `claude` no terminal.")
+    claude = _quem_produz(pastas)
     if message_id and roteiro_id:
         rodada, roteiro = conteudo_roteiros.achar(message_id, roteiro_id)
     else:
@@ -505,8 +502,9 @@ def iniciar(conv_id: int, message_id: int | None = None, roteiro_id: str | None 
         frames=(job / "frames").relative_to(projeto).as_posix(), youtube=(job / "youtube.txt").relative_to(projeto).as_posix(),
         midia=MIDIA if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
-    run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, argv(claude, pastas), projeto, pastas
+    run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, argv(claude, pastas) if claude else [], projeto, pastas
     run["_env"] = ambiente_voz(voz)
+    run["_mcp"] = not claude
 
     t = asyncio.create_task(_rodar(run, pedido))
     _TAREFAS.add(t)
@@ -723,7 +721,7 @@ def publicacao(message_id: int) -> dict:
 async def _rodar(run: dict, pedido: str) -> None:
     status = "erro"
     try:
-        final = await asyncio.to_thread(_executar, run, pedido)
+        final = await (_esperar_mcp(run) if run.get("_mcp") else asyncio.to_thread(_executar, run, pedido))
         await asyncio.to_thread(_recolher_frames, run)
         run.update(custo_usd=final.get("total_cost_usd"), turnos=final.get("num_turns"),
                    sessao=final.get("session_id") or run.get("sessao") or "")   # a revisão retoma esta sessão
@@ -842,9 +840,7 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
 
     pastas = conteudo.pastas()
     projeto = pastas["pasta_projeto"]
-    claude = achar_claude()
-    if not claude:
-        raise ToolError("Não achei o Claude Code neste PC.")
+    claude = _quem_produz(pastas)
     job_anterior = Path(projeto) / ".forja" / "producao" / str(message_id)
     if not (job_anterior / "roteiro.json").is_file():
         raise ToolError("Os arquivos da produção anterior sumiram de .forja/producao no projeto.")
@@ -896,13 +892,15 @@ def revisar(message_id: int, pedidos: list, geral: str = "") -> dict:
         comandos=", ".join(f"`{c}`" for c in pastas["comandos"]) or "(nenhum)",
         midia=(MIDIA + MIDIA_REVISAO) if (Path(projeto) / "scripts" / "midia.py").is_file() else SEM_MIDIA)
     (job / "pedido.md").write_text(pedido, encoding="utf-8")
-    a = argv(claude, pastas)
-    if base["sessao"]:
+    a = argv(claude, pastas) if claude else []
+    if claude and base["sessao"]:
         i = a.index("-p")   # logo antes do -p: o executável (e o que vier antes dele) fica intacto
         a[i:i] = ["--resume", base["sessao"]]
-    run["_job"], run["_argv"], run["_projeto"], run["_pastas"], run["_retomou"] = job, a, projeto, pastas, bool(base["sessao"])
+    run["_job"], run["_argv"], run["_projeto"], run["_pastas"] = job, a, projeto, pastas
+    run["_retomou"] = bool(claude and base["sessao"])
     spec_voz = (conteudo.especificacao(anterior["conv_id"]).get("voz") or {}) if anterior.get("conv_id") else {}
     run["_env"] = ambiente_voz(spec_voz)
+    run["_mcp"] = not claude
 
     t = asyncio.create_task(_rodar(run, pedido))
     _TAREFAS.add(t)
@@ -1014,3 +1012,96 @@ def _publicar_sozinho(run: dict) -> None:
         publicar_youtube(run["message_id"], privacidade)
     except Exception as e:
         _patch(run["message_id"], youtube={"status": "erro", "erro": str(e)[:300]})
+
+
+# ------------------------------------------------------------------ produção por uma sessão do Claude via MCP
+
+def _quem_produz(pastas: dict) -> str:
+    """O executável do Claude Code (o Forja roda o claude -p) ou "" (modo MCP: uma sessão conectada atende)."""
+    if pastas.get("produtor") == "mcp":
+        if not config.MCP_SERVIDOR:
+            raise ToolError("Para produzir pelo Claude conectado, ligue \"Permitir que o Claude controle o Forja\" em "
+                            "Configurações › MCP e conecte o Claude Code ou o Claude Desktop.")
+        return ""
+    claude = achar_claude()
+    if not claude:
+        raise ToolError("Não achei o Claude Code neste PC. Instale com `npm i -g @anthropic-ai/claude-code` "
+                        "e faça login uma vez rodando `claude` no terminal.")
+    return claude
+
+
+async def _esperar_mcp(run: dict) -> dict:
+    """Modo MCP: a produção fica na fila até uma sessão do Claude pegar (conteudo_producoes) e entregar
+    (conteudo_entregar_video). Devolve o mesmo formato do evento `result` do claude -p."""
+    run["fase"] = "aguardando o Claude (MCP)"
+    run["log"] = run["log"] + ["⏳ esperando uma sessão do Claude conectada ao Forja pegar o pedido (conteudo_producoes)"]
+    _patch(run["message_id"], **_publico(run))
+    _acordado(True)
+    try:
+        while not run.get("_entrega"):
+            if run["cancelar"] or time.monotonic() - run["t0"] > TETO:
+                return {}
+            await asyncio.sleep(1)
+        return run["_entrega"]
+    finally:
+        _acordado(False)
+
+
+def _bloco_mcp(run: dict) -> str:
+    pedido = (run["_job"] / "pedido.md").read_text(encoding="utf-8")
+    env = run.get("_env") or {}
+    variaveis = ("Antes do narrate.py, defina no terminal: " + " ".join(f"{k}={v}" for k, v in env.items()) + "\n") if env else ""
+    return "\n".join([
+        f"PRODUÇÃO {run['message_id']} — {run['titulo']}" + (f" (versão {run.get('versao')})" if run.get("revisao_de") else ""),
+        f"Pasta do projeto (trabalhe nela; os caminhos do pedido são relativos a ela): {run['_projeto']}",
+        variaveis + pedido,
+        "",
+        f"Quando o vídeo estiver renderizado: conteudo_entregar_video(producao_id={run['message_id']}, "
+        f"video=\"out/{run['slug']}.mp4\", resumo=\"<o que fez; linhas MÍDIA: e CORREÇÃO: se houver>\"). "
+        f"Se não der: conteudo_entregar_video(producao_id={run['message_id']}, erro=\"<motivo>\").",
+    ])
+
+
+async def mcp_producoes(espera: int = 60) -> str:
+    """Produções na fila do modo MCP. Sem nenhuma, espera até `espera` s (máx. 100) por uma nova."""
+    fim = time.monotonic() + max(0, min(int(espera or 0), 100))
+    while True:
+        novas = [r for r in _RUNS.values() if r.get("_mcp") and not r.get("_pegou") and not r.get("_entrega")]
+        if novas or time.monotonic() >= fim:
+            break
+        await asyncio.sleep(1)
+    if not novas:
+        andando = [r for r in _RUNS.values() if r.get("_mcp") and r.get("_pegou") and not r.get("_entrega")]
+        return ("Nenhum vídeo novo na fila." + (" Em andamento (já pegos): " + ", ".join(
+            f"{r['message_id']} ({r['titulo']})" for r in andando) if andando else ""))
+    for r in novas:
+        r["_pegou"] = True
+        r["fase"] = "o Claude (MCP) está fazendo"
+        r["log"] = r["log"] + ["🤝 uma sessão do Claude pegou o pedido"]
+        _patch(r["message_id"], **_publico(r))
+    return "\n\n---\n\n".join(_bloco_mcp(r) for r in novas)
+
+
+def mcp_entregar(producao_id: int, video: str = "", resumo: str = "", erro: str = "") -> str:
+    """A sessão do Claude terminou: com o vídeo, o Forja entrega, confere e publica como numa produção normal."""
+    run = _RUNS.get(producao_id)
+    if not run or not run.get("_mcp"):
+        return f"ERRO: a produção {producao_id} não está esperando entrega (veja conteudo_producoes)."
+    resumo = str(resumo or "").strip()[:4000]
+    if erro:
+        run["_entrega"] = {"is_error": True, "subtype": "error", "result": str(erro)[:500]}
+        return "Registrado: a produção fica como não terminada, com o motivo na tela."
+    final = {"is_error": False, "subtype": "success", "result": resumo + (f"\nVIDEO: {video}" if video else "")}
+    if not _video(run, final):
+        return (f"ERRO: não achei o vídeo ({video or 'out/' + run['slug'] + '.mp4'}) dentro de {run['_projeto']}, "
+                "renderizado depois que você pegou o pedido. Confira o caminho (relativo à pasta do projeto) e entregue de novo.")
+    run["_entrega"] = final
+    return ("Recebido. O Forja vai copiar para a entrega, conferir (volume, silêncio, tela preta, duração) e publicar se a "
+            "especificação pedir; se a conferência achar problema, chega aqui um pedido de correção.")
+
+
+def aviso_videos() -> str:
+    """Linha que as ferramentas MCP da tela Conteúdo acrescentam quando há vídeo na fila do modo MCP."""
+    if v := sum(1 for r in _RUNS.values() if r.get("_mcp") and not r.get("_pegou") and not r.get("_entrega")):
+        return f"\n\n[{v} vídeo(s) da tela Conteúdo esperando você produzir: chame conteudo_producoes.]"
+    return ""

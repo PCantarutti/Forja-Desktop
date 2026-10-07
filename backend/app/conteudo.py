@@ -93,7 +93,8 @@ def pastas() -> dict:
         linha = s.get(db.AppSetting, CHAVE)
         salvo = dict(linha.value) if linha and isinstance(linha.value, dict) else {}
     return {"pasta_estilos": "", "pasta_projeto": "", "pasta_saida": _area_de_trabalho(),
-            "comandos": list(COMANDOS_PADRAO), "claude_modelo": CLAUDE_MODELO_PADRAO, "claude_esforco": "medium", **salvo}
+            "comandos": list(COMANDOS_PADRAO), "claude_modelo": CLAUDE_MODELO_PADRAO, "claude_esforco": "medium",
+            "produtor": "cli", **salvo}
 
 
 def _pasta(valor: str, rotulo: str, obrigatoria: bool = False) -> str:
@@ -117,6 +118,10 @@ def salvar_pastas(dados: dict) -> dict:
         novo["pasta_projeto"] = _pasta(dados["pasta_projeto"], "pasta do projeto de vídeo")
     if "pasta_saida" in dados:
         novo["pasta_saida"] = _pasta(dados["pasta_saida"], "pasta onde os vídeos prontos são entregues")
+    if "produtor" in dados:   # quem faz o vídeo: o Forja roda o Claude Code (cli) ou uma sessão conectada atende (mcp)
+        if dados["produtor"] not in ("cli", "mcp"):
+            raise ToolError("Produtor inválido: cli ou mcp.")
+        novo["produtor"] = dados["produtor"]
     if "claude_cli" in dados:   # vazio = achar sozinho (PATH)
         cli = str(dados["claude_cli"] or "").strip().strip('"')
         if cli and not Path(cli).is_file():

@@ -712,9 +712,11 @@ def pedidos() -> list[dict]:
 
 
 def aviso_pedidos() -> str:
+    from . import conteudo_producao   # vídeo na fila do modo MCP também avisa (import aqui: produção importa roteiros)
+    out = ""
     if n := len(pedidos()):
-        return f"\n\n[{n} pedido(s) de roteiro na tela Conteúdo esperando você: chame conteudo_pedidos.]"
-    return ""
+        out += f"\n\n[{n} pedido(s) de roteiro na tela Conteúdo esperando você: chame conteudo_pedidos.]"
+    return out + conteudo_producao.aviso_videos()
 
 
 def _bloco(p: dict) -> str:

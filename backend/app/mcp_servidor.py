@@ -666,7 +666,7 @@ def _servidor():
     async def conteudo_pedidos(espera: int = 60) -> str:
         """Pedidos de roteiro que o usuário fez na tela Conteúdo com o motor "Claude (MCP)": tema, guia de estilo
         e o formato da resposta. Sem pedido, espera até `espera` segundos (máx. 100) por um novo."""
-        return await conteudo_roteiros.mcp_pedidos(espera)
+        return await conteudo_roteiros.mcp_pedidos(espera) + conteudo_producao.aviso_videos()
 
     @mcp.tool()
     async def conteudo_salvar_roteiros(pedido_id: int, roteiros: list[dict], fontes: list[dict] | None = None,
@@ -674,6 +674,22 @@ def _servidor():
         """Grava os roteiros de um pedido da tela Conteúdo. `roteiros` no formato do pedido; `fontes` = [{titulo, url}]
         das páginas que você usou (noticia.fontes de cada roteiro aponta para elas por número, 1 = a primeira)."""
         return await asyncio.to_thread(conteudo_roteiros.mcp_salvar, pedido_id, roteiros, fontes, modelo)
+
+    # Tela Conteúdo: produção do vídeo com "Quem faz o vídeo: Claude conectado (MCP)" em Ajustes.
+    from . import conteudo_producao
+
+    @mcp.tool()
+    async def conteudo_producoes(espera: int = 60) -> str:
+        """Vídeos que a tela Conteúdo pediu para uma sessão do Claude produzir (modo MCP): a pasta do projeto Remotion e
+        o pedido completo (roteiro, estilo, voz, regras). Pegar marca como seu. Sem pedido, espera até `espera` s (máx. 100)."""
+        return await conteudo_producao.mcp_producoes(espera)
+
+    @mcp.tool()
+    async def conteudo_entregar_video(producao_id: int, video: str = "", resumo: str = "", erro: str = "") -> str:
+        """Entrega o vídeo de uma produção pega em conteudo_producoes: `video` = caminho do .mp4 relativo à pasta do
+        projeto (ex.: out/slug.mp4), `resumo` = o que fez, com linhas "MÍDIA:" e "CORREÇÃO:" se houver. Sem vídeo:
+        `erro` = o motivo."""
+        return await asyncio.to_thread(conteudo_producao.mcp_entregar, producao_id, video, resumo, erro)
 
     return mcp
 

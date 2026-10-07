@@ -18,7 +18,7 @@ const ajuda = "text-[11px] leading-relaxed text-faint";
 
 const MOTOR_CLAUDE = "claude-mcp";   // o mesmo literal de estudos.MOTOR_CLAUDE no backend
 
-type Pastas = { pasta_estilos: string; pasta_projeto: string; pasta_saida: string; comandos: string[]; claude_cli?: string; claude_conta?: string; claude_modelo?: string; claude_esforco?: string };
+type Pastas = { pasta_estilos: string; pasta_projeto: string; pasta_saida: string; comandos: string[]; claude_cli?: string; claude_conta?: string; claude_modelo?: string; claude_esforco?: string; produtor?: "cli" | "mcp" };
 type Estilo = { nome: string; resumo: string; atualizado: string };
 type Modo = "desligada" | "aprovacao" | "automatico";
 type Spec = {
@@ -447,6 +447,21 @@ function PastasPainel(props: { pastas: Pastas; primeira: boolean; onError: (m: s
       </Secao>
 
       <Secao titulo="Claude Code">
+        <Caixa rotulo="Quem faz o vídeo">
+          <select className={`${campoCaixa} -ml-1 cursor-pointer`} value={p.produtor ?? "cli"}
+                  onChange={(e) => setP({ ...p, produtor: e.target.value as "cli" | "mcp" })}>
+            <option value="cli">o Forja roda o Claude Code sozinho</option>
+            <option value="mcp">uma sessão do Claude conectada ao Forja (MCP)</option>
+          </select>
+        </Caixa>
+        {p.produtor === "mcp" && (
+          <span className={ajuda}>
+            O vídeo fica na fila até uma sessão do Claude Code ou do Claude Desktop conectada ao Forja pedir
+            <code className="mx-1 font-mono">conteudo_producoes</code> e entregar com
+            <code className="mx-1 font-mono">conteudo_entregar_video</code>. Precisa de “Permitir que o Claude controle o
+            Forja” em Configurações › MCP. Depois da entrega, a conferência, a correção e o YouTube seguem iguais.
+          </span>
+        )}
         <ClaudeCli valor={p.claude_cli ?? ""} onChange={(v) => setP({ ...p, claude_cli: v })} />
         <div className="grid grid-cols-2 gap-1.5">
           <Caixa rotulo="Modelo que edita">
