@@ -31,7 +31,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import design_modelos, design_repo, design_revisao, tts
+from . import design_modelos, design_repo, design_revisao, tts, youtube
 
 
 settings.apply()
@@ -143,6 +143,7 @@ async def fronteira(request, call_next):
     if (config.API_TOKEN and path.startswith("/api/") and not path.endswith(SUFIXO_SEM_TOKEN)
             and not path.startswith("/api/design-janela/")   # a chave do link é a autorização
             and not (path == "/api/tts/falar" and token == tts.TOKEN_FALAR)   # narração da tela Conteúdo
+            and path != "/api/youtube/retorno"   # volta do login do Google no navegador; o `state` é a autorização
             and token not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
@@ -2584,6 +2585,47 @@ def conteudo_video(message_id: int):
 async def conteudo_revisar(message_id: int, body: dict):
     """Pedidos de mudança (quadros desenhados e trechos) num vídeo pronto: o Claude faz a próxima versão."""
     return _conteudo(conteudo_producao.revisar, message_id, (body or {}).get("pedidos") or [], (body or {}).get("geral") or "")
+
+
+@app.post("/api/conteudo/producao/{message_id}/youtube")
+async def conteudo_publicar_youtube(message_id: int, body: dict):
+    """Sobe o vídeo pronto para o YouTube (em segundo plano; o andamento vem no estado da produção)."""
+    return _conteudo(conteudo_producao.publicar_youtube, message_id, str(body.get("privacidade") or "private"),
+                     str(body.get("publicar_em") or ""))
+
+
+@app.get("/api/youtube")
+def youtube_estado():
+    return youtube.estado()
+
+
+@app.put("/api/youtube")
+def youtube_salvar(body: dict):
+    return _conteudo(youtube.salvar_cliente, str(body.get("client_id") or ""), str(body.get("client_secret") or ""))
+
+
+@app.post("/api/youtube/conectar")
+def youtube_conectar():
+    """URL do consentimento do Google; a tela abre no navegador do sistema e fica consultando /api/youtube."""
+    from .mcp_servidor import url_base
+    return {"url": _conteudo(youtube.url_login, url_base())}
+
+
+@app.get("/api/youtube/retorno")
+async def youtube_retorno(state: str = "", code: str = "", error: str = ""):
+    try:
+        msg, ok = await asyncio.to_thread(youtube.retorno, state, code, error), True
+    except ToolError as e:
+        msg, ok = str(e), False
+    import html
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>Forja</title><body style='font:16px system-ui;"
+                        f"background:#111;color:#eee;display:grid;place-items:center;height:90vh'><p>{'✅' if ok else '⚠️'} "
+                        f"{html.escape(msg)}</p>", status_code=200 if ok else 400)
+
+
+@app.delete("/api/youtube")
+def youtube_desconectar():
+    return youtube.desconectar()
 
 
 @app.post("/api/conteudo/producao/{message_id}/voz-final")

@@ -28,7 +28,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from . import conteudo, conteudo_roteiros, db, native, tts
+from . import conteudo, conteudo_roteiros, db, native, tts, youtube
 from .agent import _save
 from .tools import ToolError
 
@@ -771,6 +771,8 @@ async def _rodar(run: dict, pedido: str) -> None:
         run["segundos"] = round(time.monotonic() - run["t0"], 1)
         _patch(run["message_id"], status=status, **_publico(run))
         _RUNS.pop(run["message_id"], None)
+        if status == "ok":
+            _publicar_sozinho(run)
         try:
             from . import mobile
             pronto = f"Versão {run.get('versao', 1)} pronta" if run.get("revisao_de") else "Vídeo pronto"
@@ -907,3 +909,54 @@ def voz_final(message_id: int) -> dict:
     if novo["id"] in _RUNS:
         _RUNS[novo["id"]].update(voz="elevenlabs", voz_final="")
     return estado(novo["id"])
+
+
+# ------------------------------------------------------------------ publicação no YouTube
+
+def publicar_youtube(message_id: int, privacidade: str = "private", publicar_em: str = "") -> dict:
+    """Sobe o vídeo pronto para o YouTube em segundo plano; o andamento fica em estado()["youtube"]."""
+    p = estado(message_id)
+    video = video_entregue(message_id)
+    yt = p.get("youtube") or {}
+    if yt.get("status") == "enviando":
+        raise ToolError("Este vídeo já está subindo para o YouTube.")
+    if yt.get("status") == "ok":
+        raise ToolError(f"Este vídeo já está no YouTube: {yt.get('url')}")
+    if privacidade not in youtube.PRIVACIDADES:
+        raise ToolError("Privacidade inválida: private, unlisted ou public.")
+    if not youtube.estado()["conectado"]:
+        raise ToolError("Conecte a conta do YouTube em Conteúdo › Ajustes.")
+    titulo, descricao = publicacao(message_id).values()
+    _patch(message_id, youtube={"status": "enviando", "progresso": 0.0, "privacidade": privacidade})
+
+    def rodar():
+        try:
+            r = youtube.enviar(video, titulo, descricao, privacidade, video.with_name(f"{video.stem}-capa.jpg"), publicar_em,
+                               progresso=lambda f: _patch(message_id, youtube={"status": "enviando", "progresso": round(f, 3),
+                                                                                "privacidade": privacidade}))
+            _patch(message_id, youtube={"status": "ok", **r})
+            aviso = ("Publicado no YouTube", f"{titulo} · {r['url']}" + (f" · {r['aviso']}" if r["aviso"] else ""))
+        except Exception as e:   # nada deixa o card preso em "enviando"
+            _patch(message_id, youtube={"status": "erro", "erro": str(e)[:300]})
+            aviso = ("Não subiu para o YouTube", f"{titulo} · {str(e)[:200]}")
+        try:
+            from . import mobile
+            mobile.avisa(*aviso, p.get("conv_id"))
+        except Exception:
+            pass
+    threading.Thread(target=rodar, daemon=True, name=f"youtube-{message_id}").start()
+    return estado(message_id)
+
+
+def _publicar_sozinho(run: dict) -> None:
+    """Especificação com "publicar no YouTube": o vídeo pronto sobe sozinho. Não sobe a versão de validação (voz do
+    Edge esperando a voz final) nem a revisão de um vídeo que já foi publicado (essa a pessoa sobe pelo botão)."""
+    try:
+        privacidade = (conteudo.especificacao(run["conv_id"]).get("publicar") or {}).get("youtube") or ""
+        if not privacidade or run.get("voz_final") == "pendente":
+            return
+        if run.get("revisao_de") and (estado(run["revisao_de"]).get("youtube") or {}).get("status") == "ok":
+            return
+        publicar_youtube(run["message_id"], privacidade)
+    except Exception as e:
+        _patch(run["message_id"], youtube={"status": "erro", "erro": str(e)[:300]})
