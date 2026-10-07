@@ -374,7 +374,8 @@ def _aprovar_e_seguir(cid: int, trilha: str, rodada: int, melhor: dict, nota: st
         _grava(cid, trilha, aviso=nota)
     if not conteudo.especificacao(cid)["automacao"].get("produzir", True):
         _grava(cid, trilha, etapa="pronto", escolhido=titulo, aviso=nota)
-        _avisa("Roteiro pronto para gerar", f"{titulo} — abra o Conteúdo e toque em gerar o vídeo.", cid)
+        _avisa("Roteiro pronto para gerar", f"{titulo} — abra o Conteúdo e toque em gerar o vídeo."
+               + (f" ({nota})" if nota else ""), cid)
         return [f"{cid}: aprovado {melhor['id']}", f"{cid}: pronto para gerar"]
     _grava(cid, trilha, etapa="fila", desde=agora().isoformat(), escolhido=titulo, aviso=nota)
     return [f"{cid}: aprovado {melhor['id']}", _produzir(cid, trilha)]

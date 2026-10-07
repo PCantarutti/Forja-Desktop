@@ -714,6 +714,9 @@ function AgendaPainel(props: { carimbo?: string; onAbrir: (id: number) => void; 
                     última ({t.dia?.slice(8, 10)}/{t.dia?.slice(5, 7)}): {ETAPAS[t.etapa] ?? t.etapa}
                   </span>
                 )}
+                {t.aviso && (   // pauta guardada, 2ª tentativa, motivo da falha: o que a automação decidiu sozinha
+                  <span className={`max-w-[340px] truncate ${t.etapa === "falhou" ? "text-err" : "text-warn"}`} title={t.aviso}>{t.aviso}</span>
+                )}
               </span>
             </li>
           );
