@@ -39,6 +39,7 @@ type Spec = {
   motor: { provider: string; model: string };
   observacoes: string;
   voz: Voz;
+  publicar: { youtube: "" | "private" | "unlisted" | "public" };
   automacao: { modo: Modo; dias: number[]; horarios: string[]; hora_roteiros: string; produzir: boolean; hora_producao?: string; ativado_em?: string };
 };
 
@@ -64,7 +65,7 @@ const PROFUNDIDADES: { id: Profundidade; label: string; minutos: number; hint: s
 const SPEC_VAZIA: Spec = {
   nome: "", tema: "", palavras_chave: [], fontes: [], dias: 3, estilo: "", roteiros: 3, duracao_min: 0, formato: "vertical",
   tipo: "serie", profundidade: "normal", pesquisa_rodadas: 2, pesquisa_minutos: 15,
-  motor: { provider: "", model: "" }, observacoes: "", voz: VOZ_VAZIA,
+  motor: { provider: "", model: "" }, observacoes: "", voz: VOZ_VAZIA, publicar: { youtube: "" },
   automacao: { modo: "desligada", dias: [0, 1, 2, 3, 4, 5, 6], horarios: ["07:00"], hora_roteiros: "19:00", produzir: true },
 };
 
@@ -482,6 +483,8 @@ function PastasPainel(props: { pastas: Pastas; primeira: boolean; onError: (m: s
 
       <ServicoAjuste onError={props.onError} />
 
+      <YoutubeAjuste onError={props.onError} />
+
       <Secao titulo="Comandos liberados">
         <Caixa rotulo="Um por linha; * vale qualquer coisa">
           <textarea className={`${caixaMono} h-32 resize-y leading-relaxed`} value={comandos} spellCheck={false}
@@ -739,6 +742,67 @@ function AgendaPainel(props: { carimbo?: string; onAbrir: (id: number) => void; 
 
 type Servico = { suportado: boolean; instalado: boolean; desta_pasta?: boolean; pasta?: string };
 
+type YoutubeConta = { client_id: string; tem_chave: boolean; conectado: boolean; canal: { id: string; titulo: string } | null };
+
+/** Ajustes › YouTube: o projeto do Google (ID + chave) e o login da conta que publica. */
+function YoutubeAjuste(props: { onError: (m: string) => void }) {
+  const [c, setC] = useState<YoutubeConta | null>(null);
+  const [id, setId] = useState("");
+  const [chave, setChave] = useState("");
+  const [esperando, setEsperando] = useState(false);
+  const carregar = useCallback(() => api.get<YoutubeConta>("/youtube").then((r) => { setC(r); setId((v) => v || r.client_id); return r; }), []);
+  useEffect(() => { carregar().catch(() => setC(null)); }, [carregar]);
+  useEffect(() => {   // o login acontece no navegador: confere até a conta aparecer (ou 3 min)
+    if (!esperando) return;
+    const t = setInterval(() => carregar().then((r) => r.conectado && setEsperando(false)).catch(() => {}), 2000);
+    const fim = setTimeout(() => setEsperando(false), 180_000);
+    return () => { clearInterval(t); clearTimeout(fim); };
+  }, [esperando, carregar]);
+  if (!c) return null;
+  const tenta = (fn: () => Promise<unknown>) => fn().catch((e: any) => props.onError(e.message));
+  return (
+    <Secao titulo="YouTube">
+      <div className="flex flex-col gap-2.5 rounded-[10px] border border-line bg-surface px-3.5 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className={`size-1.5 shrink-0 rounded-full ${c.conectado ? "bg-ok" : "bg-faint"}`} />
+          <span className="flex-1 text-[13px] text-fg">
+            {c.conectado ? `Conectado: ${c.canal?.titulo ?? "canal"}` : esperando ? "Termine o login no navegador…" : "Não conectado"}
+          </span>
+          {c.conectado ? <button className={btn} onClick={() => tenta(() => api.del("/youtube").then(carregar))}>Desconectar</button>
+            : <button className={btnPrimary} disabled={!c.client_id || !c.tem_chave}
+                      onClick={() => tenta(async () => {
+                        const r = await api.post<{ url: string }>("/youtube/conectar", {});
+                        window.open(r.url);   // abre no navegador do sistema
+                        setEsperando(true);
+                      })}>Conectar conta</button>}
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Caixa rotulo="ID do cliente (Google Cloud)">
+            <input className={caixaMono} value={id} spellCheck={false} placeholder="….apps.googleusercontent.com"
+                   onChange={(e) => setId(e.target.value)} />
+          </Caixa>
+          <Caixa rotulo="Chave secreta do cliente">
+            <input className={caixaMono} type="password" value={chave} placeholder={c.tem_chave ? "guardada (cifrada)" : "GOCSPX-…"}
+                   onChange={(e) => setChave(e.target.value)} />
+          </Caixa>
+        </div>
+        {(id !== c.client_id || chave) && (
+          <button className={`${btn} self-end`} disabled={!id}
+                  onClick={() => tenta(() => api.put<YoutubeConta>("/youtube", { client_id: id, client_secret: chave }).then((r) => { setC(r); setChave(""); }))}>
+            Salvar credenciais
+          </button>
+        )}
+        <span className={ajuda}>
+          Uma vez só: em console.cloud.google.com crie um projeto, ative a “YouTube Data API v3”, configure a tela de
+          consentimento (tipo Externo, publicada em produção para o acesso não vencer em 7 dias) e crie uma credencial
+          OAuth do tipo “App para computador”. Cole o ID e a chave aqui e conecte. Cota padrão: ~6 envios por dia; sem a
+          auditoria da API o YouTube deixa os vídeos privados.
+        </span>
+      </div>
+    </Secao>
+  );
+}
+
 /** Ajustes › Ao ligar o PC: a tarefa do Windows que sobe o Forja sem janela antes do login. */
 function ServicoAjuste(props: { onError: (m: string) => void }) {
   const [svc, setSvc] = useState<Servico | null>(null);
@@ -833,7 +897,7 @@ function SpecPainel(props: {
       setSpec({ ...SPEC_VAZIA, motor: { provider: props.provider, model: props.model } });
       return;
     }
-    api.get<Spec>(`/conteudo/especificacoes/${props.conv}`).then((s) => setSpec({ ...s, voz: { ...VOZ_VAZIA, ...(s.voz || {}) } }))
+    api.get<Spec>(`/conteudo/especificacoes/${props.conv}`).then((s) => setSpec({ ...s, voz: { ...VOZ_VAZIA, ...(s.voz || {}) }, publicar: { ...{ youtube: "" as const }, ...(s.publicar || {}) } }))
       .catch((e) => props.onError(e.message));
   }, [props.conv, props.carimbo]);
 
@@ -1035,6 +1099,21 @@ function SpecPainel(props: {
               </Caixa>
               {tts && !tts.vozes.length && <span className={`col-span-2 ${ajuda}`}>Nenhuma voz na tela Voz ainda: adicione uma lá.</span>}
             </div>
+          )}
+          <Caixa rotulo="Publicar no YouTube quando ficar pronto">
+            <select className={`${campoCaixa} -ml-1 cursor-pointer`} value={spec.publicar.youtube}
+                    onChange={(e) => muda({ publicar: { youtube: e.target.value as Spec["publicar"]["youtube"] } })}>
+              <option value="">não publicar sozinho</option>
+              <option value="private">sim, como privado</option>
+              <option value="unlisted">sim, não listado</option>
+              <option value="public">sim, público</option>
+            </select>
+          </Caixa>
+          {spec.publicar.youtube && (
+            <span className={ajuda}>
+              Sobe com título, descrição e thumb assim que o vídeo fica pronto (a versão de validação com o Edge espera a
+              voz final). Precisa da conta conectada em Ajustes.
+            </span>
           )}
           <Caixa rotulo="Observações para o roteirista">
             <textarea className={`${campoCaixa} h-[58px] resize-none leading-relaxed`} value={spec.observacoes}

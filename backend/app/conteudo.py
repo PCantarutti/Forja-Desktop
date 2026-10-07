@@ -285,6 +285,8 @@ def _spec_padrao() -> dict:
             "profundidade": "normal", "pesquisa_rodadas": 2, "pesquisa_minutos": 15,
             "motor": {"provider": "", "model": ""}, "observacoes": "",
             "voz": {"motor": "estilo", "validar_edge": True, "modelo": "", "voz": ""},
+            # publicar sozinho quando o vídeo fica pronto: "" = não publica; senão a privacidade no YouTube
+            "publicar": {"youtube": ""},
             "automacao": {"modo": "desligada", "dias": list(range(7)), "horarios": ["03:00"], "hora_roteiros": "19:00",
                           "hora_producao": "03:00", "produzir": True, "ativado_em": ""}}
 
@@ -356,6 +358,11 @@ def validar_spec(dados: dict, base: dict | None = None) -> dict:
                        "modelo": str(v["modelo"] or "")[:200], "voz": str(v["voz"] or "")[:200]}
         if spec["voz"]["motor"] == "forja" and not spec["voz"]["voz"]:
             raise ToolError("Escolha a voz do Forja (tela Voz).")
+    if "publicar" in d:
+        yt = str((d["publicar"] if isinstance(d["publicar"], dict) else {}).get("youtube") or "")
+        if yt not in ("", "private", "unlisted", "public"):
+            raise ToolError("Publicação inválida no YouTube: private, unlisted ou public.")
+        spec["publicar"] = {"youtube": yt}
     if "automacao" in d:
         spec["automacao"] = _automacao(spec["automacao"], d["automacao"] if isinstance(d["automacao"], dict) else {})
     if spec["tipo"] == "unico":   # vídeo único não se repete: nunca entra na agenda
@@ -407,6 +414,7 @@ def _dict(c: db.Conversation, m: db.Message | None) -> dict:
         spec["automacao"] = {**_spec_padrao()["automacao"], **auto, "horarios": [auto.get("hora_producao") or "03:00"]}
     spec["automacao"].setdefault("produzir", True)
     spec["voz"] = {**_spec_padrao()["voz"], **(spec.get("voz") or {})}
+    spec["publicar"] = {**_spec_padrao()["publicar"], **(spec.get("publicar") or {})}
     return {"id": c.id, "nome": c.title, **spec, "atualizado": c.updated_at.isoformat() if c.updated_at else None}
 
 

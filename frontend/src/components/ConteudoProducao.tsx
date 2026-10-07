@@ -27,6 +27,7 @@ type Producao = {
   voz?: string;          // edge | elevenlabs | forja | estilo
   qc?: Qc;               // conferência automática do vídeo pronto (ffmpeg)
   qc_auto?: boolean;     // esta versão é a correção automática da conferência
+  youtube?: Youtube;
   voz_final?: string;    // "pendente": versão de validação com o Edge, esperando a voz final do ElevenLabs
 };
 
@@ -148,6 +149,7 @@ function Player(props: { p: Producao; onRevisar?: () => void; onVozFinal?: () =>
         </button>
         <Conferencia p={p} />
         <ParaYoutube id={p.id} />
+        {p.voz_final !== "pendente" && <PublicarYoutube p={p} />}
         {p.voz_final === "pendente" && (
           <div className="mt-2 flex flex-col gap-1.5 rounded-[8px] border border-accent-line bg-accent-soft px-3 py-2.5">
             <span className="text-[12px] text-fg">Versão de validação com o Edge. Aprovou? Troque só a voz pela do ElevenLabs.</span>
@@ -194,6 +196,70 @@ function Conferencia(props: { p: Producao }) {
           : props.p.qc_auto ? "Esta já era a correção automática: confira e peça mudanças se precisar."
           : qc.aviso ?? ""}
       </span>
+    </div>
+  );
+}
+
+type Youtube = { status: "enviando" | "ok" | "erro"; progresso?: number; url?: string; privacidade?: string; aviso?: string; erro?: string };
+const PRIVACIDADE: Record<string, string> = { private: "privado", unlisted: "não listado", public: "público" };
+
+/** Publicar no YouTube (conta conectada em Ajustes): sobe em segundo plano e mostra o andamento e o link. */
+function PublicarYoutube(props: { p: Producao }) {
+  const [yt, setYt] = useState<Youtube | undefined>(props.p.youtube);
+  const [conectado, setConectado] = useState<boolean | null>(null);
+  const [privacidade, setPrivacidade] = useState("private");
+  const [erro, setErro] = useState("");
+  useEffect(() => setYt(props.p.youtube), [props.p.id, props.p.youtube?.status]);
+  useEffect(() => { api.get<{ conectado: boolean }>("/youtube").then((r) => setConectado(r.conectado)).catch(() => setConectado(false)); }, []);
+  useEffect(() => {   // subindo: acompanha o andamento (o mesmo estado que o celular vê)
+    if (yt?.status !== "enviando") return;
+    const t = setInterval(() => api.get<Producao>(`/conteudo/producao/${props.p.id}`).then((r) => setYt(r.youtube)).catch(() => {}), 2000);
+    return () => clearInterval(t);
+  }, [yt?.status, props.p.id]);
+  if (yt?.status === "ok") {
+    return (
+      <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-line bg-surface px-3 py-2.5 text-[12px]">
+        <span className="text-fg">No YouTube ({PRIVACIDADE[yt.privacidade ?? ""] ?? yt.privacidade}):{" "}
+          <a className="text-accent-text underline" href={yt.url} target="_blank" rel="noreferrer">{yt.url}</a></span>
+        {yt.aviso && <span className="text-warn">{yt.aviso}</span>}
+      </div>
+    );
+  }
+  if (yt?.status === "enviando") {
+    const pct = Math.round((yt.progresso ?? 0) * 100);
+    return (
+      <div className="mt-2 flex flex-col gap-1.5 rounded-[8px] border border-line bg-surface px-3 py-2.5 text-[12px] text-fg">
+        Subindo para o YouTube… {pct}%
+        <div className="h-1 overflow-hidden rounded-full bg-raised"><div className="h-full bg-accent" style={{ width: `${pct}%` }} /></div>
+      </div>
+    );
+  }
+  if (conectado === false) {
+    return <span className="mt-2 text-[11.5px] text-faint">Para publicar daqui, conecte o YouTube em Conteúdo › Ajustes.</span>;
+  }
+  if (!conectado) return null;
+  async function publicar() {
+    setErro("");
+    try {
+      const r = await api.post<Producao>(`/conteudo/producao/${props.p.id}/youtube`, { privacidade });
+      setYt(r.youtube);
+    } catch (e: any) {
+      setErro(e.message);
+    }
+  }
+  return (
+    <div className="mt-2 flex flex-col gap-1.5">
+      {(yt?.status === "erro" || erro) && <span className="text-[11.5px] text-err">{erro || yt?.erro}</span>}
+      <div className="flex items-stretch gap-1.5">
+        <select className="h-[32px] cursor-pointer rounded-[7px] border border-line-strong bg-transparent px-2 text-[12.5px] text-fg"
+                value={privacidade} onChange={(e) => setPrivacidade(e.target.value)} aria-label="Privacidade no YouTube">
+          {Object.entries(PRIVACIDADE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <button onClick={publicar}
+                className="inline-flex h-[32px] flex-1 items-center justify-center gap-1.5 rounded-[7px] bg-accent px-3 text-[12.5px] font-medium text-accent-fg hover:brightness-110">
+          {yt?.status === "erro" ? "Tentar de novo no YouTube" : "Publicar no YouTube"}
+        </button>
+      </div>
     </div>
   );
 }

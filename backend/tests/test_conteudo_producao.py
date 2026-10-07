@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -608,3 +609,81 @@ def test_conferencia_com_problema_pede_uma_revisao_automatica(ambiente, monkeypa
     assert "CONFERÊNCIA AUTOMÁTICA" in pedido and "Volume baixo" in pedido
     assert v2["status"] == "ok" and v2["qc_auto"] is True and v2["qc"]["ok"] is False
     assert "revisao" not in v2["qc"] and len(chamadas) == 2      # a revisão automática não pede outra: sem laço
+# ------------------------------------------------------------------ publicação no YouTube
+
+def _youtube_falso(monkeypatch):
+    from app import youtube
+    enviados = []
+
+    def enviar(video, titulo, descricao, privacidade, capa=None, publicar_em="", categoria="28", progresso=lambda f: None):
+        progresso(0.5)
+        enviados.append({"video": video, "titulo": titulo, "privacidade": privacidade, "capa": capa})
+        return {"video_id": "VID", "url": "https://youtu.be/VID", "privacidade": privacidade, "aviso": ""}
+    monkeypatch.setattr(youtube, "enviar", enviar)
+    monkeypatch.setattr(youtube, "estado", lambda: {"conectado": True})
+    return enviados
+
+
+def _esperar_youtube(mid: int) -> dict:
+    for _ in range(200):
+        yt = P.estado(mid).get("youtube") or {}
+        if yt.get("status") in ("ok", "erro"):
+            return yt
+        time.sleep(0.02)
+    return yt
+
+
+def test_publica_sozinho_no_youtube_quando_a_especificacao_pede(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    enviados = _youtube_falso(monkeypatch)
+    cid, _, _ = _aprovado()
+    with pytest.raises(ToolError, match="Publicação inválida"):
+        conteudo.salvar_especificacao({"publicar": {"youtube": "todo mundo"}}, cid)
+    conteudo.salvar_especificacao({"publicar": {"youtube": "unlisted"}}, cid)
+    est = asyncio.run(_ate_o_fim(cid))
+    yt = _esperar_youtube(est["id"])
+    assert yt["status"] == "ok" and yt["url"] == "https://youtu.be/VID"
+    assert len(enviados) == 1 and enviados[0]["privacidade"] == "unlisted" and enviados[0]["titulo"]
+    assert enviados[0]["video"] == Path(est["entregue"]) and enviados[0]["capa"].name.endswith("-capa.jpg")
+    with pytest.raises(ToolError, match="já está no YouTube"):
+        P.publicar_youtube(est["id"])
+
+
+def test_sem_publicar_e_versao_de_validacao_nao_sobem(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    enviados = _youtube_falso(monkeypatch)
+    cid, _, _ = _aprovado()
+    est = asyncio.run(_ate_o_fim(cid))   # padrão: não publica
+    conteudo.salvar_especificacao({"publicar": {"youtube": "public"}, "voz": {"motor": "elevenlabs"}}, cid)
+    P._RUNS.clear()
+    cid2, _, _ = _aprovado()
+    conteudo.salvar_especificacao({"publicar": {"youtube": "public"}, "voz": {"motor": "elevenlabs"}}, cid2)
+    v1 = asyncio.run(_ate_o_fim(cid2))   # versão do Edge, esperando a voz final
+    time.sleep(0.1)
+    assert enviados == [] and not P.estado(est["id"]).get("youtube") and not v1.get("youtube")
+    # pelo botão: sobe, e erro do YouTube não deixa o card preso em "enviando"
+    from app import youtube
+    monkeypatch.setattr(youtube, "enviar", lambda *a, **k: (_ for _ in ()).throw(ToolError("Cota diária do YouTube esgotada")))
+    P.publicar_youtube(est["id"], "private")
+    yt = _esperar_youtube(est["id"])
+    assert yt["status"] == "erro" and "Cota" in yt["erro"]
+
+
+def test_video_reprovado_na_conferencia_nao_sobe_para_o_youtube(ambiente, monkeypatch):
+    monkeypatch.setenv("CLAUDE_FALSO", "ok")
+    enviados = _youtube_falso(monkeypatch)
+    monkeypatch.setattr(P.conteudo_qc, "conferir", lambda *a, **k: {"ok": False, "problemas": ["Tela preta de 2.0 s em 0:10."]})
+    cid, _, _ = _aprovado()
+    conteudo.salvar_especificacao({"publicar": {"youtube": "public"}}, cid)
+
+    async def tudo():
+        v1 = await _ate_o_fim(cid)
+        for _ in range(400):
+            qc = P.estado(v1["id"]).get("qc") or {}
+            if qc.get("revisao") and qc["revisao"] not in P._RUNS and (P.estado(qc["revisao"]).get("qc") or {}):
+                return v1, qc
+            await asyncio.sleep(0.02)
+        return v1, qc
+    v1, qc = asyncio.run(tudo())
+    assert qc.get("revisao") and enviados == []                       # nem a original nem a correção (também reprovada)
+    assert not P.estado(v1["id"]).get("youtube") and not P.estado(qc["revisao"]).get("youtube")
