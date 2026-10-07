@@ -926,7 +926,8 @@ def publicar_youtube(message_id: int, privacidade: str = "private", publicar_em:
         raise ToolError("Privacidade inválida: private, unlisted ou public.")
     if not youtube.estado()["conectado"]:
         raise ToolError("Conecte a conta do YouTube em Conteúdo › Ajustes.")
-    titulo, descricao = publicacao(message_id).values()
+    pub = publicacao(message_id)   # também traz "titulos" (alternativos) desde as pautas
+    titulo, descricao = pub["titulo"], pub["descricao"]
     _patch(message_id, youtube={"status": "enviando", "progresso": 0.0, "privacidade": privacidade})
 
     def rodar():
