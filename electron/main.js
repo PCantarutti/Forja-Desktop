@@ -39,6 +39,7 @@ let port = 0;
 // processo (ou outro usuário) da mesma máquina, que alcança 127.0.0.1 tão bem quanto o app.
 let token = crypto.randomBytes(32).toString("hex");   // vira o do serviço sem janela, se a janela adotar um
 let adotado = false;   // usando o backend do serviço sem janela (servico.py) em vez de um próprio
+let subindo = true;    // até o primeiro backend responder: queda do backend aqui é tentar de novo, não diálogo
 let mainWindow = null;
 let tray = null;
 let host = null; // views do navegador integrado (BrowserHost)
@@ -202,7 +203,8 @@ function startBackend(cdp) {
   });
   backend.on("exit", (code) => {
     backend = null;
-    if (code !== 0 && !app.isQuitting) {
+    // Subindo, quem decide é o subirBackend (tenta de novo: no boot o serviço pode estar com a trava do banco).
+    if (code !== 0 && !app.isQuitting && !subindo) {
       dialog.showErrorBox("Forja", `O backend encerrou (código ${code}).\n\nLog: ${LOG_FILE}`);
       app.quit();
     }
@@ -222,7 +224,8 @@ function stopBackend() {
   }
 }
 
-async function waitForBackend(timeoutMs = 60000) {
+// PC recém-ligado (disco frio, antivírus varrendo o Python) passava dos 60 s.
+async function waitForBackend(timeoutMs = 180000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!backend && !adotado) throw new Error(`o backend não subiu. Log: ${LOG_FILE}`);
@@ -268,6 +271,32 @@ async function servicoSemJanela() {
     }
   }
   return { port: info.port, token: info.token };   // não saiu: melhor usar ele do que brigar pelo banco
+}
+
+/** Adota o serviço sem janela ou sobe o backend da janela. Com o PC recém-ligado o serviço (tarefa "Forja
+ *  Automatico", sobe antes do login) pode já ter a trava do banco sem ainda responder: o backend da janela morria
+ *  com código 3 ("Outro backend do Forja já está usando..."). Então tenta de novo, e na próxima o serviço atende. */
+async function subirBackend() {
+  for (let tentativa = 1; ; tentativa++) {
+    const servico = await servicoSemJanela();
+    if (servico) {
+      port = servico.port;
+      token = servico.token;
+      adotado = true;
+    } else {
+      // Porta fixa quando dá: o `tailscale serve` do celular (aba Celular) aponta para ela.
+      port = Number(process.env.FORJA_PORT) || (await freePort(PORTA_PADRAO));
+      startBackend(await cdpEndpoint());
+    }
+    try {
+      await waitForBackend();
+      subindo = false;
+      return;
+    } catch (e) {
+      if (tentativa >= 10 || backend || adotado) throw e;   // só a queda rápida (trava) vale outra tentativa
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
 }
 
 // ------------------------------------------------------------------ zoom
@@ -377,7 +406,8 @@ function saveBounds() {
     clearTimeout(boundsTimer);
     boundsTimer = null;
   }
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // Minimizada ou escondida (início com o Windows) a geometria não é a da pessoa: gravaria maximized: false.
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized() || !mainWindow.isVisible()) return;
   const maximized = mainWindow.isMaximized();
   // Maximizada, guarda o tamanho normal de antes: é para ele que a janela volta ao restaurar.
   prefs.bounds = { ...(maximized ? prefs.bounds ?? {} : mainWindow.getNormalBounds()), maximized };
@@ -418,8 +448,23 @@ function createWindow({ hidden = false } = {}) {
                       backgroundThrottling: false }, // escondida/bloqueada, a tela segue acompanhando o turno do celular
   });
   mainWindow = win;
-  if (b.maximized) win.maximize();
-  if (!hidden) win.show();
+  if (!hidden) {
+    if (b.maximized) win.maximize();
+    win.show();
+  } else {
+    // No Windows maximize() MOSTRA a janela: era por isso que ela abria mesmo com "iniciar na bandeja".
+    // Maximiza só quando a pessoa abrir. O minimize() vem antes: ele mesmo dispara "show".
+    if (hidden === "min") win.minimize();
+    if (b.maximized) {
+      const max = () => {
+        win.off("show", max);
+        win.off("restore", max);
+        setTimeout(() => win.isDestroyed() || win.maximize(), 0);   // dentro do próprio restore o Windows ignora
+      };
+      win.on("show", max);
+      win.on("restore", max);
+    }
+  }
 
   win.loadURL(`http://127.0.0.1:${port}`);
   wireZoomShortcuts(win);
@@ -641,20 +686,11 @@ if (!app.requestSingleInstanceLock()) {
     syncTray();
     syncAutoStart();
     try {
-      // Porta fixa quando dá: o `tailscale serve` do celular (aba Celular) aponta para ela.
-      const servico = await servicoSemJanela();
-      if (servico) {
-        port = servico.port;
-        token = servico.token;
-        adotado = true;
-      } else {
-        port = Number(process.env.FORJA_PORT) || (await freePort(PORTA_PADRAO));
-        startBackend(await cdpEndpoint());
-      }
-      await waitForBackend();
-      // --hidden: subiu junto com o Windows e fica só na bandeja até o usuário chamar.
-      const hidden = process.argv.includes("--hidden") && prefs.closeToTray;
-      if (hidden) ensureTray();
+      await subirBackend();
+      // --hidden: subiu junto com o Windows. Com a bandeja, fica só nela; sem, minimizada na barra de tarefas
+      // (escondida sem bandeja não haveria como abrir).
+      const hidden = process.argv.includes("--hidden") ? (prefs.closeToTray ? "tray" : "min") : false;
+      if (hidden === "tray") ensureTray();
       createWindow({ hidden });
       wireUpdater();
       vigiaSono();

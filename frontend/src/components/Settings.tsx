@@ -1137,11 +1137,11 @@ function AppTabDesktop({ bridge }: { bridge: NonNullable<NonNullable<typeof wind
       </Field>
 
       <Field div label="Abrir junto com o Windows"
-             hint={d.packaged ? "E, se quiser, já direto na bandeja (precisa do X minimizar para a bandeja)." : "Só vale no app instalado; em desenvolvimento não mexe no registro."}>
+             hint={d.packaged ? "E, se quiser, sem abrir a janela: fica na bandeja se o X minimizar para ela, senão minimizada na barra de tarefas." : "Só vale no app instalado; em desenvolvimento não mexe no registro."}>
         <div className="flex flex-col items-start gap-2.5">
           <Interruptor ligado={d.startWithWindows} disabled={!d.packaged} onChange={(v) => patch({ startWithWindows: v })} />
-          <Interruptor ligado={d.startMinimized} disabled={!d.packaged || !d.startWithWindows || !d.closeToTray}
-                       rotulo="Iniciar direto na bandeja, sem abrir a janela" onChange={(v) => patch({ startMinimized: v })} />
+          <Interruptor ligado={d.startMinimized} disabled={!d.packaged || !d.startWithWindows}
+                       rotulo="Iniciar minimizado, sem abrir a janela" onChange={(v) => patch({ startMinimized: v })} />
         </div>
       </Field>
 
