@@ -153,6 +153,29 @@ def test_hooks_do_claude_code(servidor, ligado, tmp_path):
     assert not any("mcp__forja" in (c or "") for _, c in falas)  # a ferramenta do Forja já está registrada
 
 
+def test_pasta_do_conteudo_nao_vira_conversa_maestro(servidor, ligado, monkeypatch):
+    """O Claude que faz roteiros e vídeos na pasta do projeto de vídeo abria uma conversa "Claude · youtube" a cada
+    pedido (forja_note de cada etapa e os hooks). O andamento dele já aparece na tela de Conteúdo."""
+    from sqlalchemy import select
+    from app import conteudo
+    monkeypatch.setattr(conteudo, "pastas", lambda: {"pasta_projeto": str(ligado)})
+
+    def espelhos():
+        with db.session() as s:
+            return sum(1 for c in s.scalars(select(db.Conversation)) if mcp_servidor.eh_espelho(c))
+
+    antes = espelhos()
+
+    async def fn(s):
+        return _texto(await s.call_tool("forja_note", {"path": str(ligado), "texto": "Pedido 1: roteiro gravado"}))
+    assert "Anotado" in _cliente(servidor, mcp_servidor.token(), fn)
+    r = httpx.post(servidor + "/mcp/hook", json={"hook_event_name": "UserPromptSubmit", "cwd": str(ligado),
+                                                 "prompt": "pegue os pedidos"},
+                   headers={"x-forja-token": mcp_servidor.token()}).json()
+    assert r["ignorado"] == "pasta do Conteúdo"
+    assert espelhos() == antes
+
+
 def test_instala_hooks_sem_guardar_segredo(ligado):
     r = mcp_servidor.instala_hooks(str(ligado))
     cfg = json.loads((ligado / ".claude" / "settings.local.json").read_text(encoding="utf-8"))

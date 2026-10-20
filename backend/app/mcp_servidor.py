@@ -93,6 +93,16 @@ def eh_espelho(c: db.Conversation | None) -> bool:
     return bool(c and isinstance(c.origem, dict) and c.origem.get("externo") == ORIGEM)
 
 
+def pasta_do_conteudo(pasta: str) -> bool:
+    """A pasta do projeto de vídeo (tela de Conteúdo): o Claude que roda ali produz roteiros e vídeos, e o andamento
+    já aparece no Conteúdo. Espelhar abria uma conversa Maestro "Claude · youtube" por pedido (as notas de cada
+    etapa, "Pedido 3881 (TSMC...): 1 roteiro gravado")."""
+    from . import board, conteudo
+    alvo = conteudo.pastas().get("pasta_projeto") or ""
+    return bool(alvo and pasta) and (os.path.normcase(os.path.abspath(board.projeto_de(pasta)))
+                                     == os.path.normcase(os.path.abspath(alvo)))
+
+
 def espelho(pasta: str) -> tuple[int, Path]:
     """A conversa do Claude neste projeto: a mais recente dentro da janela, senão uma nova. Tipo `maestro`
     para o MaestroView mostrar a árvore de tarefas, que são as mesmas Feature/Task."""
@@ -341,6 +351,8 @@ async def status_da_tentativa(pasta: str, attempt_id: int, wait_s: int) -> str:
 async def nota(pasta: str, texto: str) -> str:
     if not config.MCP_SERVIDOR:
         return "ERRO: o controle pelo Claude está desligado no Forja (Configurações › MCP)."
+    if pasta_do_conteudo(pasta):
+        return "Anotado. (Na pasta do projeto de vídeo o andamento aparece na tela de Conteúdo.)"
     from .agent import _save
 
     def ev(conv):
@@ -823,6 +835,8 @@ async def hook(dados: dict) -> dict:
     if not config.MCP_SERVIDOR:
         return {"ok": False, "motivo": "desligado"}
     pasta = str(dados.get("cwd") or "")
+    if pasta_do_conteudo(pasta):
+        return {"ok": True, "ignorado": "pasta do Conteúdo"}
     evento = dados.get("hook_event_name") or dados.get("evento")
     if evento == "UserPromptSubmit" and (texto := str(dados.get("prompt") or "").lstrip("\ufeff").strip()):
         def ev(conv):
