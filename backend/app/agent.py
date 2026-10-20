@@ -2360,14 +2360,27 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
     if decisao == "pergunta":  # o hook pediu que o usuário decida, mesmo num modo que aprovaria sozinho
         needs_approval, rule = True, None
         meta["hook"] = motivo
-    elif (needs_approval and run.permission == "auto" and config.AUTO_REVIEW
-          and not policy.destructive_args(args)):  # destrutivo pergunta sempre, com ou sem revisor
-        veredito = await revisor.avaliar(req.provider, req.model, *_para_revisor(conv_id),
-                                         {"ferramenta": name, "descricao": tool.description[:400], "argumentos": args},
+    # Maestro é para seguir sozinho: ninguém está olhando para clicar no card (conversa 206: Workers parados a
+    # noite toda em `rm -f` e `chmod` no container). Quem decide é o modelo da Maestro, pelo revisor; negado
+    # vira erro para o Worker procurar outro caminho, nunca espera.
+    elif needs_approval and (req.mode == "maestro" or (
+            run.permission == "auto" and config.AUTO_REVIEW
+            and not policy.destructive_args(args))):  # fora do Maestro, destrutivo pergunta sempre
+        acao = {"ferramenta": name, "descricao": tool.description[:400], "argumentos": args}
+        if name in policy.SHELLS and sandbox.isolar() and sandbox.motor_ativo():
+            acao["ambiente"] = ("container Docker descartável: só a pasta do projeto montada em /workspace, "
+                                "sem root; o resto do sistema de arquivos some quando o comando termina")
+        veredito = await revisor.avaliar(req.provider, req.model, *_para_revisor(conv_id), acao,
                                          workspace.to_host(workspace.root()))
         if veredito and veredito["decision"] == "allow":
             needs_approval, rule = False, f"revisor automático: risco {veredito['risk']}"
             meta["auto_rule"] = rule
+        elif req.mode == "maestro":
+            meta["revisor"] = (f"risco {veredito['risk']}: {veredito['reason']}" if veredito
+                               else "o revisor não conseguiu avaliar")
+            result("rejeitada", f"A Maestro não autorizou esta ação ({meta['revisor']}). Não repita o mesmo "
+                                "comando: siga por outro caminho que não precise dele.")
+            return
         else:  # negou ou falhou: volta a ser pergunta, com o motivo no card
             meta["revisor"] = (f"Revisor automático: risco {veredito['risk']}. {veredito['reason']}".strip()
                                if veredito else "O revisor automático não conseguiu avaliar esta ação.")

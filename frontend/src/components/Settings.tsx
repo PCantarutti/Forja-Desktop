@@ -2564,7 +2564,7 @@ function PerfilHardware({ onError }: { onError: (e: string) => void }) {
 
 /** E7: quantos Workers cabem de fato (slot 0 é do Maestro; teto do perfil) e se a janela por slot do llama-server
  * fica abaixo do mínimo do Worker. */
-function AvisoWorkers({ n }: { n: number }) {
+export function AvisoWorkers({ n }: { n: number }) {
   const [w, setW] = useState<{ possiveis: number; motivo: string; janela_por_slot: number | null; min_ctx: number } | null>(null);
   useEffect(() => {
     const t = setTimeout(() => api.get<any>(`/perfil/workers?n=${n}`).then(setW).catch(() => {}), 300);

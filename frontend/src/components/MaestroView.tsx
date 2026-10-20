@@ -25,6 +25,7 @@ import { Balanca, Check, Clock, Cube, Split, X } from "./icons";
 import { Modal } from "./Modal";
 import { aggregate, type TurnStats } from "./MessageView";
 import ModelPicker from "./ModelPicker";
+import { AvisoWorkers } from "./Settings";
 import Tiles, { type Cabeca, type RightTab, type Rotulo } from "./RightPanel";
 import { abertos, abrir as abrirTile, type Grade } from "./tiles";
 
@@ -974,6 +975,7 @@ function PainelModelos(props: {
             ? "Um Worker por vez, e o modelo local pode ser trocado entre tarefas. É o modo para máquina com pouca VRAM."
             : "Tarefas independentes rodam juntas; as que mexem nos mesmos arquivos esperam a vez. Sem troca automática de modelo local — dois Workers disputariam a mesma VRAM."}
         </p>
+        {m.max_workers > 1 && <AvisoWorkers n={m.max_workers} />}
       </div>
     </div>
   );

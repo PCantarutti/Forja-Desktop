@@ -89,7 +89,7 @@ def test_interpretar_so_aceita_as_formas_validas():
     assert revisor.interpretar("sem json") is None
 
 
-def _roda_auto(monkeypatch, veredito: str, comando: str):
+def _roda_auto(monkeypatch, veredito: str, comando: str, mode: str = "agent", permission: str = "auto"):
     async def stream(provider, model, messages, tools, num_ctx, effort=None, **kw):
         if messages[0]["content"] == revisor.POLITICA:
             yield "content", veredito
@@ -120,8 +120,8 @@ def _roda_auto(monkeypatch, veredito: str, comando: str):
             s.add(c)
             s.commit()
         run = agent.Run(c.id)
-        req = agent.RunRequest(content="instale as dependências", provider="lmstudio", model="m", mode="agent",
-                               permission="auto")
+        req = agent.RunRequest(content="instale as dependências", provider="lmstudio", model="m", mode=mode,
+                               permission=permission)
         eventos = []
         async for ev in agent.run_agent(c.id, req, run):
             eventos.append(ev)
@@ -149,6 +149,21 @@ def test_destrutivo_nunca_passa_pelo_revisor(monkeypatch):
     eventos = _roda_auto(monkeypatch, '{"risk":"low","decision":"allow"}', "Remove-Item -Recurse C:/dados")
     cards = [e for e in eventos if e["type"] == "approval_request"]
     assert cards and cards[0]["nota"] is None
+
+
+def test_maestro_nunca_espera_clique_no_destrutivo(monkeypatch):
+    """Conversa 206: Workers parados a noite toda num card de `rm -f`. No Maestro quem decide é o revisor."""
+    eventos = _roda_auto(monkeypatch, '{"risk":"low","decision":"allow"}', "rm -f saida.cache.json",
+                         mode="maestro", permission="bypass")
+    assert not [e for e in eventos if e["type"] == "approval_request"]
+    res = next(e["message"] for e in eventos if e["type"] == "tool_result")
+    assert res["status"] == "ok" and res["meta"]["auto_rule"] == "revisor automático: risco low"
+
+    eventos = _roda_auto(monkeypatch, '{"risk":"medium","decision":"deny","reason":"apaga dado do usuário"}',
+                         "rm -rf /workspace/dados", mode="maestro", permission="bypass")
+    assert not [e for e in eventos if e["type"] == "approval_request"]
+    res = next(e["message"] for e in eventos if e["type"] == "tool_result")
+    assert res["status"] == "rejeitada" and "apaga dado do usuário" in res["content"]
 
 
 def test_ferramentas_novas_registradas():
