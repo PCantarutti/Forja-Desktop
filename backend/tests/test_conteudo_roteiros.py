@@ -279,3 +279,29 @@ def test_juiz_que_falha_nao_derruba_a_rodada(monkeypatch):
     _fakes(monkeypatch, juiz="não sei avaliar")
     est = asyncio.run(_rodar_ate_o_fim(_spec()))
     assert est["status"] == "ok" and all("nota" not in x for x in est["roteiros"])
+
+
+def test_limite_de_roteiros_apaga_os_antigos_na_ordem_certa():
+    """Aba Pastas › Roteiros guardados: passou do limite, saem descartados, depois novos, depois produzidos. Aprovado
+    e a rodada mais recente ficam; rodada que fica vazia some; mudar o limite vale na hora."""
+    cid = _spec()
+
+    def rodada(*status):
+        m = R._save(cid, role="assistant", name=R.NOME, content="", status="ok",
+                    meta={R.CHAVE: {"roteiros": [{"id": f"r{i}", "titulo": s, "status": s} for i, s in enumerate(status)]}})
+        return m.id
+
+    velha = rodada("produzido", "descartado")        # 2
+    meio = rodada("novo", "aprovado", "descartado")   # 3
+    nova = rodada("novo", "novo", "descartado")       # 3, a mais recente: intocada
+    assert R.podar(cid) == 0                          # sem limite, nada sai
+    conteudo.salvar_pastas({"roteiros_max": 5})       # 8 > 5: saem 3 já ao salvar
+    restam = {r["id"]: [x["status"] for x in r["roteiros"]] for r in R.listar(cid)}
+    assert restam[nova] == ["novo", "novo", "descartado"]
+    assert restam[meio] == ["aprovado"]               # os dois descartados e o novo mais antigo saíram
+    assert restam[velha] == ["produzido"]
+    conteudo.salvar_pastas({"roteiros_max": 4})
+    restam = {r["id"]: [x["status"] for x in r["roteiros"]] for r in R.listar(cid)}
+    assert velha not in restam and restam[meio] == ["aprovado"]   # rodada vazia some; aprovado nunca sai
+    with pytest.raises(ToolError):
+        conteudo.salvar_pastas({"roteiros_max": "muitos"})

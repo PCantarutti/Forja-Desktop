@@ -20,6 +20,8 @@ import time
 from pathlib import Path
 from typing import AsyncIterator, Callable
 
+from sqlalchemy import select
+
 from . import checkpoints, config, critico, db, gitops, modelctl, preferencias, subagents, taskdb, workspace
 from .tools import ToolError
 
@@ -263,7 +265,8 @@ async def run_task(conv_id: int, call: dict, req, run_obj, out: dict,
     async for ev in _run_uma(conv_id, call, req, run_obj, out, run_call):
         yield ev
     feitos = [out.copy()]
-    while len(feitos) < LOTE_MAX and _vale_lote(feitos[-1], req) and not run_obj.cancel.is_set():
+    while (len(feitos) < LOTE_MAX and _vale_lote(feitos[-1], req) and not run_obj.cancel.is_set()
+           and not getattr(run_obj, "paused", False)):
         if not (prox := taskdb.proxima_pronta(conv_id)):
             break
         o: dict = {}
@@ -282,8 +285,10 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
     args = call["arguments"]
     code = str(args.get("code") or "").strip().upper()
     strategy = str(args.get("strategy") or "").strip()
-    meta: dict = {"arguments": args}
+    meta: dict = {"arguments": {k: v for k, v in args.items() if k != "_retomar"}}
     root = workspace.root()
+    # `_retomar`: id da tentativa que a pausa deixou (agent._retoma_pausa). Não é argumento do modelo.
+    retomada = taskdb.resume_attempt(int(args["_retomar"])) if args.get("_retomar") else None
 
     def erro(texto: str) -> None:
         out.update(status="erro", text=texto, meta=meta)
@@ -306,74 +311,86 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
         erro(f"{task.code} foi copiada para a conversa {copiada}, onde o trabalho continua. Aqui a lista é só consulta.")
         return
 
-    if pendentes := taskdb.unmet_deps(task, conv_id):
-        erro(f"{task.code} depende de {', '.join(pendentes)}, que ainda não concluíram. "
-             "Execute essas primeiro (list_tasks mostra o estado de cada uma).")
-        return
-    if task.status == "completed":
-        erro(f"{task.code} já está concluída. Se precisa mexer nela de novo, reabra com "
-             "update_task(status='queued') dizendo o motivo.")
-        return
-    if task.attempt_count >= task.max_attempts:
-        taskdb.set_status(task.code, "needs_human", conv_id,
-                          f"Limite de {task.max_attempts} tentativas atingido.")
-        erro(f"{task.code} atingiu o limite de {task.max_attempts} tentativas e foi marcada como "
-             "needs_human. Não tente de novo: diagnostique o que está travando, e ou reescreva o "
-             "contrato (update_task) e aumente max_attempts, ou pergunte ao usuário com ask_user.")
-        return
-    if task.attempt_count and not strategy:
-        # §10: mudar de estratégia entre tentativas, não repetir o mesmo prompt.
-        erro(f"{task.code} já falhou {task.attempt_count} vez(es). Informe 'strategy' dizendo o que "
-             "muda nesta tentativa — o erro anterior vai junto no briefing do Worker. "
-             f"Último erro:\n{taskdb.last_error(task.code, conv_id)[:1500]}")
-        return
+    if retomada:   # pausa da Maestro: a MESMA tentativa continua, no mesmo Worker, de onde parou
+        att, estado_worker = retomada
+        nivel = att.worker.get("level") or "capaz"
+        spec = {"provider": att.worker.get("provider") or req.provider, "model": att.worker.get("model") or req.model}
+        mesmo = spec   # o modelo da tentativa, sem cadeia de reserva: trocar no meio repetiria efeito colateral
+        motivo_rota = (att.worker.get("rota") or "") + " — retomada da pausa"
+        strategy, erro_anterior = att.strategy or "", ""
+        attempt_id, attempt_n, externas = att.id, att.n, []
+        if hasattr(run_obj, "tentativas"):
+            run_obj.tentativas[call["id"]] = attempt_id
+        yield {"type": "task_update", "code": task.code, "status": "implementing", "attempt": attempt_n}
+    else:
+        if pendentes := taskdb.unmet_deps(task, conv_id):
+            erro(f"{task.code} depende de {', '.join(pendentes)}, que ainda não concluíram. "
+                 "Execute essas primeiro (list_tasks mostra o estado de cada uma).")
+            return
+        if task.status == "completed":
+            erro(f"{task.code} já está concluída. Se precisa mexer nela de novo, reabra com "
+                 "update_task(status='queued') dizendo o motivo.")
+            return
+        if task.attempt_count >= task.max_attempts:
+            taskdb.set_status(task.code, "needs_human", conv_id,
+                              f"Limite de {task.max_attempts} tentativas atingido.")
+            erro(f"{task.code} atingiu o limite de {task.max_attempts} tentativas e foi marcada como "
+                 "needs_human. Não tente de novo: diagnostique o que está travando, e ou reescreva o "
+                 "contrato (update_task) e aumente max_attempts, ou pergunte ao usuário com ask_user.")
+            return
+        if task.attempt_count and not strategy:
+            # §10: mudar de estratégia entre tentativas, não repetir o mesmo prompt.
+            erro(f"{task.code} já falhou {task.attempt_count} vez(es). Informe 'strategy' dizendo o que "
+                 "muda nesta tentativa — o erro anterior vai junto no briefing do Worker. "
+                 f"Último erro:\n{taskdb.last_error(task.code, conv_id)[:1500]}")
+            return
 
-    # Em modo sequencial o orquestrador pode trocar o modelo local sozinho, então um slot que só
-    # precisa ser carregado continua elegível (ver subagents._fits e modelctl.ensure).
-    trocar = modelctl.pode_trocar()
-    # Quem faz: a escolha da Maestro, ou o roteador (tipo, tamanho, falhas desta tarefa e o
-    # histórico do projeto).
-    nivel, motivo_rota = subagents.rota(task.model_slot, task.contract, evitar_niveis(task, root))
-    cadeia = subagents.chain(nivel, swap=trocar)
-    mesmo = mesmo_modelo(req)
-    if mesmo:
-        # "Workers usam o modelo da Maestro": nada de trocar de modelo. Com IA local, a Maestro e os
-        # Workers dividem o mesmo llama-server (as vagas dele rodam os Workers em paralelo) e nada é
-        # descarregado por engano para subir o modelo de um especialista.
-        cadeia = [(nivel, mesmo)]
-        motivo_rota = "modelo da Maestro (Workers usam o mesmo modelo)"
-    if not cadeia:
-        porque = subagents._why_not(trocar)
-        erro("Nenhum Worker disponível agora"
-             + (f" ({porque})" if porque else " — configure os slots em Configurações › Subagentes")
-             + f". A tarefa {task.code} continua em '{task.status}'.")
-        return
-    nivel, spec = cadeia[0]
-    if curta := modelctl.janela_curta(spec, config.WORKER_MIN_CTX, "um Worker"):
-        erro(curta)  # antes da tentativa: recusar aqui não gasta uma das max_attempts
-        return
+        # Em modo sequencial o orquestrador pode trocar o modelo local sozinho, então um slot que só
+        # precisa ser carregado continua elegível (ver subagents._fits e modelctl.ensure).
+        trocar = modelctl.pode_trocar()
+        # Quem faz: a escolha da Maestro, ou o roteador (tipo, tamanho, falhas desta tarefa e o
+        # histórico do projeto).
+        nivel, motivo_rota = subagents.rota(task.model_slot, task.contract, evitar_niveis(task, root))
+        cadeia = subagents.chain(nivel, swap=trocar)
+        mesmo = mesmo_modelo(req)
+        if mesmo:
+            # "Workers usam o modelo da Maestro": nada de trocar de modelo. Com IA local, a Maestro e os
+            # Workers dividem o mesmo llama-server (as vagas dele rodam os Workers em paralelo) e nada é
+            # descarregado por engano para subir o modelo de um especialista.
+            cadeia = [(nivel, mesmo)]
+            motivo_rota = "modelo da Maestro (Workers usam o mesmo modelo)"
+        if not cadeia:
+            porque = subagents._why_not(trocar)
+            erro("Nenhum Worker disponível agora"
+                 + (f" ({porque})" if porque else " — configure os slots em Configurações › Subagentes")
+                 + f". A tarefa {task.code} continua em '{task.status}'.")
+            return
+        nivel, spec = cadeia[0]
+        if curta := modelctl.janela_curta(spec, config.WORKER_MIN_CTX, "um Worker"):
+            erro(curta)  # antes da tentativa: recusar aqui não gasta uma das max_attempts
+            return
 
-    # Lido ANTES de abrir a tentativa nova: last_error() olha a tentativa mais recente, e a que
-    # estamos prestes a criar ainda não falhou — pegá-la deixaria o Worker sem saber o que deu errado
-    # da vez passada, que é metade do motivo de existir uma segunda tentativa.
-    erro_anterior = taskdb.last_error(task.code, conv_id)
+        # Lido ANTES de abrir a tentativa nova: last_error() olha a tentativa mais recente, e a que
+        # estamos prestes a criar ainda não falhou — pegá-la deixaria o Worker sem saber o que deu errado
+        # da vez passada, que é metade do motivo de existir uma segunda tentativa.
+        erro_anterior = taskdb.last_error(task.code, conv_id)
 
-    # Tentativa persistida ANTES de qualquer efeito colateral: se o app cair agora, taskdb.reap()
-    # encontra o rastro e devolve a tarefa para 'queued' na próxima abertura.
-    attempt_id = taskdb.new_attempt(task.code, {"level": nivel, "provider": spec["provider"],
-                                                "model": spec["model"], "agent": task.agent,
-                                                "rota": motivo_rota},
-                                    strategy, conv_id)
-    attempt_n = task.attempt_count + 1
-    if hasattr(run_obj, "tentativas"):  # escrita do Worker desta chamada = checkpoint desta tentativa
-        run_obj.tentativas[call["id"]] = attempt_id
-    # Arquivo que um Worker deixou num estado e que mudou desde então: foi mexido por fora. A Maestro
-    # precisa saber antes de confiar no que a tarefa anterior entregou.
-    externas = alteracoes_externas(conv_id, root)
-    if externas:
-        yield {"type": "event", "message": {"id": None, "role": "event", "content":
-               "Arquivos alterados fora do Forja desde a última tarefa: " + ", ".join(externas[:10]),
-               "meta": {"kind": "warning"}}}
+        # Tentativa persistida ANTES de qualquer efeito colateral: se o app cair agora, taskdb.reap()
+        # encontra o rastro e devolve a tarefa para 'queued' na próxima abertura.
+        attempt_id = taskdb.new_attempt(task.code, {"level": nivel, "provider": spec["provider"],
+                                                    "model": spec["model"], "agent": task.agent,
+                                                    "rota": motivo_rota},
+                                        strategy, conv_id)
+        attempt_n = task.attempt_count + 1
+        if hasattr(run_obj, "tentativas"):  # escrita do Worker desta chamada = checkpoint desta tentativa
+            run_obj.tentativas[call["id"]] = attempt_id
+        # Arquivo que um Worker deixou num estado e que mudou desde então: foi mexido por fora. A Maestro
+        # precisa saber antes de confiar no que a tarefa anterior entregou.
+        externas = alteracoes_externas(conv_id, root)
+        if externas:
+            yield {"type": "event", "message": {"id": None, "role": "event", "content":
+                   "Arquivos alterados fora do Forja desde a última tarefa: " + ", ".join(externas[:10]),
+                   "meta": {"kind": "warning"}}}
     # Toda tentativa recomeça o ciclo em 'queued'. Sem isto, despachar de novo uma tarefa parada em
     # 'reviewing' (o Maestro não gostou do resultado) batia numa transição ilegal e derrubava o turno.
     if task.status != "queued":
@@ -428,7 +445,10 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
     # depois de um conflito ao trazer (a nova tentativa vai sem worktree), fica o lock por arquivo.
     wt = None
     sem_wt = "trazer a tarefa para a pasta principal" in (erro_anterior or "")
-    if paralelo() and not sem_wt and await asyncio.to_thread(gitops.is_repo, root):
+    manter_wt = False   # pausa: o worktree fica com o que o Worker já escreveu, para a retomada
+    if retomada and (root / gitops.WT_DIR / task.code).is_dir():
+        wt = root / gitops.WT_DIR / task.code
+    elif paralelo() and not sem_wt and await asyncio.to_thread(gitops.is_repo, root):
         try:
             wt = await asyncio.to_thread(gitops.worktree_tarefa, root, task.code)
         except ToolError as e:
@@ -444,13 +464,19 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
                        "attempt": attempt_n}
                 async for ev in subagents.run(conv_id, sub_call, req, run_obj, sub_out, run_call,
                                               structured=True,
-                                              ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t)):
+                                              ao_registrar=lambda t: taskdb.save_transcript(attempt_id, t),
+                                              retomar=retomada[1] if retomada else None):
                     yield ev
         except Exception as e:  # nunca deixar a tentativa aberta no banco
             taskdb.finish_attempt(attempt_id, "error", error=f"{e.__class__.__name__}: {e}",
                                   seconds=time.monotonic() - t0)
             taskdb.set_status(task.code, "failed", conv_id, str(e)[:500])
             erro(f"O Worker falhou: {e.__class__.__name__}: {e}")
+            return
+
+        if sub_out.get("status") == "pausada":
+            manter_wt = _pausa(attempt_id, sub_out, out, meta, task.code, attempt_n)
+            yield {"type": "task_update", "code": task.code, "status": "paused", "attempt": attempt_n}
             return
 
         if run_obj.cancel.is_set():
@@ -514,6 +540,10 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
                             yield ev
                 except Exception as e:
                     volta_out = {"status": "erro", "text": f"{e.__class__.__name__}: {e}"}
+                if volta_out.get("status") == "pausada":   # retoma pela volta: o critério ainda vale de novo depois
+                    manter_wt = _pausa(attempt_id, volta_out, out, meta, task.code, attempt_n)
+                    yield {"type": "task_update", "code": task.code, "status": "paused", "attempt": attempt_n}
+                    return
                 taskdb.set_status(task.code, "testing", conv_id)
                 antes = {c["path"]: c for c in resultado["changes"]}
                 novo = collect_result(task, attempt_n, volta_out, raiz)
@@ -548,7 +578,7 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
         registra_estado(attempt_id, root, raiz)
     finally:
         workspace.CURRENT.reset(token_raiz)
-        if wt is not None:
+        if wt is not None and not manter_wt:
             await asyncio.to_thread(gitops.remove_worktree_tarefa, root, task.code)
 
     # Etapa de revisão explícita: só quando NADA provou o resultado. Com o comando de verificação
@@ -590,6 +620,52 @@ async def _run_uma(conv_id: int, call: dict, req, run_obj, out: dict,
     meta["task_result"] = resultado
     meta["sub"] = (sub_out.get("meta") or {}).get("sub")
     out.update(status="ok", text=_para_o_maestro(resultado), meta=meta)
+
+
+def _pausa(attempt_id: int, sub_out: dict, out: dict, meta: dict, code: str, attempt_n: int) -> bool:
+    """O Worker parou pela pausa: a tentativa fica aberta com o estado dele e o run_task volta 'pausada', sem
+    resultado no histórico (agent._save_result). Devolve True: o worktree fica."""
+    taskdb.pause_attempt(attempt_id, sub_out.get("retomar") or {})
+    meta["sub"] = (sub_out.get("meta") or {}).get("sub")
+    out.update(status="pausada", text=f"{code}: pausada na tentativa {attempt_n}.", meta=meta,
+               pausa={"attempt_id": attempt_id})
+    return True
+
+
+# ------------------------------------------------------------------ pausa que sobrevive a fechar o Forja
+PAUSA = "maestro_pausa:"
+
+
+def grava_pausa(conv_id: int, chamadas: list[dict]) -> None:
+    """A Maestro pausada: o que despausar tem de rodar antes do próximo passo dela (run_task cortado no meio,
+    com a tentativa; chamadas do mesmo passo que nem começaram). Lista vazia = pausou fora de ferramenta."""
+    with db.session() as s:
+        s.merge(db.AppSetting(key=f"{PAUSA}{conv_id}", value={"chamadas": chamadas, "quando": time.time()}))
+        if c := s.get(db.Conversation, conv_id):
+            c.updated_at = db._now()   # o celular e a outra tela veem a pausa pelo /api/activity
+        s.commit()
+
+
+def pausa(conv_id: int) -> dict | None:
+    with db.session() as s:
+        linha = s.get(db.AppSetting, f"{PAUSA}{conv_id}")
+        return dict(linha.value) if linha and isinstance(linha.value, dict) else None
+
+
+def tira_pausa(conv_id: int) -> dict | None:
+    with db.session() as s:
+        linha = s.get(db.AppSetting, f"{PAUSA}{conv_id}")
+        valor = dict(linha.value) if linha and isinstance(linha.value, dict) else None
+        if linha:
+            s.delete(linha)
+            s.commit()
+        return valor
+
+
+def pausadas() -> list[int]:
+    with db.session() as s:
+        return [int(k[len(PAUSA):]) for k in s.scalars(select(db.AppSetting.key).where(db.AppSetting.key.like(f"{PAUSA}%")))
+                if k[len(PAUSA):].isdigit()]
 
 
 def _sha(p: Path) -> str | None:

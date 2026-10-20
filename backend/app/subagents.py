@@ -474,7 +474,8 @@ async def _review(root: Path, task: str, paths: set[str], pedido: dict | None = 
 
 async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                run_call: Callable, structured: bool = False,
-               ao_registrar: Callable[[list], None] | None = None) -> AsyncIterator[dict]:
+               ao_registrar: Callable[[list], None] | None = None,
+               retomar: dict | None = None) -> AsyncIterator[dict]:
     """`structured=True`: o brief veio de um Implementation Contract do Maestro (taskdb), nao de um
     delegate_task escrito a maquina pelo modelo. Os freios de delegacao rasa (_falta) nao se aplicam:
     o contrato ja foi validado na criacao da tarefa, e recusar aqui travaria o ciclo autonomo."""
@@ -539,9 +540,14 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
         brief.append("Para conferir, rode os testes (pytest, npm test...) em vez de `python -c`/`node -e`: "
                      "no modo Automático testes passam direto, código solto na linha de comando pede aprovação.")
     messages: list[dict] = [system, {"role": "user", "content": "\n\n".join(brief)}]
+    if retomar:   # pausa da Maestro: a conversa do Worker continua de onde parou (o system prompt é o de agora)
+        messages = [system, *(retomar.get("mensagens") or messages[1:])]
 
     info = {"level": used_level, "provider": provider, "model": model, "steps": [], "tokens": 0,
             "iterations": 0, "chain": [lvl for lvl, _ in cadeia], "rota": rota.texto(papel)}
+    if retomar:
+        info.update({k: v for k, v in (retomar.get("info") or {}).items() if k in ("steps", "tokens", "iterations")})
+        info["retomada"] = info.get("retomada", 0) + 1
     if persona:
         info["agent"] = persona["name"]
     if used_level != level:
@@ -577,7 +583,11 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             ao_registrar(transcricao)
         return msg
 
-    if structured:
+    if retomar:   # a coluna do Worker mostra de novo a conversa até a pausa
+        transcricao.extend(retomar.get("transcricao") or [])
+        for m in transcricao:
+            yield {"type": "sub_message", "parent": pid, "message": m}
+    elif structured:
         yield {"type": "sub_message", "parent": pid,
                "message": registra({"role": "user", "content": messages[1]["content"]})}
 
@@ -587,9 +597,22 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
     teto_resultado = max(2000, int((ctx_max or config.NUM_CTX) * 3 * RESULTADO_FRACAO))
     # Loop de correção: verify falhou e sobram passos → a saída volta para o próprio Worker, em vez de a
     # tentativa acabar e a Maestro (às vezes noutro modelo, com troca de VRAM) ter de redespachar.
-    inicio = voltas = 0
+    inicio = int((retomar or {}).get("passo") or 0)
+    voltas = int((retomar or {}).get("voltas") or 0)
+
+    def pausa(i: int) -> None:
+        """Worker da Maestro pausado: sai daqui com o que precisa para continuar ESTE passo depois (até com o
+        Forja fechado). O passo cortado no meio é refeito; o que ele já fez (arquivos, passos) fica."""
+        out.update(status="pausada", meta=meta, text="(pausado)",
+                   retomar={"mensagens": messages[1:], "transcricao": list(transcricao), "passo": i,
+                            "voltas": voltas, "info": {k: info[k] for k in ("steps", "tokens", "iterations")}})
+
     while True:
         for i in range(inicio, config.SUBAGENT_MAX_ITERATIONS):
+            if structured and getattr(run_obj, "paused", False):
+                yield estado(f"{nome_do_nivel(used_level)} · {model}: pausado")
+                pausa(i)
+                return
             if getattr(run_obj, "paused", False):  # Pausar vale também no meio de uma tarefa do Worker
                 yield estado(f"{nome_do_nivel(used_level)} · {model}: pausado")
                 await run_obj.espera_retomar()
@@ -608,11 +631,15 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             if janela and _est(messages) > janela * PODA_FRACAO:
                 # Poda em bloco, não a cada passo: cada poda invalida o cache do prefixo a partir dali.
                 _poda_resultados(messages, manter=2, teto=PODA_TETO)
+            cortou = False
+            fluxo = llm.chat_stream(provider, model, messages, schemas, config.NUM_CTX, sub_effort,
+                                    budget_mult=SUB_BUDGET_MULT, **({"slot": rota.slot} if rota.slot is not None else {}))
             try:
-                async for kind, val in llm.chat_stream(provider, model, messages, schemas, config.NUM_CTX,
-                                                       sub_effort, budget_mult=SUB_BUDGET_MULT,
-                                                       **({"slot": rota.slot} if rota.slot is not None else {})):
+                async for kind, val in fluxo:
                     if run_obj.cancel.is_set():
+                        break
+                    if structured and getattr(run_obj, "paused", False):  # pausa corta a geração no meio
+                        cortou = True
                         break
                     if kind != "done" and t_primeiro is None:
                         t_primeiro = time.monotonic()
@@ -671,6 +698,12 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
                     yield estado(info["fallback"])
                     continue
                 out.update(status="erro", text=f"Subagente falhou ({model}): {e}", meta=meta)
+                return
+            finally:
+                await fluxo.aclose()   # sair do laço não derruba a conexão: o servidor seguiria gerando na pausa
+            if cortou:
+                yield estado(f"{nome_do_nivel(used_level)} · {model}: pausado no meio do passo {i + 1}")
+                pausa(i)
                 return
             info["tokens"] += done.get("completion_tokens") or len(content) // 4
             metricas.registra("llm", papel="worker" if structured else "subagente", conv=conv_id, model=model,
@@ -817,7 +850,8 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
 
 async def run(conv_id: int, call: dict, req, run_obj, out: dict,
               run_call: Callable, structured: bool = False,
-              ao_registrar: Callable[[list], None] | None = None) -> AsyncIterator[dict]:
+              ao_registrar: Callable[[list], None] | None = None,
+              retomar: dict | None = None) -> AsyncIterator[dict]:
     """Roda a delegação e garante que ela saia da lista de ativas. O finally vale também quando o
     usuário cancela o turno: o consumidor fecha o gerador e o finally corre."""
     from . import hooks  # tardio: hooks importa shell, que importa tools; evita ciclo no import do pacote
@@ -825,7 +859,7 @@ async def run(conv_id: int, call: dict, req, run_obj, out: dict,
     tarefa = {"task": str(call["arguments"].get("task") or "")[:500]}
     await hooks.rodar_async("subagent_start", workspace.root(), "", tarefa)
     try:
-        async for ev in _run(conv_id, call, req, run_obj, out, run_call, structured, ao_registrar):
+        async for ev in _run(conv_id, call, req, run_obj, out, run_call, structured, ao_registrar, retomar):
             yield ev
     finally:
         ATIVAS.pop(call["id"], None)

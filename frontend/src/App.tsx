@@ -109,6 +109,7 @@ type Config = {
 };
 type Live = {
   messages: Message[];
+  pausada?: boolean;  // Maestro pausada sem execução viva (a pausa está gravada no banco)
   run: {
     run_id: string;
     cursor: number;
@@ -452,9 +453,22 @@ export default function App() {
     setSettings((s) => ({ ...s, ...p }));
   };
 
-  /** Pausar: o passo em curso termina (inclusive o do Worker) e o próximo espera o Continuar. */
+  /** Pausar: na Maestro a geração para no meio (a dela ou a do Worker), a execução encerra e a pausa fica
+   *  gravada; Continuar abre uma execução sem mensagem, que retoma a mesma tentativa — até depois de fechar o app. */
   function pausar(sim: boolean) {
-    if (!runId.current) return;
+    if (!runId.current) {
+      if (!sim && currentId !== null) {   // pausa gravada, sem execução viva
+        setPausado(false);
+        follow(currentId, `/conversations/${currentId}/run`, {
+          method: "POST",
+          body: JSON.stringify({
+            content: null, provider: settings.provider, model: settings.model,
+            permission: settings.permission, effort: settings.effort === "extremo" ? "maximo" : settings.effort,
+          }),
+        });
+      }
+      return;
+    }
     setPausado(sim);
     api.post(`/runs/${runId.current}/pause`, { paused: sim }).catch((e) => setError(e.message));
   }
@@ -821,6 +835,7 @@ export default function App() {
         if (live) setMessages(live.messages);
         setRunning(false);
         resetLive();
+        if (live?.pausada) setPausado(true);   // a Maestro encerrou por pausa: o botão vira Continuar
         refreshConversations();
         loadCheckpoints(convId);
         loadChangesCount(convId);
@@ -851,6 +866,7 @@ export default function App() {
     const live = await api.get<Live>(`/conversations/${id}/live`);
     if (meu !== pedidoAbertura.current) return;  // outra conversa foi aberta enquanto isto vinha
     setMessages(live.messages);
+    if (!live.run && live.pausada) setPausado(true);
     loadCheckpoints(id);
     loadChangesCount(id);
     const kind = (await api.get<{ kind?: string }>(`/conversations/${id}`).catch(() => null))?.kind;
@@ -1068,6 +1084,10 @@ export default function App() {
         setDraft(null);
         liveGen.current = null; // a partir daqui valem as estatísticas reais da mensagem (meta.stats)
         setMessages((ms) => [...ms, ev.message]);
+        break;
+      case "assistant_discard": // Maestro pausada no meio da resposta: ela é refeita ao continuar, não fica
+        setDraft(null);
+        liveGen.current = null;
         break;
       case "approval_request":
         setApprovals((a) => ({ ...a, [ev.call.id]: { preview: ev.preview, suggest: ev.suggest, nota: ev.nota, tool: ev.call.name } }));

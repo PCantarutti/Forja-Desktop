@@ -31,7 +31,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import design_modelos, design_repo, design_revisao, tts, youtube
+from . import design_modelos, design_repo, design_revisao, maestro, tts, youtube
 
 
 settings.apply()
@@ -450,6 +450,9 @@ async def get_activity():
             e["waiting"] = len(r.approvals)
             e["paused"] = r.paused
             e["alertas"] = r.alertas  # "pode estar travada": a interface notifica quando sobe
+    for c in maestro.pausadas():   # pausa gravada (sem execução viva): o PC e o celular mostram "pausado"
+        e = entrada(c)
+        e["paused"] = e.get("paused", True) if e["running"] else True
     for r in list(design._RUNS.values()):   # geração do Design também acende a bolinha da conversa
         entrada(r["conv_id"])["running"] = True
     for r in list(comparar._RUNS.values()):  # comparação e lote de imagem/vídeo também
@@ -4058,7 +4061,9 @@ async def live(conv_id: int):  # async: roda no event loop, atômico em relaçã
         c = _get_conv(s, conv_id)
         messages = [m.to_dict() for m in c.messages]
     run = active_run(conv_id)  # sem await entre as duas leituras: snapshot consistente
-    return {"messages": messages, "run": run.snapshot() if run else None}
+    # Maestro pausada (gravada no banco, sem execução viva): a tela mostra "Continuar", até depois de reabrir o app
+    return {"messages": messages, "run": run.snapshot() if run else None,
+            "pausada": not run and maestro.pausa(conv_id) is not None}
 
 
 @app.get("/api/runs/{run_id}/stream")

@@ -18,7 +18,7 @@ const ajuda = "text-[11px] leading-relaxed text-faint";
 
 const MOTOR_CLAUDE = "claude-mcp";   // o mesmo literal de estudos.MOTOR_CLAUDE no backend
 
-type Pastas = { pasta_estilos: string; pasta_projeto: string; pasta_saida: string; comandos: string[]; claude_cli?: string; claude_conta?: string; claude_modelo?: string; claude_esforco?: string; produtor?: "cli" | "mcp" };
+type Pastas = { pasta_estilos: string; pasta_projeto: string; pasta_saida: string; comandos: string[]; claude_cli?: string; claude_conta?: string; claude_modelo?: string; claude_esforco?: string; produtor?: "cli" | "mcp"; roteiros_max?: number };
 type Estilo = { nome: string; resumo: string; atualizado: string };
 type Modo = "desligada" | "aprovacao" | "automatico";
 type Spec = {
@@ -499,6 +499,25 @@ function PastasPainel(props: { pastas: Pastas; primeira: boolean; onError: (m: s
       <ServicoAjuste onError={props.onError} />
 
       <YoutubeAjuste onError={props.onError} />
+
+      <Secao titulo="Roteiros guardados">
+        <label className="flex cursor-pointer items-center gap-2 text-[13px] text-fg">
+          <input type="checkbox" className="size-4 accent-[var(--accent)]" checked={!!p.roteiros_max}
+                 onChange={(e) => setP({ ...p, roteiros_max: e.target.checked ? 30 : 0 })} />
+          Apagar roteiros antigos automaticamente
+        </label>
+        {!!p.roteiros_max && (
+          <Caixa rotulo="Máximo de roteiros por especificação">
+            <input type="number" min={1} max={10000} className={caixaMono} value={p.roteiros_max}
+                   onChange={(e) => setP({ ...p, roteiros_max: Math.max(1, Math.min(10000, Number(e.target.value) || 1)) })} />
+          </Caixa>
+        )}
+        <span className={ajuda}>
+          {p.roteiros_max
+            ? "Passou do limite, saem os mais antigos: primeiro os descartados, depois os novos, por último os que já viraram vídeo. Aprovados e a rodada mais recente nunca saem. Vídeo apagado deixa de contar na checagem de notícia repetida."
+            : "Sem limite: todos os roteiros ficam guardados."}
+        </span>
+      </Secao>
 
       <Secao titulo="Comandos liberados">
         <Caixa rotulo="Um por linha; * vale qualquer coisa">

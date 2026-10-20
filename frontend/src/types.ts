@@ -962,7 +962,8 @@ export type Contract = {
 
 export type TaskStatus =
   | "pending" | "queued" | "loading_model" | "implementing" | "testing" | "reviewing"
-  | "completed" | "failed" | "blocked" | "needs_human" | "cancelled";
+  | "completed" | "failed" | "blocked" | "needs_human" | "cancelled"
+  | "paused";  // só no evento ao vivo (a tarefa no banco segue 'implementing', com a tentativa pausada)
 
 /** Protocolo Worker → Maestro. `changes` e `tests` são medição (git + comando), não autoavaliação. */
 export type TaskResult = {

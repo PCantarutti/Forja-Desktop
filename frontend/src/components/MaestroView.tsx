@@ -37,6 +37,7 @@ const ESTADO: Record<TaskStatus, { marca: string; cor: string; label: string }> 
   queued: { marca: "◔", cor: "text-muted", label: "aguardando" },
   loading_model: { marca: "◑", cor: "text-amber-400", label: "carregando modelo" },
   implementing: { marca: "⟳", cor: "text-sky-400", label: "implementando" },
+  paused: { marca: "‖", cor: "text-amber-400", label: "pausada" },
   testing: { marca: "⟳", cor: "text-sky-400", label: "testando" },
   reviewing: { marca: "◆", cor: "text-violet-400", label: "esperando revisão" },
   completed: { marca: "✓", cor: "text-emerald-400", label: "concluída" },
@@ -483,12 +484,12 @@ function Cabecalho(props: {
           <span className={ESTADO[props.tarefa.status].cor}>
             {props.tarefa.code} · {ESTADO[props.tarefa.status].label}
           </span>
-        ) : props.running ? (
+        ) : props.running || props.pausado ? (
           <span className={props.pausado ? "text-amber-400" : "text-sky-400"}>{props.pausado ? "pausado" : "pensando…"}</span>
         ) : (
           <span className="text-faint">parado</span>
         )}
-        {props.onNovaSessao && !props.running && (
+        {props.onNovaSessao && !props.running && !props.pausado && (
           <Confirma
             rotulo="Nova sessão"
             pergunta="Abrir sessão nova?"
@@ -497,10 +498,12 @@ function Cabecalho(props: {
             onSim={props.onNovaSessao}
           />
         )}
-        {props.running && (
+        {(props.running || props.pausado) && (
           <button
             onClick={() => props.onPausar(!props.pausado)}
-            title={props.pausado ? "Retomar de onde parou" : "Termina o passo em curso (inclusive o do Worker) e espera"}
+            title={props.pausado
+              ? "Continua de onde parou, na mesma tentativa do Worker (vale até depois de fechar o Forja)"
+              : "Para a geração agora (a da Maestro ou a do Worker) e libera o modelo; Continuar retoma daqui"}
             className={`rounded-md border px-2 py-0.5 ${props.pausado
               ? "border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
               : "border-line text-muted hover:bg-raised hover:text-fg"}`}

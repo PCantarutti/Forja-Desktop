@@ -369,6 +369,7 @@ async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
         except ToolError:
             pass   # a especificação foi apagada no meio
         _RUNS.pop(run["message_id"], None)
+        podar(run["conv_id"])
 
 
 async def _escrever(run: dict, spec: dict, escritor: dict) -> list[dict]:
@@ -609,6 +610,51 @@ def _roteiros_da_conversa(s, conv_id: int) -> list[db.Message]:
     return list(s.scalars(select(db.Message).where(db.Message.conversation_id == conv_id, db.Message.name == NOME)))
 
 
+# Ordem de quem sai primeiro quando passa do limite. Aprovado nunca sai: está na fila da produção.
+ORDEM_PODA = {"descartado": 0, "novo": 1, "produzido": 2}
+
+
+def podar(conv_id: int) -> int:
+    """Limite de roteiros por conversa (aba Pastas, `roteiros_max`; 0 = sem limite): apaga os mais antigos que
+    passarem dele — descartados, depois novos, depois produzidos. A rodada mais recente e as que estão rodando
+    ficam inteiras (a agenda e a tela ainda trabalham nelas). Rodada que fica sem roteiro some. Devolve quantos saíram."""
+    limite = int(conteudo.pastas().get("roteiros_max") or 0)
+    if limite <= 0:
+        return 0
+    with db.session() as s:
+        ms = sorted(_roteiros_da_conversa(s, conv_id), key=lambda m: m.id)
+        intocadas = {m.id for m in ms if m.status in ("running", "aguardando") or m.id in _RUNS} | ({ms[-1].id} if ms else set())
+        todos = [(m, x) for m in ms for x in ((m.meta or {}).get(CHAVE) or {}).get("roteiros") or []]
+        excesso = len(todos) - limite
+        if excesso <= 0:
+            return 0
+        sai = sorted(((m, x) for m, x in todos if m.id not in intocadas and x.get("status") in ORDEM_PODA),
+                     key=lambda mx: (ORDEM_PODA[mx[1]["status"]], mx[0].id))[:excesso]
+        por_rodada: dict[int, set[str]] = {}
+        for m, x in sai:
+            por_rodada.setdefault(m.id, set()).add(x["id"])
+        for m in ms:
+            if m.id not in por_rodada:
+                continue
+            r = dict((m.meta or {}).get(CHAVE) or {})
+            resto = [x for x in r.get("roteiros") or [] if x["id"] not in por_rodada[m.id]]
+            if resto:
+                m.meta = {**(m.meta or {}), CHAVE: {**r, "roteiros": resto}}
+            else:
+                s.delete(m)
+        if sai:
+            s.get(db.Conversation, conv_id).updated_at = db._now()   # a tela do PC e a do celular recarregam a lista
+        s.commit()
+        return len(sai)
+
+
+def podar_todas() -> int:
+    """O limite mudou nas Pastas: vale na hora para todas as especificações."""
+    with db.session() as s:
+        convs = list(s.scalars(select(db.Message.conversation_id).where(db.Message.name == NOME).distinct()))
+    return sum(podar(c) for c in convs)
+
+
 def marcar(message_id: int, roteiro_id: str, status: str) -> dict:
     """Aprovar, descartar ou voltar a novo. Aprovar tira o aprovado anterior da mesma especificação."""
     if status not in ("novo", "aprovado", "descartado"):
@@ -767,4 +813,5 @@ def mcp_salvar(pedido_id: int, roteiros: list, fontes: list | None = None, model
            fontes=[{"id": str(i), "url": f["url"], "titulo": f["titulo"], "status": "util", "resumo": ""}
                    for i, f in enumerate(lista)],
            stats={"fontes": len(lista), "uteis": len(lista), "escritor": modelo or "Claude (MCP)"})
+    podar(conv_id)
     return f"{len(feitos)} roteiro(s) gravado(s) no pedido {pedido_id}; já aparecem na tela Conteúdo." + aviso_pedidos()

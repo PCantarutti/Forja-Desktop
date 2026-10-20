@@ -149,9 +149,20 @@ def salvar_pastas(dados: dict) -> dict:
         if len(cmds) > 50:
             raise ToolError("No máximo 50 comandos permitidos.")
         novo["comandos"] = cmds
+    if "roteiros_max" in dados:   # limite de roteiros guardados por especificação; 0 = sem limite
+        try:
+            n = int(dados["roteiros_max"] or 0)
+        except (TypeError, ValueError):
+            raise ToolError("Limite de roteiros inválido: use um número (0 = sem limite).") from None
+        if not 0 <= n <= 10_000:
+            raise ToolError("Limite de roteiros entre 0 (sem limite) e 10000.")
+        novo["roteiros_max"] = n
     with db.session() as s:
         s.merge(db.AppSetting(key=CHAVE, value=novo))
         s.commit()
+    if novo.get("roteiros_max") and novo["roteiros_max"] != atual.get("roteiros_max"):
+        from . import conteudo_roteiros
+        conteudo_roteiros.podar_todas()   # o limite novo vale já, não só na próxima rodada
     return novo
 
 

@@ -173,7 +173,7 @@ class Attempt(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id", ondelete="CASCADE"), index=True)
     n: Mapped[int] = mapped_column(default=1)
-    status: Mapped[str] = mapped_column(String(20), default="running")  # running|completed|failed|cancelled|error
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running|paused|completed|failed|cancelled|error
     worker: Mapped[dict] = mapped_column(JSON, default=dict)  # {level, provider, model, agent}
     strategy: Mapped[str | None] = mapped_column(Text, nullable=True)  # o que mudou nesta tentativa
     result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
@@ -189,6 +189,9 @@ class Attempt(Base):
     # {caminho relativo: sha1 | None} dos arquivos que a tentativa deixou. Na tarefa seguinte, o que
     # não bate mais foi mexido por fora (usuário, outro programa) e a Maestro precisa saber.
     estado: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # Pausa da Maestro no meio do Worker: as mensagens dele (formato do provedor), o passo e o placar. Despausar,
+    # até depois de fechar o Forja, continua ESTA tentativa daqui em vez de abrir outra.
+    retomar: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     task: Mapped[Task] = relationship(back_populates="attempts")
 
 
@@ -269,6 +272,8 @@ def _migrate() -> None:
             c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN transcript JSON")
         if cols and "estado" not in cols:
             c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN estado JSON")
+        if cols and "retomar" not in cols:
+            c.exec_driver_sql("ALTER TABLE attempts ADD COLUMN retomar JSON")
         cols = {row[1] for row in c.exec_driver_sql("PRAGMA table_info(features)")}
         if cols and "copiada_para" not in cols:
             c.exec_driver_sql("ALTER TABLE features ADD COLUMN copiada_para INTEGER")

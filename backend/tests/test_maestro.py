@@ -1017,7 +1017,8 @@ def test_validacao_no_navegador_desligada_tira_ferramentas_e_regra(monkeypatch):
     assert any(t.name.startswith("browser_") for t in agent.available_tools({"vision"}, "auto"))
 
 
-def test_pausar_segura_o_proximo_passo_e_continuar_solta(monkeypatch):
+def test_pausar_a_maestro_encerra_grava_e_continuar_retoma(monkeypatch):
+    """Na Maestro a pausa encerra a execução (o modelo fica livre) e fica no banco; o run sem conteúdo continua."""
     chamadas = []
 
     async def fake_stream(*a, **k):
@@ -1043,23 +1044,138 @@ def test_pausar_segura_o_proximo_passo_e_continuar_solta(monkeypatch):
         run = agent.Run(cid)
         run.pausar(True)
         req = agent.RunRequest(content="x", provider="local", model="m", mode="maestro", permission="bypass")
-        eventos = []
+        eventos = [ev async for ev in agent.run_agent(cid, req, run)]
+        gravada, antes = maestro.pausa(cid), len(chamadas)
+        req2 = agent.RunRequest(content=None, provider="local", model="m", mode="maestro", permission="bypass")
+        depois = [ev async for ev in agent.run_agent(cid, req2, agent.Run(cid))]
+        return cid, eventos, gravada, antes, depois
 
-        async def consome():
-            async for ev in agent.run_agent(cid, req, run):
-                eventos.append(ev)
+    cid, eventos, gravada, antes, depois = asyncio.run(cena())
+    assert antes == 0 and gravada == {"chamadas": [], "quando": gravada["quando"]}   # o modelo nem foi chamado
+    assert any("Pausado" in (e.get("message") or {}).get("content", "") for e in eventos if e["type"] == "event")
+    assert chamadas and depois[-1]["type"] == "done" and maestro.pausa(cid) is None
 
-        tarefa = asyncio.ensure_future(consome())
-        await asyncio.sleep(0.3)
-        parado = (len(chamadas), run.snapshot()["paused"])
-        run.pausar(False)
-        await asyncio.wait_for(tarefa, 5)
-        return parado, eventos
 
-    (chamadas_pausado, pausado), eventos = asyncio.run(cena())
-    assert chamadas_pausado == 0 and pausado        # pausado: o modelo nem foi chamado
-    assert chamadas and eventos[-1]["type"] == "done"
-    assert any(e.get("text", "").startswith("Pausado") for e in eventos if e["type"] == "status")
+def _pausa_no_worker(monkeypatch, run_obj_ref: dict, passos: list):
+    """Worker: passo 1 grava um arquivo; no passo 2 o usuário pausa no MEIO da geração; ao continuar, termina."""
+    async def fala(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        passos.append([m.get("role") for m in messages])
+        if len(passos) == 1:
+            yield "done", {"tool_calls": [{"id": "c1", "name": "write_file",
+                                           "arguments": {"path": "a.py", "content": "x = 1"}}],
+                           "completion_tokens": 30}
+        elif len(passos) == 2:
+            yield "content", "pensando em"
+            run_obj_ref["run"].pausar(True)   # Pausar chega com a resposta pela metade
+            yield "content", " algo longo"
+            yield "done", {"tool_calls": [], "completion_tokens": 999}
+        else:
+            yield "content", "Pronto."
+            yield "done", {"tool_calls": [], "completion_tokens": 5}
+
+    monkeypatch.setattr(llm, "chat_stream", fala)
+
+
+def test_pausa_no_meio_do_worker_continua_na_mesma_tentativa(conv, monkeypatch):
+    ref, passos = {}, []
+    _pausa_no_worker(monkeypatch, ref, passos)
+    _plano(conv, [{"title": "X", "contract": {"goal": "g"}}])
+    req = agent.RunRequest(content="x", provider="lmstudio", model="m", mode="maestro", permission="auto")
+    run_call, chamadas = _run_call_factory()
+
+    def despacha(args):
+        ref["run"] = run_obj = agent.Run(conv)
+        out: dict = {}
+
+        async def cena():
+            async for _ in maestro.run_task(conv, {"id": "rt1", "name": "run_task", "arguments": args},
+                                            req, run_obj, out, run_call):
+                pass
+        asyncio.run(cena())
+        return out
+
+    out = despacha({"code": "TASK-001"})
+    assert out["status"] == "pausada" and len(passos) == 2
+    aid = out["pausa"]["attempt_id"]
+    t = taskdb.detail(conv, "TASK-001")
+    assert t["attempts"][0]["status"] == "paused" and t["attempt_count"] == 1
+    taskdb.reap()   # o Forja fechou: a pausa sobrevive à subida
+    assert taskdb.detail(conv, "TASK-001")["attempts"][0]["status"] == "paused"
+
+    out = despacha({"code": "TASK-001", "_retomar": aid})
+    assert out["status"] == "ok", out
+    t = taskdb.detail(conv, "TASK-001")
+    assert t["attempt_count"] == 1 and t["attempts"][0]["status"] in ("completed", "unverified")
+    # o passo cortado é refeito com o histórico de antes da pausa (o write_file e o resultado dele)
+    assert passos[2] == passos[1] and "tool" in passos[2]
+    assert [c["name"] for c in chamadas] == ["write_file"]   # o arquivo não é escrito duas vezes
+    papeis = [m["role"] for m in t["attempts"][0]["transcript"]]
+    assert papeis[:3] == ["user", "assistant", "tool"] and papeis.count("user") == 1
+
+
+def test_pausa_da_maestro_pelo_run_agent_e_mensagem_nova_descarta(conv, monkeypatch):
+    """Ponta a ponta: a Maestro despacha, o Worker pausa no meio, a execução encerra com a pausa gravada e o
+    run_task sem resultado; continuar fecha a tarefa na mesma tentativa. Numa segunda pausa, mensagem nova descarta."""
+    ref, passos = {}, []
+    _pausa_no_worker(monkeypatch, ref, passos)
+    worker_fala = llm.chat_stream
+
+    async def fala(provider, model, messages, tools, num_ctx, effort=None, **kw):
+        if model == "maestro-m":   # a Maestro: despacha uma vez, depois encerra
+            if not any(m.get("role") == "tool" for m in messages):
+                yield "done", {"tool_calls": [{"id": "rt9", "name": "run_task", "arguments": {"code": "TASK-001"}}]}
+            else:
+                yield "content", "Feito."
+                yield "done", {"tool_calls": []}
+            return
+        async for x in worker_fala(provider, model, messages, tools, num_ctx, effort, **kw):
+            yield x
+
+    async def limite(*a):
+        return 131072
+
+    monkeypatch.setattr(llm, "chat_stream", fala)
+    monkeypatch.setattr(llm, "context_limit", limite)
+    _plano(conv, [{"title": "X", "contract": {"goal": "g"}}])
+
+    def roda(content):
+        ref["run"] = run = agent.Run(conv)
+        req = agent.RunRequest(content=content, provider="lmstudio", model="maestro-m", mode="maestro", permission="bypass")
+
+        async def cena():
+            return [ev async for ev in agent.run_agent(conv, req, run)]
+        return asyncio.run(cena())
+
+    roda("faça a tarefa")
+    p = maestro.pausa(conv)
+    assert p and p["chamadas"][0]["call"]["id"] == "rt9" and p["chamadas"][0]["attempt_id"]
+    with db.session() as s:
+        assert not s.query(db.Message).filter(db.Message.conversation_id == conv, db.Message.role == "tool",
+                                              db.Message.tool_call_id == "rt9").count()
+    roda(None)   # Continuar
+    assert maestro.pausa(conv) is None
+    t = taskdb.detail(conv, "TASK-001")
+    assert t["attempt_count"] == 1 and t["attempts"][0]["status"] in ("completed", "unverified")
+    with db.session() as s:
+        res = s.query(db.Message).filter(db.Message.conversation_id == conv, db.Message.tool_call_id == "rt9").one()
+        assert res.status == "ok"
+
+    # segunda pausa, e o usuário manda outra mensagem em vez de continuar
+    taskdb.set_status("TASK-001", "queued", conv)
+    passos.clear()
+    with db.session() as s:   # a próxima tentativa precisa de estratégia; o resto do histórico não importa aqui
+        s.query(db.Message).filter(db.Message.conversation_id == conv).delete()
+        s.commit()
+    monkeypatch.setattr(taskdb, "last_error", lambda *a, **k: "")
+    with db.session() as s:
+        s.get(db.Task, taskdb.get("TASK-001", conv).id).attempt_count = 0
+        s.commit()
+    roda("faça de novo")
+    assert maestro.pausa(conv)
+    eventos = roda("esquece, faça outra coisa")
+    assert maestro.pausa(conv) is None
+    cancelada = next(e["message"] for e in eventos if e["type"] == "tool_result" and e["message"]["tool_call_id"] == "rt9")
+    assert cancelada["status"] == "cancelada" and taskdb.get("TASK-001", conv).status == "cancelled"
 
 
 def test_parar_solta_uma_execucao_pausada(monkeypatch):

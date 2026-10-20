@@ -197,6 +197,7 @@ class Run:
         self.auto = autonomo.Sessao(conv_id)  # E16-C: trabalho autônomo e o placar do relatório
         self.rodando = asyncio.Event()   # limpo = pausado (Pausar/Continuar); o Parar é o cancel
         self.rodando.set()
+        self.pausas: list[dict] = []     # Maestro: chamadas que a pausa deixou por fazer ({call, attempt_id?})
         self.pending: dict[str, asyncio.Future] = {}
         self.events: list[dict] = []
         self.finished = False
@@ -220,7 +221,7 @@ class Run:
             # Quem reconectar no meio de uma escrita longa vê de onde ela parou, não uma tela parada.
             tool = self.draft.get("tool") or {"name": "", "text": ""}
             self.draft["tool"] = {"name": ev["name"] or tool["name"], "text": (tool["text"] + ev["text"])[-TOOL_TAIL:]}
-        elif t == "assistant_end":
+        elif t in ("assistant_end", "assistant_discard"):   # discard: resposta cortada pela pausa, não gravada
             self.draft = None
             self.geracao = None  # daqui em diante valem as estatísticas reais da mensagem (meta.stats)
         elif t == "approval_request":
@@ -1286,6 +1287,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
             yield _event(conv_id, "info", "Trabalho aberto de outra conversa desta pasta veio para cá: "
                                           + "; ".join(assumidas) + ".")
 
+    # Mensagem nova com a Maestro pausada: a pausa vira cancelamento ANTES da fala entrar (a chamada sem
+    # resultado no meio do histórico quebraria a próxima requisição). Despausar é o run sem conteúdo.
+    if req.mode == "maestro" and req.content is not None and (p := maestro.tira_pausa(conv_id)):
+        for ev in _descarta_pausa(conv_id, p):
+            yield ev
+
     provisorio = ""  # título tirado da 1ª mensagem; no fim do turno o modelo resume um melhor
     if req.content is not None:
         with db.session() as s:
@@ -1414,7 +1421,21 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         yield _event(conv_id, "mudanca", f"[modelo trocado: as respostas acima foram geradas por {anterior}; a "
                                          f"conversa continua com {req.model}]", to_model=True)
 
+    pausou = False
+    if maestro_mode and req.content is None and (p := maestro.tira_pausa(conv_id)):
+        yield _event(conv_id, "info", "Continuando de onde a pausa parou.")
+        async for ev in _retoma_pausa(conv_id, p, req, run, caps):
+            yield ev
+
     while not run.cancel.is_set():
+        if run.paused and maestro_mode:
+            # Maestro: a pausa ENCERRA a execução e fica no banco. O modelo fica livre para descarregar e
+            # usar em outra parte do Forja; despausar (até depois de fechar o app) continua daqui.
+            maestro.grava_pausa(conv_id, run.pausas)
+            yield _event(conv_id, "info", "Pausado. O modelo está livre: dá para descarregar e usar outra parte do "
+                                          "Forja. Continuar retoma daqui, até depois de fechar o app.")
+            pausou = True
+            break
         if run.paused:  # Pausar: o passo anterior terminou; o próximo espera o Continuar
             yield {"type": "status", "text": "Pausado. Continuar retoma daqui."}
             await run.espera_retomar()
@@ -1520,8 +1541,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
                      "max_tokens": max(2048, min(livre, teto_livre // 2))}
         fluxo = ate_cancelar(llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort,
                                              **extra_llm), run.cancel)
+        cortado = False
         try:
             async for kind, val in fluxo:
+                if maestro_mode and run.paused:  # a pausa corta a resposta no meio; o passo é refeito ao continuar
+                    cortado = True
+                    break
                 if kind != "done" and t_first is None:
                     t_first = time.monotonic()
                 if kind == "content":
@@ -1592,6 +1617,10 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if run.cancel.is_set():
             _save_partial(conv_id, content, reasoning)
             break
+        if cortado:   # nada da resposta cortada vai ao histórico: a próxima volta gera o passo inteiro de novo
+            yield {"type": "assistant_discard"}
+            iterations -= 1
+            continue
         if degenerou:
             metricas.registra("filtro_raciocinio", conv=conv_id, model=req.model, motivo=degenerou[:120])
             # O raciocínio degenerado não volta ao histórico: reenviado, ele reforçaria o próprio giro.
@@ -1781,10 +1810,17 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         contaveis = {c["id"]: c for c in calls if not _poll(c)}  # esperar o Worker não é girar
         progrediu = False
         for lote in batches(calls):
+            if maestro_mode and run.paused and not run.cancel.is_set():
+                run.pausas += [{"call": c} for c in lote]   # nem começaram: rodam primeiro ao continuar
+                continue
             rodar = [] if run.cancel.is_set() else [c for c in lote if c["id"] not in cancelar
                                                      and c["id"] not in recusadas]
             if rodar:
                 async for ev in _run_batch(conv_id, rodar, req, run, caps):
+                    if ev.get("pausada"):   # run_task cortado pela pausa: sem resultado, volta ao continuar
+                        run.pausas.append(ev["pausada"])
+                        yield {"type": "status", "text": ev["text"]}
+                        continue
                     if ev.get("type") == "tool_result" and (c := contaveis.get(ev["message"].get("tool_call_id"))):
                         t = REGISTRY.get(c["name"])
                         progrediu |= placar.resultado(c["name"], c["arguments"], ev["message"].get("status") or "",
@@ -1860,7 +1896,7 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
 
     for f in run.filhos.values():  # o turno acabou (parado, limite, erro): filho órfão não teria a quem avisar
         f["task"].cancel()
-    if run.auto.ligado and not run.auto.estacionou and not run.cancel.is_set():
+    if run.auto.ligado and not run.auto.estacionou and not run.cancel.is_set() and not pausou:
         texto = _relatorio(conv_id, run, maestro_mode, inicio_run)
         yield _event(conv_id, "info", texto)
         if not maestro_mode:  # no Maestro o push do fim do turno já avisa
@@ -2074,12 +2110,55 @@ async def _execute(conv_id: int, call: dict, req: RunRequest, run: Run,
 
 
 def _save_result(conv_id: int, call: dict, out: dict) -> dict:
+    if out.get("status") == "pausada":
+        # Maestro pausada no meio do run_task: a chamada não tem resultado ainda. Nada vai ao histórico; quem
+        # despausar roda de novo esta chamada, na mesma tentativa (`_retomar`).
+        original = {**call, "arguments": {k: v for k, v in call["arguments"].items() if k != "_retomar"}}
+        return {"type": "status", "text": out.get("text") or "pausado",
+                "pausada": {"call": original, **(out.get("pausa") or {})}}
     metricas.registra("ferramenta", conv=conv_id, nome=call["name"], status=out.get("status") or "erro",
                       segundos=(out.get("meta") or {}).get("segundos"))  # E10
     m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"],
               status=out.get("status") or "erro", content=out.get("text") or "",
               meta=out.get("meta") or {"arguments": call["arguments"]})
     return {"type": "tool_result", "message": m.to_dict()}
+
+
+async def _retoma_pausa(conv_id: int, p: dict, req: RunRequest, run: Run, caps) -> AsyncIterator[dict]:
+    """Despausar: as chamadas que a pausa deixou rodam antes do próximo passo da Maestro, cada run_task na
+    tentativa que já existia. Pausar de novo no meio guarda o que sobrar."""
+    for item in p.get("chamadas") or []:
+        if run.paused or run.cancel.is_set():
+            run.pausas.append(item)
+            continue
+        call = item["call"]
+        if item.get("attempt_id"):
+            call = {**call, "arguments": {**call["arguments"], "_retomar": item["attempt_id"]}}
+        async for ev in _execute(conv_id, call, req, run, caps):
+            if ev.get("pausada"):
+                run.pausas.append(ev["pausada"])
+                yield {"type": "status", "text": ev["text"]}
+                continue
+            yield ev
+
+
+def _descarta_pausa(conv_id: int, p: dict) -> list[dict]:
+    """Mensagem nova com a Maestro pausada: o que ficou por fazer vira 'cancelada' (com a tentativa fechada e a
+    tarefa em 'cancelled', que a Maestro pode despachar de novo)."""
+    evs = []
+    for item in p.get("chamadas") or []:
+        call = item["call"]
+        code = str((call.get("arguments") or {}).get("code") or "").upper()
+        if aid := item.get("attempt_id"):
+            taskdb.finish_attempt(aid, "cancelled", error="Pausa descartada: o usuário mandou uma mensagem nova.")
+            with contextlib.suppress(ToolError):
+                taskdb.set_status(code, "cancelled", conv_id, "Pausa descartada pelo usuário.")
+        m = _save(conv_id, role="tool", tool_call_id=call["id"], name=call["name"], status="cancelada",
+                  content=(f"Não concluída: a Maestro foi pausada{' no meio de ' + code if code else ''} e o usuário "
+                           "mandou outra mensagem em vez de continuar. Despache de novo se ainda fizer sentido."),
+                  meta={"arguments": call.get("arguments") or {}})
+        evs.append({"type": "tool_result", "message": m.to_dict()})
+    return evs
 
 
 def _poll(call: dict) -> bool:

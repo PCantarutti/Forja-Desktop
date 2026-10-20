@@ -727,6 +727,27 @@ def save_transcript(attempt_id: int, transcript: list) -> None:
             s.commit()
 
 
+def pause_attempt(attempt_id: int, retomar: dict) -> None:
+    """Pausa da Maestro: a tentativa não acaba; guarda de onde o Worker continua. O reap() da subida só mexe
+    em 'running', então a pausa sobrevive a fechar o Forja."""
+    with db.session() as s:
+        if att := s.get(db.Attempt, attempt_id):
+            att.status, att.retomar = "paused", retomar
+            s.commit()
+
+
+def resume_attempt(attempt_id: int) -> tuple[db.Attempt, dict] | None:
+    """(tentativa, estado do Worker) de uma tentativa pausada, que volta a 'running'. None: não está pausada."""
+    with db.session() as s:
+        att = s.get(db.Attempt, attempt_id)
+        if not att or att.status != "paused":
+            return None
+        estado, att.status, att.retomar = att.retomar or {}, "running", None
+        s.commit()
+        s.expunge(att)
+        return att, estado
+
+
 def last_error(code: str, conv_id: int | None = None) -> str:
     """O que deu errado na última tentativa, para entrar no brief da próxima."""
     conv_id = conv_id if conv_id is not None else _conv()
