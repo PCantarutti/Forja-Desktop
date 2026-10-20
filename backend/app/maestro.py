@@ -636,11 +636,13 @@ def _pausa(attempt_id: int, sub_out: dict, out: dict, meta: dict, code: str, att
 PAUSA = "maestro_pausa:"
 
 
-def grava_pausa(conv_id: int, chamadas: list[dict]) -> None:
+def grava_pausa(conv_id: int, chamadas: list[dict], req: dict | None = None) -> None:
     """A Maestro pausada: o que despausar tem de rodar antes do próximo passo dela (run_task cortado no meio,
-    com a tentativa; chamadas do mesmo passo que nem começaram). Lista vazia = pausou fora de ferramenta."""
+    com a tentativa; chamadas do mesmo passo que nem começaram). Lista vazia = pausou fora de ferramenta.
+    `req` (modelo, permissão, esforço) é com o que continuar quando quem despausa não manda (o celular)."""
     with db.session() as s:
-        s.merge(db.AppSetting(key=f"{PAUSA}{conv_id}", value={"chamadas": chamadas, "quando": time.time()}))
+        s.merge(db.AppSetting(key=f"{PAUSA}{conv_id}",
+                              value={"chamadas": chamadas, "quando": time.time(), **({"req": req} if req else {})}))
         if c := s.get(db.Conversation, conv_id):
             c.updated_at = db._now()   # o celular e a outra tela veem a pausa pelo /api/activity
         s.commit()

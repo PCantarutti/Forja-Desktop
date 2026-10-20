@@ -1431,7 +1431,8 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if run.paused and maestro_mode:
             # Maestro: a pausa ENCERRA a execução e fica no banco. O modelo fica livre para descarregar e
             # usar em outra parte do Forja; despausar (até depois de fechar o app) continua daqui.
-            maestro.grava_pausa(conv_id, run.pausas)
+            maestro.grava_pausa(conv_id, run.pausas, {"provider": req.provider, "model": req.model,
+                                                      "permission": run.permission, "effort": req.effort})
             yield _event(conv_id, "info", "Pausado. O modelo está livre: dá para descarregar e usar outra parte do "
                                           "Forja. Continuar retoma daqui, até depois de fechar o app.")
             pausou = True

@@ -1051,7 +1051,7 @@ def test_pausar_a_maestro_encerra_grava_e_continuar_retoma(monkeypatch):
         return cid, eventos, gravada, antes, depois
 
     cid, eventos, gravada, antes, depois = asyncio.run(cena())
-    assert antes == 0 and gravada == {"chamadas": [], "quando": gravada["quando"]}   # o modelo nem foi chamado
+    assert antes == 0 and gravada["chamadas"] == [] and gravada["req"]["model"] == "m"   # o modelo nem foi chamado
     assert any("Pausado" in (e.get("message") or {}).get("content", "") for e in eventos if e["type"] == "event")
     assert chamadas and depois[-1]["type"] == "done" and maestro.pausa(cid) is None
 
@@ -1149,6 +1149,7 @@ def test_pausa_da_maestro_pelo_run_agent_e_mensagem_nova_descarta(conv, monkeypa
     roda("faça a tarefa")
     p = maestro.pausa(conv)
     assert p and p["chamadas"][0]["call"]["id"] == "rt9" and p["chamadas"][0]["attempt_id"]
+    assert p["req"] == {"provider": "lmstudio", "model": "maestro-m", "permission": "bypass", "effort": "medio"}
     with db.session() as s:
         assert not s.query(db.Message).filter(db.Message.conversation_id == conv, db.Message.role == "tool",
                                               db.Message.tool_call_id == "rt9").count()

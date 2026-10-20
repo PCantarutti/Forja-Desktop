@@ -16,6 +16,14 @@ os.makedirs(os.environ["WORKSPACE_ROOT"], exist_ok=True)
 import pytest  # noqa: E402
 
 
+@pytest.fixture
+def tmp_path(tmp_path):
+    """O tmp_path com a caixa que está no disco. O pytest monta o caminho com o usuário de agora
+    (pytest-of-Pedro), e a pasta pode ter nascido com outra caixa (pytest-of-pedro): o código resolve o
+    caminho, o teste compara texto, e três testes falhavam só por isso."""
+    return tmp_path.resolve()
+
+
 @pytest.fixture(autouse=True)
 def _sem_titulo_do_design(monkeypatch):
     """O título do Design é uma chamada extra ao modelo: os modelos falsos dos testes não esperam por ela."""

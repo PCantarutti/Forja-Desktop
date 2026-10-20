@@ -4028,6 +4028,28 @@ async def start_run(conv_id: int, body: RunBody):
     return _sse(run, 0)
 
 
+@app.post("/api/conversations/{conv_id}/continuar")
+async def continuar(conv_id: int):
+    """Despausar a Maestro sem saber o modelo (o celular): com execução viva pausada, solta; com a pausa gravada
+    (execução encerrada, até depois de fechar o app), abre a execução que retoma com o que a pausa guardou."""
+    if run := active_run(conv_id):
+        if not run.paused:
+            raise HTTPException(409, "A Maestro não está pausada.")
+        run.pausar(False)
+        await run.publish({"type": "paused", "paused": False})
+        return {"ok": True, "run_id": run.id}
+    if not (p := maestro.pausa(conv_id)):
+        raise HTTPException(409, "Esta conversa não está pausada.")
+    r = p.get("req") or {}
+    spec = {**(mobile.defaults() or {}), **{k: v for k, v in (config.MAESTRO_MODEL or {}).items() if v}}
+    run = Run(conv_id)
+    RUNS[run.id] = run
+    run.start(RunRequest(mode="maestro", content=None, provider=r.get("provider") or spec.get("provider") or "local",
+                         model=r.get("model") or spec.get("model") or "", permission=r.get("permission") or "auto",
+                         effort=r.get("effort") or "medio"))
+    return {"ok": True, "run_id": run.id}
+
+
 @app.post("/api/conversations/{conv_id}/rewind")
 def rewind(conv_id: int, body: dict):
     """Apaga da mensagem indicada em diante (editar) ou tudo depois dela (regenerar)."""
