@@ -1087,7 +1087,7 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
             if native and calls:
                 out.append({"role": "assistant", "content": m.content or "", "tool_calls": [
                     {"id": c["id"], "type": "function",
-                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
+                     "function": {"name": c["name"], "arguments": json.dumps(llm.args_historico(c), ensure_ascii=False)}}
                     for c in calls]})
                 # `prefixo_estavel` estende isto aos turnos ANTERIORES, e a razão é a mesma das
                 # imagens: deixar o raciocínio cair quando chega uma mensagem nova do usuário
@@ -1098,7 +1098,7 @@ def build_history(msgs: list[db.Message], via: str, caps: set[str] | None = None
                     out[-1]["reasoning_content"] = m.thinking
             else:
                 text = m.content + "".join(
-                    "\n<tool_call>\n" + json.dumps({"name": c["name"], "arguments": c["arguments"]},
+                    "\n<tool_call>\n" + json.dumps({"name": c["name"], "arguments": llm.args_historico(c)},
                                                    ensure_ascii=False) + "\n</tool_call>" for c in calls)
                 if text.strip():
                     out.append({"role": "assistant", "content": text.strip()})
@@ -1512,8 +1512,12 @@ async def run_agent(conv_id: int, req: RunRequest, run: Run) -> AsyncIterator[di
         if rota_principal.slot is not None:  # E4: guarda o cache de quem estava no slot e traz o desta conversa
             if feito := await asyncio.to_thread(kvcache.assume, conv_id, rota_principal.slot):
                 yield _event(conv_id, "info", f"Cache do prompt em disco: {feito}.")
+        # Teto de geração: o que sobra da janela, com folga para o resultado da ferramenta, e no máximo metade
+        # dela. Sem isto o Qwen gerou 78 mil tokens num write_file (79 min) até bater na borda (conversa 207).
+        livre = teto_livre - _estimate(messages, tools) * 4 // 3 - 4096
         extra_llm = {**({"budget_mult": mult} if mult != 1.0 else {}),
-                     **({"slot": rota_principal.slot} if rota_principal.slot is not None else {})}
+                     **({"slot": rota_principal.slot} if rota_principal.slot is not None else {}),
+                     "max_tokens": max(2048, min(livre, teto_livre // 2))}
         fluxo = ate_cancelar(llm.chat_stream(req.provider, req.model, messages, tools, config.NUM_CTX, req.effort,
                                              **extra_llm), run.cancel)
         try:
@@ -2246,7 +2250,8 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
         out.update(status=status, text=apelidos.nota(call) + text, meta=meta)
 
     if "__raw__" in args:
-        result("erro", f"Argumentos não são JSON válido: {args['__raw__'][:200]}")
+        result("erro", f"Argumentos não são JSON válido (se a resposta foi cortada no limite de geração, "
+                       f"divida em partes menores: um arquivo ou trecho por chamada): {args['__raw__'][:200]}")
         return
     if run.permission == "plan" and bloqueada_no_plano(name):
         # O catálogo não muda no modo Plano (prefixo estável); quem segura a escrita é isto.

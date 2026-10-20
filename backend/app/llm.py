@@ -380,9 +380,21 @@ def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict,
     return saida, msgs
 
 
+def args_historico(c: dict) -> dict:
+    """Argumentos de uma chamada como voltam ao modelo. JSON inválido (geração cortada no limite) não
+    executou nada e pode ter centenas de KB: reenviado inteiro, estoura a janela e nenhuma compactação
+    tira (a poda só corta resultado, e o turno atual fica fora do resumo). Conversa 207, 20/10/2026."""
+    a = c["arguments"]
+    if isinstance(a, dict) and "__raw__" in a:
+        return {"_omitido": f"argumentos com JSON inválido ({len(a['__raw__']) // 1024} KB), "
+                            "provavelmente cortados no limite de geração; nada foi executado"}
+    return a
+
+
 async def chat_stream(provider: str, model: str, messages: list[dict], tools: list[dict] | None,
                       num_ctx: int, effort: str | None = None, think: bool | None = None,
-                      budget_mult: float = 1.0, slot: int | None = None) -> AsyncIterator[tuple[str, object]]:
+                      budget_mult: float = 1.0, slot: int | None = None,
+                      max_tokens: int | None = None) -> AsyncIterator[tuple[str, object]]:
     impl = _ollama_stream if spec(provider)["type"] == "ollama" else _openai_stream
     ULTIMO_USO["t"] = time.monotonic()  # E4: a descarga por ociosidade conta a partir daqui
     if servidor_local_externo(provider):
@@ -397,6 +409,12 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     if think is False:  # chamada mecânica (compactar, titular, commit): raciocinar aqui é desperdício
         extra, messages = _sem_pensar(provider, extra, messages)
+    if max_tokens:  # teto de quem chama (o que sobra da janela); o ajuste do modelo só pode baixar
+        if spec(provider)["type"] == "ollama":
+            o = extra.setdefault("options", {})
+            o["num_predict"] = min(o.get("num_predict") or max_tokens, max_tokens)
+        else:
+            extra["max_tokens"] = min(extra.get("max_tokens") or max_tokens, max_tokens)
     from . import modelctl
     if embutido:
         modelctl.ocupa(slot, +1)  # o slot auxiliar fica marcado enquanto gera (a escolha do próximo o evita)

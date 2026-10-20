@@ -716,11 +716,11 @@ async def _run(conv_id: int, call: dict, req, run_obj, out: dict,
             if via == "native":
                 messages.append({"role": "assistant", "content": visible, "tool_calls": [
                     {"id": c["id"], "type": "function",
-                     "function": {"name": c["name"], "arguments": json.dumps(c["arguments"], ensure_ascii=False)}}
+                     "function": {"name": c["name"], "arguments": json.dumps(llm.args_historico(c), ensure_ascii=False)}}
                     for c in calls]})
             else:
                 messages.append({"role": "assistant", "content": visible + "".join(
-                    "\n<tool_call>\n" + json.dumps({"name": c["name"], "arguments": c["arguments"]},
+                    "\n<tool_call>\n" + json.dumps({"name": c["name"], "arguments": llm.args_historico(c)},
                                                    ensure_ascii=False) + "\n</tool_call>" for c in calls)})
 
             permitidas_agora = {t.name for t in tools}
