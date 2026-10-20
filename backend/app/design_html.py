@@ -428,15 +428,70 @@ def esqueleto(plano: dict) -> str:
     tokens = "\n".join(f"  {k}: {v};" for k, v in plano["tokens"].items())
     slides = plano.get("tipo") == "slides"   # deck: cada seção é um slide 1920x1080
     tela = plano.get("tipo") == "prototipo"   # protótipo: cada seção é uma tela, uma por vez
+    casca = (plano.get("casca") or {}) if tela else {}
     corpo = "\n".join(_placeholder(s["nome"], slides, tela) for s in plano["secoes"])
+    if casca.get("itens"):   # a navegação global vem antes das telas e é escrita uma vez só
+        corpo = f'<section data-section="casca" data-casca data-placeholder="1">Gerando a navegação…</section>\n{corpo}'
     titulo = re.sub(r"[<>&]", "", plano["titulo"])
-    base = _BASE_CSS + ("\n" + SLIDES_CSS if slides else "") + ("\n" + PROTOTIPO_CSS if tela else "")
+    base = (_BASE_CSS + ("\n" + SLIDES_CSS if slides else "") + ("\n" + PROTOTIPO_CSS if tela else "")
+            + ("\n" + CASCA_CSS if casca.get("itens") else ""))
     # estilo comum das fotos (skill gerar-imagens): vai junto com o documento para o registro dos slots
     estilo = re.sub(r'["<>&]', "", plano.get("estilo_imagens") or "")
     meta_estilo = f'<meta name="forja-estilo-imagens" content="{estilo}">\n' if estilo else ""
+    # o molde comum das telas fica no documento: correções e pedidos depois do plano também o recebem
+    if molde := re.sub(r'["<>&]', "", casca.get("layout") or ""):
+        meta_estilo += f'<meta name="forja-layout-telas" content="{molde}">\n'
+    body = f'<body data-casca-nav="{casca["navegacao"]}">' if casca.get("itens") else "<body>"
     return (f'<!doctype html>\n<html lang="pt-BR">\n<head>\n<meta charset="utf-8">\n'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">\n<title>{titulo}</title>\n{meta_estilo}'
-            f"<style>\n:root {{\n{tokens}\n}}\n{base}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n<body>\n{corpo}\n{PROTOTIPO_JS if tela else ""}\n</body>\n</html>\n")
+            f"<style>\n:root {{\n{tokens}\n}}\n{base}\n{PLACEHOLDER_CSS}\n</style>\n</head>\n{body}\n{corpo}\n{PROTOTIPO_JS if tela else ''}\n</body>\n</html>\n")
+
+
+REFERENCIA_MAX = 6000   # caracteres da tela de referência que vão para as outras (o resto da tela não muda o molde)
+
+
+def marcar_casca(html_sec: str, sem: list[str]) -> str:
+    """A casca escrita pelo modelo com os atributos que o CSS e o runtime do Forja usam."""
+    raiz = indexar(html_sec)[0]
+    tag = _attr(_attr(raiz["txt"], "data-casca", ""), "data-sem", ",".join(sem))
+    return tag + html_sec[len(raiz["txt"]):]
+
+
+def contexto_prototipo(html: str, nome: str) -> str:
+    """O que uma tela precisa saber das outras para o protótipo ficar coerente: a navegação global (que ela NÃO
+    redesenha), o molde comum e uma tela pronta como referência de estrutura."""
+    partes = []
+    if m := re.search(r'<meta name="forja-layout-telas" content="([^"]*)"', html):
+        partes.append(f"Molde comum de todas as telas (siga-o): {m.group(1)}")
+    casca = next((e for e in secoes(html) if "data-casca" in e["attrs"] and "data-placeholder" not in e["attrs"]), None)
+    if casca:
+        sem = [x for x in (casca["attrs"].get("data-sem") or "").split(",") if x]
+        nav = (re.search(r'<body[^>]*data-casca-nav="(\w+)"', html) or [None, "inferior"])[1]
+        partes.append(
+            f"Navegação global (casca) — JÁ EXISTE e aparece em toda tela{' exceto ' + ', '.join(sem) if sem else ''}; "
+            f"fica {'na parte de baixo' if nav == 'inferior' else 'na lateral (embaixo no celular)' if nav == 'lateral' else 'no topo'} "
+            "e o Forja reserva o espaço dela. NÃO desenhe outra barra de navegação, tab bar, menu lateral nem cabeçalho "
+            f"de app; a tela é só o conteúdo. Para referência, a casca é:\n{html[casca['ini']:casca['fim']]}"
+            + ("\nEsta tela NÃO mostra a casca (tela cheia): os botões dela levam às outras telas com data-ir."
+               if nome in sem else ""))
+        sem_ref = set(sem)
+    else:
+        sem_ref = set()
+    ref = next((e for e in secoes(html) if "data-tela" in e["attrs"] and "data-placeholder" not in e["attrs"]
+                and e["attrs"].get("data-section") not in sem_ref | {nome}), None)
+    if ref:
+        trecho, rnome = html[ref["ini"]:ref["fim"]], ref["attrs"]["data-section"]
+        todo_css = "\n".join(m.group(1) for m in re.finditer(r"<style[^>]*>(.*?)</style\s*>", html, re.S | re.I))
+        # ponytail: regra a regra (seletor{...}); as de dentro de @media vêm sem o @media, basta para ler o padrão
+        css = "\n".join(r.strip() for r in re.findall(r"[^{}]+\{[^{}]*\}", todo_css)
+                        if f'"{rnome}"' in r.split("{")[0] or f".{rnome}-" in r.split("{")[0])
+        partes.append(
+            f'Tela de referência — "{ref["attrs"]["data-section"]}", já pronta. Esta tela tem de parecer do MESMO app: '
+            "mesma estrutura (.tela-corpo e .tela-cabeca), mesmo cabeçalho de tela, mesmos cartões, botões, espaçamentos "
+            "e tipografia. Mude o conteúdo, não o molde:\n" + trecho[:REFERENCIA_MAX]
+            + ("\n<!-- (resto da tela de referência omitido) -->" if len(trecho) > REFERENCIA_MAX else "")
+            + (f"\nCSS dela (só para ler o padrão; não copie os seletores, use o prefixo da sua tela):\n{css[:2500]}" if css else ""))
+    return "\n\n".join(partes)
 
 
 def placeholder(html: str, nome: str) -> str | None:
@@ -611,7 +666,33 @@ def por_tweaks(html: str, tweaks: list[dict]) -> str:
 
 PROTOTIPO_CSS = """body>[data-tela]{display:none;min-height:100vh}
 body>[data-tela][data-tela-atual]{display:block}
-@media print{body>[data-tela]{display:block!important}body>[data-tela]:not(:last-child){break-after:page}}"""
+@media print{body>[data-tela]{display:block!important}body>[data-tela]:not(:last-child){break-after:page}}
+.tela-corpo{width:min(960px,100% - 2*var(--esp-4, 1.5rem));margin-inline:auto;padding-block:var(--esp-4, 1.5rem)}
+.tela-cabeca{display:flex;align-items:center;justify-content:space-between;gap:var(--esp-3, .75rem);margin-bottom:var(--esp-4, 1.5rem)}
+.tela-cabeca h1{font-size:var(--texto-2xl, 2.25rem);letter-spacing:-.02em;margin:0}
+.tela-cabeca p{margin:.25em 0 0;color:color-mix(in srgb, currentColor 65%, transparent)}"""
+# Casca do protótipo (navegação global, gerada uma vez): a POSIÇÃO é do Forja, não do modelo. Cada tela escrita
+# sozinha desenhava a própria barra e nenhuma reservava o espaço dela (conversa 200: a barra inferior cobriu a
+# última refeição da v4 à v8). O espaço vai num pseudo-elemento, que não briga com o padding que a tela escolher.
+NAVEGACOES = ("inferior", "lateral", "topo")
+CASCA_CSS = """:root{--casca-altura:68px;--casca-largura:248px}
+body>[data-casca]{position:fixed;z-index:40;margin:0;background:var(--cor-superficie, #fff)}
+body>[data-tela]::after{content:"";display:block}
+body[data-casca-nav="inferior"]>[data-casca]{left:0;right:0;bottom:0;min-height:var(--casca-altura);padding-bottom:env(safe-area-inset-bottom)}
+body[data-casca-nav="inferior"]>[data-tela]::after{height:calc(var(--casca-altura) + var(--esp-4, 1.5rem) + env(safe-area-inset-bottom))}
+body[data-casca-nav="topo"]>[data-casca]{left:0;right:0;top:0;min-height:var(--casca-altura)}
+body[data-casca-nav="topo"]>[data-tela]{scroll-margin-top:var(--casca-altura)}
+body[data-casca-nav="topo"]>[data-tela]::before{content:"";display:block;height:var(--casca-altura)}
+body[data-casca-nav="lateral"]>[data-casca]{left:0;top:0;bottom:0;width:var(--casca-largura);overflow-y:auto}
+body[data-casca-nav="lateral"]>[data-tela]{margin-left:var(--casca-largura)}
+@media (max-width:899px){
+ body[data-casca-nav="lateral"]>[data-casca]{top:auto;right:0;width:auto;min-height:var(--casca-altura);overflow:visible}
+ body[data-casca-nav="lateral"]>[data-tela]{margin-left:0}
+ body[data-casca-nav="lateral"]>[data-tela]::after{height:calc(var(--casca-altura) + var(--esp-4, 1.5rem))}}
+body[data-sem-casca]>[data-casca]{display:none}
+body[data-sem-casca]>[data-tela]{margin-left:0}
+body[data-sem-casca]>[data-tela]::after,body[data-sem-casca]>[data-tela]::before{display:none}
+@media print{body>[data-casca]{position:static}}"""
 # Vai no documento (e no export): troca de tela por data-ir, abre/fecha por data-alterna, #hash direto.
 PROTOTIPO_JS = """<script data-forja-prototipo>
 (function () {
@@ -620,6 +701,14 @@ PROTOTIPO_JS = """<script data-forja-prototipo>
     var ts = telas(), alvo = ts.filter(function (t) { return t.getAttribute("data-section") === nome; })[0] || ts[0];
     if (!alvo) return;
     ts.forEach(function (t) { if (t === alvo) t.setAttribute("data-tela-atual", ""); else t.removeAttribute("data-tela-atual"); });
+    var atual = alvo.getAttribute("data-section"), casca = document.querySelector("body > [data-casca]");
+    if (casca) {   // item ativo da navegação global e telas sem ela (login, onboarding)
+      [].forEach.call(casca.querySelectorAll("[data-ir]"), function (b) {
+        if (b.getAttribute("data-ir") === atual) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+      });
+      var sem = (casca.getAttribute("data-sem") || "").split(",").indexOf(atual) >= 0;
+      if (sem) document.body.setAttribute("data-sem-casca", ""); else document.body.removeAttribute("data-sem-casca");
+    }
     window.scrollTo(0, 0);
     try { parent.postMessage({ "forja-design": 1, type: "tela", nome: alvo.getAttribute("data-section") }, "*"); } catch (e) {}
   }

@@ -5,7 +5,9 @@ import { ArrowUp, Plus, Trash } from "./icons";
 // geradas (uma por vez). Mexer no plano é barato; regenerar a página inteira não é.
 
 export type Secao = { nome: string; objetivo: string; conteudo: string };
-export type Plano = { tipo: "site" | "slides"; titulo: string; tokens: Record<string, string>; secoes: Secao[] };
+export type Casca = { navegacao: "inferior" | "lateral" | "topo"; itens: { tela: string; rotulo: string }[]; sem_casca: string[]; layout: string };
+export type Plano = { tipo: "site" | "slides" | "prototipo"; titulo: string; tokens: Record<string, string>; secoes: Secao[]; casca?: Casca };
+const NAVEGACAO = { inferior: "Barra inferior", lateral: "Menu lateral", topo: "Barra no topo" } as const;
 
 const campo = "w-full rounded-lg border border-line bg-raised px-2 py-1 text-[13px] text-fg focus:border-focus focus:outline-none";
 const eCor = (v: string) => /^#[0-9a-f]{6}$/i.test(v.trim());
@@ -65,7 +67,22 @@ export default function DesignPlano(props: { plano: Plano; onGerar: (p: Plano) =
         </details>
       )}
 
-      <div className="mb-1 text-xs text-muted">{p.tipo === "slides" ? "Slides, na ordem (uma ideia por slide)" : "Seções, na ordem"}</div>
+      {p.tipo === "prototipo" && p.casca && (
+        <div className="mb-3 rounded-xl border border-line p-2 text-xs text-muted">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0">Navegação de todas as telas</span>
+            <select value={p.casca.navegacao} aria-label="Tipo de navegação"
+                    onChange={(e) => setP({ ...p, casca: { ...p.casca!, navegacao: e.target.value as Casca["navegacao"] } })}
+                    className={`${campo} w-auto`}>
+              {Object.entries(NAVEGACAO).map(([k, r]) => <option key={k} value={k}>{r}</option>)}
+            </select>
+          </div>
+          <div className="mt-1.5 text-fg-2">{p.casca.itens.map((i) => i.rotulo).join(" · ")}
+            {!!p.casca.sem_casca.length && <span className="text-faint"> — sem barra: {p.casca.sem_casca.join(", ")}</span>}</div>
+          {p.casca.layout && <p className="mt-1 text-faint">{p.casca.layout}</p>}
+        </div>
+      )}
+      <div className="mb-1 text-xs text-muted">{p.tipo === "slides" ? "Slides, na ordem (uma ideia por slide)" : p.tipo === "prototipo" ? "Telas, na ordem" : "Seções, na ordem"}</div>
       <ol className="flex flex-col gap-2">
         {p.secoes.map((s, i) => (
           <li key={i} className="rounded-xl border border-line p-2">
@@ -93,7 +110,7 @@ export default function DesignPlano(props: { plano: Plano; onGerar: (p: Plano) =
         <button disabled={props.desabilitado || !valido}
                 onClick={() => props.onGerar({ ...p, secoes: p.secoes.map((s) => ({ ...s, nome: slug(s.nome) })) })}
                 className="rounded-[9px] bg-accent px-3 py-1.5 text-sm font-medium text-accent-fg hover:brightness-110 disabled:opacity-40">
-          Gerar {p.secoes.length} {p.tipo === "slides" ? "slides" : "seções"}
+          Gerar {p.secoes.length} {p.tipo === "slides" ? "slides" : p.tipo === "prototipo" ? "telas" : "seções"}
         </button>
       </div>
     </div>

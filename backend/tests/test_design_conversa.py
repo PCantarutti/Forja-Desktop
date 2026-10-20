@@ -242,6 +242,48 @@ def test_prototipo_telas_com_navegacao(monkeypatch):
     assert h.index('data-section="perfil"') < h.index("data-forja-prototipo")
 
 
+def test_prototipo_com_casca_e_um_app_so(monkeypatch):
+    """Conversa 200: cada tela escrita sozinha inventava a própria navegação e grade, e a barra fixa cobria o
+    conteúdo. Com casca, a navegação sai uma vez (posição do Forja) e as telas seguem a principal."""
+    conv = _projeto(None)
+    vistos = []
+    plano = {"tipo": "prototipo", "titulo": "Contador", "tokens": {"--cor-fundo": "#fff"},
+             "secoes": [{"nome": "login"}, {"nome": "diario"}, {"nome": "inicio"}, {"nome": "detalhe"}],
+             "casca": {"navegacao": "inferior", "itens": [{"tela": "inicio", "rotulo": "Início"},
+                                                          {"tela": "diario", "rotulo": "Diário"},
+                                                          {"tela": "nao-existe", "rotulo": "X"}],
+                       "sem_casca": ["login"], "layout": "Cabeçalho com título e uma ação; cartões brancos."}}
+
+    def responder(tipo, user):
+        if tipo == "plano":
+            return json.dumps(plano)
+        if tipo == "casca":
+            return ('<section data-section="casca"><nav><a href="#" data-ir="inicio">Início</a>'
+                    '<a href="#" data-ir="diario">Diário</a></nav></section><style>.casca-x{gap:4px}</style>')
+        nome = re.search(r'Seção a escrever: data-section="(\w+)"', user).group(1)
+        return (f'<section data-section="{nome}"><div class="tela-corpo"><header class="tela-cabeca"><h1>{nome}</h1>'
+                f'</header><div class="{nome}-lista">ok</div></div></section><style>.{nome}-lista{{padding:8px}}</style>')
+    _fake(monkeypatch, responder, vistos)
+    msg = _esperar(lambda: design.start(conv, "protótipo do contador de calorias", M))
+    p = design.estado(msg["id"])["plano"]
+    assert [i["tela"] for i in p["casca"]["itens"]] == ["inicio", "diario"]   # tela inexistente sai
+    _esperar(lambda: design.aprovar(msg["id"], p, M))
+    # casca primeiro, depois a tela principal (referência), depois o resto
+    assert [v[0] for v in vistos] == ["plano", "casca", "tela", "tela", "tela", "tela"]
+    escritas = [re.search(r'Seção a escrever: data-section="(\w+)"', u).group(1) for t, u in vistos if t == "tela"]
+    assert escritas[0] == "inicio"
+    ctx = dict(zip(escritas, [u for t, u in vistos if t == "tela"]))
+    assert "Navegação global (casca)" in ctx["inicio"] and "Tela de referência" not in ctx["inicio"]
+    assert 'Tela de referência — "inicio"' in ctx["diario"] and ".inicio-lista" in ctx["diario"]
+    assert "Molde comum de todas as telas" in ctx["detalhe"]
+    assert "NÃO mostra a casca" in ctx["login"]
+    h = design.projeto(conv)["html"]
+    assert '<body data-casca-nav="inferior"' in h and 'data-sem="login"' in h and "data-casca" in h
+    assert "body[data-casca-nav=\"inferior\"]>[data-tela]::after" in h   # o espaço da barra é do Forja
+    assert h.index('data-section="casca"') < h.index('data-section="login"') and "data-placeholder" not in h
+    assert "4 telas" in _ultima(conv)["mensagem"]
+
+
 def test_modelo_sem_visao_segue_com_o_texto_das_referencias(monkeypatch):
     conv = _projeto(None)
     vistos = []

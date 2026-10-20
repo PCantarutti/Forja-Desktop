@@ -988,11 +988,34 @@ def validar_plano(d: dict) -> dict:
         raise ValueError("o plano não tem nenhuma seção")
     if len(secoes) > 12:
         raise ValueError("o plano tem seções demais (máximo 12)")
-    return {"tipo": d.get("tipo") if d.get("tipo") in ("slides", "prototipo") else "site",
-            "titulo": str(d.get("titulo") or "Sem título").strip()[:120], "tokens": tokens, "secoes": secoes,
-            "marca": re.sub(r"[<>]", "", str(d.get("marca") or "")).strip()[:60],
-            "estilo_imagens": re.sub(r'["<>]', "", str(d.get("estilo_imagens") or ""))[:300],
-            "sistema": str(d.get("sistema") or "")[:40]}
+    tipo = d.get("tipo") if d.get("tipo") in ("slides", "prototipo") else "site"
+    plano = {"tipo": tipo, "titulo": str(d.get("titulo") or "Sem título").strip()[:120], "tokens": tokens, "secoes": secoes,
+             "marca": re.sub(r"[<>]", "", str(d.get("marca") or "")).strip()[:60],
+             "estilo_imagens": re.sub(r'["<>]', "", str(d.get("estilo_imagens") or ""))[:300],
+             "sistema": str(d.get("sistema") or "")[:40]}
+    if tipo == "prototipo" and (casca := _casca(d.get("casca"), [s["nome"] for s in secoes])):
+        plano["casca"] = casca
+    return plano
+
+
+def _casca(c, nomes: list[str]) -> dict | None:
+    """A navegação global do protótipo, só com telas que existem. Sem itens válidos: sem casca (cada tela por si,
+    como era)."""
+    if not isinstance(c, dict) or "casca" in nomes:   # "casca" é o nome reservado do elemento da navegação
+        return None
+    itens, vistos = [], set()
+    for i in c.get("itens") if isinstance(c.get("itens"), list) else []:
+        tela = design_html.slug((i or {}).get("tela") if isinstance(i, dict) else i)
+        if tela in nomes and tela not in vistos:
+            vistos.add(tela)
+            itens.append({"tela": tela, "rotulo": re.sub(r"[<>]", "", str((i or {}).get("rotulo") if isinstance(i, dict) else "")
+                                                         or tela).strip()[:24]})
+    if len(itens) < 2:
+        return None
+    sem = [s for s in (design_html.slug(x) for x in (c.get("sem_casca") if isinstance(c.get("sem_casca"), list) else []))
+           if s in nomes and s not in vistos]
+    return {"navegacao": c.get("navegacao") if c.get("navegacao") in design_html.NAVEGACOES else "inferior",
+            "itens": itens[:5], "sem_casca": sem, "layout": str(c.get("layout") or "")[:600]}
 
 
 def _css(html: str) -> str:
@@ -1016,11 +1039,23 @@ def _ctx_secao(titulo: str, html: str, nomes: list[str], sec: dict, atual: str |
         partes.append(f"Objetivo: {sec['objetivo']}")
     if sec.get("conteudo"):
         partes.append(f"Conteúdo: {sec['conteudo']}")
+    if design_html.e_prototipo(html) and sec["nome"] != "casca" and (proto := design_html.contexto_prototipo(html, sec["nome"])):
+        partes.append(proto)   # cada tela é escrita sozinha: sem isto, cada uma inventava a própria navegação e grade
     if atual:
         partes.append(f"HTML atual da seção (refaça a partir dele; mude o que o pedido pede):\n{atual}")
     if pedido:
         partes.append(f"Pedido: {pedido}")
     return "\n\n".join(partes)
+
+
+def _ctx_casca(titulo: str, html: str, plano: dict) -> str:
+    casca = plano["casca"]
+    telas = ", ".join(s["nome"] for s in plano["secoes"])
+    itens = "\n".join(f'- tela "{i["tela"]}": rótulo "{i["rotulo"]}"' for i in casca["itens"])
+    return "\n\n".join([f"App: {titulo}", f"Tokens (:root):\n{design_html.root_css(html) or '(nenhum)'}",
+                        f"Telas do protótipo: {telas}", f'Navegação: "{casca["navegacao"]}"',
+                        f"Itens da navegação, em ordem:\n{itens}",
+                        *([f"Molde das telas (para a casca combinar): {casca['layout']}"] if casca.get("layout") else [])])
 
 
 def _novo_run(conv_id: int, message_id: int, modo: str, spec: dict, esforco: str, **extra) -> dict:
@@ -1586,7 +1621,8 @@ def aprovar(message_id: int, plano: dict, modelos: dict, esforco: str = "baixo",
     doc = design_html.carimbar(doc)
     run = _novo_run(conv_id, message_id, "etapas", spec, esforco if esforco in ESFORCOS else "baixo",
                     base=base, plano=plano, doc=doc, n=0, entrada=0, imagens=imagens,
-                    secoes=[{"nome": x["nome"], "status": "fila"} for x in plano["secoes"]])
+                    secoes=[*([{"nome": "casca", "status": "fila"}] if plano.get("casca") else []),
+                            *({"nome": x["nome"], "status": "fila"} for x in plano["secoes"])])
     # o raciocínio/estatísticas do plano (já gravados) continuam na mensagem
     with db.session() as s:
         m = s.get(db.Message, message_id)
@@ -1674,30 +1710,45 @@ async def _rodar_etapas(run: dict) -> None:
     unidade = {"slides": "slide", "prototipo": "tela"}.get(plano.get("tipo"), "seção")
     erros, passos = [], [f"Montou o esqueleto: tokens do plano e {len(nomes)} lugar(es) de {unidade}"]
     run["passos"] = passos
+    casca = plano.get("casca") if telas else None
+    # Ordem de escrita (o documento fica na ordem do plano): a casca, depois a tela principal, que vira a
+    # referência de molde das outras, depois o resto.
+    ordem = list(enumerate(plano["secoes"], 1 if casca else 0))
+    if casca:
+        principal = casca["itens"][0]["tela"]
+        ordem.sort(key=lambda x: x[1]["nome"] != principal)
+        ordem.insert(0, (0, {"nome": "casca"}))
     try:
-        for i, sec in enumerate(plano["secoes"]):
+        for i, sec in ordem:
             if run["cancelar"]:
                 break
             run["secoes"][i]["status"] = "gerando"
             try:
                 alvo = design_html.placeholder(run["doc"], sec["nome"])
                 marca = plano.get("marca")   # cada seção é escrita sozinha: sem isto o rodapé virava "Sua Empresa"
-                user = _ctx_secao(f'{plano["titulo"]} (marca: {marca})' if marca else plano["titulo"],
-                                  run["doc"], nomes, sec, None, None)
+                titulo = f'{plano["titulo"]} (marca: {marca})' if marca else plano["titulo"]
+                e_casca = casca is not None and i == 0
+                user = (_ctx_casca(titulo, run["doc"], plano) if e_casca
+                        else _ctx_secao(titulo, run["doc"], nomes, sec, None, None))
                 if ds := design_sistema.do_documento(run["doc"]):
                     user += "\n\n" + design_sistema.para_prompt(ds)
                 user = design_imagens.enxugar(user)
                 run["entrada"] += len(user)
-                sis = prompt("slide" if slides else "tela" if telas else "secao") + (
+                sis = prompt("casca" if e_casca else "slide" if slides else "tela" if telas else "secao") + (
                     design_imagens.INSTRUCAO_INTERNET if run.get("imagens") == "internet" else "")
                 texto = await _chamar(run, [{"role": "system", "content": sis},
                                             {"role": "user", "content": user}])
                 if run["cancelar"]:
                     run["secoes"][i]["status"] = "fila"
                     break
-                html_sec, css = design_html.ler_secao(texto, sec["nome"], slides, telas)
+                html_sec, css = design_html.ler_secao(texto, sec["nome"], slides, telas and not e_casca)
+                if e_casca:
+                    html_sec = design_html.marcar_casca(html_sec, casca["sem_casca"])
                 run["doc"], _ = design_html.aplicar(run["doc"], {"patches": [{"fid": alvo, "html": html_sec}], "css": css})
                 run["secoes"][i]["status"] = "ok"
+                if e_casca:   # a casca não conta como tela
+                    passos.append(f"Escreveu a navegação global ({casca['navegacao']}, {len(casca['itens'])} itens)")
+                    continue
                 run["n"] += 1
                 passos.append(f"Escreveu {'o' if unidade != 'seção' else 'a'} {unidade} “{sec['nome']}”")
             except ValueError as e:   # uma seção ruim não derruba as outras
