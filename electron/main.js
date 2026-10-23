@@ -53,6 +53,7 @@ const DEFAULT_PREFS = {
   startWithWindows: false,
   startMinimized: false, // só vale junto com startWithWindows
   manterAcordado: false, // true = o PC não dorme com o Forja aberto (o celular alcança a qualquer hora)
+  overlayAssistente: true, // false = o círculo do assistente no canto da tela não aparece (jogo em tela cheia)
   bounds: null, // { x, y, width, height, maximized }
 };
 
@@ -350,13 +351,33 @@ function showWindow() {
   mainWindow.focus();
 }
 
-function menuBandeja() {
+const gb = (b) => (b / 2 ** 30).toLocaleString("pt-BR", { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+
+/** O pedaço "modelo e memória" do menu: o que está na VRAM, quanto cada placa e a RAM têm em uso, e descarregar. */
+function itensUso(u) {
+  if (!u) return [{ label: "IA local: o Forja ainda não respondeu", enabled: false }];
+  const m = u.modelo;
+  const itens = [
+    { label: m ? `● ${m.alias} carregado` : u.carregando ? `◌ Carregando ${u.carregando.name ?? "modelo"}…` : "○ Nenhum modelo na VRAM", enabled: false },
+    ...(u.gpus ?? []).map((g) => ({ label: `    ${g.nome.replace(/\(R\)|\(TM\)|Graphics/g, "").replace(/\s+/g, " ").trim()}: ${gb(g.usado)} / ${gb(g.total)} GB`, enabled: false })),
+    ...(u.ram?.total ? [{ label: `    RAM: ${gb(u.ram.usado)} / ${gb(u.ram.total)} GB`, enabled: false }] : []),
+  ];
+  if (u.gerando_imagem) itens.push({ label: "    Gerando imagem ou vídeo agora", enabled: false });
+  itens.push({ label: "Descarregar o modelo da VRAM", enabled: Boolean(m), click: descarregarModelo });
+  return itens;
+}
+
+function menuBandeja(u = usoAtual) {
   return Menu.buildFromTemplate([
     { label: "Abrir o Forja", click: showWindow },
     ...(voz.instalado ? [
       { label: "Ouvir “Forja, …” (assistente de voz)", type: "checkbox", checked: voz.ligado, click: alternarVoz },
+      { label: "Mostrar o círculo do assistente na tela", type: "checkbox", checked: prefs.overlayAssistente,
+        click: () => { prefs.overlayAssistente = !prefs.overlayAssistente; savePrefs(); if (!prefs.overlayAssistente) mostraBolha(""); } },
       { label: "Chamar o assistente agora", accelerator: atalho.ok ? atalho.atual : undefined, click: chamarAssistente },
     ] : []),
+    { type: "separator" },
+    ...itensUso(u),
     { type: "separator" },
     {
       label: "Sair",
@@ -368,12 +389,63 @@ function menuBandeja() {
   ]);
 }
 
+let iconeBase = null; // 16x16 do Forja; com modelo na VRAM ganha um ponto verde no canto
+let usoAtual = null;   // o último /api/local/uso: o menu abre na hora, sem esperar o backend
+
+function iconeBandeja(carregado) {
+  if (!iconeBase) {
+    const icon = iconPath();
+    iconeBase = icon ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : nativeImage.createEmpty();
+  }
+  if (!carregado || iconeBase.isEmpty()) return iconeBase;
+  const { width: w, height: h } = iconeBase.getSize();
+  const px = Buffer.from(iconeBase.toBitmap()); // BGRA
+  for (let y = h - 7; y < h; y++) {
+    for (let x = w - 7; x < w; x++) {
+      const d = Math.hypot(x - (w - 3.5), y - (h - 3.5));
+      if (d > 3.5) continue;
+      const i = (y * w + x) * 4;
+      const borda = d > 2.6; // anel escuro: o ponto aparece em barra de tarefas clara e escura
+      px[i] = borda ? 20 : 80; px[i + 1] = borda ? 20 : 200; px[i + 2] = borda ? 20 : 60; px[i + 3] = 255;
+    }
+  }
+  return nativeImage.createFromBitmap(px, { width: w, height: h });
+}
+
 function ensureTray() {
   if (tray) return;
-  const icon = iconPath();
-  const img = icon ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : nativeImage.createEmpty();
-  tray = new Tray(img);
+  tray = new Tray(iconeBandeja(false));
   tray.on("click", showWindow);
+  // o menu é montado na hora do clique: modelo, VRAM e RAM de agora (setContextMenu congelaria o de quando montou)
+  tray.on("right-click", async () => {
+    await vigiaUso();
+    tray?.popUpContextMenu(menuBandeja());
+  });
+}
+
+async function vigiaUso() {
+  if (!port || !tray) return;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/local/uso`, { headers: { "x-forja-token": token }, signal: AbortSignal.timeout(2500) });
+    usoAtual = await r.json();
+  } catch {
+    return; // backend reiniciando: fica o último
+  }
+  const m = usoAtual?.modelo;
+  const gpu = (usoAtual?.gpus ?? []).reduce((a, g) => (!a || g.usado > a.usado ? g : a), null);
+  tray.setImage(iconeBandeja(Boolean(m)));
+  tray.setToolTip([voz.ligado ? "Forja · ouvindo “Forja, …”" : "Forja",
+    m ? `${m.alias} na VRAM` : "Nenhum modelo na VRAM",
+    gpu ? `VRAM ${gb(gpu.usado)}/${gb(gpu.total)} GB · RAM ${gb(usoAtual.ram.usado)}/${gb(usoAtual.ram.total)} GB` : ""].filter(Boolean).join("\n"));
+}
+
+async function descarregarModelo() {
+  try {
+    await fetch(`http://127.0.0.1:${port}/api/local/unload`, { method: "POST", headers: { "x-forja-token": token } });
+  } catch (err) {
+    dialog.showErrorBox("Descarregar o modelo", String(err));
+  }
+  await vigiaUso();
 }
 
 function dropTray() {
@@ -388,8 +460,7 @@ function syncTray() {
   if (prefs.closeToTray || voz.instalado) ensureTray();
   else dropTray();
   if (!tray) return;
-  tray.setContextMenu(menuBandeja());
-  tray.setToolTip(voz.ligado ? "Forja · ouvindo “Forja, …”" : "Forja");
+  vigiaUso();
 }
 
 // ------------------------------------------------------------------ assistente de voz (bandeja)
@@ -525,7 +596,7 @@ async function vigiaBolha() {
         // escutando: ouviu "Forja" (ou o atalho) e grava o pedido; entendendo/pensando: Whisper e modelo; falando: a voz
     const modo = { escutando: "escutando", entendendo: "pensando", pensando: "pensando", falando: "falando" }[e.estado] || "";
     const naTela = paginaAssistente && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
-    mostraBolha(naTela ? "" : modo);
+    mostraBolha(naTela || !prefs.overlayAssistente ? "" : modo);
   } catch { /* backend reiniciando */ }
 }
 
@@ -783,6 +854,7 @@ const desktopState = () => ({
   startWithWindows: prefs.startWithWindows,
   startMinimized: prefs.startMinimized,
   manterAcordado: prefs.manterAcordado,
+  overlayAssistente: prefs.overlayAssistente,
   version: app.getVersion(),
   packaged: app.isPackaged,
   paths: { data: USER_DATA, log: LOG_FILE, db: DB_FILE, md: MD_DIR, exe: app.getPath("exe") },
@@ -801,6 +873,7 @@ ipcMain.handle("forja:desktop:set", (_e, patch = {}) => {
   if (typeof patch.startWithWindows === "boolean") prefs.startWithWindows = patch.startWithWindows;
   if (typeof patch.startMinimized === "boolean") prefs.startMinimized = patch.startMinimized;
   if (typeof patch.manterAcordado === "boolean") prefs.manterAcordado = patch.manterAcordado;
+  if (typeof patch.overlayAssistente === "boolean") prefs.overlayAssistente = patch.overlayAssistente;
   savePrefs();
   vigiaSono();
   syncTray();
@@ -858,6 +931,7 @@ if (!app.requestSingleInstanceLock()) {
       vigiaVoz();
       setInterval(vigiaVoz, 5_000);
       setInterval(vigiaBolha, 250);
+setInterval(vigiaUso, 10_000); // ícone e dica da bandeja: modelo na VRAM, VRAM e RAM
     } catch (e) {
       dialog.showErrorBox("Forja", `Não foi possível iniciar: ${e.message}`);
       app.quit();

@@ -1369,6 +1369,26 @@ def assistente_esquecer():
     return assistente.esquecer()
 
 
+@app.post("/api/assistente/tela")
+def assistente_tela(body: dict):
+    """A conversa aberta no PC: "Forja, lê essa resposta" lê a última resposta dela."""
+    assistente._tela["conv"] = int(body["conv"]) if str(body.get("conv") or "").isdigit() else None
+    return {"ok": True}
+
+
+@app.post("/api/transcrever")
+async def transcrever(file: UploadFile = File(...)):
+    """Ditado em qualquer campo de texto: o áudio gravado pela tela vira texto com o Whisper do assistente."""
+    dados = await file.read()
+    if len(dados) > 30_000_000:
+        raise HTTPException(413, "Áudio grande demais para ditado (máx. 30 MB).")
+    ext = (file.filename or "audio.webm").rsplit(".", 1)[-1]
+    try:
+        return {"texto": await asyncio.to_thread(assistente.transcrever, dados, ext)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.delete("/api/assistente/acompanhar/{aid}")
 def assistente_parar_acompanhar(aid: str):
     from . import web_voz

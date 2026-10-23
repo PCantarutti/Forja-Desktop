@@ -1150,6 +1150,11 @@ function AppTabDesktop({ bridge }: { bridge: NonNullable<NonNullable<typeof wind
         <Interruptor ligado={d.manterAcordado} onChange={(v) => patch({ manterAcordado: v })} />
       </Field>
 
+      <Field div label="Círculo do assistente de voz na tela"
+             hint="O círculo no canto da tela que mostra o F.O.R.J.A ouvindo e falando. Desligue para jogar em tela cheia: ele continua ouvindo, só não aparece. Também na bandeja do sistema.">
+        <Interruptor ligado={d.overlayAssistente} onChange={(v) => patch({ overlayAssistente: v })} />
+      </Field>
+
       <Iniciais />
 
       <Atualizacao versao={d.version} dev={!d.packaged} />

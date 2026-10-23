@@ -31,6 +31,7 @@ import subprocess
 import threading
 import time
 import unicodedata
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -251,7 +252,7 @@ def resumo() -> dict:
     # `lembrete`: o último que tocou; a tela do PC mostra a notificação do Windows quando o n muda
     return {"ligado": _vivo(), "estado": _estado["estado"], "ultimo": _estado["ultimo"], "instalado": instalado(),
             "lembrete": {k: lembretes.disparado[k] for k in ("n", "titulo", "texto")} if lembretes.disparado["n"] else None,
-            "abrir": dict(_abrir) if _abrir["n"] else None}
+            "abrir": dict(_abrir) if _abrir["n"] else None, "ditar": {"n": _ditar["n"], "texto": _ditar.get("texto", "")} if _ditar["n"] else None}
 
 
 def emprestavel() -> dict | None:
@@ -519,6 +520,42 @@ def parar() -> None:
     _estado.update(estado="desligado")
 
 
+_transcricoes: dict = {}  # ditado pedido ao ouvido: id -> {"pronto": Event, "texto" | "erro"}
+
+
+def transcrever(dados: bytes, extensao: str = "webm") -> str:
+    """Ditado de um campo de texto do Forja: o mesmo Whisper do assistente. Com o ouvido ligado, ele transcreve (o
+    modelo já está carregado); desligado, um processo avulso carrega, transcreve e sai. Nada fica no disco."""
+    if not instalado():
+        raise ToolError("Para ditar, instale o assistente de voz na página F.O.R.J.A (é o mesmo Whisper).")
+    pasta = PASTA / "ditado"
+    pasta.mkdir(parents=True, exist_ok=True)
+    arq = pasta / f"{uuid.uuid4().hex}.{re.sub(r'[^a-z0-9]', '', extensao.lower())[:5] or 'webm'}"
+    arq.write_bytes(dados)
+    try:
+        if _vivo():
+            tid = uuid.uuid4().hex
+            espera = _transcricoes[tid] = {"pronto": threading.Event()}
+            _manda("transcreve", arquivo=str(arq), id=tid)
+            ok = espera["pronto"].wait(120)
+            _transcricoes.pop(tid, None)
+            if not ok:
+                raise ToolError("O ouvido do assistente não respondeu a tempo.")
+        else:
+            r = subprocess.run([str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_ouvido.py")),
+                                "--transcrever", str(arq), "--whisper", ler()["whisper"]],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+                               env={**os.environ, "HF_HUB_CACHE": str(PASTA / "hf"), "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"},
+                               cwd=str(PASTA), **native.popen_kwargs())
+            linhas = [l for l in r.stdout.splitlines() if l.startswith("{")]
+            espera = json.loads(linhas[-1]) if linhas else {"erro": (r.stderr or r.stdout).strip()[-300:] or "sem saída"}
+        if espera.get("erro"):
+            raise ToolError(f"Não deu para transcrever: {espera['erro']}")
+        return espera.get("texto", "")
+    finally:
+        arq.unlink(missing_ok=True)
+
+
 def _interrompe() -> None:
     """Cala a fala e cancela o comando em andamento (o turno que ele abriu no Forja continua: aquele é do Forja)."""
     _manda("cala")
@@ -607,6 +644,20 @@ def _le(p: subprocess.Popen) -> None:
                 _estado["estado"] = resto
         elif tipo == "ERRO":
             _estado["erro"] = resto
+        elif tipo == "TRANSCRITO":
+            r = json.loads(resto)
+            if espera := _transcricoes.get(r.get("id")):
+                espera.update(r)
+                espera["pronto"].set()
+        elif tipo == "INTERROMPEU":
+            # "Forja" dito por cima da resposta: o ouvido já calou e abriu a escuta; aqui morre o comando em andamento
+            # (sem mandar "cala" de novo, que descartaria o bip que ele acabou de tocar)
+            f = _tarefa.pop("f", None)
+            if f and not f.done():
+                f.cancel()
+            _pendente.clear()
+            _estado["estado"] = "escutando"
+            print("Forja: voz: interrompido por \"Forja\"", flush=True)
         elif tipo == "OUVIU":
             ouviu = json.loads(resto)
             _estado["ouviu"] = ouviu["texto"]
@@ -691,6 +742,9 @@ AGENTE = re.compile(r"\b(?:n[oa]\s+|em\s+|pelo\s+|usando\s+o\s+)?modo\s+(?:de\s+
                     r"|\b(?:pede|peca|manda|mande|fala)\s+(?:pro|pra\s+o|para\s+o|ao|o)\s+agente\b[\s,:]*|^\s*agente\b[\s,:]*")
 MAESTRO = re.compile(r"\b(?:n[oa]\s+|em\s+|pel[oa]\s+|com\s+[oa]\s+|usando\s+[oa]\s+|pr[oa]\s+)?(?:modo\s+(?:de\s+)?)?"
                      r"maestro\b(?:\s+do\s+forja)?[\s,:]*")
+CONTROLE_AGENTE = re.compile(r"\b(?:aprov\w*|recus\w*|neg[ae]\w*|solicit\w*|pediu|pedindo|status|terminou|"
+                             r"como\s+(?:esta|ta|anda)\w*|par[ae]r?\s+(?:o\s+|a\s+)?(?:agente|maestro|trabalho)|"
+                             r"(?:agente|maestro)\s+(?:parar|para\b|pare))\b")
 # pesquisa profunda vai para a tela Pesquisa; "pesquise X" simples ele mesmo responde (com a busca na web)
 PESQUISA = re.compile(r"(?:\b(?:fa[cz]\w*|quero|preciso|cri\w*|comec\w*|inici\w*|abr\w*|rod\w*|gera?\w*)\s+)?(?:uma?\s+)?"
                       r"(?:(?:pesquis\w*|investig\w*|levantamento)\s+(?:bem\s+)?"
@@ -737,6 +791,8 @@ def rota(comando: str) -> tuple[str, str]:
         return "parar", ""
     if SALVAR.search(c):
         return "salvar_conversa", ""
+    if CONTROLE_AGENTE.search(c):
+        return "chat", comando  # "aprova o que o agente pediu", "como está o agente": controlar, não abrir trabalho novo
     if m := PESQUISA.search(c):
         return "pesquisa", re.sub(r"^(?:sobre|de|do|da|dos|das|acerca\s+de)\s+", "", _corta(comando, c, m), flags=re.I)
     if m := MAESTRO.search(c):
@@ -1243,10 +1299,12 @@ PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w
                    r"vencimento|anotei|onde\s+(?:o|a|que|e)|fez|rolou|feito|arquivo\w*|condominio|apolice|seguro|papeis|memori\w*|"
                    r"apag\w*|delet\w*|lista|informac\w*|parte\s+do|sites?|preco\w*|loja\w*|barat\w*|compar\w*|"
                    r"acompanh\w*|versao|lanc\w*|github|release|abaixo|custa\w*|quanto\s+(?:ta|esta|custa)|navegador|monitor\w*|"
-                   r"vigi\w*|de\s+olho|alert\w*|atualiz\w*|notifica\w*|valor|conto|grito)\b")
+                   r"vigi\w*|de\s+olho|alert\w*|atualiz\w*|notifica\w*|valor|conto|grito|agente|aprov\w*|recus\w*|"
+                   r"pedi\w*|trabalho|indo|termin\w*|dit\w*|digit\w*|le\s+(?:pra|para|essa|esse|isso|a|o)|ler|leitura|voz\s+alta|"
+                   r"respost\w*|mensagem|solicit\w*|neg\w*)\b")
 # pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente)
 SABER = re.compile(r"\b(?:card|board|onde\b.{0,40}\b(?:trata|faz|salva|guarda|fica|processa|esta|ta)\b|em\s+que\s+(?:arquivo|parte)|"
-                   r"qual\s+(?:e\s+)?a\s+parte|"
+                   r"qual\s+(?:e\s+)?a\s+parte|como\s+(?:esta|ta)\s+(?:o\s+)?(?:agente|trabalho)|aprov\w*|"
                    r"o\s+que\s+(?:o\s+agente|a\s+maestro|foi|rolou|\w+\s+fez)|o\s+que\s+(?:eu\s+)?fiz)\b")
 CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A quer. Responda SÓ um JSON numa linha.
 - Mexer no computador: {"tipo":"pc","acao":"<acao>","alvo":"<alvo>"} com acao em:
@@ -1275,6 +1333,10 @@ CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A
 - O que foi feito num projeto do Forja: {"tipo":"historico","projeto":"<nome ou vazio>","quando":"<hoje, ontem...>"}.
 - Web: {"tipo":"web","acao":"abrir","alvo":"<site ou nome do site>","no_forja":<true só se pediu o navegador do Forja>}
   ou {"tipo":"web","acao":"precos","produto":"<produto>"} (ver ou comparar o preço nas lojas).
+- O agente do Forja trabalhando: {"tipo":"agente","acao":"status","projeto":"<nome ou vazio>"} (como está, terminou?),
+  {"tipo":"agente","acao":"pedidos"} (o que ele está pedindo para aprovar), {"tipo":"agente","acao":"aprovar"},
+  {"tipo":"agente","acao":"recusar"} ou {"tipo":"agente","acao":"parar","projeto":"<nome ou vazio>"}.
+- Escrever no campo aberto do Forja: {"tipo":"ditar","texto":"<o texto, se a pessoa já disse; vazio = ela vai ditar agora>"}. Ler em voz alta a resposta aberta no Forja: {"tipo":"ler_resposta"}.
 - Acompanhar e avisar depois: {"tipo":"acompanhar","acao":"preco","produto":"<produto>","limite":<valor em reais, número>},
   {"tipo":"acompanhar","acao":"versao","projeto":"<programa ou projeto de software>"}, {"tipo":"acompanhar","acao":"listar"}
   ou {"tipo":"acompanhar","acao":"parar","alvo":"<palavras>"}.
@@ -1307,6 +1369,13 @@ Exemplos:
 "me avisa se o Galaxy S25 ficar abaixo de 4 mil" -> {"tipo":"acompanhar","acao":"preco","produto":"Galaxy S25","limite":4000}
 "me fala quando lançar versão nova do ollama" -> {"tipo":"acompanhar","acao":"versao","projeto":"ollama"}
 "o que você tá acompanhando pra mim?" -> {"tipo":"acompanhar","acao":"listar"}
+"como tá indo o trabalho no projeto da loja?" -> {"tipo":"agente","acao":"status","projeto":"loja"}
+"ele tá pedindo alguma coisa?" -> {"tipo":"agente","acao":"pedidos"}
+"pode aprovar o que ele pediu" -> {"tipo":"agente","acao":"aprovar"}
+"manda o agente parar" -> {"tipo":"agente","acao":"parar","projeto":""}
+"quero ditar uma mensagem" -> {"tipo":"ditar","texto":""}
+"digita aí: o relatório sai amanhã" -> {"tipo":"ditar","texto":"o relatório sai amanhã"}
+"lê pra mim essa resposta" -> {"tipo":"ler_resposta"}
 "me lembra como se faz pão de queijo" -> {"tipo":"responder"}
 "procura o resultado do jogo do Flamengo" -> {"tipo":"responder"}
 "abre o jogo comigo, você é uma IA?" -> {"tipo":"responder"}
@@ -1344,6 +1413,8 @@ async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | N
         return "resumo_dia", d
     if d.get("tipo") in ("documentos", "memoria", "nota", "card", "codigo", "historico", "web", "acompanhar"):
         return d["tipo"], d
+    if d.get("tipo") in ("agente", "ditar", "ler_resposta"):
+        return "forja_" + d["tipo"], d
     return None
 NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 
@@ -1351,6 +1422,8 @@ NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 async def _executa(nome: str, args: dict, spec: dict | None = None, slot=None) -> str:
     """Ação que o modelo escolheu (o que as regras não pegaram): faz, fala o resultado e devolve uma linha para o
     histórico da conversa falada."""
+    if nome.startswith("forja_"):
+        return await _forja_voz(nome.removeprefix("forja_"), args)
     if nome in ("web", "acompanhar"):
         if spec is None:
             spec, slot, _ = await _prepara_modelo()
@@ -2345,6 +2418,145 @@ async def _confere_acompanhamentos() -> None:
             web_voz.atualiza(x["id"], ultimo=ofertas[0][1] if ofertas else None, conferido=agora)
 
 
+# ------------------------------------------------------------------ o próprio Forja: agente, ditado e leitura (fase 5)
+
+_tela: dict = {"conv": None}  # a conversa aberta na tela do PC (App.tsx avisa): "lê essa resposta" lê dela
+_ditar = {"n": 0}             # "Forja, dita": o PC começa o ditado no campo aberto quando o n muda
+PERIGOSO = re.compile(r"\b(?:rm|rmdir|del|erase|format|mkfs|drop|truncate|shutdown|reboot|reg\s+delete)\b|"
+                      r"--force|-rf\b|git\s+push|git\s+reset\s+--hard|Remove-Item", re.I)
+
+
+def _runs_vivos() -> list:
+    from .agent import RUNS
+    return [r for r in RUNS.values() if not r.finished]
+
+
+def _titulo(conv_id: int) -> str:
+    with db.session() as s:
+        c = s.get(db.Conversation, conv_id)
+        return (c.title if c else "") or "a conversa"
+
+
+def _acha_run(projeto: str = ""):
+    """A execução de que a pessoa fala: a do projeto dito; sem nome, a que está pedindo aprovação, senão a mais nova."""
+    runs = _runs_vivos()
+    if projeto.strip():
+        pasta = _acha_projeto(projeto)
+        with db.session() as s:
+            runs = [r for r in runs if (c := s.get(db.Conversation, r.conv_id)) and c.workspace == pasta]
+    return next((r for r in runs if r.approvals), runs[-1] if runs else None)
+
+
+def _pedido_dito(a: dict) -> str:
+    call = a.get("call") or {}
+    args = call.get("arguments") or {}
+    alvo = args.get("command") or args.get("path") or args.get("url") or args.get("question") or ""
+    return {"run_command": "rodar o comando", "write_file": "escrever o arquivo", "edit_file": "mexer no arquivo",
+            "delete_file": "apagar o arquivo", "browser_click": "clicar no navegador", "browser_type": "digitar no navegador",
+            "ask_user": "perguntar"}.get(call.get("name", ""), call.get("name", "uma ferramenta")) + (f" {str(alvo)[:120]}" if alvo else "")
+
+
+def _texto_falavel(md: str, limite: int = 3500) -> str:
+    """Resposta do chat para ler em voz alta: bloco de código vira "(código na tela)", sem markdown e com teto."""
+    t = re.sub(r"```.*?```", " (código na tela) ", md or "", flags=re.S)
+    t = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", t)
+    t = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", t)
+    t = _falavel(re.sub(r"^\s*[-*+]\s+|^\s*\d+\.\s+|^\s*>\s*|\|", "", t, flags=re.M))
+    return t if len(t) <= limite else t[:limite].rsplit(" ", 1)[0] + "... O resto está na tela."
+
+
+async def _forja_voz(acao: str, d: dict) -> str:
+    """O agente pelo assistente: como está, o que pede, aprovar, recusar, parar. E o ditado e a leitura da tela."""
+    if acao == "ditar":
+        _ditar["n"] += 1
+        _ditar["texto"] = str(d.get("texto") or "").strip()  # já disse o texto ("digita aí: ..."): vai direto
+        fala("Escrito." if _ditar["texto"] else "Pode falar. Eu escrevo no campo aberto.")
+        return "(ditado)"
+    if acao == "ler_resposta":
+        conv = _tela["conv"]
+        with db.session() as s:
+            texto = s.execute(select(db.Message.content).where(db.Message.conversation_id == conv, db.Message.role == "assistant",
+                                                               db.Message.content != "").order_by(db.Message.id.desc())
+                              .limit(1)).scalar() if conv else None
+        if not texto:
+            fala("Não tem resposta aberta na tela para eu ler.")
+            return "(nada para ler)"
+        lido = _texto_falavel(texto)
+        if ler()["motor"] == "tela":
+            await _fala_tela(lido)
+        else:
+            fala(lido)
+        return "(resposta lida)"
+    sub = str(d.get("acao") or "status")
+    from .agent import RUNS
+    run = RUNS.get(d["run_id"]) if d.get("run_id") else _acha_run(str(d.get("projeto") or ""))
+    if not run or run.finished:
+        if sub == "status" and _projetos():  # parado: conta o que foi feito no projeto hoje
+            spec, slot, _ = await _prepara_modelo()
+            fala("Nenhum agente está trabalhando agora.")
+            return await _saber_voz("historico", {"projeto": str(d.get("projeto") or ""), "quando": "hoje"}, spec, slot)
+        fala("Nenhum agente está trabalhando agora.")
+        return "(agente: nenhum)"
+    titulo = _titulo(run.conv_id)
+    if sub == "parar":
+        run.stop()
+        fala(f"Parei o agente de {titulo}.")
+        return "(agente parado)"
+    pedidos = list(run.approvals.items())
+    if sub == "status":
+        tarefas = [t for t in (run.tasks or []) if isinstance(t, dict)]
+        feitas = sum(str(t.get("status")) in ("completed", "done", "feita", "concluida") for t in tarefas)
+        agora = next((t.get("content") or t.get("text") or t.get("titulo") for t in tarefas
+                      if str(t.get("status")) in ("in_progress", "doing", "andamento")), "")
+        partes = [f"O agente de {titulo} está trabalhando"]
+        if tarefas:
+            partes.append(f"{feitas} de {len(tarefas)} tarefas feitas" + (f", agora: {agora}" if agora else ""))
+        partes.append(f"e espera você aprovar {len(pedidos)} pedido{'s' if len(pedidos) > 1 else ''}" if pedidos
+                      else "sem pedido esperando")
+        fala(", ".join(partes) + ".")
+        return "(agente: status)"
+    if not pedidos:
+        fala(f"O agente de {titulo} não está pedindo nada agora.")
+        return "(agente: sem pedidos)"
+    ditos = [_pedido_dito(a) for _, a in pedidos]
+    if sub == "pedidos":
+        fala(f"O agente de {titulo} pede para {'; e para '.join(ditos)}. Aprovo?")
+        _pendente.clear()
+        _pendente.update(tipo="aprovar", run=run.id, t=time.time())
+        _manda("escuta")
+        return "(agente: pedidos lidos)"
+    perigoso = any(PERIGOSO.search(str(((a.get("call") or {}).get("arguments") or {}).get("command") or "")) for _, a in pedidos)
+    if sub == "aprovar" and (len(pedidos) > 1 or perigoso) and not d.get("confirmado"):
+        # mais de um pedido, ou um comando que apaga/força: lê antes e só aprova com um sim
+        fala(f"Ele pede para {'; e para '.join(ditos)}. Confirma?")
+        _pendente.clear()
+        _pendente.update(tipo="aprovar", run=run.id, t=time.time())
+        _manda("escuta")
+        return "(agente: confirmação pedida)"
+    aprova = sub == "aprovar"
+    for cid, _ in pedidos:
+        run.resolve(cid, {"approved": aprova, "mode": None, "feedback": None if aprova else "Recusado por voz no assistente.",
+                          "answer": None, "answers": None})
+    fala(f"{'Aprovei' if aprova else 'Recusei'}: {'; '.join(ditos)}.")
+    print(f"Forja: voz: {len(pedidos)} pedido(s) do agente {'aprovado(s)' if aprova else 'recusado(s)'} por voz", flush=True)
+    return f"(agente: {'aprovou' if aprova else 'recusou'})"
+
+
+async def _aprovar_respondido(resposta: str) -> None:
+    from .agent import RUNS
+    run = RUNS.get(_pendente.get("run", ""))
+    _pendente.clear()
+    r = _sem_acento(resposta).strip(" .!?,").replace("forja", "").strip(" ,")
+    if not run or run.finished or not run.approvals:
+        fala("Esse pedido já foi resolvido.")
+    elif SIM.match(r) or re.match(r"^(?:aprova|aprovo|aprovado|confirmo|confirma)\b", r):
+        await _forja_voz("agente", {"acao": "aprovar", "run_id": run.id, "confirmado": True})
+    elif re.match(r"^(?:recusa|recuso|nao|nega|cancela)\b", r):
+        await _forja_voz("agente", {"acao": "recusar", "run_id": run.id})
+    else:
+        fala("Deixei o pedido esperando na tela.")
+
+
 def _itens_ditos(itens: list[dict]) -> str:
     return "; ".join(f"{lembretes.dito(datetime.fromisoformat(x['quando']))}, {x['texto']}" for x in itens)
 
@@ -2410,6 +2622,7 @@ async def _atende(ouviu: dict) -> None:
             await (_agente(_pendente["pedido"], comando) if tipo == "pasta" else
                    _lembrete_quando(comando) if tipo == "lembrete" else
                    _enviar_respondido(comando) if tipo == "enviar_email" else
+                   _aprovar_respondido(comando) if tipo == "aprovar" else
                    _evento_quando(comando) if tipo == "evento" else
                    _modelo_respondido(comando) if tipo == "modelo" else
                    _trocar_modelo(comando, pendente=True) if tipo == "trocar" else _vram_respondido(comando))

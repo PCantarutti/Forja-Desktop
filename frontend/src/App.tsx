@@ -1,3 +1,4 @@
+import Ditado from "./components/Ditado";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, streamSSE, uploadFile } from "./api";
 import { useStickyBottom } from "./useStickyBottom";
@@ -638,6 +639,9 @@ export default function App() {
     };
   }, []);
 
+  // "Forja, lê essa resposta": o assistente precisa saber qual conversa está na tela
+  useEffect(() => { api.post("/assistente/tela", { conv: currentId ?? null }).catch(() => {}); }, [currentId]);
+
   // Avisos que não dependem da conversa aberta na tela: aprovação esperando (inclusive do Worker) e
   // Maestro que terminou. Vêm da atividade, que cobre todas as conversas; a aberta já avisa pelo stream.
   const atividadeAnterior = useRef<Activity | null>(null);
@@ -654,6 +658,9 @@ export default function App() {
     const lembrete = activity.voz?.lembrete;
     if (lembrete && lembrete.n !== antes.voz?.lembrete?.n) notify(lembrete.titulo || "Lembrete", lembrete.texto, true);
     // "Forja, abre o g1 no navegador do Forja": o painel Navegador da conversa aberta vai até o site
+    // "Forja, dita": o campo aberto começa a gravar (Ditado.tsx)
+    const ditar = activity.voz?.ditar;
+    if (ditar && ditar.n !== antes.voz?.ditar?.n) window.dispatchEvent(new CustomEvent("forja:ditar", { detail: ditar.texto }));
     const abrirSite = activity.voz?.abrir;
     if (abrirSite && abrirSite.n !== antes.voz?.abrir?.n) { (window as any).forja?.focus?.(); abreLinkNoForja(abrirSite.url); }
     const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
@@ -2324,6 +2331,7 @@ export default function App() {
   return (
     <TestarCodigo.Provider value={testarCodigo}>
     <div className="flex h-full">
+      <Ditado />
       <SectionRail
         value={section}
         onChange={changeSection}
