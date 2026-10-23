@@ -92,8 +92,9 @@ async def lifespan(_app):
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
     assistente.parar()    # o microfone fecha com o backend
-    if vigia_voz := assistente._tarefa.get("vigia"):
-        vigia_voz.cancel()  # a ociosidade do modelo do assistente
+    for vigia_voz in (assistente._tarefa.get("vigia"), assistente._tarefa.get("lembretes")):
+        if vigia_voz:
+            vigia_voz.cancel()  # a ociosidade do modelo do assistente e a hora dos lembretes
     lsp.fechar_todos()
     localai.unload()  # o modelo local morre com o backend (no app o Electron já mata a árvore)
     await mcp_client.stop()
@@ -1366,6 +1367,13 @@ def assistente_conversa():
 @app.delete("/api/assistente/conversa")
 def assistente_esquecer():
     return assistente.esquecer()
+
+
+@app.delete("/api/assistente/lembretes/{lid}")
+def assistente_apagar_lembrete(lid: str):
+    """Tira um lembrete (a lista volta pela GET /api/assistente, campo lembretes)."""
+    from . import lembretes
+    return lembretes.apagar({lid})
 
 
 @app.post("/api/assistente/salvar-conversa")

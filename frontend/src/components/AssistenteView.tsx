@@ -15,6 +15,7 @@ type Estado = {
   metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
   vozes_kokoro: { id: string; nome: string }[]; humores: { id: string; nome: string }[];
+  lembretes: { id: string; quando: string; texto: string }[];
 };
 type Mic = { id: string; nome: string; api: string; tipo: "entrada" | "saida"; padrao: boolean };
 type Favorito = { nome: string; provider: string; model: string };
@@ -67,6 +68,14 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Muda o modelo do assistente na hora (o mesmo de Configurações › Modelo) e já começa a carregar. “O de sempre” volta a seguir o do último envio no Forja. Sem nome, ele pergunta e diz quais você tem." },
   { titulo: "Usar o modelo que já está carregado", exemplos: ["Pode usar se já estiver carregado"],
     texto: "Em Configurações › Modelo, escolha os modelos que ele pode usar: se um deles já estiver carregado e parado, ele responde com ele em vez de carregar o dele (mais rápido, nada troca na placa). Ocupado com trabalho do Forja, não pega." },
+  { titulo: "Controlar o PC", exemplos: ["Forja, abre o Spotify", "Forja, fecha o Chrome", "Forja, volume 30", "Forja, aumenta o volume", "Forja, tira o som", "Forja, muda para o fone", "Forja, passa o som pra caixa", "Forja, trava o PC"],
+    texto: "Abre qualquer programa do menu Iniciar, fecha um programa como no X (se tiver algo sem salvar, ele pergunta), muda o volume e a saída de som e trava a tela. Só ações dessa lista: nada de comando livre no Windows. “Não perturbe” o Windows não deixa um programa ligar: ele abre a página das notificações." },
+  { titulo: "Janelas e música", exemplos: ["Forja, joga essa janela para o outro monitor", "Forja, maximiza o VS Code", "Forja, minimiza tudo", "Forja, pausa a música", "Forja, próxima música", "Forja, o que está tocando?"],
+    texto: "“Essa janela” é a que está na frente. Música e vídeo pelo controle de mídia do Windows: vale para Spotify, YouTube no navegador e o que mais mostrar o player do Windows." },
+  { titulo: "Pastas e arquivos", exemplos: ["Forja, abre a pasta de downloads", "Forja, acha o PDF do contrato de ontem", "Forja, procura a planilha de gastos", "Forja, onde está o print que eu tirei hoje?"],
+    texto: "Procura em Downloads, Documentos, Área de trabalho, Imagens e Vídeos, pelo tipo (PDF, planilha, foto, print...), pelo dia (hoje, ontem, essa semana) e pelas palavras do nome. Abre a pasta com o arquivo selecionado; não apaga nem move nada." },
+  { titulo: "Lembretes", exemplos: ["Forja, me lembre de lavar a louça às 14h", "Forja, me lembra de ligar pro João daqui a 20 minutos", "Forja, amanhã às 8 me lembre de tomar o remédio", "Forja, quais são meus lembretes?", "Forja, cancela o lembrete da louça"],
+    texto: "Na hora, notificação no Windows, no celular (Forja Mobile) e ele fala, se estiver ligado. Sem horário, ele pergunta “Pra quando?”. Valem “às 2 da tarde”, “em meia hora”, “amanhã”, “na sexta às 10h”. Ficam guardados (somem só quando tocam ou você cancela) e aparecem em Configurações › Lembretes; um perdido com o Forja fechado toca assim que ele abrir." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
@@ -606,6 +615,20 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   </p>
                 </Grupo>
 
+                <Grupo id="lembretes" titulo="Lembretes" resumo={e.lembretes.length ? `${e.lembretes.length} marcado${e.lembretes.length === 1 ? "" : "s"}` : "nenhum"}>
+                  {e.lembretes.map((l) => (
+                    <div key={l.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="shrink-0 font-mono text-[11px] text-fg-2">{quandoCurto(l.quando)}</span>
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-fg" title={l.texto}>{l.texto || "(sem texto)"}</span>
+                      <button aria-label={`Cancelar ${l.texto}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                              onClick={() => api.del(`/assistente/lembretes/${l.id}`).then(carrega).catch((er) => onError(er.message))}>cancelar</button>
+                    </div>
+                  ))}
+                  <p className="text-[11.5px] leading-relaxed text-faint">
+                    “Forja, me lembre de lavar a louça às 14h”: na hora, notificação no Windows, no celular (Forja Mobile) e a voz dele, se estiver ligado.
+                  </p>
+                </Grupo>
+
                 <Grupo id="comandos" titulo="Imagem, vídeo e projetos" resumo={resumoComandos}>
                   <Caixa rotulo="Modelo favorito de imagem (“Forja, crie uma imagem de…”)">
                     <select className={`${campo} cursor-pointer`} value={e.imagem} onChange={(ev) => grava({ imagem: ev.target.value })}>
@@ -635,6 +658,14 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
       )}
     </div>
   );
+}
+
+/** "14:00" hoje, "amanhã 8:30", "26/10 10:00". */
+function quandoCurto(iso: string): string {
+  const q = new Date(iso), hoje = new Date();
+  const hora = q.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const dias = Math.round((new Date(q.toDateString()).getTime() - new Date(hoje.toDateString()).getTime()) / 864e5);
+  return dias === 0 ? hora : dias === 1 ? `amanhã ${hora}` : `${q.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} ${hora}`;
 }
 
 function abertoGuardado(chave: string, padrao: boolean): boolean {

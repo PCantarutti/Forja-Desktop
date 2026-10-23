@@ -31,11 +31,12 @@ import subprocess
 import threading
 import time
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
 
-from . import config, db, downloads, localai, mobile, native, tts
+from . import config, db, downloads, lembretes, localai, mobile, native, pc, tts
 from .tools import ToolError
 
 PASTA = localai.RUNTIMES / "assistente"
@@ -198,7 +199,8 @@ def estado() -> dict:
             "detector_treinado": DETECTOR.is_file(), "metricas": metricas,
             "treinando": treino["id"] if treino and treino["status"] == "running" else "",
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
-            "vozes_kokoro": VOZES_KOKORO, "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()]}
+            "vozes_kokoro": VOZES_KOKORO, "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
+            "lembretes": lembretes.lista()}
 
 
 def nota_falada(humor: str, pode_brincar: bool = True) -> str:
@@ -217,7 +219,9 @@ def sem_marca(texto: str) -> str:
 
 def resumo() -> dict:
     """O pedaço do /api/activity: barato, sem tocar no disco."""
-    return {"ligado": _vivo(), "estado": _estado["estado"], "ultimo": _estado["ultimo"], "instalado": instalado()}
+    # `lembrete`: o último que tocou; a tela do PC mostra a notificação do Windows quando o n muda
+    return {"ligado": _vivo(), "estado": _estado["estado"], "ultimo": _estado["ultimo"], "instalado": instalado(),
+            "lembrete": {"n": lembretes.disparado["n"], "texto": lembretes.disparado["texto"]} if lembretes.disparado["n"] else None}
 
 
 def emprestavel() -> dict | None:
@@ -597,6 +601,7 @@ def ao_subir(loop: asyncio.AbstractEventLoop) -> None:
     vigiar a ociosidade do modelo do assistente."""
     _loop[:] = [loop]
     _tarefa["vigia"] = loop.create_task(_vigia_ocioso())
+    _tarefa["lembretes"] = loop.create_task(lembretes.vigia(fala))
     if ler()["ligado"] and instalado():
         iniciar()
 
@@ -722,7 +727,8 @@ def rota(comando: str) -> tuple[str, str]:
 def _parece_pedido(texto: str) -> bool:
     """Resposta a "Com qual modelo?" que na verdade é um pedido novo: casa com outra rota, ou é uma frase/pergunta
     longa demais para ser só um nome de modelo."""
-    return rota(texto)[0] != "chat" or len(texto.split()) >= 6 or texto.strip().endswith("?")
+    return rota(texto)[0] != "chat" or len(texto.split()) >= 6 or texto.strip().endswith("?") \
+        or bool(pc.entende(texto) or lembretes.entende(texto))
 
 
 def modelo_dito(comando: str) -> tuple[str, str]:
@@ -1410,6 +1416,51 @@ async def _vram_respondido(resposta: str) -> None:
         fala("Beleza, deixo para depois.")
 
 
+def _itens_ditos(itens: list[dict]) -> str:
+    return "; ".join(f"{lembretes.dito(datetime.fromisoformat(x['quando']))}, {x['texto']}" for x in itens)
+
+
+async def _lembrete(tipo: str, dado) -> None:
+    """"Me lembre de X às 14h" (criar), sem horário (pergunta "Pra quando?"), "quais meus lembretes", "cancela o da louça"."""
+    if tipo == "criar":
+        alvo, texto = dado
+        lembretes.criar(alvo, texto)
+        fala(f"Combinado, {lembretes.dito(alvo)}: {texto}." if texto else f"Combinado, te chamo {lembretes.dito(alvo)}.")
+    elif tipo == "pergunta":
+        _pendente.clear()
+        _pendente.update(tipo="lembrete", pedido=dado, tentativas=0, t=time.time())
+        fala("Pra quando?")
+        _manda("escuta")
+    elif tipo == "listar":
+        itens = lembretes.lista()
+        fala("Você não tem lembretes." if not itens else
+             f"Você tem um lembrete: {_itens_ditos(itens)}." if len(itens) == 1 else
+             f"Você tem {len(itens)} lembretes: {_itens_ditos(itens[:5])}.")
+    else:
+        itens = lembretes.parecidos(dado, lembretes.lista())
+        if not itens:
+            fala("Não achei esse lembrete.")
+            return
+        lembretes.apagar({x["id"] for x in itens})
+        fala(f"Cancelei: {itens[0]['texto']}." if len(itens) == 1 else f"Cancelei {len(itens)} lembretes.")
+
+
+async def _lembrete_quando(resposta: str) -> None:
+    """A resposta a "Pra quando?": "às 15h", "daqui a meia hora", "amanhã"."""
+    alvo, _ = lembretes.quando(resposta)
+    if alvo is None and _pendente.get("tentativas", 0) < 1:
+        _pendente["tentativas"] = 1
+        fala("Não entendi o horário. Diga, por exemplo, às 15h ou daqui a 20 minutos.")
+        _manda("escuta")
+        return
+    pedido = _pendente.get("pedido", "")
+    _pendente.clear()
+    if alvo is None:
+        fala("Deixei pra lá. Peça de novo com o horário.")
+        return
+    await _lembrete("criar", (alvo, pedido))
+
+
 async def _atende(ouviu: dict) -> None:
     from .llm import LLMError
     comando = (ouviu.get("comando") or "").strip()
@@ -1428,6 +1479,7 @@ async def _atende(ouviu: dict) -> None:
         if _pendente and ouviu.get("resposta"):
             tipo = _pendente["tipo"]
             await (_agente(_pendente["pedido"], comando) if tipo == "pasta" else
+                   _lembrete_quando(comando) if tipo == "lembrete" else
                    _modelo_respondido(comando) if tipo == "modelo" else
                    _trocar_modelo(comando, pendente=True) if tipo == "trocar" else _vram_respondido(comando))
             return
@@ -1442,6 +1494,13 @@ async def _atende(ouviu: dict) -> None:
         if tipo not in ("trocar_modelo", "qual_modelo"):  # "use o modelo X" sozinho é trocar o do assistente
             sem_modelo, modelo = modelo_dito(comando)
             tipo, pedido = rota(sem_modelo)
+        if tipo == "chat" and (lem := lembretes.entende(comando)):
+            await _lembrete(*lem)
+            return
+        if tipo == "chat" and (acao := pc.entende(comando)):
+            print(f"Forja: voz: ação do PC: {acao[0]}", flush=True)  # sem o argumento: pode ser nome de arquivo
+            fala(await asyncio.to_thread(pc.faz, *acao))
+            return
         if tipo == "chat" and CITA_FORJA.search(_sem_acento(comando)):
             # cita o Forja e nenhuma regra pegou (o Whisper ouviu torto, ou jeito novo de pedir): o modelo decide
             tipo = {"responder": "chat", "chat": "chat_forja"}.get(r := await classifica_rota(sem_modelo), r)

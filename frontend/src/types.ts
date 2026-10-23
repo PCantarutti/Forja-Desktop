@@ -35,7 +35,8 @@ export type Activity = {
   board?: string;  // carimbo do board de issues: card mudou ou varredura começou/terminou
   autonomo?: number[];  // conversas com trabalho autônomo ligado (PC e celular acompanham)
   // assistente de voz F.O.R.J.A: o botão do microfone e a conversa que o último comando falado abriu (`n` sobe a cada uma)
-  voz?: { ligado: boolean; instalado: boolean; estado: string; ultimo: { conv: number; kind: string; n: number } | null };
+  voz?: { ligado: boolean; instalado: boolean; estado: string; ultimo: { conv: number; kind: string; n: number } | null;
+          lembrete?: { n: number; texto: string } | null };
 };
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video";
