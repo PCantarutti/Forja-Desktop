@@ -91,7 +91,7 @@ HUMORES = {
 }
 PADRAO = {"ligado": False, "mic": "", "saida": "", "whisper": "small", "motor": "kokoro", "voz": "pf_dora", "modelo_tts": "", "voz_tts": "",
           "humor": "sarcastico", "favoritos": [], "modelo": None, "ocioso_min": 5, "atalho": "",
-          "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado",
+          "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado", "permitidos": [],
           "imagem": "", "video": "", "pasta_projetos": ""}
 MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se o modelo desandar
 # raciocínio do modelo antes de falar: desligado é o padrão (resposta falada quer velocidade); os outros são os
@@ -147,6 +147,11 @@ def gravar(patch: dict) -> dict:
                 for f in favs):
             raise ToolError("Cada favorito precisa de um nome de uso (ex.: código) e de um modelo; no máximo 12.")
         d["favoritos"] = [{"nome": str(f["nome"]).strip(), "provider": f["provider"], "model": f["model"]} for f in favs]
+        perm = d["permitidos"]
+        if not isinstance(perm, list) or len(perm) > 30 or any(
+                not (isinstance(p, dict) and p.get("provider") and p.get("model")) for p in perm):
+            raise ToolError("Cada modelo permitido precisa de provider e model; no máximo 30.")
+        d["permitidos"] = [{"provider": p["provider"], "model": p["model"]} for p in perm]
         m = d["modelo"]
         if m is not None and not (isinstance(m, dict) and m.get("provider") and m.get("model")):
             raise ToolError("modelo precisa de provider e model (ou null para o do último envio).")
@@ -213,6 +218,27 @@ def sem_marca(texto: str) -> str:
 def resumo() -> dict:
     """O pedaço do /api/activity: barato, sem tocar no disco."""
     return {"ligado": _vivo(), "estado": _estado["estado"], "ultimo": _estado["ultimo"], "instalado": instalado()}
+
+
+def emprestavel() -> dict | None:
+    """Um modelo de texto JÁ carregado, parado (nada do Forja usando) e que a pessoa deixou o assistente usar
+    (`permitidos`): responde com ele em vez de carregar ou trocar o do assistente. llama.cpp do Forja ou LM Studio /
+    Ollama desta máquina. None quando não há nenhum assim."""
+    from . import llm, modelctl
+    perm = ler()["permitidos"]
+    if not perm or modelctl.em_uso() or localai._loading or localai.image_busy():
+        return None
+    st = localai.status()
+    alias = st.get("alias") if st.get("running") else ""
+    if alias:
+        for p in perm:
+            if p["provider"] == "local" and Path(p["model"]).stem in (alias, Path(alias).stem):
+                return {"provider": "local", "model": alias}
+    for p in perm:
+        if p["provider"] != "local" and llm.servidor_local_externo(p["provider"]) \
+                and llm.carregado_externo(p["provider"]) == p["model"]:
+            return dict(p)
+    return None
 
 
 def modelo_assistente() -> dict:
@@ -492,6 +518,8 @@ async def preaquece() -> str:
         spec = modelo_assistente()
     except ToolError:
         return "sem modelo"
+    if await asyncio.to_thread(emprestavel):
+        return "permitido no ar"  # já tem um modelo permitido carregado e parado: a pergunta usa ele, nada a carregar
     if not modelctl.gerenciavel(spec):
         return "fora do Forja"  # nuvem ou LM Studio/Ollama: carregam sozinhos no primeiro pedido
     if _trava_carga().locked():
@@ -640,6 +668,13 @@ SALVAR = re.compile(r"\b(?:salv\w*|transform\w*|guard\w*|vir\w*|pass\w*|coloc\w*
 CHAT_FORJA = re.compile(r"\b(?:abr\w*|inici\w*|comec\w*|cri\w*|bot\w*|coloc\w*)\b\s+(?:(?:um|uma|o|a|outro|outra|novo|nova)\s+){0,2}"
                         r"(?:chat|conversa)\b(?:\s+(?:nov[oa]|do\s+forja|n[oa]\s+(?:forja(?:\s+desktop)?|aplicativo|app)))*"
                         r"[\s,:]*(?:(?:sobre|para|pra|de|com|acerca\s+de)\s+)?(.*)")
+# "troca seu modelo para o Qwen 3.6", "use o modelo Ornith para responder": o modelo DO ASSISTENTE (não de um chat)
+TROCA_MODELO = re.compile(r"\b(?:troc\w*|mud\w*|alter\w*|coloc\w*|bot\w*|volt\w*|use|usa|usar|quero\s+que\s+voce\s+use|"
+                          r"passa\w*\s+a\s+usar|responde\w*\s+com)\b(?:\s+(?:o|seu|teu|de|do|pro|pra|para|ao))*\s+(?:proprio\s+)?modelo\b"
+                          r"(?:\s+(?:do|de)\s+(?:assistente|voce|forja))?(?:\s+(?:para|pra|pro|por|pelo))?\s*(?:o\s+|a\s+)?"
+                          r"(.*?)(?:\s+(?:para|pra)\s+(?:responder|falar|conversar)(?:\s+comigo)?)?[\s.!?]*$")
+QUAL_MODELO = re.compile(r"\b(?:qual|que)\s+(?:e\s+)?(?:o\s+)?(?:seu\s+|teu\s+)?modelo\s+(?:voce|vc|ta|esta|e\s+o\s+seu)\b"
+                         r"|\bqual\s+(?:e\s+)?(?:o\s+)?seu\s+modelo\b|\bcom\s+qual\s+modelo\s+voce\b")
 # o que indica que a pessoa quer algo DO Forja: sem regra casada, o modelo decide (classifica_rota)
 CITA_FORJA = re.compile(r"\b(?:forja|aplicativo|app|chat|conversa|agente|a\s+gente|maestro|pesquisa\s+\w+|imagem|foto|"
                         r"desenho|video)\b")
@@ -677,6 +712,10 @@ def rota(comando: str) -> tuple[str, str]:
         return "video", comando[m.start(1):].strip(" ,.") or comando
     if m := IMAGEM.search(c):
         return "imagem", comando[m.start(1):].strip(" ,.") or comando
+    if QUAL_MODELO.search(c):
+        return "qual_modelo", ""
+    if m := TROCA_MODELO.search(c):
+        return "trocar_modelo", comando[m.start(1):m.end(1)].strip(" ,.?")
     return "chat", comando
 
 
@@ -940,6 +979,8 @@ def escolher_modelo(resposta: str, favoritos: list[dict], modelos: list[dict], p
     melhor, nota = None, 0.0
     for m, alvo in candidatos:
         n = difflib.SequenceMatcher(None, falado, alvo[:len(falado) + 4]).ratio() + (0.5 if falado in alvo else 0)
+        if n > 0 and m.get("provider") == "local":
+            n += 0.15  # empate com o mesmo modelo no LM Studio/Ollama ("gemma 12b"): o GGUF do Forja ganha
         if n > nota:
             melhor, nota = m, n
     return {"provider": melhor["provider"], "model": melhor["model"]} if melhor and nota >= 0.55 else None
@@ -1123,6 +1164,9 @@ async def _chat(texto: str) -> None:
     from datetime import datetime
     spec = modelo_assistente()
     escolhido = bool(ler()["modelo"])
+    emprestado = await asyncio.to_thread(emprestavel)
+    if emprestado:
+        spec = emprestado  # já carregado, parado e permitido: responde com ele, sem carregar nem trocar nada
     if modelctl.gerenciavel(spec):
         # Guarda de VRAM: a pergunta falada nunca derruba trabalho do Forja. Com outro modelo local no ar: se algo usa
         # ele (ou o assistente segue "o do último envio"), responde com ele mesmo; parado, troca para o do assistente.
@@ -1197,7 +1241,9 @@ async def _chat(texto: str) -> None:
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": saida[:6000]})
     # a piada não entra no histórico: piadas antigas no contexto puxam o modelo a brincar de novo
     hist.append({"role": "assistant", "content": tudo.split("[piada]")[0].strip()})
-    _uso.update(spec=spec, t=time.monotonic(), llm_t=llm.ULTIMO_USO["t"])  # ociosidade conta daqui
+    if not emprestado or emprestado == modelo_assistente():
+        _uso.update(spec=spec, t=time.monotonic(), llm_t=llm.ULTIMO_USO["t"])  # ociosidade conta daqui
+    # (o modelo emprestado não é do assistente: quem o descarrega é a ociosidade do próprio Forja)
     _humor["pausa"] = PAUSA_PIADA if "[piada]" in tudo else max(0, _humor["pausa"] - 1)
     if not sem_marca(tudo):
         fala("Fiquei sem resposta dessa vez. Pode repetir?")
@@ -1300,6 +1346,61 @@ async def _agente(pedido: str, resposta: str | None = None, kind: str = "agent",
         fala("Deixa pra lá. Pode pedir de novo quando quiser.")
 
 
+VOLTA_PADRAO = re.compile(r"\b(?:(?:o\s+)?de\s+sempre|padrao|ultimo\s+envio|o\s+mesmo\s+do\s+forja|o\s+do\s+forja|o\s+normal)\b")
+
+
+async def _trocar_modelo(dito: str, pendente: bool = False) -> None:
+    """"Troca seu modelo para o Qwen 3.6": muda o modelo do assistente (o mesmo campo da página) e já começa a
+    carregar. "O de sempre" volta a seguir o do último envio no Forja. Sem nome, ou nome que não bate: pergunta."""
+    if not dito.strip():
+        _pendente.clear()
+        _pendente.update(tipo="trocar", tentativas=0)
+        modelos = await asyncio.to_thread(modelos_disponiveis)
+        fala(f"Para qual modelo? Tenho {_nomes_para_dizer(modelos)}. Ou o de sempre.")
+        _manda("escuta")
+        return
+    if VOLTA_PADRAO.search(_sem_acento(dito)):
+        _pendente.clear()
+        gravar({"modelo": None})
+        _conversa_chat.clear()
+        fala("Pronto, volto a usar o modelo do último envio no Forja.")
+        return
+    modelos = await asyncio.to_thread(modelos_disponiveis)
+    spec = escolher_modelo(dito, ler()["favoritos"], modelos, {})
+    if not spec:
+        tentativas = _pendente.get("tentativas", 0) if pendente else 0
+        if tentativas < 2:
+            _pendente.clear()
+            _pendente.update(tipo="trocar", tentativas=tentativas + 1)
+            fala(f"Não achei esse. Tenho {_nomes_para_dizer(modelos)}. Qual?")
+            _manda("escuta")
+        else:
+            _pendente.clear()
+            fala("Não achei. Deixei o modelo como estava.")
+        return
+    _pendente.clear()
+    gravar({"modelo": spec})
+    _conversa_chat.clear()  # outro modelo: o que o anterior lembrava da conversa falada não vem junto
+    fala(f"Pronto, agora respondo com o {falavel(spec['model'])}.")
+    if _loop:
+        _tarefa.setdefault("pesquisas", set()).add(asyncio.create_task(preaquece()))  # já vai carregando
+
+
+async def _qual_modelo() -> None:
+    try:
+        spec = modelo_assistente()
+    except ToolError as e:
+        fala(str(e))
+        return
+    emprestado = await asyncio.to_thread(emprestavel)
+    agora = emprestado or spec
+    extra = "" if ler()["modelo"] else ", o do último envio no Forja"
+    if emprestado and emprestado != spec:
+        fala(f"Agora estou usando o {falavel(agora['model'])}, que já estava carregado. O meu é o {falavel(spec['model'])}{extra}.")
+    else:
+        fala(f"Estou com o {falavel(spec['model'])}{extra}.")
+
+
 async def _vram_respondido(resposta: str) -> None:
     p = dict(_pendente)
     _pendente.clear()
@@ -1327,7 +1428,8 @@ async def _atende(ouviu: dict) -> None:
         if _pendente and ouviu.get("resposta"):
             tipo = _pendente["tipo"]
             await (_agente(_pendente["pedido"], comando) if tipo == "pasta" else
-                   _modelo_respondido(comando) if tipo == "modelo" else _vram_respondido(comando))
+                   _modelo_respondido(comando) if tipo == "modelo" else
+                   _trocar_modelo(comando, pendente=True) if tipo == "trocar" else _vram_respondido(comando))
             return
         _pendente.clear()  # chamou "Forja" de novo no meio de uma pergunta: vale o comando novo
         if not comando:
@@ -1335,8 +1437,11 @@ async def _atende(ouviu: dict) -> None:
             _manda("bip")
             _manda("escuta")
             return
-        sem_modelo, modelo = modelo_dito(comando)
-        tipo, pedido = rota(sem_modelo)
+        tipo, pedido = rota(comando)
+        modelo = ""
+        if tipo not in ("trocar_modelo", "qual_modelo"):  # "use o modelo X" sozinho é trocar o do assistente
+            sem_modelo, modelo = modelo_dito(comando)
+            tipo, pedido = rota(sem_modelo)
         if tipo == "chat" and CITA_FORJA.search(_sem_acento(comando)):
             # cita o Forja e nenhuma regra pegou (o Whisper ouviu torto, ou jeito novo de pedir): o modelo decide
             tipo = {"responder": "chat", "chat": "chat_forja"}.get(r := await classifica_rota(sem_modelo), r)
@@ -1349,7 +1454,11 @@ async def _atende(ouviu: dict) -> None:
             salvar_conversa()
             fala("Pronto, nossa conversa virou um chat do Forja.")
             return
-        if tipo in ("agente", "maestro"):
+        if tipo == "trocar_modelo":
+            await _trocar_modelo(pedido)
+        elif tipo == "qual_modelo":
+            await _qual_modelo()
+        elif tipo in ("agente", "maestro"):
             await _agente(pedido, kind="maestro" if tipo == "maestro" else "agent", modelo=modelo)
         elif tipo in ("imagem", "video"):
             await _midia(tipo, pedido)

@@ -394,7 +394,7 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 /* Assistente F.O.R.J.A: o círculo fluido grande da página dele (o mesmo da sobreposição do canto da tela, em
    electron/main.js BOLHA_HTML). ouvindo: respira devagar; escutando: ondas saindo (ouviu "Forja" ou o microfone);
    pensando: apagado e lento; falando: pulsa; desligado: cinza parado. */
-.forja-circulo { position: relative; width: 220px; height: 220px; transition: filter .4s ease, transform .5s cubic-bezier(.22,1,.36,1), width .45s cubic-bezier(.22,1,.36,1), height .45s cubic-bezier(.22,1,.36,1); }
+.forja-circulo { position: relative; isolation: isolate; width: 220px; height: 220px; transition: filter .4s ease, transform .5s cubic-bezier(.22,1,.36,1), width .45s cubic-bezier(.22,1,.36,1), height .45s cubic-bezier(.22,1,.36,1); }
 .forja-circulo .g { position: absolute; inset: 0; mix-blend-mode: screen; animation: forja-forma 6s linear infinite; }
 .forja-circulo .g1 { background: radial-gradient(circle at 35% 35%, #bfe3ff, #3b82f6 52%, #1e3a8a00 72%); }
 .forja-circulo .g2 { background: radial-gradient(circle at 65% 62%, #d9c7ff, #7c3aed 52%, #4c1d9500 72%); animation-duration: 8s; animation-direction: reverse; }
@@ -410,16 +410,12 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 @keyframes forja-halo { 0%, 100% { scale: .92; opacity: .5; } 50% { scale: 1.1; opacity: .95; } }
 @keyframes forja-fala { 0%, 100% { scale: 1; } 30% { scale: 1.08; } 60% { scale: .97; } }
 @keyframes forja-anel { 0% { scale: .7; opacity: .9; } 100% { scale: 1.45; opacity: 0; } }
-.forja-circulo.ouvindo .g { animation-duration: 10s; }
 .forja-circulo.escutando { filter: hue-rotate(-38deg) saturate(1.25); }
-.forja-circulo.escutando .g { animation-duration: 3s; }
 .forja-circulo.escutando .anel { animation: forja-anel 1.5s cubic-bezier(.22,1,.36,1) infinite; }
 .forja-circulo.escutando .a2 { animation-delay: .5s; }
 .forja-circulo.escutando .a3 { animation-delay: 1s; }
 .forja-circulo.pensando { filter: saturate(.55) brightness(.8); }
-.forja-circulo.pensando .g { animation-duration: 14s; }
 .forja-circulo.falando { animation: forja-fala .85s ease-in-out infinite; }
-.forja-circulo.falando .halo { animation-duration: 1.1s; }
 .forja-circulo.desligado { filter: grayscale(1) brightness(.45); transform: scale(.9); }
 .forja-circulo.desligado .g, .forja-circulo.desligado .halo { animation-play-state: paused; }
 @media (prefers-reduced-motion: reduce) { .forja-circulo, .forja-circulo .g, .forja-circulo .halo, .forja-circulo .anel { animation: none !important; } }

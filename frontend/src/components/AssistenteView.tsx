@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { LocalModel } from "../types";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
-import { BarraTopo, Caixa, Secao } from "./ImagensView";
-import { Mic, X } from "./icons";
+import { BarraTopo, Caixa } from "./ImagensView";
+import { ChevronDown, Mic, X } from "./icons";
 
 type Estado = {
   ligado: boolean; instalado: boolean; instalando: string; estado: string; erro: string; mic: string; saida: string; mic_nome: string; ouviu: string;
   motor: "kokoro" | "tela"; voz: string; modelo_tts: string; voz_tts: string; whisper: string; humor: string;
   imagem: string; video: string; pasta_projetos: string; favoritos: Favorito[];
   modelo: { provider: string; model: string } | null; ocioso_min: number; atalho: string; raciocinio: string;
+  permitidos: { provider: string; model: string }[];
   detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number;
   metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
@@ -31,7 +32,7 @@ const ESTADO: Record<string, string> = {
 /** Tutorial da página: TUDO o que o assistente sabe fazer. Feature nova do assistente entra aqui junto (CLAUDE.md). */
 const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Chamar", exemplos: ["Forja, …", "Ei Forja, …", "Forja (sozinho)"],
-    texto: "Comece com “Forja” e fale o pedido (pode dar uma pausa depois do nome). Só o nome: toca um bip e ele ouve o próximo pedido, sem precisar repetir. Liga e desliga no microfone do canto da janela, na bandeja do sistema ou aqui." },
+    texto: "Comece com “Forja” e fale o pedido (pode dar uma pausa depois do nome). Só o nome: toca um bip e ele ouve o próximo pedido, sem precisar repetir. Se o círculo acendeu e ele não entendeu o pedido, ele diz “Não entendi. Pode repetir?” e continua ouvindo. Liga e desliga no microfone do canto da janela, na bandeja do sistema ou aqui." },
   { titulo: "Perguntar", exemplos: ["Forja, quanto é 15% de 200?", "Forja, quais são as notícias de hoje?", "Forja, e em dólar?"],
     texto: "Responde só falando, sem abrir nem mexer em nada no Forja. Pesquisa na web quando precisa (“Pesquisando.”) e lembra a conversa enquanto o modelo dele estiver carregado, então dá para emendar perguntas." },
   { titulo: "Conversa só na memória", exemplos: ["Forja, salva nossa conversa num chat", "Salvar como chat", "Esquecer"],
@@ -62,6 +63,10 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Um círculo no canto inferior direito da tela, mesmo com o Forja minimizado: com ondas saindo quando ele ouviu “Forja” (ou o atalho) e está escutando o pedido, mais apagado enquanto pensa, pulsando enquanto fala." },
   { titulo: "Modelo dele e da placa de vídeo", exemplos: [],
     texto: "Escolha o modelo do assistente em “Modelo do assistente” (vazio: o do último envio no Forja). Abrir chat ou agente com outro modelo tira o do assistente da placa e carrega o novo com o pedido; se outro trabalho estiver usando a placa, ele avisa e começa quando ele terminar. Parado pelo tempo escolhido, o modelo dele sai da placa sozinho. Pergunta falada nunca derruba trabalho do Forja; imagem ou vídeo com trabalho em andamento: ele pergunta antes." },
+  { titulo: "Trocar o modelo dele falando", exemplos: ["Forja, troca seu modelo para o Qwen 3.6", "Forja, use o modelo Ornith para responder", "Forja, volta para o de sempre", "Forja, qual modelo você está usando?"],
+    texto: "Muda o modelo do assistente na hora (o mesmo de Configurações › Modelo) e já começa a carregar. “O de sempre” volta a seguir o do último envio no Forja. Sem nome, ele pergunta e diz quais você tem." },
+  { titulo: "Usar o modelo que já está carregado", exemplos: ["Pode usar se já estiver carregado"],
+    texto: "Em Configurações › Modelo, escolha os modelos que ele pode usar: se um deles já estiver carregado e parado, ele responde com ele em vez de carregar o dele (mais rápido, nada troca na placa). Ocupado com trabalho do Forja, não pega." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
@@ -201,6 +206,14 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   ];
   for (const f of e.favoritos) if (!opcoes.some((o) => o.provider === f.provider && o.model === f.model)) opcoes.push({ grupo: "Escolhidos", provider: f.provider, model: f.model });
   const grupos = [...new Set(opcoes.map((o) => o.grupo))];
+  const nomeModelo = (m: string) => (m.split(/[\\/]/).pop() ?? m).replace(/\.(gguf|safetensors)$/i, "");
+  const resumoModelo = `${e.modelo ? nomeModelo(e.modelo.model) : "o do último envio"} · raciocínio ${e.raciocinio}`
+    + (e.permitidos.length ? ` · +${e.permitidos.length} permitido${e.permitidos.length === 1 ? "" : "s"}` : "");
+  const resumoOuvir = `${mics.find((m) => m.id === e.mic)?.nome ?? "microfone padrão"} · `
+    + (e.motor === "kokoro" ? e.vozes_kokoro.find((v) => v.id === e.voz)?.nome ?? e.voz : "voz da tela Voz");
+  const resumoDetector = ({ whisper: "Só Whisper", treinado: "Detector", ambos: "Detector + Whisper" } as const)[e.detector]
+    + (e.minha_voz ? ` · ${e.minha_voz} gravaç${e.minha_voz === 1 ? "ão" : "ões"}` : "");
+  const resumoComandos = `imagem: ${e.imagem ? nomeModelo(e.imagem) : "nenhum"} · vídeo: ${e.video ? nomeModelo(e.video) : "nenhum"}`;
   const mudaFav = (i: number, patch: Partial<Favorito> | null) =>
     grava({ favoritos: patch === null ? e.favoritos.filter((_, j) => j !== i) : e.favoritos.map((f, j) => (j === i ? { ...f, ...patch } : f)) });
 
@@ -321,10 +334,10 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
               <X className="size-3.5" />
             </button>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-[18px] overflow-y-auto px-4 pt-1.5 pb-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pt-1.5 pb-4">
             {!e.instalado ? <p className="text-[12px] leading-relaxed text-muted">Instale o assistente para configurá-lo.</p> : (
               <>
-                <Secao titulo="Modelo do assistente">
+                <Grupo id="modelo" titulo="Modelo" resumo={resumoModelo} abertoPadrao>
                     <Caixa rotulo="Responde com">
                       <select className={`${campo} cursor-pointer`} value={e.modelo ? `${e.modelo.provider}|${e.modelo.model}` : ""}
                               onChange={(ev) => { const [provider, ...m] = ev.target.value.split("|"); grava({ modelo: provider ? { provider, model: m.join("|") } : null }); }}>
@@ -358,9 +371,106 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     ninguém mais usou). Modelo de nuvem não ocupa a placa. Modelo maior que a placa (ex.: um 35B numa de 12 GB) roda
                     parte na CPU e responde devagar mesmo sem raciocínio: para conversar, prefira um que caiba inteiro.
                   </p>
-                </Secao>
+                
+                    <div className="mt-1 flex flex-col gap-1.5">
+                      <span className="text-[11.5px] font-medium text-fg-2">Pode usar se já estiver carregado</span>
+                      {e.permitidos.map((p, i) => (
+                        <div key={`${p.provider}|${p.model}`} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                          <span className="min-w-0 flex-1 truncate text-[12px] text-fg" title={`${p.provider} · ${p.model}`}>{p.model.split(/[\\/]/).pop()}</span>
+                          <span className="shrink-0 text-[10.5px] text-faint">{p.provider === "local" ? "IA local" : p.provider}</span>
+                          <button aria-label={`Tirar ${p.model}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                                  onClick={() => grava({ permitidos: e.permitidos.filter((_, j) => j !== i) })}>tirar</button>
+                        </div>
+                      ))}
+                      <Caixa rotulo="Permitir mais um">
+                        <select className={`${campo} cursor-pointer`} value="" onChange={(ev) => {
+                          const [provider, ...m] = ev.target.value.split("|");
+                          if (provider) grava({ permitidos: [...e.permitidos, { provider, model: m.join("|") }] });
+                        }}>
+                          <option value="">escolha um modelo…</option>
+                          {grupos.map((g) => (
+                            <optgroup key={g} label={g}>
+                              {opcoes.filter((o) => o.grupo === g && !e.permitidos.some((p) => p.provider === o.provider && p.model === o.model))
+                                .map((o) => <option key={`${o.provider}|${o.model}`} value={`${o.provider}|${o.model}`}>{o.model.split(/[\\/]/).pop()}</option>)}
+                            </optgroup>
+                          ))}
+                        </select>
+                      </Caixa>
+                      <p className="text-[11.5px] leading-relaxed text-faint">
+                        Se um destes já estiver carregado e parado, ele responde com ele em vez de carregar o dele: mais rápido e
+                        sem trocar nada na placa. Também dá para trocar o modelo dele falando: “Forja, troca seu modelo para o Qwen 3.6”.
+                      </p>
+                    </div>
+                </Grupo>
 
-                <Secao titulo="Atalho global">
+                <Grupo id="ouvir" titulo="Ouvir e falar" resumo={resumoOuvir}>
+                  <Caixa rotulo="Microfone">
+                    <select className={`${campo} cursor-pointer`} value={e.mic && mics.some((m) => m.id === e.mic) ? e.mic : ""} onChange={(ev) => grava({ mic: ev.target.value })}>
+                      <option value="">Padrão do Windows</option>
+                      {mics.filter((m) => m.api === "MME" && m.tipo !== "saida").map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
+                    </select>
+                  </Caixa>
+                  <Caixa rotulo="Precisão do Whisper (maior = entende melhor, demora mais)">
+                    <select className={`${campo} cursor-pointer`} value={e.whisper} onChange={(ev) => grava({ whisper: ev.target.value })}>
+                      <option value="base">base (rápido)</option>
+                      <option value="small">small (equilibrado)</option>
+                      <option value="medium">medium (preciso, mais lento)</option>
+                    </select>
+                  </Caixa>
+                
+                  <Caixa rotulo="Alto-falante (onde ele fala)">
+                    <select className={`${campo} cursor-pointer`} value={e.saida && mics.some((m) => m.id === e.saida) ? e.saida : ""} onChange={(ev) => grava({ saida: ev.target.value })}>
+                      <option value="">Padrão do Windows</option>
+                      {mics.filter((m) => m.api === "MME" && m.tipo === "saida").map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
+                    </select>
+                  </Caixa>
+                  <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label="Voz do assistente">
+                    {([["kokoro", "Rápida (Kokoro)", "Na CPU, começa a falar em ~1 s"],
+                       ["tela", "Uma voz da tela Voz", "Clonada (F5/Fish): bem mais lenta, e tira o modelo de texto da GPU a cada resposta"]] as const).map(([id, rot, dica]) => (
+                      <button key={id} role="radio" aria-checked={e.motor === id} title={dica} onClick={() => grava({ motor: id })}
+                              className={`flex-1 rounded-[6px] py-1.5 ${e.motor === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>{rot}</button>
+                    ))}
+                  </div>
+                  {e.motor === "kokoro" ? (
+                    <Caixa rotulo="Voz">
+                      <select className={`${campo} cursor-pointer`} value={e.voz} onChange={(ev) => grava({ voz: ev.target.value })}>
+                        {e.vozes_kokoro.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
+                      </select>
+                    </Caixa>
+                  ) : (
+                    <>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <Caixa rotulo="Modelo da tela Voz">
+                          <select className={`${campo} cursor-pointer`} value={e.modelo_tts} onChange={(ev) => grava({ modelo_tts: ev.target.value })}>
+                            <option value="">o primeiro</option>
+                            {tts.modelos.map((m) => <option key={m.nome}>{m.nome}</option>)}
+                          </select>
+                        </Caixa>
+                        <Caixa rotulo="Voz de referência">
+                          <select className={`${campo} cursor-pointer`} value={e.voz_tts} onChange={(ev) => grava({ voz_tts: ev.target.value })}>
+                            <option value="">a primeira</option>
+                            {tts.vozes.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
+                          </select>
+                        </Caixa>
+                      </div>
+                      <p className="text-[11.5px] leading-relaxed text-faint">Avisos curtos (“Pesquisando.”, “Criando a imagem…”) continuam na voz rápida; a resposta vem inteira na voz clonada, depois que o modelo termina.</p>
+                    </>
+                  )}
+                </Grupo>
+
+                <Grupo id="personalidade" titulo="Personalidade" resumo={e.humores.find((h) => h.id === e.humor)?.nome ?? ""}>
+                  <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Humor">
+                    {e.humores.map((h) => (
+                      <button key={h.id} role="radio" aria-checked={e.humor === h.id} onClick={() => grava({ humor: h.id })}
+                              className={`rounded-[9px] border px-3 py-2 text-left text-[12.5px] ${e.humor === h.id ? "border-accent-line bg-accent-soft text-accent-text" : "border-line bg-surface text-muted hover:text-fg"}`}>
+                        {h.nome}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11.5px] leading-relaxed text-faint">{DICA_HUMOR[e.humor]} Ele só brinca quando cabe: pergunta boba sim, assunto sério não, e nunca em toda resposta.</p>
+                </Grupo>
+
+                <Grupo id="atalho" titulo="Atalho global" resumo={e.atalho || "nenhum"}>
                   <div className="flex gap-1.5">
                     <div className="flex-1">
                       <Caixa rotulo={gravandoAtalho ? "Aperte a combinação (Esc cancela)" : "Chamar sem dizer “Forja” (funciona com o Forja minimizado)"}>
@@ -381,9 +491,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       : !window.forja?.atalho ? "Atalho global só no Forja Desktop."
                       : "Aperte e fale o pedido direto. Com ele falando, o atalho interrompe e já ouve você (o microfone fica fechado enquanto ele fala). Desligado, ele liga e ouve. Ex.: Ctrl+Alt+F."}
                   </p>
-                </Secao>
+                </Grupo>
 
-                <Secao titulo="Detector de “Forja”">
+                <Grupo id="detector" titulo="Detector de “Forja”" resumo={resumoDetector}>
                   <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label="Como ele reconhece “Forja”">
                     {([["whisper", "Só Whisper", "Transcreve tudo o que o microfone pega e procura “Forja”: não precisa treinar, mas gasta CPU com TV ou conversa por perto, e o círculo demora um pouco mais"],
                        ["treinado", "Detector", "Um modelo pequeno só para “Forja”: quase não gasta CPU e acende na hora; se ele não ouvir o nome, nada acontece"],
@@ -423,6 +533,8 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   )}
                   {avisoGrav && <p className="text-[11.5px] text-warn">{avisoGrav}</p>}
                   {gravs.length > 0 && (
+                    <Recolhe titulo={`Suas gravações (${gravs.length})`} resumo={`${gravs.filter((g) => g.reconhecida).length} reconhecidas no último treino`} id="gravacoes">
+                      {gravs.length > 0 && (
                     <div className="flex flex-col gap-0.5 rounded-[10px] border border-line bg-surface p-1.5" aria-label="Suas gravações">
                       <div className="flex items-center px-1.5 pb-1 text-[10.5px] text-faint">
                         <span className="flex-1">Suas gravações ({gravs.length})</span>
@@ -449,6 +561,8 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       ))}
                     </div>
                   )}
+                    </Recolhe>
+                  )}
                   {treino?.error && <p className="text-[11.5px] text-diff-del-fg">{treino.error}</p>}
                   <p className="text-[11.5px] leading-relaxed text-faint">
                     {e.metricas
@@ -457,78 +571,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     O treino não precisa de você: usa vozes sintéticas e 20 s do som da casa (uns 5 minutos, na CPU). Gravações da sua voz melhoram o acerto: grave e treine de novo.
                     Com o detector o Whisper ainda confere o nome, então barulho que pareça “Forja” não vira comando.
                   </p>
-                </Secao>
+                </Grupo>
 
-                <Secao titulo="Ouvir">
-                  <Caixa rotulo="Microfone">
-                    <select className={`${campo} cursor-pointer`} value={e.mic && mics.some((m) => m.id === e.mic) ? e.mic : ""} onChange={(ev) => grava({ mic: ev.target.value })}>
-                      <option value="">Padrão do Windows</option>
-                      {mics.filter((m) => m.api === "MME" && m.tipo !== "saida").map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
-                    </select>
-                  </Caixa>
-                  <Caixa rotulo="Precisão do Whisper (maior = entende melhor, demora mais)">
-                    <select className={`${campo} cursor-pointer`} value={e.whisper} onChange={(ev) => grava({ whisper: ev.target.value })}>
-                      <option value="base">base (rápido)</option>
-                      <option value="small">small (equilibrado)</option>
-                      <option value="medium">medium (preciso, mais lento)</option>
-                    </select>
-                  </Caixa>
-                </Secao>
-
-                <Secao titulo="Voz">
-                  <Caixa rotulo="Alto-falante (onde ele fala)">
-                    <select className={`${campo} cursor-pointer`} value={e.saida && mics.some((m) => m.id === e.saida) ? e.saida : ""} onChange={(ev) => grava({ saida: ev.target.value })}>
-                      <option value="">Padrão do Windows</option>
-                      {mics.filter((m) => m.api === "MME" && m.tipo === "saida").map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
-                    </select>
-                  </Caixa>
-                  <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label="Voz do assistente">
-                    {([["kokoro", "Rápida (Kokoro)", "Na CPU, começa a falar em ~1 s"],
-                       ["tela", "Uma voz da tela Voz", "Clonada (F5/Fish): bem mais lenta, e tira o modelo de texto da GPU a cada resposta"]] as const).map(([id, rot, dica]) => (
-                      <button key={id} role="radio" aria-checked={e.motor === id} title={dica} onClick={() => grava({ motor: id })}
-                              className={`flex-1 rounded-[6px] py-1.5 ${e.motor === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>{rot}</button>
-                    ))}
-                  </div>
-                  {e.motor === "kokoro" ? (
-                    <Caixa rotulo="Voz">
-                      <select className={`${campo} cursor-pointer`} value={e.voz} onChange={(ev) => grava({ voz: ev.target.value })}>
-                        {e.vozes_kokoro.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
-                      </select>
-                    </Caixa>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        <Caixa rotulo="Modelo da tela Voz">
-                          <select className={`${campo} cursor-pointer`} value={e.modelo_tts} onChange={(ev) => grava({ modelo_tts: ev.target.value })}>
-                            <option value="">o primeiro</option>
-                            {tts.modelos.map((m) => <option key={m.nome}>{m.nome}</option>)}
-                          </select>
-                        </Caixa>
-                        <Caixa rotulo="Voz de referência">
-                          <select className={`${campo} cursor-pointer`} value={e.voz_tts} onChange={(ev) => grava({ voz_tts: ev.target.value })}>
-                            <option value="">a primeira</option>
-                            {tts.vozes.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
-                          </select>
-                        </Caixa>
-                      </div>
-                      <p className="text-[11.5px] leading-relaxed text-faint">Avisos curtos (“Pesquisando.”, “Criando a imagem…”) continuam na voz rápida; a resposta vem inteira na voz clonada, depois que o modelo termina.</p>
-                    </>
-                  )}
-                </Secao>
-
-                <Secao titulo="Personalidade">
-                  <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Humor">
-                    {e.humores.map((h) => (
-                      <button key={h.id} role="radio" aria-checked={e.humor === h.id} onClick={() => grava({ humor: h.id })}
-                              className={`rounded-[9px] border px-3 py-2 text-left text-[12.5px] ${e.humor === h.id ? "border-accent-line bg-accent-soft text-accent-text" : "border-line bg-surface text-muted hover:text-fg"}`}>
-                        {h.nome}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="text-[11.5px] leading-relaxed text-faint">{DICA_HUMOR[e.humor]} Ele só brinca quando cabe: pergunta boba sim, assunto sério não, e nunca em toda resposta.</p>
-                </Secao>
-
-                <Secao titulo="Modelos favoritos por uso" extra={e.favoritos.length < 12 && opcoes.length > 0 && (
+                <Grupo id="favoritos" titulo="Modelos favoritos por uso" resumo={`${e.favoritos.length} favorito${e.favoritos.length === 1 ? "" : "s"}`} extra={e.favoritos.length < 12 && opcoes.length > 0 && (
                   <button className="text-[11.5px] text-faint hover:text-fg"
                           onClick={() => {
                             const nome = ["código", "documento", "pesquisa", "conversa", "imagem"].find((n) => !e.favoritos.some((f) => f.nome === n)) ?? `uso ${e.favoritos.length + 1}`;
@@ -559,9 +604,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     Ao pedir “Forja, abra um chat no Forja sobre…” ou um trabalho no modo agente, ele pergunta com qual modelo seguir:
                     responda o nome do modelo, “o de sempre” (o do último envio) ou um destes usos, como “código” ou “pesquisa”.
                   </p>
-                </Secao>
+                </Grupo>
 
-                <Secao titulo="Comandos">
+                <Grupo id="comandos" titulo="Imagem, vídeo e projetos" resumo={resumoComandos}>
                   <Caixa rotulo="Modelo favorito de imagem (“Forja, crie uma imagem de…”)">
                     <select className={`${campo} cursor-pointer`} value={e.imagem} onChange={(ev) => grava({ imagem: ev.target.value })}>
                       <option value="">nenhum: ele avisa</option>
@@ -582,7 +627,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     “Forja, no modo agente crie um site de ecommerce”: se uma conversa já trabalha numa pasta com nome parecido, ele
                     pergunta se continua nela ou cria uma nova. Qualquer outra pergunta ele só responde falando, pesquisando na web se precisar, sem abrir nem mexer em nada no Forja.
                   </p>
-                </Secao>
+                </Grupo>
               </>
             )}
           </div>
@@ -592,16 +637,74 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   );
 }
 
+function abertoGuardado(chave: string, padrao: boolean): boolean {
+  try {
+    const v = localStorage.getItem(chave);
+    return v === null ? padrao : v === "1";
+  } catch {
+    return padrao;
+  }
+}
+
+/** Um grupo do painel de configurações: fechado mostra só o título e um resumo do que está escolhido; lembra se a
+ *  pessoa deixou aberto (localStorage, por grupo). */
+function Grupo(props: { id: string; titulo: string; resumo?: string; abertoPadrao?: boolean; extra?: React.ReactNode;
+                        children: React.ReactNode }) {
+  const chave = `forja.assistente.grupo.${props.id}`;
+  const [aberto, setAberto] = useState(() => abertoGuardado(chave, !!props.abertoPadrao));
+  const alterna = () => setAberto((v) => { try { localStorage.setItem(chave, v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
+  return (
+    <section className={`rounded-[10px] border ${aberto ? "border-line-strong bg-surface/60" : "border-line"}`}>
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <button onClick={alterna} aria-expanded={aberto} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <ChevronDown className={`size-3.5 shrink-0 text-faint transition-transform duration-200 ${aberto ? "" : "-rotate-90"}`} />
+          <span className="shrink-0 text-[12.5px] font-medium text-fg">{props.titulo}</span>
+          {!aberto && props.resumo && <span className="min-w-0 truncate text-[11.5px] text-faint" title={props.resumo}>{props.resumo}</span>}
+        </button>
+        {aberto && props.extra}
+      </div>
+      {aberto && <div className="flex flex-col gap-2 border-t border-line px-3 pt-2.5 pb-3">{props.children}</div>}
+    </section>
+  );
+}
+
+/** Recolhível dentro de um grupo (a lista de gravações, que cresce). */
+function Recolhe(props: { id: string; titulo: string; resumo?: string; children: React.ReactNode }) {
+  const chave = `forja.assistente.recolhe.${props.id}`;
+  const [aberto, setAberto] = useState(() => abertoGuardado(chave, false));
+  const alterna = () => setAberto((v) => { try { localStorage.setItem(chave, v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
+  return (
+    <div className="rounded-[9px] border border-line bg-surface">
+      <button onClick={alterna} aria-expanded={aberto} className="flex w-full items-center gap-2 px-2.5 py-2 text-left">
+        <ChevronDown className={`size-3 shrink-0 text-faint transition-transform duration-200 ${aberto ? "" : "-rotate-90"}`} />
+        <span className="text-[12px] text-fg-2">{props.titulo}</span>
+        {props.resumo && <span className="ml-auto truncate text-[11px] text-faint">{props.resumo}</span>}
+      </button>
+      {aberto && <div className="border-t border-line p-1.5">{props.children}</div>}
+    </div>
+  );
+}
+
 const MODO_CIRCULO: Record<string, string> = {
   ouvindo: "ouvindo", gravando: "ouvindo", transcrevendo: "ouvindo", carregando: "ouvindo",
   escutando: "escutando", entendendo: "pensando", pensando: "pensando", falando: "falando",
 };
 
+const VELOCIDADE: Record<string, number> = { ouvindo: 0.6, escutando: 2, pensando: 0.43 };  // sobre os 6 s da forma
+
 /** O mesmo círculo fluido da sobreposição do canto da tela, grande: parado e respirando quando ouve, com ondas quando
  *  escuta um pedido, apagado quando pensa e pulsando quando fala (estilos em index.css, .forja-circulo). */
 function CirculoForja(props: { modo: string; tamanho: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // a velocidade muda pelo playbackRate, que guarda a fase: trocar o animation-duration no CSS fazia as bolhas e o
+    // halo pularem de forma e brilho a cada mudança de estado (a tela "piscava")
+    const g = VELOCIDADE[props.modo] ?? 1;
+    ref.current?.querySelectorAll<HTMLElement>(".g, .halo").forEach((el) => el.getAnimations().forEach((a) =>
+      a.updatePlaybackRate(el.classList.contains("halo") ? (props.modo === "falando" ? 2.7 : 1) : g)));
+  }, [props.modo]);
   return (
-    <div className={`forja-circulo ${props.modo || "desligado"}`} style={{ width: props.tamanho, height: props.tamanho }} aria-hidden>
+    <div ref={ref} className={`forja-circulo ${props.modo || "desligado"}`} style={{ width: props.tamanho, height: props.tamanho }} aria-hidden>
       <div className="anel" /><div className="anel a2" /><div className="anel a3" />
       <div className="halo" />
       <div className="g g1" /><div className="g g2" /><div className="g g3" />

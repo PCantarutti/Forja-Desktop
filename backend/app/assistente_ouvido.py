@@ -53,6 +53,16 @@ def normaliza(texto: str) -> str:
     return "".join(c for c in t if not unicodedata.combining(c))
 
 
+def sem_quase_nome(texto: str) -> str:
+    """O nome já foi ouvido (detector ou checagem rápida) mas a transcrição da frase inteira saiu sem ele, ou com ele
+    torto ("Força, que horas são", "Porja, ..."): tira a primeira palavra se ela lembra "Forja" e devolve o pedido."""
+    import difflib
+    palavras = texto.strip().split(maxsplit=1)
+    if palavras and difflib.SequenceMatcher(None, normaliza(palavras[0]).strip(",.!?:;"), "forja").ratio() >= 0.6:
+        return (palavras[1] if len(palavras) > 1 else "").lstrip(" ,.:;!?-").strip()
+    return texto.strip()
+
+
 def acorda(texto: str) -> str | None:
     """O comando depois de "Forja" ("" se só chamou), ou None se a fala não começa pelo nome. Olha o texto sem acento
     mas devolve o pedaço original (com acento), cortado na mesma posição."""
@@ -228,6 +238,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
     with sd.InputStream(device=mic, samplerate=SR, channels=1, dtype="float32", blocksize=BLOCO,
                         callback=lambda d, *_: blocos.put(d[:, 0].copy())):
         piso, antes, atual, acima, silencio, acordado, checou = 0.003, [], None, 0, 0, False, False
+        motivo = ""  # por que este trecho é pedido: "escuta" (janela aberta), "detector" ou "nome" (checagem rápida)
         detectou = 0.0  # quando o detector acendeu (pode ser um instante antes de o trecho abrir)
         while True:
             b = blocos.get()
@@ -238,7 +249,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
             if detector and detector.alimenta(b):
                 detectou = time.time()
                 if atual is not None and not acordado:
-                    acordado = True
+                    acordado, motivo = True, "detector"
                     diz("ESTADO", "escutando")
             rms = float(np.sqrt(np.mean(b * b)))
             limiar = max(0.008, piso * 3.5)
@@ -248,7 +259,8 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                 acima = acima + 1 if rms > limiar else 0
                 if acima >= INICIO:
                     atual, silencio, checou = list(antes), 0, False
-                    acordado = escuta.ativa() or time.time() - detectou < 1.5
+                    motivo = "escuta" if escuta.ativa() else "detector" if time.time() - detectou < 1.5 else ""
+                    acordado = bool(motivo)
                     diz("ESTADO", "escutando" if acordado else "gravando")
                 continue
             atual.append(b)
@@ -256,12 +268,12 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
             if (not detector or not so_detector) and not acordado and not checou and len(atual) >= CHECA_WAKE:
                 checou = True
                 if verifica(np.concatenate(atual)):
-                    acordado = True
+                    acordado, motivo = True, "nome"
                     diz("ESTADO", "escutando")
             fim = FIM_SILENCIO_COMANDO if acordado else FIM_SILENCIO  # no meio de um pedido, a pausa pode ser maior
             if silencio >= fim or len(atual) * BLOCO >= MAX_TRECHO:
-                yield np.concatenate(atual), acordado
-                atual, antes, acima, acordado = None, [], 0, False
+                yield np.concatenate(atual), acordado, motivo
+                atual, antes, acima, acordado, motivo = None, [], 0, False, ""
 
 def dispositivo(ident: str, tipo: str) -> int | None:
     """O índice do aparelho com este id ("<nome> <API>", o de --listar). O Windows trunca nomes e dois aparelhos
@@ -357,7 +369,7 @@ def main() -> int:
     so_detector = bool(detector) and not a.com_whisper
     diz("LOG", "Forja: detector treinado" + (" + Whisper" if detector and not so_detector else "") if detector
         else "Forja pelo Whisper em toda fala")
-    for audio, acordado in trechos(mic, boca, escuta, verifica, detector, so_detector):
+    for audio, acordado, motivo in trechos(mic, boca, escuta, verifica, detector, so_detector):
         if so_detector and not acordado:
             diz("ESTADO", "ouvindo")
             continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
@@ -368,8 +380,15 @@ def main() -> int:
         if ALUCINACAO.search(normaliza(texto)):
             diz("LOG", "ignorado: alucinação do Whisper")  # sem o texto: a fala da pessoa não vai para o log
             texto = ""
-        resposta = escuta.ativa()
+        # vale a janela de quando a pessoa COMEÇOU a falar: um pedido longo depois do bip passava dos 10 s até
+        # terminar de transcrever, a janela fechava no meio e o pedido sumia sem resposta nenhuma
+        resposta = motivo == "escuta" or escuta.ativa()
         comando = acorda(texto)
+        if texto and comando is None and motivo in ("detector", "nome"):
+            # o círculo já tinha acendido (o nome foi ouvido), mas a frase inteira saiu sem "Forja" ou com ele torto:
+            # antes o pedido era descartado em silêncio; agora vale, sem a palavra parecida com o nome
+            comando = sem_quase_nome(texto)
+            diz("LOG", "o nome foi ouvido mas não saiu na transcrição: vale o pedido")
         if texto and comando == "":
             # só "Forja" (dentro ou fora da janela): bip e escuta aqui mesmo. Nunca vira pergunta ("Forja." já foi
             # respondido como se fosse o pedido), e sem ida e volta ao backend o bip sai na hora.
@@ -382,8 +401,13 @@ def main() -> int:
             escuta.fecha()
             diz("OUVIU", json.dumps({"texto": texto, "comando": comando if comando is not None else texto,
                                      "wake": comando is not None, "resposta": resposta}, ensure_ascii=False))
-        elif acordado and not texto:
-            diz("LOG", "acordou mas não entendeu nada")
+        elif acordado:
+            # ouviu "Forja" (ou estava esperando a resposta) e não entendeu nada: avisa e escuta de novo, em vez de
+            # ficar mudo com o círculo apagando
+            diz("LOG", "acordou mas não entendeu: pediu para repetir")
+            boca.fala("Não entendi. Pode repetir?")
+            escuta.abre()
+            continue
         diz("ESTADO", "ouvindo")
     return 0
 

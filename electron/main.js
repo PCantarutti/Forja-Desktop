@@ -466,14 +466,15 @@ html,body{margin:0;height:100%;background:transparent;overflow:hidden}
 #b.pensando{filter:saturate(.55) brightness(.8)}
 .anel{position:absolute;inset:0;border-radius:50%;border:2px solid #5eead4;opacity:0}
 #b.escutando{filter:hue-rotate(-38deg) saturate(1.25)}
-#b.escutando .g{animation-duration:3s}
 #b.escutando .anel{animation:anel 1.5s cubic-bezier(.22,1,.36,1) infinite}
 #b.escutando .a2{animation-delay:.5s}#b.escutando .a3{animation-delay:1s}
 @keyframes anel{0%{scale:.62;opacity:.9}100%{scale:1.32;opacity:0}}
-#b.pensando .g{animation-duration:14s}#b.pensando .halo{animation-duration:2.6s}
+
 @media (prefers-reduced-motion:reduce){.g,.halo,.anel,#b.falando{animation:none}}
 </style><div id="b"><div class="anel"></div><div class="anel a2"></div><div class="anel a3"></div><div class="halo"></div><div class="g g1"></div><div class="g g2"></div><div class="g g3"></div></div>
-<script>function modo(m){document.getElementById("b").className=m?"on "+m:""}</script>`;
+<script>/* velocidade pelo playbackRate, que guarda a fase: trocar animation-duration fazia o círculo pular */
+function modo(m){const b=document.getElementById("b");b.className=m?"on "+m:"";const v={escutando:2,pensando:.43}[m]||1;
+b.querySelectorAll(".g,.halo").forEach(el=>el.getAnimations().forEach(a=>a.updatePlaybackRate(el.classList.contains("halo")?(m==="pensando"?1.15:1):v)))}</script>`;
 let bolha = null;
 let bolhaModo = "";
 

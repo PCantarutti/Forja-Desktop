@@ -316,3 +316,59 @@ def test_pergunta_pendente_nao_engole_pedido_novo():
     assert not assistente._parece_pedido("qwen 3.6")
     assert not assistente._parece_pedido("o de sempre")
     assert not assistente._parece_pedido("meu favorito de código")
+
+
+def test_trocar_o_modelo_do_assistente_falando():
+    casos = {
+        "troca seu modelo para o qwen 3.6": "qwen 3.6",
+        "muda o modelo do assistente pra gemma 12b": "gemma 12b",
+        "use o modelo ornith para responder": "ornith",
+        "passa a usar o modelo gemma": "gemma",
+        "quero que você use o modelo qwen": "qwen",
+        "troca de modelo": "",
+        "volta o seu modelo para o de sempre": "de sempre",
+        "volta pro modelo de sempre": "de sempre",
+    }
+    for frase, dito in casos.items():
+        assert assistente.rota(frase) == ("trocar_modelo", dito), frase
+    assert assistente.rota("qual modelo você está usando?")[0] == "qual_modelo"
+    assert assistente.rota("qual é o seu modelo?")[0] == "qual_modelo"
+    # "usando o modelo X" num pedido de agente/chat é o modelo DAQUELE trabalho, não troca o do assistente
+    assert assistente.rota("no modo agente crie um jogo usando o modelo gemma")[0] == "agente"
+    assert assistente.rota("abre um chat no forja usando o modelo qwen")[0] == "chat_forja"
+    assert assistente.rota("o que é um modelo de linguagem?")[0] == "chat"
+
+
+def _emprestavel(monkeypatch, alias="gemma-4-12b-it-Q4_K_M", permitidos=None, em_uso=False):
+    from app import llm, modelctl
+    perm = [{"provider": "local", "model": "gemma-4-12b-it-Q4_K_M"}] if permitidos is None else permitidos
+    monkeypatch.setattr(assistente, "ler", lambda: {**assistente.PADRAO, "permitidos": perm})
+    monkeypatch.setattr(modelctl, "em_uso", lambda: em_uso)
+    monkeypatch.setattr(assistente.localai, "status", lambda: {"running": bool(alias), "alias": alias})
+    monkeypatch.setattr(assistente.localai, "image_busy", lambda: False)
+    monkeypatch.setattr(assistente.localai, "_loading", False, raising=False)
+    monkeypatch.setattr(llm, "servidor_local_externo", lambda p: p == "lmstudio")
+    monkeypatch.setattr(llm, "carregado_externo", lambda p: "qwen-lm" if p == "lmstudio" else None)
+    return assistente.emprestavel()
+
+
+def test_modelo_carregado_e_parado_so_se_permitido(monkeypatch):
+    assert _emprestavel(monkeypatch) == {"provider": "local", "model": "gemma-4-12b-it-Q4_K_M"}
+    assert _emprestavel(monkeypatch, alias="Qwen3.6-35B-A3B-Q4_K_M") is None            # carregado, mas não permitido
+    assert _emprestavel(monkeypatch, em_uso=True) is None                               # permitido, mas trabalhando
+    assert _emprestavel(monkeypatch, alias="", permitidos=[]) is None
+    assert _emprestavel(monkeypatch, alias="", permitidos=[{"provider": "lmstudio", "model": "qwen-lm"}]) == \
+        {"provider": "lmstudio", "model": "qwen-lm"}                                    # LM Studio desta máquina
+
+
+def test_mesmo_modelo_no_lmstudio_e_local_prefere_o_local():
+    modelos = [{"provider": "lmstudio", "model": "gemma-4-12b"}, {"provider": "local", "model": "gemma-4-12b-it-Q4_K_M"}]
+    assert assistente.escolher_modelo("gemma 12b", [], modelos, {}) == {"provider": "local", "model": "gemma-4-12b-it-Q4_K_M"}
+
+
+def test_nome_ouvido_mas_fora_da_transcricao():
+    from app.assistente_ouvido import sem_quase_nome
+    assert sem_quase_nome("Força, que horas são?") == "que horas são?"
+    assert sem_quase_nome("Porja abre o chat") == "abre o chat"
+    assert sem_quase_nome("que horas são?") == "que horas são?"
+    assert sem_quase_nome("Forja.") == ""
