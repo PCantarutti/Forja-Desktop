@@ -17,7 +17,10 @@ type Estado = {
   vozes_kokoro: { id: string; nome: string }[]; humores: { id: string; nome: string }[];
   lembretes: { id: string; quando: string; texto: string }[];
   resumo_hora: string; cidade: string; avisos_email: string[];
+  pastas_documentos: string[]; notas: { id: string; texto: string; quando: string }[];
+  documentos: { arquivos: number; indexando: boolean; erro: string };
 };
+type Memoria = { name: string; slug: string; description: string; type: string };
 type GoogleConta = { client_id: string; tem_chave: boolean; conectado: boolean; email: string | null; pode_copiar_youtube: boolean };
 type Mic = { id: string; nome: string; api: string; tipo: "entrada" | "saida"; padrao: boolean };
 type Favorito = { nome: string; provider: string; model: string };
@@ -84,6 +87,14 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Lê e marca na sua Agenda Google (evento de 1 hora; só o dia vira evento do dia todo). “Me avisa N minutos antes” cria um lembrete do Forja. Sem a conta conectada, “marca” vira lembrete do Forja." },
   { titulo: "Resumo do dia e avisos de e-mail", exemplos: ["Forja, como tá meu dia?", "Forja, resumo do dia"],
     texto: "Agenda, e-mails importantes, lembretes, o que o Forja trabalhou durante a noite, o clima da sua cidade e notícias. Escolha um horário em E-mail e agenda e ele sai sozinho todo dia (falado, no Windows e no celular). Em “Avisar quando chegar e-mail de”, ele avisa na hora os e-mails dessas pessoas ou com essas palavras no assunto." },
+  { titulo: "Perguntar aos seus documentos", exemplos: ["Forja, quando vence meu contrato de aluguel?", "Forja, até quando vale a garantia da geladeira?", "Forja, o que diz minha nota sobre a viagem?"],
+    texto: "Escolha as pastas em Documentos e memória (contratos, PDFs, Word, planilhas, um cofre do Obsidian). Ele lê tudo para um índice no seu PC, atualiza sozinho e responde dizendo de qual arquivo veio." },
+  { titulo: "Memória pessoal", exemplos: ["Forja, lembra que meu carro é um Onix prata", "Forja, anota que a Bia prefere reunião à tarde", "Forja, qual é o meu carro?", "Forja, esquece o que eu disse do carro"],
+    texto: "Só o que você pede para guardar, e você vê e apaga em Documentos e memória. É a mesma memória do agente do Forja: o que você ensina aqui ele também sabe. A conversa falada continua sem ir para o disco." },
+  { titulo: "Notas rápidas", exemplos: ["Forja, anota: comprar café", "Forja, o que eu anotei ontem?", "Forja, apaga a nota do café"],
+    texto: "Sem horário vira nota; com horário (“às 14h”) vira lembrete." },
+  { titulo: "Projetos do Forja", exemplos: ["Forja, cria um card no board do Forja: bug no login", "Forja, onde o Forja trata o upload de imagem?", "Forja, o que o agente fez no projeto da loja hoje?"],
+    texto: "O projeto é achado pelo nome entre as pastas do Agente e da Maestro (sem nome: o mais recente). O card entra no backlog do board; “onde” usa o índice de código do agente; o histórico junta as conversas do dia e os commits." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
@@ -163,6 +174,10 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   const alternarPainel = () => setPainel((v) => { try { localStorage.setItem("forja.assistente.painel", v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
   const [tutorial, setTutorial] = useState(false);
   const [google, setGoogle] = useState<GoogleConta | null>(null);
+  const [memorias, setMemorias] = useState<Memoria[]>([]);
+  const carregaMemorias = useCallback(() => api.get<{ items: Memoria[] }>("/memory/personal")
+    .then((r) => setMemorias(r.items.filter((m) => m.type === "usuario" || m.type === "preferencia"))).catch(() => {}), []);
+  useEffect(() => { carregaMemorias(); const t = setInterval(carregaMemorias, 5000); return () => clearInterval(t); }, [carregaMemorias]);
   const [vivo, setVivo] = useState("desligado");  // o estado do ouvido, rápido: o círculo acompanha a fala
   const [transcricao, setTranscricao] = useState<{ quem: "voce" | "forja"; texto: string }[]>([]);
   const fimConversa = useRef<HTMLDivElement>(null);
@@ -655,6 +670,53 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   <p className="text-[11.5px] leading-relaxed text-faint">
                     O resumo do dia sai falado (com ele ligado), no Windows e no celular: agenda, e-mails importantes, lembretes,
                     o que o Forja trabalhou durante a noite, o clima e notícias. Os avisos de e-mail conferem a caixa a cada 3 minutos.
+                  </p>
+                </Grupo>
+
+                <Grupo id="saber" titulo="Documentos e memória"
+                       resumo={`${e.pastas_documentos.length} pasta${e.pastas_documentos.length === 1 ? "" : "s"} · ${memorias.length} memória${memorias.length === 1 ? "" : "s"} · ${e.notas.length} nota${e.notas.length === 1 ? "" : "s"}`}>
+                  <span className="text-[11.5px] font-medium text-fg-2">
+                    Pastas dos seus documentos {e.documentos.indexando ? "(lendo…)" : e.pastas_documentos.length ? `(${e.documentos.arquivos} arquivos)` : ""}
+                  </span>
+                  {e.pastas_documentos.map((p) => (
+                    <div key={p} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-fg" title={p}>{p}</span>
+                      <button aria-label={`Tirar ${p}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                              onClick={() => grava({ pastas_documentos: e.pastas_documentos.filter((x) => x !== p) })}>tirar</button>
+                    </div>
+                  ))}
+                  <Caixa rotulo="Caminho da pasta (Enter para adicionar): contratos, notas, um cofre do Obsidian">
+                    <input className={`${campo} font-mono`} placeholder="C:\Users\voce\Documents"
+                           onKeyDown={(ev) => {
+                             const v = ev.currentTarget.value.trim();
+                             if (ev.key === "Enter" && v) { grava({ pastas_documentos: [...e.pastas_documentos, v] }); ev.currentTarget.value = ""; }
+                           }} />
+                  </Caixa>
+                  {e.documentos.erro && <span className="text-[11.5px] text-diff-del-fg">{e.documentos.erro}</span>}
+                  <span className="mt-1 text-[11.5px] font-medium text-fg-2">O que ele sabe de você</span>
+                  {memorias.length === 0 && <span className="text-[11.5px] text-faint">Nada ainda. Diga “Forja, lembra que…”.</span>}
+                  {memorias.map((m) => (
+                    <div key={m.slug} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-fg" title={m.description}>
+                        <span className="font-medium">{m.name}</span> <span className="text-muted">{m.description}</span>
+                      </span>
+                      <button aria-label={`Esquecer ${m.name}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                              onClick={() => api.post("/memory/personal/delete", { names: [m.slug] }).then(carregaMemorias).catch((er) => onError(er.message))}>esquecer</button>
+                    </div>
+                  ))}
+                  <span className="mt-1 text-[11.5px] font-medium text-fg-2">Notas</span>
+                  {e.notas.length === 0 && <span className="text-[11.5px] text-faint">Nenhuma. Diga “Forja, anota: …”.</span>}
+                  {[...e.notas].reverse().map((n) => (
+                    <div key={n.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="shrink-0 font-mono text-[11px] text-fg-2">{quandoCurto(n.quando)}</span>
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-fg" title={n.texto}>{n.texto}</span>
+                      <button aria-label={`Apagar ${n.texto}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                              onClick={() => api.del(`/assistente/notas/${n.id}`).then(carrega).catch((er) => onError(er.message))}>apagar</button>
+                    </div>
+                  ))}
+                  <p className="text-[11.5px] leading-relaxed text-faint">
+                    Tudo fica no seu PC: os documentos viram um índice local, e as memórias são as mesmas que o agente do Forja usa.
+                    A conversa falada continua sem ser guardada; só vale o que você pedir para guardar.
                   </p>
                 </Grupo>
 

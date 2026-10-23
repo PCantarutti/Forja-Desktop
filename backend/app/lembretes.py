@@ -39,7 +39,7 @@ HORA = re.compile(r"(?P<as>\b(?:as|a|ao|para\s+as|para\s+o|pras|pelas|la\s+pelas
                   r"|meio[\s-]?dia|meia[\s-]?noite)(?:(?P<u>\s*(?::|h(?=\d|\b)|hs\b|hrs\b|horas?\b))\s*(?:e\s+)?"
                   r"(?P<m>\d{2}|meia|quinze|trinta|quarenta\s+e\s+cinco)?(?:\s*min(?:utos)?\b)?)?"
                   r"(?:\s+(?:da|de|a)\s+(?P<p>manha|tarde|noite|madrugada))?(?![\w:])")
-DIA = re.compile(r"\b(?P<dia>depois\s+de\s+amanha|amanha|hoje)\b|\b(?:na\s+|no\s+|nesta\s+|nessa\s+|proxim[ao]\s+|n[ao]\s+proxim[ao]\s+)?"
+DIA = re.compile(r"\b(?P<dia>depois\s+de\s+amanha|amanha|hoje|anteontem|ontem)\b|\b(?:na\s+|no\s+|nesta\s+|nessa\s+|proxim[ao]\s+|n[ao]\s+proxim[ao]\s+)?"
                  r"(?P<sem>segunda|terca|quarta|quinta|sexta|sabado|domingo)(?:[\s-]feira)?\b")
 PERIODO = re.compile(r"\b(?:de|a|pela|na|hoje\s+a)\s+(?P<p>manha|tarde|noite)\b")
 SEMANA = ["segunda", "terca", "quarta", "quinta", "sexta", "sabado", "domingo"]
@@ -68,7 +68,7 @@ def quando(texto: str, agora: datetime | None = None) -> tuple[datetime | None, 
     if d := DIA.search(c):
         trechos.append(d.span())
         if d["dia"]:
-            dia = agora.date() + timedelta(days={"hoje": 0, "amanha": 1}.get(d["dia"], 2))
+            dia = agora.date() + timedelta(days={"hoje": 0, "amanha": 1, "ontem": -1, "anteontem": -2}.get(d["dia"], 2))
         else:
             falta = (SEMANA.index(d["sem"]) - agora.weekday()) % 7
             dia = agora.date() + timedelta(days=falta or 7)
@@ -130,6 +130,8 @@ def dia_dito(d, agora: datetime | None = None) -> str:
         return "hoje"
     if dias == 1:
         return "amanhã"
+    if dias in (-1, -2):
+        return "ontem" if dias == -1 else "anteontem"
     if 1 < dias <= 7:
         dia = ["na segunda", "na terça", "na quarta", "na quinta", "na sexta", "no sábado", "no domingo"][d.weekday()]
         return dia.replace("na ", "na próxima ").replace("no ", "no próximo ") if dias == 7 else dia

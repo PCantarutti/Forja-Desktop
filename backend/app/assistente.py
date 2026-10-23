@@ -94,7 +94,8 @@ HUMORES = {
 PADRAO = {"ligado": False, "mic": "", "saida": "", "whisper": "small", "motor": "kokoro", "voz": "pf_dora", "modelo_tts": "", "voz_tts": "",
           "humor": "sarcastico", "favoritos": [], "modelo": None, "ocioso_min": 5, "atalho": "",
           "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado", "permitidos": [],
-          "imagem": "", "video": "", "pasta_projetos": "", "resumo_hora": "", "cidade": "", "avisos_email": []}
+          "imagem": "", "video": "", "pasta_projetos": "", "resumo_hora": "", "cidade": "", "avisos_email": [],
+          "pastas_documentos": []}
 MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se o modelo desandar
 # raciocínio do modelo antes de falar: desligado é o padrão (resposta falada quer velocidade); os outros são os
 # esforços do Forja (config.REASONING_BUDGET), e o pensamento nunca é falado
@@ -181,7 +182,15 @@ def gravar(patch: dict) -> dict:
         if not isinstance(avisos, list) or len(avisos) > 20:
             raise ToolError("avisos_email: no máximo 20 remetentes ou palavras.")
         d["avisos_email"] = [a for a in dict.fromkeys(str(x).strip()[:80] for x in avisos) if a]
+        pastas = d["pastas_documentos"]
+        if not isinstance(pastas, list) or len(pastas) > 10:
+            raise ToolError("pastas_documentos: no máximo 10 pastas.")
+        d["pastas_documentos"] = [str(x).strip() for x in dict.fromkeys(pastas) if str(x).strip()]
+        if falta := [x for x in d["pastas_documentos"] if not Path(x).is_dir()]:
+            raise ToolError(f"Pasta não encontrada: {falta[0]}")
         CONFIG.write_text(json.dumps(d, ensure_ascii=False, indent=2), "utf-8")
+    if "pastas_documentos" in patch and d["pastas_documentos"]:
+        indexa_documentos()  # pasta nova: já começa a ler, para a primeira pergunta não esperar
     reinicia = {"mic", "saida", "whisper", "voz", "detector", "sensibilidade"} & set(patch)
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
         parar()
@@ -209,7 +218,12 @@ def estado() -> dict:
             "treinando": treino["id"] if treino and treino["status"] == "running" else "",
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "vozes_kokoro": VOZES_KOKORO, "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
-            "lembretes": lembretes.lista()}
+            "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado()}
+
+
+def _conhecimento():
+    from . import conhecimento
+    return conhecimento
 
 
 def nota_falada(humor: str, pode_brincar: bool = True) -> str:
@@ -691,6 +705,7 @@ TROCA_MODELO = re.compile(r"\b(?:troc\w*|mud\w*|alter\w*|coloc\w*|bot\w*|volt\w*
 QUAL_MODELO = re.compile(r"\b(?:qual|que)\s+(?:e\s+)?(?:o\s+)?(?:seu\s+|teu\s+)?modelo\s+(?:voce|vc|ta|esta|e\s+o\s+seu)\b"
                          r"|\bqual\s+(?:e\s+)?(?:o\s+)?seu\s+modelo\b|\bcom\s+qual\s+modelo\s+voce\b")
 # o que indica que a pessoa quer algo DO Forja: sem regra casada, o modelo decide (classifica_rota)
+NAO_MIDIA = re.compile(r"^\s*(?:onde|qual|em\s+que)\b|\b(?:upload|codigo|funcao|arquivo)\b")
 CITA_FORJA = re.compile(r"\b(?:forja|aplicativo|app|chat|conversa|agente|a\s+gente|maestro|pesquisa\s+\w+|imagem|foto|"
                         r"desenho|video)\b")
 # "usando o modelo Qwen 3.6": o modelo já vem no pedido e a pergunta "com qual modelo?" não precisa ser feita
@@ -723,9 +738,11 @@ def rota(comando: str) -> tuple[str, str]:
         return "agente", _corta(comando, c, m)
     if m := CHAT_FORJA.search(c):
         return "chat_forja", comando[m.start(1):].strip(" ,.?")
-    if m := VIDEO.search(c):
+    if NAO_MIDIA.search(c):  # "onde está o código que faz o upload de imagem?" é pergunta, não pedido de imagem
+        pass
+    elif m := VIDEO.search(c):
         return "video", comando[m.start(1):].strip(" ,.") or comando
-    if m := IMAGEM.search(c):
+    elif m := IMAGEM.search(c):
         return "imagem", comando[m.start(1):].strip(" ,.") or comando
     if QUAL_MODELO.search(c):
         return "qual_modelo", ""
@@ -1205,7 +1222,14 @@ PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w
                    r"computador|esquec\w*|pul\w*|proxima|anterior|player|cheia|esconde\w*|limpa|aument\w*|abaix\w*|baix\w*|alto|"
                    r"diminu\w*|salv\w*|baixei|contrato|boleto|nome\s+d[ae]ss[ae]|e-?mails?|gmail|caixa\s+de\s+entrada|"
                    r"inbox|respond\w*|escrev\w*|agenda|reunia\w*|reunio\w*|evento\w*|marc\w*|resumo|meu\s+dia|chegou|"
-                   r"o\s+que\s+(?:que\s+)?(?:eu\s+)?tenho|dentista|consulta|medico|programacao|novidades|pra\s+fazer)\b")
+                   r"o\s+que\s+(?:que\s+)?(?:eu\s+)?tenho|dentista|consulta|medico|programacao|novidades|pra\s+fazer|"
+                   r"lembra\s+que|guard\w*|nota\w*|card|board|codigo|projeto\w*|documento\w*|garantia|vence\w*|"
+                   r"vencimento|anotei|onde\s+(?:o|a|que|e)|fez|rolou|feito|arquivo\w*|condominio|apolice|seguro|papeis|memori\w*|"
+                   r"apag\w*|delet\w*|lista|informac\w*|parte\s+do)\b")
+# pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente)
+SABER = re.compile(r"\b(?:card|board|onde\b.{0,40}\b(?:trata|faz|salva|guarda|fica|processa|esta|ta)\b|em\s+que\s+(?:arquivo|parte)|"
+                   r"qual\s+(?:e\s+)?a\s+parte|"
+                   r"o\s+que\s+(?:o\s+agente|a\s+maestro|foi|rolou|\w+\s+fez)|o\s+que\s+(?:eu\s+)?fiz)\b")
 CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A quer. Responda SÓ um JSON numa linha.
 - Mexer no computador: {"tipo":"pc","acao":"<acao>","alvo":"<alvo>"} com acao em:
   abrir / fechar (alvo: o programa), volume (alvo: 0 a 100, ou +10 / -10), mudo (alvo: 1 deixa mudo, 0 tira do mudo),
@@ -1223,6 +1247,14 @@ CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A
 - Agenda (Google Agenda): {"tipo":"agenda","acao":"listar","quando":"<dia como foi dito: hoje, amanhã, sexta, essa semana>"},
   {"tipo":"agenda","acao":"criar","titulo":"<compromisso>","quando":"<dia e hora como foi dito>","aviso_min":<minutos antes para avisar; 0 se não pediu>}.
 - Resumo do dia (agenda, e-mails, lembretes, clima, notícias): {"tipo":"resumo_dia"}.
+- Documentos da pessoa (contratos, notas, PDFs nas pastas dela): {"tipo":"documentos","pergunta":"<a pergunta>"}.
+- Memória pessoal (um fato para guardar para sempre): {"tipo":"memoria","acao":"guardar","assunto":"<2 a 4 palavras>",
+  "texto":"<o fato completo>"} ou {"tipo":"memoria","acao":"esquecer","assunto":"<palavras>"}.
+- Nota rápida (sem horário): {"tipo":"nota","acao":"anotar","texto":"<a nota>"}, {"tipo":"nota","acao":"listar",
+  "quando":"<hoje, ontem... ou vazio>"} ou {"tipo":"nota","acao":"apagar","texto":"<palavras>"}.
+- Card no board de um projeto do Forja: {"tipo":"card","projeto":"<nome ou vazio>","titulo":"<o card>"}.
+- Onde algo está no código de um projeto: {"tipo":"codigo","projeto":"<nome ou vazio>","pergunta":"<o que procurar>"}.
+- O que foi feito num projeto do Forja: {"tipo":"historico","projeto":"<nome ou vazio>","quando":"<hoje, ontem...>"}.
 - Qualquer outra coisa (pergunta, conversa, conta, receita, pesquisa na web, notícia): {"tipo":"responder"}.
 Exemplos:
 "segura a música aí" -> {"tipo":"pc","acao":"midia","alvo":"pausa"}
@@ -1238,6 +1270,14 @@ Exemplos:
 "tenho alguma coisa na quinta?" -> {"tipo":"agenda","acao":"listar","quando":"quinta"}
 "bota na agenda academia amanhã às 7 e me avisa meia hora antes" -> {"tipo":"agenda","acao":"criar","titulo":"academia","quando":"amanhã às 7","aviso_min":30}
 "como tá meu dia?" -> {"tipo":"resumo_dia"}
+"lembra que meu carro é um Onix prata" -> {"tipo":"memoria","acao":"guardar","assunto":"carro","texto":"O carro da pessoa é um Onix prata"}
+"anota que a Bia prefere reunião à tarde" -> {"tipo":"memoria","acao":"guardar","assunto":"Bia reuniões","texto":"A Bia prefere reunião à tarde"}
+"anota aí: trocar a lâmpada da sala" -> {"tipo":"nota","acao":"anotar","texto":"trocar a lâmpada da sala"}
+"o que foi que eu anotei ontem?" -> {"tipo":"nota","acao":"listar","quando":"ontem"}
+"até quando vale a garantia da geladeira?" -> {"tipo":"documentos","pergunta":"até quando vale a garantia da geladeira"}
+"põe no board do mesaflow: tela de login trava" -> {"tipo":"card","projeto":"mesaflow","titulo":"tela de login trava"}
+"em que arquivo o forja salva as configurações?" -> {"tipo":"codigo","projeto":"forja","pergunta":"salva configurações"}
+"o que rolou no projeto da loja ontem?" -> {"tipo":"historico","projeto":"loja","quando":"ontem"}
 "me lembra como se faz pão de queijo" -> {"tipo":"responder"}
 "procura o resultado do jogo do Flamengo" -> {"tipo":"responder"}
 "abre o jogo comigo, você é uma IA?" -> {"tipo":"responder"}
@@ -1273,6 +1313,8 @@ async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | N
         return "agenda", d
     if d.get("tipo") == "resumo_dia":
         return "resumo_dia", d
+    if d.get("tipo") in ("documentos", "memoria", "nota", "card", "codigo", "historico"):
+        return d["tipo"], d
     return None
 NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 
@@ -1280,6 +1322,10 @@ NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 async def _executa(nome: str, args: dict, spec: dict | None = None, slot=None) -> str:
     """Ação que o modelo escolheu (o que as regras não pegaram): faz, fala o resultado e devolve uma linha para o
     histórico da conversa falada."""
+    if nome in ("documentos", "memoria", "nota", "card", "codigo", "historico"):
+        if spec is None:
+            spec, slot, _ = await _prepara_modelo()
+        return await _saber_voz(nome, args, spec, slot)
     if nome in ("email", "agenda", "resumo_dia"):
         if spec is None:
             spec, slot, _ = await _prepara_modelo()
@@ -1365,7 +1411,7 @@ async def _chat(texto: str) -> None:
     # O system fica fixo e o que muda a cada pergunta (hora, pausa do humor) vai junto dela: o prefixo da conversa
     # não muda e o llama-server reaproveita o cache (antes reprocessava ~600 tokens toda vez: 10 s num MoE grande).
     agora_txt = f"[Agora: {datetime.now():%d/%m/%Y %H:%M} neste PC.{'' if pode_brincar else ' ' + SEM_PIADA}]"
-    msgs = [{"role": "system", "content": nota_falada(cfg["humor"])}, *hist[-12:-1],
+    msgs = [{"role": "system", "content": nota_falada(cfg["humor"]) + _memorias_txt()}, *hist[-12:-1],
             {"role": "user", "content": f"{agora_txt}\n{texto}"}]
     esforco = cfg["raciocinio"]
     buf, tudo, pesquisou, feito = "", "", False, ""
@@ -1618,7 +1664,15 @@ async def _gera(spec: dict, slot, sistema: str, usuario: str, max_tokens: int = 
                                            None, 8192, think=False, slot=slot, max_tokens=max_tokens):
         if tipo == "content":
             texto += val
-    return sem_marca(texto).strip()
+    return _falavel(sem_marca(texto))
+
+
+def _falavel(texto: str) -> str:
+    """O que vai ser lido em voz alta: sem markdown (a voz lia "asterisco"), sem crase de código e sem o "FALADO:" que
+    modelo pequeno às vezes copia da instrução."""
+    texto = re.sub(r"^\s*(?:falado|resposta)\s*[:.\-]\s*", "", texto.strip(), flags=re.I)
+    texto = re.sub(r"\*\*|__|`+|^#+\s*", "", texto, flags=re.M)
+    return re.sub(r"[ \t]{2,}", " ", texto).strip()
 
 
 def _dados(itens: list[str]) -> str:
@@ -1888,6 +1942,9 @@ async def _vigia_rotina() -> None:
         await asyncio.sleep(30)
         try:
             await _resumo_agendado()
+            if time.monotonic() - _rotina.get("docs_t", 0.0) > 900:
+                _rotina["docs_t"] = time.monotonic()
+                indexa_documentos()
             if time.monotonic() - _rotina["email_t"] > 180:
                 _rotina["email_t"] = time.monotonic()
                 await asyncio.to_thread(_confere_avisos_email)
@@ -1935,6 +1992,184 @@ def _confere_avisos_email() -> list[dict]:
                         f"E-mail novo de {nome}: {e['assunto']}." if _vivo() else "", fala, e["id"])
     AVISOS_VISTOS.write_text(json.dumps(list(vistos | {e["id"] for e in lista})[-500:]), "utf-8")
     return novos
+
+
+# ------------------------------------------------------------------ documentos, memória, notas e o Forja (fase 3)
+
+DOCS = ("Você é o assistente de voz F.O.R.J.A e responde usando SÓ os trechos dos documentos da pessoa. Responda "
+        "FALADO, curto (1 a 3 frases), dizendo de qual arquivo veio (só o nome). Se os trechos não respondem, diga que "
+        "não achou isso nos documentos. " + DADO_DE_FORA)
+CODIGO = ("Você é o assistente de voz F.O.R.J.A; sua resposta vai ser lida em voz alta. Em 1 a 3 frases, sem markdown, "
+          "diga onde fica o que foi perguntado: o nome do arquivo, a pasta e a função. Use SÓ o resultado da busca: não "
+          "invente arquivo, banco ou detalhe que não esteja nele; se ele não responde, diga os arquivos mais prováveis. "
+          + DADO_DE_FORA)
+HISTORICO = ("Você é o assistente de voz F.O.R.J.A. Resuma FALADO, em até 4 frases, o que foi feito no projeto no período, "
+             "a partir das conversas do Forja e dos commits. " + DADO_DE_FORA)
+
+
+def _memorias_txt() -> str:
+    """As memórias "do usuário" e de preferência (as mesmas do agente) no system do chat falado: "qual a placa do meu
+    carro?" responde. Só o que a pessoa pediu para guardar; a conversa falada continua sem ir para o disco."""
+    from . import memory
+    if not config.PERSONAL_MEMORY:
+        return ""
+    linhas = []
+    for m in [m for m in memory.personal_list() if m["type"] in ("usuario", "preferencia")][:40]:
+        try:
+            linhas.append(f"- {m['name']}: {memory.personal_read(m['slug'])['content'].strip()[:300]}")
+        except memory.MemoryError:
+            continue
+    return ("\n\nO que você sabe sobre a pessoa (ela pediu para guardar; use só quando ajudar a responder):\n"
+            + "\n".join(linhas)) if linhas else ""
+
+
+def indexa_documentos() -> None:
+    from . import conhecimento
+    pastas = ler()["pastas_documentos"]
+    if pastas and not conhecimento.estado()["indexando"]:
+        threading.Thread(target=lambda: _tenta(conhecimento.atualiza, pastas), daemon=True).start()
+
+
+def _tenta(fn, *args):
+    try:
+        return fn(*args)
+    except Exception as e:  # thread de fundo: registra e segue
+        print(f"Forja: voz: {fn.__name__} falhou: {e.__class__.__name__}: {e}", flush=True)
+
+
+def _acha_projeto(nome: str) -> str | None:
+    """A pasta do projeto dito ("forja", "loja", "e-commerce") entre as do Agente e da Maestro; vazio = a mais recente."""
+    pastas = list(_projetos())
+    if not nome.strip():
+        return pastas[0] if pastas else None
+    return pasta_parecida(re.sub(r"[^a-z0-9]+", "-", _sem_acento(nome)).strip("-"), pastas)
+
+
+def _palavras(texto: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z0-9]+", _sem_acento(texto)) if len(w) >= 4]
+
+
+async def _saber_voz(nome: str, d: dict, spec: dict, slot) -> str:
+    from . import board, codebusca, conhecimento, memory
+    if nome == "memoria":
+        if d.get("acao") == "esquecer":
+            alvo = _palavras(str(d.get("assunto") or d.get("texto") or ""))
+            itens = [m for m in memory.personal_list() if m["type"] in ("usuario", "preferencia")
+                     and alvo and any(w in _sem_acento(m["name"] + " " + m["description"]) for w in alvo)]
+            if not itens:
+                fala("Não achei essa memória.")
+                return "(memória: não achou)"
+            memory.personal_delete([m["slug"] for m in itens])
+            fala(f"Esqueci: {itens[0]['name']}." if len(itens) == 1 else f"Esqueci {len(itens)} memórias.")
+            return "(memória apagada)"
+        texto = str(d.get("texto") or "").strip()
+        if not texto:
+            fala("O que eu guardo?")
+            return "(memória: vazia)"
+        assunto = str(d.get("assunto") or "").strip() or " ".join(texto.split()[:4])
+        memory.personal_write(assunto, texto[:200], texto, "usuario")
+        print("Forja: voz: memória guardada", flush=True)  # sem o conteúdo no log
+        fala("Guardado.")
+        return "(memória guardada)"
+    if nome == "nota":
+        acao = d.get("acao")
+        if acao == "anotar":
+            texto = str(d.get("texto") or "").strip()
+            if not texto:
+                fala("O que eu anoto?")
+                return "(nota vazia)"
+            if lembretes.tem_hora(texto) and (alvo := lembretes.quando(texto)[0]):
+                await _lembrete("criar", (alvo, texto))  # "anota que tenho dentista sexta às 10": com hora, avisa
+                return "(nota com hora virou lembrete)"
+            conhecimento.anotar(texto)
+            fala(f"Anotado: {texto}.")
+            return "(nota anotada)"
+        if acao == "apagar":
+            alvo = _palavras(str(d.get("texto") or ""))
+            ids = {x["id"] for x in conhecimento.notas() if alvo and any(w in _sem_acento(x["texto"]) for w in alvo)}
+            conhecimento.apagar_notas(ids)
+            fala("Apaguei." if ids else "Não achei essa nota.")
+            return "(nota apagada)"
+        quando = str(d.get("quando") or "").strip()
+        dia = lembretes.quando(quando)[0] if quando else None
+        itens = conhecimento.notas_do_dia(dia.date()) if dia else conhecimento.notas()[-5:]
+        rotulo = lembretes.dia_dito(dia.date()).capitalize() if dia else "Suas últimas notas"
+        if not itens:
+            fala(f"{rotulo} você não anotou nada." if dia else "Você não tem notas.")
+        else:
+            fala(f"{rotulo}{' você anotou' if dia else ''}: {'; '.join(x['texto'] for x in itens)}.")
+        return "(notas lidas)"
+    if nome == "documentos":
+        pastas = ler()["pastas_documentos"]
+        if not pastas:
+            fala("Escolha as pastas dos seus documentos na página do assistente, em Documentos e memória.")
+            return "(documentos: sem pastas)"
+        pergunta = str(d.get("pergunta") or "").strip()
+        achados = await asyncio.to_thread(conhecimento.busca, pergunta, pastas)
+        if not achados:
+            fala("Não achei nada sobre isso nos seus documentos.")
+            return "(documentos: nada)"
+        fala(await _gera(spec, slot, DOCS, f"Pergunta: {pergunta}\n" + _dados(
+            [f"Arquivo: {a['arquivo']}\n{a['trecho']}" for a in achados])))
+        return f"(documentos: {len(achados)} trechos)"
+    pasta = _acha_projeto(str(d.get("projeto") or ""))
+    if not pasta:
+        fala(f"Não achei o projeto {d.get('projeto') or ''} nas conversas do agente.".replace("  ", " "))
+        return "(projeto não achado)"
+    nome_pasta = Path(pasta).name
+    if nome == "card":
+        titulo = str(d.get("titulo") or "").strip()
+        if not titulo:
+            fala("Qual é o card?")
+            return "(card vazio)"
+        card, _ = await asyncio.to_thread(board.criar, board.projeto_de(pasta),
+                                          {"titulo": titulo, "descricao": "Criado por voz no assistente F.O.R.J.A."})
+        fala(f"Criei o card {titulo} no board de {nome_pasta}.")
+        return "(card criado)"
+    if nome == "codigo":
+        pergunta = str(d.get("pergunta") or "").strip()
+        try:
+            r = await asyncio.to_thread(codebusca.code_search, Path(pasta), {"query": pergunta})
+        except ToolError as e:
+            fala(f"Não consegui buscar no código: {e}")
+            return "(código: erro)"
+        fala(await _gera(spec, slot, CODIGO, f"Projeto {nome_pasta}. Pergunta: onde {pergunta}?\n" + _dados([r[:4000]])))
+        return "(código: buscou)"
+    quando = str(d.get("quando") or "hoje").strip()
+    dia = (lembretes.quando(quando)[0] or datetime.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+    partes = await asyncio.to_thread(_historico, pasta, dia)
+    if not partes:
+        fala(f"Não teve trabalho em {nome_pasta} {lembretes.dia_dito(dia.date())}.")
+        return "(histórico: nada)"
+    fala(await _gera(spec, slot, HISTORICO, f"Projeto {nome_pasta}, {lembretes.dia_dito(dia.date())}.\n" + _dados(partes)))
+    return "(histórico resumido)"
+
+
+def _historico(pasta: str, dia: datetime) -> list[str]:
+    """Conversas do projeto mexidas no dia (título e a última resposta do agente) e os commits do dia."""
+    from datetime import timezone
+    ini = dia.astimezone(timezone.utc).replace(tzinfo=None)
+    fim = ini + timedelta(days=1)
+    partes = []
+    with db.session() as s:
+        convs = s.execute(select(db.Conversation).where(db.Conversation.workspace == pasta)
+                          .order_by(db.Conversation.updated_at.desc()).limit(15)).scalars().all()
+        for c in convs:
+            if not (c.updated_at and ini <= c.updated_at.replace(tzinfo=None) < fim):
+                continue
+            ultima = s.execute(select(db.Message.content).where(db.Message.conversation_id == c.id,
+                                                                db.Message.role == "assistant", db.Message.content != "")
+                               .order_by(db.Message.id.desc()).limit(1)).scalar() or ""
+            partes.append(f"Conversa ({c.kind}) \"{c.title}\": {ultima[:700]}")
+    try:
+        r = subprocess.run(["git", "-C", pasta, "log", f"--since={dia:%Y-%m-%d} 00:00", f"--until={dia:%Y-%m-%d} 23:59",
+                            "--pretty=%s", "-n", "20"], capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=15, **native.popen_kwargs())
+        if r.returncode == 0 and r.stdout.strip():
+            partes.append("Commits do dia:\n" + r.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return partes
 
 
 def _itens_ditos(itens: list[dict]) -> str:
@@ -2024,7 +2259,7 @@ async def _atende(ouviu: dict) -> None:
             print(f"Forja: voz: ação do PC: {acao[0]}", flush=True)  # sem o argumento: pode ser nome de arquivo
             fala(await asyncio.to_thread(pc.faz, *acao))
             return
-        if tipo == "chat" and CITA_FORJA.search(_sem_acento(comando)):
+        if tipo == "chat" and CITA_FORJA.search(_sem_acento(comando)) and not SABER.search(_sem_acento(comando)):
             # cita o Forja e nenhuma regra pegou (o Whisper ouviu torto, ou jeito novo de pedir): o modelo decide
             tipo = {"responder": "chat", "chat": "chat_forja"}.get(r := await classifica_rota(sem_modelo), r)
             print(f"Forja: voz: o modelo classificou o pedido como {tipo}", flush=True)

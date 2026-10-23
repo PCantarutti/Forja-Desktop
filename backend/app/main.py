@@ -1369,6 +1369,12 @@ def assistente_esquecer():
     return assistente.esquecer()
 
 
+@app.delete("/api/assistente/notas/{nid}")
+def assistente_apagar_nota(nid: str):
+    from . import conhecimento
+    return conhecimento.apagar_notas({nid})
+
+
 @app.delete("/api/assistente/lembretes/{lid}")
 def assistente_apagar_lembrete(lid: str):
     """Tira um lembrete (a lista volta pela GET /api/assistente, campo lembretes)."""
