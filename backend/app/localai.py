@@ -108,7 +108,7 @@ CONTROLADAS = {
     "--slot-save-path", "-c", "--ctx-size", "-ngl", "--gpu-layers", "--n-gpu-layers", "-t", "--threads",
     "-b", "--batch-size", "-ub", "--ubatch-size", "-np", "--parallel", "-fa", "--flash-attn", "-ctk",
     "--cache-type-k", "-ctv", "--cache-type-v", "-kvu", "--kv-unified", "-nkvo", "--no-kv-offload", "--mlock",
-    "--no-mmap", "--mmap", "--load-mode", "--seed", "-s", "--rope-freq-base", "--rope-freq-scale", "--mmproj",
+    "--no-mmap", "--mmap", "--load-mode", "--no-host", "--seed", "-s", "--rope-freq-base", "--rope-freq-scale", "--mmproj",
     "-mm", "--swa-full", "--ctx-checkpoints", "--n-cpu-moe", "-ncmoe", "-fit", "--fit", "--device", "-dev",
     "--override-kv", "--reasoning-budget", "--spec-type", "--spec-draft-n-max", "--spec-draft-model", "-md",
     "--model-draft", "--spec-draft-ngl", "-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft", "--log-file",
@@ -1736,6 +1736,10 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
         # Sem o cache em RAM cada slot guarda o seu; a troca de conversa no mesmo slot fica com o kvcache.
         a += ["--cache-ram", "0"]
     a += _load_mode(bool(p.get("mlock")), bool(p.get("mmap", True)), known)
+    if not p.get("mmap", True) and "vulkan" in str(exe).lower() and ok("--no-host"):
+        # Sem mmap o Vulkan põe os pesos que ficam na CPU (--n-cpu-moe) em memória pinada (Vulkan_Host):
+        # 16 GB do flint derrubaram a Arc B580 com ErrorDeviceLost na carga. --no-host usa buffer comum.
+        a.append("--no-host")
     for key, flag in (("rope_freq_base", "--rope-freq-base"), ("rope_freq_scale", "--rope-freq-scale")):
         if float(p.get(key) or 0) and ok(flag):
             a += [flag, str(float(p[key]))]

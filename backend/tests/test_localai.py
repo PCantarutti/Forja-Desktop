@@ -1257,6 +1257,15 @@ def test_mlock_sem_mmap_e_ignorado(isolado):
     assert localai._load_mode(True, False, frozenset(["--mlock", "--no-mmap"])) == ["--no-mmap"]
 
 
+def test_sem_mmap_no_vulkan_usa_no_host(isolado):
+    """Sem mmap, o Vulkan pinava os experts da CPU (16 GB do flint) e a Arc caía com ErrorDeviceLost."""
+    p = {**localai.DEFAULT_PARAMS, "mmap": False}
+    vk = Path("runtimes/llama/vulkan/llama-server.exe")
+    assert "--no-host" in localai.argv(vk, "m.gguf", p)
+    assert "--no-host" not in localai.argv(vk, "m.gguf", localai.DEFAULT_PARAMS)
+    assert "--no-host" not in localai.argv(Path("runtimes/llama/cuda/llama-server.exe"), "m.gguf", p)
+
+
 def test_perfis_por_modelo(isolado, monkeypatch):
     """Perfil = só o que difere do padrão; aplicar vira os parâmetros do modelo e o resto volta ao padrão."""
     p = "m.gguf"
