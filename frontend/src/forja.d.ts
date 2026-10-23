@@ -43,6 +43,10 @@ interface ForjaBridge {
   };
   /** Ícone do programa padrão do sistema para uma extensão (".docx"). Vazio se não houver. */
   icon(ext: string): Promise<string>;
+  /** Atalho global do assistente de voz como a casca registrou: erro = combinação inválida ou já usada. */
+  atalho?(): Promise<{ atual: string; ok: boolean; erro: string }>;
+  /** A página do assistente à vista: a casca esconde o círculo do canto da tela. */
+  assistenteVisivel?(visivel: boolean): void;
   /** Navegador nativo: onde o painel da conversa `key` está (px de CSS), ou bounds null quando não está visível. */
   browser: {
     view(shown: { key: string; bounds: { x: number; y: number; width: number; height: number } | null }): void;

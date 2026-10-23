@@ -34,7 +34,9 @@ import { Modal } from "./components/Modal";
 import ModeloCarregado from "./components/ModeloCarregado";
 import { LogoMark } from "./components/Logo";
 import { lerAparencia } from "./aparencia";
+import AssistenteView from "./components/AssistenteView";
 import {
+  BotaoVoz,
   ModeWarning,
   nextPermission,
   ModeEffortMenu,
@@ -645,6 +647,9 @@ export default function App() {
     atividadeAnterior.current = activity;
     if (!antes) return;
     if (activity.lista && antes.lista && activity.lista !== antes.lista) refreshConversations();
+    // "Forja, crie uma imagem de...": o comando falado abriu uma conversa, e o PC vai até ela.
+    const voz = activity.voz?.ultimo;
+    if (voz && voz.n !== antes.voz?.ultimo?.n) irParaConversa(voz.conv, voz.kind as Section);
     const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
     const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
     for (const c of activity.conversations) {
@@ -2317,15 +2322,18 @@ export default function App() {
         value={section}
         onChange={changeSection}
         logo={<img src="/favicon.svg" alt="Forja" className="size-full" />}
-        pe={
+        pe={<>
+          <BotaoVoz voz={activity.voz} onError={setError}
+                    onInstalar={() => changeSection("assistente")}
+                    onMudou={(voz) => setActivity((a) => ({ ...a, voz: { ...a.voz!, ...voz } }))} />
           <button onClick={() => setShowSettings(true)} title="Configurações · Ctrl ,"
                   className="grid size-[30px] place-items-center rounded-full bg-raised text-[11px] font-semibold text-fg-2 hover:text-fg">
             {iniciais}
           </button>
-        }
+        </>}
       />
-      {!sidebarHidden && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : abrindoLista ? "lista-abre" : ""}`}>{lista}</div>}
-      {sidebarHidden && espiando !== "fora" && (
+      {!sidebarHidden && section !== "assistente" && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : abrindoLista ? "lista-abre" : ""}`}>{lista}</div>}
+      {sidebarHidden && section !== "assistente" && espiando !== "fora" && (
         // A lista por cima do conteúdo, sem empurrar: aparece no hover do botão e fica enquanto o mouse
         // estiver no botão ou nela.
         <div
@@ -2365,7 +2373,7 @@ export default function App() {
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className={`flex min-w-0 items-center gap-2 overflow-hidden ${sidebarHidden ? "pl-9" : ""}`}>
           <span className="min-w-12 truncate text-sm font-medium text-fg" title={conv?.title}>
-            {conv?.title ?? "Nova conversa"}
+            {section === "assistente" ? "F.O.R.J.A" : conv?.title ?? "Nova conversa"}
           </span>
           {agentica && (
           <button
@@ -2568,6 +2576,8 @@ export default function App() {
             onError={setError}
             onConversationChanged={refreshConversations}
           />
+        ) : section === "assistente" ? (
+          <AssistenteView onError={setError} />
         ) : section === "tts" ? (
           <TtsView
             conv={currentId}
@@ -2604,7 +2614,7 @@ export default function App() {
       {/* Mostrar/esconder a lista: um botão só, fixo à direita do logo e na altura dele. Com a lista
           aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. Fica por último
           no DOM: no Electron a região de arrastar que vem depois engole o no-drag de quem veio antes. */}
-      <button
+      {section !== "assistente" && <button
         onClick={alternaLista}
         title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
         aria-pressed={!sidebarHidden}
@@ -2614,7 +2624,7 @@ export default function App() {
         className="fixed top-[12px] left-[68px] z-30 grid size-7 place-items-center rounded-[7px] text-muted hover:bg-raised hover:text-fg"
       >
         <PanelLeft />
-      </button>
+      </button>}
     </div>
     </TestarCodigo.Provider>
   );

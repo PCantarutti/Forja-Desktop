@@ -1,0 +1,237 @@
+from app import assistente
+from app.assistente_ouvido import acorda
+
+
+def test_acorda_so_com_forja_no_comeco():
+    assert acorda("Forja, quais são as notícias de hoje?") == "quais são as notícias de hoje?"
+    assert acorda("Ei Forja crie uma imagem") == "crie uma imagem"
+    assert acorda("forjá") == ""
+    assert acorda("Forja.") == ""
+    assert acorda("eu fui na forja ontem") is None
+    assert acorda("Forjado em aço") is None
+
+
+def test_rota():
+    assert assistente.rota("crie uma imagem de um gato esquiando") == ("imagem", "um gato esquiando")
+    assert assistente.rota("gere um vídeo de um cachorro surfando") == ("video", "um cachorro surfando")
+    assert assistente.rota("no modo agente crie um site de ecommerce") == ("agente", "crie um site de ecommerce")
+    assert assistente.rota("modo agente, faça uma calculadora") == ("agente", "faça uma calculadora")
+    assert assistente.rota("quais são as notícias de hoje?") == ("chat", "quais são as notícias de hoje?")
+    assert assistente.rota("o que é uma imagem de disco?") == ("chat", "o que é uma imagem de disco?")
+
+
+def test_rota_chat_no_forja_so_quando_pedido():
+    assert assistente.rota("abra um chat no Forja sobre receitas de bolo") == ("chat_forja", "receitas de bolo")
+    assert assistente.rota("inicia uma conversa nova no forja desktop") == ("chat_forja", "")
+    assert assistente.rota("o que é um chat?")[0] == "chat"
+
+
+MODELOS = [{"provider": "local", "model": m, "nome": m} for m in
+           ["Qwen3.6-35B-A3B-Q4_K_M", "Qwen3.8-27B-UD-IQ3_XXS", "gemma-4-12b-it-Q4_K_M", "gemma-4-26B-A4B-it-UD-Q4_K_M"]]
+FAVS = [{"nome": "código", "provider": "local", "model": "Qwen3.8-27B-UD-IQ3_XXS"},
+        {"nome": "pesquisa", "provider": "ollama-cloud", "model": "gpt-oss:120b"}]
+PADRAO = {"provider": "ollama-cloud", "model": "gpt-oss:120b"}
+
+
+def test_escolher_modelo():
+    e = lambda r: (assistente.escolher_modelo(r, FAVS, MODELOS, PADRAO) or {}).get("model")
+    assert e("o de sempre") == "gpt-oss:120b"
+    assert e("meu favorito de código") == "Qwen3.8-27B-UD-IQ3_XXS"
+    assert e("Pesquisa.") == "gpt-oss:120b"
+    assert e("Qwen 3.6") == "Qwen3.6-35B-A3B-Q4_K_M"
+    assert e("qwen três ponto oito") == "Qwen3.8-27B-UD-IQ3_XXS"
+    assert e("gemma 12b") == "gemma-4-12b-it-Q4_K_M"
+    assert e("gemma 26") == "gemma-4-26B-A4B-it-UD-Q4_K_M"
+    assert e("llama 3") is None
+
+
+def test_falavel():
+    assert assistente.falavel("Qwen3.6-35B-A3B-Q4_K_M") == "Qwen3.6 35B A3B"
+    assert assistente.falavel("gemma-4-26B-A4B-it-UD-Q4_K_M") == "gemma 4 26B A4B it"
+    assert assistente.falavel("gpt-oss:120b") == "gpt oss:120b"
+
+
+def test_nome_projeto():
+    assert assistente.nome_projeto("crie um site de ecommerce") == "site-ecommerce"
+    assert assistente.nome_projeto("faça uma calculadora simples") == "calculadora"
+    assert assistente.nome_projeto("crie") == "projeto"
+
+
+def test_nota_falada_com_humor_so_quando_escolhido():
+    assert "Personalidade" not in assistente.nota_falada("nenhum")
+    sarc = assistente.nota_falada("sarcastico")
+    assert "J.A.R.V.I.S." in sarc and "[piada]" in sarc
+    assert "GLaDOS" in assistente.nota_falada("acido")
+    assert assistente.nota_falada("inexistente") == assistente.nota_falada("nenhum")
+    pausa = assistente.nota_falada("sarcastico", pode_brincar=False)
+    assert "J.A.R.V.I.S." not in pausa and assistente.SEM_PIADA in pausa
+
+
+def test_marca_de_piada_nao_e_falada():
+    assert assistente.sem_marca("Quatro. [piada] Quer a papinha?") == "Quatro. Quer a papinha?"
+    assert assistente.sem_marca("[piada]") == ""
+
+
+def test_pasta_parecida():
+    pastas = [r"C:\Projetos\loja-ecommerce", r"C:\Projetos\blog", r"C:\Projetos\calc"]
+    assert assistente.pasta_parecida("site-ecommerce", pastas) == r"C:\Projetos\loja-ecommerce"
+    assert assistente.pasta_parecida("site-e-commerce-react", [r"C:\x\site-ecommerce"]) == r"C:\x\site-ecommerce"
+    assert assistente.pasta_parecida("jogo-cobrinha", pastas) is None
+    assert assistente.pasta_parecida("calculadora", pastas) == r"C:\Projetos\calc"  # na dúvida pergunta: é barato
+
+
+def test_parar_e_cancela():
+    for frase in ["para", "Para.", "cancela", "silêncio!", "chega", "deixa pra lá"]:
+        assert assistente.rota(frase)[0] == "parar", frase
+    assert assistente.rota("para que serve um capacitor?")[0] == "chat"
+
+
+def test_alucinacao_do_whisper():
+    from app.assistente_ouvido import ALUCINACAO, normaliza
+    for t in ["Legendas pela comunidade Amara.org", "Obrigado por assistir!", "Obrigado."]:
+        assert ALUCINACAO.search(normaliza(t)), t
+    assert not ALUCINACAO.search(normaliza("Forja, obrigado pela ajuda com o código"))
+
+
+def test_janela_de_escuta_conta_do_fim_da_fala():
+    import threading, time as t
+    from app import assistente_ouvido as o
+
+    class Boca:
+        falando = threading.Event()
+        fim_fala = 0.0
+    b = Boca()
+    e = o.Escuta(b)
+    assert not e.ativa()
+    b.falando.set()                       # perguntou "Com qual modelo?" e ainda está falando
+    e.abre()
+    e.desde -= o.ESCUTA_S + 5             # o pedido de escuta chegou há muito tempo...
+    b.fim_fala = t.time()                 # ...mas a fala da pergunta acabou agora
+    b.falando.clear()
+    assert e.ativa()
+    b.fim_fala -= o.ESCUTA_S + 1          # ninguém respondeu dentro da janela
+    assert not e.ativa()
+
+
+def _ocioso(monkeypatch, alias="gemma", em_uso=False, outro_usou=False, minutos=5):
+    import asyncio
+    from app import llm, modelctl
+    descarregou = []
+
+    async def unload(motivo=""):
+        descarregou.append(motivo)
+        yield {}
+    monkeypatch.setattr(assistente, "ler", lambda: {**assistente.PADRAO, "ocioso_min": minutos})
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: True)
+    monkeypatch.setattr(modelctl, "em_uso", lambda: em_uso)
+    monkeypatch.setattr(modelctl, "unload", unload)
+    monkeypatch.setattr(assistente.localai, "status", lambda: {"running": True, "alias": alias})
+    monkeypatch.setitem(llm.ULTIMO_USO, "t", 1000.0 + (50 if outro_usou else 0))
+    assistente._uso.update(spec={"provider": "local", "model": "gemma"}, t=1000.0, llm_t=1000.0)
+    feito = asyncio.run(assistente.descarrega_se_ocioso(agora=1000.0 + minutos * 60 + 1))
+    return feito, descarregou
+
+
+def test_ocioso_descarrega_so_o_que_e_do_assistente(monkeypatch):
+    assert _ocioso(monkeypatch) == (True, ["assistente ocioso"])
+    assert _ocioso(monkeypatch, em_uso=True) == (False, [])        # trabalho do Forja usando
+    assert _ocioso(monkeypatch, outro_usou=True) == (False, [])    # alguém usou depois da última pergunta
+    assert _ocioso(monkeypatch, alias="qwen") == (False, [])       # já trocaram o modelo
+    assert _ocioso(monkeypatch, minutos=0) == (False, [])          # "nunca"
+
+
+def test_espera_quando_outro_trabalho_usa_o_modelo(monkeypatch):
+    from app import modelctl
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: spec["provider"] == "local")
+    monkeypatch.setattr(assistente.localai, "status", lambda: {"running": True, "alias": "gemma"})
+    monkeypatch.setattr(assistente.localai, "image_busy", lambda: False)
+    monkeypatch.setattr(assistente.localai, "_loading", False, raising=False)
+    monkeypatch.setattr(modelctl, "em_uso", lambda: True)
+    assert assistente._precisa_esperar({"provider": "local", "model": "qwen"}) == "gemma"
+    assert assistente._precisa_esperar({"provider": "local", "model": "gemma"}) == ""   # o mesmo: não troca nada
+    assert assistente._precisa_esperar({"provider": "ollama-cloud", "model": "x"}) == ""  # nuvem não precisa da placa
+    monkeypatch.setattr(modelctl, "em_uso", lambda: False)
+    assert assistente._precisa_esperar({"provider": "local", "model": "qwen"}) == ""    # parado: troca na hora
+
+
+def test_busca_escrita_como_texto():
+    calls, resto = assistente._chamadas_em_texto('{{"name": "web_search", "arguments": {"query": "7 vezes 8"}}}')
+    assert [c["arguments"]["query"] for c in calls] == ["7 vezes 8"] and resto == ""
+    calls, _ = assistente._chamadas_em_texto('<tool_call>{"name": "web_search", "arguments": {"query": "dólar"}}</tool_call>')
+    assert calls and calls[0]["name"] == "web_search"
+    assert assistente._chamadas_em_texto("São cinquenta e seis.") == ([], "São cinquenta e seis.")
+
+
+def test_salvar_conversa_por_voz():
+    for frase in ["salva nossa conversa num chat", "transforma essa conversa em um chat do Forja",
+                  "guarda a conversa no Forja", "vira essa conversa um chat"]:
+        assert assistente.rota(frase)[0] == "salvar_conversa", frase
+    assert assistente.rota("o que é uma conversa?")[0] == "chat"
+    assert assistente.rota("abra um chat no forja sobre conversa fiada")[0] == "chat_forja"
+
+
+def test_transcricao_so_em_memoria_e_agrupa_a_resposta(monkeypatch):
+    monkeypatch.setattr(assistente, "_manda", lambda *a, **k: None)
+    assistente.esquecer()
+    assistente._anota("voce", "quanto é 2 mais 2?")
+    assistente.fala("Quatro.")
+    assistente.fala("Quer a papinha também?")
+    t = assistente.conversa()["transcricao"]
+    assert [(x["quem"], x["texto"]) for x in t] == [("voce", "quanto é 2 mais 2?"), ("forja", "Quatro. Quer a papinha também?")]
+    assistente.esquecer()
+    assert assistente.conversa()["transcricao"] == []
+
+
+def test_salvar_sem_conversa_avisa():
+    import pytest
+    assistente.esquecer()
+    with pytest.raises(assistente.ToolError):
+        assistente.salvar_conversa()
+
+
+def test_ociosidade_esquece_a_conversa_falada(monkeypatch):
+    monkeypatch.setattr(assistente, "_manda", lambda *a, **k: None)
+    assistente._anota("voce", "oi")
+    assistente._conversa_chat["msgs"] = [{"role": "user", "content": "oi"}]
+    _ocioso(monkeypatch, em_uso=True)  # mesmo sem poder descarregar (Forja usando), a conversa expira
+    assert assistente.conversa()["transcricao"] == [] and not assistente._conversa_chat
+
+
+def _preaquece(monkeypatch, no_ar="", em_uso=False, imagem=False):
+    import asyncio
+    from app import modelctl
+    carregou = []
+
+    async def ensure(spec, out=None, cancel=None):
+        carregou.append(spec["model"])
+        yield {}
+    monkeypatch.setattr(assistente, "modelo_assistente", lambda: {"provider": "local", "model": "gemma"})
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: True)
+    monkeypatch.setattr(modelctl, "em_uso", lambda: em_uso)
+    monkeypatch.setattr(modelctl, "ensure", ensure)
+    monkeypatch.setattr(assistente.localai, "status", lambda: {"running": bool(no_ar), "alias": no_ar})
+    monkeypatch.setattr(assistente.localai, "image_busy", lambda: imagem)
+    monkeypatch.setattr(assistente.localai, "_loading", False, raising=False)
+    return asyncio.run(assistente.preaquece()), carregou
+
+
+def test_atalho_preaquece_o_modelo_sem_derrubar_trabalho(monkeypatch):
+    assert _preaquece(monkeypatch) == ("carregado", ["gemma"])                         # placa vazia: carrega
+    assert _preaquece(monkeypatch, no_ar="qwen") == ("carregado", ["gemma"])           # outro parado: troca
+    assert _preaquece(monkeypatch, no_ar="qwen", em_uso=True) == ("placa ocupada", [])  # outro em uso: não mexe
+    assert _preaquece(monkeypatch, no_ar="gemma") == ("já no ar", [])
+    assert _preaquece(monkeypatch, imagem=True) == ("placa ocupada", [])
+
+
+def test_atalho_nao_carrega_em_dobro(monkeypatch):
+    import asyncio
+    from app import modelctl
+    monkeypatch.setattr(assistente, "modelo_assistente", lambda: {"provider": "local", "model": "gemma"})
+    monkeypatch.setattr(modelctl, "gerenciavel", lambda spec: True)
+
+    async def com_carga_em_andamento():
+        async with assistente._trava_carga():  # uma pergunta falada já está carregando o modelo
+            return await assistente.preaquece()
+    assistente._carga.clear()
+    assert asyncio.run(com_carga_em_andamento()) == "já carregando"
+    assistente._carga.clear()

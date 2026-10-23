@@ -31,7 +31,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import design_modelos, design_repo, design_revisao, maestro, tts, youtube
+from . import assistente, design_modelos, design_repo, design_revisao, maestro, tts, youtube
 
 
 settings.apply()
@@ -70,6 +70,7 @@ async def lifespan(_app):
     vivas.add(agenda)
     from . import estudos_piloto
     estudos_piloto.retomar()  # Estudos: piloto que estava rodando quando o app fechou (o item interrompido é refeito)
+    assistente.ao_subir(asyncio.get_running_loop())  # assistente de voz: reabre ouvindo se estava ligado
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
     # MCP conecta em background: npx/uvx podem demorar e a API não deve esperar (o painel mostra "connecting").
@@ -90,6 +91,9 @@ async def lifespan(_app):
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
+    assistente.parar()    # o microfone fecha com o backend
+    if vigia_voz := assistente._tarefa.get("vigia"):
+        vigia_voz.cancel()  # a ociosidade do modelo do assistente
     lsp.fechar_todos()
     localai.unload()  # o modelo local morre com o backend (no app o Electron já mata a árvore)
     await mcp_client.stop()
@@ -505,7 +509,9 @@ async def get_activity():
     return {"conversations": list(por_conversa.values()), "servers": vivos, "local": local, "local_alias": alias,
             "lista": f"{n}-{maior}-{ultima}", "board": quadro, "autonomo": autonomo.ligadas(),
             # Conteúdo (E18): com automação marcada o Electron segura o sono do PC — dormindo às 3h, nada roda
-            "acordado": conteudo_agenda.acordado()}
+            "acordado": conteudo_agenda.acordado(),
+            # assistente de voz: o botão do microfone (PC e bandeja) e a conversa que um comando falado abriu
+            "voz": assistente.resumo()}
 
 
 # ------------------------------------------------------------------ board de issues (E15)
@@ -1315,6 +1321,88 @@ async def tts_baixar(body: dict):
 @app.post("/api/tts/remover/{motor}")
 def tts_remover(motor: str):
     _tts(tts.remover, motor)
+    return {"ok": True}
+
+
+@app.get("/api/assistente")
+def assistente_estado():
+    return assistente.estado()
+
+
+@app.get("/api/assistente/estado")
+def assistente_resumo():
+    """Barato (sem disco): o Electron consulta 4x por segundo para o círculo de "falando" no canto da tela."""
+    return assistente.resumo()
+
+
+@app.put("/api/assistente")
+def assistente_gravar(body: dict):
+    return _tts(assistente.gravar, body)
+
+
+@app.post("/api/assistente/ligar")
+def assistente_ligar(body: dict):
+    """Botão do microfone (trilho do PC e bandeja do sistema)."""
+    return _tts(assistente.ligar, bool(body.get("ligado")))
+
+
+@app.post("/api/assistente/instalar")
+def assistente_instalar():
+    return assistente.instalar()
+
+
+@app.get("/api/assistente/microfones")
+async def assistente_microfones():
+    return await asyncio.to_thread(assistente.microfones)
+
+
+@app.get("/api/assistente/conversa")
+def assistente_conversa():
+    """A conversa falada (só em memória): o que a pessoa disse e o que ele respondeu."""
+    return assistente.conversa()
+
+
+@app.delete("/api/assistente/conversa")
+def assistente_esquecer():
+    return assistente.esquecer()
+
+
+@app.post("/api/assistente/salvar-conversa")
+def assistente_salvar_conversa():
+    """Transforma a conversa falada num chat do Forja (o único jeito de ela ir para o disco)."""
+    return {"conv": _tts(assistente.salvar_conversa)}
+
+
+@app.post("/api/assistente/treinar")
+def assistente_treinar():
+    """Treina o detector de "Forja" (vozes sintéticas + som ambiente + as gravações da pessoa, se houver)."""
+    return _tts(assistente.treinar)
+
+
+@app.post("/api/assistente/gravar-voz")
+async def assistente_gravar_voz():
+    """2 s do microfone com a pessoa dizendo "Forja": exemplo extra para o próximo treino."""
+    try:
+        return await asyncio.to_thread(assistente.gravar_voz)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/assistente/gravar-voz")
+def assistente_apagar_voz():
+    return assistente.apagar_voz()
+
+
+@app.post("/api/assistente/chamar")
+def assistente_chamar():
+    """Atalho global do Electron: ouve o próximo pedido sem "Forja" (interrompe a fala; desligado, liga)."""
+    return _tts(assistente.chamar)
+
+
+@app.post("/api/assistente/simular")
+def assistente_simular(body: dict):
+    """Como se tivesse ouvido "Forja, <texto>": teste sem microfone."""
+    _tts(assistente.simular, str(body.get("texto") or "").strip())
     return {"ok": True}
 
 

@@ -5,7 +5,7 @@
  * Empacotado, o Python e o build da UI vêm de process.resourcesPath. Em dev (npm run dev), usa o
  * venv de backend/.venv e o FORJA_WEB que o script passar.
  */
-const { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, powerSaveBlocker, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, Notification, Tray, dialog, globalShortcut, ipcMain, nativeImage, powerSaveBlocker, screen, shell } = require("electron");
 const { spawn, execFileSync } = require("child_process");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -350,25 +350,29 @@ function showWindow() {
   mainWindow.focus();
 }
 
+function menuBandeja() {
+  return Menu.buildFromTemplate([
+    { label: "Abrir o Forja", click: showWindow },
+    ...(voz.instalado ? [
+      { label: "Ouvir “Forja, …” (assistente de voz)", type: "checkbox", checked: voz.ligado, click: alternarVoz },
+      { label: "Chamar o assistente agora", accelerator: atalho.ok ? atalho.atual : undefined, click: chamarAssistente },
+    ] : []),
+    { type: "separator" },
+    {
+      label: "Sair",
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+}
+
 function ensureTray() {
   if (tray) return;
   const icon = iconPath();
   const img = icon ? nativeImage.createFromPath(icon).resize({ width: 16, height: 16 }) : nativeImage.createEmpty();
   tray = new Tray(img);
-  tray.setToolTip("Forja");
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: "Abrir o Forja", click: showWindow },
-      { type: "separator" },
-      {
-        label: "Sair",
-        click: () => {
-          app.isQuitting = true;
-          app.quit();
-        },
-      },
-    ]),
-  );
   tray.on("click", showWindow);
 }
 
@@ -378,10 +382,165 @@ function dropTray() {
   tray = null;
 }
 
-/** O ícone da bandeja só existe quando serve para alguma coisa: fechar-para-bandeja ligado. */
+/** O ícone da bandeja só existe quando serve para alguma coisa: fechar-para-bandeja ligado, ou o assistente de voz
+ *  instalado (o liga/desliga dele mora no menu). */
 function syncTray() {
-  if (prefs.closeToTray) ensureTray();
+  if (prefs.closeToTray || voz.instalado) ensureTray();
   else dropTray();
+  if (!tray) return;
+  tray.setContextMenu(menuBandeja());
+  tray.setToolTip(voz.ligado ? "Forja · ouvindo “Forja, …”" : "Forja");
+}
+
+// ------------------------------------------------------------------ assistente de voz (bandeja)
+
+let voz = { instalado: false, ligado: false };
+// Atalho global (configurado na página F.O.R.J.A): funciona com o Forja minimizado, na bandeja ou atrás de outra
+// janela. `erro`: outro programa já usa a combinação, ou ela não é válida; a página mostra.
+let atalho = { atual: "", ok: false, erro: "" };
+
+function registraAtalho(accel) {
+  if (accel === atalho.atual) return;
+  if (atalho.ok) globalShortcut.unregister(atalho.atual);
+  atalho = { atual: accel, ok: false, erro: "" };
+  if (accel) {
+    try {
+      atalho.ok = globalShortcut.register(accel, chamarAssistente);
+      if (!atalho.ok) atalho.erro = "Outro programa já usa esta combinação. Escolha outra.";
+    } catch (err) {
+      atalho.erro = `Combinação inválida: ${err.message}`;
+    }
+  }
+  syncTray();
+}
+
+async function chamarAssistente() {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/assistente/chamar`, { method: "POST", headers: { "x-forja-token": token } });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      new Notification({ title: "Assistente F.O.R.J.A", body: e.detail || `HTTP ${r.status}` }).show();
+    }
+    vigiaVoz();
+  } catch (err) {
+    new Notification({ title: "Assistente F.O.R.J.A", body: `O Forja não respondeu: ${err.message}` }).show();
+  }
+}
+
+ipcMain.handle("forja:atalho:status", () => atalho);
+
+// A página do assistente aberta mostra o círculo grande: com a janela à vista, o do canto da tela sobraria.
+let paginaAssistente = false;
+ipcMain.on("forja:assistente:visivel", (_e, visivel) => { paginaAssistente = Boolean(visivel); });
+
+/** Ligado no trilho da janela ou pelo backend: o checkbox da bandeja acompanha, e o atalho segue a configuração. */
+async function vigiaVoz() {
+  if (!port) return;
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/assistente`, { headers: { "x-forja-token": token } });
+    const e = await r.json();
+    registraAtalho(e.instalado ? String(e.atalho || "") : "");
+    if (Boolean(e.instalado) !== voz.instalado || Boolean(e.ligado) !== voz.ligado) {
+      voz = { instalado: Boolean(e.instalado), ligado: Boolean(e.ligado) };
+      syncTray();
+    }
+  } catch { /* backend reiniciando: tenta no próximo tique */ }
+}
+
+// Círculo fluido no canto inferior direito da TELA (não da janela): pulsa enquanto o assistente fala, mais devagar
+// enquanto pensa. Janela transparente, sempre por cima, que não pega foco nem clique.
+const BOLHA_HTML = `<!doctype html><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:transparent;overflow:hidden}
+#b{position:absolute;inset:22px;opacity:0;transform:scale(.55);transition:opacity .35s ease,transform .45s cubic-bezier(.22,1,.36,1)}
+#b.on{opacity:1;transform:scale(1)}
+.g{position:absolute;inset:0;mix-blend-mode:screen;animation:forma 6s linear infinite}
+.g1{background:radial-gradient(circle at 35% 35%,#bfe3ff,#3b82f6 52%,#1e3a8a00 72%)}
+.g2{background:radial-gradient(circle at 65% 62%,#d9c7ff,#7c3aed 52%,#4c1d9500 72%);animation-duration:8s;animation-direction:reverse}
+.g3{background:radial-gradient(circle at 50% 45%,#a5fff0,#06b6d4 48%,#0e749000 70%);animation-duration:4.6s;opacity:.85}
+.halo{position:absolute;inset:-14px;border-radius:50%;background:radial-gradient(circle,#60a5fa66,#60a5fa00 68%);animation:halo 1.1s ease-in-out infinite}
+@keyframes forma{0%{border-radius:42% 58% 63% 37%/45% 41% 59% 55%;rotate:0deg}33%{border-radius:58% 42% 38% 62%/60% 52% 48% 40%}
+66%{border-radius:38% 62% 52% 48%/42% 61% 39% 58%}100%{border-radius:42% 58% 63% 37%/45% 41% 59% 55%;rotate:360deg}}
+@keyframes halo{0%,100%{scale:.9;opacity:.55}50%{scale:1.14;opacity:1}}
+@keyframes fala{0%,100%{scale:1}30%{scale:1.09}60%{scale:.97}}
+#b.falando{animation:fala .85s ease-in-out infinite}
+#b.pensando{filter:saturate(.55) brightness(.8)}
+.anel{position:absolute;inset:0;border-radius:50%;border:2px solid #5eead4;opacity:0}
+#b.escutando{filter:hue-rotate(-38deg) saturate(1.25)}
+#b.escutando .g{animation-duration:3s}
+#b.escutando .anel{animation:anel 1.5s cubic-bezier(.22,1,.36,1) infinite}
+#b.escutando .a2{animation-delay:.5s}#b.escutando .a3{animation-delay:1s}
+@keyframes anel{0%{scale:.62;opacity:.9}100%{scale:1.32;opacity:0}}
+#b.pensando .g{animation-duration:14s}#b.pensando .halo{animation-duration:2.6s}
+@media (prefers-reduced-motion:reduce){.g,.halo,.anel,#b.falando{animation:none}}
+</style><div id="b"><div class="anel"></div><div class="anel a2"></div><div class="anel a3"></div><div class="halo"></div><div class="g g1"></div><div class="g g2"></div><div class="g g3"></div></div>
+<script>function modo(m){document.getElementById("b").className=m?"on "+m:""}</script>`;
+let bolha = null;
+let bolhaModo = "";
+
+function criaBolha() {
+  const { workArea } = screen.getPrimaryDisplay();
+  const lado = 132;
+  bolha = new BrowserWindow({
+    width: lado, height: lado, x: workArea.x + workArea.width - lado - 16, y: workArea.y + workArea.height - lado - 16,
+    frame: false, transparent: true, resizable: false, movable: false, focusable: false, skipTaskbar: true,
+    alwaysOnTop: true, show: false, hasShadow: false,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+  });
+  bolha.setAlwaysOnTop(true, "screen-saver");
+  bolha.setIgnoreMouseEvents(true);
+  bolha.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(BOLHA_HTML));
+  bolha.on("closed", () => { bolha = null; });
+}
+
+function aplicaBolha() {
+  const js = `modo(${JSON.stringify(bolhaModo)})`;
+  if (bolha.webContents.isLoading()) bolha.webContents.once("did-finish-load", () => bolha?.webContents.executeJavaScript(js));
+  else bolha.webContents.executeJavaScript(js).catch(() => {});
+}
+
+function mostraBolha(modo) {
+  if (modo === bolhaModo) return;
+  bolhaModo = modo;
+  if (modo) {
+    if (!bolha) criaBolha();
+    bolha.showInactive();
+    aplicaBolha();
+  } else if (bolha) {
+    // entre uma frase e outra o ouvido passa um instante por "ouvindo": só some se continuar parado
+    setTimeout(() => {
+      if (bolhaModo || !bolha) return;
+      aplicaBolha();
+      setTimeout(() => { if (!bolhaModo && bolha) bolha.hide(); }, 450);
+    }, 700);
+  }
+}
+
+async function vigiaBolha() {
+  if (!voz.ligado || !port) return mostraBolha("");
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/assistente/estado`, { headers: { "x-forja-token": token } });
+    const e = await r.json();
+    if (Boolean(e.ligado) !== voz.ligado) vigiaVoz();
+        // escutando: ouviu "Forja" (ou o atalho) e grava o pedido; entendendo/pensando: Whisper e modelo; falando: a voz
+    const modo = { escutando: "escutando", entendendo: "pensando", pensando: "pensando", falando: "falando" }[e.estado] || "";
+    const naTela = paginaAssistente && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
+    mostraBolha(naTela ? "" : modo);
+  } catch { /* backend reiniciando */ }
+}
+
+async function alternarVoz() {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/api/assistente/ligar`, {
+      method: "POST", headers: { "x-forja-token": token, "content-type": "application/json" },
+      body: JSON.stringify({ ligado: !voz.ligado }),
+    });
+    const e = await r.json();
+    if (r.ok) voz = { instalado: Boolean(e.instalado), ligado: Boolean(e.ligado) };
+    else dialog.showErrorBox("Assistente de voz", e.detail || `HTTP ${r.status}`);
+  } catch (err) {
+    dialog.showErrorBox("Assistente de voz", String(err));
+  }
+  syncTray();
 }
 
 // ------------------------------------------------------------------ janela
@@ -695,6 +854,9 @@ if (!app.requestSingleInstanceLock()) {
       wireUpdater();
       vigiaSono();
       setInterval(vigiaSono, 30_000);
+      vigiaVoz();
+      setInterval(vigiaVoz, 5_000);
+      setInterval(vigiaBolha, 250);
     } catch (e) {
       dialog.showErrorBox("Forja", `Não foi possível iniciar: ${e.message}`);
       app.quit();
@@ -735,7 +897,7 @@ app.on("activate", showWindow);
 app.on("before-quit", () => {
   app.isQuitting = true;
 });
-app.on("will-quit", stopBackend);
+app.on("will-quit", () => { globalShortcut.unregisterAll(); stopBackend(); });
 process.on("exit", stopBackend);
 // `exit` não roda em SIGINT/SIGTERM: sem estes, o Ctrl+C do `npm run dev` deixava uvicorn, o
 // Chromium do navegador integrado, o llama-server e todo serve_start rodando.

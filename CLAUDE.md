@@ -59,11 +59,22 @@ Coisas que já enganaram:
   apontado para o arquivo novo) e copiar linha a linha por `rowid`, pulando as que levantam
   `DatabaseError` (um `SELECT` do bloco inteiro falha por causa de uma página; linha a linha, não).
   No fim, apagar filho sem pai e conferir `integrity_check` e `foreign_key_check`.
+- **A instância de validação precisa da sua própria porta de llama-server:** suba com
+  `$env:FORJA_LOCAL_PORT = "8078"`. As duas instâncias usam 8077 por padrão; com o Forja instalado servindo um
+  modelo nela, a de validação manda os pedidos para o modelo do OUTRO app e o indicador/IA local dela dizem
+  "nenhum modelo carregado" (2026-10-23, assistente de voz respondendo com o modelo do Forja instalado).
 - `DevToolsActivePort` é escrito uma vez, antes do `ready`. Nunca apagar; validar a porta ao vivo.
 - O texto “Aguardando a primeira tela…” no painel Navegador significa modo espelho (headless), ou seja,
   o modo nativo NÃO está ativo: `FORJA_CDP` não chegou ao backend.
 - O userData padrão de dev é o mesmo do app instalado (`%APPDATA%\Forja`) — por isso a validação
   sobe com `--user-data-dir` próprio (ver acima). Nunca deixar os dois escrevendo no mesmo `forja.db`.
+
+## Assistente de voz F.O.R.J.A: tutorial sempre em dia
+
+A página F.O.R.J.A (`frontend/src/components/AssistenteView.tsx`) tem um tutorial com tudo o que o assistente
+sabe fazer: o array `CAPACIDADES`. Feature nova ou mudança de comportamento do assistente (comando falado novo,
+rota em `backend/app/assistente.py`, configuração, guarda) só está pronta com a entrada dela ali, com exemplos
+de frase reais (os que a `rota()` e os testes de `backend/tests/test_assistente.py` aceitam).
 
 ## PC e celular sempre em sincronia, ao vivo
 

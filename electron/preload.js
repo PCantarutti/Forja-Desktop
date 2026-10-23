@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld("forja", {
   icon: (ext) => ipcRenderer.invoke("forja:icon", ext),
   /** Traz a janela para a frente (clique numa notificação do sistema), mesmo minimizada na bandeja. */
   focus: () => ipcRenderer.send("forja:focus"),
+  /** Atalho global do assistente de voz: {atual, ok, erro} (registrado pela casca a partir da configuração). */
+  atalho: () => ipcRenderer.invoke("forja:atalho:status"),
+  /** A página do assistente está aberta: o círculo do canto da tela se esconde (a página mostra o grande). */
+  assistenteVisivel: (visivel) => ipcRenderer.send("forja:assistente:visivel", visivel),
   browser: {
     // Onde o painel Navegador está (px de CSS) e de qual conversa; bounds null = não mostrar view nenhuma.
     view: (shown) => ipcRenderer.send("forja:browser:view", shown),

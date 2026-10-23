@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
+import { api } from "../api";
+import type { Activity } from "../types";
 import CartaoEstado from "./CartaoEstado";
-import { Balanca, Bubble, Camera, Check, ChevronDown, Code, Film, Image, Livro, Onda, Prancheta, Search, Split } from "./icons";
+import { Balanca, Bubble, Camera, Check, ChevronDown, Code, Film, Image, Livro, Mic, MicOff, Onda, Prancheta, Search, Split } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
 export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
 // "imagem" é o mesmo literal do `kind` da conversa no backend: a barra lateral interpola
 // a seção direto na query de /conversations.
-export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudos" | "conteudo" | "tts";
+// "assistente" é uma página (configurações do assistente de voz), não um tipo de conversa: não tem lista nem chat.
+export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudos" | "conteudo" | "tts" | "assistente";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string }[] = [
   { id: "auto", label: "Automático", hint: "O Forja decide: edições passam, o resto pergunta" },
@@ -226,6 +229,7 @@ export const SECOES: { id: Section; label: string; title: string; icon: React.Re
   { id: "estudos", label: "Estudos", title: "Estudos (resumo e prova do seu material)", icon: <Livro className="size-[18px]" /> },
   { id: "conteudo", label: "Conteúdo", title: "Conteúdo (roteiros e vídeos para o canal)", icon: <Camera className="size-[18px]" /> },
   { id: "tts", label: "Voz", title: "Voz (texto para fala)", icon: <Onda className="size-[18px]" /> },
+  { id: "assistente", label: "F.O.R.J.A", title: "Assistente de voz F.O.R.J.A", icon: <Mic className="size-[18px]" /> },
 ];
 
 /** Trilho de seções à esquerda (60 px), sempre visível. Com a lista de conversas escondida, mostra o
@@ -262,6 +266,36 @@ export function SectionRail(props: {
       <div className="flex-1" />
       {props.pe}
     </nav>
+  );
+}
+
+const ESTADO_VOZ: Record<string, string> = {
+  ouvindo: "ouvindo — diga \"Forja, ...\"", gravando: "escutando você", transcrevendo: "ouvindo", escutando: "escutando seu pedido", entendendo: "entendendo", pensando: "pensando",
+  falando: "falando", carregando: "carregando o Whisper e a voz",
+};
+
+/** Microfone do trilho, acima das iniciais: liga e desliga o assistente F.O.R.J.A (o mesmo da bandeja). Sem o runtime
+ *  instalado, leva à tela Voz, onde fica o botão de instalar. */
+export function BotaoVoz(props: { voz: Activity["voz"]; onError: (e: string) => void; onInstalar: () => void;
+                                  onMudou: (v: { ligado: boolean; estado: string }) => void }) {
+  const v = props.voz;
+  const ligado = !!v?.ligado;
+  const ativo = ligado && !["ouvindo", "carregando", "gravando", "transcrevendo"].includes(v?.estado ?? "");
+  const titulo = !v?.instalado ? "Assistente de voz F.O.R.J.A: instalar na tela Voz"
+    : ligado ? `Assistente de voz: ${ESTADO_VOZ[v.estado] ?? v.estado}. Clique para desligar`
+    : "Assistente de voz desligado. Clique para ouvir \"Forja, ...\"";
+  const alternar = () => {
+    if (!v?.instalado) return props.onInstalar();
+    api.post<{ ligado: boolean; estado: string }>("/assistente/ligar", { ligado: !ligado })
+      .then((r) => props.onMudou({ ligado: r.ligado, estado: r.estado }))
+      .catch((e) => props.onError(e.message));
+  };
+  return (
+    <button onClick={alternar} title={titulo} aria-label={titulo} aria-pressed={ligado}
+            className={`mb-2 grid size-[30px] place-items-center rounded-full transition-colors ${
+              ligado ? "bg-accent-soft text-accent-text" : "text-faint hover:bg-raised hover:text-fg"} ${ativo ? "animate-pulse" : ""}`}>
+      {ligado ? <Mic className="size-[15px]" /> : <MicOff className="size-[15px]" />}
+    </button>
   );
 }
 

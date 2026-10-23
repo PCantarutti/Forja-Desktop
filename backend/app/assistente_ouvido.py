@@ -1,0 +1,363 @@
+"""Ouvido e boca do assistente F.O.R.J.A: microfone sempre aberto, detecção da palavra "Forja", Whisper e a voz rápida
+(Kokoro, na CPU). Roda no venv do assistente (RUNTIMES/assistente/venv), chamado por assistente.py.
+
+    python assistente_ouvido.py --modelos <pasta do Kokoro> [--mic "fifine MME"] [--whisper small] [--voz pf_dora]
+    python assistente_ouvido.py --listar        # microfones, um JSON por linha, e sai
+
+Saída no stdout, por linhas: "PRONTO <microfone>" ao subir (ou "ERRO <mensagem>" e sai); "ESTADO ouvindo|gravando|
+transcrevendo|falando"; "OUVIU <json>" com {texto, comando, wake, resposta} quando a fala começa com "Forja" (ou quando
+o backend pediu a próxima fala com "escuta"); "FALOU" quando a fila de fala esvazia; "LOG <texto>" para depuração.
+Pedidos no stdin, um JSON por linha: {"cmd": "fala", "texto"} (Kokoro), {"cmd": "toca", "arquivo"} (WAV pronto, ex.: voz
+clonada da tela Voz), {"cmd": "escuta"} (a próxima fala vale sem "Forja": resposta a uma pergunta), {"cmd": "cala"}.
+
+Enquanto fala, o microfone é ignorado: sem cancelamento de eco, ele ouviria a própria voz.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import queue
+import re
+import sys
+import threading
+import time
+import unicodedata
+import wave
+from pathlib import Path
+
+SR = 16000
+BLOCO = 480  # 30 ms
+PRE_ROLL = 10  # blocos guardados antes de a fala começar (300 ms): o "F" de Forja não se perde
+INICIO = 3  # blocos acima do limiar para abrir um trecho (90 ms)
+FIM_SILENCIO = 27  # blocos de silêncio que fecham o trecho (~800 ms)
+FIM_SILENCIO_COMANDO = 40  # depois de "Forja" a pessoa pensa no pedido: ~1,2 s
+CHECA_WAKE = 50  # blocos (1,5 s) até a checagem rápida de "Forja" no começo do trecho
+# frases que o Whisper inventa em silêncio, ruído ou música (legendas de vídeos do treino dele)
+ALUCINACAO = re.compile(r"amara\.org|legenda|inscreva-se|obrigad[oa] por assistir|ate a proxima|tchau,? tchau|"
+                        r"^\W*(obrigad[oa]|e ai|hum+|ah+)\W*$")
+MAX_TRECHO = SR * 15
+ESCUTA_S = 10  # depois de "escuta", quanto tempo espera a resposta
+# ponytail: palavra de ativação por transcrição (Whisper em todo trecho de fala). Gasta CPU com TV ligada; modelo de
+# wake word treinado para "Forja" (openWakeWord) quando isso pesar.
+WAKE = re.compile(r"^\s*(?:(?:ei|oi|ok|ola|e ai|hey)\s+)?(?:forja|forjas|forje|forge|forjar|porja|forca|forj[ao])\b"
+                  r"[\s,.:;!?-]*(.*)$", re.S)
+KOKORO = {"modelo": "kokoro-v1.0.int8.onnx", "vozes": "voices-v1.0.bin"}
+
+
+def diz(tipo: str, texto: str = "") -> None:
+    print(f"{tipo} {texto}".strip(), flush=True)
+
+
+def normaliza(texto: str) -> str:
+    t = unicodedata.normalize("NFKD", texto.lower())
+    return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def acorda(texto: str) -> str | None:
+    """O comando depois de "Forja" ("" se só chamou), ou None se a fala não começa pelo nome. Olha o texto sem acento
+    mas devolve o pedaço original (com acento), cortado na mesma posição."""
+    m = WAKE.match(normaliza(texto))
+    if not m:
+        return None
+    return texto[m.start(1):].lstrip(" ,.:;!?-").strip() if m.group(1) else ""
+
+
+def frases(texto: str) -> list[str]:
+    texto = re.sub(r"[*_#`>|\[\]]", "", texto)
+    return [f.strip() for f in re.split(r"(?<=[.!?…;:])\s+|\n+", texto) if f.strip()]
+
+
+class Boca:
+    """Duas threads: uma sintetiza a frase seguinte enquanto a outra toca a atual."""
+
+    def __init__(self, modelos: Path, voz: str):
+        from kokoro_onnx import Kokoro
+        self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
+        self.voz = voz
+        self.textos: queue.Queue = queue.Queue()
+        self.audios: queue.Queue = queue.Queue()
+        self.falando = threading.Event()
+        self.fim_fala = 0.0
+        self.geracao = 0  # "cala" sobe o número: o que estava na fila de antes é descartado
+        threading.Thread(target=self._sintetiza, daemon=True).start()
+        threading.Thread(target=self._toca, daemon=True).start()
+
+    def fala(self, texto: str) -> None:
+        for f in frases(texto):
+            self.falando.set()
+            self.textos.put((self.geracao, f))
+
+    def toca(self, arquivo: str) -> None:
+        import numpy as np
+        with wave.open(arquivo) as w:
+            sr, n, larg = w.getframerate(), w.getnchannels(), w.getsampwidth()
+            bruto = w.readframes(w.getnframes())
+        tipo = {2: np.int16, 4: np.int32}.get(larg)
+        if not tipo:
+            diz("LOG", f"WAV com {larg * 8} bits não suportado: {arquivo}")
+            return
+        a = np.frombuffer(bruto, tipo).astype(np.float32) / np.iinfo(tipo).max
+        self.falando.set()
+        self.audios.put((self.geracao, a.reshape(-1, n), sr))
+
+    def cala(self) -> None:
+        import sounddevice as sd
+        self.geracao += 1
+        sd.stop()
+
+    def _sintetiza(self) -> None:
+        while True:
+            g, t = self.textos.get()
+            try:
+                if g == self.geracao:
+                    amostras, sr = self.kokoro.create(t, voice=self.voz, speed=1.1, lang="pt-br")
+                    self.audios.put((g, amostras, sr))
+            except Exception as e:  # frase que o fonemizador não engole não derruba a boca
+                diz("LOG", f"Kokoro: {e}")
+            finally:
+                self.textos.task_done()
+
+    def _toca(self) -> None:
+        import sounddevice as sd
+        while True:
+            g, amostras, sr = self.audios.get()
+            if g == self.geracao:
+                diz("ESTADO", "falando")
+                sd.play(amostras, sr)
+                sd.wait()
+            self.audios.task_done()
+            if self.textos.unfinished_tasks == 0 and self.audios.unfinished_tasks == 0:
+                self.fim_fala = time.time()
+                self.falando.clear()
+                diz("FALOU")
+                diz("ESTADO", "ouvindo")
+
+
+class Detector:
+    """Detector treinado da palavra "Forja" (assistente_treino.py): características do openWakeWord a cada 80 ms e uma
+    MLP pequena em numpy. Muito mais leve que transcrever toda fala com o Whisper; ele só confirma depois."""
+
+    def __init__(self, npz: Path, oww: Path, sensibilidade: float):
+        import numpy as np
+        from openwakeword.utils import AudioFeatures
+        d = np.load(npz)
+        self.W1, self.b1, self.W2, self.b2 = d["W1"], d["b1"], d["W2"], d["b2"]
+        self.media, self.desvio, self.quadros = d["media"], d["desvio"], int(d["quadros"])
+        # sensibilidade 0..1 (0,5 = o limiar do treino): mais alta pega voz baixa/longe e erra mais
+        self.limiar = float(min(0.97, max(0.2, float(d["limiar"]) - (sensibilidade - 0.5) * 0.4)))
+        self.af = AudioFeatures(melspec_model_path=str(oww / "melspectrogram.onnx"),
+                                embedding_model_path=str(oww / "embedding_model.onnx"), inference_framework="onnx")
+        self.buf = np.zeros(0, np.int16)
+        self.anterior, self.ultimo = 0.0, 0.0
+
+    def prob(self, x):
+        import numpy as np
+        h = np.maximum(0, ((x - self.media) / self.desvio) @ self.W1 + self.b1)
+        return float(1 / (1 + np.exp(-(h @ self.W2 + self.b2)[0])))
+
+    def alimenta(self, bloco) -> bool:
+        """Um bloco do microfone (float32). True quando "Forja" acabou de ser dito: a média de 2 janelas seguidas
+        (160 ms) passa do limiar, no máximo uma vez a cada 2 s. Média e não "as duas acima": a probabilidade oscila em
+        volta do limiar na palavra, e uma janela de queda não pode perder o nome."""
+        import numpy as np
+        self.buf = np.concatenate([self.buf, (np.clip(bloco, -1, 1) * 32767).astype(np.int16)])
+        disparou = False
+        while len(self.buf) >= 1280:
+            self.af(self.buf[:1280])
+            self.buf = self.buf[1280:]
+            p = self.prob(self.af.get_features(self.quadros).reshape(-1))
+            if (p + self.anterior) / 2 >= self.limiar and time.time() - self.ultimo > 2:
+                self.ultimo, disparou = time.time(), True
+            self.anterior = p
+        return disparou
+
+
+class Escuta:
+    """Janela em que a próxima fala vale sem "Forja": resposta a uma pergunta do assistente ou o atalho global.
+    Conta do fim da fala da pergunta (se ele estiver falando), não de quando o pedido chegou."""
+
+    def __init__(self, boca: "Boca"):
+        self.boca = boca
+        self.desde = 0.0
+        self.anunciada = False
+
+    def abre(self) -> None:
+        self.desde, self.anunciada = time.time(), False
+
+    def fecha(self) -> None:
+        self.desde, self.anunciada = 0.0, False
+
+    def ativa(self) -> bool:
+        return bool(self.desde) and time.time() - max(self.desde, self.boca.fim_fala) < ESCUTA_S
+
+    def vigia(self) -> None:
+        """A cada bloco do microfone: anuncia "escutando" quando a fala da pergunta acaba e expira em silêncio."""
+        if not self.desde or self.boca.falando.is_set():
+            return
+        if not self.ativa():
+            self.fecha()
+            diz("ESTADO", "ouvindo")
+        elif not self.anunciada:
+            self.anunciada = True
+            diz("ESTADO", "escutando")
+
+
+def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Detector | None = None):
+    """Trechos de fala do microfone, cortados por energia com limiar que acompanha o ruído da sala. Devolve
+    (áudio, acordado): acordado = a fala já é um comando (janela de escuta aberta, ou "Forja" ouvido no começo dela
+    pela checagem rápida de `verifica`, que acende o "escutando" antes de a pessoa terminar de falar)."""
+    import numpy as np
+    import sounddevice as sd
+    blocos: queue.Queue = queue.Queue()
+    with sd.InputStream(device=mic, samplerate=SR, channels=1, dtype="float32", blocksize=BLOCO,
+                        callback=lambda d, *_: blocos.put(d[:, 0].copy())):
+        piso, antes, atual, acima, silencio, acordado, checou = 0.003, [], None, 0, 0, False, False
+        detectou = 0.0  # quando o detector acendeu (pode ser um instante antes de o trecho abrir)
+        while True:
+            b = blocos.get()
+            escuta.vigia()
+            if boca.falando.is_set() or time.time() - boca.fim_fala < 0.4:
+                atual, antes, acima = None, [], 0  # a própria voz (e o eco dela) não conta
+                continue
+            if detector and detector.alimenta(b):
+                detectou = time.time()
+                if atual is not None and not acordado:
+                    acordado = True
+                    diz("ESTADO", "escutando")
+            rms = float(np.sqrt(np.mean(b * b)))
+            limiar = max(0.008, piso * 3.5)
+            if atual is None:
+                piso = piso * 0.995 + rms * 0.005 if rms < limiar else piso  # o ruído de fundo, devagar
+                antes = (antes + [b])[-PRE_ROLL:]
+                acima = acima + 1 if rms > limiar else 0
+                if acima >= INICIO:
+                    atual, silencio, checou = list(antes), 0, False
+                    acordado = escuta.ativa() or time.time() - detectou < 1.5
+                    diz("ESTADO", "escutando" if acordado else "gravando")
+                continue
+            atual.append(b)
+            silencio = silencio + 1 if rms < limiar else 0
+            if not detector and not acordado and not checou and len(atual) >= CHECA_WAKE:
+                checou = True
+                if verifica(np.concatenate(atual)):
+                    acordado = True
+                    diz("ESTADO", "escutando")
+            fim = FIM_SILENCIO_COMANDO if acordado else FIM_SILENCIO  # no meio de um pedido, a pausa pode ser maior
+            if silencio >= fim or len(atual) * BLOCO >= MAX_TRECHO:
+                yield np.concatenate(atual), acordado
+                atual, antes, acima, acordado = None, [], 0, False
+
+def dispositivo(ident: str, tipo: str) -> int | None:
+    """O índice do aparelho com este id ("<nome> <API>", o de --listar). O Windows trunca nomes e dois aparelhos
+    podem ficar iguais (o sounddevice recusa nome ambíguo): vale o primeiro que casa. Sumiu: erro claro agora,
+    não mudo na primeira fala."""
+    import sounddevice as sd
+    if not ident:
+        return None
+    for i, d in enumerate(sd.query_devices()):
+        api = sd.query_hostapis(d["hostapi"])["name"]
+        canais = d["max_input_channels"] if tipo == "entrada" else d["max_output_channels"]
+        if canais > 0 and f"{d['name']} {api}" == ident:
+            return i
+    raise RuntimeError(f"{'Microfone' if tipo == 'entrada' else 'Alto-falante'} não encontrado: {ident}. "
+                       "Foi desconectado? Escolha outro na página F.O.R.J.A.")
+
+
+def listar() -> int:
+    """Microfones e alto-falantes, um JSON por linha: {id, nome, api, tipo: entrada|saida, padrao}."""
+    import sounddevice as sd
+    padrao = {"entrada": sd.query_devices(kind="input")["name"], "saida": sd.query_devices(kind="output")["name"]}
+    for d in sd.query_devices():
+        api = sd.query_hostapis(d["hostapi"])["name"]
+        for tipo, canais in (("entrada", d["max_input_channels"]), ("saida", d["max_output_channels"])):
+            if canais > 0:
+                print(json.dumps({"id": f"{d['name']} {api}", "nome": d["name"], "api": api, "tipo": tipo,
+                                  "padrao": d["name"] == padrao[tipo] and api == "MME"}, ensure_ascii=False), flush=True)
+    return 0
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--modelos", default="")
+    p.add_argument("--mic", default="")
+    p.add_argument("--whisper", default="small")
+    p.add_argument("--voz", default="pf_dora")
+    p.add_argument("--saida", default="")  # alto-falante (pedaço do nome + API); vazio = o padrão do Windows
+    p.add_argument("--listar", action="store_true")
+    p.add_argument("--detector", default="")  # .npz do detector treinado de "Forja" (vazio: Whisper em toda fala)
+    p.add_argument("--oww", default="")       # pasta com melspectrogram.onnx e embedding_model.onnx
+    p.add_argument("--sensibilidade", type=float, default=0.5)
+    a = p.parse_args()
+    if a.listar:
+        return listar()
+    try:
+        import sounddevice as sd
+        from faster_whisper import WhisperModel
+        mic = a.mic or None
+        mic = dispositivo(a.mic, "entrada")
+        nome = sd.query_devices(mic, kind="input")["name"]
+        if a.saida:
+            sd.default.device = (None, dispositivo(a.saida, "saida"))
+        stt = WhisperModel(a.whisper, device="cpu", compute_type="int8")
+        boca = Boca(Path(a.modelos), a.voz)
+        detector = Detector(Path(a.detector), Path(a.oww), a.sensibilidade) if a.detector else None
+    except Exception as e:
+        diz("ERRO", f"{e.__class__.__name__}: {e}")
+        return 1
+
+    escuta = Escuta(boca)
+
+    def verifica(inicio) -> bool:
+        """Checagem rápida: o começo do trecho já tem "Forja"? (só para o "escutando" aparecer na hora)"""
+        segs, _ = stt.transcribe(inicio, language="pt", beam_size=1, initial_prompt="Forja.", vad_filter=False,
+                                 condition_on_previous_text=False, without_timestamps=True)
+        return acorda(" ".join(s.text for s in segs)) is not None
+
+    def pedidos() -> None:
+        for linha in sys.stdin:
+            try:
+                q = json.loads(linha)
+                if q["cmd"] == "fala":
+                    boca.fala(q["texto"])
+                elif q["cmd"] == "toca":
+                    boca.toca(q["arquivo"])
+                elif q["cmd"] == "escuta":
+                    escuta.abre()
+                elif q["cmd"] == "cala":
+                    boca.cala()
+                elif q["cmd"] == "surdo":  # gravando amostra para o treino: não reage ao "Forja" dela
+                    boca.fim_fala = max(boca.fim_fala, time.time() + float(q.get("s") or 3))
+            except Exception as e:
+                diz("LOG", f"pedido inválido: {e}")
+        boca.cala()
+        sys.exit(0)  # stdin fechou: o backend saiu
+    threading.Thread(target=pedidos, daemon=True).start()
+
+    diz("PRONTO", nome)
+    diz("ESTADO", "ouvindo")
+    diz("LOG", "detector treinado de Forja ligado" if detector else "Forja pelo Whisper em toda fala")
+    for audio, acordado in trechos(mic, boca, escuta, verifica, detector):
+        if detector and not acordado:
+            diz("ESTADO", "ouvindo")
+            continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
+        diz("ESTADO", "entendendo" if acordado else "transcrevendo")
+        segs, _ = stt.transcribe(audio, language="pt", beam_size=1, initial_prompt="Forja.", vad_filter=False,
+                                 condition_on_previous_text=False)
+        texto = " ".join(s.text for s in segs).strip()
+        if ALUCINACAO.search(normaliza(texto)):
+            diz("LOG", "ignorado: alucinação do Whisper")  # sem o texto: a fala da pessoa não vai para o log
+            texto = ""
+        resposta = escuta.ativa()
+        comando = acorda(texto)
+        if texto and (comando is not None or resposta):
+            escuta.fecha()
+            diz("OUVIU", json.dumps({"texto": texto, "comando": comando if comando is not None else texto,
+                                     "wake": comando is not None, "resposta": resposta}, ensure_ascii=False))
+        elif acordado and not texto:
+            diz("LOG", "acordou mas não entendeu nada")
+        diz("ESTADO", "ouvindo")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
