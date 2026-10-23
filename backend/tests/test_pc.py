@@ -19,6 +19,11 @@ PEDIDOS = {
     "tira o som": ("mudo", "1"),
     "silencia o pc": ("mudo", "1"),
     "volta o som": ("mudo", "0"),
+    "tira o mudo pra mim": ("mudo", "0"),
+    "desliga o mudo do computador": ("mudo", "0"),
+    "baixa o volume pra trinta por cento": ("volume", "30"),
+    "volume em trinta e cinco": ("volume", "35"),
+    "tira o som do pc e joga pra caixa": ("saida", "caixa"),
     "muda para o fone": ("saida", "fone"),
     "passa o som pra caixa": ("saida", "caixa"),
     "troca a saída de áudio para o headset game": ("saida", "headset game"),
@@ -33,6 +38,10 @@ PEDIDOS = {
     "mostra a área de trabalho": ("minimizar_tudo", ""),
     "pausa a música": ("midia", "pausa"),
     "pausa": ("midia", "pausa"),
+    "para essa música um segundo": ("midia", "pausa"),
+    "para de tocar": ("midia", "pausa"),
+    "volta a anterior, por favor": ("midia", "anterior"),
+    "bloqueia essa tela aqui rapidinho": ("travar", ""),
     "continua a música": ("midia", "pausa"),
     "próxima música": ("midia", "proxima"),
     "pula essa música": ("midia", "proxima"),
@@ -47,7 +56,7 @@ PEDIDOS = {
     "onde está o print que eu tirei hoje?": ("arquivo", "print que eu tirei hoje"),
 }
 
-NAO_SAO = ["quanto é 15% de 200?", "que horas são?", "procura o preço da placa de vídeo", "me conta uma piada",
+NAO_SAO = ["Procura vídeos de yoga para iniciantes", "quanto é 15% de 200?", "que horas são?", "procura o preço da placa de vídeo", "me conta uma piada",
            "qual a capital da França?", "passa para a próxima pergunta"]
 
 
@@ -72,6 +81,7 @@ def test_acha_a_saida_de_som():
     assert s("headset voice") == "2"
     assert s("caixa") == "5"           # o do Steam é virtual
     assert s("monitor") == "4"
+    assert s("headphone") == "3"
     assert s("geladeira") is None
 
 
@@ -98,6 +108,7 @@ def test_acha_a_janela():
     assert [j["hwnd"] for j in pc.acha_janela("chrome", js)] == [2, 3]
     assert [j["hwnd"] for j in pc.acha_janela("vs code", js)] == [4]
     assert pc.acha_janela("discord", js) == []
+    assert [j["hwnd"] for j in pc.acha_janela("navegador", js)] == [2, 3]
 
 
 def test_busca_arquivo(tmp_path):
@@ -127,3 +138,15 @@ def test_nao_rouba_pedido_do_forja_nem_pergunta():
         frase = item[0] if isinstance(item, tuple) else item
         if assistente.rota(frase)[0] == "chat":
             assert pc.entende(frase) is None and lembretes.entende(frase) is None, frase
+
+
+def test_valida_o_que_o_modelo_pede():
+    assert pc.valida("volume", "30%") == ("volume", "30")
+    assert pc.valida("volume", "+10") == ("volume", "+10")
+    assert pc.valida("volume", "máximo") == ("volume", "100")
+    assert pc.valida("midia", "próxima") == ("midia", "proxima")
+    assert pc.valida("pasta", "area_de_trabalho") == ("pasta", "area de trabalho")
+    assert pc.valida("fechar", "") is None          # nunca "fecha a janela da frente" por palpite do modelo
+    assert pc.valida("fechar", "chrome") == ("fechar", "chrome")
+    assert pc.valida("formatar", "c:") is None      # fora da lista
+    assert pc.valida("pasta", "C:\\Windows") is None

@@ -32,7 +32,8 @@ NUM = {"uma": 1, "um": 1, "duas": 2, "dois": 2, "tres": 3, "quatro": 4, "cinco":
        "nove": 9, "dez": 10, "onze": 11, "doze": 12, "quinze": 15, "vinte": 20, "trinta": 30, "quarenta": 40,
        "quarenta e cinco": 45, "cinquenta": 50, "meia": 30}
 _N = r"\d{1,3}|" + "|".join(sorted(NUM, key=len, reverse=True))
-RELATIVO = re.compile(r"\b(?:daqui\s+a|daqui|em|dentro\s+de|depois\s+de)\s+(?:(?P<meia>meia)\s+hora|(?P<n>" + _N + r")\s*"
+RELATIVO = re.compile(r"\b(?:daqui\s+a|daqui|em|dentro\s+de|depois\s+de)\s+(?:uns\s+|umas\s+|cerca\s+de\s+|uns\s+|tipo\s+)?"
+                      r"(?:(?P<meia>meia)\s+hora|(?P<n>" + _N + r")\s*"
                       r"(?P<u>minutos?|mins?|horas?|hrs?|h)(?P<emeia>\s+e\s+meia)?)\b")
 HORA = re.compile(r"(?P<as>\b(?:as|a|ao|para\s+as|para\s+o|pras|pelas|la\s+pelas)\s+)?\b(?P<h>\d{1,2}|" + "|".join(k for k in NUM if NUM[k] <= 12) +
                   r"|meio[\s-]?dia|meia[\s-]?noite)(?:(?P<u>\s*(?::|h(?=\d|\b)|hs\b|hrs\b|horas?\b))\s*(?:e\s+)?"
@@ -103,6 +104,18 @@ def quando(texto: str, agora: datetime | None = None) -> tuple[datetime | None, 
     return alvo, trechos
 
 
+def quando_da_ferramenta(texto: str, agora: datetime | None = None) -> datetime | None:
+    """O `quando` que o modelo passou: como a pessoa disse ("amanhã às 8") ou já em ISO ("2026-10-24T08:00")."""
+    texto = (texto or "").strip()
+    try:
+        alvo = datetime.fromisoformat(texto.replace(" ", "T", 1) if re.match(r"\d{4}-\d\d-\d\d \d", texto) else texto)
+        if alvo.tzinfo:
+            alvo = alvo.astimezone().replace(tzinfo=None)
+        return alvo if alvo > (agora or datetime.now()) else None
+    except ValueError:
+        return quando(texto, agora)[0] if texto else None
+
+
 def dito(alvo: datetime, agora: datetime | None = None) -> str:
     """Como falar a hora: "às 14h", "às 14h30, amanhã", "na sexta às 10h"."""
     agora = agora or datetime.now()
@@ -121,9 +134,9 @@ def dito(alvo: datetime, agora: datetime | None = None) -> str:
 
 GATILHO = re.compile(r"\b(?:me\s+lembr\w*|lembr\w*[\s-]+me|(?:cri\w*|coloc\w*|bot\w*|fa[zc]\w*|marc\w*|agend\w*|poe|anot\w*)\s+"
                      r"(?:um\s+)?lembrete|lembrete)\b(?P<con>\s*(?:de|que|para|pra|do|da|dos|das)\b|\s*[:,])?")
-LISTAR = re.compile(r"\b(?:quais|que)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?lembretes\b|\btenho\s+(?:algum\s+)?lembretes?\b|"
+LISTAR = re.compile(r"\b(?:quais|que)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:proximos\s+)?lembretes\b|\bo\s+que\s+(?:eu\s+)?tenho\s+marcado\b|\btenho\s+(?:algum\s+)?lembretes?\b|"
                     r"\b(?:lista|fala|diz)\w*\s+(?:os\s+)?(?:meus\s+)?lembretes\b")
-CANCELAR = re.compile(r"\b(?:cancel\w*|apag\w*|tir\w*|remov\w*|desmarc\w*|exclu\w*)\s+(?P<todos>todos\s+)?(?:o\s+|os\s+|meus\s+)?"
+CANCELAR = re.compile(r"\b(?:cancel\w*|apag\w*|tir\w*|remov\w*|desmarc\w*|exclu\w*|delet\w*)\s+(?P<todos>todos\s+)?(?:(?:o|os|do|dos|meus|aquele|esse|este)\s+)?"
                       r"lembretes?\b(?:\s+(?:de|da|do|das|dos|para|pra|que)\s+(?P<alvo>.+))?")
 CONECTIVO = re.compile(r"^(?:de|que|para|pra|do|da|e|:|,|-)\s+|\s+(?:de|que|para|pra|e|,|as|a)$")
 

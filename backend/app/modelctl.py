@@ -533,10 +533,13 @@ def externo_ocioso() -> dict | None:
 
 def precisa_descarregar() -> bool:
     minutos = int(getattr(config, "DESCARREGAR_OCIOSO_MIN", 15))
-    if minutos <= 0 or localai is None or not localai.status().get("running"):
+    if minutos <= 0 or localai is None or not (st := localai.status()).get("running"):
         return False
     from . import llm
-    return not em_uso() and time.monotonic() - llm.ULTIMO_USO["t"] > minutos * 60
+    # carregar conta como uso: sem isso, um modelo carregado pela IA local (ou pelo atalho do assistente) depois de
+    # 15 min sem pergunta nenhuma caía na primeira volta da vigia, menos de um minuto depois de subir
+    parado = min(time.monotonic() - llm.ULTIMO_USO["t"], float(st["uptime"]) if st.get("uptime") is not None else float("inf"))
+    return not em_uso() and parado > minutos * 60
 
 
 async def vigia_ociosidade(intervalo: float = 60) -> None:

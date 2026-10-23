@@ -131,6 +131,9 @@ def test_ociosidade(monkeypatch):
     monkeypatch.setitem(llm.ULTIMO_USO, "t", time.monotonic() - 16 * 60)
     monkeypatch.setattr(agent, "RUNS", {})
     assert modelctl.precisa_descarregar()                    # 16 min sem uso
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "m", "uptime": 30})
+    assert not modelctl.precisa_descarregar()                # acabou de carregar: carregar conta como uso
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "m"})
 
     class Ativa:
         finished, approvals = False, {}

@@ -67,7 +67,8 @@ NOTA_FALADA = ("A resposta será FALADA em voz alta por você, o assistente de v
                "markdown, listas, tabelas, links, emojis ou citações entre colchetes. Escreva números e siglas como se "
                "lê. Se usou a web, diga de onde veio em poucas palavras. A data e a hora que vêm com cada pergunta são "
                "as reais de agora: sua memória de treino pode ser mais antiga, então para fatos recentes confie na busca "
-               "e nunca diga que a data é do futuro.")
+               "e nunca diga que a data é do futuro. Para mexer no PC da pessoa ou marcar lembretes, chame as ferramentas "
+               "controlar_pc e lembrete: nunca diga que fez algo sem chamá-las.")
 REGRA_HUMOR = ("Regra do humor: o PADRÃO é responder sem piada, só a informação, com a personalidade apenas no tom. "
                "Faça uma piada SOMENTE se a pergunta for boba, óbvia ou pedir brincadeira E você tiver uma tirada "
                "realmente boa e curta; uma piada mais ou menos é pior que nenhuma. Nunca em notícias, assuntos sérios "
@@ -1161,6 +1162,112 @@ BUSCA = {"type": "function", "function": {
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 
 
+CONTROLAR_PC = {"type": "function", "function": {
+    "name": "controlar_pc",
+    "description": "Faz UMA ação no computador da pessoa (Windows), quando ela pede para mexer no PC: abrir ou fechar "
+                   "programa, volume, som mudo, trocar a saída de som (fone, caixa), travar a tela, não perturbe, janelas, "
+                   "música (pausar, próxima, anterior, o que está tocando), abrir pasta ou achar arquivo no PC. NÃO use "
+                   "para perguntas, receitas, pesquisa na web nem conversa.",
+    "parameters": {"type": "object", "properties": {
+        "acao": {"type": "string", "enum": sorted(pc.ACOES)},
+        "alvo": {"type": "string", "description":
+                 "abrir/fechar/maximizar/minimizar/restaurar/outro_monitor: o programa (vazio = a janela da frente); "
+                 "volume: 0 a 100, ou +10 / -10; mudo: 1 liga, 0 desliga; saida: o aparelho (fone, caixa, headset, "
+                 "monitor); midia: pausa, proxima ou anterior; pasta: downloads, documentos, imagens, area de trabalho, "
+                 "videos ou musicas; arquivo: o que procurar, como a pessoa disse (tipo, nome, dia)"}},
+        "required": ["acao"]}}}
+LEMBRETE = {"type": "function", "function": {
+    "name": "lembrete",
+    "description": "Lembretes da pessoa: criar (ela pede para ser lembrada ou avisada de algo depois), listar os marcados "
+                   "ou cancelar um.",
+    "parameters": {"type": "object", "properties": {
+        "acao": {"type": "string", "enum": ["criar", "listar", "cancelar"]},
+        "texto": {"type": "string", "description": "criar: o que lembrar, curto, como tarefa (ex.: 'regar as plantas'); "
+                                                   "cancelar: palavras do lembrete"},
+        "quando": {"type": "string", "description": "criar: o horário como a pessoa disse (ex.: 'às 14h', 'daqui a 30 "
+                                                    "minutos', 'amanhã às 8 da manhã'); vazio se ela não disse"}},
+        "required": ["acao"]}}}
+FERRAMENTAS = [BUSCA, CONTROLAR_PC, LEMBRETE]
+# palavra que pode ser pedido de PC ou lembrete: só aí vale a chamada extra do classificador (pergunta pura não paga)
+PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w*|pause|pausa\w*|play|stop|janela\w*|tela|"
+                   r"monitor|desktop|area\s+de\s+trabalho|fone\w*|caixa|headset|headphone|pasta|arquivo\w*|pdf|planilha|"
+                   r"download\w*|abr\w*|fech\w*|trav\w*|bloque\w*|minimiz\w*|maximiz\w*|lembr\w*|avis\w*|toque|anot\w*|"
+                   r"agenda|compromisso\w*|foco|perturb\w*|spotify|chrome|navegador|programa|app|aplicativo|calculadora|pc|"
+                   r"computador|esquec\w*|pul\w*|proxima|anterior|player|cheia|esconde\w*|limpa|aument\w*|abaix\w*|baix\w*|alto|"
+                   r"diminu\w*|salv\w*|baixei|contrato|boleto|nome\s+d[ae]ss[ae])\b")
+CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A quer. Responda SÓ um JSON numa linha.
+- Mexer no computador: {"tipo":"pc","acao":"<acao>","alvo":"<alvo>"} com acao em:
+  abrir / fechar (alvo: o programa), volume (alvo: 0 a 100, ou +10 / -10), mudo (alvo: 1 deixa mudo, 0 tira do mudo),
+  saida (alvo: fone, caixa, headset, monitor), travar, nao_perturbe, outro_monitor / maximizar / minimizar / restaurar
+  (alvo: o programa; vazio = a janela da frente), minimizar_tudo, midia (alvo: pausa, proxima ou anterior),
+  tocando (que música está tocando), pasta (alvo: downloads, documentos, imagens, area de trabalho, videos, musicas),
+  arquivo (alvo: o que procurar no PC, como foi dito).
+- Lembrete: {"tipo":"lembrete","acao":"criar","texto":"<tarefa curta>","quando":"<horário como foi dito, ou vazio>"},
+  {"tipo":"lembrete","acao":"listar"} ou {"tipo":"lembrete","acao":"cancelar","texto":"<palavras do lembrete>"}.
+- Qualquer outra coisa (pergunta, conversa, conta, receita, pesquisa na web, notícia): {"tipo":"responder"}.
+Exemplos:
+"segura a música aí" -> {"tipo":"pc","acao":"midia","alvo":"pausa"}
+"joga o áudio pro headset" -> {"tipo":"pc","acao":"saida","alvo":"headset"}
+"esconde tudo aí" -> {"tipo":"pc","acao":"minimizar_tudo","alvo":""}
+"deixa o word grandão" -> {"tipo":"pc","acao":"maximizar","alvo":"word"}
+"me cutuca às 17h pra buscar as crianças" -> {"tipo":"lembrete","acao":"criar","texto":"buscar as crianças","quando":"às 17h"}
+"não me deixa esquecer do aniversário da Ana" -> {"tipo":"lembrete","acao":"criar","texto":"aniversário da Ana","quando":""}
+"como chama essa que tá tocando?" -> {"tipo":"pc","acao":"tocando","alvo":""}
+"tá baixinho, sobe aí" -> {"tipo":"pc","acao":"volume","alvo":"+10"}
+"me lembra como se faz pão de queijo" -> {"tipo":"responder"}
+"procura o resultado do jogo do Flamengo" -> {"tipo":"responder"}
+"abre o jogo comigo, você é uma IA?" -> {"tipo":"responder"}
+"abre umas ideias de presente pro dia dos pais" -> {"tipo":"responder"}"""
+
+
+async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | None:
+    """Pedido com pista de PC ou lembrete que as regras não pegaram ("dá um pause aí", "me avisa amanhã às 8 pra
+    regar as plantas"): o modelo classifica em JSON fechado, que modelo pequeno acerta bem mais do que decidir chamar
+    ferramenta numa conversa livre (lá ele dizia "já estou abrindo" sem abrir nada)."""
+    from . import llm
+    saida = ""
+    try:
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"],
+                                               [{"role": "system", "content": CLASSIFICA_ACAO},
+                                                {"role": "user", "content": f"Pedido: \"{texto}\""}],
+                                               None, 2048, think=False, slot=slot, max_tokens=80):
+            if tipo == "content":
+                saida += val
+        d = json.loads(re.search(r"\{.*\}", saida, re.S).group(0))
+    except Exception as e:  # modelo fora do ar, JSON torto: segue como pergunta normal
+        print(f"Forja: voz: classificação de ação falhou: {e.__class__.__name__}", flush=True)
+        return None
+    if d.get("tipo") == "pc" and pc.valida(str(d.get("acao") or ""), str(d.get("alvo") or "")):
+        return "controlar_pc", d
+    if d.get("tipo") == "lembrete" and d.get("acao") in ("criar", "listar", "cancelar"):
+        return "lembrete", d
+    return None
+NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
+
+
+async def _executa(nome: str, args: dict) -> str:
+    """controlar_pc e lembrete pedidos pelo modelo (o que as regras não pegaram): faz, fala o resultado e devolve uma
+    linha para o histórico da conversa falada."""
+    if nome == "lembrete":
+        acao = str(args.get("acao") or "")
+        if acao == "criar":
+            alvo = lembretes.quando_da_ferramenta(str(args.get("quando") or ""))
+            await _lembrete("criar", (alvo, str(args.get("texto") or "").strip())) if alvo else \
+                await _lembrete("pergunta", str(args.get("texto") or "").strip())
+        elif acao in ("listar", "cancelar"):
+            await _lembrete(acao, str(args.get("texto") or ""))
+        else:
+            fala("Não entendi o que fazer com o lembrete.")
+        return f"(lembrete: {acao})"
+    ok = pc.valida(str(args.get("acao") or ""), str(args.get("alvo") or ""))
+    if not ok:
+        fala("Isso eu não sei fazer no PC.")
+        return "(ação do PC recusada)"
+    print(f"Forja: voz: ação do PC pelo modelo: {ok[0]}", flush=True)
+    fala(await asyncio.to_thread(pc.faz, *ok))
+    return f"(PC: {ok[0]})"
+
+
 async def _chat(texto: str) -> None:
     """Pergunta comum: só responde falando. Não cria conversa nem mexe na tela: o modelo é chamado direto (o mesmo do
     último turno), com a busca na web como ferramenta, e o histórico fica em memória enquanto a conversa falada durar.
@@ -1195,7 +1302,14 @@ async def _chat(texto: str) -> None:
                     fala("Carregando o modelo, um instante.")
                 async for _ in modelctl.ensure(spec, {}, asyncio.Event()):
                     pass
+    slot = modelctl.slot_auxiliar() if modelctl.gerenciavel(spec) else None  # slot fixo: o cache fica nele
     hist = _conversa_chat.setdefault("msgs", [])
+    if PISTA.search(_sem_acento(texto)) and (pedido := await _classifica_acao(spec, slot, texto)):
+        feito = await _executa(*pedido)
+        hist += [{"role": "user", "content": texto}, {"role": "assistant", "content": feito}]
+        if not emprestado or emprestado == modelo_assistente():
+            _uso.update(spec=spec, t=time.monotonic(), llm_t=llm.ULTIMO_USO["t"])
+        return
     hist.append({"role": "user", "content": texto})
     cfg = ler()
     kokoro = cfg["motor"] == "kokoro"
@@ -1206,12 +1320,11 @@ async def _chat(texto: str) -> None:
     msgs = [{"role": "system", "content": nota_falada(cfg["humor"])}, *hist[-12:-1],
             {"role": "user", "content": f"{agora_txt}\n{texto}"}]
     esforco = cfg["raciocinio"]
-    slot = modelctl.slot_auxiliar() if modelctl.gerenciavel(spec) else None  # slot fixo: o cache fica nele
-    buf, tudo, pesquisou = "", "", False
+    buf, tudo, pesquisou, feito = "", "", False, ""
     for _ in range(3):  # até duas rodadas de busca e a resposta
         chamadas: list[dict] = []
         buf = ""
-        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], msgs, [BUSCA], 8192,
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], msgs, FERRAMENTAS, 8192,
                                                effort=None if esforco == "desligado" else esforco,
                                                think=False if esforco == "desligado" else None, slot=slot,
                                                max_tokens=MAX_TOKENS_FALA + (0 if esforco == "desligado" else 4000)):
@@ -1224,12 +1337,17 @@ async def _chat(texto: str) -> None:
                     fala(sem_marca(m.group(1)))
                     buf = buf[m.end():]
             elif tipo == "done":
-                chamadas = [c for c in val["tool_calls"] if c["name"] == "web_search"]
+                chamadas = [c for c in val["tool_calls"] if c["name"] in NOMES_FERRAMENTAS]
         if not chamadas:
             chamadas, resto = _chamadas_em_texto(tudo)
             if chamadas:
                 tudo = buf = resto
         if not chamadas:
+            break
+        if acoes := [c for c in chamadas if c["name"] != "web_search"]:
+            # ação no PC ou lembrete: quem fala é o resultado (curto e certo), não uma segunda rodada do modelo
+            feito = " ".join([await _executa(c["name"], c["arguments"] or {}) for c in acoes])
+            tudo = buf = ""
             break
         if not pesquisou:
             pesquisou = True
@@ -1246,11 +1364,13 @@ async def _chat(texto: str) -> None:
                 saida = f"Busca falhou: {e}"
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": saida[:6000]})
     # a piada não entra no histórico: piadas antigas no contexto puxam o modelo a brincar de novo
-    hist.append({"role": "assistant", "content": tudo.split("[piada]")[0].strip()})
+    hist.append({"role": "assistant", "content": feito or tudo.split("[piada]")[0].strip()})
     if not emprestado or emprestado == modelo_assistente():
         _uso.update(spec=spec, t=time.monotonic(), llm_t=llm.ULTIMO_USO["t"])  # ociosidade conta daqui
     # (o modelo emprestado não é do assistente: quem o descarrega é a ociosidade do próprio Forja)
     _humor["pausa"] = PAUSA_PIADA if "[piada]" in tudo else max(0, _humor["pausa"] - 1)
+    if feito:
+        return  # a ação já falou o resultado
     if not sem_marca(tudo):
         fala("Fiquei sem resposta dessa vez. Pode repetir?")
     elif kokoro:
@@ -1263,7 +1383,7 @@ def _chamadas_em_texto(texto: str) -> tuple[list[dict], str]:
     do agente, depois de desfazer as chaves dobradas que alguns templates deixam escapar."""
     from .parsing import parse_text_tool_calls
     t = re.sub(r"^\s*\{\{(.*)\}\}\s*$", r"{\1}", texto, flags=re.S)
-    calls, resto = parse_text_tool_calls(t, ["web_search"])
+    calls, resto = parse_text_tool_calls(t, NOMES_FERRAMENTAS)
     return [{"id": c.get("id") or f"busca{i}", "name": c["name"], "arguments": c.get("arguments") or {}}
             for i, c in enumerate(calls)], resto
 
@@ -1497,7 +1617,7 @@ async def _atende(ouviu: dict) -> None:
         if tipo == "chat" and (lem := lembretes.entende(comando)):
             await _lembrete(*lem)
             return
-        if tipo == "chat" and (acao := pc.entende(comando)):
+        if tipo == "chat" and (acao := pc.entende(comando)) and await asyncio.to_thread(pc.certeza, *acao):
             print(f"Forja: voz: ação do PC: {acao[0]}", flush=True)  # sem o argumento: pode ser nome de arquivo
             fala(await asyncio.to_thread(pc.faz, *acao))
             return

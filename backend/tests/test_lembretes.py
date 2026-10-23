@@ -20,6 +20,7 @@ def test_horario_falado():
     assert q("em meia hora") == datetime(2026, 10, 23, 10, 30)
     assert q("daqui a uma hora e meia") == datetime(2026, 10, 23, 11, 30)
     assert q("em 2 horas") == datetime(2026, 10, 23, 12, 0)
+    assert q("daqui a uns trinta minutos") == datetime(2026, 10, 23, 10, 30)
     assert q("amanhã às 8") == datetime(2026, 10, 24, 8, 0)
     assert q("amanhã") == datetime(2026, 10, 24, 9, 0)
     assert q("amanhã à noite") == datetime(2026, 10, 24, 20, 0)

@@ -30,7 +30,7 @@ def _norm(t: str) -> str:
 
 PEDIDO_EDUCADO = re.compile(r"^(?:(?:por\s+favor|voce\s+pode|vc\s+pode|pode|consegue|quero\s+que\s+voce|da\s+pra|"
                             r"agora|ai|e)[\s,]+)+")
-TRAVAR = re.compile(r"\b(?:trav\w*|bloque\w*)\s+(?:o\s+|a\s+)?(?:pc|computador|tela|maquina|windows)\b")
+TRAVAR = re.compile(r"\b(?:trav\w*|bloque\w*)\s+(?:o\s+|a\s+|ess[ae]\s+|est[ae]\s+|meu\s+|minha\s+)?(?:pc|computador|tela|maquina|windows)\b")
 NAO_PERTURBE = re.compile(r"\bnao\s+(?:perturbe|incomode)\b|\bmodo\s+foco\b")
 VOLUME_N = re.compile(r"\b(?:volume|som)\b\D{0,20}?(\d{1,3})\s*(?:%|por\s*cento)?\b")
 VOLUME_MAX = re.compile(r"\b(?:volume|som)\b.{0,20}\b(?:maximo|no\s+talo|todo)\b")
@@ -40,11 +40,13 @@ VOLUME_MENOS = re.compile(r"\b(?:abaix\w*|baix\w*|diminu\w*|reduz\w*)\s+(?:um\s+
                           r"\b(?:volume|som)\s+mais\s+baixo\b|\bmais\s+baixo\b")
 MUDO = re.compile(r"\b(?:muta|mute|muda\s+o\s+som\s+pra\s+mudo|silencia\w*\s+o\s+(?:pc|som|computador)|"
                   r"tira\s+o\s+som|desliga\s+o\s+som|(?:modo\s+)?mudo|sem\s+som)\b")
-DESMUDO = re.compile(r"\b(?:desmut\w*|volta\w*\s+o\s+som|liga\w*\s+o\s+som|tira\w*\s+do\s+mudo)\b")
+DESMUDO = re.compile(r"\b(?:desmut\w*|volta\w*\s+o\s+som|liga\w*\s+o\s+som|(?:tir\w*|sai\w*)\s+(?:o\s+som\s+)?d?o\s+mudo|"
+                     r"(?:deslig\w*|desativ\w*|tir\w*)\s+o\s+mudo)\b")
 SAIDA = re.compile(r"\b(?:mud\w*|troc\w*|coloc\w*|pass\w*|jog\w*|poe|bota|usa)\s+(?:o\s+|a\s+)?"
                    r"(?:(?:som|audio|saida(?:\s+de\s+(?:som|audio))?)\s+)?(?:para|pra|pro|no|na)\s+(?:o\s+|a\s+|os\s+|as\s+)?(.+)$")
 SAIDA_EXPLICITA = re.compile(r"\b(?:som|audio|saida)\b")
 APARELHO = {"fone": ["fone", "headphone", "headset", "auricular", "earphone"],
+            "headphone": ["fone", "headphone", "headset"],
             "headset": ["headset", "fone"],
             "caixa": ["alto-falante", "alto falante", "speaker", "caixa"],
             "alto falante": ["alto-falante", "alto falante", "speaker"],
@@ -54,8 +56,9 @@ TOCANDO = re.compile(r"\b(?:o\s+)?que\s+(?:e\s+que\s+)?(?:esta|ta)\s+tocando\b|\
                      r"esta\s+tocando|ta\s+tocando)\b|\bqual\s+(?:e\s+)?(?:o\s+nome\s+d)?(?:a|essa)\s+musica\b")
 PROXIMA = re.compile(r"^(?:pula|passa|proxima|avanca)(?:\s+(?:essa|esta))?$|\b(?:proxima\s+|pul\w*\s+(?:essa\s+|a\s+)?|pass\w*\s+(?:essa\s+|a\s+)?|"
                      r"avanc\w*\s+(?:a\s+)?)(?:musica|faixa|video)\b")
-ANTERIOR = re.compile(r"\b(?:musica|faixa)\s+anterior\b|\bvolt\w*\s+(?:pr[ao]\s+|a\s+)?(?:musica|faixa)\b|^anterior\b")
+ANTERIOR = re.compile(r"\b(?:musica|faixa)\s+anterior\b|\bvolt\w*\s+(?:pr[ao]\s+|a\s+)?anterior\b|\bvolt\w*\s+(?:pr[ao]\s+|a\s+)?(?:musica|faixa)\b|^anterior\b")
 PAUSA = re.compile(r"^(?:pausa|pause|despausa|continua|play|retoma|da\s+play|solta\s+o\s+som)\b|"
+                   r"\bpar[ae]\s+(?:de\s+tocar|(?:a|essa|esta)\s+(?:musica|video|faixa))\b|"
                    r"\b(?:pausa\w*|pause|continu\w*|despaus\w*|retom\w*|solt\w*|da\s+play\s+n[ao])\s+(?:a\s+|o\s+|na\s+|no\s+)?"
                    r"(?:musica|video|midia|spotify|playlist|podcast|youtube)\b")
 MINIMIZA_TUDO = re.compile(r"\bminimiz\w*\s+tud\w*|\bmostr\w*\s+(?:a\s+)?area\s+de\s+trabalho\b")
@@ -73,17 +76,30 @@ TIPOS = {"pdf": {".pdf"}, "planilha": {".xlsx", ".xls", ".csv", ".ods"}, "docume
          "foto": {".jpg", ".jpeg", ".png", ".heic", ".webp"}, "imagem": {".jpg", ".jpeg", ".png", ".heic", ".webp", ".gif"},
          "print": {".png", ".jpg"}, "video": {".mp4", ".mkv", ".mov", ".avi", ".webm"}, "musica": {".mp3", ".flac", ".wav", ".m4a"},
          "zip": {".zip", ".rar", ".7z"}, "instalador": {".exe", ".msi"}, "arquivo": set()}
+# só tipos que são claramente arquivo: "procura vídeos de yoga" é pesquisa na web (o modelo decide esses)
 ARQUIVO = re.compile(r"\b(?:ach\w*|procur\w*|encontr\w*|cade|onde\s+(?:esta|ta|fica|foi\s+parar))\s+(?:o\s+|a\s+|um\s+|uma\s+|"
-                     r"meu\s+|minha\s+|aquel[ea]\s+)?((?:" + "|".join(TIPOS) + r")s?\b.*)$")
+                     r"meu\s+|minha\s+|aquel[ea]\s+)?((?:pdf|planilha|documento|doc|apresentacao|print|zip|instalador|arquivo)s?\b.*)$")
 ABRIR = re.compile(r"^(?:abr\w*|inici\w*|execut\w*|ligu?e?\s+o|liga\s+o|carreg\w*\s+o)\s+(?:o\s+|a\s+)?"
                    r"(?:app\s+|aplicativo\s+|programa\s+)?(?:do\s+|da\s+)?(.+)$")
 FECHAR = re.compile(r"^(?:fech\w*|encerr\w*|mat\w*|finaliz\w*|sai\w*\s+d[oa])\s+(?:o\s+|a\s+|os\s+|as\s+)?"
                     r"(?:app\s+|aplicativo\s+|programa\s+)?(?:do\s+|da\s+)?(.+)$")
 
 
+DEZENAS = {"dez": 10, "vinte": 20, "trinta": 30, "quarenta": 40, "cinquenta": 50, "sessenta": 60, "setenta": 70,
+           "oitenta": 80, "noventa": 90, "cem": 100}
+UNIDADES = {"um": 1, "dois": 2, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6, "sete": 7, "oito": 8, "nove": 9}
+
+
+def _numeros(c: str) -> str:
+    """"trinta e cinco por cento" -> "35 por cento": o Whisper às vezes escreve o número por extenso."""
+    dez = "|".join(DEZENAS)
+    return re.sub(rf"\b({dez})(?:\s+e\s+({'|'.join(UNIDADES)}))?\b",
+                  lambda m: str(DEZENAS[m[1]] + (UNIDADES[m[2]] if m[2] else 0)), c)
+
+
 def entende(comando: str) -> tuple[str, str] | None:
     """(ação, argumento) quando o pedido é uma das ações do PC; None para o resto (pergunta, Forja...)."""
-    c = PEDIDO_EDUCADO.sub("", _norm(comando).strip(" .!?,")).strip()
+    c = _numeros(PEDIDO_EDUCADO.sub("", _norm(comando).strip(" .!?,")).strip())
     c = re.sub(r"[.!?]+$", "", c).strip()
     if TRAVAR.search(c):
         return "travar", ""
@@ -101,8 +117,6 @@ def entende(comando: str) -> tuple[str, str] | None:
         return "volume", "+10"
     if VOLUME_MENOS.search(c):
         return "volume", "-10"
-    if MUDO.search(c):
-        return "mudo", "1"
     if m := OUTRO_MONITOR.search(c):
         alvo = m.group(1).strip()
         return "outro_monitor", "" if ESSA_JANELA.match(alvo) else alvo
@@ -110,6 +124,8 @@ def entende(comando: str) -> tuple[str, str] | None:
         alvo = m.group(1).strip()
         if SAIDA_EXPLICITA.search(c[:m.start(1)]) or any(re.search(rf"\b{a}", alvo) for a in APARELHO):
             return "saida", alvo
+    if MUDO.search(c):
+        return "mudo", "1"
     if PROXIMA.search(c):
         return "midia", "proxima"
     if ANTERIOR.search(c):
@@ -131,6 +147,50 @@ def entende(comando: str) -> tuple[str, str] | None:
     if m := ABRIR.match(c):
         return "abrir", m.group(1)
     return None
+
+
+ACOES = {"abrir", "fechar", "volume", "mudo", "saida", "travar", "nao_perturbe", "outro_monitor", "maximizar", "minimizar",
+         "restaurar", "minimizar_tudo", "midia", "tocando", "pasta", "arquivo"}
+
+
+def valida(acao: str, alvo: str, do_modelo: bool = True) -> tuple[str, str] | None:
+    """A chamada da ferramenta controlar_pc (o modelo escolheu a ação): só ações da lista e argumentos no formato de
+    cada uma. O alvo nunca vira comando: só escolhe entre o que o Windows listou."""
+    acao, alvo = (acao or "").strip().lower(), str(alvo or "").strip()
+    if acao not in ACOES:
+        return None
+    a = _norm(alvo)
+    if acao == "volume":
+        if re.search(r"max|tudo|100", a):
+            return acao, "100"
+        m = re.match(r"^([+-]?)\s*(\d{1,3})", a.replace("%", ""))
+        if not m:
+            return (acao, "+10") if re.search(r"aument|sob|mais|alto", a) else (acao, "-10") if re.search(r"abaix|diminu|menos|baix", a) \
+                else None
+        return acao, f"{m[1]}{min(100, int(m[2]))}"
+    if acao == "mudo":
+        return acao, "0" if a in ("0", "nao", "false", "desliga", "desligar") else "1"
+    if acao == "midia":
+        return acao, "proxima" if "prox" in a else "anterior" if "anter" in a or "volt" in a else "pausa"
+    if acao == "pasta":
+        a = a.replace("_", " ")
+        return (acao, a) if a in PASTAS else None
+    if acao == "saida" and not alvo:
+        return None
+    alvo = "" if ESSA_JANELA.match(a) else alvo
+    if acao == "fechar" and not alvo and do_modelo:
+        return None  # "limpa a tela" não pode virar "fecha a janela da frente": fechar pelo modelo só com o programa dito
+    return acao, alvo
+
+
+def certeza(acao: str, arg: str) -> bool:
+    """O atalho por regra só vale se o alvo existe: "abre as opções de receitas" não é programa nenhum, então o pedido
+    segue para o modelo (que responde, ou chama a ferramenta com o nome certo)."""
+    if acao == "abrir":
+        return acha_app(arg) is not None
+    if acao in ("fechar", "maximizar", "minimizar", "restaurar", "outro_monitor") and arg:
+        return bool(acha_janela(arg))
+    return True
 
 
 # ------------------------------------------------------------------ Windows
@@ -217,6 +277,13 @@ def _sem_artigo(dito: str) -> str:
     return APELIDOS.get(d, d)
 
 
+NAVEGADORES = ("chrome", "msedge", "firefox", "vivaldi", "brave", "opera", "edge")
+
+
+def _navegador(d: str) -> bool:
+    return d in ("navegador", "browser", "internet")
+
+
 def _forja(j: dict) -> bool:
     """Janela do próprio Forja (a casca Electron é o pai deste backend): não se fecha nem se esconde por voz."""
     return j["pid"] in (os.getpid(), os.getppid()) or Path(j["exe"]).stem.lower() in ("forja", "electron")
@@ -228,6 +295,8 @@ def acha_janela(dito: str, todas: list[dict] | None = None) -> list[dict]:
     notas = []
     for j in todas if todas is not None else janelas():
         nota = _nota(d, Path(j["exe"]).stem, j["titulo"])
+        if _navegador(d) and Path(j["exe"]).stem.lower() in NAVEGADORES:
+            nota = 1.5  # "fecha o navegador": o que estiver aberto (Chrome, Edge, Vivaldi...)
         if nota >= 0.75:
             notas.append((nota, j))
     if not notas:
@@ -263,6 +332,8 @@ def acha_app(dito: str, lista: list[dict] | None = None) -> dict | None:
         if APP_RUIM.search(a.get("Name", "")):
             continue
         n = _nota(d, a.get("Name", ""))
+        if _navegador(d) and any(b in _norm(a.get("Name", "")) for b in NAVEGADORES):
+            n = 1.0  # "abre o navegador": o primeiro instalado da lista
         if n > nota:
             melhor, nota = a, n
     return melhor if nota >= 0.8 else None
