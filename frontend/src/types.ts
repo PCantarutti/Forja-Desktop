@@ -36,7 +36,7 @@ export type Activity = {
   autonomo?: number[];  // conversas com trabalho autônomo ligado (PC e celular acompanham)
   // assistente de voz F.O.R.J.A: o botão do microfone e a conversa que o último comando falado abriu (`n` sobe a cada uma)
   voz?: { ligado: boolean; instalado: boolean; estado: string; ultimo: { conv: number; kind: string; n: number } | null;
-          lembrete?: { n: number; titulo?: string; texto: string } | null };
+          lembrete?: { n: number; titulo?: string; texto: string } | null; abrir?: { n: number; url: string } | null };
 };
 
 export type Attachment = { path: string; name: string; size: number; mime: string; kind: "image" | "text" | "file" | "video";

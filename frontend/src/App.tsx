@@ -653,6 +653,9 @@ export default function App() {
     // "Forja, me lembre de... às 14h": deu a hora (o celular recebe o push pelo backend)
     const lembrete = activity.voz?.lembrete;
     if (lembrete && lembrete.n !== antes.voz?.lembrete?.n) notify(lembrete.titulo || "Lembrete", lembrete.texto, true);
+    // "Forja, abre o g1 no navegador do Forja": o painel Navegador da conversa aberta vai até o site
+    const abrirSite = activity.voz?.abrir;
+    if (abrirSite && abrirSite.n !== antes.voz?.abrir?.n) { (window as any).forja?.focus?.(); abreLinkNoForja(abrirSite.url); }
     const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
     const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
     for (const c of activity.conversations) {

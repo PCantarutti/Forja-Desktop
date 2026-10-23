@@ -19,6 +19,7 @@ type Estado = {
   resumo_hora: string; cidade: string; avisos_email: string[];
   pastas_documentos: string[]; notas: { id: string; texto: string; quando: string }[];
   documentos: { arquivos: number; indexando: boolean; erro: string };
+  acompanhar: { id: string; tipo: "preco" | "versao"; alvo: string; limite: number | null; base: string | null; ultimo: number | null; conferido: string | null }[];
 };
 type Memoria = { name: string; slug: string; description: string; type: string };
 type GoogleConta = { client_id: string; tem_chave: boolean; conectado: boolean; email: string | null; pode_copiar_youtube: boolean };
@@ -54,7 +55,7 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Trabalhar no modo agente ou na Maestro", exemplos: ["Forja, no modo agente crie um site de ecommerce", "Forja, crie um jogo para mim no modo agente", "Forja, pede pro agente fazer um script", "Forja, no maestro crie um sistema de estoque"],
     texto: "Se uma conversa já trabalha numa pasta com nome parecido, pergunta se continua nela ou cria uma pasta nova (em chat-agente/ ou chat-maestro/ dentro da pasta dos projetos). Depois pergunta o modelo e começa." },
   { titulo: "Pesquisa profunda", exemplos: ["Forja, faça uma pesquisa profunda sobre carros elétricos", "Forja, pesquise a fundo isso que conversamos"],
-    texto: "Abre uma pesquisa na tela Pesquisa (a funda, com fontes). “Isso que conversamos” vira uma pergunta completa a partir da conversa falada. Ele avisa quando terminar. Pesquisa simples (“pesquise o valor do dólar”) ele mesmo responde falando." },
+    texto: "Abre uma pesquisa na tela Pesquisa (a funda, com fontes). “Isso que conversamos” vira uma pergunta completa a partir da conversa falada. Quando termina, ele avisa e lê as conclusões em poucas frases. Pesquisa simples (“pesquise o valor do dólar”) ele mesmo responde falando." },
   { titulo: "Escolher o modelo falando", exemplos: ["o de sempre", "qwen 3.6", "gemma 12b", "meu favorito de código", "…usando o modelo qwen 3.6"],
     texto: "Quando ele pergunta “Com qual modelo?”: o nome do modelo, “o de sempre” (o do último envio no Forja) ou um dos seus favoritos por uso. Dizendo “usando o modelo X” no próprio pedido, ele nem pergunta. Não achou? Ele diz os modelos que você tem." },
   { titulo: "Microfone, alto-falante e voz", exemplos: ["Fone do headset", "Voz rápida", "Voz clonada da tela Voz"],
@@ -95,6 +96,10 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Sem horário vira nota; com horário (“às 14h”) vira lembrete." },
   { titulo: "Projetos do Forja", exemplos: ["Forja, cria um card no board do Forja: bug no login", "Forja, onde o Forja trata o upload de imagem?", "Forja, o que o agente fez no projeto da loja hoje?"],
     texto: "O projeto é achado pelo nome entre as pastas do Agente e da Maestro (sem nome: o mais recente). O card entra no backlog do board; “onde” usa o índice de código do agente; o histórico junta as conversas do dia e os commits." },
+  { titulo: "Sites e preços", exemplos: ["Forja, abre o site da Caixa", "Forja, abre o g1 no navegador do Forja", "Forja, vê quanto tá o PS5 nas lojas"],
+    texto: "Acha o site oficial pela busca e fala o endereço para você conferir. Sem “do Forja”, abre no seu navegador (onde estão seus logins); com, no painel Navegador. Preço: lê as lojas agora e diz as três mais baratas. Login e compra são sempre seus." },
+  { titulo: "Acompanhar e avisar", exemplos: ["Forja, me avisa quando o Galaxy S25 baixar de 4 mil", "Forja, me fala quando sair versão nova do llama.cpp", "Forja, o que você está acompanhando?", "Forja, para de acompanhar o Galaxy"],
+    texto: "Confere a cada 3 horas e avisa uma vez, falado, no Windows e no celular. Versão nova vale para projetos do GitHub. A lista fica em Configurações › Acompanhando." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
@@ -718,6 +723,22 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     Tudo fica no seu PC: os documentos viram um índice local, e as memórias são as mesmas que o agente do Forja usa.
                     A conversa falada continua sem ser guardada; só vale o que você pedir para guardar.
                   </p>
+                </Grupo>
+
+                <Grupo id="acompanhar" titulo="Acompanhando" resumo={e.acompanhar.length ? `${e.acompanhar.length} item${e.acompanhar.length === 1 ? "" : "s"}` : "nada"}>
+                  {e.acompanhar.length === 0 && <span className="text-[11.5px] text-faint">Nada. Diga “Forja, me avisa quando o PS5 baixar de 3 mil”.</span>}
+                  {e.acompanhar.map((a) => (
+                    <div key={a.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-fg">
+                        {a.tipo === "preco"
+                          ? <>{a.alvo} <span className="text-muted">abaixo de R$ {a.limite?.toLocaleString("pt-BR")}{a.ultimo ? ` · agora R$ ${a.ultimo.toLocaleString("pt-BR")}` : ""}</span></>
+                          : <>{a.alvo} <span className="text-muted">versão nova{a.base ? ` (hoje ${a.base})` : ""}</span></>}
+                      </span>
+                      <button aria-label={`Parar de acompanhar ${a.alvo}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                              onClick={() => api.del(`/assistente/acompanhar/${a.id}`).then(carrega).catch((er) => onError(er.message))}>parar</button>
+                    </div>
+                  ))}
+                  <p className="text-[11.5px] leading-relaxed text-faint">Confere a cada 3 horas e avisa uma vez (falado, no Windows e no celular).</p>
                 </Grupo>
 
                 <Grupo id="lembretes" titulo="Lembretes" resumo={e.lembretes.length ? `${e.lembretes.length} marcado${e.lembretes.length === 1 ? "" : "s"}` : "nenhum"}>

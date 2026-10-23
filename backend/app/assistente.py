@@ -218,7 +218,13 @@ def estado() -> dict:
             "treinando": treino["id"] if treino and treino["status"] == "running" else "",
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "vozes_kokoro": VOZES_KOKORO, "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
-            "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado()}
+            "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado(),
+            "acompanhar": _web().lista()}
+
+
+def _web():
+    from . import web_voz
+    return web_voz
 
 
 def _conhecimento():
@@ -244,7 +250,8 @@ def resumo() -> dict:
     """O pedaço do /api/activity: barato, sem tocar no disco."""
     # `lembrete`: o último que tocou; a tela do PC mostra a notificação do Windows quando o n muda
     return {"ligado": _vivo(), "estado": _estado["estado"], "ultimo": _estado["ultimo"], "instalado": instalado(),
-            "lembrete": {k: lembretes.disparado[k] for k in ("n", "titulo", "texto")} if lembretes.disparado["n"] else None}
+            "lembrete": {k: lembretes.disparado[k] for k in ("n", "titulo", "texto")} if lembretes.disparado["n"] else None,
+            "abrir": dict(_abrir) if _abrir["n"] else None}
 
 
 def emprestavel() -> dict | None:
@@ -1126,8 +1133,17 @@ async def _avisa_pesquisa(message_id: int, pergunta: str) -> None:
         except ToolError:
             return
         if st.get("status") != "rodando":
-            fala(f"A pesquisa sobre {pergunta[:80]} terminou." if st.get("status") == "pronto"
-                 else f"A pesquisa sobre {pergunta[:80]} parou: {st.get('aviso') or st.get('status')}.")
+            if st.get("status") != "pronto":
+                fala(f"A pesquisa sobre {pergunta[:80]} parou: {st.get('aviso') or st.get('status')}.")
+                return
+            resumo = ""
+            try:  # o relatório pode ser longo: ele lê as conclusões em poucas frases, não o texto inteiro
+                spec, slot, _ = await _prepara_modelo()
+                resumo = await _gera(spec, slot, RESUMO_PESQUISA, _dados([(st.get("relatorio") or "")[:9000]]), 500)
+            except Exception as e:
+                print(f"Forja: voz: resumo da pesquisa falhou: {e.__class__.__name__}", flush=True)
+            lembretes.avisa("Pesquisa pronta", pergunta[:150], "", fala)
+            fala(f"A pesquisa sobre {pergunta[:80]} terminou. {resumo} O relatório completo está na tela Pesquisa.".replace("  ", " "))
             return
 
 def _precisa_esperar(spec: dict) -> str:
@@ -1225,7 +1241,9 @@ PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w
                    r"o\s+que\s+(?:que\s+)?(?:eu\s+)?tenho|dentista|consulta|medico|programacao|novidades|pra\s+fazer|"
                    r"lembra\s+que|guard\w*|nota\w*|card|board|codigo|projeto\w*|documento\w*|garantia|vence\w*|"
                    r"vencimento|anotei|onde\s+(?:o|a|que|e)|fez|rolou|feito|arquivo\w*|condominio|apolice|seguro|papeis|memori\w*|"
-                   r"apag\w*|delet\w*|lista|informac\w*|parte\s+do)\b")
+                   r"apag\w*|delet\w*|lista|informac\w*|parte\s+do|sites?|preco\w*|loja\w*|barat\w*|compar\w*|"
+                   r"acompanh\w*|versao|lanc\w*|github|release|abaixo|custa\w*|quanto\s+(?:ta|esta|custa)|navegador|monitor\w*|"
+                   r"vigi\w*|de\s+olho|alert\w*|atualiz\w*|notifica\w*|valor|conto|grito)\b")
 # pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente)
 SABER = re.compile(r"\b(?:card|board|onde\b.{0,40}\b(?:trata|faz|salva|guarda|fica|processa|esta|ta)\b|em\s+que\s+(?:arquivo|parte)|"
                    r"qual\s+(?:e\s+)?a\s+parte|"
@@ -1255,6 +1273,11 @@ CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A
 - Card no board de um projeto do Forja: {"tipo":"card","projeto":"<nome ou vazio>","titulo":"<o card>"}.
 - Onde algo está no código de um projeto: {"tipo":"codigo","projeto":"<nome ou vazio>","pergunta":"<o que procurar>"}.
 - O que foi feito num projeto do Forja: {"tipo":"historico","projeto":"<nome ou vazio>","quando":"<hoje, ontem...>"}.
+- Web: {"tipo":"web","acao":"abrir","alvo":"<site ou nome do site>","no_forja":<true só se pediu o navegador do Forja>}
+  ou {"tipo":"web","acao":"precos","produto":"<produto>"} (ver ou comparar o preço nas lojas).
+- Acompanhar e avisar depois: {"tipo":"acompanhar","acao":"preco","produto":"<produto>","limite":<valor em reais, número>},
+  {"tipo":"acompanhar","acao":"versao","projeto":"<programa ou projeto de software>"}, {"tipo":"acompanhar","acao":"listar"}
+  ou {"tipo":"acompanhar","acao":"parar","alvo":"<palavras>"}.
 - Qualquer outra coisa (pergunta, conversa, conta, receita, pesquisa na web, notícia): {"tipo":"responder"}.
 Exemplos:
 "segura a música aí" -> {"tipo":"pc","acao":"midia","alvo":"pausa"}
@@ -1278,6 +1301,12 @@ Exemplos:
 "põe no board do mesaflow: tela de login trava" -> {"tipo":"card","projeto":"mesaflow","titulo":"tela de login trava"}
 "em que arquivo o forja salva as configurações?" -> {"tipo":"codigo","projeto":"forja","pergunta":"salva configurações"}
 "o que rolou no projeto da loja ontem?" -> {"tipo":"historico","projeto":"loja","quando":"ontem"}
+"abre o site da Caixa" -> {"tipo":"web","acao":"abrir","alvo":"Caixa Econômica Federal","no_forja":false}
+"abre o g1 aqui no navegador do forja" -> {"tipo":"web","acao":"abrir","alvo":"g1","no_forja":true}
+"vê quanto tá o PS5 nas lojas" -> {"tipo":"web","acao":"precos","produto":"PS5"}
+"me avisa se o Galaxy S25 ficar abaixo de 4 mil" -> {"tipo":"acompanhar","acao":"preco","produto":"Galaxy S25","limite":4000}
+"me fala quando lançar versão nova do ollama" -> {"tipo":"acompanhar","acao":"versao","projeto":"ollama"}
+"o que você tá acompanhando pra mim?" -> {"tipo":"acompanhar","acao":"listar"}
 "me lembra como se faz pão de queijo" -> {"tipo":"responder"}
 "procura o resultado do jogo do Flamengo" -> {"tipo":"responder"}
 "abre o jogo comigo, você é uma IA?" -> {"tipo":"responder"}
@@ -1313,7 +1342,7 @@ async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | N
         return "agenda", d
     if d.get("tipo") == "resumo_dia":
         return "resumo_dia", d
-    if d.get("tipo") in ("documentos", "memoria", "nota", "card", "codigo", "historico"):
+    if d.get("tipo") in ("documentos", "memoria", "nota", "card", "codigo", "historico", "web", "acompanhar"):
         return d["tipo"], d
     return None
 NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
@@ -1322,6 +1351,10 @@ NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 async def _executa(nome: str, args: dict, spec: dict | None = None, slot=None) -> str:
     """Ação que o modelo escolheu (o que as regras não pegaram): faz, fala o resultado e devolve uma linha para o
     histórico da conversa falada."""
+    if nome in ("web", "acompanhar"):
+        if spec is None:
+            spec, slot, _ = await _prepara_modelo()
+        return await _web_voz(nome, args, spec, slot)
     if nome in ("documentos", "memoria", "nota", "card", "codigo", "historico"):
         if spec is None:
             spec, slot, _ = await _prepara_modelo()
@@ -1942,6 +1975,9 @@ async def _vigia_rotina() -> None:
         await asyncio.sleep(30)
         try:
             await _resumo_agendado()
+            if time.monotonic() - _rotina.setdefault("web_t", time.monotonic()) > 3 * 3600:  # não na subida
+                _rotina["web_t"] = time.monotonic()
+                await _confere_acompanhamentos()
             if time.monotonic() - _rotina.get("docs_t", 0.0) > 900:
                 _rotina["docs_t"] = time.monotonic()
                 indexa_documentos()
@@ -2170,6 +2206,143 @@ def _historico(pasta: str, dia: datetime) -> list[str]:
     except (OSError, subprocess.SubprocessError):
         pass
     return partes
+
+
+# ------------------------------------------------------------------ web: sites, preços e acompanhamentos (fase 4)
+
+_abrir = {"n": 0, "url": ""}  # link para o PC abrir no painel Navegador (o n muda a cada pedido)
+RESUMO_PESQUISA = ("Você é o assistente de voz F.O.R.J.A. Diga em até 4 frases faladas, sem markdown, as conclusões "
+                   "principais deste relatório de pesquisa. " + DADO_DE_FORA)
+PRECOS = ("Você extrai preços de páginas de lojas. Para cada loja, o preço À VISTA do produto pedido, só se a linha for "
+          "claramente desse produto (não acessório, capa, peça nem outro modelo). Responda SÓ um JSON numa linha: "
+          "[{\"loja\":\"<domínio>\",\"preco\":<número em reais>}]. Loja sem preço claro fica de fora. " + DADO_DE_FORA)
+
+
+def _reais(v: float) -> str:
+    inteiro = f"{int(v):,}".replace(",", ".")
+    return f"{inteiro} reais" + (f" e {round((v - int(v)) * 100)} centavos" if v - int(v) >= 0.01 else "")
+
+
+async def _ofertas(produto: str, spec: dict, slot) -> list[tuple[str, float]]:
+    """(loja, preço) do mais barato ao mais caro, pelo que as lojas mostram agora."""
+    from . import web_voz
+    cands = await asyncio.to_thread(web_voz.candidatos_preco, produto)
+    if not cands:
+        return []
+    saida = await _gera(spec, slot, PRECOS, f"Produto: {produto}\n" + _dados(
+        [f"Loja: {c['loja']}\nTítulo: {c['titulo']}\nLinhas com preço:\n" + "\n".join(c["linhas"]) for c in cands]), 400)
+    lojas = {c["loja"] for c in cands}
+    try:
+        itens = json.loads(re.search(r"\[.*\]", saida, re.S).group(0))
+    except (AttributeError, ValueError):
+        return []
+    ofertas = {}
+    for i in itens if isinstance(itens, list) else []:
+        loja = str((i or {}).get("loja") or "").lower().removeprefix("www.")
+        preco = web_voz.para_numero((i or {}).get("preco"))
+        if loja in lojas and preco and preco > 1 and (loja not in ofertas or preco < ofertas[loja]):
+            ofertas[loja] = preco  # loja que o modelo inventou fica de fora: só as que a busca achou
+    return sorted(ofertas.items(), key=lambda x: x[1])
+
+
+async def _web_voz(nome: str, d: dict, spec: dict, slot) -> str:
+    """"Abre o site do banco", "vê quanto tá o PS5 nas lojas", "me avisa quando baixar de 2 mil", "quando sair versão
+    nova do llama.cpp". Login e compra são sempre da pessoa."""
+    from . import web_voz
+    acao = d.get("acao")
+    if nome == "web" and acao == "abrir":
+        alvo = str(d.get("alvo") or "").strip()
+        url = await asyncio.to_thread(web_voz.site_oficial, alvo) if alvo else None
+        if not url:
+            fala(f"Não achei o site de {alvo or 'que você pediu'}.")
+            return "(site não achado)"
+        dom = web_voz._dominio(url)
+        if d.get("no_forja"):
+            _abrir.update(n=_abrir["n"] + 1, url=url)
+            fala(f"Abrindo {dom} no navegador do Forja.")
+        else:
+            os.startfile(url)  # o navegador da pessoa, com os logins dela
+            fala(f"Abrindo {dom}.")
+        return f"(abriu {dom})"
+    if nome == "web":
+        produto = str(d.get("produto") or "").strip()
+        fala(f"Procurando o preço de {produto} nas lojas.")
+        ofertas = await _ofertas(produto, spec, slot)
+        if not ofertas:
+            fala(f"Não achei preço de {produto} nas lojas agora.")
+            return "(preços: nada)"
+        primeiro, *resto = ofertas[:3]
+        depois = (" Depois, " + " e ".join(f"{l}, {_reais(p)}" for l, p in resto) + ".") if resto else ""
+        fala(f"A mais barata que achei: {primeiro[0]}, {_reais(primeiro[1])}.{depois} São preços de agora; confira no "
+             f"site antes de comprar.")
+        return f"(preços: {len(ofertas)} lojas)"
+    if acao == "listar":
+        itens = web_voz.lista()
+        if not itens:
+            fala("Não estou acompanhando nada.")
+        else:
+            fala("Estou acompanhando: " + "; ".join(
+                f"{x['alvo']} abaixo de {_reais(x['limite'])}" if x["tipo"] == "preco" else f"versão nova do {x['alvo']}"
+                for x in itens) + ".")
+        return "(acompanhamentos lidos)"
+    if acao == "parar":
+        alvo = _palavras(str(d.get("alvo") or ""))
+        ids = {x["id"] for x in web_voz.lista() if alvo and any(w in _sem_acento(x["alvo"]) for w in alvo)}
+        web_voz.apagar(ids)
+        fala("Parei de acompanhar." if ids else "Não achei esse acompanhamento.")
+        return "(acompanhamento parado)"
+    if acao == "versao":
+        projeto = str(d.get("projeto") or "").strip()
+        repo = await asyncio.to_thread(web_voz.repo_github, projeto) if projeto else None
+        if not repo:
+            fala(f"Não achei o {projeto or 'projeto'} no GitHub. Por enquanto acompanho versão de projeto do GitHub e preço de produto.")
+            return "(versão: sem repositório)"
+        base = await asyncio.to_thread(web_voz.ultima_versao, repo)
+        web_voz.acompanhar("versao", projeto, base=base, repo=repo)
+        fala(f"Combinado. {'A versão de agora do ' + projeto + ' é ' + base + '. ' if base else ''}Te aviso quando sair outra.")
+        return "(acompanhando versão)"
+    produto = str(d.get("produto") or "").strip()
+    limite = web_voz.para_numero(d.get("limite") or "")
+    if not produto or not limite:
+        fala("Me diga o produto e o valor, por exemplo: me avisa quando o PS5 baixar de 3 mil.")
+        return "(acompanhar: faltou dado)"
+    fala(f"Vendo o preço de agora de {produto}.")
+    ofertas = await _ofertas(produto, spec, slot)
+    if ofertas and ofertas[0][1] <= limite:
+        fala(f"Já está abaixo: {ofertas[0][0]}, {_reais(ofertas[0][1])}.")
+        return "(já abaixo do limite)"
+    web_voz.acompanhar("preco", produto, limite=limite)
+    agora = f"Hoje o menor que achei é {_reais(ofertas[0][1])}, na {ofertas[0][0]}. " if ofertas else ""
+    fala(f"Combinado. {agora}Confiro a cada 3 horas e te aviso quando ficar abaixo de {_reais(limite)}.")
+    return "(acompanhando preço)"
+
+
+async def _confere_acompanhamentos() -> None:
+    """A cada 3 horas: versão nova no GitHub e preço abaixo do limite. Avisa uma vez (falado, Windows e celular) e
+    tira da lista."""
+    from . import web_voz
+    agora = datetime.now().isoformat(timespec="seconds")
+    for x in web_voz.lista():
+        if x["tipo"] == "versao":
+            v = await asyncio.to_thread(web_voz.ultima_versao, x["repo"])
+            if v and x.get("base") and v != x["base"]:
+                lembretes.avisa("Versão nova", f"{x['alvo']} {v}", f"Saiu a versão {v} do {x['alvo']}." if _vivo() else "", fala)
+                web_voz.apagar({x["id"]})
+            else:
+                web_voz.atualiza(x["id"], base=x.get("base") or v, conferido=agora)
+            continue
+        try:
+            spec, slot, _ = await _prepara_modelo()
+        except ToolError:
+            return  # placa ocupada gerando imagem: confere na próxima volta
+        ofertas = await _ofertas(x["alvo"], spec, slot)
+        if ofertas and ofertas[0][1] <= (x.get("limite") or 0):
+            loja, preco = ofertas[0]
+            lembretes.avisa(f"Preço baixou: {x['alvo']}", f"{loja}: R$ {preco:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                            f"O {x['alvo']} baixou: {_reais(preco)} na {loja}." if _vivo() else "", fala)
+            web_voz.apagar({x["id"]})
+        else:
+            web_voz.atualiza(x["id"], ultimo=ofertas[0][1] if ofertas else None, conferido=agora)
 
 
 def _itens_ditos(itens: list[dict]) -> str:

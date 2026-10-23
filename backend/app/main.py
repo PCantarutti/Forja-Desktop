@@ -1369,6 +1369,12 @@ def assistente_esquecer():
     return assistente.esquecer()
 
 
+@app.delete("/api/assistente/acompanhar/{aid}")
+def assistente_parar_acompanhar(aid: str):
+    from . import web_voz
+    return web_voz.apagar({aid})
+
+
 @app.delete("/api/assistente/notas/{nid}")
 def assistente_apagar_nota(nid: str):
     from . import conhecimento
