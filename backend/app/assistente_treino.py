@@ -165,11 +165,19 @@ def main() -> int:
                 (frases_teste if voz in teste_vozes else frases_fala).append(w)
             for _ in range(3):  # só ruído, sem fala
                 alvo_n.append(np.clip(ruido.trecho(int(JANELA * SR)) * rng.uniform(0.3, 3), -1, 1))
-        minha = []
+        minha, minha_limpa = [], {}  # exemplos aumentados da voz da pessoa; e um de cada, limpo, para medir no fim
         if a.minha_voz and Path(a.minha_voz).is_dir():
             for p in sorted(Path(a.minha_voz).glob("*.wav")):
                 w = apara(ler_wav(p))
-                minha += [monta(w, ruido, rng) for _ in range(6)]
+                if len(w) < SR * 0.15:  # gravação sem fala: só atrapalharia
+                    continue
+                minha_limpa[p.stem] = monta(w, Ruidos(None, random.Random(1)), random.Random(1), fim=0.9)
+                for i in range(24):
+                    # velocidade ±10% (a mesma pessoa diz o nome mais rápido ou mais devagar), volume, posição e ruído
+                    v = reamostra(w, int(SR * rng.uniform(0.9, 1.1)))
+                    depois = rng.choice(frases_fala) if (i % 4 == 3 and frases_fala) else None
+                    minha.append(monta(v, ruido, rng, fim=rng.uniform(0.7, 0.85) if depois is not None else None,
+                                       depois=depois))
         diz("FASE", "extraindo características (openWakeWord)")
         diz("PROGRESSO", "0.72")
         oww = Path(a.oww)
@@ -224,9 +232,20 @@ def main() -> int:
             limiar = float(lim)
             if alarmes_com(lim) <= max(1, minutos / 3) and (pn >= lim).mean() <= 0.01:
                 break
+        # a voz da pessoa manda: se o limiar deixa de fora gravações dela, desce (sem passar de ~2 alarmes a cada
+        # 3 min de conversa), porque um detector que não ouve o dono é pior que um que acende à toa de vez em quando
+        pm = {k: v for k, v in zip(minha_limpa, prob(clf, (feats(list(minha_limpa.values())) - media) / desvio))} \
+            if minha_limpa else {}
+        if pm:
+            for lim in np.arange(limiar, 0.3, -0.01):
+                if np.mean([v >= lim for v in pm.values()]) >= 0.8:
+                    if alarmes_com(lim) <= max(2, minutos * 2 / 3):
+                        limiar = float(lim)
+                    break
         acerto = float((pp >= limiar).mean()) if len(pp) else 0.0
         falsos = float((pn >= limiar).mean()) if len(pn) else 0.0
         alarmes = alarmes_com(limiar)
+        minha_detalhe = {k: bool(v >= limiar) for k, v in pm.items()}
 
         W1, W2 = clf.coefs_
         b1, b2 = clf.intercepts_
@@ -236,7 +255,8 @@ def main() -> int:
         diz("OK", json.dumps({"acerto": round(acerto, 3), "falsos": round(falsos, 4), "limiar": round(limiar, 3),
                               "alarmes_fala_corrida": alarmes, "minutos_fala_corrida": round(minutos, 1),
                               "positivos": len(Xp) + len(Xm), "negativos": len(Xn), "vozes": total,
-                              "minha_voz": len(Xm) // 6}))
+                              "minha_voz": len(minha_limpa), "minha_voz_detalhe": minha_detalhe,
+                              "minha_voz_acerto": round(float(np.mean(list(minha_detalhe.values()))), 3) if minha_detalhe else None}))
         return 0
     except Exception as e:
         import traceback

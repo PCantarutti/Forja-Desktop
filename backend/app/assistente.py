@@ -98,6 +98,7 @@ MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se 
 # esforços do Forja (config.REASONING_BUDGET), e o pensamento nunca é falado
 RACIOCINIO = ("desligado", "baixo", "medio", "alto")
 ESPERA_LIVRE_MIN = 30  # chat/agente com outro modelo espera no máximo isto o trabalho atual terminar
+PENDENTE_S = 60  # uma pergunta dele ("Com qual modelo?", "continuo nessa pasta?") vale por isto
 PARAR = re.compile(r"^\s*(?:para|pare|parar|cancela|cancele|cancelar|chega|silencio|cala a boca|cale-se|esquece|"
                    r"deixa pra la|deixa para la|nada|nao precisa|tchau)\b[\s.!,]*$")
 
@@ -157,9 +158,9 @@ def gravar(patch: dict) -> dict:
         d["atalho"] = str(d["atalho"] or "").strip()[:60]
         if d["raciocinio"] not in RACIOCINIO:
             raise ToolError("raciocinio deve ser " + ", ".join(RACIOCINIO))
-        if d["detector"] not in ("whisper", "treinado"):
-            raise ToolError("detector deve ser whisper ou treinado")
-        if d["detector"] == "treinado" and not DETECTOR.is_file():
+        if d["detector"] not in ("whisper", "treinado", "ambos"):
+            raise ToolError("detector deve ser whisper, treinado ou ambos")
+        if d["detector"] != "whisper" and not DETECTOR.is_file():
             raise ToolError("Treine o detector de “Forja” antes de ligá-lo.")
         try:
             d["sensibilidade"] = max(0.0, min(1.0, float(d["sensibilidade"])))
@@ -316,22 +317,69 @@ def treinar() -> dict:
     return job
 
 
+def _qualidade(wav: Path) -> dict:
+    """Quanto da gravação é fala e o pico: avisa na hora a gravação que não vai ajudar o treino."""
+    import array
+    import wave
+    with wave.open(str(wav)) as w:
+        amostras = array.array("h", w.readframes(w.getnframes()))
+    if not amostras:
+        return {"segundos_voz": 0.0, "pico": 0.0, "aviso": "gravação vazia"}
+    pico = max(abs(x) for x in amostras) / 32768
+    janelas = [amostras[i:i + 480] for i in range(0, len(amostras) - 480, 480)]
+    energia = [sum(x * x for x in j) / len(j) for j in janelas]
+    piso = sorted(energia)[len(energia) // 10] if energia else 0
+    voz = sum(1 for e in energia if e > max(piso * 8, 120 ** 2)) * 0.03
+    aviso = ("não ouvi fala: fale mais perto do microfone" if voz < 0.2 else
+             "muito baixo: fale mais alto ou mais perto" if pico < 0.05 else
+             "estourou (alto demais): fale um pouco mais longe" if pico > 0.98 else
+             "longo demais: diga só “Forja”" if voz > 1.6 else "")
+    return {"segundos_voz": round(voz, 2), "pico": round(pico, 2), "aviso": aviso}
+
+
+def gravacoes() -> list[dict]:
+    """As gravações da pessoa para o treino, com a qualidade e se o último treino reconheceu cada uma."""
+    try:
+        reconhece = json.loads(METRICAS.read_text("utf-8")).get("minha_voz_detalhe") or {}
+    except (OSError, ValueError):
+        reconhece = {}
+    out = []
+    for p in sorted(MINHA_VOZ.glob("*.wav")) if MINHA_VOZ.is_dir() else []:
+        out.append({"id": p.stem, **_qualidade(p), "reconhecida": reconhece.get(p.stem)})
+    return out
+
+
+def apagar_gravacao(gid: str) -> list[dict]:
+    if not re.fullmatch(r"\d{3}", gid):
+        raise ToolError("Gravação inválida.")
+    (MINHA_VOZ / f"{gid}.wav").unlink(missing_ok=True)
+    return gravacoes()
+
+
+def arquivo_gravacao(gid: str) -> Path:
+    p = MINHA_VOZ / f"{gid}.wav"
+    if not re.fullmatch(r"\d{3}", gid) or not p.is_file():
+        raise ToolError("Gravação não encontrada.")
+    return p
+
+
 def gravar_voz() -> dict:
     """Uma amostra de 2 s da pessoa dizendo "Forja" (vira exemplo positivo no próximo treino). O ouvido fica surdo
     enquanto isso: senão ele responderia ao "Forja" da gravação."""
     if not instalado():
         raise ToolError("Instale o assistente primeiro.")
     MINHA_VOZ.mkdir(parents=True, exist_ok=True)
-    n = len(list(MINHA_VOZ.glob("*.wav")))
-    if n >= 30:
+    existentes = sorted(int(p.stem) for p in MINHA_VOZ.glob("*.wav") if p.stem.isdigit())
+    if len(existentes) >= 30:
         raise ToolError("Já tem 30 gravações: é o bastante. Treine de novo.")
     _manda("surdo", s=3)
-    destino = MINHA_VOZ / f"{n + 1:03d}.wav"
+    n = len(existentes)
+    destino = MINHA_VOZ / f"{(existentes[-1] if existentes else 0) + 1:03d}.wav"  # apagar uma no meio não sobrescreve outra
     r = subprocess.run([str(_py()), "-c", GRAVA, str(destino), ler()["mic"], "2"], capture_output=True, text=True,
                        timeout=30, **native.popen_kwargs())
     if r.returncode or not destino.is_file():
         raise ToolError("Não consegui gravar: " + (r.stderr.strip().splitlines() or ["microfone indisponível"])[-1])
-    return {"minha_voz": n + 1}
+    return {"minha_voz": n + 1, "gravacao": {"id": destino.stem, **_qualidade(destino)}}
 
 
 def apagar_voz() -> dict:
@@ -357,6 +405,8 @@ def _vivo() -> bool:
 
 
 def _manda(cmd: str, **dados) -> None:
+    if cmd == "escuta" and _pendente:
+        _pendente["t"] = time.time()  # a pergunta pendente vale a partir de quando ele terminou de perguntar
     p = _proc.get("p")
     if p and p.poll() is None:
         try:
@@ -388,8 +438,10 @@ def iniciar() -> None:
         argv += ["--mic", cfg["mic"]]
     if cfg["saida"]:
         argv += ["--saida", cfg["saida"]]
-    if cfg["detector"] == "treinado" and DETECTOR.is_file():
+    if cfg["detector"] != "whisper" and DETECTOR.is_file():
         argv += ["--detector", str(DETECTOR), "--oww", str(OWW), "--sensibilidade", str(cfg["sensibilidade"])]
+        if cfg["detector"] == "ambos":
+            argv.append("--com-whisper")
     # o Whisper fica no runtime, não no perfil; sem symlink no Windows o hub reclama a cada subida (funciona igual)
     env = {**os.environ, "HF_HUB_CACHE": str(PASTA / "hf"), "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"}
     p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -565,31 +617,60 @@ def _sem_acento(t: str) -> str:
     return "".join(c for c in t if not unicodedata.combining(c))
 
 
-IMAGEM = re.compile(r"\b(?:crie|cria|criar|gere|gera|gerar|faca|faz|fazer|desenhe|desenha|desenhar|mostre)\b.*?"
-                    r"\b(?:uma\s+|umas\s+)?(?:imagem|imagens|foto|figura|ilustracao)\b\s*(?:de|do|da|dos|das|com)?\s*(.*)")
-VIDEO = re.compile(r"\b(?:crie|cria|criar|gere|gera|gerar|faca|faz|fazer|anime)\b.*?\b(?:um\s+)?(?:video|animacao)\b"
-                   r"\s*(?:de|do|da|dos|das|com)?\s*(.*)")
-AGENTE = re.compile(r"\b(?:no\s+|em\s+)?modo\s+agente\b[\s,:]*|^\s*agente[\s,:]+")
+IMAGEM = re.compile(r"\b(?:crie|cria|criar|gere|gera|gerar|faca|faz|fazer|desenhe|desenha|desenhar|mostre|quero|preciso)\b"
+                    r".*?\b(?:uma\s+|umas\s+)?(?:imagem|imagens|foto|figura|ilustracao|desenho)\b\s*(?:de|do|da|dos|das|com)?\s*(.*)")
+VIDEO = re.compile(r"\b(?:crie|cria|criar|gere|gera|gerar|faca|faz|fazer|anime|quero|preciso)\b.*?\b(?:um\s+)?"
+                   r"(?:video|animacao)\b\s*(?:de|do|da|dos|das|com)?\s*(.*)")
+# "no modo agente", "pelo agente", "pede pro agente", "agente, crie..." e o "modo a gente" que o Whisper escreve
+AGENTE = re.compile(r"\b(?:n[oa]\s+|em\s+|pelo\s+|usando\s+o\s+)?modo\s+(?:de\s+)?(?:agente|a\s+gente|agent)\b[\s,:]*"
+                    r"|\b(?:no|pelo|com\s+o|pro|pra\s+o|para\s+o|ao|usando\s+o)\s+agente\b(?:\s+do\s+forja)?[\s,:]*"
+                    r"|\b(?:pede|peca|manda|mande|fala)\s+(?:pro|pra\s+o|para\s+o|ao|o)\s+agente\b[\s,:]*|^\s*agente\b[\s,:]*")
+MAESTRO = re.compile(r"\b(?:n[oa]\s+|em\s+|pel[oa]\s+|com\s+[oa]\s+|usando\s+[oa]\s+|pr[oa]\s+)?(?:modo\s+(?:de\s+)?)?"
+                     r"maestro\b(?:\s+do\s+forja)?[\s,:]*")
+# pesquisa profunda vai para a tela Pesquisa; "pesquise X" simples ele mesmo responde (com a busca na web)
+PESQUISA = re.compile(r"(?:\b(?:fa[cz]\w*|quero|preciso|cri\w*|comec\w*|inici\w*|abr\w*|rod\w*|gera?\w*)\s+)?(?:uma?\s+)?"
+                      r"(?:(?:pesquis\w*|investig\w*|levantamento)\s+(?:bem\s+)?"
+                      r"(?:profunda|funda|aprofundada|completa|completo|detalhada|detalhado|a\s+fundo)"
+                      r"|relatorio\s+(?:completo|detalhado)|(?:modo|tela)\s+(?:de\s+)?pesquisa)\b"
+                      r"(?:\s+n[oa]\s+(?:aplicativo\s+)?(?:forja|aplicativo|app)(?:\s+desktop)?)?(?:\s+(?:pra|para)\s+mim)?[\s,:]*")
 # "salva nossa conversa num chat", "transforma essa conversa em um chat do Forja": a falada vai para o disco
 SALVAR = re.compile(r"\b(?:salv\w*|transform\w*|guard\w*|vir\w*|pass\w*|coloc\w*|bot\w*|registr\w*)\b.{0,30}?"
                     r"\b(?:nossa|essa|esta|a)\s+(?:conversa|papo|conversinha)\b")
-# "abra um chat no Forja sobre X": aí sim abre conversa (pergunta comum só é respondida falando)
-CHAT_FORJA = re.compile(r"\b(?:abr[ae]|abrir|inici[ae]|iniciar|comec[ae]|comecar|cri[ae]|criar)\b\s+(?:um\s+|uma\s+)?"
-                        r"(?:novo\s+|nova\s+)?(?:chat|conversa)\b(?:\s+nov[oa]\b)?(?:\s+n[oa]\s+forja(?:\s+desktop)?)?[\s,:]*"
-                        r"(?:(?:sobre|para|pra|de|com)\s+)?(.*)")
+# "abra um chat no Forja sobre X", "abre o chat", "inicia uma conversa nova": aí sim abre conversa
+CHAT_FORJA = re.compile(r"\b(?:abr\w*|inici\w*|comec\w*|cri\w*|bot\w*|coloc\w*)\b\s+(?:(?:um|uma|o|a|outro|outra|novo|nova)\s+){0,2}"
+                        r"(?:chat|conversa)\b(?:\s+(?:nov[oa]|do\s+forja|n[oa]\s+(?:forja(?:\s+desktop)?|aplicativo|app)))*"
+                        r"[\s,:]*(?:(?:sobre|para|pra|de|com|acerca\s+de)\s+)?(.*)")
+# o que indica que a pessoa quer algo DO Forja: sem regra casada, o modelo decide (classifica_rota)
+CITA_FORJA = re.compile(r"\b(?:forja|aplicativo|app|chat|conversa|agente|a\s+gente|maestro|pesquisa\s+\w+|imagem|foto|"
+                        r"desenho|video)\b")
+# "usando o modelo Qwen 3.6": o modelo já vem no pedido e a pergunta "com qual modelo?" não precisa ser feita
+MODELO_DITO = re.compile(r"[\s,]*\b(?:usando|use|usa|com|pelo|no|via)\s+(?:o\s+)?modelo\s+(.+?)\s*(?=[,;!?]|\.(?:\s|$)|$)")
+CORTESIA = re.compile(r"^\s*(?:(?:por\s+favor|pra\s+mim|para\s+mim|ai|agora)[\s,]+)+|[\s,]+(?:por\s+favor|pra\s+mim|para\s+mim)\s*$")
+
+
+def _corta(comando: str, c: str, m: re.Match) -> str:
+    """O pedido sem o trecho que disse o tipo ("no modo agente"), sem cortesia solta nas pontas."""
+    resto = (comando[:m.start()] + " " + comando[m.end():]).strip(" ,.;:")
+    resto = re.sub(r"\s{2,}", " ", resto)
+    return CORTESIA.sub("", resto).strip(" ,.;:") or resto
 
 
 def rota(comando: str) -> tuple[str, str]:
-    """(tipo, pedido): imagem, video, agente ou chat. Por palavra-chave: decide na hora, sem gastar o LLM.
-    ponytail: regex; classificar com o LLM se aparecerem pedidos que ela não pega."""
+    """(tipo, pedido): parar, salvar_conversa, pesquisa, maestro, agente, chat_forja, video, imagem ou chat.
+    Por palavra-chave, testada com várias formas de pedir (tests/test_assistente.py). O que fica de fora mas cita
+    algo do Forja vai para classifica_rota (o modelo decide)."""
     c = _sem_acento(comando)
     # a posição do casamento no texto sem acento vale no original: NFKD + tirar acento não muda o tamanho
     if PARAR.match(c):
         return "parar", ""
     if SALVAR.search(c):
         return "salvar_conversa", ""
+    if m := PESQUISA.search(c):
+        return "pesquisa", re.sub(r"^(?:sobre|de|do|da|dos|das|acerca\s+de)\s+", "", _corta(comando, c, m), flags=re.I)
+    if m := MAESTRO.search(c):
+        return "maestro", _corta(comando, c, m)
     if m := AGENTE.search(c):
-        return "agente", (comando[:m.start()] + comando[m.end():]).strip(" ,.")
+        return "agente", _corta(comando, c, m)
     if m := CHAT_FORJA.search(c):
         return "chat_forja", comando[m.start(1):].strip(" ,.?")
     if m := VIDEO.search(c):
@@ -599,17 +680,72 @@ def rota(comando: str) -> tuple[str, str]:
     return "chat", comando
 
 
+def _parece_pedido(texto: str) -> bool:
+    """Resposta a "Com qual modelo?" que na verdade é um pedido novo: casa com outra rota, ou é uma frase/pergunta
+    longa demais para ser só um nome de modelo."""
+    return rota(texto)[0] != "chat" or len(texto.split()) >= 6 or texto.strip().endswith("?")
+
+
+def modelo_dito(comando: str) -> tuple[str, str]:
+    """("pedido sem a menção", "nome do modelo dito") ou (comando, "") se não falou de modelo."""
+    m = MODELO_DITO.search(_sem_acento(comando))
+    if not m:
+        return comando, ""
+    return (comando[:m.start()] + comando[m.end():]).strip(" ,."), comando[m.start(1):m.end(1)]
+
+
+ROTAS_LLM = ("responder", "chat", "agente", "maestro", "pesquisa", "imagem", "video")
+CLASSIFICA = """Classifique o pedido falado ao assistente de voz do app Forja. Responda SÓ uma palavra:
+responder, chat, agente, maestro, pesquisa, imagem ou video.
+- responder: pergunta, conversa, explicação, ou pesquisa simples que o assistente resolve falando.
+- chat: abrir uma conversa de chat dentro do app Forja.
+- agente: pedir ao agente do Forja para criar ou mexer em arquivos, programar um site, jogo, app, script ou projeto.
+- maestro: usar a Maestro do Forja (planeja e delega para workers).
+- pesquisa: pesquisa profunda, relatório completo com fontes.
+- imagem / video: gerar uma imagem ou um vídeo.
+Só escolha uma ação do app quando o pedido for para FAZER algo no Forja. Na dúvida: responder.
+Exemplos:
+"me explica o que é um agente de IA" -> responder
+"cria um jogo da cobrinha com o agente do forja" -> agente
+"quero que o forja programe um site de receitas" -> agente
+"abre uma conversa lá no aplicativo sobre investimentos" -> chat
+"faz um levantamento completo sobre carros elétricos no forja" -> pesquisa
+"desenha um dragão de cartola" -> imagem
+"o que é um vídeo vertical?" -> responder"""
+
+
+async def classifica_rota(comando: str) -> str:
+    """O pedido cita o Forja e nenhuma regra pegou (o Whisper ouviu torto, ou um jeito novo de pedir): o modelo do
+    assistente decide, numa chamada curta. Erro ou resposta estranha: responder (o caminho que não abre nada)."""
+    from . import llm
+    try:
+        spec = modelo_assistente()
+        texto = ""
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"],
+                                               [{"role": "system", "content": CLASSIFICA},
+                                                {"role": "user", "content": comando}],
+                                               None, 2048, think=False, max_tokens=8):
+            if tipo == "content":
+                texto += val
+        palavra = _sem_acento(texto).strip(" .\"'\n").split()[0] if texto.strip() else ""
+        return palavra if palavra in ROTAS_LLM else "responder"
+    except Exception as e:
+        print(f"Forja: voz: classificação do pedido falhou: {e.__class__.__name__}", flush=True)
+        return "responder"
+
+
 VERBOS = {"crie", "cria", "criar", "faca", "faz", "fazer", "monte", "monta", "montar", "desenvolva", "construa",
-          "programe", "continue", "continua", "trabalhe", "implemente"}
+          "programe", "continue", "continua", "trabalhe", "implemente", "quero", "preciso", "gostaria"}
 VAZIAS = {"um", "uma", "o", "a", "os", "as", "de", "do", "da", "dos", "das", "para", "pra", "com", "e", "no", "na",
-          "meu", "minha", "novo", "nova", "simples", "projeto", "pasta"}
+          "meu", "minha", "novo", "nova", "simples", "projeto", "pasta", "mim", "me", "chat", "conversa", "forja",
+          "que", "voce", "ai", "agora", "favor", "por", "em", "nesse", "nessa", "esse", "essa", "isso", "sobre",
+          "abra", "abre", "abrir", "inicie", "inicia", "iniciar", "comece", "comeca"}
 
 
 def nome_projeto(pedido: str) -> str:
     """"crie um site de ecommerce" -> "site-ecommerce": até 4 palavras que dizem o que é."""
     palavras = [p for p in re.findall(r"[a-z0-9]+", _sem_acento(pedido)) if p not in VERBOS | VAZIAS]
     return "-".join(palavras[:4]) or "projeto"
-
 
 def pasta_parecida(nome: str, pastas: list[str]) -> str | None:
     """A pasta cujo nome lembra o projeto pedido: palavra significativa em comum ou nomes quase iguais."""
@@ -637,10 +773,11 @@ def _projetos() -> dict[str, int]:
     return out
 
 
-def _pasta_nova(nome: str) -> Path:
+def _pasta_nova(nome: str, kind: str = "agent") -> Path:
+    """Projeto novo pedido por voz: <raiz>/chat-agente/<nome> ou <raiz>/chat-maestro/<nome>, nunca solto na raiz.
+    Raiz: a "pasta dos projetos" da página, ou ~/Forja."""
     cfg = ler()
-    raiz = Path(cfg["pasta_projetos"] or (Path(config.WORKSPACE_PADRAO).parent if config.WORKSPACE_PADRAO
-                                          else Path.home() / "Forja"))
+    raiz = Path(cfg["pasta_projetos"] or Path.home() / "Forja") / ("chat-maestro" if kind == "maestro" else "chat-agente")
     destino, n = raiz / nome, 2
     while destino.exists():
         destino, n = raiz / f"{nome}-{n}", n + 1
@@ -671,7 +808,8 @@ def _anota(quem: str, texto: str) -> None:
     if not texto:
         return
     ultima = _transcricao[-1] if _transcricao else None
-    if ultima and ultima["quem"] == quem == "forja" and time.time() - ultima["t"] < 30:
+    # só as frases de uma mesma resposta viram um balão: aviso que chega sozinho depois (pesquisa terminou) é outro
+    if ultima and ultima["quem"] == quem == "forja" and _atendendo[0] and time.time() - ultima["t"] < 30:
         ultima["texto"] += " " + texto  # as frases de uma mesma resposta viram um balão só
         ultima["t"] = time.time()
     else:
@@ -730,6 +868,18 @@ async def _turno(conv: int, kind: str, texto: str, spec: dict | None = None) -> 
 PADRAO_DITO = re.compile(r"\b(mesmo|sempre|atual|padrao|tanto faz|qualquer|esse ai|o que estiver)\b")
 NUMEROS = {"zero": "0", "um": "1", "uma": "1", "dois": "2", "duas": "2", "tres": "3", "quatro": "4", "cinco": "5",
            "seis": "6", "sete": "7", "oito": "8", "nove": "9", "ponto": "", "virgula": ""}
+# como o Whisper escreve os nomes em português (das conversas salvas: "Comem 3.6", "WEN 3.6", "KEWEN3.6", "gema")
+APELIDOS = {
+    "qwen": ["que wen", "que e wen", "kewen", "kiwen", "kwen", "quen", "kuen", "cuen", "cowen", "comem", "queen", "quem",
+             "wen", "uen", "quin", "qwen"],
+    "gemma": ["gema", "gemas", "jema", "jemma", "guema", "gemar", "gemma"],
+    "llama": ["lhama", "lama", "iama", "llama"], "mistral": ["mistrau", "mistral"],
+    "deepseek": ["deep seek", "dip seek", "dip sik", "dipsik", "dipseek", "deepseek"],
+    "ornith": ["ornitio", "ornite", "ornit", "ornif", "ornith"], "phi": ["fai", "phi"],
+    "gpt": ["gepete", "jipiti", "gpt"],
+}
+_APELIDO = re.compile(r"\b(" + "|".join(sorted({a for v in APELIDOS.values() for a in v}, key=len, reverse=True))
+                      .replace(" ", r"\s+") + r")\b")
 
 
 def falavel(nome: str) -> str:
@@ -757,34 +907,61 @@ def _compacto(t: str) -> str:
     return "".join(NUMEROS.get(p, p) for p in palavras)
 
 
+def _desapelida(r: str) -> str:
+    """"que e wen 3.6" -> "qwen 3.6": os apelidos viram o nome do modelo."""
+    def nome(m: re.Match) -> str:
+        dito = re.sub(r"\s+", " ", m.group(1))
+        return next(k for k, v in APELIDOS.items() if dito in v)
+    return _APELIDO.sub(nome, r)
+
+
 def escolher_modelo(resposta: str, favoritos: list[dict], modelos: list[dict], padrao: dict) -> dict | None:
     """O modelo que a pessoa disse: "o de sempre", um favorito pelo nome do uso ("código") ou o nome do modelo
-    ("qwen 3.6", "gemma 12b"). None quando nada bate."""
+    ("qwen 3.6", "gemma 12b", e como o Whisper ouve: "kewen 3.6", "gema"). None quando nada bate."""
     r = _sem_acento(resposta)
     if PADRAO_DITO.search(r) and padrao.get("model"):
         return {"provider": padrao["provider"], "model": padrao["model"]}
     for f in favoritos:
         if re.search(rf"\b{re.escape(_sem_acento(f['nome']))}", r):
             return {"provider": f["provider"], "model": f["model"]}
-    falado = _compacto(re.sub(r"\b(o|a|com|usa|use|modelo|quero|pode ser|vai de)\b", " ", r))
-    if len(falado) < 3:
+    alvos = [(m, _compacto(falavel(m["model"]))) for m in modelos]
+    # só fica o que pode ser parte de um nome: número, ou palavra que aparece em algum modelo ("que", "é" saem)
+    separado = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", r)  # "kewen3.6" -> "kewen 3.6"
+    palavras = [NUMEROS.get(p, p) for p in re.findall(r"[a-z0-9]+", _desapelida(separado))]
+    palavras = [p for p in palavras if p and (p.isdigit() or any(p in a for _, a in alvos))]
+    falado = "".join(palavras)
+    if len(falado) < 2:
         return None
-    letras = re.findall(r"[a-z]{3,}", falado)
+    letras = [p for p in palavras if not p.isdigit() and len(p) >= 3]
+    candidatos = [(m, a) for m, a in alvos if all(w in a for w in letras)]
+    if not letras:  # só o número ("três ponto seis"): vale se um modelo só tem ele
+        candidatos = [(m, a) for m, a in candidatos if falado in a]
+        return {"provider": candidatos[0][0]["provider"], "model": candidatos[0][0]["model"]} if len(candidatos) == 1 else None
     melhor, nota = None, 0.0
-    for m in modelos:
-        alvo = _compacto(falavel(m["model"]))
-        if not all(w in alvo for w in letras):  # "gemma" tem de estar em "gemma412bit"
-            continue
+    for m, alvo in candidatos:
         n = difflib.SequenceMatcher(None, falado, alvo[:len(falado) + 4]).ratio() + (0.5 if falado in alvo else 0)
         if n > nota:
             melhor, nota = m, n
     return {"provider": melhor["provider"], "model": melhor["model"]} if melhor and nota >= 0.55 else None
 
 
+def _nomes_para_dizer(modelos: list[dict], n: int = 4) -> str:
+    nomes = list(dict.fromkeys(re.sub(r"\s+it$", "", falavel(m["model"]), flags=re.I) for m in modelos))[:n]
+    return ", ".join(nomes[:-1]) + f" e {nomes[-1]}" if len(nomes) > 1 else "".join(nomes)
+
+
 async def _pergunta_modelo(ctx: dict) -> None:
-    """Antes de abrir chat ou agente no Forja: com qual modelo? A resposta chega em _modelo_respondido."""
+    """Antes de abrir chat, agente, maestro ou pesquisa no Forja: com qual modelo? Se o pedido já disse ("usando o
+    modelo Qwen 3.6"), não pergunta. A resposta chega em _modelo_respondido."""
     _pendente.clear()
     _pendente.update(tipo="modelo", tentativas=0, **ctx)
+    if ctx.get("modelo_dito"):
+        spec = escolher_modelo(ctx["modelo_dito"], ler()["favoritos"], await asyncio.to_thread(modelos_disponiveis),
+                               mobile.defaults())
+        if spec:
+            _pendente.clear()
+            await _comeca_com(ctx, spec)
+            return
     favs = [f["nome"] for f in ler()["favoritos"]]
     dica = f" Ou um favorito: {', '.join(favs)}." if favs else ""
     fala(f"Com qual modelo? Diga o nome, ou o de sempre.{dica}")
@@ -793,35 +970,91 @@ async def _pergunta_modelo(ctx: dict) -> None:
 
 async def _modelo_respondido(resposta: str) -> None:
     p = dict(_pendente)
-    spec = escolher_modelo(resposta, ler()["favoritos"], await asyncio.to_thread(modelos_disponiveis), mobile.defaults())
+    modelos = await asyncio.to_thread(modelos_disponiveis)
+    spec = escolher_modelo(resposta, ler()["favoritos"], modelos, mobile.defaults())
     if not spec:
-        if p["tentativas"] < 1:
+        if p["tentativas"] < 2:
             _pendente["tentativas"] += 1
-            fala("Não achei esse modelo. Diga o nome de novo, ou o de sempre.")
+            fala(f"Não achei esse. Tenho {_nomes_para_dizer(modelos)}. Qual? Ou diga o de sempre.")
             _manda("escuta")
         else:
             _pendente.clear()
             fala("Não achei. Pode pedir de novo quando quiser.")
         return
     _pendente.clear()
+    await _comeca_com(p, spec)
+
+
+TIPO_CONVERSA = {"chat": "chat", "agent": "agent", "maestro": "maestro", "pesquisa": "pesquisa"}
+
+
+async def _comeca_com(p: dict, spec: dict) -> None:
+    """O modelo foi escolhido: cria a conversa certa (e a pasta, no agente/maestro) e começa."""
     nome = falavel(spec["model"])
-    if p["kind"] == "chat":
+    kind = TIPO_CONVERSA[p["kind"]]
+    if kind == "pesquisa":
+        pergunta = await _pergunta_da_pesquisa(p["pedido"])
+        conv = _nova_conversa("pesquisa", titulo=pergunta)
+        aviso = f"Vou fazer uma pesquisa profunda sobre {pergunta}, com o {nome}. Te aviso quando terminar."
+    elif kind == "chat":
         conv = _nova_conversa("chat", titulo=p["pedido"])
         aviso = f"Abri o chat com o {nome}."
     elif p.get("conv"):
         conv = p["conv"]
         aviso = f"Continuando em {Path(p['pasta']).name}, com o {nome}."
     else:
-        pasta = _pasta_nova(p["nome"])
-        conv = _nova_conversa("agent", str(pasta), titulo=p["pedido"])
-        aviso = f"Criei a pasta {pasta.name} e vou trabalhar nela no modo agente, com o {nome}."
-    kind = "chat" if p["kind"] == "chat" else "agent"
+        pasta = _pasta_nova(p["nome"], kind)
+        conv = _nova_conversa(kind, str(pasta), titulo=p["pedido"])
+        modo = "na Maestro" if kind == "maestro" else "no modo agente"
+        aviso = f"Criei a pasta {pasta.name} e vou trabalhar nela {modo}, com o {nome}."
     _abre(conv, kind)
-    if not p["pedido"]:
+    if not p["pedido"] and kind != "pesquisa":
         fala(aviso)
         return
-    await _troca_e_comeca(conv, kind, p["pedido"], spec, aviso)
+    await _troca_e_comeca(conv, kind, pergunta if kind == "pesquisa" else p["pedido"], spec, aviso)
 
+
+REFERENCIA = re.compile(r"\b(isso|disso|nisso|esse assunto|desse assunto|esse tema|o que (?:a gente )?conversamos|"
+                        r"o que falamos|a nossa conversa|essa conversa)\b")
+
+
+async def _pergunta_da_pesquisa(pedido: str) -> str:
+    """"sobre isso que conversamos": a pergunta da pesquisa sai da conversa falada (o modelo do assistente reescreve
+    numa pergunta que se sustenta sozinha). Pedido com assunto próprio vai como está."""
+    from . import llm
+    if pedido and not REFERENCIA.search(_sem_acento(pedido)):
+        return pedido
+    conversa_txt = "\n".join(f"{'Pessoa' if x['quem'] == 'voce' else 'Assistente'}: {x['texto']}" for x in _transcricao[-12:])
+    if not conversa_txt:
+        return pedido or "o assunto da conversa"
+    try:
+        spec = modelo_assistente()
+        texto = ""
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], [
+                {"role": "system", "content": "Escreva UMA pergunta de pesquisa completa, que se entenda sem a conversa, "
+                                              "sobre o assunto que a pessoa quer pesquisar. Só a pergunta, sem aspas."},
+                {"role": "user", "content": f"Conversa:\n{conversa_txt}\n\nPedido: {pedido or 'pesquise isso'}"}],
+                None, 4096, think=False, max_tokens=80):
+            if tipo == "content":
+                texto += val
+        return texto.strip().strip('"') or pedido
+    except Exception:
+        return pedido or conversa_txt.splitlines()[-1][:120]
+
+
+async def _avisa_pesquisa(message_id: int, pergunta: str) -> None:
+    """Fala quando a pesquisa profunda termina (ela roda sozinha na tela Pesquisa, pode levar dezenas de minutos)."""
+    from . import pesquisa
+    while True:
+        await asyncio.sleep(15)
+        try:
+            st = pesquisa.estado(message_id)
+        except ToolError:
+            return
+        if st.get("status") != "rodando":
+            fala(f"A pesquisa sobre {pergunta[:80]} terminou." if st.get("status") == "pronto"
+                 else f"A pesquisa sobre {pergunta[:80]} parou: {st.get('aviso') or st.get('status')}.")
+            return
 
 def _precisa_esperar(spec: dict) -> str:
     """Outro modelo local no ar com trabalho do Forja usando ele: o turno com `spec` não pode trocar agora (derrubaria
@@ -866,6 +1099,12 @@ async def _troca_e_comeca(conv: int, kind: str, pedido: str, spec: dict, aviso: 
         fala(aviso + (" Trocando de modelo, leva um instante." if troca else ""))
     if u == spec or (u and modelctl.gerenciavel(u)):
         _uso.clear()  # o modelo agora é do turno (ou vai sair dele): a ociosidade do assistente não mexe mais
+    if kind == "pesquisa":
+        from . import pesquisa
+        contexto = "\n".join(f"{'Pessoa' if x['quem'] == 'voce' else 'Assistente'}: {x['texto']}" for x in _transcricao[-12:])
+        msg = pesquisa.start(conv, pedido, spec["provider"], spec["model"], "funda", contexto=contexto[:4000])
+        _tarefa.setdefault("pesquisas", set()).add(asyncio.create_task(_avisa_pesquisa(msg["id"], pedido)))
+        return
     await _turno(conv, kind, pedido, spec)
 
 
@@ -889,7 +1128,8 @@ async def _chat(texto: str) -> None:
         # ele (ou o assistente segue "o do último envio"), responde com ele mesmo; parado, troca para o do assistente.
         if localai.image_busy():
             raise ToolError("A placa de vídeo está ocupada gerando uma imagem. Pergunte de novo daqui a pouco.")
-        if localai._loading or _trava_carga().locked():  # o atalho já começou a carregar (preaquece): espera ele
+        avisou = localai._loading or _trava_carga().locked()
+        if avisou:  # o atalho já começou a carregar (preaquece): espera ele
             fala("Só um instante, o modelo está carregando.")
         async with _trava_carga():
             limite = time.monotonic() + 180
@@ -901,7 +1141,8 @@ async def _chat(texto: str) -> None:
                 spec = {"provider": spec["provider"], "model": no_ar}
             elif no_ar != spec["model"]:
                 _conversa_chat.clear()  # o modelo saiu da placa (por fora): a memória da conversa falada foi junto
-                fala("Carregando o modelo, um instante.")
+                if not avisou:
+                    fala("Carregando o modelo, um instante.")
                 async for _ in modelctl.ensure(spec, {}, asyncio.Event()):
                     pass
     hist = _conversa_chat.setdefault("msgs", [])
@@ -1028,25 +1269,28 @@ async def _midia(kind: str, pedido: str, confirmado: bool = False) -> None:
         fala(f"Não deu para gerar: {e}")
 
 
-async def _agente(pedido: str, resposta: str | None = None) -> None:
+async def _agente(pedido: str, resposta: str | None = None, kind: str = "agent", modelo: str = "") -> None:
+    """Agente ou Maestro: pasta parecida já em uso? Pergunta se continua nela; depois, o modelo."""
     if resposta is None:
         nome = nome_projeto(pedido)
         projetos = _projetos()
         achada = pasta_parecida(nome, list(projetos))
         if achada:
             _pendente.clear()
-            _pendente.update(tipo="pasta", pedido=pedido, nome=nome, pasta=achada, conv=projetos[achada], tentativas=0)
+            _pendente.update(tipo="pasta", pedido=pedido, nome=nome, pasta=achada, conv=projetos[achada], tentativas=0,
+                             kind=kind, modelo_dito=modelo)
             fala(f"Já tem uma conversa trabalhando na pasta {Path(achada).name}. Continuo nela, ou crio uma pasta nova?")
             _manda("escuta")
             return
-        await _pergunta_modelo({"kind": "agent", "pedido": pedido, "nome": nome})
+        await _pergunta_modelo({"kind": kind, "pedido": pedido, "nome": nome, "modelo_dito": modelo})
         return
     r = _sem_acento(resposta)
     p = dict(_pendente)
+    base = {"kind": p.get("kind", "agent"), "pedido": p["pedido"], "modelo_dito": p.get("modelo_dito", "")}
     if re.search(r"\b(contin\w*|mesma|nessa|essa|ela|sim|pode)\b", r):
-        await _pergunta_modelo({"kind": "agent", "pedido": p["pedido"], "conv": p["conv"], "pasta": p["pasta"]})
+        await _pergunta_modelo({**base, "conv": p["conv"], "pasta": p["pasta"]})
     elif re.search(r"\b(nova|novo|outra|outro|cria|crie|nao)\b", r):
-        await _pergunta_modelo({"kind": "agent", "pedido": p["pedido"], "nome": p["nome"]})
+        await _pergunta_modelo({**base, "nome": p["nome"]})
     elif p["tentativas"] < 1:
         _pendente["tentativas"] += 1
         fala("Não entendi. Diga continuar, ou pasta nova.")
@@ -1072,6 +1316,10 @@ async def _atende(ouviu: dict) -> None:
     _estado["estado"] = "pensando"  # o overlay pulsa devagar até a primeira fala
     _anota("voce", comando or ouviu.get("texto", ""))
     try:
+        if _pendente and time.time() - _pendente.get("t", time.time()) > PENDENTE_S:
+            _pendente.clear()  # perguntou faz tempo e ninguém respondeu: o que chega agora é pedido novo
+        if _pendente and _pendente["tipo"] == "modelo" and ouviu.get("resposta") and _parece_pedido(comando):
+            _pendente.clear()  # "Com qual modelo?" e veio um pedido completo, não um nome: larga a pergunta
         if _pendente and ouviu.get("resposta") and PARAR.match(_sem_acento(comando)):
             _pendente.clear()  # "cancela" respondendo a uma pergunta: desiste dela
             fala("Ok, deixei pra lá.")
@@ -1083,10 +1331,16 @@ async def _atende(ouviu: dict) -> None:
             return
         _pendente.clear()  # chamou "Forja" de novo no meio de uma pergunta: vale o comando novo
         if not comando:
-            fala("Pois não?")
+            # só "Forja": nada de "Pois não?" (falando, o microfone fecha e come o começo do pedido): bip e escuta
+            _manda("bip")
             _manda("escuta")
             return
-        tipo, pedido = rota(comando)
+        sem_modelo, modelo = modelo_dito(comando)
+        tipo, pedido = rota(sem_modelo)
+        if tipo == "chat" and CITA_FORJA.search(_sem_acento(comando)):
+            # cita o Forja e nenhuma regra pegou (o Whisper ouviu torto, ou jeito novo de pedir): o modelo decide
+            tipo = {"responder": "chat", "chat": "chat_forja"}.get(r := await classifica_rota(sem_modelo), r)
+            print(f"Forja: voz: o modelo classificou o pedido como {tipo}", flush=True)
         if tipo == "parar":
             _manda("cala")  # o comando anterior já foi cancelado ao chegar este (_le)
             return
@@ -1095,14 +1349,16 @@ async def _atende(ouviu: dict) -> None:
             salvar_conversa()
             fala("Pronto, nossa conversa virou um chat do Forja.")
             return
-        if tipo == "agente":
-            await _agente(pedido)
+        if tipo in ("agente", "maestro"):
+            await _agente(pedido, kind="maestro" if tipo == "maestro" else "agent", modelo=modelo)
         elif tipo in ("imagem", "video"):
             await _midia(tipo, pedido)
         elif tipo == "chat_forja":
-            await _pergunta_modelo({"kind": "chat", "pedido": pedido})
+            await _pergunta_modelo({"kind": "chat", "pedido": pedido, "modelo_dito": modelo})
+        elif tipo == "pesquisa":
+            await _pergunta_modelo({"kind": "pesquisa", "pedido": pedido, "modelo_dito": modelo})
         else:
-            await _chat(pedido)
+            await _chat(comando)
     except asyncio.CancelledError:
         print("Forja: voz: comando cancelado", flush=True)  # comando novo, atalho ou "para" (sem o texto: privacidade)
     except ToolError as e:

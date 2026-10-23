@@ -394,7 +394,7 @@ button, a, [role="button"] { transition-duration: 120ms; transition-timing-funct
 /* Assistente F.O.R.J.A: o círculo fluido grande da página dele (o mesmo da sobreposição do canto da tela, em
    electron/main.js BOLHA_HTML). ouvindo: respira devagar; escutando: ondas saindo (ouviu "Forja" ou o microfone);
    pensando: apagado e lento; falando: pulsa; desligado: cinza parado. */
-.forja-circulo { position: relative; width: 220px; height: 220px; transition: filter .4s ease, transform .5s cubic-bezier(.22,1,.36,1); }
+.forja-circulo { position: relative; width: 220px; height: 220px; transition: filter .4s ease, transform .5s cubic-bezier(.22,1,.36,1), width .45s cubic-bezier(.22,1,.36,1), height .45s cubic-bezier(.22,1,.36,1); }
 .forja-circulo .g { position: absolute; inset: 0; mix-blend-mode: screen; animation: forja-forma 6s linear infinite; }
 .forja-circulo .g1 { background: radial-gradient(circle at 35% 35%, #bfe3ff, #3b82f6 52%, #1e3a8a00 72%); }
 .forja-circulo .g2 { background: radial-gradient(circle at 65% 62%, #d9c7ff, #7c3aed 52%, #4c1d9500 72%); animation-duration: 8s; animation-direction: reverse; }

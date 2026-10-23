@@ -125,7 +125,8 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
 # inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
 # navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
-TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/conteudo/video/", "/api/tts/arquivo")
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/conteudo/video/", "/api/tts/arquivo",
+                        "/api/assistente/gravacoes/")
 SUFIXO_SEM_TOKEN = ("/relatorio",)
 
 
@@ -1391,6 +1392,25 @@ async def assistente_gravar_voz():
 @app.delete("/api/assistente/gravar-voz")
 def assistente_apagar_voz():
     return assistente.apagar_voz()
+
+
+@app.get("/api/assistente/gravacoes")
+def assistente_gravacoes():
+    """As gravações da pessoa dizendo "Forja": qualidade e se o último treino reconheceu cada uma."""
+    return assistente.gravacoes()
+
+
+@app.delete("/api/assistente/gravacoes/{gid}")
+def assistente_apagar_gravacao(gid: str):
+    return _tts(assistente.apagar_gravacao, gid)
+
+
+@app.get("/api/assistente/gravacoes/{gid}/audio")
+def assistente_audio_gravacao(gid: str):
+    try:
+        return FileResponse(assistente.arquivo_gravacao(gid), media_type="audio/wav")
+    except ToolError:
+        raise HTTPException(404, "Gravação não encontrada")
 
 
 @app.post("/api/assistente/chamar")

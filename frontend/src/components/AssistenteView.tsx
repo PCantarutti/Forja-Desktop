@@ -10,13 +10,14 @@ type Estado = {
   motor: "kokoro" | "tela"; voz: string; modelo_tts: string; voz_tts: string; whisper: string; humor: string;
   imagem: string; video: string; pasta_projetos: string; favoritos: Favorito[];
   modelo: { provider: string; model: string } | null; ocioso_min: number; atalho: string; raciocinio: string;
-  detector: "whisper" | "treinado"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number;
-  metricas: { acerto: number; falsos: number; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
+  detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number;
+  metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
   vozes_kokoro: { id: string; nome: string }[]; humores: { id: string; nome: string }[];
 };
 type Mic = { id: string; nome: string; api: string; tipo: "entrada" | "saida"; padrao: boolean };
 type Favorito = { nome: string; provider: string; model: string };
+type Gravacao = { id: string; segundos_voz: number; pico: number; aviso: string; reconhecida: boolean | null };
 type Catalogo = { id: string; name: string; models: string[] }[];
 type Job = { id: string; detail?: string; error?: string; status: string };
 type Tts = { modelos: { nome: string }[]; vozes: { id: string; nome: string }[] };
@@ -30,7 +31,7 @@ const ESTADO: Record<string, string> = {
 /** Tutorial da página: TUDO o que o assistente sabe fazer. Feature nova do assistente entra aqui junto (CLAUDE.md). */
 const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Chamar", exemplos: ["Forja, …", "Ei Forja, …", "Forja (sozinho)"],
-    texto: "Comece com “Forja”. Só o nome: ele diz “Pois não?” e ouve o próximo pedido sem precisar repetir. Liga e desliga no microfone do canto da janela, na bandeja do sistema ou aqui." },
+    texto: "Comece com “Forja” e fale o pedido (pode dar uma pausa depois do nome). Só o nome: toca um bip e ele ouve o próximo pedido, sem precisar repetir. Liga e desliga no microfone do canto da janela, na bandeja do sistema ou aqui." },
   { titulo: "Perguntar", exemplos: ["Forja, quanto é 15% de 200?", "Forja, quais são as notícias de hoje?", "Forja, e em dólar?"],
     texto: "Responde só falando, sem abrir nem mexer em nada no Forja. Pesquisa na web quando precisa (“Pesquisando.”) e lembra a conversa enquanto o modelo dele estiver carregado, então dá para emendar perguntas." },
   { titulo: "Conversa só na memória", exemplos: ["Forja, salva nossa conversa num chat", "Salvar como chat", "Esquecer"],
@@ -43,10 +44,12 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "O mesmo na tela Vídeo, com o modelo favorito de vídeo." },
   { titulo: "Abrir um chat no Forja", exemplos: ["Forja, abra um chat no Forja sobre receitas de bolo", "Forja, inicia uma conversa nova"],
     texto: "Pergunta com qual modelo seguir, abre a conversa no Chat e já manda o assunto como primeira mensagem." },
-  { titulo: "Trabalhar no modo agente", exemplos: ["Forja, no modo agente crie um site de ecommerce"],
-    texto: "Se uma conversa já trabalha numa pasta com nome parecido, pergunta se continua nela ou cria uma pasta nova (na pasta dos projetos). Depois pergunta o modelo e começa." },
-  { titulo: "Escolher o modelo falando", exemplos: ["o de sempre", "qwen 3.6", "gemma 12b", "meu favorito de código"],
-    texto: "Quando ele pergunta “Com qual modelo?”: o nome do modelo, “o de sempre” (o do último envio no Forja) ou um dos seus favoritos por uso." },
+  { titulo: "Trabalhar no modo agente ou na Maestro", exemplos: ["Forja, no modo agente crie um site de ecommerce", "Forja, crie um jogo para mim no modo agente", "Forja, pede pro agente fazer um script", "Forja, no maestro crie um sistema de estoque"],
+    texto: "Se uma conversa já trabalha numa pasta com nome parecido, pergunta se continua nela ou cria uma pasta nova (em chat-agente/ ou chat-maestro/ dentro da pasta dos projetos). Depois pergunta o modelo e começa." },
+  { titulo: "Pesquisa profunda", exemplos: ["Forja, faça uma pesquisa profunda sobre carros elétricos", "Forja, pesquise a fundo isso que conversamos"],
+    texto: "Abre uma pesquisa na tela Pesquisa (a funda, com fontes). “Isso que conversamos” vira uma pergunta completa a partir da conversa falada. Ele avisa quando terminar. Pesquisa simples (“pesquise o valor do dólar”) ele mesmo responde falando." },
+  { titulo: "Escolher o modelo falando", exemplos: ["o de sempre", "qwen 3.6", "gemma 12b", "meu favorito de código", "…usando o modelo qwen 3.6"],
+    texto: "Quando ele pergunta “Com qual modelo?”: o nome do modelo, “o de sempre” (o do último envio no Forja) ou um dos seus favoritos por uso. Dizendo “usando o modelo X” no próprio pedido, ele nem pergunta. Não achou? Ele diz os modelos que você tem." },
   { titulo: "Microfone, alto-falante e voz", exemplos: ["Fone do headset", "Voz rápida", "Voz clonada da tela Voz"],
     texto: "Escolha de qual microfone ele ouve e em qual alto-falante ele fala (o fone, por exemplo). Microfone desconectado: ele tenta voltar sozinho e avisa aqui se não der." },
   { titulo: "Personalidade", exemplos: ["Sarcástico", "Ácido", "Leve", "Sem humor"],
@@ -61,8 +64,8 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Escolha o modelo do assistente em “Modelo do assistente” (vazio: o do último envio no Forja). Abrir chat ou agente com outro modelo tira o do assistente da placa e carrega o novo com o pedido; se outro trabalho estiver usando a placa, ele avisa e começa quando ele terminar. Parado pelo tempo escolhido, o modelo dele sai da placa sozinho. Pergunta falada nunca derruba trabalho do Forja; imagem ou vídeo com trabalho em andamento: ele pergunta antes." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
-  { titulo: "Detector treinado de “Forja”", exemplos: ["Treinar o detector", "Gravar minha voz"],
-    texto: "Em vez de transcrever toda fala da casa, um modelo pequeno treinado só para o nome acende o Whisper. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele melhor." },
+  { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
+    texto: "Um modelo pequeno treinado só para o nome acende o círculo na hora e quase não gasta CPU. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele bem melhor (ouça e apague as ruins na lista). “Detector + Whisper” acende rápido e não deixa o nome escapar." },
 ];
 
 function Tutorial() {
@@ -130,6 +133,10 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   const [atalho, setAtalho] = useState<{ atual: string; ok: boolean; erro: string } | null>(null);
   const [gravandoAtalho, setGravandoAtalho] = useState(false);
   const [gravandoVoz, setGravandoVoz] = useState(false);
+  const [gravs, setGravs] = useState<Gravacao[]>([]);
+  const [avisoGrav, setAvisoGrav] = useState("");
+  const carregaGravs = useCallback(() => api.get<Gravacao[]>("/assistente/gravacoes").then(setGravs).catch(() => {}), []);
+  useEffect(() => { carregaGravs(); }, [carregaGravs]);
   const [painel, setPainel] = useState(() => { try { return localStorage.getItem("forja.assistente.painel") !== "0"; } catch { return true; } });
   const alternarPainel = () => setPainel((v) => { try { localStorage.setItem("forja.assistente.painel", v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
   const [tutorial, setTutorial] = useState(false);
@@ -231,29 +238,33 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
           parametros={painel}
           onParametros={alternarPainel}
         />
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col">
           {tutorial ? (
-            <div className="mx-auto max-w-[720px] px-5 py-5"><Tutorial /></div>
+            <div className="flex-1 overflow-y-auto"><div className="mx-auto max-w-[720px] px-5 py-5"><Tutorial /></div></div>
           ) : !e.instalado ? (
-            <div className="mx-auto flex min-h-full max-w-md flex-col justify-center px-5 py-8">{instalarBotao}</div>
+            <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5 py-8">{instalarBotao}</div>
           ) : (
-            <div className="mx-auto flex min-h-full max-w-[720px] flex-col items-center px-5 pt-[6vh] pb-6">
-              <CirculoForja modo={modo} />
+            <>
+            {/* círculo e microfone fixos no topo: só a conversa embaixo rola (antes subiam junto e sumiam de vista) */}
+            <div className={`flex shrink-0 flex-col items-center px-5 ${transcricao.length ? "pt-4 pb-2" : "pt-[6vh] pb-4"}`}>
+              <CirculoForja modo={modo} tamanho={transcricao.length ? 120 : 220} />
               <button onClick={chamar} disabled={!!e.erro && !e.ligado}
                       title={modo === "falando" ? "Interromper e falar" : "Falar com o F.O.R.J.A agora (sem dizer “Forja”)"}
                       aria-label="Falar com o assistente agora"
-                      className={`mt-7 grid size-14 place-items-center rounded-full transition-colors ${modo === "escutando" ? "bg-accent text-accent-fg" : "border border-line-strong bg-surface text-fg hover:border-accent hover:text-accent-text"}`}>
+                      className={`${transcricao.length ? "mt-4 size-12" : "mt-7 size-14"} grid place-items-center rounded-full transition-colors ${modo === "escutando" ? "bg-accent text-accent-fg" : "border border-line-strong bg-surface text-fg hover:border-accent hover:text-accent-text"}`}>
                 <Mic className="size-[22px]" />
               </button>
-              <p className="mt-3 h-5 text-center text-[13px] text-muted">
+              <p className="mt-2.5 h-5 text-center text-[13px] text-muted">
                 {e.erro ? <span className="text-diff-del-fg">{e.erro}</span>
                   : !e.ligado ? "Desligado: o botão liga e já ouve"
                   : modo === "escutando" ? "Pode falar…"
                   : modo === "ouvindo" ? `Diga “Forja, …”${e.atalho ? ` ou aperte ${e.atalho}` : ""}`
                   : ESTADO[vivo] ?? vivo}
               </p>
-
-              <div className="mt-8 flex w-full flex-col gap-2.5">
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex max-w-[720px] flex-col items-center px-5 pb-6">
+              <div className="mt-3 flex w-full flex-col gap-2.5">
                 {transcricao.map((x, i) => (
                   <div key={i} className={`flex ${x.quem === "voce" ? "justify-end" : "justify-start"}`}>
                     <p className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${x.quem === "voce" ? "bg-raised text-fg" : "text-fg-2"}`}>
@@ -278,6 +289,8 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                 </p>
               )}
             </div>
+            </div>
+            </>
           )}
         </div>
 
@@ -372,14 +385,15 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
 
                 <Secao titulo="Detector de “Forja”">
                   <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label="Como ele reconhece “Forja”">
-                    {([["whisper", "Whisper em toda fala", "Transcreve tudo o que o microfone pega e procura “Forja”: não precisa treinar, mas gasta CPU com TV ou conversa por perto"],
-                       ["treinado", "Detector treinado", "Um modelo pequeno só para “Forja”: quase não gasta CPU, e o Whisper só roda quando ele ouve o nome"]] as const).map(([id, rot, dica]) => (
-                      <button key={id} role="radio" aria-checked={e.detector === id} title={dica} disabled={id === "treinado" && !e.detector_treinado}
+                    {([["whisper", "Só Whisper", "Transcreve tudo o que o microfone pega e procura “Forja”: não precisa treinar, mas gasta CPU com TV ou conversa por perto, e o círculo demora um pouco mais"],
+                       ["treinado", "Detector", "Um modelo pequeno só para “Forja”: quase não gasta CPU e acende na hora; se ele não ouvir o nome, nada acontece"],
+                       ["ambos", "Detector + Whisper", "O detector acende o círculo na hora e o Whisper também confere toda fala: se o detector perder o nome, o Whisper pega (gasta CPU como o Só Whisper)"]] as const).map(([id, rot, dica]) => (
+                      <button key={id} role="radio" aria-checked={e.detector === id} title={dica} disabled={id !== "whisper" && !e.detector_treinado}
                               onClick={() => grava({ detector: id })}
                               className={`flex-1 rounded-[6px] py-1.5 disabled:opacity-40 ${e.detector === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>{rot}</button>
                     ))}
                   </div>
-                  {e.detector === "treinado" && (
+                  {e.detector !== "whisper" && (
                     <Caixa rotulo={`Sensibilidade: ${Math.round(e.sensibilidade * 100)}% (mais alta pega voz baixa ou de longe, e acende à toa mais vezes)`}>
                       <input type="range" min={0} max={1} step={0.05} defaultValue={e.sensibilidade} className="w-full accent-accent"
                              onPointerUp={(ev) => grava({ sensibilidade: Number((ev.target as HTMLInputElement).value) })}
@@ -400,20 +414,45 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       </button>
                       <button className={botaoEstado} disabled={gravandoVoz || e.minha_voz >= 30}
                               title="Clique e diga “Forja” uma vez, no seu tom normal. 5 a 10 gravações ajudam o detector com a sua voz."
-                              onClick={() => { setGravandoVoz(true); api.post<{ minha_voz: number }>("/assistente/gravar-voz")
-                                .then((r) => setE((a) => a && { ...a, minha_voz: r.minha_voz })).catch((er) => onError(er.message)).finally(() => setGravandoVoz(false)); }}>
+                              onClick={() => { setGravandoVoz(true); setAvisoGrav(""); api.post<{ minha_voz: number; gravacao: Gravacao }>("/assistente/gravar-voz")
+                                .then((r) => { setE((a) => a && { ...a, minha_voz: r.minha_voz }); setAvisoGrav(r.gravacao.aviso ? `Gravação ${r.gravacao.id}: ${r.gravacao.aviso}. Apague e grave de novo.` : ""); carregaGravs(); })
+                                .catch((er) => onError(er.message)).finally(() => setGravandoVoz(false)); }}>
                         {gravandoVoz ? "Diga “Forja” agora…" : `Gravar minha voz (${e.minha_voz})`}
                       </button>
-                      {e.minha_voz > 0 && !gravandoVoz && (
-                        <button className="text-[11.5px] text-faint hover:text-diff-del-fg"
-                                onClick={() => api.del<{ minha_voz: number }>("/assistente/gravar-voz").then((r) => setE((a) => a && { ...a, minha_voz: r.minha_voz })).catch((er) => onError(er.message))}>apagar gravações</button>
-                      )}
+                    </div>
+                  )}
+                  {avisoGrav && <p className="text-[11.5px] text-warn">{avisoGrav}</p>}
+                  {gravs.length > 0 && (
+                    <div className="flex flex-col gap-0.5 rounded-[10px] border border-line bg-surface p-1.5" aria-label="Suas gravações">
+                      <div className="flex items-center px-1.5 pb-1 text-[10.5px] text-faint">
+                        <span className="flex-1">Suas gravações ({gravs.length})</span>
+                        <button className="hover:text-diff-del-fg" onClick={() => api.del<{ minha_voz: number }>("/assistente/gravar-voz")
+                          .then((r) => { setE((a) => a && { ...a, minha_voz: r.minha_voz }); carregaGravs(); }).catch((er) => onError(er.message))}>apagar todas</button>
+                      </div>
+                      {gravs.map((g) => (
+                        <div key={g.id} className="group flex items-center gap-2 rounded-[7px] px-1.5 py-1 hover:bg-raised/60">
+                          <button aria-label={`Ouvir a gravação ${g.id}`} title="Ouvir" className="text-[12px] text-muted hover:text-fg"
+                                  onClick={() => { new Audio(`/api/assistente/gravacoes/${g.id}/audio`).play().catch(() => {}); }}>▶</button>
+                          <span className="font-mono text-[11px] text-faint">{g.id}</span>
+                          <span className={`min-w-0 flex-1 truncate text-[11.5px] ${g.aviso ? "text-warn" : "text-muted"}`} title={g.aviso}>
+                            {g.aviso || `${g.segundos_voz.toFixed(1).replace(".", ",")} s de voz`}
+                          </span>
+                          {g.reconhecida !== null && (
+                            <span className={`text-[11px] ${g.reconhecida ? "text-ok" : "text-diff-del-fg"}`}
+                                  title={g.reconhecida ? "O último treino reconhece esta gravação" : "O último treino NÃO reconhece esta gravação: regrave ou treine de novo"}>
+                              {g.reconhecida ? "✓" : "✗"}
+                            </span>
+                          )}
+                          <button aria-label={`Apagar a gravação ${g.id}`} title="Apagar" className="text-[12px] text-faint opacity-60 hover:text-diff-del-fg group-hover:opacity-100"
+                                  onClick={() => api.del<Gravacao[]>(`/assistente/gravacoes/${g.id}`).then((r) => { setGravs(r); setE((a) => a && { ...a, minha_voz: r.length }); }).catch((er) => onError(er.message))}>🗑</button>
+                        </div>
+                      ))}
                     </div>
                   )}
                   {treino?.error && <p className="text-[11.5px] text-diff-del-fg">{treino.error}</p>}
                   <p className="text-[11.5px] leading-relaxed text-faint">
                     {e.metricas
-                      ? `Último treino (${e.metricas.quando}): reconheceu ${Math.round(e.metricas.acerto * 100)}% dos “Forja” de vozes que nunca ouviu, acendeu à toa em ${(e.metricas.falsos * 100).toFixed(1)}% das falas parecidas e ${e.metricas.alarmes_fala_corrida}× em ${e.metricas.minutos_fala_corrida} min de conversa corrida. ${e.metricas.vozes} vozes sintéticas${e.metricas.minha_voz ? ` e ${e.metricas.minha_voz} gravações suas` : ""}. `
+                      ? `Último treino (${e.metricas.quando}): reconheceu ${Math.round(e.metricas.acerto * 100)}% dos “Forja” de vozes que nunca ouviu, acendeu à toa em ${(e.metricas.falsos * 100).toFixed(1)}% das falas parecidas e ${e.metricas.alarmes_fala_corrida}× em ${e.metricas.minutos_fala_corrida} min de conversa corrida. ${e.metricas.vozes} vozes sintéticas${e.metricas.minha_voz ? ` e ${e.metricas.minha_voz} gravações suas (reconhece ${Math.round((e.metricas.minha_voz_acerto ?? 0) * 100)}% delas)` : ""}. `
                       : ""}
                     O treino não precisa de você: usa vozes sintéticas e 20 s do som da casa (uns 5 minutos, na CPU). Gravações da sua voz melhoram o acerto: grave e treine de novo.
                     Com o detector o Whisper ainda confere o nome, então barulho que pareça “Forja” não vira comando.
@@ -535,7 +574,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       {local?.video_models.map((m) => <option key={m.path} value={m.path}>{m.name}</option>)}
                     </select>
                   </Caixa>
-                  <Caixa rotulo="Pasta dos projetos novos do agente (vazio = ao lado da pasta padrão)">
+                  <Caixa rotulo="Pasta dos projetos novos (vazio = ~/Forja): cada um vai em chat-agente/ ou chat-maestro/">
                     <input className={`${campo} font-mono`} defaultValue={e.pasta_projetos} placeholder="C:\Projetos"
                            onBlur={(ev) => ev.target.value.trim() !== e.pasta_projetos && grava({ pasta_projetos: ev.target.value.trim() })} />
                   </Caixa>
@@ -560,9 +599,9 @@ const MODO_CIRCULO: Record<string, string> = {
 
 /** O mesmo círculo fluido da sobreposição do canto da tela, grande: parado e respirando quando ouve, com ondas quando
  *  escuta um pedido, apagado quando pensa e pulsando quando fala (estilos em index.css, .forja-circulo). */
-function CirculoForja(props: { modo: string }) {
+function CirculoForja(props: { modo: string; tamanho: number }) {
   return (
-    <div className={`forja-circulo ${props.modo || "desligado"}`} aria-hidden>
+    <div className={`forja-circulo ${props.modo || "desligado"}`} style={{ width: props.tamanho, height: props.tamanho }} aria-hidden>
       <div className="anel" /><div className="anel a2" /><div className="anel a3" />
       <div className="halo" />
       <div className="g g1" /><div className="g g2" /><div className="g g3" />

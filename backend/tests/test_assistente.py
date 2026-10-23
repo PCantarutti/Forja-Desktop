@@ -174,10 +174,14 @@ def test_transcricao_so_em_memoria_e_agrupa_a_resposta(monkeypatch):
     monkeypatch.setattr(assistente, "_manda", lambda *a, **k: None)
     assistente.esquecer()
     assistente._anota("voce", "quanto é 2 mais 2?")
+    assistente._atendendo[0] += 1  # durante o pedido: as frases da resposta viram um balão só
     assistente.fala("Quatro.")
     assistente.fala("Quer a papinha também?")
+    assistente._atendendo[0] -= 1
+    assistente.fala("A pesquisa terminou.")  # aviso que chega sozinho depois: balão próprio
     t = assistente.conversa()["transcricao"]
-    assert [(x["quem"], x["texto"]) for x in t] == [("voce", "quanto é 2 mais 2?"), ("forja", "Quatro. Quer a papinha também?")]
+    assert [(x["quem"], x["texto"]) for x in t] == [("voce", "quanto é 2 mais 2?"), ("forja", "Quatro. Quer a papinha também?"),
+                                                    ("forja", "A pesquisa terminou.")]
     assistente.esquecer()
     assert assistente.conversa()["transcricao"] == []
 
@@ -235,3 +239,80 @@ def test_atalho_nao_carrega_em_dobro(monkeypatch):
     assistente._carga.clear()
     assert asyncio.run(com_carga_em_andamento()) == "já carregando"
     assistente._carga.clear()
+
+
+ROTAS = [
+    ("no modo agente crie um site de ecommerce", "agente", "crie um site de ecommerce"),
+    ("crie um jogo para mim no modo agente", "agente", "crie um jogo"),
+    ("no modo agente, crie um jogo de nave", "agente", "crie um jogo de nave"),
+    ("cria um jogo da cobrinha no modo a gente", "agente", "cria um jogo da cobrinha"),  # como o Whisper escreve
+    ("pede pro agente fazer um site de receitas", "agente", "fazer um site de receitas"),
+    ("usando o agente, monta uma calculadora em python", "agente", "monta uma calculadora em python"),
+    ("agente, cria um script que renomeia fotos", "agente", "cria um script que renomeia fotos"),
+    ("faz um app de tarefas pelo agente", "agente", "faz um app de tarefas"),
+    ("com o agente do Forja crie um bot de discord", "agente", "crie um bot de discord"),
+    ("modo de agente faça um jogo da velha", "agente", "faça um jogo da velha"),
+    ("no maestro crie um sistema de estoque", "maestro", "crie um sistema de estoque"),
+    ("usando a maestro desenvolve um site completo de loja", "maestro", "desenvolve um site completo de loja"),
+    ("modo maestro, faça um jogo de plataforma", "maestro", "faça um jogo de plataforma"),
+    ("faça uma pesquisa profunda pra mim sobre alíquotas de ICMS", "pesquisa", "alíquotas de ICMS"),
+    ("faça uma pesquisa profunda no aplicativo Forja pra mim sobre isso", "pesquisa", "isso"),
+    ("pesquise a fundo sobre carros elétricos no Brasil", "pesquisa", "carros elétricos no Brasil"),
+    ("quero uma pesquisa completa sobre energia solar", "pesquisa", "energia solar"),
+    ("faz um relatório completo sobre o mercado de GPUs", "pesquisa", "o mercado de GPUs"),
+    ("abre um chat no Forja sobre receitas", "chat_forja", "receitas"),
+    ("abre o chat no Forja sobre uma pesquisa de preços", "chat_forja", "uma pesquisa de preços"),
+    ("inicia uma conversa nova no forja", "chat_forja", ""),
+    ("cria um chat novo sobre viagens", "chat_forja", "viagens"),
+    ("abre uma conversa no aplicativo sobre investimentos", "chat_forja", "investimentos"),
+    ("crie uma imagem de um gato esquiando", "imagem", "um gato esquiando"),
+    ("quero uma foto de uma praia ao pôr do sol", "imagem", "uma praia ao pôr do sol"),
+    ("gera um vídeo de um cachorro surfando", "video", "um cachorro surfando"),
+    ("salva nossa conversa num chat", "salvar_conversa", ""),
+    ("cancela", "parar", ""),
+    ("o que é um agente de IA?", "chat", None),
+    ("pesquise o valor do ICMS em Minas Gerais", "chat", None),  # pesquisa simples: ele mesmo responde
+    ("me explica como funciona uma pesquisa de mercado", "chat", None),
+    ("a gente pode conversar depois?", "chat", None),
+    ("o que é uma imagem de disco?", "chat", None),
+]
+
+
+def test_rota_entende_varios_jeitos_de_pedir():
+    errados = [(f, assistente.rota(f)) for f, tipo, pedido in ROTAS
+               if assistente.rota(f)[0] != tipo or (pedido is not None and assistente.rota(f)[1].lower() != pedido.lower())]
+    assert not errados
+
+
+def test_modelo_dito_no_pedido():
+    assert assistente.modelo_dito("abre o chat no Forja sobre ICMS usando o modelo KEWEN3.6") == \
+        ("abre o chat no Forja sobre ICMS", "KEWEN3.6")
+    assert assistente.modelo_dito("no modo agente crie um jogo, com o modelo gemma 12b")[1] == "gemma 12b"
+    assert assistente.modelo_dito("crie um jogo") == ("crie um jogo", "")
+
+
+def test_pasta_nova_por_tipo(tmp_path, monkeypatch):
+    monkeypatch.setattr(assistente, "ler", lambda: {**assistente.PADRAO, "pasta_projetos": str(tmp_path)})
+    assert assistente._pasta_nova("jogo-nave") == tmp_path / "chat-agente" / "jogo-nave"
+    assert assistente._pasta_nova("jogo-nave") == tmp_path / "chat-agente" / "jogo-nave-2"
+    assert assistente._pasta_nova("estoque", "maestro") == tmp_path / "chat-maestro" / "estoque"
+    assert assistente.nome_projeto("abra um chat sobre um jogo flip bird") == "jogo-flip-bird"
+
+
+def test_nome_do_modelo_como_o_whisper_ouve():
+    e = lambda r: (assistente.escolher_modelo(r, [], MODELOS, PADRAO) or {}).get("model")
+    for dito in ["Comem 3.6.", "Que é WEN 3.6.", "KEWEN3.6", "usando o modelo kewen 3.6", "três ponto seis"]:
+        assert e(dito) == "Qwen3.6-35B-A3B-Q4_K_M", dito
+    assert e("gema.") in ("gemma-4-12b-it-Q4_K_M", "gemma-4-26B-A4B-it-UD-Q4_K_M")
+    assert e("gema 26") == "gemma-4-26B-A4B-it-UD-Q4_K_M"
+    assert e("o que é isso?") is None
+    assert assistente._nomes_para_dizer(MODELOS) == "Qwen3.6 35B A3B, Qwen3.8 27B, gemma 4 12b e gemma 4 26B A4B"
+
+
+def test_pergunta_pendente_nao_engole_pedido_novo():
+    assert assistente._parece_pedido("quanto é 3 vezes 4?")
+    assert assistente._parece_pedido("no modo agente crie um jogo")
+    assert assistente._parece_pedido("me fala a previsão do tempo de amanhã em São Paulo")
+    assert not assistente._parece_pedido("qwen 3.6")
+    assert not assistente._parece_pedido("o de sempre")
+    assert not assistente._parece_pedido("meu favorito de código")

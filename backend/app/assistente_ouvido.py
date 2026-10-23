@@ -30,8 +30,8 @@ BLOCO = 480  # 30 ms
 PRE_ROLL = 10  # blocos guardados antes de a fala começar (300 ms): o "F" de Forja não se perde
 INICIO = 3  # blocos acima do limiar para abrir um trecho (90 ms)
 FIM_SILENCIO = 27  # blocos de silêncio que fecham o trecho (~800 ms)
-FIM_SILENCIO_COMANDO = 40  # depois de "Forja" a pessoa pensa no pedido: ~1,2 s
-CHECA_WAKE = 50  # blocos (1,5 s) até a checagem rápida de "Forja" no começo do trecho
+FIM_SILENCIO_COMANDO = 55  # depois de "Forja" a pessoa pensa no pedido: ~1,65 s (com 1,2 s o pedido saía cortado)
+CHECA_WAKE = 33  # blocos (1 s) até a checagem rápida de "Forja" no começo do trecho: o círculo acende antes
 # frases que o Whisper inventa em silêncio, ruído ou música (legendas de vídeos do treino dele)
 ALUCINACAO = re.compile(r"amara\.org|legenda|inscreva-se|obrigad[oa] por assistir|ate a proxima|tchau,? tchau|"
                         r"^\W*(obrigad[oa]|e ai|hum+|ah+)\W*$")
@@ -87,6 +87,18 @@ class Boca:
             self.falando.set()
             self.textos.put((self.geracao, f))
 
+    def bip(self) -> None:
+        """Dois tons curtos (~0,2 s): "estou ouvindo". Curto de propósito e marcado para quase não fechar o microfone:
+        a pessoa fala logo em seguida, e o "Pois não?" falado comia o começo do pedido."""
+        import numpy as np
+        sr = 24000
+        partes = []
+        for freq in (660, 880):
+            t = np.arange(int(sr * 0.085)) / sr
+            partes.append(np.sin(2 * np.pi * freq * t) * np.minimum(1, np.minimum(t, t[::-1]) / 0.012) * 0.22)
+        self.falando.set()
+        self.audios.put((self.geracao, np.concatenate(partes).astype(np.float32), sr, True))
+
     def toca(self, arquivo: str) -> None:
         import numpy as np
         with wave.open(arquivo) as w:
@@ -98,7 +110,7 @@ class Boca:
             return
         a = np.frombuffer(bruto, tipo).astype(np.float32) / np.iinfo(tipo).max
         self.falando.set()
-        self.audios.put((self.geracao, a.reshape(-1, n), sr))
+        self.audios.put((self.geracao, a.reshape(-1, n), sr, False))
 
     def cala(self) -> None:
         import sounddevice as sd
@@ -111,7 +123,7 @@ class Boca:
             try:
                 if g == self.geracao:
                     amostras, sr = self.kokoro.create(t, voice=self.voz, speed=1.1, lang="pt-br")
-                    self.audios.put((g, amostras, sr))
+                    self.audios.put((g, amostras, sr, False))
             except Exception as e:  # frase que o fonemizador não engole não derruba a boca
                 diz("LOG", f"Kokoro: {e}")
             finally:
@@ -120,17 +132,20 @@ class Boca:
     def _toca(self) -> None:
         import sounddevice as sd
         while True:
-            g, amostras, sr = self.audios.get()
+            g, amostras, sr, curto = self.audios.get()
             if g == self.geracao:
-                diz("ESTADO", "falando")
+                if not curto:
+                    diz("ESTADO", "falando")
                 sd.play(amostras, sr)
                 sd.wait()
             self.audios.task_done()
             if self.textos.unfinished_tasks == 0 and self.audios.unfinished_tasks == 0:
-                self.fim_fala = time.time()
+                # depois do bip o microfone reabre quase na hora (0,05 s); depois de fala, 0,4 s para o eco morrer
+                self.fim_fala = time.time() - (0.35 if curto else 0)
                 self.falando.clear()
-                diz("FALOU")
-                diz("ESTADO", "ouvindo")
+                if not curto:
+                    diz("FALOU")
+                    diz("ESTADO", "ouvindo")
 
 
 class Detector:
@@ -202,7 +217,8 @@ class Escuta:
             diz("ESTADO", "escutando")
 
 
-def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Detector | None = None):
+def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Detector | None = None,
+            so_detector: bool = True):
     """Trechos de fala do microfone, cortados por energia com limiar que acompanha o ruído da sala. Devolve
     (áudio, acordado): acordado = a fala já é um comando (janela de escuta aberta, ou "Forja" ouvido no começo dela
     pela checagem rápida de `verifica`, que acende o "escutando" antes de a pessoa terminar de falar)."""
@@ -237,7 +253,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                 continue
             atual.append(b)
             silencio = silencio + 1 if rms < limiar else 0
-            if not detector and not acordado and not checou and len(atual) >= CHECA_WAKE:
+            if (not detector or not so_detector) and not acordado and not checou and len(atual) >= CHECA_WAKE:
                 checou = True
                 if verifica(np.concatenate(atual)):
                     acordado = True
@@ -287,6 +303,7 @@ def main() -> int:
     p.add_argument("--detector", default="")  # .npz do detector treinado de "Forja" (vazio: Whisper em toda fala)
     p.add_argument("--oww", default="")       # pasta com melspectrogram.onnx e embedding_model.onnx
     p.add_argument("--sensibilidade", type=float, default=0.5)
+    p.add_argument("--com-whisper", action="store_true")  # detector + Whisper: o detector acende rápido, o Whisper não deixa passar
     a = p.parse_args()
     if a.listar:
         return listar()
@@ -325,6 +342,8 @@ def main() -> int:
                     escuta.abre()
                 elif q["cmd"] == "cala":
                     boca.cala()
+                elif q["cmd"] == "bip":
+                    boca.bip()
                 elif q["cmd"] == "surdo":  # gravando amostra para o treino: não reage ao "Forja" dela
                     boca.fim_fala = max(boca.fim_fala, time.time() + float(q.get("s") or 3))
             except Exception as e:
@@ -335,9 +354,11 @@ def main() -> int:
 
     diz("PRONTO", nome)
     diz("ESTADO", "ouvindo")
-    diz("LOG", "detector treinado de Forja ligado" if detector else "Forja pelo Whisper em toda fala")
-    for audio, acordado in trechos(mic, boca, escuta, verifica, detector):
-        if detector and not acordado:
+    so_detector = bool(detector) and not a.com_whisper
+    diz("LOG", "Forja: detector treinado" + (" + Whisper" if detector and not so_detector else "") if detector
+        else "Forja pelo Whisper em toda fala")
+    for audio, acordado in trechos(mic, boca, escuta, verifica, detector, so_detector):
+        if so_detector and not acordado:
             diz("ESTADO", "ouvindo")
             continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
         diz("ESTADO", "entendendo" if acordado else "transcrevendo")
@@ -349,6 +370,14 @@ def main() -> int:
             texto = ""
         resposta = escuta.ativa()
         comando = acorda(texto)
+        if texto and comando == "":
+            # só "Forja" (dentro ou fora da janela): bip e escuta aqui mesmo. Nunca vira pergunta ("Forja." já foi
+            # respondido como se fosse o pedido), e sem ida e volta ao backend o bip sai na hora.
+            boca.bip()
+            escuta.abre()
+            diz("LOG", "ouviu só o nome: escutando o pedido")
+            diz("ESTADO", "escutando")
+            continue
         if texto and (comando is not None or resposta):
             escuta.fecha()
             diz("OUVIU", json.dumps({"texto": texto, "comando": comando if comando is not None else texto,
