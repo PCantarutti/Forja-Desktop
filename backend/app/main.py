@@ -92,7 +92,7 @@ async def lifespan(_app):
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
     assistente.parar()    # o microfone fecha com o backend
-    for vigia_voz in (assistente._tarefa.get("vigia"), assistente._tarefa.get("lembretes")):
+    for vigia_voz in (assistente._tarefa.get("vigia"), assistente._tarefa.get("lembretes"), assistente._tarefa.get("rotina")):
         if vigia_voz:
             vigia_voz.cancel()  # a ociosidade do modelo do assistente e a hora dos lembretes
     lsp.fechar_todos()
@@ -149,7 +149,7 @@ async def fronteira(request, call_next):
     if (config.API_TOKEN and path.startswith("/api/") and not path.endswith(SUFIXO_SEM_TOKEN)
             and not path.startswith("/api/design-janela/")   # a chave do link é a autorização
             and not (path == "/api/tts/falar" and token == tts.TOKEN_FALAR)   # narração da tela Conteúdo
-            and path != "/api/youtube/retorno"   # volta do login do Google no navegador; o `state` é a autorização
+            and path not in ("/api/youtube/retorno", "/api/google/retorno")   # volta do login do Google; o `state` autoriza
             and token not in (config.API_TOKEN, mobile.token())):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
@@ -2745,6 +2745,53 @@ async def youtube_retorno(state: str = "", code: str = "", error: str = ""):
 @app.delete("/api/youtube")
 def youtube_desconectar():
     return youtube.desconectar()
+
+
+# ------------------------------------------------------------------ conta Google do assistente (Gmail e Agenda)
+
+@app.get("/api/google")
+def google_estado():
+    from . import google_conta
+    return google_conta.estado()
+
+
+@app.put("/api/google")
+def google_salvar(body: dict):
+    from . import google_conta
+    return _conteudo(google_conta.salvar_cliente, str(body.get("client_id") or ""), str(body.get("client_secret") or ""))
+
+
+@app.post("/api/google/copiar-youtube")
+def google_copiar_youtube():
+    from . import google_conta
+    return _conteudo(google_conta.copiar_do_youtube)
+
+
+@app.post("/api/google/conectar")
+def google_conectar():
+    """URL do consentimento do Google; a tela abre no navegador do sistema e fica consultando /api/google."""
+    from . import google_conta
+    from .mcp_servidor import url_base
+    return {"url": _conteudo(google_conta.url_login, url_base())}
+
+
+@app.get("/api/google/retorno")
+async def google_retorno(state: str = "", code: str = "", error: str = ""):
+    from . import google_conta
+    try:
+        msg, ok = await asyncio.to_thread(google_conta.retorno, state, code, error), True
+    except ToolError as e:
+        msg, ok = str(e), False
+    import html
+    return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>Forja</title><body style='font:16px system-ui;"
+                        f"background:#111;color:#eee;display:grid;place-items:center;height:90vh'><p>{'✅' if ok else '⚠️'} "
+                        f"{html.escape(msg)}</p>", status_code=200 if ok else 400)
+
+
+@app.delete("/api/google")
+def google_desconectar():
+    from . import google_conta
+    return google_conta.desconectar()
 
 
 @app.post("/api/conteudo/producao/{message_id}/voz-final")

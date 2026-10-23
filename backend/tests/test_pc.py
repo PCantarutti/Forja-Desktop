@@ -140,6 +140,13 @@ def test_nao_rouba_pedido_do_forja_nem_pergunta():
             assert pc.entende(frase) is None and lembretes.entende(frase) is None, frase
 
 
+def test_fechar_so_o_que_foi_dito():
+    assert pc.alvo_dito("chrome", "fecha o Chrome aí")
+    assert pc.alvo_dito("google chrome", "fecha o google chrome")
+    assert not pc.alvo_dito("navegador", "Fecha o assunto sobre política agora")
+    assert not pc.alvo_dito("", "fecha tudo")
+
+
 def test_valida_o_que_o_modelo_pede():
     assert pc.valida("volume", "30%") == ("volume", "30")
     assert pc.valida("volume", "+10") == ("volume", "+10")

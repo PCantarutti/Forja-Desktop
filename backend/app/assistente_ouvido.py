@@ -44,8 +44,15 @@ WAKE = re.compile(r"^\s*(?:(?:ei|oi|ok|ola|e ai|hey)\s+)?(?:forja|forjas|forje|f
 KOKORO = {"modelo": "kokoro-v1.0.int8.onnx", "vozes": "voices-v1.0.bin"}
 
 
+_saida = threading.Lock()
+
+
 def diz(tipo: str, texto: str = "") -> None:
-    print(f"{tipo} {texto}".strip(), flush=True)
+    # uma escrita só, sob trava: o print de duas threads (fala e microfone) grudava as linhas ("FALOUESTADO escutando")
+    # e o backend perdia o ESTADO, deixando o círculo no estado errado
+    with _saida:
+        sys.stdout.write(f"{tipo} {texto}".strip() + "\n")
+        sys.stdout.flush()
 
 
 def normaliza(texto: str) -> str:
@@ -413,4 +420,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    import faulthandler
+    faulthandler.enable()  # queda nativa (PortAudio, ONNX) deixa o traceback no log do backend em vez de sumir calada
     sys.exit(main())

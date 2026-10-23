@@ -652,7 +652,7 @@ export default function App() {
     if (voz && voz.n !== antes.voz?.ultimo?.n) irParaConversa(voz.conv, voz.kind as Section);
     // "Forja, me lembre de... às 14h": deu a hora (o celular recebe o push pelo backend)
     const lembrete = activity.voz?.lembrete;
-    if (lembrete && lembrete.n !== antes.voz?.lembrete?.n) notify("Lembrete", lembrete.texto, true);
+    if (lembrete && lembrete.n !== antes.voz?.lembrete?.n) notify(lembrete.titulo || "Lembrete", lembrete.texto, true);
     const conv = (id: number) => conversationsRef.current.find((c) => c.id === id);
     const rodandoAntes = new Map(antes.conversations.filter((c) => c.running).map((c) => [c.id, c]));
     for (const c of activity.conversations) {

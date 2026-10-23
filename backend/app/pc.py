@@ -183,6 +183,14 @@ def valida(acao: str, alvo: str, do_modelo: bool = True) -> tuple[str, str] | No
     return acao, alvo
 
 
+def alvo_dito(alvo: str, frase: str) -> bool:
+    """O programa que o modelo escolheu foi DITO na frase? "Fecha o assunto sobre política" virou "fechar navegador"
+    com o Ornith: fechar só com o nome (ou parte dele) que a pessoa falou, nunca um que o modelo inventou."""
+    f = _norm(frase)
+    palavras = [w for w in re.findall(r"[a-z0-9]+", _norm(alvo)) if len(w) >= 3]
+    return bool(palavras) and all(re.search(rf"\b{re.escape(w)}", f) for w in palavras)
+
+
 def certeza(acao: str, arg: str) -> bool:
     """O atalho por regra só vale se o alvo existe: "abre as opções de receitas" não é programa nenhum, então o pedido
     segue para o modelo (que responde, ou chama a ferramenta com o nome certo)."""

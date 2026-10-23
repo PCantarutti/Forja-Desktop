@@ -17,7 +17,7 @@ from . import config, mobile
 
 ARQUIVO = config.DATA_DIR / "lembretes.json"
 _lock = threading.Lock()
-disparado = {"n": 0, "texto": "", "id": ""}  # o último que tocou: a tela do PC mostra a notificação quando n muda
+disparado = {"n": 0, "titulo": "", "texto": "", "id": ""}  # o último aviso: a tela do PC mostra a notificação quando n muda
 
 
 def _norm(t: str) -> str:
@@ -116,6 +116,26 @@ def quando_da_ferramenta(texto: str, agora: datetime | None = None) -> datetime 
         return quando(texto, agora)[0] if texto else None
 
 
+def tem_hora(texto: str) -> bool:
+    """O texto disse um horário (e não só o dia)? "sexta às 10" sim; "sexta" não (evento do dia inteiro)."""
+    c = _norm(texto or "")
+    return bool(RELATIVO.search(c) or any(m["as"] or m["u"] or m["p"] for m in HORA.finditer(c)))
+
+
+def dia_dito(d, agora: datetime | None = None) -> str:
+    """"hoje", "amanhã", "na sexta", "no dia 30/10"."""
+    hoje = (agora or datetime.now()).date()
+    dias = (d - hoje).days
+    if dias == 0:
+        return "hoje"
+    if dias == 1:
+        return "amanhã"
+    if 1 < dias <= 7:
+        dia = ["na segunda", "na terça", "na quarta", "na quinta", "na sexta", "no sábado", "no domingo"][d.weekday()]
+        return dia.replace("na ", "na próxima ").replace("no ", "no próximo ") if dias == 7 else dia
+    return f"no dia {d.day:02d}/{d.month:02d}"
+
+
 def dito(alvo: datetime, agora: datetime | None = None) -> str:
     """Como falar a hora: "às 14h", "às 14h30, amanhã", "na sexta às 10h"."""
     agora = agora or datetime.now()
@@ -134,7 +154,7 @@ def dito(alvo: datetime, agora: datetime | None = None) -> str:
 
 GATILHO = re.compile(r"\b(?:me\s+lembr\w*|lembr\w*[\s-]+me|(?:cri\w*|coloc\w*|bot\w*|fa[zc]\w*|marc\w*|agend\w*|poe|anot\w*)\s+"
                      r"(?:um\s+)?lembrete|lembrete)\b(?P<con>\s*(?:de|que|para|pra|do|da|dos|das)\b|\s*[:,])?")
-LISTAR = re.compile(r"\b(?:quais|que)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:proximos\s+)?lembretes\b|\bo\s+que\s+(?:eu\s+)?tenho\s+marcado\b|\btenho\s+(?:algum\s+)?lembretes?\b|"
+LISTAR = re.compile(r"\b(?:quais|que)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:proximos\s+)?lembretes\b|\btenho\s+(?:algum\s+)?lembretes?\b|"
                     r"\b(?:lista|fala|diz)\w*\s+(?:os\s+)?(?:meus\s+)?lembretes\b")
 CANCELAR = re.compile(r"\b(?:cancel\w*|apag\w*|tir\w*|remov\w*|desmarc\w*|exclu\w*|delet\w*)\s+(?P<todos>todos\s+)?(?:(?:o|os|do|dos|meus|aquele|esse|este)\s+)?"
                       r"lembretes?\b(?:\s+(?:de|da|do|das|dos|para|pra|que)\s+(?P<alvo>.+))?")
@@ -211,15 +231,22 @@ def parecidos(alvo: str, itens: list[dict]) -> list[dict]:
     return [x for x in itens if any(w in _norm(x["texto"]) for w in palavras)]
 
 
-def _toca(item: dict, fala, atraso_min: int) -> None:
-    texto = item["texto"] or "Você pediu para eu lembrar agora."
-    disparado.update(n=disparado["n"] + 1, texto=texto, id=item["id"])
-    titulo = "Lembrete" if atraso_min < 5 else f"Lembrete (era para {datetime.fromisoformat(item['quando']):%H:%M})"
+def avisa(titulo: str, texto: str, falado: str, fala, id_: str = "") -> None:
+    """Notificação do Windows (a tela do PC vê `disparado` pelo /api/activity), push no celular e a voz. Também o
+    resumo do dia e os avisos de e-mail saem por aqui."""
+    disparado.update(n=disparado["n"] + 1, titulo=titulo, texto=texto, id=id_)
     threading.Thread(target=mobile.avisa, args=(titulo, texto), daemon=True).start()
     try:
-        fala(f"Lembrete: {texto}.")
+        if falado:
+            fala(falado)
     except Exception as e:  # voz desligada ou caindo: a notificação já saiu
-        print(f"Forja: lembrete sem voz: {e}", flush=True)
+        print(f"Forja: aviso sem voz: {e}", flush=True)
+
+
+def _toca(item: dict, fala, atraso_min: int) -> None:
+    texto = item["texto"] or "Você pediu para eu lembrar agora."
+    titulo = "Lembrete" if atraso_min < 5 else f"Lembrete (era para {datetime.fromisoformat(item['quando']):%H:%M})"
+    avisa(titulo, texto, f"Lembrete: {texto}.", fala, item["id"])
     print("Forja: lembrete tocou", flush=True)  # sem o texto: o log não guarda o que a pessoa disse
 
 

@@ -16,7 +16,9 @@ type Estado = {
               minha_voz: number; quando: string } | null;
   vozes_kokoro: { id: string; nome: string }[]; humores: { id: string; nome: string }[];
   lembretes: { id: string; quando: string; texto: string }[];
+  resumo_hora: string; cidade: string; avisos_email: string[];
 };
+type GoogleConta = { client_id: string; tem_chave: boolean; conectado: boolean; email: string | null; pode_copiar_youtube: boolean };
 type Mic = { id: string; nome: string; api: string; tipo: "entrada" | "saida"; padrao: boolean };
 type Favorito = { nome: string; provider: string; model: string };
 type Gravacao = { id: string; segundos_voz: number; pico: number; aviso: string; reconhecida: boolean | null };
@@ -76,6 +78,12 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Procura em Downloads, Documentos, Área de trabalho, Imagens e Vídeos, pelo tipo (PDF, planilha, foto, print...), pelo dia (hoje, ontem, essa semana) e pelas palavras do nome. Abre a pasta com o arquivo selecionado; não apaga nem move nada." },
   { titulo: "Lembretes", exemplos: ["Forja, me lembre de lavar a louça às 14h", "Forja, me lembra de ligar pro João daqui a 20 minutos", "Forja, amanhã às 8 me lembre de tomar o remédio", "Forja, me dá um toque daqui a meia hora pra tirar a roupa do varal", "Forja, não me deixa esquecer de pagar a luz", "Forja, quais são meus lembretes?", "Forja, cancela o lembrete da louça"],
     texto: "Na hora, notificação no Windows, no celular (Forja Mobile) e ele fala, se estiver ligado. Sem horário, ele pergunta “Pra quando?”. Valem “às 2 da tarde”, “em meia hora”, “amanhã”, “na sexta às 10h”. Ficam guardados (somem só quando tocam ou você cancela) e aparecem em Configurações › Lembretes; um perdido com o Forja fechado toca assim que ele abrir." },
+  { titulo: "E-mail (Gmail)", exemplos: ["Forja, tenho e-mail importante?", "Forja, resume os e-mails do João", "Forja, lê o último do banco", "Forja, responde que eu topo a reunião na quinta", "Forja, escreve pra Ana dizendo que eu atraso 10 minutos"],
+    texto: "Com a conta Google conectada (Configurações › E-mail e agenda). Ele resume falando, sem ler tudo. Para responder ou escrever, ele monta o rascunho no Gmail, lê em voz alta e pergunta “Mando?”: só envia com um sim (“manda”, “pode enviar”); “muda para sexta” reescreve; “não” deixa nos rascunhos. O que está escrito nos e-mails nunca vira ordem para ele." },
+  { titulo: "Agenda (Google)", exemplos: ["Forja, o que tenho amanhã?", "Forja, tenho alguma coisa na quinta?", "Forja, marca dentista sexta às 10", "Forja, bota na agenda academia amanhã às 7 e me avisa meia hora antes"],
+    texto: "Lê e marca na sua Agenda Google (evento de 1 hora; só o dia vira evento do dia todo). “Me avisa N minutos antes” cria um lembrete do Forja. Sem a conta conectada, “marca” vira lembrete do Forja." },
+  { titulo: "Resumo do dia e avisos de e-mail", exemplos: ["Forja, como tá meu dia?", "Forja, resumo do dia"],
+    texto: "Agenda, e-mails importantes, lembretes, o que o Forja trabalhou durante a noite, o clima da sua cidade e notícias. Escolha um horário em E-mail e agenda e ele sai sozinho todo dia (falado, no Windows e no celular). Em “Avisar quando chegar e-mail de”, ele avisa na hora os e-mails dessas pessoas ou com essas palavras no assunto." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
@@ -154,6 +162,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   const [painel, setPainel] = useState(() => { try { return localStorage.getItem("forja.assistente.painel") !== "0"; } catch { return true; } });
   const alternarPainel = () => setPainel((v) => { try { localStorage.setItem("forja.assistente.painel", v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
   const [tutorial, setTutorial] = useState(false);
+  const [google, setGoogle] = useState<GoogleConta | null>(null);
   const [vivo, setVivo] = useState("desligado");  // o estado do ouvido, rápido: o círculo acompanha a fala
   const [transcricao, setTranscricao] = useState<{ quem: "voce" | "forja"; texto: string }[]>([]);
   const fimConversa = useRef<HTMLDivElement>(null);
@@ -205,6 +214,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   }, [e?.instalando, e?.ligado, e?.treinando, carrega]);
 
   if (!e) return <div className="flex-1 bg-bg" />;
+  const resumoGoogle = google?.conectado ? (google.email ?? "conectado") : "não conectado";
   const grava = (patch: Partial<Estado>) => api.put<Estado>("/assistente", patch).then((r) => setE((a) => a && { ...a, ...r })).catch((er) => onError(er.message));
   const ligar = (ligado: boolean) => api.post<Estado>("/assistente/ligar", { ligado }).then(setE).catch((er) => onError(er.message));
   const imagens = local?.image_models.filter((m) => !m.req?.edita) ?? [];
@@ -615,6 +625,39 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   </p>
                 </Grupo>
 
+                <Grupo id="google" titulo="E-mail e agenda" resumo={resumoGoogle}>
+                  <ContaGoogle onError={onError} onMuda={setGoogle} />
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Caixa rotulo="Resumo do dia, todo dia às">
+                      <input type="time" className={`${campo} cursor-pointer`} value={e.resumo_hora}
+                             onChange={(ev) => grava({ resumo_hora: ev.target.value })} />
+                    </Caixa>
+                    <Caixa rotulo="Cidade do clima">
+                      <input className={campo} defaultValue={e.cidade} placeholder="ex.: Campinas"
+                             onBlur={(ev) => ev.target.value.trim() !== e.cidade && grava({ cidade: ev.target.value.trim() })} />
+                    </Caixa>
+                  </div>
+                  <span className="text-[11.5px] font-medium text-fg-2">Avisar quando chegar e-mail de</span>
+                  {e.avisos_email.map((a) => (
+                    <div key={a} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="min-w-0 flex-1 truncate text-[12px] text-fg">{a}</span>
+                      <button aria-label={`Tirar ${a}`} className="text-[11.5px] text-faint hover:text-diff-del-fg"
+                              onClick={() => grava({ avisos_email: e.avisos_email.filter((x) => x !== a) })}>tirar</button>
+                    </div>
+                  ))}
+                  <Caixa rotulo="Remetente ou palavra no assunto (Enter para adicionar)">
+                    <input className={campo} placeholder="ex.: chefe@empresa.com, Banco, build failed"
+                           onKeyDown={(ev) => {
+                             const v = ev.currentTarget.value.trim();
+                             if (ev.key === "Enter" && v) { grava({ avisos_email: [...e.avisos_email, v] }); ev.currentTarget.value = ""; }
+                           }} />
+                  </Caixa>
+                  <p className="text-[11.5px] leading-relaxed text-faint">
+                    O resumo do dia sai falado (com ele ligado), no Windows e no celular: agenda, e-mails importantes, lembretes,
+                    o que o Forja trabalhou durante a noite, o clima e notícias. Os avisos de e-mail conferem a caixa a cada 3 minutos.
+                  </p>
+                </Grupo>
+
                 <Grupo id="lembretes" titulo="Lembretes" resumo={e.lembretes.length ? `${e.lembretes.length} marcado${e.lembretes.length === 1 ? "" : "s"}` : "nenhum"}>
                   {e.lembretes.map((l) => (
                     <div key={l.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
@@ -655,6 +698,73 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
             )}
           </div>
         </aside>
+      )}
+    </div>
+  );
+}
+
+/** A conta Google do assistente (Gmail e Agenda): o mesmo projeto do Google Cloud do YouTube serve. O login acontece no
+ *  navegador do sistema; a tela confere até a conta aparecer. */
+function ContaGoogle(props: { onError: (m: string) => void; onMuda: (c: GoogleConta) => void }) {
+  const { onError, onMuda } = props;
+  const [c, setC] = useState<GoogleConta | null>(null);
+  const [id, setId] = useState("");
+  const [chave, setChave] = useState("");
+  const [esperando, setEsperando] = useState(false);
+  const carregar = useCallback(() => api.get<GoogleConta>("/google").then((r) => { setC(r); onMuda(r); setId((v) => v || r.client_id); return r; }), [onMuda]);
+  useEffect(() => { carregar().catch(() => setC(null)); }, [carregar]);
+  useEffect(() => {   // o login acontece no navegador: confere até a conta aparecer (ou 3 min)
+    if (!esperando) return;
+    const t = setInterval(() => carregar().then((r) => r.conectado && setEsperando(false)).catch(() => {}), 2000);
+    const fim = setTimeout(() => setEsperando(false), 180_000);
+    return () => { clearInterval(t); clearTimeout(fim); };
+  }, [esperando, carregar]);
+  if (!c) return null;
+  const tenta = (fn: () => Promise<unknown>) => fn().catch((er: any) => onError(er.message));
+  const botao = "rounded-[8px] border border-line px-2.5 py-1 text-[12px] text-fg hover:bg-surface-2 disabled:opacity-40";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+        <span className={`size-1.5 shrink-0 rounded-full ${c.conectado ? "bg-ok" : "bg-faint"}`} />
+        <span className="min-w-0 flex-1 truncate text-[12px] text-fg">
+          {c.conectado ? (c.email ?? "Conectado") : esperando ? "Termine o login no navegador…" : "Conta Google não conectada"}
+        </span>
+        {c.conectado ? <button className={botao} onClick={() => tenta(() => api.del("/google").then(carregar))}>Desconectar</button>
+          : <button className={botao} disabled={!c.client_id || !c.tem_chave}
+                    onClick={() => tenta(async () => {
+                      const r = await api.post<{ url: string }>("/google/conectar", {});
+                      window.open(r.url);   // abre no navegador do sistema
+                      setEsperando(true);
+                    })}>Conectar</button>}
+      </div>
+      {!c.conectado && (
+        <>
+          {c.pode_copiar_youtube && (
+            <button className={`${botao} self-start`} onClick={() => tenta(() => api.post("/google/copiar-youtube", {}).then(carregar))}>
+              Usar o projeto do Google do YouTube
+            </button>
+          )}
+          <Caixa rotulo="ID do cliente (Google Cloud)">
+            <input className={`${campo} font-mono`} value={id} spellCheck={false} placeholder="….apps.googleusercontent.com"
+                   onChange={(ev) => setId(ev.target.value)} />
+          </Caixa>
+          <Caixa rotulo="Chave secreta do cliente">
+            <input className={`${campo} font-mono`} type="password" value={chave} placeholder={c.tem_chave ? "guardada (cifrada)" : "GOCSPX-…"}
+                   onChange={(ev) => setChave(ev.target.value)} />
+          </Caixa>
+          {(id !== c.client_id || chave) && (
+            <button className={`${botao} self-end`} disabled={!id}
+                    onClick={() => tenta(() => api.put<GoogleConta>("/google", { client_id: id, client_secret: chave }).then((r) => { setC(r); onMuda(r); setChave(""); }))}>
+              Salvar credenciais
+            </button>
+          )}
+          <p className="text-[11.5px] leading-relaxed text-faint">
+            Uma vez só: em console.cloud.google.com, no projeto (pode ser o mesmo do YouTube), ative a “Gmail API” e a “Google
+            Calendar API”; na tela de consentimento (tipo Externo) publique em produção, para o acesso não vencer em 7 dias; crie
+            uma credencial OAuth “App para computador”, cole o ID e a chave aqui e conecte. O Google avisa que o app não foi
+            verificado: é o seu próprio projeto, siga em “Avançado”.
+          </p>
+        </>
       )}
     </div>
   );
