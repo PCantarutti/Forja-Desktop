@@ -64,6 +64,35 @@ export default function Ditado() {
     return navigator.mediaDevices.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
   }
 
+  async function transcreve(audio: Blob) {
+    setFase("transcrevendo");
+    try {
+      const form = new FormData();
+      form.append("file", audio, "ditado.webm");
+      const r = await fetch("/api/transcrever", { method: "POST", body: form, headers: auth() });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.detail ?? `HTTP ${r.status}`);
+      insere(String(d.texto ?? "").trim());
+    } catch (e: any) {
+      setErro(e.message ?? String(e));
+    } finally {
+      setFase("parado");
+    }
+  }
+
+  function insere(texto: string) {
+    const a = alvo.current;
+    if (!a || !texto || !a.el.isConnected) return;
+    const { el, ini, fim } = a;
+    const antes = el.value.slice(0, ini), depois = el.value.slice(fim);
+    const ins = (antes && !/\s$/.test(antes) ? " " : "") + texto + (depois && !/^\s/.test(depois) ? " " : "");
+    // o setter nativo + evento "input": é o que o React de cada tela enxerga como digitação
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, antes + ins + depois);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+    el.setSelectionRange(antes.length + ins.length, antes.length + ins.length);
+  }
+
   async function comeca(el: Campo | null = campo, sozinho = false) {
     if (!el) return;
     setErro("");
@@ -120,35 +149,6 @@ export default function Ditado() {
     window.addEventListener("forja:ditar", dita);
     return () => window.removeEventListener("forja:ditar", dita);
   });
-
-  async function transcreve(audio: Blob) {
-    setFase("transcrevendo");
-    try {
-      const form = new FormData();
-      form.append("file", audio, "ditado.webm");
-      const r = await fetch("/api/transcrever", { method: "POST", body: form, headers: auth() });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.detail ?? `HTTP ${r.status}`);
-      insere(String(d.texto ?? "").trim());
-    } catch (e: any) {
-      setErro(e.message ?? String(e));
-    } finally {
-      setFase("parado");
-    }
-  }
-
-  function insere(texto: string) {
-    const a = alvo.current;
-    if (!a || !texto || !a.el.isConnected) return;
-    const { el, ini, fim } = a;
-    const antes = el.value.slice(0, ini), depois = el.value.slice(fim);
-    const ins = (antes && !/\s$/.test(antes) ? " " : "") + texto + (depois && !/^\s/.test(depois) ? " " : "");
-    // o setter nativo + evento "input": é o que o React de cada tela enxerga como digitação
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, antes + ins + depois);
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.focus();
-    el.setSelectionRange(antes.length + ins.length, antes.length + ins.length);
-  }
 
   useEffect(() => { if (erro) { const t = setTimeout(() => setErro(""), 5000); return () => clearTimeout(t); } }, [erro]);
 

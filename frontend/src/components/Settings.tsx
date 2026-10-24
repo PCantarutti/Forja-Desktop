@@ -500,7 +500,7 @@ function CelularTab(props: { onError: (e: string) => void }) {
 // ------------------------------------------------------------------ aplicativo (Electron)
 
 /** Interruptor do design (34×20): ligado na cor de destaque. */
-function Interruptor({ ligado, onChange, disabled, rotulo }: { ligado: boolean; onChange: (v: boolean) => void; disabled?: boolean; rotulo?: string }) {
+export function Interruptor({ ligado, onChange, disabled, rotulo }: { ligado: boolean; onChange: (v: boolean) => void; disabled?: boolean; rotulo?: string }) {
   return (
     <button type="button" role="switch" aria-checked={ligado} disabled={disabled} onClick={() => onChange(!ligado)}
             className={`inline-flex items-center gap-2.5 text-[13px] text-fg-2 ${disabled ? "cursor-default opacity-45" : ""}`}>

@@ -44,6 +44,9 @@ INTERROMPE_MARGEM = 0.05  # "Forja" por cima da fala dele: um pouco mais de cert
 WAKE = re.compile(r"^\s*(?:(?:ei|oi|ok|ola|e ai|hey)\s+)?(?:forja|forjas|forje|forge|forjar|porja|forca|forj[ao])\b"
                   r"[\s,.:;!?-]*(.*)$", re.S)
 KOKORO = {"modelo": "kokoro-v1.0.int8.onnx", "vozes": "voices-v1.0.bin"}
+# idioma da conversa ("vamos conversar em inglês"): o Whisper detecta sozinho fora do português (o "Forja" dito no
+# meio do inglês sai certo, o que language="en" às vezes vira "Forge"), e o pedido de voz troca a do Kokoro
+IDIOMA = {"stt": "pt"}
 
 
 _saida = threading.Lock()
@@ -102,10 +105,10 @@ class Boca:
         threading.Thread(target=self._sintetiza, daemon=True).start()
         threading.Thread(target=self._toca, daemon=True).start()
 
-    def fala(self, texto: str) -> None:
+    def fala(self, texto: str, voz: str | None = None, lang: str | None = None) -> None:
         for f in frases(texto):
             self.falando.set()
-            self.textos.put((self.geracao, f))
+            self.textos.put((self.geracao, f, voz, lang))
 
     def bip(self) -> None:
         """Dois tons curtos (~0,2 s): "estou ouvindo". Curto de propósito e marcado para quase não fechar o microfone:
@@ -142,10 +145,11 @@ class Boca:
 
     def _sintetiza(self) -> None:
         while True:
-            g, t = self.textos.get()
+            g, t, voz, lang = self.textos.get()
             try:
                 if g == self.geracao:
-                    amostras, sr = self.kokoro.create(t, voice=self.voz, speed=1.1, lang="pt-br")
+                    amostras, sr = self.kokoro.create(t, voice=voz or self.voz, speed=1.1 if not lang else 1.0,
+                                                      lang=lang or "pt-br")
                     self.audios.put((g, amostras, sr, False, t))
             except Exception as e:  # frase que o fonemizador não engole não derruba a boca
                 diz("LOG", f"Kokoro: {e}")
@@ -220,9 +224,12 @@ class Escuta:
         self.boca = boca
         self.desde = 0.0
         self.anunciada = False
+        self.suave = False
 
-    def abre(self) -> None:
-        self.desde, self.anunciada = time.time(), False
+    def abre(self, suave: bool = False) -> None:
+        """`suave`: a conversa contínua depois de uma resposta. Fala nela vale sem "Forja"; barulho ou nada some em
+        silêncio (a janela de uma pergunta dele, ao contrário, pede para repetir)."""
+        self.desde, self.anunciada, self.suave = time.time(), False, suave
 
     def fecha(self) -> None:
         self.desde, self.anunciada = 0.0, False
@@ -418,11 +425,13 @@ def main() -> int:
             try:
                 q = json.loads(linha)
                 if q["cmd"] == "fala":
-                    boca.fala(q["texto"])
+                    boca.fala(q["texto"], q.get("voz"), q.get("lang"))
+                elif q["cmd"] == "idioma":
+                    IDIOMA["stt"] = q.get("stt") or ""
                 elif q["cmd"] == "toca":
                     boca.toca(q["arquivo"])
                 elif q["cmd"] == "escuta":
-                    escuta.abre()
+                    escuta.abre(suave=bool(q.get("suave")))
                 elif q["cmd"] == "cala":
                     boca.cala()
                 elif q["cmd"] == "bip":
@@ -447,8 +456,8 @@ def main() -> int:
             diz("ESTADO", "ouvindo")
             continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
         diz("ESTADO", "entendendo" if acordado else "transcrevendo")
-        segs, _ = stt.transcribe(audio, language="pt", beam_size=1, initial_prompt="Forja.", vad_filter=False,
-                                 condition_on_previous_text=False)
+        segs, _ = stt.transcribe(audio, language=IDIOMA["stt"] or None, beam_size=1, initial_prompt="Forja.",
+                                 vad_filter=False, condition_on_previous_text=False)
         texto = " ".join(s.text for s in segs).strip()
         if ALUCINACAO.search(normaliza(texto)):
             diz("LOG", "ignorado: alucinação do Whisper")  # sem o texto: a fala da pessoa não vai para o log
@@ -474,6 +483,8 @@ def main() -> int:
             escuta.fecha()
             diz("OUVIU", json.dumps({"texto": texto, "comando": comando if comando is not None else texto,
                                      "wake": comando is not None, "resposta": resposta}, ensure_ascii=False))
+        elif acordado and motivo == "escuta" and escuta.suave:
+            escuta.fecha()  # conversa contínua: tosse, porta, TV baixa... nada de "não entendi" a cada barulho
         elif acordado:
             # ouviu "Forja" (ou estava esperando a resposta) e não entendeu nada: avisa e escuta de novo, em vez de
             # ficar mudo com o círculo apagando

@@ -4,6 +4,7 @@ import type { LocalModel } from "../types";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { BarraTopo, Caixa } from "./ImagensView";
 import { ChevronDown, Mic, X } from "./icons";
+import { Interruptor } from "./Settings";
 
 type Estado = {
   ligado: boolean; instalado: boolean; instalando: string; estado: string; erro: string; mic: string; saida: string; mic_nome: string; ouviu: string;
@@ -18,6 +19,8 @@ type Estado = {
   lembretes: { id: string; quando: string; texto: string }[];
   resumo_hora: string; cidade: string; avisos_email: string[];
   pastas_documentos: string[]; notas: { id: string; texto: string; quando: string }[];
+  conversa_continua: boolean; idioma: string;
+  acoes: { id: string; t: number; tipo: string; resumo: string; desfeito: boolean; pode_desfazer: boolean }[];
   documentos: { arquivos: number; indexando: boolean; erro: string };
   acompanhar: { id: string; tipo: "preco" | "versao"; alvo: string; limite: number | null; base: string | null; ultimo: number | null; conferido: string | null }[];
 };
@@ -108,6 +111,12 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Lê a última resposta da conversa aberta na tela (código vira “código na tela”), com a voz escolhida em Ouvir e falar." },
   { titulo: "Círculo e bandeja", exemplos: ["Configurações do Forja › Círculo do assistente", "bandeja do sistema"],
     texto: "Para jogar, desligue o círculo do canto da tela (ele continua ouvindo). Ligado ou desligado, o assistente lembra ao reabrir o Forja. Na bandeja: o modelo na VRAM, a VRAM e a RAM em uso, e Descarregar; o ícone ganha um ponto verde com modelo carregado." },
+  { titulo: "Conversa contínua", exemplos: ["Forja, quanto é 15% de 200?", "… e de 300?"],
+    texto: "Depois de responder, ele fica uns segundos ouvindo a próxima pergunta sem precisar de “Forja” (o círculo mostra que está escutando). Barulho nessa janela é ignorado. Liga e desliga em Ouvir e falar." },
+  { titulo: "Outros idiomas", exemplos: ["Forja, como se diz bom dia em espanhol?", "Forja, traduz isso pro inglês", "Forja, vamos conversar em inglês pra eu treinar", "Let's go back to Portuguese"],
+    texto: "Traduz e fala com uma voz nativa (inglês, espanhol, francês, italiano, japonês, chinês, hindi). Na conversa para treinar, ele ouve e responde no idioma e corrige seus erros de leve, até você pedir para voltar ao português." },
+  { titulo: "Desfazer e registro", exemplos: ["Forja, desfaz", "Forja, volta o que você fez"],
+    texto: "Tudo o que ele faz por voz fica em “O que ele fez” (só a ação, nunca a conversa). Dá para desfazer volume, mudo, saída de som, lembrete, nota, memória, card, acompanhamento e evento da agenda; e-mail enviado, aprovação e programa fechado não voltam, por isso esses pedem confirmação ou nome antes." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
@@ -318,7 +327,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                 {e.erro ? <span className="text-diff-del-fg">{e.erro}</span>
                   : !e.ligado ? "Desligado: o botão liga e já ouve"
                   : modo === "escutando" ? "Pode falar…"
-                  : modo === "ouvindo" ? `Diga “Forja, …”${e.atalho ? ` ou aperte ${e.atalho}` : ""}`
+                  : modo === "ouvindo" ? `Diga “Forja, …”${e.atalho ? ` ou aperte ${e.atalho}` : ""}${e.idioma ? ` · conversa em ${e.idioma}` : ""}`
                   : ESTADO[vivo] ?? vivo}
               </p>
             </div>
@@ -451,6 +460,8 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                 </Grupo>
 
                 <Grupo id="ouvir" titulo="Ouvir e falar" resumo={resumoOuvir}>
+                  <Interruptor ligado={e.conversa_continua} onChange={(v) => grava({ conversa_continua: v })}
+                               rotulo="Conversa contínua: depois de responder, ouve a próxima pergunta sem “Forja”" />
                   <Caixa rotulo="Microfone">
                     <select className={`${campo} cursor-pointer`} value={e.mic && mics.some((m) => m.id === e.mic) ? e.mic : ""} onChange={(ev) => grava({ mic: ev.target.value })}>
                       <option value="">Padrão do Windows</option>
@@ -747,6 +758,21 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     </div>
                   ))}
                   <p className="text-[11.5px] leading-relaxed text-faint">Confere a cada 3 horas e avisa uma vez (falado, no Windows e no celular).</p>
+                </Grupo>
+
+                <Grupo id="acoes" titulo="O que ele fez" resumo={e.acoes.length ? `${e.acoes.length} ações recentes` : "nada ainda"}>
+                  {e.acoes.length === 0 && <span className="text-[11.5px] text-faint">Ações por voz aparecem aqui (sem o que foi conversado).</span>}
+                  {e.acoes.map((a) => (
+                    <div key={a.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
+                      <span className="shrink-0 font-mono text-[11px] text-fg-2">{new Date(a.t * 1000).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
+                      <span className={`min-w-0 flex-1 truncate text-[12px] ${a.desfeito ? "text-faint line-through" : "text-fg"}`} title={a.resumo}>{a.resumo}</span>
+                      {a.pode_desfazer && (
+                        <button className="text-[11.5px] text-faint hover:text-fg"
+                                onClick={() => api.post("/assistente/desfazer", { id: a.id }).then(carrega).catch((er) => onError(er.message))}>desfazer</button>
+                      )}
+                    </div>
+                  ))}
+                  <p className="text-[11.5px] leading-relaxed text-faint">“Forja, desfaz” volta a última que dá: volume, mudo, saída de som, lembrete, nota, memória, card, acompanhamento e evento (até 2 horas).</p>
                 </Grupo>
 
                 <Grupo id="lembretes" titulo="Lembretes" resumo={e.lembretes.length ? `${e.lembretes.length} marcado${e.lembretes.length === 1 ? "" : "s"}` : "nenhum"}>

@@ -288,6 +288,11 @@ def eventos(inicio: datetime, fim: datetime) -> list[dict]:
     return saida
 
 
+def apagar_evento(evento_id: str) -> None:
+    """O "Forja, desfaz" de um evento marcado por voz."""
+    _pede("DELETE", f"{AGENDA}/events/{evento_id}")
+
+
 def criar_evento(titulo: str, inicio: datetime | date, minutos: int = 60) -> dict:
     """Evento na agenda principal. `date` (sem hora) vira evento do dia inteiro."""
     if isinstance(inicio, datetime):

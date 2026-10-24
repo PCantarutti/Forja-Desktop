@@ -96,7 +96,7 @@ PADRAO = {"ligado": False, "mic": "", "saida": "", "whisper": "small", "motor": 
           "humor": "sarcastico", "favoritos": [], "modelo": None, "ocioso_min": 5, "atalho": "",
           "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado", "permitidos": [],
           "imagem": "", "video": "", "pasta_projetos": "", "resumo_hora": "", "cidade": "", "avisos_email": [],
-          "pastas_documentos": []}
+          "pastas_documentos": [], "conversa_continua": True}
 MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se o modelo desandar
 # raciocínio do modelo antes de falar: desligado é o padrão (resposta falada quer velocidade); os outros são os
 # esforços do Forja (config.REASONING_BUDGET), e o pensamento nunca é falado
@@ -220,7 +220,7 @@ def estado() -> dict:
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "vozes_kokoro": VOZES_KOKORO, "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
             "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado(),
-            "acompanhar": _web().lista()}
+            "acompanhar": _web().lista(), "acoes": acoes(30), "idioma": _idioma.get("nome", "")}
 
 
 def _web():
@@ -933,9 +933,14 @@ def _abre(conv: int, kind: str) -> None:
     _estado["ultimo"] = {"conv": conv, "kind": kind, "n": n}
 
 
-def fala(texto: str) -> None:
+def fala(texto: str, voz: str = "", lang: str = "") -> None:
     _anota("forja", texto)
-    _manda("fala", texto=texto)
+    _manda("fala", texto=texto, **({"voz": voz, "lang": lang} if voz else {}))
+
+
+def _fala_resposta(texto: str) -> None:
+    """A resposta do modelo: na conversa em outro idioma, com a voz nativa dele."""
+    fala(texto, _idioma.get("voz", ""), _idioma.get("lang", ""))
 
 
 def _anota(quem: str, texto: str) -> None:
@@ -1301,7 +1306,9 @@ PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w
                    r"acompanh\w*|versao|lanc\w*|github|release|abaixo|custa\w*|quanto\s+(?:ta|esta|custa)|navegador|monitor\w*|"
                    r"vigi\w*|de\s+olho|alert\w*|atualiz\w*|notifica\w*|valor|conto|grito|agente|aprov\w*|recus\w*|"
                    r"pedi\w*|trabalho|indo|termin\w*|dit\w*|digit\w*|le\s+(?:pra|para|essa|esse|isso|a|o)|ler|leitura|voz\s+alta|"
-                   r"respost\w*|mensagem|solicit\w*|neg\w*)\b")
+                   r"respost\w*|mensagem|solicit\w*|neg\w*|traduz\w*|translat\w*|idioma|lingua|language|ingles|english|"
+                   r"espanhol|spanish|frances|french|italiano|japones|chines|mandarim|portugu\w*|como\s+se\s+diz|como\s+(?:que\s+)?fala|"
+                   r"desfa\w*|volta\s+o\s+que)\b")
 # pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente)
 SABER = re.compile(r"\b(?:card|board|onde\b.{0,40}\b(?:trata|faz|salva|guarda|fica|processa|esta|ta)\b|em\s+que\s+(?:arquivo|parte)|"
                    r"qual\s+(?:e\s+)?a\s+parte|como\s+(?:esta|ta)\s+(?:o\s+)?(?:agente|trabalho)|aprov\w*|"
@@ -1337,6 +1344,9 @@ CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A
   {"tipo":"agente","acao":"pedidos"} (o que ele está pedindo para aprovar), {"tipo":"agente","acao":"aprovar"},
   {"tipo":"agente","acao":"recusar"} ou {"tipo":"agente","acao":"parar","projeto":"<nome ou vazio>"}.
 - Escrever no campo aberto do Forja: {"tipo":"ditar","texto":"<o texto, se a pessoa já disse; vazio = ela vai ditar agora>"}. Ler em voz alta a resposta aberta no Forja: {"tipo":"ler_resposta"}.
+- Idiomas: {"tipo":"traduzir","texto":"<o texto; vazio = a última resposta dele>","idioma":"<idioma>"} ou
+  {"tipo":"idioma","idioma":"<idioma da conversa daqui pra frente; português = voltar ao normal>"}.
+- Desfazer o que ele acabou de fazer: {"tipo":"desfazer"}.
 - Acompanhar e avisar depois: {"tipo":"acompanhar","acao":"preco","produto":"<produto>","limite":<valor em reais, número>},
   {"tipo":"acompanhar","acao":"versao","projeto":"<programa ou projeto de software>"}, {"tipo":"acompanhar","acao":"listar"}
   ou {"tipo":"acompanhar","acao":"parar","alvo":"<palavras>"}.
@@ -1376,6 +1386,11 @@ Exemplos:
 "quero ditar uma mensagem" -> {"tipo":"ditar","texto":""}
 "digita aí: o relatório sai amanhã" -> {"tipo":"ditar","texto":"o relatório sai amanhã"}
 "lê pra mim essa resposta" -> {"tipo":"ler_resposta"}
+"como se diz bom dia em espanhol?" -> {"tipo":"traduzir","texto":"bom dia","idioma":"espanhol"}
+"traduz isso pro inglês" -> {"tipo":"traduzir","texto":"","idioma":"inglês"}
+"vamos conversar em inglês pra eu treinar" -> {"tipo":"idioma","idioma":"inglês"}
+"let's go back to Portuguese" -> {"tipo":"idioma","idioma":"português"}
+"volta o que você fez" -> {"tipo":"desfazer"}
 "me lembra como se faz pão de queijo" -> {"tipo":"responder"}
 "procura o resultado do jogo do Flamengo" -> {"tipo":"responder"}
 "abre o jogo comigo, você é uma IA?" -> {"tipo":"responder"}
@@ -1415,6 +1430,8 @@ async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | N
         return d["tipo"], d
     if d.get("tipo") in ("agente", "ditar", "ler_resposta"):
         return "forja_" + d["tipo"], d
+    if d.get("tipo") in ("traduzir", "idioma", "desfazer"):
+        return d["tipo"], d
     return None
 NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 
@@ -1422,6 +1439,12 @@ NOMES_FERRAMENTAS = [f["function"]["name"] for f in FERRAMENTAS]
 async def _executa(nome: str, args: dict, spec: dict | None = None, slot=None) -> str:
     """Ação que o modelo escolheu (o que as regras não pegaram): faz, fala o resultado e devolve uma linha para o
     histórico da conversa falada."""
+    if nome in ("traduzir", "idioma"):
+        if spec is None:
+            spec, slot, _ = await _prepara_modelo()
+        return await _idioma_voz(nome, args, spec, slot)
+    if nome == "desfazer":
+        return await _desfaz()
     if nome.startswith("forja_"):
         return await _forja_voz(nome.removeprefix("forja_"), args)
     if nome in ("web", "acompanhar"):
@@ -1457,7 +1480,7 @@ async def _executa(nome: str, args: dict, spec: dict | None = None, slot=None) -
         fala("Isso eu não sei fazer no PC.")
         return "(ação do PC recusada)"
     print(f"Forja: voz: ação do PC pelo modelo: {ok[0]}", flush=True)
-    fala(await asyncio.to_thread(pc.faz, *ok))
+    fala(await _pc(*ok))
     return f"(PC: {ok[0]})"
 
 
@@ -1517,7 +1540,11 @@ async def _chat(texto: str) -> None:
     # O system fica fixo e o que muda a cada pergunta (hora, pausa do humor) vai junto dela: o prefixo da conversa
     # não muda e o llama-server reaproveita o cache (antes reprocessava ~600 tokens toda vez: 10 s num MoE grande).
     agora_txt = f"[Agora: {datetime.now():%d/%m/%Y %H:%M} neste PC.{'' if pode_brincar else ' ' + SEM_PIADA}]"
-    msgs = [{"role": "system", "content": nota_falada(cfg["humor"]) + _memorias_txt()}, *hist[-12:-1],
+    if _idioma.get("nome"):  # modelo pequeno segue a instrução de idioma bem melhor junto da pergunta do que só no system
+        agora_txt += f"\n[Responda em {_idioma['nome']}, nunca em português.]"
+    nota_idioma = (f"\n\nConversa em {_idioma['nome']}: a pessoa está praticando. Responda SEMPRE em {_idioma['nome']}, "
+                   f"curto e natural; se ela errar, corrija com gentileza em uma frase antes de responder.") if _idioma.get("nome") else ""
+    msgs = [{"role": "system", "content": nota_falada(cfg["humor"]) + _memorias_txt() + nota_idioma}, *hist[-12:-1],
             {"role": "user", "content": f"{agora_txt}\n{texto}"}]
     esforco = cfg["raciocinio"]
     buf, tudo, pesquisou, feito = "", "", False, ""
@@ -1534,7 +1561,7 @@ async def _chat(texto: str) -> None:
                 # parece chamada de ferramenta escrita como texto (modelo pequeno): segura até ver o que é
                 segura = tudo.lstrip()[:1] in ("{", "[", "<", "`")
                 while kokoro and not segura and (m := re.match(r"(.+?[.!?…:;])(\s+)", buf, re.S)) and len(m.group(1)) > 12:
-                    fala(sem_marca(m.group(1)))
+                    _fala_resposta(sem_marca(m.group(1)))
                     buf = buf[m.end():]
             elif tipo == "done":
                 chamadas = [c for c in val["tool_calls"] if c["name"] in NOMES_FERRAMENTAS]
@@ -1578,10 +1605,12 @@ async def _chat(texto: str) -> None:
         return  # a ação já falou o resultado
     if not sem_marca(tudo):
         fala("Fiquei sem resposta dessa vez. Pode repetir?")
-    elif kokoro:
-        fala(sem_marca(buf))
+    elif kokoro or _idioma.get("voz"):
+        _fala_resposta(sem_marca(buf))
     else:
         await _fala_tela(sem_marca(tudo))
+    if ler()["conversa_continua"]:
+        _manda("escuta", suave=True)  # a próxima pergunta vale sem "Forja" (conta do fim da fala dele)
 
 def _chamadas_em_texto(texto: str) -> tuple[list[dict], str]:
     """Modelo pequeno que escreve a chamada como texto ({"name": "web_search", ...}, <tool_call>...): o mesmo parser
@@ -1887,6 +1916,7 @@ async def _enviar_respondido(resposta: str) -> None:
         _pendente.clear()
         await asyncio.to_thread(g.enviar_rascunho, p["draft"])
         print("Forja: voz: e-mail enviado", flush=True)  # sem destinatário nem texto no log
+        _registra("email", f"E-mail enviado para {p['nome']}")
         fala(f"Enviado para {p['nome']}.")
     elif NAO.match(r) or p.get("ajustes", 0) >= 3:
         _pendente.clear()
@@ -1905,15 +1935,18 @@ async def _marca(titulo: str, alvo: datetime, com_hora: bool, aviso: int) -> str
     from . import google_conta as g
     quando = lembretes.dito(alvo) if com_hora else lembretes.dia_dito(alvo.date())
     if not g.conectado():  # sem conta Google: vira lembrete do Forja, que pelo menos avisa
-        lembretes.criar(alvo - timedelta(minutes=aviso) if com_hora else alvo.replace(hour=9, minute=0),
-                        f"{titulo} {_hora(alvo)}" if com_hora and aviso else titulo)
+        item = lembretes.criar(alvo - timedelta(minutes=aviso) if com_hora else alvo.replace(hour=9, minute=0),
+                               f"{titulo} {_hora(alvo)}" if com_hora and aviso else titulo)
+        _registra("lembrete", f"Lembrete: {titulo}", {"lembrete": item["id"]})
         fala(f"Sem a conta Google conectada, marquei como lembrete do Forja: {titulo}, {quando}.")
         return "(agenda: virou lembrete)"
-    await asyncio.to_thread(g.criar_evento, titulo, alvo if com_hora else alvo.date())
+    ev = await asyncio.to_thread(g.criar_evento, titulo, alvo if com_hora else alvo.date())
+    desfazer = {"evento": ev.get("id")} if ev.get("id") else {}
     extra = ""
     if aviso and com_hora:
-        lembretes.criar(alvo - timedelta(minutes=aviso), f"{titulo} em {aviso} minutos")
+        desfazer["lembrete"] = lembretes.criar(alvo - timedelta(minutes=aviso), f"{titulo} em {aviso} minutos")["id"]
         extra = f" Te aviso {aviso} minutos antes."
+    _registra("evento", f"Evento na agenda: {titulo}, {quando}", desfazer or None)
     fala(f"Marquei {titulo} {quando} na sua agenda.{extra}")
     return "(agenda: evento criado)"
 
@@ -2177,6 +2210,7 @@ async def _saber_voz(nome: str, d: dict, spec: dict, slot) -> str:
             return "(memória: vazia)"
         assunto = str(d.get("assunto") or "").strip() or " ".join(texto.split()[:4])
         memory.personal_write(assunto, texto[:200], texto, "usuario")
+        _registra("memoria", f"Memória guardada: {assunto}", {"memoria": memory._slug(assunto)})
         print("Forja: voz: memória guardada", flush=True)  # sem o conteúdo no log
         fala("Guardado.")
         return "(memória guardada)"
@@ -2190,7 +2224,8 @@ async def _saber_voz(nome: str, d: dict, spec: dict, slot) -> str:
             if lembretes.tem_hora(texto) and (alvo := lembretes.quando(texto)[0]):
                 await _lembrete("criar", (alvo, texto))  # "anota que tenho dentista sexta às 10": com hora, avisa
                 return "(nota com hora virou lembrete)"
-            conhecimento.anotar(texto)
+            nota = conhecimento.anotar(texto)
+            _registra("nota", "Nota anotada", {"nota": nota["id"]})
             fala(f"Anotado: {texto}.")
             return "(nota anotada)"
         if acao == "apagar":
@@ -2233,6 +2268,7 @@ async def _saber_voz(nome: str, d: dict, spec: dict, slot) -> str:
             return "(card vazio)"
         card, _ = await asyncio.to_thread(board.criar, board.projeto_de(pasta),
                                           {"titulo": titulo, "descricao": "Criado por voz no assistente F.O.R.J.A."})
+        _registra("card", f"Card no board de {nome_pasta}: {titulo}", {"card": card.get("id")} if card.get("id") else None)
         fala(f"Criei o card {titulo} no board de {nome_pasta}.")
         return "(card criado)"
     if nome == "codigo":
@@ -2371,7 +2407,8 @@ async def _web_voz(nome: str, d: dict, spec: dict, slot) -> str:
             fala(f"Não achei o {projeto or 'projeto'} no GitHub. Por enquanto acompanho versão de projeto do GitHub e preço de produto.")
             return "(versão: sem repositório)"
         base = await asyncio.to_thread(web_voz.ultima_versao, repo)
-        web_voz.acompanhar("versao", projeto, base=base, repo=repo)
+        item = web_voz.acompanhar("versao", projeto, base=base, repo=repo)
+        _registra("acompanhar", f"Acompanhando versão do {projeto}", {"acompanhar": item["id"]})
         fala(f"Combinado. {'A versão de agora do ' + projeto + ' é ' + base + '. ' if base else ''}Te aviso quando sair outra.")
         return "(acompanhando versão)"
     produto = str(d.get("produto") or "").strip()
@@ -2384,7 +2421,8 @@ async def _web_voz(nome: str, d: dict, spec: dict, slot) -> str:
     if ofertas and ofertas[0][1] <= limite:
         fala(f"Já está abaixo: {ofertas[0][0]}, {_reais(ofertas[0][1])}.")
         return "(já abaixo do limite)"
-    web_voz.acompanhar("preco", produto, limite=limite)
+    item = web_voz.acompanhar("preco", produto, limite=limite)
+    _registra("acompanhar", f"Acompanhando preço: {produto}", {"acompanhar": item["id"]})
     agora = f"Hoje o menor que achei é {_reais(ofertas[0][1])}, na {ofertas[0][0]}. " if ofertas else ""
     fala(f"Combinado. {agora}Confiro a cada 3 horas e te aviso quando ficar abaixo de {_reais(limite)}.")
     return "(acompanhando preço)"
@@ -2500,6 +2538,7 @@ async def _forja_voz(acao: str, d: dict) -> str:
     titulo = _titulo(run.conv_id)
     if sub == "parar":
         run.stop()
+        _registra("agente", f"Agente de {titulo} parado")
         fala(f"Parei o agente de {titulo}.")
         return "(agente parado)"
     pedidos = list(run.approvals.items())
@@ -2537,6 +2576,7 @@ async def _forja_voz(acao: str, d: dict) -> str:
     for cid, _ in pedidos:
         run.resolve(cid, {"approved": aprova, "mode": None, "feedback": None if aprova else "Recusado por voz no assistente.",
                           "answer": None, "answers": None})
+    _registra("agente", f"{'Aprovado' if aprova else 'Recusado'} no agente de {titulo}: {'; '.join(ditos)[:160]}")
     fala(f"{'Aprovei' if aprova else 'Recusei'}: {'; '.join(ditos)}.")
     print(f"Forja: voz: {len(pedidos)} pedido(s) do agente {'aprovado(s)' if aprova else 'recusado(s)'} por voz", flush=True)
     return f"(agente: {'aprovou' if aprova else 'recusou'})"
@@ -2557,6 +2597,135 @@ async def _aprovar_respondido(resposta: str) -> None:
         fala("Deixei o pedido esperando na tela.")
 
 
+# ------------------------------------------------------------------ idiomas, registro e desfazer (fase 6)
+
+# idioma falado -> (código do Whisper, voz do Kokoro, idioma do Kokoro)
+IDIOMAS = {"ingles": ("en", "af_heart", "en-us"), "espanhol": ("es", "ef_dora", "es"), "frances": ("fr", "ff_siwis", "fr-fr"),
+           "italiano": ("it", "if_sara", "it"), "japones": ("ja", "jf_alpha", "ja"), "chines": ("zh", "zf_xiaobei", "cmn"),
+           "mandarim": ("zh", "zf_xiaobei", "cmn"), "hindi": ("hi", "hf_alpha", "hi"), "english": ("en", "af_heart", "en-us"),
+           "spanish": ("es", "ef_dora", "es"), "french": ("fr", "ff_siwis", "fr-fr")}
+OLA = {"en": "Sure! From now on, let's speak English. I'll gently correct your mistakes.",
+       "es": "¡Claro! Desde ahora hablamos en español.", "fr": "D'accord ! À partir de maintenant, on parle français.",
+       "it": "Certo! Da adesso parliamo in italiano.", "ja": "はい、これから日本語で話しましょう。",
+       "zh": "好的，从现在开始我们说中文。", "hi": "ठीक है, अब से हम हिंदी में बात करेंगे।"}
+_idioma: dict = {}  # a conversa em outro idioma: {"nome", "cod", "voz", "lang"}; vazio = português
+TRADUZ = "Traduza o texto para {idioma}. Responda SÓ com a tradução, natural, sem aspas nem explicação. " + DADO_DE_FORA
+ACOES = config.DATA_DIR / "assistente_acoes.jsonl"
+DESFAZ_S = 2 * 3600  # "desfaz" vale para o que ele fez nas últimas 2 horas
+DESFAZ = re.compile(r"^\s*(?:desfa\w*|desfaca)\b|\bvolt\w*\s+(?:atras\s+)?(?:o\s+)?que\s+(?:voce\s+)?(?:acabou\s+de\s+)?fez\b|"
+                    r"\bvolt\w*\s+atras\b|\bpasso\s+atras\b|\bvolt\w*\s+(?:pr[oa]|para)\s+(?:o\s+|a\s+)?(?:que|como)\s+(?:estava|tava)\b|"
+                    r"\b(?:como|o\s+que)\s+(?:estava|tava)\s+antes\b")
+
+
+def _registra(tipo: str, resumo: str, desfazer: dict | None = None) -> None:
+    """O que ele fez, em uma linha (sem a conversa): a lista da página e o "Forja, desfaz"."""
+    item = {"id": uuid.uuid4().hex[:10], "t": time.time(), "tipo": tipo, "resumo": resumo[:200], "desfazer": desfazer,
+            "desfeito": False}
+    try:
+        ACOES.parent.mkdir(parents=True, exist_ok=True)
+        with ACOES.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        linhas = ACOES.read_text("utf-8").splitlines()
+        if len(linhas) > 400:
+            ACOES.write_text("\n".join(linhas[-300:]) + "\n", "utf-8")
+    except OSError as e:
+        print(f"Forja: voz: registro de ações falhou: {e}", flush=True)
+
+
+def acoes(n: int = 40) -> list[dict]:
+    try:
+        itens = [json.loads(l) for l in ACOES.read_text("utf-8").splitlines() if l.strip()]
+    except (OSError, ValueError):
+        return []
+    return [{**x, "pode_desfazer": bool(x.get("desfazer")) and not x.get("desfeito") and time.time() - x["t"] < DESFAZ_S}
+            for x in reversed(itens[-n:])]
+
+
+async def _pc(acao: str, arg: str) -> str:
+    """Ação do PC com o estado de antes guardado: volume, mudo e saída de som têm desfazer."""
+    desfazer = None
+    try:
+        if acao in ("volume", "mudo"):
+            vol, mudo = (await asyncio.to_thread(pc.audio, "estado")).split(";")
+            desfazer = {"volume": vol, "mudo": mudo}
+        elif acao == "saida":
+            desfazer = {"saida": next((s["id"] for s in await asyncio.to_thread(pc.saidas) if s["padrao"]), None)}
+    except Exception as e:  # sem o estado de antes, faz assim mesmo (só não dá para desfazer)
+        print(f"Forja: voz: estado antes de {acao}: {e.__class__.__name__}", flush=True)
+    dito = await asyncio.to_thread(pc.faz, acao, arg)
+    if not dito.startswith(("Não ", "Isso ", "Eu não")):
+        _registra("pc", dito.rstrip("."), desfazer)
+    return dito
+
+
+async def _desfaz(item_id: str = "") -> str:
+    """Desfaz a última ação que tem desfazer (ou a escolhida na página): volume, mudo, saída de som, lembrete, nota,
+    memória, card, acompanhamento e evento da agenda. E-mail enviado, aprovação e programa fechado não voltam."""
+    from . import board, conhecimento, google_conta, memory, web_voz
+    alvo = next((x for x in acoes(200) if x["pode_desfazer"] and (not item_id or x["id"] == item_id)), None)
+    if not alvo:
+        fala("Não tem nada recente que eu consiga desfazer.")
+        return "(nada para desfazer)"
+    d = alvo["desfazer"]
+    try:
+        if "volume" in d:
+            await asyncio.to_thread(pc.audio, "volume", d["volume"])
+            if d.get("mudo") == "1":
+                await asyncio.to_thread(pc.audio, "mudo", "1")
+        if d.get("saida"):
+            await asyncio.to_thread(pc.audio, "saida", d["saida"])
+        if d.get("lembrete"):
+            lembretes.apagar({d["lembrete"]})
+        if d.get("nota"):
+            conhecimento.apagar_notas({d["nota"]})
+        if d.get("memoria"):
+            memory.personal_delete([d["memoria"]])
+        if d.get("card"):
+            await asyncio.to_thread(board.apagar, d["card"])
+        if d.get("acompanhar"):
+            web_voz.apagar({d["acompanhar"]})
+        if d.get("evento"):
+            await asyncio.to_thread(google_conta.apagar_evento, d["evento"])
+    except Exception as e:
+        fala(f"Não consegui desfazer: {e}")
+        return "(desfazer falhou)"
+    linhas = []
+    for l in ACOES.read_text("utf-8").splitlines():
+        x = json.loads(l)
+        linhas.append(json.dumps({**x, "desfeito": True} if x["id"] == alvo["id"] else x, ensure_ascii=False))
+    ACOES.write_text("\n".join(linhas) + "\n", "utf-8")
+    fala(f"Desfeito: {alvo['resumo']}.")
+    return "(desfeito)"
+
+
+async def _idioma_voz(nome: str, d: dict, spec: dict, slot) -> str:
+    """"Traduz isso pro inglês" (fala a tradução com voz nativa) e "vamos conversar em inglês" (a conversa toda muda:
+    Whisper, voz e o modelo responde no idioma, corrigindo de leve)."""
+    idioma = _sem_acento(str(d.get("idioma") or "")).strip()
+    cod, voz, lang = IDIOMAS.get(idioma, ("", "", ""))
+    if nome == "idioma":
+        if not cod:  # português (ou um que ele não fala): volta ao normal
+            _idioma.clear()
+            _manda("idioma", stt="pt")
+            _conversa_chat.clear()
+            fala("Pronto, voltamos para o português.")
+            return "(idioma: português)"
+        _idioma.update(nome=str(d.get("idioma")), cod=cod, voz=voz, lang=lang)
+        _manda("idioma", stt="")  # o Whisper detecta: o "Forja" no meio do inglês sai certo
+        _conversa_chat.clear()
+        fala(OLA.get(cod, f"Ok, {d.get('idioma')}."), voz, lang)
+        return f"(idioma: {cod})"
+    texto = str(d.get("texto") or "").strip()
+    if not texto:  # "traduz isso": a última coisa que ele disse
+        texto = next((x["texto"] for x in reversed(_transcricao) if x["quem"] == "forja"), "")
+    if not texto:
+        fala("Traduzir o quê?")
+        return "(traduzir: sem texto)"
+    traducao = await _gera(spec, slot, TRADUZ.format(idioma=d.get("idioma") or "inglês"), _dados([texto]), 600)
+    fala(traducao, voz, lang)
+    return "(traduzido)"
+
+
 def _itens_ditos(itens: list[dict]) -> str:
     return "; ".join(f"{lembretes.dito(datetime.fromisoformat(x['quando']))}, {x['texto']}" for x in itens)
 
@@ -2565,7 +2734,8 @@ async def _lembrete(tipo: str, dado) -> None:
     """"Me lembre de X às 14h" (criar), sem horário (pergunta "Pra quando?"), "quais meus lembretes", "cancela o da louça"."""
     if tipo == "criar":
         alvo, texto = dado
-        lembretes.criar(alvo, texto)
+        item = lembretes.criar(alvo, texto)
+        _registra("lembrete", f"Lembrete {lembretes.dito(alvo)}", {"lembrete": item["id"]})
         fala(f"Combinado, {lembretes.dito(alvo)}: {texto}." if texto else f"Combinado, te chamo {lembretes.dito(alvo)}.")
     elif tipo == "pergunta":
         _pendente.clear()
@@ -2638,12 +2808,15 @@ async def _atende(ouviu: dict) -> None:
         if tipo not in ("trocar_modelo", "qual_modelo"):  # "use o modelo X" sozinho é trocar o do assistente
             sem_modelo, modelo = modelo_dito(comando)
             tipo, pedido = rota(sem_modelo)
+        if tipo == "chat" and DESFAZ.search(_sem_acento(comando)):
+            await _desfaz()
+            return
         if tipo == "chat" and (lem := lembretes.entende(comando)):
             await _lembrete(*lem)
             return
         if tipo == "chat" and (acao := pc.entende(comando)) and await asyncio.to_thread(pc.certeza, *acao):
             print(f"Forja: voz: ação do PC: {acao[0]}", flush=True)  # sem o argumento: pode ser nome de arquivo
-            fala(await asyncio.to_thread(pc.faz, *acao))
+            fala(await _pc(*acao))
             return
         if tipo == "chat" and CITA_FORJA.search(_sem_acento(comando)) and not SABER.search(_sem_acento(comando)):
             # cita o Forja e nenhuma regra pegou (o Whisper ouviu torto, ou jeito novo de pedir): o modelo decide

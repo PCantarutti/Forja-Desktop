@@ -59,7 +59,7 @@ public static class ForjaAudio {
 
   static int Atual() { float v; Vol().GetMasterVolumeLevelScalar(out v); return (int)Math.Round(v * 100); }
 
-  /// volume N | mais N | mudo 1/0 | lista | saida <id>. Devolve o volume, ou a lista "id\tnome\tpadrão" por linha.
+  /// volume N | mais N | mudo 1/0 | estado | lista | saida <id>. Devolve o volume, ou a lista "id\tnome\tpadrão" por linha.
   public static string Run(string[] a) {
     Guid ctx = Guid.Empty;
     switch (a[0]) {
@@ -73,6 +73,9 @@ public static class ForjaAudio {
       case "mudo":
         Vol().SetMute(a[1] == "1", ref ctx);
         return Atual().ToString();
+      case "estado":  // "volume;mudo", sem mexer em nada (o "mais 0" tirava o mudo): o desfazer guarda isto
+        bool m; Vol().GetMute(out m);
+        return Atual() + ";" + (m ? "1" : "0");
       case "lista":
         IMMDeviceCollection c; En().EnumAudioEndpoints(0, 1, out c);  // saída, só os ativos
         IMMDevice padrao; En().GetDefaultAudioEndpoint(0, 1, out padrao);

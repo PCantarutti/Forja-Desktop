@@ -1369,6 +1369,13 @@ def assistente_esquecer():
     return assistente.esquecer()
 
 
+@app.post("/api/assistente/desfazer")
+async def assistente_desfazer(body: dict | None = None):
+    """O "Forja, desfaz" pela página: a ação escolhida (ou a última que dá para desfazer)."""
+    await assistente._desfaz(str((body or {}).get("id") or ""))
+    return {"acoes": assistente.acoes(30)}
+
+
 @app.post("/api/assistente/tela")
 def assistente_tela(body: dict):
     """A conversa aberta no PC: "Forja, lê essa resposta" lê a última resposta dela."""
