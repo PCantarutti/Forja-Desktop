@@ -139,9 +139,9 @@ class Boca:
         return "forja" in re.sub(r"[^a-z]", "", normaliza(self.atual))
 
     def cala(self) -> None:
-        import sounddevice as sd
+        # só marca: quem para é o _toca, no próximo bloco. sd.stop() daqui (thread dos pedidos) com o _toca no meio do
+        # sd.play derrubava o processo com access violation dentro do PortAudio (visto num "para" no meio da resposta)
         self.geracao += 1
-        sd.stop()
 
     def _sintetiza(self) -> None:
         while True:
@@ -157,6 +157,7 @@ class Boca:
                 self.textos.task_done()
 
     def _toca(self) -> None:
+        import numpy as np
         import sounddevice as sd
         while True:
             g, amostras, sr, curto, texto = self.audios.get()
@@ -164,8 +165,13 @@ class Boca:
                 if not curto:
                     diz("ESTADO", "falando")
                 self.atual = texto
-                sd.play(amostras, sr)
-                sd.wait()
+                bloco = sr // 10  # 0,1 s: o tanto que o "cala" demora para valer
+                with sd.OutputStream(samplerate=sr, channels=1 if amostras.ndim == 1 else amostras.shape[1],
+                                     dtype="float32") as saida:
+                    for i in range(0, len(amostras), bloco):
+                        if g != self.geracao:
+                            break
+                        saida.write(np.ascontiguousarray(amostras[i:i + bloco], dtype=np.float32))
                 self.atual = ""
             self.audios.task_done()
             if self.textos.unfinished_tasks == 0 and self.audios.unfinished_tasks == 0:

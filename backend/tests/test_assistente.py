@@ -372,3 +372,38 @@ def test_nome_ouvido_mas_fora_da_transcricao():
     assert sem_quase_nome("Porja abre o chat") == "abre o chat"
     assert sem_quase_nome("que horas são?") == "que horas são?"
     assert sem_quase_nome("Forja.") == ""
+
+
+def test_boca_cala_sem_mexer_no_audio_de_outra_thread(monkeypatch):
+    # sd.stop() da thread dos pedidos com o _toca no meio do sd.play derrubava o ouvido (access violation no PortAudio):
+    # o "cala" só marca, e o _toca para sozinho no próximo bloco de 0,1 s
+    import sys, threading, queue, time, types
+    from app import assistente_ouvido as o
+
+    class Amostras(list):  # o backend não tem numpy (ele vive no venv do assistente): o bastante para o _toca
+        ndim = 1
+    escritos, tocando = [], threading.Event()
+
+    class Saida:
+        def __init__(self, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def write(self, x):
+            escritos.append(len(x))
+            tocando.set()
+            time.sleep(0.01)
+    falso = types.SimpleNamespace(OutputStream=Saida, stop=lambda: (_ for _ in ()).throw(AssertionError("sd.stop")))
+    monkeypatch.setitem(sys.modules, "sounddevice", falso)
+    monkeypatch.setitem(sys.modules, "numpy", types.SimpleNamespace(float32=None, ascontiguousarray=lambda x, dtype=None: x))
+    monkeypatch.setattr(o, "diz", lambda *a: None)
+    b = o.Boca.__new__(o.Boca)
+    b.textos, b.audios, b.falando, b.fim_fala, b.geracao, b.atual = queue.Queue(), queue.Queue(), threading.Event(), 0.0, 0, ""
+    threading.Thread(target=b._toca, daemon=True).start()
+    b.falando.set()
+    b.audios.put((0, Amostras([0.0] * 24000 * 10), 24000, False, "uma resposta longa"))  # 10 s = 100 blocos
+    assert tocando.wait(2)
+    b.cala()
+    prazo = time.time() + 5
+    while b.audios.unfinished_tasks and time.time() < prazo:  # sem join(): thread morta não trava a bateria
+        time.sleep(0.02)
+    assert 0 < len(escritos) < 100 and not b.falando.is_set()
