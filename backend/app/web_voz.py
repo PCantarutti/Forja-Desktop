@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -39,17 +40,33 @@ def _de(dom: str, lista: set[str]) -> bool:
     return any(dom == d or dom.endswith("." + d) for d in lista)
 
 
+def _nome(texto: str) -> str:
+    """"Itaú Unibanco" -> "itauunibanco": para comparar o pedido com o nome do domínio."""
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode())
+
+
 def site_oficial(alvo: str) -> str | None:
-    """"itau.com.br" vai direto; "o site do Itaú" passa pela busca e fica com o primeiro resultado que não é rede
-    social, enciclopédia nem reclamação. Devolve a URL da raiz do site."""
+    """"itau.com.br" vai direto; "o site do Itaú" passa pela busca. Vence o resultado cujo domínio tem o nome pedido
+    (itau.com.br para "Itaú"), mesmo que esteja em NAO_OFICIAL: pedir "o YouTube" é querer o youtube.com, e sem isso
+    ele caía no about.youtube. Sem nenhum assim, fica o primeiro que não é rede social, enciclopédia nem reclamação.
+    Devolve a URL da raiz do site."""
     alvo = alvo.strip().strip(".")
     if m := DOMINIO.match(alvo.replace(" ", "")):
         return f"https://{m[1].lower()}{m[2] or '/'}"
+    nome = _nome(alvo)
     for q in (f"{alvo} site oficial", alvo):  # a busca às vezes volta vazia: uma segunda, com outras palavras
+        reserva = None
         for r in web.buscar(q, 8):
             dom = _dominio(r.get("url", ""))
-            if dom and not _de(dom, NAO_OFICIAL):
-                return f"https://{urlparse(r['url']).hostname}/"
+            if not dom:
+                continue
+            raiz = f"https://{urlparse(r['url']).hostname}/"
+            if nome and _nome(dom.split(".")[0]) == nome:
+                return raiz
+            if not reserva and not _de(dom, NAO_OFICIAL):
+                reserva = raiz
+        if reserva:
+            return reserva
     return None
 
 

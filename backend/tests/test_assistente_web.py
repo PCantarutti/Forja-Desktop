@@ -22,6 +22,16 @@ def test_site_oficial(monkeypatch):
     assert web_voz.site_oficial("g1.globo.com") == "https://g1.globo.com/"
 
 
+def test_site_oficial_de_rede_social(monkeypatch):
+    # "abre o youtube": o youtube.com está em NAO_OFICIAL e o about.youtube vinha antes dele
+    monkeypatch.setattr(web_voz.web, "buscar", lambda q, n=6: [
+        {"url": "https://about.youtube/", "title": "Sobre o YouTube"},
+        {"url": "https://pt.wikipedia.org/wiki/YouTube", "title": "YouTube – Wikipédia"},
+        {"url": "https://www.youtube.com/", "title": "YouTube"}])
+    assert web_voz.site_oficial("YouTube") == "https://www.youtube.com/"
+    assert web_voz.site_oficial("o canal do fulano") == "https://about.youtube/"  # sem nome casando: o primeiro que vale
+
+
 def test_para_numero():
     assert web_voz.para_numero("R$ 3.499,90") == 3499.9
     assert web_voz.para_numero("4 mil") == 4000
