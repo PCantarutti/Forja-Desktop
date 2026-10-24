@@ -582,6 +582,8 @@ def test_desligar_o_pensamento_manda_todos_os_interruptores(monkeypatch):
     _lm(monkeypatch)
     sistema = [{"role": "system", "content": "regras"}]
     assert llm._sem_pensar("oll", {}, sistema) == ({"think": False}, sistema)
+    # gpt-oss não desliga (o Ollama ignora think=false): vai o mínimo
+    assert llm._sem_pensar("oll", {}, sistema, "gpt-oss:120b") == ({"think": "low"}, sistema)
 
     corpo, msgs = llm._sem_pensar("lm", {}, sistema)
     assert corpo == {"chat_template_kwargs": {"enable_thinking": False},
@@ -600,6 +602,22 @@ def test_chamada_mecanica_nao_pensa(monkeypatch):
     assert chamadas[0]["chat_template_kwargs"] == {"enable_thinking": False}
     assert ("content", "resposta 1") in eventos
     assert not [v for k, v in eventos if k == "reasoning"]
+
+
+def test_chamada_mecanica_no_gpt_oss_tem_folga_para_pensar(monkeypatch):
+    """O gpt-oss não desliga o raciocínio: com num_predict 80 a resposta do classificador saía vazia."""
+    monkeypatch.setitem(config.PROVIDERS, "oll",
+                        {"id": "oll", "name": "O", "type": "ollama", "url": "http://x/v1", "api_key": ""})
+    monkeypatch.setattr(llm, "capabilities", _sem_capacidades)
+    monkeypatch.setattr(llm.db, "get_model_setting", lambda m: {})
+    chamadas: list = []
+    monkeypatch.setattr(llm, "_ollama_stream", _impl_falso(chamadas, 0))
+    _consome(llm.chat_stream("oll", "gpt-oss:120b", [{"role": "system", "content": "s"}], None, 2048,
+                             think=False, max_tokens=80))
+    _consome(llm.chat_stream("oll", "gemma4:31b", [{"role": "system", "content": "s"}], None, 2048,
+                             think=False, max_tokens=80))
+    assert chamadas[0]["think"] == "low" and chamadas[0]["options"]["num_predict"] == 80 + llm.PENSAMENTO_MINIMO
+    assert chamadas[1]["think"] is False and chamadas[1]["options"]["num_predict"] == 80
 
 
 def test_uma_requisicao_por_passo(monkeypatch):

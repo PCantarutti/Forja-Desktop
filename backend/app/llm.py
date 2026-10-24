@@ -240,6 +240,10 @@ def _raise_for(provider: str, status: int, body: bytes, cabecalhos=None) -> None
 # Esforço -> raciocínio do modelo. Só mandamos quando o modelo entende, senão o servidor recusa.
 EFFORT_LEVEL = {"baixo": "low", "medio": "medium", "alto": "high", "maximo": "high", "extremo": "low"}
 REASONING_MODELS = re.compile(r"gpt-oss|gpt-5|^o[1-4](-|$)|deepseek-r|grok|magistral", re.I)
+# raciocínio que não desliga: o Ollama ignora `think: false` no gpt-oss (só aceita low/medium/high). Com o teto curto
+# de uma chamada mecânica (o classificador do assistente pede 80 tokens), o pensamento comia tudo e a resposta saía vazia
+SEM_DESLIGAR = re.compile(r"gpt-oss", re.I)
+PENSAMENTO_MINIMO = 1024  # folga no teto para o raciocínio "low" desses modelos
 
 
 async def _reasoning(provider: str, model: str, effort: str | None, body: dict, messages: list[dict],
@@ -363,14 +367,14 @@ def _budget(effort: str | None, mult: float = 1.0) -> int:
     return int(base * mult * config.REASONING_BUDGET_MULT) if base else 0
 
 
-def _sem_pensar(provider: str, extra: dict, messages: list[dict]) -> tuple[dict, list[dict]]:
+def _sem_pensar(provider: str, extra: dict, messages: list[dict], model: str = "") -> tuple[dict, list[dict]]:
     """Mesma chamada com o pensamento desligado. Não existe um interruptor só: cada família usa o seu
     (`think` no Ollama, `enable_thinking` no template do Qwen3.6/GLM, `reasoning_budget_tokens` no
     llama-server, `/no_think` no texto do Qwen3). Mandamos todos: o que não for entendido é ignorado
     sem erro, e assim isto vale para o modelo que você trocar amanhã, não só para o de hoje."""
     saida, msgs = dict(extra), list(messages)
     if spec(provider)["type"] == "ollama":
-        saida["think"] = False
+        saida["think"] = "low" if SEM_DESLIGAR.search(model) else False  # o mínimo, onde desligar não existe
         return saida, msgs
     saida["chat_template_kwargs"] = {**saida.get("chat_template_kwargs", {}), "enable_thinking": False}
     saida["reasoning_budget_tokens"] = saida["reasoning_budget"] = 0
@@ -408,7 +412,9 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
     await _reasoning(provider, model, effort, extra, messages, budget_mult)
     _inference(provider, model, extra)  # o ajuste do modelo vale mais que o esforço da conversa
     if think is False:  # chamada mecânica (compactar, titular, commit): raciocinar aqui é desperdício
-        extra, messages = _sem_pensar(provider, extra, messages)
+        extra, messages = _sem_pensar(provider, extra, messages, model)
+        if max_tokens and extra.get("think") == "low":
+            max_tokens += PENSAMENTO_MINIMO  # o raciocínio que não desliga não pode comer a resposta
     if max_tokens:  # teto de quem chama (o que sobra da janela); o ajuste do modelo só pode baixar
         if spec(provider)["type"] == "ollama":
             o = extra.setdefault("options", {})
