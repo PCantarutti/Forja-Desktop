@@ -68,6 +68,17 @@ def test_ofertas_descartam_loja_inventada(monkeypatch):
     assert asyncio.run(assistente._ofertas("PS5", SPEC, None)) == [("kabum.com.br", 3499.0), ("pichau.com.br", 3599.0)]
 
 
+def test_ofertas_descartam_preco_de_acessorio(monkeypatch):
+    lojas = ["kabum.com.br", "olx.com.br", "lista.mercadolivre.com.br"]
+    monkeypatch.setattr(web_voz, "candidatos_preco", lambda p: [{"loja": l, "url": "", "titulo": "", "linhas": ["R$ 1"]}
+                                                              for l in lojas])
+
+    async def gera(spec, slot, sistema, usuario, max_tokens=400):  # o controle de 499 lido como o console
+        return '[{"loja":"kabum.com.br","preco":499},{"loja":"olx.com.br","preco":4015},{"loja":"lista.mercadolivre.com.br","preco":5499}]'
+    monkeypatch.setattr(assistente, "_gera", gera)
+    assert asyncio.run(assistente._ofertas("PS5", SPEC, None)) == [("olx.com.br", 4015.0), ("lista.mercadolivre.com.br", 5499.0)]
+
+
 def test_abrir_site(monkeypatch):
     falas = _falas(monkeypatch)
     monkeypatch.setattr(web_voz, "site_oficial", lambda alvo: "https://g1.globo.com/")

@@ -160,3 +160,10 @@ def test_navegador_do_forja_nao_vira_chat_no_forja():
     s = assistente._sem_acento("abre o youtube no navegador do Forja")
     assert assistente.CITA_FORJA.search(s) and assistente.SABER.search(s)   # vai para o _chat, que abre o site
     assert assistente.PISTA.search(s)
+
+
+def test_noticias_gerais_vao_com_as_manchetes():
+    casa = lambda t: bool(assistente.NOTICIAS_GERAIS.search(assistente._sem_acento(t)))
+    assert casa("quais são as notícias de hoje?") and casa("me dá as principais notícias")
+    assert casa("quais as manchetes do dia?") and casa("tem notícias?")
+    assert not casa("quais as notícias do Flamengo?") and not casa("notícias sobre a Petrobras")
