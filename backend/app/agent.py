@@ -615,6 +615,8 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
         rules.append("- Leia o arquivo antes de editar (a ferramenta recusa arquivo não lido ou que mudou depois da "
                      "leitura). Use edit_file para mudanças pontuais (old_str exato e único, sem números de linha) "
                      "e write_file para arquivos novos ou reescritas completas.")
+        rules.append("- Pediram programa, script ou código? Crie os arquivos na pasta da conversa com write_file "
+                     "(e rode, se der). Não entregue o código só como texto na resposta.")
     if "read_file" in names:
         rules.append("- Use read_file, não comandos de shell (cat, type, Get-Content), para ler arquivos. Arquivo "
                      "grande: continue com start_line.")
@@ -824,7 +826,9 @@ def environment_block(names: list[str]) -> list[str]:
                  f"{info.get('shell')}." + (f" Instalado: {vers}." if vers else ""))
     faltando = [k for k, v in (info.get("versions") or {}).items() if not v]
     if faltando:
-        lines.append(f"- Não encontrado no PATH: {', '.join(faltando)}. Não tente usar; avise o usuário.")
+        # "Não tente usar" fazia o modelo desistir e colar o código no chat (sondagem falha às vezes no boot).
+        lines.append(f"- Não achado no PATH na última sondagem: {', '.join(faltando)}. Se a tarefa precisar, confira "
+                     "com run_command; se faltar mesmo, instale (ex.: winget) ou diga como. Não desista da tarefa por isso.")
     if str(info.get("shell", "")).lower() in ("powershell", "pwsh"):
         lines.append("- Sintaxe PowerShell: encadeie comandos com ';' (não use '&&' nem '||'); variáveis são "
                      "$env:NOME; barras normais nos caminhos funcionam; executável por caminho entre aspas "

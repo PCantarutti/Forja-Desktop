@@ -16,6 +16,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 SYSTEM = platform.system()  # Windows | Linux | Darwin
@@ -101,16 +102,22 @@ def version(cmd: str) -> str | None:
 
 
 _INFO: dict | None = None
+_SONDADO = 0.0
 TOOLS = {"node": "node --version", "npm": "npm --version", "python": "python --version", "git": "git --version"}
 
 
 def info(force: bool = False) -> dict:
     """Sistema, shell e versões do que o agente costuma chamar. Cacheado: sondar custa ~1 s."""
-    global _INFO
+    global _INFO, _SONDADO
     if _INFO is None or force:
         _INFO = {"system": SYSTEM, "release": platform.release(), "machine": platform.machine(),
                  "shell": shell_name(), "home": str(Path.home()),
                  "versions": {k: version(v) for k, v in TOOLS.items()}}
+        _SONDADO = time.monotonic()
+    elif time.monotonic() - _SONDADO > 300 and None in _INFO["versions"].values():
+        # Falha no boot (timeout, PATH ainda chegando) não pode valer até fechar o app; nem sondar a cada passo.
+        _INFO["versions"].update({k: version(TOOLS[k]) for k, v in _INFO["versions"].items() if not v})
+        _SONDADO = time.monotonic()
     return _INFO
 
 
