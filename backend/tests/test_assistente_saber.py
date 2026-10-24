@@ -31,6 +31,21 @@ def test_indice_de_documentos(tmp_path, monkeypatch):
     assert conhecimento.busca("contrato", [str(tmp_path / "outra")]) == []      # pasta tirada da lista não vale
 
 
+def test_pergunta_sem_pista_que_esta_nos_documentos(tmp_path, monkeypatch):
+    # "quem é o síndico?" não tem palavra da PISTA: só o índice dos documentos leva ao classificador
+    monkeypatch.setattr(conhecimento.config, "DATA_DIR", tmp_path / "dados")
+    docs = tmp_path / "cofre"
+    docs.mkdir()
+    (docs / "Síndico e condomínio.md").write_text("O síndico é o Rogério Tavares, apto 802.", "utf-8")
+    conhecimento.atualiza([str(docs)])
+    monkeypatch.setattr(assistente, "ler", lambda: {**assistente.PADRAO, "pastas_documentos": [str(docs)]})
+    assert not assistente.PISTA.search(assistente._sem_acento("quem é o síndico do prédio?"))
+    assert asyncio.run(assistente._nos_documentos("quem é o síndico do prédio?"))
+    assert not asyncio.run(assistente._nos_documentos("qual a capital da Austrália?"))
+    monkeypatch.setattr(assistente, "ler", lambda: dict(assistente.PADRAO))       # sem pastas: nem consulta
+    assert not asyncio.run(assistente._nos_documentos("quem é o síndico do prédio?"))
+
+
 def test_notas(tmp_path, monkeypatch):
     monkeypatch.setattr(conhecimento, "NOTAS", tmp_path / "notas.json")
     falas = _falas(monkeypatch)
@@ -123,3 +138,25 @@ def test_historico_junta_conversas_e_commits(monkeypatch):
 def test_fala_sem_markdown():
     assert assistente._falavel("FALADO. O upload fica em **`backend/app/uploads.py`**, na função `salvar`.") == \
         "O upload fica em backend/app/uploads.py, na função salvar."
+
+
+def test_classificador_memoria_sem_texto_vira_pergunta(monkeypatch):
+    # "qual é o meu carro?" chegava ao classificador (casou com o diário) e voltava memoria sem texto: "O que eu guardo?"
+    from app import llm
+    respostas = []
+
+    async def stream(*a, **k):
+        yield "content", respostas.pop(0)
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    respostas.append('{"tipo":"memoria","acao":"consultar","assunto":"carro"}')
+    assert asyncio.run(assistente._classifica_acao(SPEC, None, "qual é o meu carro?")) is None
+    respostas.append('{"tipo":"memoria","acao":"guardar","assunto":"carro","texto":"O carro é um Onix"}')
+    assert asyncio.run(assistente._classifica_acao(SPEC, None, "lembra que meu carro é um Onix"))[0] == "memoria"
+    respostas.append('{"tipo":"memoria","acao":"esquecer","assunto":"carro"}')
+    assert asyncio.run(assistente._classifica_acao(SPEC, None, "esquece o carro"))[0] == "memoria"
+
+
+def test_navegador_do_forja_nao_vira_chat_no_forja():
+    s = assistente._sem_acento("abre o youtube no navegador do Forja")
+    assert assistente.CITA_FORJA.search(s) and assistente.SABER.search(s)   # vai para o _chat, que abre o site
+    assert assistente.PISTA.search(s)

@@ -114,15 +114,17 @@ def estado() -> dict:
     return dict(_estado)
 
 
-VAZIAS = {"quando", "qual", "quais", "onde", "como", "que", "meu", "minha", "meus", "minhas", "esta", "está", "tem",
+VAZIAS = {"quando", "quem", "qual", "quais", "onde", "como", "que", "meu", "minha", "meus", "minhas", "esta", "está", "tem",
           "tenho", "sobre", "para", "pra", "com", "uma", "um", "dos", "das", "nos", "nas", "foi", "ser", "sao", "são"}
 
 
-def busca(pergunta: str, pastas: list[str], n: int = 6) -> list[dict]:
-    """Os trechos que mais casam com a pergunta (nome do arquivo pesa mais), no máximo 2 por arquivo."""
+def busca(pergunta: str, pastas: list[str], n: int = 6, atualizar: bool = True) -> list[dict]:
+    """Os trechos que mais casam com a pergunta (nome do arquivo pesa mais), no máximo 2 por arquivo.
+    `atualizar=False` só consulta o índice como está (milissegundos): é a pista de toda pergunta falada."""
     if not pastas:
         return []
-    atualiza(pastas)
+    if atualizar:
+        atualiza(pastas)
     palavras = " ".join(w for w in re.findall(r"\w+", pergunta.lower()) if len(w) >= 3 and w not in VAZIAS)
     consulta = consulta_fts(palavras)
     if not consulta:

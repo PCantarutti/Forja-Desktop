@@ -1309,8 +1309,9 @@ PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w
                    r"respost\w*|mensagem|solicit\w*|neg\w*|traduz\w*|translat\w*|idioma|lingua|language|ingles|english|"
                    r"espanhol|spanish|frances|french|italiano|japones|chines|mandarim|portugu\w*|como\s+se\s+diz|como\s+(?:que\s+)?fala|"
                    r"desfa\w*|volta\s+o\s+que)\b")
-# pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente)
-SABER = re.compile(r"\b(?:card|board|onde\b.{0,40}\b(?:trata|faz|salva|guarda|fica|processa|esta|ta)\b|em\s+que\s+(?:arquivo|parte)|"
+# pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente).
+# "abre o g1 no navegador do Forja" também: sem isso virava "abrir um chat no Forja" e perguntava o modelo
+SABER = re.compile(r"\b(?:card|board|navegador|onde\b.{0,40}\b(?:trata|faz|salva|guarda|fica|processa|esta|ta)\b|em\s+que\s+(?:arquivo|parte)|"
                    r"qual\s+(?:e\s+)?a\s+parte|como\s+(?:esta|ta)\s+(?:o\s+)?(?:agente|trabalho)|aprov\w*|"
                    r"o\s+que\s+(?:o\s+agente|a\s+maestro|foi|rolou|\w+\s+fez)|o\s+que\s+(?:eu\s+)?fiz)\b")
 CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A quer. Responda SÓ um JSON numa linha.
@@ -1426,7 +1427,9 @@ async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | N
         return "agenda", d
     if d.get("tipo") == "resumo_dia":
         return "resumo_dia", d
-    if d.get("tipo") in ("documentos", "memoria", "nota", "card", "codigo", "historico", "web", "acompanhar"):
+    if d.get("tipo") == "memoria" and (d.get("acao") == "esquecer" or str(d.get("texto") or "").strip()):
+        return "memoria", d  # "qual é o meu carro?" não é guardar nem esquecer: a resposta livre já tem as memórias
+    if d.get("tipo") in ("documentos", "nota", "card", "codigo", "historico", "web", "acompanhar"):
         return d["tipo"], d
     if d.get("tipo") in ("agente", "ditar", "ler_resposta"):
         return "forja_" + d["tipo"], d
@@ -1518,6 +1521,13 @@ async def _prepara_modelo() -> tuple[dict, object, dict | None]:
     return spec, (modelctl.slot_auxiliar() if modelctl.gerenciavel(spec) else None), emprestado  # slot fixo: o cache
 
 
+async def _nos_documentos(texto: str) -> bool:
+    """A pergunta casa com algo nas pastas de documentos: também é pista para o classificador ("quem é o síndico?" não
+    tem palavra da PISTA, mas está nas notas). Só o índice como está, sem varrer as pastas."""
+    pastas = ler()["pastas_documentos"]
+    return bool(pastas) and bool(await asyncio.to_thread(_conhecimento().busca, texto, pastas, 1, False))
+
+
 async def _chat(texto: str) -> None:
     """Pergunta comum: só responde falando. Não cria conversa nem mexe na tela: o modelo é chamado direto (o mesmo do
     último turno), com a busca na web como ferramenta, e o histórico fica em memória enquanto a conversa falada durar.
@@ -1527,7 +1537,8 @@ async def _chat(texto: str) -> None:
     from datetime import datetime
     spec, slot, emprestado = await _prepara_modelo()
     hist = _conversa_chat.setdefault("msgs", [])
-    if PISTA.search(_sem_acento(texto)) and (pedido := await _classifica_acao(spec, slot, texto)):
+    if ((PISTA.search(_sem_acento(texto)) or await _nos_documentos(texto))
+            and (pedido := await _classifica_acao(spec, slot, texto))):
         feito = await _executa(*pedido, spec=spec, slot=slot)
         hist += [{"role": "user", "content": texto}, {"role": "assistant", "content": feito}]
         if not emprestado or emprestado == modelo_assistente():
