@@ -3,7 +3,7 @@
 Três responsabilidades:
 
 1. Runtimes — baixa e descompacta os binários oficiais do GitHub em %APPDATA%\\Forja\\runtimes.
-   Nada vem no instalador: o usuário escolhe CPU, Vulkan (padrão, roda em qualquer GPU) ou CUDA.
+   Nada vem no instalador: o usuário escolhe CPU, Vulkan (padrão, roda em qualquer GPU), CUDA ou SYCL (Intel Arc).
 2. Modelos — varre as pastas configuradas por .gguf e guarda os parâmetros de carga de cada um.
 3. Servidor — sobe o `llama-server` com esses parâmetros. Ele fala OpenAI, então o resto do Forja
    (llm.py, agent.py) o usa como qualquer outro provedor, o `local`.
@@ -41,7 +41,7 @@ LOG_FILE = LOG_DIR / "llama-server.log"
 EXE = {"llama": ["llama-server"], "sd": ["sd-cli", "sd"], "ffmpeg": ["ffmpeg"]}
 # ffmpeg: só para ampliar vídeo (ampliar.py) — o sd.cpp não lê vídeo. Build LGPL "shared" do BtbN (~80 MB).
 REPO = {"llama": "ggml-org/llama.cpp", "sd": "leejet/stable-diffusion.cpp", "ffmpeg": "BtbN/FFmpeg-Builds"}
-BACKENDS = ("vulkan", "cpu", "cuda")
+BACKENDS = ("vulkan", "cpu", "cuda", "sycl")
 
 # Regex do asset por runtime/backend. `extra` é baixado junto (runtime do CUDA).
 ASSETS = {
@@ -49,6 +49,10 @@ ASSETS = {
         "cpu":    (r"^llama-b\d+-bin-win-cpu-x64\.zip$", None),
         "vulkan": (r"^llama-b\d+-bin-win-vulkan-x64\.zip$", None),
         "cuda":   (r"^llama-b\d+-bin-win-cuda-\d+\.\d+-x64\.zip$", r"^cudart-llama-bin-win-cuda-\d+\.\d+-x64\.zip$"),
+        # Intel Arc (oneAPI/Level Zero), com as DLLs do oneAPI no zip. Opcional ao lado do Vulkan: na B580
+        # (build 11829) gera 28% mais rápido com MoE parcialmente na CPU (Qwen3.6-35B-A3B, 50,7 x 39,6 t/s),
+        # mas modelo inteiro na GPU lê o prompt ~4x mais devagar (gemma-4-12b, 374 x 1476 t/s).
+        "sycl":   (r"^llama-b\d+-bin-win-sycl-x64\.zip$", None),
     },
     "sd": {
         "cpu":    (r"^sd-.*-bin-win-cpu-x64\.zip$", None),
@@ -510,7 +514,7 @@ def find_exe(kind: str) -> Path | None:
         exe = exe_em(kind, escolhido)
         if exe:
             return exe
-    for backend in ("cuda", "vulkan", "cpu"):
+    for backend in ("cuda", "vulkan", "sycl", "cpu"):  # SYCL só ganha em parte dos modelos: atrás do Vulkan
         exe = exe_em(kind, backend)
         if exe:
             return exe
@@ -518,7 +522,7 @@ def find_exe(kind: str) -> Path | None:
 
 
 def set_runtime(kind: str, backend: str) -> dict:
-    """Troca o motor sem reinstalar nada: CPU, Vulkan e CUDA convivem lado a lado no disco."""
+    """Troca o motor sem reinstalar nada: CPU, Vulkan, CUDA e SYCL convivem lado a lado no disco."""
     if kind == "comfy" or kind.startswith("tts_"):
         return runtimes()  # um pacote só (a marca da GPU / o PyTorch dela): não há o que trocar
     if kind not in EXE:

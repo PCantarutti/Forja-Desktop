@@ -292,7 +292,7 @@ function Runtime(props: { st: LocalState; kind: "llama" | "sd" | "ffmpeg" | "com
           : props.kind === "ffmpeg"
           ? "É o motor da ampliação de vídeo: separa os quadros, junta de volta com o áudio e interpola o movimento (~80 MB)."
           : `Vulkan roda em qualquer GPU (NVIDIA, AMD, Intel) e é o menor download. CUDA só para NVIDIA, e baixa
-        também o runtime da NVIDIA (~370 MB). CPU funciona em qualquer máquina, devagar.`}
+        também o runtime da NVIDIA (~370 MB). SYCL é para Intel Arc (~150 MB). CPU funciona em qualquer máquina, devagar.`}
       </p>
       <div className="mt-2.5 flex items-center gap-2">
         <select className={`${campo} w-auto ${info.backends.length < 2 ? "hidden" : ""}`} value={backend} onChange={(e) => setBackend(e.target.value)}>

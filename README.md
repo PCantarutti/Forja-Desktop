@@ -383,12 +383,13 @@ servidor separado. Ele usa os binários oficiais do [llama.cpp](https://github.c
 |---|---|---|
 | `vulkan` | ~30 MB | Padrão. Roda em NVIDIA, AMD e Intel |
 | `cuda` | ~240 MB + ~370 MB do runtime da NVIDIA | Só NVIDIA; costuma ser o mais rápido |
+| `sycl` | ~150 MB (só chat) | Intel Arc. Na B580 gera ~28% mais rápido com MoE parcialmente na CPU; com o modelo inteiro na GPU o Vulkan ganha |
 | `cpu` | ~18 MB | Sem GPU |
 
-Os binários ficam em `%APPDATA%\Forja\runtimes` e **convivem lado a lado**: dá para ter CPU, Vulkan e CUDA ao mesmo
+Os binários ficam em `%APPDATA%\Forja\runtimes` e **convivem lado a lado**: dá para ter CPU, Vulkan, CUDA e SYCL ao mesmo
 tempo e trocar em **Configurações › Runtime** (ou no seletor do próprio painel) sem baixar nada de novo — útil para
 comparar GPU e CPU, ou quando você troca a placa de vídeo. Sem escolha manual, vale o melhor instalado
-(cuda › vulkan › cpu). A tela mostra a versão de cada um (`build 11064`) e atualiza pelo mesmo botão.
+(cuda › vulkan › sycl › cpu). A tela mostra a versão de cada um (`build 11064`) e atualiza pelo mesmo botão.
 
 **Configurações › Hardware** mostra o processador, RAM e VRAM (total e livre) e as GPUs que o motor atual enxerga,
 cada uma com um interruptor — desligar tira a placa do próximo carregamento (`--device` do llama.cpp). Ali também

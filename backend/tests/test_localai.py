@@ -195,7 +195,8 @@ def test_asset_do_runtime_bate_com_os_nomes_do_github():
     nomes = ["llama-b11064-bin-win-cpu-x64.zip", "llama-b11064-bin-win-vulkan-x64.zip",
              "llama-b11064-bin-win-cuda-12.4-x64.zip", "cudart-llama-bin-win-cuda-12.4-x64.zip",
              "llama-b11064-bin-win-cpu-arm64.zip", "sd-master-17860c0-bin-win-vulkan-x64.zip",
-             "sd-master-17860c0-bin-win-cuda12-x64.zip", "cudart-sd-bin-win-cu12-x64.zip"]
+             "sd-master-17860c0-bin-win-cuda12-x64.zip", "cudart-sd-bin-win-cu12-x64.zip",
+             "llama-b11064-bin-win-sycl-x64.zip", "llama-b11064-bin-ubuntu-sycl-fp16-x64.tar.gz"]
     import re
 
     def casa(kind, backend, idx):
@@ -208,6 +209,8 @@ def test_asset_do_runtime_bate_com_os_nomes_do_github():
     assert casa("llama", "cuda", 1) == ["cudart-llama-bin-win-cuda-12.4-x64.zip"]
     assert casa("sd", "vulkan", 0) == ["sd-master-17860c0-bin-win-vulkan-x64.zip"]
     assert casa("sd", "cuda", 1) == ["cudart-sd-bin-win-cu12-x64.zip"]
+    assert casa("llama", "sycl", 0) == ["llama-b11064-bin-win-sycl-x64.zip"]  # não pega o do Ubuntu
+    assert "sycl" not in localai.ASSETS["sd"]  # o sd.cpp não publica build SYCL para Windows
 
 
 # ---------------------------------------------------------------- imagem

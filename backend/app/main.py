@@ -721,7 +721,7 @@ async def stop_server(name: str):
 
 class RuntimeBody(BaseModel):
     kind: str = "llama"      # llama | sd | ffmpeg | comfy
-    backend: str = "vulkan"  # vulkan | cpu | cuda
+    backend: str = "vulkan"  # vulkan | cpu | cuda | sycl
 
 
 class LoadBody(BaseModel):

@@ -108,7 +108,7 @@ function ItemMenu(props: {
 }
 
 type Llama = { chosen?: string; backend?: string; available?: { backend: string; version?: string }[] };
-const NOME_RUNTIME: Record<string, string> = { vulkan: "Vulkan", cuda: "CUDA", cpu: "CPU", rocm: "ROCm", metal: "Metal" };
+const NOME_RUNTIME: Record<string, string> = { vulkan: "Vulkan", cuda: "CUDA", sycl: "SYCL", cpu: "CPU", rocm: "ROCm", metal: "Metal" };
 
 /** O motor do llama.cpp em uso (o mesmo de Configurações › Runtime), para o pé da lista. */
 function useRuntime(): { nome: string; ok: boolean; titulo: string } | null {
