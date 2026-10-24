@@ -627,3 +627,42 @@ def test_uma_requisicao_por_passo(monkeypatch):
     monkeypatch.setattr(llm, "_openai_stream", _impl_falso(chamadas, 40_000))
     eventos = _consome(llm.chat_stream("lm", "qwen", [], None, 8192, "medio"))
     assert len(chamadas) == 1 and ("content", "resposta 1") in eventos
+
+
+@pytest.mark.parametrize("kind", ["lmstudio", "ollama"])
+def test_max_tokens_acima_do_teto_do_modelo_repete_com_o_teto(monkeypatch, kind):
+    """nemotron-3-ultra no Ollama Cloud: metade da janela (131072) passa do teto de saída (65536) e volta 400."""
+    _lm(monkeypatch, kind)
+    monkeypatch.setattr(llm, "TETO_SAIDA", {})
+    monkeypatch.setattr(llm, "_reasoning", lambda *a, **k: asyncio.sleep(0))
+    monkeypatch.setattr(llm, "_inference", lambda *a, **k: None)
+    chamadas: list = []
+
+    async def impl(provider, model, messages, tools, num_ctx, extra):
+        n = extra["max_tokens"] if kind != "ollama" else extra["options"]["num_predict"]
+        chamadas.append(n)
+        if n > 65536:
+            raise llm.LLMError('lm respondeu HTTP 400: {"error":"max_tokens (131072) exceeds model\'s maximum '
+                               'output tokens (65536) for model nemotron-3-ultra"}', 400)
+        yield "content", "ok"
+        yield "done", {"tool_calls": []}
+    monkeypatch.setattr(llm, "_ollama_stream" if kind == "ollama" else "_openai_stream", impl)
+    assert ("content", "ok") in _consome(llm.chat_stream("lm", "nemo", [], None, 8192, max_tokens=131072))
+    assert chamadas == [131072, 65536]
+    _consome(llm.chat_stream("lm", "nemo", [], None, 8192, max_tokens=131072))
+    assert chamadas[-1] == 65536 and len(chamadas) == 3  # o teto fica lembrado: sem 400 de novo
+
+
+def test_think_no_texto_vira_raciocinio_durante_o_stream(monkeypatch):
+    """Modelo que pensa dentro do texto: a tela mostrava o <think> como resposta até o fim da geração."""
+    from app.parsing import ThinkStream
+
+    def roda(pedacos):
+        t = ThinkStream()
+        out = [p for s in pedacos for p in t.feed(s)] + t.fim()
+        junta = {k: "".join(v for kk, v in out if kk == k) for k in ("reasoning", "content")}
+        return junta["reasoning"], junta["content"]
+    assert roda(["\n<th", "ink>pla", "no</thi", "nk>\n\nResposta"]) == ("plano", "Resposta")
+    assert roda(["<think>só pensou"]) == ("só pensou", "")                     # sem fechar
+    assert roda(["Use a tag ", "<think> no prompt"]) == ("", "Use a tag <think> no prompt")  # no meio: conteúdo
+    assert roda(["<"]) == ("", "<")

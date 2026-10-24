@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import httpx
 
 from . import config, db, localai
+from .parsing import ThinkStream
 
 TIMEOUT = httpx.Timeout(connect=10, read=600, write=60, pool=10)
 
@@ -309,6 +310,25 @@ def _inference(provider: str, model: str, extra: dict) -> None:
 ULTIMO_USO: dict = {"t": time.monotonic()}  # última chamada ao LLM (descarga por ociosidade, E4)
 ULTIMO_EXTERNO: dict = {}  # E13-B: último modelo usado num Ollama/LM Studio local {provider, model, t}
 _CARREGADOS: dict[str, tuple[float, str | None]] = {}
+# Teto de saída que o provedor disse ter, por (provider, model): o max_tokens do agente (metade da janela) passa
+# do limite de alguns modelos da nuvem (nemotron-3-ultra: 65536) e a chamada volta HTTP 400.
+TETO_SAIDA: dict[tuple[str, str], int] = {}
+_TETO_NO_ERRO = re.compile(r"maximum output tokens \((\d+)\)|supports at most (\d+) completion tokens")
+
+
+def teto_do_erro(e: LLMError) -> int | None:
+    m = e.status == 400 and _TETO_NO_ERRO.search(str(e))
+    return int(m.group(1) or m.group(2)) if m else None
+
+
+def _limita_saida(extra: dict, teto: int) -> bool:
+    """Baixa o teto de geração do corpo (max_tokens no OpenAI, options.num_predict no Ollama). True se mudou."""
+    corpo = extra.get("options") if "max_tokens" not in extra else extra
+    chave = "max_tokens" if corpo is extra else "num_predict"
+    if not corpo or not corpo.get(chave) or corpo[chave] <= teto:
+        return False
+    corpo[chave] = teto
+    return True
 
 
 def servidor_local_externo(provider: str) -> bool:
@@ -421,15 +441,34 @@ async def chat_stream(provider: str, model: str, messages: list[dict], tools: li
             o["num_predict"] = min(o.get("num_predict") or max_tokens, max_tokens)
         else:
             extra["max_tokens"] = min(extra.get("max_tokens") or max_tokens, max_tokens)
+    if teto := TETO_SAIDA.get((provider, model)):
+        _limita_saida(extra, teto)
     from . import modelctl
     if embutido:
         modelctl.ocupa(slot, +1)  # o slot auxiliar fica marcado enquanto gera (a escolha do próximo o evita)
     try:
-        async for ev in impl(provider, model, messages, tools, num_ctx, extra):
-            if embutido and ev[0] == "done" and isinstance(ev[1], dict):
-                modelctl.registra_uso(slot, ev[1].get("timings"))
-            ULTIMO_USO["t"] = time.monotonic()   # gerando conta como uso: uma resposta longa não é "ociosidade"
-            yield ev
+        for tentativa in (1, 2):
+            try:
+                think = ThinkStream()
+                async for ev in impl(provider, model, messages, tools, num_ctx, extra):
+                    if embutido and ev[0] == "done" and isinstance(ev[1], dict):
+                        modelctl.registra_uso(slot, ev[1].get("timings"))
+                    ULTIMO_USO["t"] = time.monotonic()   # gerando conta como uso: uma resposta longa não é "ociosidade"
+                    if ev[0] == "content":
+                        for parte in think.feed(ev[1]):
+                            yield parte
+                        continue
+                    if ev[0] == "done":
+                        for parte in think.fim():
+                            yield parte
+                    yield ev
+                for parte in think.fim():  # stream que acaba sem "done"
+                    yield parte
+                break
+            except LLMError as e:  # o 400 chega antes de qualquer evento: repetir não duplica nada
+                if tentativa == 2 or not (teto := teto_do_erro(e)) or not _limita_saida(extra, teto):
+                    raise
+                TETO_SAIDA[(provider, model)] = teto
         ULTIMO_USO["t"] = time.monotonic()
     except httpx.HTTPError as e:
         raise _conn_error(provider, e) from e

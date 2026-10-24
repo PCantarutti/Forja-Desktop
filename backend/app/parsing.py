@@ -17,6 +17,40 @@ def split_think(text: str) -> tuple[str, str]:
     return thinking, THINK_RE.sub("", text).strip()
 
 
+class ThinkStream:
+    """Separa, durante o stream, o <think>…</think> com que o modelo ABRE a resposta (o split_think só roda no fim,
+    e até lá a tela mostrava o raciocínio como texto). <think> no meio da resposta é conteúdo: fica como está."""
+
+    def __init__(self):
+        self.estado, self.buf = "antes", ""  # antes → dentro → fora (ou antes → fora)
+
+    def feed(self, s: str) -> list[tuple[str, str]]:
+        if self.estado == "fora":
+            return [("content", s)]
+        self.buf += s
+        if self.estado == "antes":
+            inicio = self.buf.lstrip()
+            if "<think>".startswith(inicio):
+                return []  # ainda pode ser a tag chegando aos pedaços
+            if not inicio.startswith("<think>"):
+                self.estado, buf, self.buf = "fora", self.buf, ""
+                return [("content", buf)]
+            self.estado, self.buf = "dentro", inicio[len("<think>"):]
+        i = self.buf.find("</think>")
+        if i >= 0:
+            pensou, resto = self.buf[:i], self.buf[i + len("</think>"):].lstrip()
+            self.estado, self.buf = "fora", ""
+            return [p for p in (("reasoning", pensou), ("content", resto)) if p[1]]
+        # segura o fim que pode ser o começo de "</think>"
+        k = next((n for n in range(min(7, len(self.buf)), 0, -1) if "</think>".startswith(self.buf[-n:])), 0)
+        pronto, self.buf = self.buf[:len(self.buf) - k], self.buf[len(self.buf) - k:]
+        return [("reasoning", pronto)] if pronto else []
+
+    def fim(self) -> list[tuple[str, str]]:
+        buf, self.buf = self.buf, ""
+        return [("reasoning" if self.estado == "dentro" else "content", buf)] if buf else []
+
+
 # ------------------------------------------------------------------ parser
 
 def _loads(s: str):
