@@ -11,7 +11,11 @@ const JANELAS: Record<string, string> = {
   daily: "Diário",
   weekly: "Semanal",
   monthly: "Mensal",
+  "24h": "Últimas 24 h",
+  "7d": "Últimos 7 dias",
+  "30d": "Últimos 30 dias",
 };
+const DOLAR = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD" });
 
 /**
  * Cota do Ollama Cloud, compartilhada por quem mostra (Provedores, delegação, anel de contexto):
@@ -64,6 +68,14 @@ export function UsageBars(props: { data: CloudUsage; models?: boolean }) {
           </div>
         );
       })}
+      {props.data.gasto?.map((g) => (
+        <div key={g.name} className="flex items-baseline justify-between gap-2 text-[11px]">
+          <span className="truncate text-muted">{JANELAS[g.name] ?? g.name}</span>
+          <span className="shrink-0 text-fg">
+            {DOLAR.format(g.usd)} <span className="text-faint">· {g.requests} req.</span>
+          </span>
+        </div>
+      ))}
       {props.models && !!props.data.models.length && (
         <div className="pt-0.5 text-[11px] text-faint">
           {props.data.models

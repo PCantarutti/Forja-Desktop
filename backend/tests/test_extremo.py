@@ -490,6 +490,32 @@ def test_usage_nao_levanta_quando_o_endpoint_some(monkeypatch):
     assert asyncio.run(llm.usage("nuvem2")) is None
 
 
+def test_usage_formato_de_gasto_em_dolar(monkeypatch):
+    """Out/2026: o /api/usage trocou `limits` por gasto em US$ por período (range 24h|7d|30d)."""
+    monkeypatch.setitem(config.PROVIDERS, "nuvem3",
+                        {"id": "nuvem3", "name": "N", "type": "ollama", "url": "https://ollama.com/v1", "api_key": "k"})
+    llm._USAGE.clear()
+    gastos = {"": ("7d", 0.11426, 8593), "?range=24h": ("24h", 0.1068, 398), "?range=30d": ("30d", 0.50271, 9281)}
+
+    class Resp:
+        status_code = 200
+        def __init__(self, q): self.q = q
+        def json(self):
+            r, usd, n = gastos[self.q]
+            return {"range": r, "scope": "self", "totals": {"request_count": n, "usage_usd": usd}, "buckets": []}
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url): return Resp(url.removeprefix("https://ollama.com/api/usage"))
+
+    monkeypatch.setattr(llm.httpx, "AsyncClient", FakeClient)
+    u = asyncio.run(llm.usage("nuvem3"))
+    assert u["limits"] == [] and [(g["name"], g["usd"], g["requests"]) for g in u["gasto"]] == [
+        ("24h", 0.1068, 398), ("7d", 0.11426, 8593), ("30d", 0.50271, 9281)]
+
+
 # ------------------------------------------------ teto de pensamento
 
 BUDGET = config.REASONING_BUDGET

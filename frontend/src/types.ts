@@ -119,6 +119,8 @@ export type CloudUsage = {
   name: string;
   limits: { name: string; usage: number }[];
   models: { name: string; request_count?: number }[];
+  /** Formato de out/2026: gasto em US$ por período (24h, 7d, 30d), sem o teto do plano. */
+  gasto?: { name: string; usd: number; requests: number }[];
 };
 
 /** Delegação em andamento, em qualquer conversa (aba Instâncias). */

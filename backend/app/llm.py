@@ -11,6 +11,7 @@ Mensagens de entrada/saída ficam sempre no formato OpenAI.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -679,15 +680,27 @@ async def usage(provider: str) -> dict | None:
     if (cache := _USAGE.get(provider)) and agora - cache[0] < USAGE_TTL:
         return cache[1]
     host = base_url(provider).removesuffix("/v1")
-    try:
-        async with httpx.AsyncClient(timeout=10, headers=headers(provider)) as c:
-            r = await c.get(f"{host}/api/usage")
-        dados = r.json() if r.status_code < 400 else {}
-    except (httpx.HTTPError, ValueError):
-        dados = {}
+
+    async def busca(q: str = "") -> dict:
+        try:
+            async with httpx.AsyncClient(timeout=10, headers=headers(provider)) as c:
+                r = await c.get(f"{host}/api/usage{q}")
+            return r.json() if r.status_code < 400 else {}
+        except (httpx.HTTPError, ValueError):
+            return {}
+
+    dados = await busca()
     limites, modelos = _limites(dados.get("limits") or {})
-    saida = ({"provider": provider, "name": spec(provider)["name"], "limits": limites, "models": modelos}
-             if limites else None)
+    gasto = []
+    if dados.get("totals"):
+        # Formato de out/2026 (crédito em US$ no lugar das janelas de 5 h/semana): gasto por período
+        # (range 24h|7d|30d), sem o teto do plano — por isso não há percentual.
+        dia, mes = await asyncio.gather(busca("?range=24h"), busca("?range=30d"))
+        gasto = [{"name": j["range"], "usd": float(j["totals"].get("usage_usd") or 0),
+                  "requests": int(j["totals"].get("request_count") or 0)}
+                 for j in (dia, dados, mes) if j.get("totals") and j.get("range")]
+    saida = ({"provider": provider, "name": spec(provider)["name"], "limits": limites, "models": modelos,
+              "gasto": gasto} if limites or gasto else None)
     _USAGE[provider] = (agora, saida)
     return saida
 
