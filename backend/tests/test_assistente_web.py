@@ -158,3 +158,53 @@ def test_repo_com_nome_exato(monkeypatch):
         {"url": "https://github.com/ggml-org/llama.cpp/releases"}])
     assert web_voz.repo_github("llama.cpp") == "ggml-org/llama.cpp"
     assert web_voz.repo_github("ggml-org/whisper.cpp") == "ggml-org/whisper.cpp"
+
+
+def test_tela_responde_e_acha_produtos_parecidos(monkeypatch):
+    from app import llm
+    falas = _falas(monkeypatch)
+    monkeypatch.setattr(assistente, "_print_tela", lambda: "data:image/jpeg;base64,AAAA")
+    async def caps(p, m):
+        return {"vision", "tools"}
+    monkeypatch.setattr(llm, "capabilities", caps)
+    vistos = []
+
+    async def ve(spec, slot, sistema, pedido, imagem, max_tokens):
+        vistos.append((sistema, imagem))
+        if sistema == assistente.TELA_PRODUTO:
+            return '{"produto":"tênis Nike Air Max 90 branco","descricao":"um tênis Nike Air Max 90 branco"}'
+        return "É um erro de permissão: o arquivo está em uso por outro programa."
+    monkeypatch.setattr(assistente, "_ve", ve)
+
+    async def ofertas(produto, spec, slot):
+        assert produto == "tênis Nike Air Max 90 branco"
+        return [("netshoes.com.br", 599.9), ("centauro.com.br", 649.0)]
+    monkeypatch.setattr(assistente, "_ofertas", ofertas)
+    feito = asyncio.run(assistente._tela_voz({"acao": "perguntar", "pergunta": "o que esse erro quer dizer?"}, SPEC, None))
+    assert "erro de permissão" in feito  # o histórico leva o que foi visto: a pergunta seguinte depende disso
+    assert falas[-1].startswith("É um erro de permissão") and vistos[-1][1].startswith("data:image/jpeg")
+    n = assistente._abrir["n"]
+    asyncio.run(assistente._tela_voz({"acao": "produtos", "pergunta": "parecidos com esse"}, SPEC, None))
+    assert falas[-2] == "Vi um tênis Nike Air Max 90 branco. Procurando parecidos nas lojas."
+    assert "netshoes.com.br" in falas[-1] and falas[-1].endswith("Abri a busca no navegador do Forja.")
+    assert assistente._abrir["n"] == n + 1 and "tbm=shop" in assistente._abrir["url"] and "Nike" in assistente._abrir["url"]
+
+
+def test_tela_com_modelo_sem_visao_avisa(monkeypatch):
+    from app import llm
+    falas = _falas(monkeypatch)
+    async def caps(p, m):
+        return {"tools"}
+    monkeypatch.setattr(llm, "capabilities", caps)
+    monkeypatch.setattr(assistente, "_print_tela", lambda: (_ for _ in ()).throw(AssertionError("não tira print à toa")))
+    asyncio.run(assistente._tela_voz({"acao": "perguntar"}, {"provider": "ollama-cloud", "model": "gpt-oss:120b"}, None))
+    assert "não enxerga imagem" in falas[-1]
+
+
+def test_frases_da_tela_vao_para_o_classificador():
+    for f in ("o que tem na minha tela?", "acha produtos parecidos com esse que eu tô vendo", "resume essa página pra mim",
+              "o que é essa foto na minha tela?", "quanto custa esse tênis que eu tô olhando?",
+              "o que esse erro aqui quer dizer?", "quanto custa isso aqui?"):
+        c = assistente._sem_acento(f)
+        assert assistente.rota(f)[0] == "chat" and assistente.PISTA.search(c), f
+        assert not assistente.CITA_FORJA.search(c) or assistente.SABER.search(c), f   # não cai no classifica_rota
