@@ -318,6 +318,33 @@ def test_pergunta_pendente_nao_engole_pedido_novo():
     assert not assistente._parece_pedido("meu favorito de código")
 
 
+
+def test_pra_quando_larga_a_pergunta_se_vier_pedido_novo(monkeypatch):
+    import asyncio, time
+    # "me lembra de X" sem horário -> "Pra quando?"; aí "anota aí: levar o carro no lava-jato" era lido como horário
+    # ("Não entendi o horário", depois "Deixei pra lá") e a nota se perdia
+    falas = []
+    monkeypatch.setattr(assistente, "fala", falas.append)
+    monkeypatch.setattr(assistente, "_manda", lambda *a, **k: None)
+    vistos = []
+
+    async def chat(texto):
+        vistos.append(texto)
+    monkeypatch.setattr(assistente, "_chat", chat)
+    assistente._pendente.clear()
+    assistente._pendente.update(tipo="lembrete", pedido="tirar o bolo", t=time.time())
+    asyncio.run(assistente._atende({"comando": "anota aí: levar o carro no lava-jato", "resposta": True}))
+    assert vistos == ["anota aí: levar o carro no lava-jato"] and not assistente._pendente
+    criados = []
+
+    async def lembrete(acao, arg):
+        criados.append((acao, arg[1]))
+    monkeypatch.setattr(assistente, "_lembrete", lembrete)
+    assistente._pendente.update(tipo="lembrete", pedido="tirar o bolo", t=time.time())
+    asyncio.run(assistente._atende({"comando": "amanhã às 8 da manhã, por favor", "resposta": True}))
+    assert criados == [("criar", "tirar o bolo")]   # resposta com horário continua valendo, mesmo longa
+
+
 def test_trocar_o_modelo_do_assistente_falando():
     casos = {
         "troca seu modelo para o qwen 3.6": "qwen 3.6",
@@ -333,6 +360,8 @@ def test_trocar_o_modelo_do_assistente_falando():
         assert assistente.rota(frase) == ("trocar_modelo", dito), frase
     assert assistente.rota("qual modelo você está usando?")[0] == "qual_modelo"
     assert assistente.rota("qual é o seu modelo?")[0] == "qual_modelo"
+    assert assistente.rota("qual modelo cê tá usando?")[0] == "qual_modelo"
+    assert assistente.rota("com qual modelo vc tá falando comigo?")[0] == "qual_modelo"
     # "usando o modelo X" num pedido de agente/chat é o modelo DAQUELE trabalho, não troca o do assistente
     assert assistente.rota("no modo agente crie um jogo usando o modelo gemma")[0] == "agente"
     assert assistente.rota("abre um chat no forja usando o modelo qwen")[0] == "chat_forja"

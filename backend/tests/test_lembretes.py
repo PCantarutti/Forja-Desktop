@@ -38,7 +38,10 @@ def test_pedidos_de_lembrete():
     assert e("cria um lembrete para pagar o boleto na segunda às 10h") == ("criar", (datetime(2026, 10, 26, 10, 0), "pagar o boleto"))
     assert e("me lembre de regar as plantas") == ("pergunta", "regar as plantas")
     assert e("quais são meus lembretes?") == ("listar", "")
+    assert e("o que eu tenho de lembrete?") == ("listar", "")
+    assert e("tenho alguns lembretes pra hoje?") == ("listar", "")
     assert e("cancela o lembrete da louça") == ("cancelar", "louça")
+    assert e("esquece o lembrete do bolo") == ("cancelar", "bolo")
     assert e("apaga todos os lembretes") == ("cancelar", "*")
     assert e("você me lembra quem foi Einstein?") is None
     assert e("que horas são?") is None

@@ -208,3 +208,29 @@ def test_frases_da_tela_vao_para_o_classificador():
         c = assistente._sem_acento(f)
         assert assistente.rota(f)[0] == "chat" and assistente.PISTA.search(c), f
         assert not assistente.CITA_FORJA.search(c) or assistente.SABER.search(c), f   # não cai no classifica_rota
+
+
+def test_resposta_depois_da_busca_nao_repete(monkeypatch):
+    # o gpt-oss responde e pede outra busca na mesma rodada: a resposta já tinha sido falada e a rodada seguinte
+    # repetia tudo ("...um milhão e duzentos mil habitantes.Ottawa, a capital do Canadá, tem cerca de um milhão...")
+    from app import llm, web
+    falas = _falas(monkeypatch)
+    monkeypatch.setattr(assistente, "_fala_resposta", falas.append)
+    async def prepara():
+        return SPEC, None, None
+    monkeypatch.setattr(assistente, "_prepara_modelo", prepara)
+    monkeypatch.setattr(assistente, "ler", lambda: dict(assistente.PADRAO))
+    monkeypatch.setattr(web, "web_search", lambda root, a: {"text": "Ottawa: 1.218.903 habitantes"})
+    busca = {"tool_calls": [{"id": "b1", "name": "web_search", "arguments": {"query": "população Ottawa"}}]}
+    rodadas = [[("done", busca)],
+               [("content", "Ottawa tem cerca de um milhão e duzentos mil habitantes. "), ("done", busca)],
+               [("content", "Ottawa, a capital do Canadá, tem cerca de um milhão de habitantes. "), ("done", {"tool_calls": []})]]
+
+    async def stream(*a, **k):
+        for ev in rodadas.pop(0):
+            yield ev
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    assistente._conversa_chat.clear()
+    asyncio.run(assistente._chat("e quantos habitantes tem lá?"))
+    assert falas == ["Pesquisando.", "Ottawa tem cerca de um milhão e duzentos mil habitantes."]
+    assert len(rodadas) == 1   # a terceira rodada nem roda

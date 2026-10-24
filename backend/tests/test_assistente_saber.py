@@ -29,6 +29,9 @@ def test_indice_de_documentos(tmp_path, monkeypatch):
     conhecimento.atualiza([str(docs)])
     assert conhecimento.busca("bolo de cenoura", [str(docs)]) == []
     assert conhecimento.busca("contrato", [str(tmp_path / "outra")]) == []      # pasta tirada da lista não vale
+    (docs / "Contratos" / "apto.md").write_text("Locador: Marta Albuquerque.", "utf-8")
+    conhecimento.atualiza([str(docs)])
+    assert [a["arquivo"] for a in conhecimento.busca("quem é a locadora?", [str(docs)])] == ["apto.md"]  # gênero
 
 
 def test_pergunta_sem_pista_que_esta_nos_documentos(tmp_path, monkeypatch):

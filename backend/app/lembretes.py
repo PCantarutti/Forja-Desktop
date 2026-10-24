@@ -156,9 +156,9 @@ def dito(alvo: datetime, agora: datetime | None = None) -> str:
 
 GATILHO = re.compile(r"\b(?:me\s+lembr\w*|lembr\w*[\s-]+me|(?:cri\w*|coloc\w*|bot\w*|fa[zc]\w*|marc\w*|agend\w*|poe|anot\w*)\s+"
                      r"(?:um\s+)?lembrete|lembrete)\b(?P<con>\s*(?:de|que|para|pra|do|da|dos|das)\b|\s*[:,])?")
-LISTAR = re.compile(r"\b(?:quais|que)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:proximos\s+)?lembretes\b|\btenho\s+(?:algum\s+)?lembretes?\b|"
+LISTAR = re.compile(r"\b(?:quais|que)\s+(?:sao\s+)?(?:os\s+)?(?:meus\s+)?(?:proximos\s+)?lembretes\b|\btenho\s+(?:algum\s+|alguns\s+|de\s+)?lembretes?\b|"
                     r"\b(?:lista|fala|diz)\w*\s+(?:os\s+)?(?:meus\s+)?lembretes\b")
-CANCELAR = re.compile(r"\b(?:cancel\w*|apag\w*|tir\w*|remov\w*|desmarc\w*|exclu\w*|delet\w*)\s+(?P<todos>todos\s+)?(?:(?:o|os|do|dos|meus|aquele|esse|este)\s+)?"
+CANCELAR = re.compile(r"\b(?:cancel\w*|esquec\w*|apag\w*|tir\w*|remov\w*|desmarc\w*|exclu\w*|delet\w*)\s+(?P<todos>todos\s+)?(?:(?:o|os|do|dos|meus|aquele|esse|este)\s+)?"
                       r"lembretes?\b(?:\s+(?:de|da|do|das|dos|para|pra|que)\s+(?P<alvo>.+))?")
 CONECTIVO = re.compile(r"^(?:de|que|para|pra|do|da|e|:|,|-)\s+|\s+(?:de|que|para|pra|e|,|as|a)$")
 

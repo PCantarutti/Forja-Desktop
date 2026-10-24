@@ -125,7 +125,9 @@ def busca(pergunta: str, pastas: list[str], n: int = 6, atualizar: bool = True) 
         return []
     if atualizar:
         atualiza(pastas)
-    palavras = " ".join(w for w in re.findall(r"\w+", pergunta.lower()) if len(w) >= 3 and w not in VAZIAS)
+    # palavra longa perde a última letra antes do prefixo: "locadora" acha "Locador", "contratos" acha "contrato"
+    palavras = " ".join(w[:-1] if len(w) >= 6 else w for w in re.findall(r"\w+", pergunta.lower())
+                        if len(w) >= 3 and w not in VAZIAS)
     consulta = consulta_fts(palavras)
     if not consulta:
         return []
