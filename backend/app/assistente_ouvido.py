@@ -405,6 +405,7 @@ def main() -> int:
     p.add_argument("--whisper", default="small")
     p.add_argument("--voz", default="pf_dora")
     p.add_argument("--efeito", default="")  # "glados": o filtro de assistente_glados.py sobre a voz treinada
+    p.add_argument("--stt", default="pt")  # "auto": o Whisper detecta o idioma (voz que só fala inglês)
     p.add_argument("--saida", default="")  # alto-falante (pedaço do nome + API); vazio = o padrão do Windows
     p.add_argument("--listar", action="store_true")
     p.add_argument("--detector", default="")  # .npz do detector treinado de "Forja" (vazio: Whisper em toda fala)
@@ -413,6 +414,7 @@ def main() -> int:
     p.add_argument("--com-whisper", action="store_true")  # detector + Whisper: o detector acende rápido, o Whisper não deixa passar
     p.add_argument("--transcrever", default="")  # ditado com o assistente desligado: transcreve o arquivo e sai
     a = p.parse_args()
+    IDIOMA["stt"] = "" if a.stt == "auto" else a.stt
     if a.listar:
         return listar()
     if a.transcrever:

@@ -26,6 +26,7 @@ import asyncio
 import difflib
 import json
 import os
+import queue
 import re
 import subprocess
 import threading
@@ -73,9 +74,25 @@ def vozes_kokoro() -> list[dict]:
     for f in sorted(VOZES_PIPER.glob("*.onnx")):
         if f.with_suffix(".onnx.json").is_file():
             nome = f.stem.replace("-", " ").replace("_", " ").capitalize()
+            if so_ingles(f"piper:{f.stem}"):  # a GLaDOS original já é ela: nada de filtro por cima
+                treinadas.append({"id": f"piper:{f.stem}", "nome": f"{nome} (treinada, só inglês)"})
+                continue
             treinadas += [{"id": f"piper:{f.stem}", "nome": f"{nome} (treinada)"},
                           {"id": f"piper:{f.stem}:glados", "nome": f"GLaDOS ({nome}, com filtro)"}]
     return treinadas + VOZES_KOKORO
+
+
+def so_ingles(voz: str | None = None) -> bool:
+    """Voz treinada em inglês (a GLaDOS do jogo): ele entende qualquer idioma, mas sempre responde em inglês."""
+    voz = ler()["voz"] if voz is None else voz
+    if not voz.startswith("piper:"):
+        return False
+    nome = voz[6:].removesuffix(":glados")
+    try:
+        cfg = json.loads((VOZES_PIPER / f"{nome}.onnx.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return False
+    return str(cfg.get("espeak", {}).get("voice", "")).startswith("en")
 
 
 def _voz_arg(voz: str) -> str:
@@ -582,6 +599,8 @@ def iniciar() -> None:
             "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"])]
     if cfg["voz"].startswith("piper:") and cfg["voz"].endswith(":glados"):
         argv += ["--efeito", "glados"]
+    if so_ingles(cfg["voz"]):
+        argv += ["--stt", "auto"]  # fala com ela em qualquer idioma: o Whisper detecta
     if cfg["mic"]:
         argv += ["--mic", cfg["mic"]]
     if cfg["saida"]:
@@ -1021,8 +1040,56 @@ def _abre(conv: int, kind: str) -> None:
 
 
 def fala(texto: str, voz: str = "", lang: str = "") -> None:
+    if not voz and so_ingles():
+        _em_ingles.put(texto)  # uma fila: a tradução não troca a ordem das frases
+        return
     _anota("forja", texto)
     _manda("fala", texto=texto, **({"voz": voz, "lang": lang} if voz else {}))
+
+
+# Voz que só fala inglês: as frases prontas do assistente (em português no código) passam por tradução antes. Cache em
+# disco: são sempre as mesmas, e na segunda vez não custa nada. Sem modelo no ar, fala o original na voz em português.
+TRADUCOES_EN = PASTA / "traducoes_en.json"
+PORTUGUES = re.compile(r"[ãõçáéíóúâêà]|\b(?:nao|voce|esta|que|para|com|uma?|de|em|os|pra|isso|aqui)\b", re.I)
+TRADUZ_EN = ("Translate to natural spoken English. Reply ONLY with the translation, no quotes or explanations. "
+             "Keep names, numbers and meaning. ")
+_em_ingles: queue.Queue[str] = queue.Queue()
+
+
+def _traduz_en(texto: str) -> str:
+    try:
+        cache = json.loads(TRADUCOES_EN.read_text("utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    if texto in cache:
+        return cache[texto]
+    from . import modelctl
+    spec = modelo_assistente()
+    if modelctl.gerenciavel(spec) and localai.status().get("alias") != spec["model"]:
+        raise ToolError("modelo fora do ar")  # não carrega modelo (nem gasta VRAM) só para traduzir uma frase pronta
+    slot = modelctl.slot_auxiliar() if modelctl.gerenciavel(spec) else None
+    ingles = asyncio.run(_gera(spec, slot, TRADUZ_EN + DADO_DE_FORA, _dados([texto]), 300))
+    if ingles:
+        cache[texto] = ingles
+        TRADUCOES_EN.write_text(json.dumps(cache, ensure_ascii=False, indent=0), "utf-8")
+    return ingles or texto
+
+
+def _fala_em_ingles() -> None:
+    while True:
+        texto = _em_ingles.get()
+        voz = {}
+        if PORTUGUES.search(_sem_acento(texto) + texto):
+            try:
+                texto = _traduz_en(texto)
+            except Exception as e:
+                print(f"Forja: voz: tradução para o inglês falhou ({e.__class__.__name__}), fala em português", flush=True)
+                voz = {"voz": "pf_dora", "lang": "pt-br"}
+        _anota("forja", texto)
+        _manda("fala", texto=texto, **voz)
+
+
+threading.Thread(target=_fala_em_ingles, daemon=True).start()
 
 
 def _fala_resposta(texto: str) -> None:
@@ -1665,6 +1732,10 @@ async def _chat(texto: str) -> None:
         agora_txt += f"\n[Responda em {_idioma['nome']}, nunca em português.]"
     nota_idioma = (f"\n\nConversa em {_idioma['nome']}: a pessoa está praticando. Responda SEMPRE em {_idioma['nome']}, "
                    f"curto e natural; se ela errar, corrija com gentileza em uma frase antes de responder.") if _idioma.get("nome") else ""
+    if so_ingles() and not _idioma.get("nome"):  # a voz só fala inglês: entende tudo, responde em inglês
+        agora_txt += "\n[Answer in English only, whatever language the question is in.]"
+        nota_idioma = ("\n\nYour voice only speaks English: ALWAYS answer in natural spoken English, whatever language "
+                       "the person uses (they understand English). Never answer in Portuguese.")
     msgs = [{"role": "system", "content": nota_falada(cfg["humor"]) + _memorias_txt() + nota_idioma}, *hist[-12:-1],
             {"role": "user", "content": f"{agora_txt}\n{texto}"}]
     if NOTICIAS_GERAIS.search(_sem_acento(texto)) and (manchetes := await asyncio.to_thread(_manchetes)):
@@ -2934,7 +3005,7 @@ async def _idioma_voz(nome: str, d: dict, spec: dict, slot) -> str:
     if nome == "idioma":
         if not cod:  # português (ou um que ele não fala): volta ao normal
             _idioma.clear()
-            _manda("idioma", stt="pt")
+            _manda("idioma", stt="" if so_ingles() else "pt")
             _conversa_chat.clear()
             fala("Pronto, voltamos para o português.")
             return "(idioma: português)"

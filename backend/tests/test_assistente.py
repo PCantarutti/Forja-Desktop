@@ -464,6 +464,28 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     assert chamadas == [False, True] and assistente.ler()["voz"] == "piper:mae:glados"
 
 
+def test_voz_so_ingles_traduz_frases_prontas(tmp_path, monkeypatch):
+    # a GLaDOS do jogo só fala inglês: sem filtro na lista, e as frases prontas (em português) saem traduzidas, com cache
+    monkeypatch.setattr(assistente, "VOZES_PIPER", tmp_path)
+    monkeypatch.setattr(assistente, "TRADUCOES_EN", tmp_path / "traducoes.json")
+    (tmp_path / "glados.onnx").write_bytes(b"x")
+    (tmp_path / "glados.onnx.json").write_text('{"espeak": {"voice": "en-us"}}', "utf-8")
+    assert assistente.vozes_kokoro()[0] == {"id": "piper:glados", "nome": "Glados (treinada, só inglês)"}
+    assert "piper:glados:glados" not in [v["id"] for v in assistente.vozes_kokoro()]
+    assert assistente.so_ingles("piper:glados") and not assistente.so_ingles("pf_dora")
+    monkeypatch.setattr(assistente, "ler", lambda: {**assistente.PADRAO, "voz": "piper:glados"})
+    monkeypatch.setattr(assistente, "modelo_assistente", lambda: {"provider": "ollama-cloud", "model": "x"})
+    pedidos = []
+
+    async def gera(spec, slot, sistema, usuario, n=400):
+        pedidos.append(usuario)
+        return "Opening YouTube."
+    monkeypatch.setattr(assistente, "_gera", gera)
+    assert assistente._traduz_en("Abrindo o YouTube.") == "Opening YouTube."
+    assert assistente._traduz_en("Abrindo o YouTube.") == "Opening YouTube." and len(pedidos) == 1  # do cache
+    assert assistente.PORTUGUES.search("nao consegui") and not assistente.PORTUGUES.search("Opening YouTube.")
+
+
 def test_humor_glados_usa_falas_locais_como_referencia(tmp_path, monkeypatch):
     # o texto da Valve não vai para o repositório: só um arquivo local, sorteado uma vez (o prompt fica fixo, o cache vale)
     arq = tmp_path / "glados.txt"
