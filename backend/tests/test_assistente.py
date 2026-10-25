@@ -462,3 +462,16 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     assistente.gravar({"voz": "piper:mae"})
     assistente.gravar({"voz": "piper:mae:glados"})  # com o filtro: instala também pyworld e pedalboard
     assert chamadas == [False, True] and assistente.ler()["voz"] == "piper:mae:glados"
+
+
+def test_humor_glados_usa_falas_locais_como_referencia(tmp_path, monkeypatch):
+    # o texto da Valve não vai para o repositório: só um arquivo local, sorteado uma vez (o prompt fica fixo, o cache vale)
+    arq = tmp_path / "glados.txt"
+    monkeypatch.setattr(assistente, "ESTILO_GLADOS", arq)
+    monkeypatch.setattr(assistente, "_ref_glados", [])
+    assert "Falas reais" not in assistente.nota_falada("acido")          # sem o arquivo, só os exemplos próprios
+    arq.write_text("\n".join(f"Linha de teste numero {i} com algumas palavras" for i in range(40)) + "\nxyzcurta\n", "utf-8")
+    a, b = assistente.nota_falada("acido"), assistente.nota_falada("acido")
+    assert "Falas reais" in a and a == b and a.count("\n- ") == 12 and "xyzcurta" not in a
+    assert "Falas reais" not in assistente.nota_falada("sarcastico")
+    assert "criatura" in assistente.HUMORES["acido"]["prompt"]  # proibida, e dita como proibida

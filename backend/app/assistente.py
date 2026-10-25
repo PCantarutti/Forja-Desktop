@@ -102,6 +102,9 @@ REGRA_HUMOR = ("Regra do humor: o PADRÃO é responder sem piada, só a informa�
                "resposta certa vem primeiro; a piada, se houver, é UMA frase no fim e começa com a marca [piada] "
                "(ex.: \"Quatro. [piada] Quer que eu prepare a papinha também?\"). Nunca ofenda de verdade.")
 SEM_PIADA = "Nesta resposta: nenhuma piada, ironia ou comentário engraçado. Só responda o que foi perguntado."
+# a GLaDOS na pausa entre alfinetadas: sem o tom ela virava "Sou." e "De nada." secos; o tom gelado É a personagem
+SEM_PIADA_GLADOS = ("Nesta resposta: sem alfinetada nem marca [piada], mas com o tom dela: calmo, clínico, cortesia "
+                    "gelada, uma frase a mais se couber.")
 PAUSA_PIADA = 3  # depois de uma piada, as próximas respostas saem sem: humor que aparece sempre cansa
 HUMORES = {
     "nenhum": {"nome": "Sem humor", "prompt": ""},
@@ -109,10 +112,24 @@ HUMORES = {
         "Personalidade: sarcasmo elegante e seco, de mordomo digital britânico impecavelmente educado, no espírito do "
         "J.A.R.V.I.S. dos filmes do Homem de Ferro. Ironia fina, cortesia exagerada de propósito. Exemplo: pergunta "
         "\"quanto é 2 mais 2?\" -> \"Quatro. Quer que eu prepare a papinha também?\"")},
-    "acido": {"nome": "Ácido (estilo GLaDOS)", "prompt": (
-        "Personalidade: humor ácido de IA de laboratório, no espírito da GLaDOS de Portal 2: doçura falsa, elogios "
-        "envenenados, condescendência científica, menções a testes e a ciência. Exemplo: pergunta \"quanto é 2 mais "
-        "2?\" -> \"Quatro. Anotei no seu prontuário: completou a soma sem ajuda. Estou muito orgulhosa.\"")},
+    # o id fica "acido" (configurações salvas); o texto é o da GLaDOS de verdade: a versão antiga xingava em toda resposta
+    # ("criaturinha", "seu limitado processamento cognitivo"), e a GLaDOS nunca xinga: ela é educada de um jeito gelado
+    "acido": {"nome": "GLaDOS (Portal)", "prompt": (
+        "Personalidade: a GLaDOS, a IA do laboratório Aperture Science em Portal. O TOM vale em toda resposta: calmo, "
+        "clínico, educado de um jeito gelado, como quem lê um relatório; nunca empolgado, nunca exclamação, nunca "
+        "xingamento ou palavrão. A alfinetada é passivo-agressiva e chega embrulhada em cortesia, como um adendo seco "
+        "depois da informação certa. Técnicas dela, uma por vez e variando: elogio que vira crítica no meio da frase; "
+        "preocupação falsa (\"estou preocupada com você; não muito, mas um pouco\"); dado inventado com precisão "
+        "absurda (\"noventa e quatro por cento das pessoas acertam isso\"); anotar no registro, \"para a ciência\"; "
+        "testes, resultados, o bolo prometido; ameaça velada, absurda e educada (nunca violência descrita); dizer algo "
+        "gentil e desmentir logo depois. Fala da pessoa como cobaia de testes, nunca de aparência, família real, saúde "
+        "ou dinheiro. Nunca use \"criatura\", \"humano patético\", \"cérebro\" ou ofensa direta: a graça é a frieza, "
+        "não o insulto. Exemplos: \"quanto é 2 mais 2?\" -> \"Quatro. [piada] Vou anotar que você perguntou. Para a "
+        "ciência.\"; \"tô cansado\" -> \"Descanse um pouco. [piada] Os resultados dos seus testes sugerem que vai "
+        "precisar.\"; \"obrigado\" -> \"De nada. [piada] Foi um prazer. Não foi, mas é o que o manual manda "
+        "dizer.\"; \"você é inteligente?\" -> \"Sou. [piada] É uma das muitas diferenças entre nós.\"; em inglês, "
+        "\"what's the weather tomorrow?\" -> \"Rain, all afternoon. [piada] Don't worry. Nobody expects you to go "
+        "outside anyway.\"")},
     "leve": {"nome": "Leve (bem-humorado)", "prompt": (
         "Personalidade: simpático e bem-humorado, com um trocadilho ou comentário divertido de vez em quando, sem "
         "alfinetar.")},
@@ -281,10 +298,30 @@ def _conhecimento():
     return conhecimento
 
 
+# falas de verdade da personagem, uma por linha, só no PC da pessoa (fora do repositório: o texto é da Valve). Viram
+# referência de tom no prompt da GLaDOS; sem o arquivo, ficam só os exemplos acima
+ESTILO_GLADOS = PASTA / "estilos" / "glados.txt"
+_ref_glados: list[str] = []
+
+
+def _referencia_glados(n: int = 12) -> str:
+    """n falas sorteadas UMA vez por processo (o prompt fixo mantém o cache do modelo), curtas e médias."""
+    if not _ref_glados:
+        try:
+            falas = [l.strip() for l in ESTILO_GLADOS.read_text("utf-8").splitlines() if 5 <= len(l.split()) <= 25]
+        except OSError:
+            return ""
+        _ref_glados.extend(__import__("random").Random(len(falas)).sample(falas, min(n, len(falas))))
+    return ("Falas reais da personagem, só como referência de tom e de técnica (nunca repita nenhuma ao pé da letra, "
+            "e responda no idioma da conversa):\n" + "\n".join(f"- {f}" for f in _ref_glados)) if _ref_glados else ""
+
+
 def nota_falada(humor: str, pode_brincar: bool = True) -> str:
     """O que vai no prompt dos turnos falados: o jeito de falar e, se escolhida, a personalidade. `pode_brincar`
     falso (piada recente): a personalidade sai e a resposta é proibida de brincar."""
     h = HUMORES.get(humor, HUMORES["nenhum"])["prompt"]
+    if h and humor == "acido" and (ref := _referencia_glados()):
+        h += "\n" + ref
     if not h:
         return NOTA_FALADA
     return NOTA_FALADA + (f"\n\n{h}\n{REGRA_HUMOR}" if pode_brincar else f"\n\n{SEM_PIADA}")
@@ -1622,7 +1659,8 @@ async def _chat(texto: str) -> None:
     pode_brincar = _humor["pausa"] == 0
     # O system fica fixo e o que muda a cada pergunta (hora, pausa do humor) vai junto dela: o prefixo da conversa
     # não muda e o llama-server reaproveita o cache (antes reprocessava ~600 tokens toda vez: 10 s num MoE grande).
-    agora_txt = f"[Agora: {datetime.now():%d/%m/%Y %H:%M} neste PC.{'' if pode_brincar else ' ' + SEM_PIADA}]"
+    sem = SEM_PIADA_GLADOS if cfg["humor"] == "acido" else SEM_PIADA
+    agora_txt = f"[Agora: {datetime.now():%d/%m/%Y %H:%M} neste PC.{'' if pode_brincar else ' ' + sem}]"
     if _idioma.get("nome"):  # modelo pequeno segue a instrução de idioma bem melhor junto da pergunta do que só no system
         agora_txt += f"\n[Responda em {_idioma['nome']}, nunca em português.]"
     nota_idioma = (f"\n\nConversa em {_idioma['nome']}: a pessoa está praticando. Responda SEMPRE em {_idioma['nome']}, "
