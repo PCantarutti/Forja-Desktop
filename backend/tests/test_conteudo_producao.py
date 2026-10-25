@@ -84,6 +84,8 @@ async def _ate_o_fim(cid: int, **kw) -> dict:
         if est["id"] not in P._RUNS:
             break
         await asyncio.sleep(0.05)
+    # Conferência e publicação rodam depois de sair de _RUNS: sem esperar, o asyncio.run cancela essa parte.
+    await asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()}))
     return P.estado(est["id"])
 
 
@@ -287,6 +289,7 @@ async def _revisao_ate_o_fim(mid: int, pedidos, geral="") -> dict:
         if est["id"] not in P._RUNS:
             break
         await asyncio.sleep(0.05)
+    await asyncio.gather(*(asyncio.all_tasks() - {asyncio.current_task()}))   # idem _ate_o_fim
     return P.estado(est["id"])
 
 
