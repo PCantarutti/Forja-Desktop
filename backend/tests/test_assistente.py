@@ -436,3 +436,26 @@ def test_boca_cala_sem_mexer_no_audio_de_outra_thread(monkeypatch):
     while b.audios.unfinished_tasks and time.time() < prazo:  # sem join(): thread morta não trava a bateria
         time.sleep(0.02)
     assert 0 < len(escritos) < 100 and not b.falando.is_set()
+
+
+def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch):
+    import threading
+    monkeypatch.setattr(assistente, "VOZES_PIPER", tmp_path)
+    (tmp_path / "mae.onnx").write_bytes(b"x")
+    (tmp_path / "mae.onnx.json").write_text("{}", "utf-8")
+    (tmp_path / "sem-config.onnx").write_bytes(b"x")  # sem o .json o Piper não carrega: fica de fora
+    assert assistente.vozes_kokoro()[0] == {"id": "piper:mae", "nome": "Mae (treinada)"}
+    assert [v["id"] for v in assistente.vozes_kokoro()].count("piper:sem-config") == 0
+    assert assistente._voz_arg("piper:mae") == str(tmp_path / "mae.onnx")
+    assert assistente._voz_arg("pf_dora") == "pf_dora"
+    assert assistente._voz_arg("piper:apagada") == assistente.PADRAO["voz"]
+    assert assistente._voz_arg("piper:../../x") == assistente.PADRAO["voz"]
+    # escolher a voz treinada numa instalação antiga garante o piper-tts no venv (em background)
+    chamadas = []
+    monkeypatch.setattr(assistente, "CONFIG", tmp_path / "assistente.json")
+    monkeypatch.setattr(assistente, "instalado", lambda: True)
+    monkeypatch.setattr(assistente, "_vivo", lambda: False)
+    monkeypatch.setattr(assistente, "_garante_piper", lambda: chamadas.append(1))
+    monkeypatch.setattr(threading, "Thread", lambda target, daemon: type("T", (), {"start": lambda s: target()})())
+    assistente.gravar({"voz": "piper:mae"})
+    assert chamadas == [1] and assistente.ler()["voz"] == "piper:mae"

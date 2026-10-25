@@ -43,7 +43,7 @@ from .tools import ToolError
 PASTA = localai.RUNTIMES / "assistente"
 MODELOS = PASTA / "kokoro"
 CONFIG = config.DATA_DIR / "assistente.json"
-PACOTES = ["faster-whisper", "sounddevice", "numpy", "kokoro-onnx", "openwakeword", "scikit-learn"]
+PACOTES = ["faster-whisper", "sounddevice", "numpy", "kokoro-onnx", "openwakeword", "scikit-learn", "piper-tts"]
 KOKORO_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 KOKORO_ARQUIVOS = ["kokoro-v1.0.int8.onnx", "voices-v1.0.bin"]
 # detector treinado de "Forja": openWakeWord só pelas características (os dois .onnx), classificador nosso
@@ -60,6 +60,24 @@ GRAVA = ("import sys,wave,sounddevice as sd;"
          "w.writeframes(a.tobytes());w.close()")
 VOZES_KOKORO = [{"id": "pf_dora", "nome": "Dora (feminina)"}, {"id": "pm_alex", "nome": "Alex (masculina)"},
                 {"id": "pm_santa", "nome": "Santa (masculina, grave)"}]
+# vozes treinadas no Piper (uma pessoa de verdade, pt-BR nativo, sem sotaque): <nome>.onnx + <nome>.onnx.json. Falam na
+# CPU, frase a frase como o Kokoro e mais rápido (~40x o tempo real); o Kokoro segue carregado para os outros idiomas
+VOZES_PIPER = PASTA / "piper"
+
+
+def vozes_kokoro() -> list[dict]:
+    """As vozes da tela: as prontas do Kokoro e as treinadas no Piper (`piper:<nome>`)."""
+    treinadas = [{"id": f"piper:{f.stem}", "nome": f"{f.stem.replace('-', ' ').replace('_', ' ').capitalize()} (treinada)"}
+                 for f in sorted(VOZES_PIPER.glob("*.onnx")) if f.with_suffix(".onnx.json").is_file()]
+    return treinadas + VOZES_KOKORO
+
+
+def _voz_arg(voz: str) -> str:
+    """O --voz do ouvido: o nome da voz do Kokoro, ou o caminho do .onnx da treinada (apagada: volta para a padrão)."""
+    if not voz.startswith("piper:"):
+        return voz
+    f = VOZES_PIPER / f"{voz[6:]}.onnx"
+    return str(f) if re.fullmatch(r"[\w-]+", voz[6:]) and f.is_file() else PADRAO["voz"]
 # A conversa falada mora só na memória (nunca no banco nem no log): some quando o modelo do assistente sai da placa,
 # ou quando a pessoa pede para transformá-la num chat do Forja ("salva nossa conversa num chat").
 TRANSCRICAO_MAX = 60
@@ -193,10 +211,30 @@ def gravar(patch: dict) -> dict:
     if "pastas_documentos" in patch and d["pastas_documentos"]:
         indexa_documentos()  # pasta nova: já começa a ler, para a primeira pergunta não esperar
     reinicia = {"mic", "saida", "whisper", "voz", "detector", "sensibilidade"} & set(patch)
+    if str(patch.get("voz") or "").startswith("piper:") and instalado():
+        threading.Thread(target=_garante_piper, daemon=True).start()  # reinicia o ouvido ele mesmo, se instalar
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
         parar()
         iniciar()
     return d
+
+
+def _garante_piper() -> None:
+    """Voz treinada escolhida numa instalação de antes do piper-tts: instala o pacote no venv do assistente (~10 s com o
+    uv) e reinicia o ouvido. Sem ele o ouvido fala na voz padrão e avisa no log, em vez de ficar mudo."""
+    py = str(_py())
+    if subprocess.run([py, "-c", "import piper"], capture_output=True, **native.popen_kwargs()).returncode == 0:
+        return
+    job = downloads.create("runtime", "Voz treinada (Piper)")
+    try:
+        tts._passo(job, [tts._uv(job), "pip", "install", "--python", py, "piper-tts"], "instalando o Piper")
+        downloads.finish(job["id"], result="ok")
+    except Exception as e:
+        downloads.finish(job["id"], error=str(e) if isinstance(e, ToolError) else f"{e.__class__.__name__}: {e}")
+        return
+    if _vivo():
+        parar()
+        iniciar()
 
 
 def _py() -> Path:
@@ -218,7 +256,7 @@ def estado() -> dict:
             "detector_treinado": DETECTOR.is_file(), "metricas": metricas,
             "treinando": treino["id"] if treino and treino["status"] == "running" else "",
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
-            "vozes_kokoro": VOZES_KOKORO, "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
+            "vozes_kokoro": vozes_kokoro(), "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
             "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado(),
             "acompanhar": _web().lista(), "acoes": acoes(30), "idioma": _idioma.get("nome", "")}
 
@@ -494,7 +532,7 @@ def iniciar() -> None:
         return
     cfg = ler()
     argv = [str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_ouvido.py")),
-            "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", cfg["voz"]]
+            "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"])]
     if cfg["mic"]:
         argv += ["--mic", cfg["mic"]]
     if cfg["saida"]:

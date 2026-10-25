@@ -95,7 +95,15 @@ class Boca:
     def __init__(self, modelos: Path, voz: str):
         from kokoro_onnx import Kokoro
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
-        self.voz = voz
+        self.voz, self.piper = voz, None
+        if voz.endswith(".onnx"):  # voz treinada no Piper: o português dela; o Kokoro fica para os outros idiomas
+            try:
+                from piper import PiperVoice
+                self.piper = PiperVoice.load(voz)
+                self.voz = "pf_dora"
+            except Exception as e:  # sem o piper-tts no venv (instalação antiga) ou modelo quebrado: fala, mas na padrão
+                diz("LOG", f"voz treinada indisponível, usando a padrão: {e.__class__.__name__}: {e}")
+                self.voz = "pf_dora"
         self.textos: queue.Queue = queue.Queue()
         self.audios: queue.Queue = queue.Queue()
         self.falando = threading.Event()
@@ -148,11 +156,16 @@ class Boca:
             g, t, voz, lang = self.textos.get()
             try:
                 if g == self.geracao:
-                    amostras, sr = self.kokoro.create(t, voice=voz or self.voz, speed=1.1 if not lang else 1.0,
-                                                      lang=lang or "pt-br")
+                    if self.piper and not voz and not lang:
+                        import numpy as np
+                        amostras = np.concatenate([c.audio_float_array for c in self.piper.synthesize(t)])
+                        sr = self.piper.config.sample_rate
+                    else:
+                        amostras, sr = self.kokoro.create(t, voice=voz or self.voz, speed=1.1 if not lang else 1.0,
+                                                          lang=lang or "pt-br")
                     self.audios.put((g, amostras, sr, False, t))
             except Exception as e:  # frase que o fonemizador não engole não derruba a boca
-                diz("LOG", f"Kokoro: {e}")
+                diz("LOG", f"síntese: {e}")
             finally:
                 self.textos.task_done()
 
