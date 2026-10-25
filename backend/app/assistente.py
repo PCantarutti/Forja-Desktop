@@ -43,7 +43,9 @@ from .tools import ToolError
 PASTA = localai.RUNTIMES / "assistente"
 MODELOS = PASTA / "kokoro"
 CONFIG = config.DATA_DIR / "assistente.json"
-PACOTES = ["faster-whisper", "sounddevice", "numpy", "kokoro-onnx", "openwakeword", "scikit-learn", "piper-tts"]
+PACOTES = ["faster-whisper", "sounddevice", "numpy", "kokoro-onnx", "openwakeword", "scikit-learn", "piper-tts", "pyworld",
+           "pedalboard"]
+PACOTES_GLADOS = ["pyworld", "pedalboard"]  # o filtro GLaDOS (assistente_glados.py) sobre a voz treinada
 KOKORO_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 KOKORO_ARQUIVOS = ["kokoro-v1.0.int8.onnx", "voices-v1.0.bin"]
 # detector treinado de "Forja": openWakeWord só pelas características (os dois .onnx), classificador nosso
@@ -67,8 +69,12 @@ VOZES_PIPER = PASTA / "piper"
 
 def vozes_kokoro() -> list[dict]:
     """As vozes da tela: as prontas do Kokoro e as treinadas no Piper (`piper:<nome>`)."""
-    treinadas = [{"id": f"piper:{f.stem}", "nome": f"{f.stem.replace('-', ' ').replace('_', ' ').capitalize()} (treinada)"}
-                 for f in sorted(VOZES_PIPER.glob("*.onnx")) if f.with_suffix(".onnx.json").is_file()]
+    treinadas = []
+    for f in sorted(VOZES_PIPER.glob("*.onnx")):
+        if f.with_suffix(".onnx.json").is_file():
+            nome = f.stem.replace("-", " ").replace("_", " ").capitalize()
+            treinadas += [{"id": f"piper:{f.stem}", "nome": f"{nome} (treinada)"},
+                          {"id": f"piper:{f.stem}:glados", "nome": f"GLaDOS ({nome}, com filtro)"}]
     return treinadas + VOZES_KOKORO
 
 
@@ -76,8 +82,9 @@ def _voz_arg(voz: str) -> str:
     """O --voz do ouvido: o nome da voz do Kokoro, ou o caminho do .onnx da treinada (apagada: volta para a padrão)."""
     if not voz.startswith("piper:"):
         return voz
-    f = VOZES_PIPER / f"{voz[6:]}.onnx"
-    return str(f) if re.fullmatch(r"[\w-]+", voz[6:]) and f.is_file() else PADRAO["voz"]
+    nome = voz[6:].removesuffix(":glados")  # o filtro vai à parte, no --efeito
+    f = VOZES_PIPER / f"{nome}.onnx"
+    return str(f) if re.fullmatch(r"[\w-]+", nome) and f.is_file() else PADRAO["voz"]
 # A conversa falada mora só na memória (nunca no banco nem no log): some quando o modelo do assistente sai da placa,
 # ou quando a pessoa pede para transformá-la num chat do Forja ("salva nossa conversa num chat").
 TRANSCRICAO_MAX = 60
@@ -212,22 +219,25 @@ def gravar(patch: dict) -> dict:
         indexa_documentos()  # pasta nova: já começa a ler, para a primeira pergunta não esperar
     reinicia = {"mic", "saida", "whisper", "voz", "detector", "sensibilidade"} & set(patch)
     if str(patch.get("voz") or "").startswith("piper:") and instalado():
-        threading.Thread(target=_garante_piper, daemon=True).start()  # reinicia o ouvido ele mesmo, se instalar
+        threading.Thread(target=_garante_piper, args=(patch["voz"].endswith(":glados"),), daemon=True).start()
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
         parar()
         iniciar()
     return d
 
 
-def _garante_piper() -> None:
-    """Voz treinada escolhida numa instalação de antes do piper-tts: instala o pacote no venv do assistente (~10 s com o
-    uv) e reinicia o ouvido. Sem ele o ouvido fala na voz padrão e avisa no log, em vez de ficar mudo."""
+def _garante_piper(glados: bool = False) -> None:
+    """Voz treinada escolhida numa instalação de antes do piper-tts (e do filtro GLaDOS): instala o que falta no venv do
+    assistente (~10 s com o uv) e reinicia o ouvido. Sem eles o ouvido fala na voz padrão (ou sem o filtro) e avisa no
+    log, em vez de ficar mudo."""
     py = str(_py())
-    if subprocess.run([py, "-c", "import piper"], capture_output=True, **native.popen_kwargs()).returncode == 0:
+    teste = "import piper" + ("; import pyworld, pedalboard" if glados else "")
+    if subprocess.run([py, "-c", teste], capture_output=True, **native.popen_kwargs()).returncode == 0:
         return
-    job = downloads.create("runtime", "Voz treinada (Piper)")
+    job = downloads.create("runtime", "Voz treinada (Piper)" + (" e filtro GLaDOS" if glados else ""))
     try:
-        tts._passo(job, [tts._uv(job), "pip", "install", "--python", py, "piper-tts"], "instalando o Piper")
+        tts._passo(job, [tts._uv(job), "pip", "install", "--python", py, "piper-tts", *(PACOTES_GLADOS if glados else [])],
+                   "instalando o Piper" + (" e o filtro" if glados else ""))
         downloads.finish(job["id"], result="ok")
     except Exception as e:
         downloads.finish(job["id"], error=str(e) if isinstance(e, ToolError) else f"{e.__class__.__name__}: {e}")
@@ -533,6 +543,8 @@ def iniciar() -> None:
     cfg = ler()
     argv = [str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_ouvido.py")),
             "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"])]
+    if cfg["voz"].startswith("piper:") and cfg["voz"].endswith(":glados"):
+        argv += ["--efeito", "glados"]
     if cfg["mic"]:
         argv += ["--mic", cfg["mic"]]
     if cfg["saida"]:

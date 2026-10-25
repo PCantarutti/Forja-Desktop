@@ -92,10 +92,10 @@ def frases(texto: str) -> list[str]:
 class Boca:
     """Duas threads: uma sintetiza a frase seguinte enquanto a outra toca a atual."""
 
-    def __init__(self, modelos: Path, voz: str):
+    def __init__(self, modelos: Path, voz: str, efeito: str = ""):
         from kokoro_onnx import Kokoro
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
-        self.voz, self.piper = voz, None
+        self.voz, self.piper, self.efeito = voz, None, None
         if voz.endswith(".onnx"):  # voz treinada no Piper: o português dela; o Kokoro fica para os outros idiomas
             try:
                 from piper import PiperVoice
@@ -104,6 +104,13 @@ class Boca:
             except Exception as e:  # sem o piper-tts no venv (instalação antiga) ou modelo quebrado: fala, mas na padrão
                 diz("LOG", f"voz treinada indisponível, usando a padrão: {e.__class__.__name__}: {e}")
                 self.voz = "pf_dora"
+        if efeito == "glados" and self.piper:
+            try:
+                import assistente_glados  # ao lado deste arquivo (o ouvido roda como script)
+                import pyworld  # noqa: F401  (falha aqui, e não na primeira frase)
+                self.efeito = assistente_glados.aplica
+            except Exception as e:  # sem pyworld no venv: fala com a voz treinada, sem o filtro
+                diz("LOG", f"filtro GLaDOS indisponível, falando sem ele: {e.__class__.__name__}: {e}")
         self.textos: queue.Queue = queue.Queue()
         self.audios: queue.Queue = queue.Queue()
         self.falando = threading.Event()
@@ -160,6 +167,8 @@ class Boca:
                         import numpy as np
                         amostras = np.concatenate([c.audio_float_array for c in self.piper.synthesize(t)])
                         sr = self.piper.config.sample_rate
+                        if self.efeito:  # o filtro GLaDOS: ~0,15 s por segundo de fala, enquanto a frase anterior toca
+                            amostras = self.efeito(amostras, sr)
                     else:
                         amostras, sr = self.kokoro.create(t, voice=voz or self.voz, speed=1.1 if not lang else 1.0,
                                                           lang=lang or "pt-br")
@@ -395,6 +404,7 @@ def main() -> int:
     p.add_argument("--mic", default="")
     p.add_argument("--whisper", default="small")
     p.add_argument("--voz", default="pf_dora")
+    p.add_argument("--efeito", default="")  # "glados": o filtro de assistente_glados.py sobre a voz treinada
     p.add_argument("--saida", default="")  # alto-falante (pedaço do nome + API); vazio = o padrão do Windows
     p.add_argument("--listar", action="store_true")
     p.add_argument("--detector", default="")  # .npz do detector treinado de "Forja" (vazio: Whisper em toda fala)
@@ -419,7 +429,7 @@ def main() -> int:
         if a.saida:
             sd.default.device = (None, dispositivo(a.saida, "saida"))
         stt = WhisperModel(a.whisper, device="cpu", compute_type="int8")
-        boca = Boca(Path(a.modelos), a.voz)
+        boca = Boca(Path(a.modelos), a.voz, a.efeito)
         detector = Detector(Path(a.detector), Path(a.oww), a.sensibilidade) if a.detector else None
     except Exception as e:
         diz("ERRO", f"{e.__class__.__name__}: {e}")

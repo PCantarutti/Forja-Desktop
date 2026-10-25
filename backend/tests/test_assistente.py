@@ -444,9 +444,11 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     (tmp_path / "mae.onnx").write_bytes(b"x")
     (tmp_path / "mae.onnx.json").write_text("{}", "utf-8")
     (tmp_path / "sem-config.onnx").write_bytes(b"x")  # sem o .json o Piper não carrega: fica de fora
-    assert assistente.vozes_kokoro()[0] == {"id": "piper:mae", "nome": "Mae (treinada)"}
+    assert assistente.vozes_kokoro()[:2] == [{"id": "piper:mae", "nome": "Mae (treinada)"},
+                                             {"id": "piper:mae:glados", "nome": "GLaDOS (Mae, com filtro)"}]
     assert [v["id"] for v in assistente.vozes_kokoro()].count("piper:sem-config") == 0
     assert assistente._voz_arg("piper:mae") == str(tmp_path / "mae.onnx")
+    assert assistente._voz_arg("piper:mae:glados") == str(tmp_path / "mae.onnx")  # o filtro vai no --efeito
     assert assistente._voz_arg("pf_dora") == "pf_dora"
     assert assistente._voz_arg("piper:apagada") == assistente.PADRAO["voz"]
     assert assistente._voz_arg("piper:../../x") == assistente.PADRAO["voz"]
@@ -455,7 +457,8 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     monkeypatch.setattr(assistente, "CONFIG", tmp_path / "assistente.json")
     monkeypatch.setattr(assistente, "instalado", lambda: True)
     monkeypatch.setattr(assistente, "_vivo", lambda: False)
-    monkeypatch.setattr(assistente, "_garante_piper", lambda: chamadas.append(1))
-    monkeypatch.setattr(threading, "Thread", lambda target, daemon: type("T", (), {"start": lambda s: target()})())
+    monkeypatch.setattr(assistente, "_garante_piper", lambda glados=False: chamadas.append(glados))
+    monkeypatch.setattr(threading, "Thread", lambda target, args=(), daemon=None: type("T", (), {"start": lambda s: target(*args)})())
     assistente.gravar({"voz": "piper:mae"})
-    assert chamadas == [1] and assistente.ler()["voz"] == "piper:mae"
+    assistente.gravar({"voz": "piper:mae:glados"})  # com o filtro: instala também pyworld e pedalboard
+    assert chamadas == [False, True] and assistente.ler()["voz"] == "piper:mae:glados"
