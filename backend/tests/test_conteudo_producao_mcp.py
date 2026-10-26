@@ -16,12 +16,13 @@ def modo_mcp(ambiente, monkeypatch):  # noqa: F811
     return ambiente
 
 
-async def _ate(cond, vezes=300):
+async def _ate(cond, vezes=1500):
+    # 30 s: na bateria inteira a máquina fica lenta e 6 s não bastavam (o teste seguia sem o vídeo pronto)
     for _ in range(vezes):
         if cond():
             return True
         await asyncio.sleep(0.02)
-    return False
+    raise AssertionError("condição não chegou em 30 s")
 
 
 def test_exige_o_interruptor_do_mcp(monkeypatch):
