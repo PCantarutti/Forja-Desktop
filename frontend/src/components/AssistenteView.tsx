@@ -3,7 +3,7 @@ import { api } from "../api";
 import type { LocalModel } from "../types";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { BarraTopo, Caixa } from "./ImagensView";
-import { ChevronDown, Mic, X } from "./icons";
+import { Mic, X } from "./icons";
 import { Interruptor } from "./Settings";
 
 type Estado = {
@@ -19,7 +19,7 @@ type Estado = {
   lembretes: { id: string; quando: string; texto: string }[];
   resumo_hora: string; cidade: string; avisos_email: string[];
   pastas_documentos: string[]; notas: { id: string; texto: string; quando: string }[];
-  conversa_continua: boolean; idioma: string;
+  conversa_continua: boolean; idioma: string; trocavoz_saida: string; trocavoz_retorno: boolean; trocavoz_pausa: number; trocavoz_whisper: string; trocavoz: { ligado: boolean; erro: string; saida: string };
   acoes: { id: string; t: number; tipo: string; resumo: string; desfeito: boolean; pode_desfazer: boolean }[];
   documentos: { arquivos: number; indexando: boolean; erro: string };
   acompanhar: { id: string; tipo: "preco" | "versao"; alvo: string; limite: number | null; base: string | null; ultimo: number | null; conferido: string | null }[];
@@ -48,7 +48,7 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Conversa só na memória", exemplos: ["Forja, salva nossa conversa num chat", "Salvar como chat", "Esquecer"],
     texto: "Nada do que vocês conversam vai para o disco nem para o log: some quando o modelo dele descarrega. Para guardar, peça para transformar a conversa num chat do Forja (ou use o botão Salvar como chat na tela dele). Esquecer apaga na hora." },
   { titulo: "Tela do assistente", exemplos: ["botão do microfone", "Como usar", "Configurações"],
-    texto: "O círculo grande mostra o que ele está fazendo; o botão do microfone fala com ele na hora (como o atalho); embaixo, a transcrição do que você disse e do que ele respondeu, e um campo para escrever. As configurações ficam no painel da direita, que recolhe." },
+    texto: "O círculo grande mostra o que ele está fazendo; o botão do microfone fala com ele na hora (como o atalho); embaixo, a transcrição do que você disse e do que ele respondeu, e um campo para escrever. As configurações ficam no painel da direita (que recolhe), em abas: Voz, Chamar, Modelos, Dados e Atividade." },
   { titulo: "Criar imagem", exemplos: ["Forja, crie uma imagem de um gato esquiando"],
     texto: "Abre uma conversa nova em Imagem e gera com o seu modelo favorito de imagem (em Comandos, abaixo)." },
   { titulo: "Gerar vídeo", exemplos: ["Forja, gere um vídeo de um cachorro surfando"],
@@ -63,6 +63,8 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Quando ele pergunta “Com qual modelo?”: o nome do modelo, “o de sempre” (o do último envio no Forja) ou um dos seus favoritos por uso. Dizendo “usando o modelo X” no próprio pedido, ele nem pergunta. Não achou? Ele diz os modelos que você tem." },
   { titulo: "Microfone, alto-falante e voz", exemplos: ["Fone do headset", "Voz treinada", "GLaDOS em inglês", "Voz rápida", "Voz clonada da tela Voz"],
     texto: "Escolha de qual microfone ele ouve e em qual alto-falante ele fala (o fone, por exemplo). As vozes “(treinada)” são de uma pessoa de verdade, treinadas no Piper com gravações dela: português nativo, sem sotaque, e falam na CPU frase a frase, mais rápido que a voz rápida. Ficam na pasta piper do runtime do assistente (o .onnx e o .onnx.json). Cada uma tem também a versão “GLaDOS (…, com filtro)”: a mesma voz com afinação robótica cravada em escala, entonação de máquina e o timbre metálico, ainda na CPU. Voz treinada em inglês (“… (treinada, só inglês)”, como a GLaDOS do jogo): fale com ela em qualquer idioma, ela sempre responde em inglês, e as frases prontas dele saem traduzidas (guardadas: da segunda vez é na hora). Microfone desconectado: ele tenta voltar sozinho e avisa aqui se não der." },
+  { titulo: "Trocador de voz (Discord e chamadas)", exemplos: ["Configurações › Voz › Trocador de voz", "microfone “CABLE Output” no Discord"],
+    texto: "Você fala no seu microfone e seus amigos ouvem a voz do assistente: cada frase é transcrita pelo Whisper e falada de novo na voz escolhida (Kokoro, treinada ou GLaDOS) num microfone virtual, ~1 s depois na velocidade rápida (a equilibrada entende melhor, ~2 s). Ligue o Retorno para ouvir a voz dele no seu fone. Se ele te corta no meio da frase, aumente a “Pausa que encerra a frase” (padrão 0,6 s); se demora para sair, diminua a pausa ou use a velocidade rápida. Precisa do VB-CABLE (grátis, vb-audio.com); no Discord, escolha o microfone “CABLE Output”. Com voz só em inglês, ele traduz o que você fala. Liga no interruptor da aba Voz e desliga sozinho ao fechar o Forja." },
   { titulo: "Personalidade", exemplos: ["Sarcástico", "GLaDOS", "Leve", "Sem humor"],
     texto: "O humor só aparece onde cabe: pergunta boba sim, assunto sério não, e depois de uma piada as próximas respostas saem sem." },
   { titulo: "Atalho global", exemplos: ["Ctrl+Alt+F"],
@@ -74,9 +76,9 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Modelo dele e da placa de vídeo", exemplos: [],
     texto: "Escolha o modelo do assistente em “Modelo do assistente” (vazio: o do último envio no Forja). Abrir chat ou agente com outro modelo tira o do assistente da placa e carrega o novo com o pedido; se outro trabalho estiver usando a placa, ele avisa e começa quando ele terminar. Parado pelo tempo escolhido, o modelo dele sai da placa sozinho. Pergunta falada nunca derruba trabalho do Forja; imagem ou vídeo com trabalho em andamento: ele pergunta antes." },
   { titulo: "Trocar o modelo dele falando", exemplos: ["Forja, troca seu modelo para o Qwen 3.6", "Forja, use o modelo Ornith para responder", "Forja, volta para o de sempre", "Forja, qual modelo você está usando?"],
-    texto: "Muda o modelo do assistente na hora (o mesmo de Configurações › Modelo) e já começa a carregar. “O de sempre” volta a seguir o do último envio no Forja. Sem nome, ele pergunta e diz quais você tem." },
+    texto: "Muda o modelo do assistente na hora (o mesmo de Configurações › Modelos) e já começa a carregar. “O de sempre” volta a seguir o do último envio no Forja. Sem nome, ele pergunta e diz quais você tem." },
   { titulo: "Usar o modelo que já está carregado", exemplos: ["Pode usar se já estiver carregado"],
-    texto: "Em Configurações › Modelo, escolha os modelos que ele pode usar: se um deles já estiver carregado e parado, ele responde com ele em vez de carregar o dele (mais rápido, nada troca na placa). Ocupado com trabalho do Forja, não pega." },
+    texto: "Em Configurações › Modelos, escolha os modelos que ele pode usar: se um deles já estiver carregado e parado, ele responde com ele em vez de carregar o dele (mais rápido, nada troca na placa). Ocupado com trabalho do Forja, não pega." },
   { titulo: "Controlar o PC", exemplos: ["Forja, abre o Spotify", "Forja, fecha o Chrome", "Forja, volume 30", "Forja, aumenta o volume", "Forja, tira o som", "Forja, muda para o fone", "Forja, passa o som pra caixa", "Forja, tá baixinho, sobe aí", "Forja, trava o PC"],
     texto: "Abre qualquer programa do menu Iniciar, fecha um programa como no X (se tiver algo sem salvar, ele pergunta), muda o volume e a saída de som e trava a tela. Pode pedir do seu jeito: o que as regras não pegam, o modelo dele entende e escolhe uma ação da lista (nunca comando livre no Windows; fechar programa só com o nome dito). “Não perturbe” o Windows não deixa um programa ligar: ele abre a página das notificações." },
   { titulo: "Janelas e música", exemplos: ["Forja, joga essa janela para o outro monitor", "Forja, maximiza o VS Code", "Forja, minimiza tudo", "Forja, pausa a música", "Forja, dá um pause aí", "Forja, próxima música", "Forja, o que está tocando?"],
@@ -84,9 +86,9 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Pastas e arquivos", exemplos: ["Forja, abre a pasta de downloads", "Forja, acha o PDF do contrato de ontem", "Forja, procura a planilha de gastos", "Forja, onde está o print que eu tirei hoje?"],
     texto: "Procura em Downloads, Documentos, Área de trabalho, Imagens e Vídeos, pelo tipo (PDF, planilha, foto, print...), pelo dia (hoje, ontem, essa semana) e pelas palavras do nome. Abre a pasta com o arquivo selecionado; não apaga nem move nada." },
   { titulo: "Lembretes", exemplos: ["Forja, me lembre de lavar a louça às 14h", "Forja, me lembra de ligar pro João daqui a 20 minutos", "Forja, amanhã às 8 me lembre de tomar o remédio", "Forja, me dá um toque daqui a meia hora pra tirar a roupa do varal", "Forja, não me deixa esquecer de pagar a luz", "Forja, quais são meus lembretes?", "Forja, cancela o lembrete da louça"],
-    texto: "Na hora, notificação no Windows, no celular (Forja Mobile) e ele fala, se estiver ligado. Sem horário, ele pergunta “Pra quando?”. Valem “às 2 da tarde”, “em meia hora”, “amanhã”, “na sexta às 10h”. Ficam guardados (somem só quando tocam ou você cancela) e aparecem em Configurações › Lembretes; um perdido com o Forja fechado toca assim que ele abrir." },
+    texto: "Na hora, notificação no Windows, no celular (Forja Mobile) e ele fala, se estiver ligado. Sem horário, ele pergunta “Pra quando?”. Valem “às 2 da tarde”, “em meia hora”, “amanhã”, “na sexta às 10h”. Ficam guardados (somem só quando tocam ou você cancela) e aparecem em Configurações › Atividade; um perdido com o Forja fechado toca assim que ele abrir." },
   { titulo: "E-mail (Gmail)", exemplos: ["Forja, tenho e-mail importante?", "Forja, resume os e-mails do João", "Forja, lê o último do banco", "Forja, responde que eu topo a reunião na quinta", "Forja, escreve pra Ana dizendo que eu atraso 10 minutos"],
-    texto: "Com a conta Google conectada (Configurações › E-mail e agenda). Ele resume falando, sem ler tudo. Para responder ou escrever, ele monta o rascunho no Gmail, lê em voz alta e pergunta “Mando?”: só envia com um sim (“manda”, “pode enviar”); “muda para sexta” reescreve; “não” deixa nos rascunhos. O que está escrito nos e-mails nunca vira ordem para ele." },
+    texto: "Com a conta Google conectada (Configurações › Dados › E-mail e agenda). Ele resume falando, sem ler tudo. Para responder ou escrever, ele monta o rascunho no Gmail, lê em voz alta e pergunta “Mando?”: só envia com um sim (“manda”, “pode enviar”); “muda para sexta” reescreve; “não” deixa nos rascunhos. O que está escrito nos e-mails nunca vira ordem para ele." },
   { titulo: "Agenda (Google)", exemplos: ["Forja, o que tenho amanhã?", "Forja, tenho alguma coisa na quinta?", "Forja, marca dentista sexta às 10", "Forja, bota na agenda academia amanhã às 7 e me avisa meia hora antes"],
     texto: "Lê e marca na sua Agenda Google (evento de 1 hora; só o dia vira evento do dia todo). “Me avisa N minutos antes” cria um lembrete do Forja. Sem a conta conectada, “marca” vira lembrete do Forja." },
   { titulo: "Resumo do dia e avisos de e-mail", exemplos: ["Forja, como tá meu dia?", "Forja, resumo do dia"],
@@ -104,7 +106,7 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "O que está na sua tela", exemplos: ["Forja, o que tem na minha tela?", "Forja, o que esse erro aqui quer dizer?", "Forja, acha produtos parecidos com esse que eu tô vendo", "Forja, onde eu compro isso mais barato?"],
     texto: "Tira um print do monitor da janela da frente e responde olhando para ele: lê erros, resume a página, explica o que aparece. Com produto na tela, descobre qual é, diz as três lojas mais baratas e abre a busca no painel Navegador. Precisa de um modelo com visão (gemma 4, por exemplo); com modelo da nuvem, o print sai do PC. Ele não fica salvo." },
   { titulo: "Acompanhar e avisar", exemplos: ["Forja, me avisa quando o Galaxy S25 baixar de 4 mil", "Forja, me fala quando sair versão nova do llama.cpp", "Forja, o que você está acompanhando?", "Forja, para de acompanhar o Galaxy"],
-    texto: "Confere a cada 3 horas e avisa uma vez, falado, no Windows e no celular. Versão nova vale para projetos do GitHub. A lista fica em Configurações › Acompanhando." },
+    texto: "Confere a cada 3 horas e avisa uma vez, falado, no Windows e no celular. Versão nova vale para projetos do GitHub. A lista fica em Configurações › Atividade." },
   { titulo: "Ditado em qualquer campo", exemplos: ["microfone ao lado do Enviar", "Forja, dita", "Forja, quero ditar uma mensagem"],
     texto: "Todo campo de chat do Forja tem um microfone ao lado do Enviar (nos outros campos ele aparece em cima, no canto): um clique grava, outro para, e o texto entra onde está o cursor. Usa o mesmo Whisper e o mesmo microfone do assistente, mesmo com ele desligado. “Forja, dita” começa no campo aberto e para sozinho quando você fica em silêncio." },
   { titulo: "O agente do Forja por voz", exemplos: ["Forja, como tá o trabalho no projeto da loja?", "Forja, ele tá pedindo alguma coisa?", "Forja, aprova o que ele pediu", "Forja, recusa", "Forja, para o agente"],
@@ -196,8 +198,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   useEffect(() => { carregaGravs(); }, [carregaGravs]);
   const [painel, setPainel] = useState(() => { try { return localStorage.getItem("forja.assistente.painel") !== "0"; } catch { return true; } });
   const alternarPainel = () => setPainel((v) => { try { localStorage.setItem("forja.assistente.painel", v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
+  const [aba, setAba] = useState<Aba>(() => { try { return (localStorage.getItem("forja.assistente.aba") as Aba) || "voz"; } catch { return "voz"; } });
+  const trocaAba = (a: Aba) => { setAba(a); try { localStorage.setItem("forja.assistente.aba", a); } catch { /* sem storage */ } };
   const [tutorial, setTutorial] = useState(false);
-  const [google, setGoogle] = useState<GoogleConta | null>(null);
   const [memorias, setMemorias] = useState<Memoria[]>([]);
   const carregaMemorias = useCallback(() => api.get<{ items: Memoria[] }>("/memory/personal")
     .then((r) => setMemorias(r.items.filter((m) => m.type === "usuario" || m.type === "preferencia"))).catch(() => {}), []);
@@ -253,7 +256,6 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   }, [e?.instalando, e?.ligado, e?.treinando, carrega]);
 
   if (!e) return <div className="flex-1 bg-bg" />;
-  const resumoGoogle = google?.conectado ? (google.email ?? "conectado") : "não conectado";
   const grava = (patch: Partial<Estado>) => api.put<Estado>("/assistente", patch).then((r) => setE((a) => a && { ...a, ...r })).catch((er) => onError(er.message));
   const ligar = (ligado: boolean) => api.post<Estado>("/assistente/ligar", { ligado }).then(setE).catch((er) => onError(er.message));
   const imagens = local?.image_models.filter((m) => !m.req?.edita) ?? [];
@@ -264,14 +266,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   ];
   for (const f of e.favoritos) if (!opcoes.some((o) => o.provider === f.provider && o.model === f.model)) opcoes.push({ grupo: "Escolhidos", provider: f.provider, model: f.model });
   const grupos = [...new Set(opcoes.map((o) => o.grupo))];
-  const nomeModelo = (m: string) => (m.split(/[\\/]/).pop() ?? m).replace(/\.(gguf|safetensors)$/i, "");
-  const resumoModelo = `${e.modelo ? nomeModelo(e.modelo.model) : "o do último envio"} · raciocínio ${e.raciocinio}`
-    + (e.permitidos.length ? ` · +${e.permitidos.length} permitido${e.permitidos.length === 1 ? "" : "s"}` : "");
-  const resumoOuvir = `${mics.find((m) => m.id === e.mic)?.nome ?? "microfone padrão"} · `
-    + (e.motor === "kokoro" ? e.vozes_kokoro.find((v) => v.id === e.voz)?.nome ?? e.voz : "voz da tela Voz");
-  const resumoDetector = ({ whisper: "Só Whisper", treinado: "Detector", ambos: "Detector + Whisper" } as const)[e.detector]
-    + (e.minha_voz ? ` · ${e.minha_voz} gravaç${e.minha_voz === 1 ? "ão" : "ões"}` : "");
-  const resumoComandos = `imagem: ${e.imagem ? nomeModelo(e.imagem) : "nenhum"} · vídeo: ${e.video ? nomeModelo(e.video) : "nenhum"}`;
+  const cabo = mics.find((m) => m.tipo === "saida" && m.api === "MME" && m.nome.startsWith("CABLE Input"));
   const mudaFav = (i: number, patch: Partial<Favorito> | null) =>
     grava({ favoritos: patch === null ? e.favoritos.filter((_, j) => j !== i) : e.favoritos.map((f, j) => (j === i ? { ...f, ...patch } : f)) });
 
@@ -392,10 +387,18 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
               <X className="size-3.5" />
             </button>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pt-1.5 pb-4">
-            {!e.instalado ? <p className="text-[12px] leading-relaxed text-muted">Instale o assistente para configurá-lo.</p> : (
+          {e.instalado && (
+            <div className="mx-4 mt-2 flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="tablist" aria-label="Seções das configurações">
+              {ABAS.map(([id, rot]) => (
+                <button key={id} role="tab" aria-selected={aba === id} onClick={() => trocaAba(id)}
+                        className={`flex-1 rounded-[6px] py-1.5 ${aba === id ? "bg-raised font-medium text-fg" : "text-muted hover:text-fg"}`}>{rot}</button>
+              ))}
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-4">
+            {!e.instalado ? <p className="px-4 text-[12px] leading-relaxed text-muted">Instale o assistente para configurá-lo.</p> : (
               <>
-                <Grupo id="modelo" titulo="Modelo" resumo={resumoModelo} abertoPadrao>
+                {aba === "modelos" && <Secao titulo="Modelo do assistente">
                     <Caixa rotulo="Responde com">
                       <select className={`${campo} cursor-pointer`} value={e.modelo ? `${e.modelo.provider}|${e.modelo.model}` : ""}
                               onChange={(ev) => { const [provider, ...m] = ev.target.value.split("|"); grava({ modelo: provider ? { provider, model: m.join("|") } : null }); }}>
@@ -459,9 +462,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                         sem trocar nada na placa. Também dá para trocar o modelo dele falando: “Forja, troca seu modelo para o Qwen 3.6”.
                       </p>
                     </div>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="ouvir" titulo="Ouvir e falar" resumo={resumoOuvir}>
+                {aba === "voz" && <Secao titulo="Ouvir e falar">
                   <Interruptor ligado={e.conversa_continua} onChange={(v) => grava({ conversa_continua: v })}
                                rotulo="Conversa contínua: depois de responder, ouve a próxima pergunta sem “Forja”" />
                   <Caixa rotulo="Microfone">
@@ -516,9 +519,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       <p className="text-[11.5px] leading-relaxed text-faint">Avisos curtos (“Pesquisando.”, “Criando a imagem…”) continuam na voz rápida; a resposta vem inteira na voz clonada, depois que o modelo termina.</p>
                     </>
                   )}
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="personalidade" titulo="Personalidade" resumo={e.humores.find((h) => h.id === e.humor)?.nome ?? ""}>
+                {aba === "voz" && <Secao titulo="Personalidade">
                   <div className="grid grid-cols-2 gap-1.5" role="radiogroup" aria-label="Humor">
                     {e.humores.map((h) => (
                       <button key={h.id} role="radio" aria-checked={e.humor === h.id} onClick={() => grava({ humor: h.id })}
@@ -528,9 +531,49 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     ))}
                   </div>
                   <p className="text-[11.5px] leading-relaxed text-faint">{DICA_HUMOR[e.humor]} Ele só brinca quando cabe: pergunta boba sim, assunto sério não, e nunca em toda resposta.</p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="atalho" titulo="Atalho global" resumo={e.atalho || "nenhum"}>
+                {aba === "voz" && <Secao titulo="Trocador de voz">
+                  <Interruptor ligado={e.trocavoz.ligado} rotulo="Falar nas chamadas com a voz dele"
+                               onChange={(v) => api.post("/assistente/trocavoz", { ligado: v }).then(carrega).catch((er) => onError(er.message))} />
+                  <Caixa rotulo="Microfone virtual (onde a voz dele sai)">
+                    <select className={`${campo} cursor-pointer`} value={e.trocavoz_saida && mics.some((m) => m.id === e.trocavoz_saida) ? e.trocavoz_saida : ""}
+                            onChange={(ev) => grava({ trocavoz_saida: ev.target.value })}>
+                      <option value="">{cabo ? `automático: ${cabo.nome}` : "automático: VB-CABLE (não instalado)"}</option>
+                      {mics.filter((m) => m.api === "MME" && m.tipo === "saida").map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
+                    </select>
+                  </Caixa>
+                  <Caixa rotulo="Velocidade (Whisper do trocador)">
+                    <select className={`${campo} cursor-pointer`} value={e.trocavoz_whisper} onChange={(ev) => grava({ trocavoz_whisper: ev.target.value })}>
+                      <option value="base">rápida: ~1 s para converter (base)</option>
+                      <option value="small">equilibrada: entende melhor, ~2 s (small)</option>
+                      <option value="medium">precisa: 5 s ou mais, só com a CPU livre (medium)</option>
+                    </select>
+                  </Caixa>
+                  <Caixa rotulo="Pausa que encerra a frase (mais longa: não te corta; mais curta: a voz sai antes)">
+                    <select className={`${campo} cursor-pointer`} value={e.trocavoz_pausa} onChange={(ev) => grava({ trocavoz_pausa: Number(ev.target.value) })}>
+                      {[0.3, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2].map((s) => <option key={s} value={s}>{s.toLocaleString("pt-BR")} s{s === 0.6 ? " (padrão)" : ""}</option>)}
+                    </select>
+                  </Caixa>
+                  <Interruptor ligado={e.trocavoz_retorno} onChange={(v) => grava({ trocavoz_retorno: v })}
+                               rotulo="Retorno: ouvir a voz dele no alto-falante de Ouvir e falar" />
+                  {!cabo && (
+                    <p className="text-[11.5px] leading-relaxed text-warn">
+                      Falta o cabo de áudio virtual. Instale o VB-CABLE (grátis, pede administrador e reiniciar o PC){" "}
+                      <button className="underline hover:text-fg" onClick={() => window.open("https://vb-audio.com/Cable/")}>em vb-audio.com</button>{" "}
+                      e depois <button className="underline hover:text-fg" onClick={() => api.get<Mic[]>("/assistente/microfones").then(setMics).catch(() => {})}>procure de novo</button>.
+                    </p>
+                  )}
+                  {e.trocavoz.erro && <p className="text-[11.5px] text-diff-del-fg">{e.trocavoz.erro}</p>}
+                  <p className="text-[11.5px] leading-relaxed text-faint">
+                    No Discord (Configurações › Voz e vídeo), escolha o microfone “CABLE Output”. Fale normal no microfone de
+                    Ouvir e falar: cada frase sai na voz escolhida acima logo depois de você parar de falar. Voz só em inglês
+                    traduz o que você fala. Com o retorno, use fone: na caixa de som o microfone pega a voz dele de volta.
+                    Desliga sozinho ao fechar o Forja.
+                  </p>
+                </Secao>}
+
+                {aba === "chamar" && <Secao titulo="Atalho global">
                   <div className="flex gap-1.5">
                     <div className="flex-1">
                       <Caixa rotulo={gravandoAtalho ? "Aperte a combinação (Esc cancela)" : "Chamar sem dizer “Forja” (funciona com o Forja minimizado)"}>
@@ -551,9 +594,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       : !window.forja?.atalho ? "Atalho global só no Forja Desktop."
                       : "Aperte e fale o pedido direto. Com ele falando, o atalho interrompe e já ouve você (o microfone fica fechado enquanto ele fala). Desligado, ele liga e ouve. Ex.: Ctrl+Alt+F."}
                   </p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="detector" titulo="Detector de “Forja”" resumo={resumoDetector}>
+                {aba === "chamar" && <Secao titulo="Detector de “Forja”">
                   <div className="flex rounded-[8px] border border-line bg-surface p-0.5 text-xs" role="radiogroup" aria-label="Como ele reconhece “Forja”">
                     {([["whisper", "Só Whisper", "Transcreve tudo o que o microfone pega e procura “Forja”: não precisa treinar, mas gasta CPU com TV ou conversa por perto, e o círculo demora um pouco mais"],
                        ["treinado", "Detector", "Um modelo pequeno só para “Forja”: quase não gasta CPU e acende na hora; se ele não ouvir o nome, nada acontece"],
@@ -593,9 +636,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   )}
                   {avisoGrav && <p className="text-[11.5px] text-warn">{avisoGrav}</p>}
                   {gravs.length > 0 && (
-                    <Recolhe titulo={`Suas gravações (${gravs.length})`} resumo={`${gravs.filter((g) => g.reconhecida).length} reconhecidas no último treino`} id="gravacoes">
-                      {gravs.length > 0 && (
-                    <div className="flex flex-col gap-0.5 rounded-[10px] border border-line bg-surface p-1.5" aria-label="Suas gravações">
+                    <div className="flex max-h-[220px] flex-col gap-0.5 overflow-y-auto rounded-[10px] border border-line bg-surface p-1.5" aria-label="Suas gravações">
                       <div className="flex items-center px-1.5 pb-1 text-[10.5px] text-faint">
                         <span className="flex-1">Suas gravações ({gravs.length})</span>
                         <button className="hover:text-diff-del-fg" onClick={() => api.del<{ minha_voz: number }>("/assistente/gravar-voz")
@@ -621,8 +662,6 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       ))}
                     </div>
                   )}
-                    </Recolhe>
-                  )}
                   {treino?.error && <p className="text-[11.5px] text-diff-del-fg">{treino.error}</p>}
                   <p className="text-[11.5px] leading-relaxed text-faint">
                     {e.metricas
@@ -631,9 +670,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     O treino não precisa de você: usa vozes sintéticas e 20 s do som da casa (uns 5 minutos, na CPU). Gravações da sua voz melhoram o acerto: grave e treine de novo.
                     Com o detector o Whisper ainda confere o nome, então barulho que pareça “Forja” não vira comando.
                   </p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="favoritos" titulo="Modelos favoritos por uso" resumo={`${e.favoritos.length} favorito${e.favoritos.length === 1 ? "" : "s"}`} extra={e.favoritos.length < 12 && opcoes.length > 0 && (
+                {aba === "modelos" && <Secao titulo="Modelos favoritos por uso" extra={e.favoritos.length < 12 && opcoes.length > 0 && (
                   <button className="text-[11.5px] text-faint hover:text-fg"
                           onClick={() => {
                             const nome = ["código", "documento", "pesquisa", "conversa", "imagem"].find((n) => !e.favoritos.some((f) => f.nome === n)) ?? `uso ${e.favoritos.length + 1}`;
@@ -664,10 +703,10 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     Ao pedir “Forja, abra um chat no Forja sobre…” ou um trabalho no modo agente, ele pergunta com qual modelo seguir:
                     responda o nome do modelo, “o de sempre” (o do último envio) ou um destes usos, como “código” ou “pesquisa”.
                   </p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="google" titulo="E-mail e agenda" resumo={resumoGoogle}>
-                  <ContaGoogle onError={onError} onMuda={setGoogle} />
+                {aba === "dados" && <Secao titulo="E-mail e agenda">
+                  <ContaGoogle onError={onError} />
                   <div className="grid grid-cols-2 gap-1.5">
                     <Caixa rotulo="Resumo do dia, todo dia às">
                       <input type="time" className={`${campo} cursor-pointer`} value={e.resumo_hora}
@@ -697,10 +736,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     O resumo do dia sai falado (com ele ligado), no Windows e no celular: agenda, e-mails importantes, lembretes,
                     o que o Forja trabalhou durante a noite, o clima e notícias. Os avisos de e-mail conferem a caixa a cada 3 minutos.
                   </p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="saber" titulo="Documentos e memória"
-                       resumo={`${e.pastas_documentos.length} pasta${e.pastas_documentos.length === 1 ? "" : "s"} · ${memorias.length} memória${memorias.length === 1 ? "" : "s"} · ${e.notas.length} nota${e.notas.length === 1 ? "" : "s"}`}>
+                {aba === "dados" && <Secao titulo="Documentos e memória">
                   <span className="text-[11.5px] font-medium text-fg-2">
                     Pastas dos seus documentos {e.documentos.indexando ? "(lendo…)" : e.pastas_documentos.length ? `(${e.documentos.arquivos} arquivos)` : ""}
                   </span>
@@ -744,9 +782,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     Tudo fica no seu PC: os documentos viram um índice local, e as memórias são as mesmas que o agente do Forja usa.
                     A conversa falada continua sem ser guardada; só vale o que você pedir para guardar.
                   </p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="acompanhar" titulo="Acompanhando" resumo={e.acompanhar.length ? `${e.acompanhar.length} item${e.acompanhar.length === 1 ? "" : "s"}` : "nada"}>
+                {aba === "atividade" && <Secao titulo="Acompanhando">
                   {e.acompanhar.length === 0 && <span className="text-[11.5px] text-faint">Nada. Diga “Forja, me avisa quando o PS5 baixar de 3 mil”.</span>}
                   {e.acompanhar.map((a) => (
                     <div key={a.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
@@ -760,9 +798,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     </div>
                   ))}
                   <p className="text-[11.5px] leading-relaxed text-faint">Confere a cada 3 horas e avisa uma vez (falado, no Windows e no celular).</p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="acoes" titulo="O que ele fez" resumo={e.acoes.length ? `${e.acoes.length} ações recentes` : "nada ainda"}>
+                {aba === "atividade" && <Secao titulo="O que ele fez">
                   {e.acoes.length === 0 && <span className="text-[11.5px] text-faint">Ações por voz aparecem aqui (sem o que foi conversado).</span>}
                   {e.acoes.map((a) => (
                     <div key={a.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
@@ -775,9 +813,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     </div>
                   ))}
                   <p className="text-[11.5px] leading-relaxed text-faint">“Forja, desfaz” volta a última que dá: volume, mudo, saída de som, lembrete, nota, memória, card, acompanhamento e evento (até 2 horas).</p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="lembretes" titulo="Lembretes" resumo={e.lembretes.length ? `${e.lembretes.length} marcado${e.lembretes.length === 1 ? "" : "s"}` : "nenhum"}>
+                {aba === "atividade" && <Secao titulo="Lembretes">
                   {e.lembretes.map((l) => (
                     <div key={l.id} className="flex items-center gap-2 rounded-[8px] border border-line bg-surface px-2.5 py-1.5">
                       <span className="shrink-0 font-mono text-[11px] text-fg-2">{quandoCurto(l.quando)}</span>
@@ -789,9 +827,9 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   <p className="text-[11.5px] leading-relaxed text-faint">
                     “Forja, me lembre de lavar a louça às 14h”: na hora, notificação no Windows, no celular (Forja Mobile) e a voz dele, se estiver ligado.
                   </p>
-                </Grupo>
+                </Secao>}
 
-                <Grupo id="comandos" titulo="Imagem, vídeo e projetos" resumo={resumoComandos}>
+                {aba === "modelos" && <Secao titulo="Imagem, vídeo e projetos">
                   <Caixa rotulo="Modelo favorito de imagem (“Forja, crie uma imagem de…”)">
                     <select className={`${campo} cursor-pointer`} value={e.imagem} onChange={(ev) => grava({ imagem: ev.target.value })}>
                       <option value="">nenhum: ele avisa</option>
@@ -812,7 +850,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     “Forja, no modo agente crie um site de ecommerce”: se uma conversa já trabalha numa pasta com nome parecido, ele
                     pergunta se continua nela ou cria uma nova. Qualquer outra pergunta ele só responde falando, pesquisando na web se precisar, sem abrir nem mexer em nada no Forja.
                   </p>
-                </Grupo>
+                </Secao>}
               </>
             )}
           </div>
@@ -824,13 +862,13 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
 
 /** A conta Google do assistente (Gmail e Agenda): o mesmo projeto do Google Cloud do YouTube serve. O login acontece no
  *  navegador do sistema; a tela confere até a conta aparecer. */
-function ContaGoogle(props: { onError: (m: string) => void; onMuda: (c: GoogleConta) => void }) {
-  const { onError, onMuda } = props;
+function ContaGoogle(props: { onError: (m: string) => void }) {
+  const { onError } = props;
   const [c, setC] = useState<GoogleConta | null>(null);
   const [id, setId] = useState("");
   const [chave, setChave] = useState("");
   const [esperando, setEsperando] = useState(false);
-  const carregar = useCallback(() => api.get<GoogleConta>("/google").then((r) => { setC(r); onMuda(r); setId((v) => v || r.client_id); return r; }), [onMuda]);
+  const carregar = useCallback(() => api.get<GoogleConta>("/google").then((r) => { setC(r); setId((v) => v || r.client_id); return r; }), []);
   useEffect(() => { carregar().catch(() => setC(null)); }, [carregar]);
   useEffect(() => {   // o login acontece no navegador: confere até a conta aparecer (ou 3 min)
     if (!esperando) return;
@@ -873,7 +911,7 @@ function ContaGoogle(props: { onError: (m: string) => void; onMuda: (c: GoogleCo
           </Caixa>
           {(id !== c.client_id || chave) && (
             <button className={`${botao} self-end`} disabled={!id}
-                    onClick={() => tenta(() => api.put<GoogleConta>("/google", { client_id: id, client_secret: chave }).then((r) => { setC(r); onMuda(r); setChave(""); }))}>
+                    onClick={() => tenta(() => api.put<GoogleConta>("/google", { client_id: id, client_secret: chave }).then((r) => { setC(r); setChave(""); }))}>
               Salvar credenciais
             </button>
           )}
@@ -897,51 +935,21 @@ function quandoCurto(iso: string): string {
   return dias === 0 ? hora : dias === 1 ? `amanhã ${hora}` : `${q.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} ${hora}`;
 }
 
-function abertoGuardado(chave: string, padrao: boolean): boolean {
-  try {
-    const v = localStorage.getItem(chave);
-    return v === null ? padrao : v === "1";
-  } catch {
-    return padrao;
-  }
-}
+/** Abas do painel de configurações: cada uma mostra suas seções abertas, sem recolher nada. */
+const ABAS = [["voz", "Voz"], ["chamar", "Chamar"], ["modelos", "Modelos"], ["dados", "Dados"], ["atividade", "Atividade"]] as const;
+type Aba = (typeof ABAS)[number][0];
 
-/** Um grupo do painel de configurações: fechado mostra só o título e um resumo do que está escolhido; lembra se a
- *  pessoa deixou aberto (localStorage, por grupo). */
-function Grupo(props: { id: string; titulo: string; resumo?: string; abertoPadrao?: boolean; extra?: React.ReactNode;
-                        children: React.ReactNode }) {
-  const chave = `forja.assistente.grupo.${props.id}`;
-  const [aberto, setAberto] = useState(() => abertoGuardado(chave, !!props.abertoPadrao));
-  const alterna = () => setAberto((v) => { try { localStorage.setItem(chave, v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
+/** Uma seção de uma aba: título, ação opcional à direita, conteúdo sempre à vista; separadas por uma linha. */
+function Secao(props: { titulo: string; extra?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className={`rounded-[10px] border ${aberto ? "border-line-strong bg-surface/60" : "border-line"}`}>
-      <div className="flex items-center gap-2 px-3 py-2.5">
-        <button onClick={alterna} aria-expanded={aberto} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          <ChevronDown className={`size-3.5 shrink-0 text-faint transition-transform duration-200 ${aberto ? "" : "-rotate-90"}`} />
-          <span className="shrink-0 text-[12.5px] font-medium text-fg">{props.titulo}</span>
-          {!aberto && props.resumo && <span className="min-w-0 truncate text-[11.5px] text-faint" title={props.resumo}>{props.resumo}</span>}
-        </button>
-        {aberto && props.extra}
+    <section className="flex flex-col gap-2 border-b border-line px-4 py-4 last:border-b-0">
+      <div className="flex min-h-5 items-center gap-2">
+        <h3 className="text-[12.5px] font-semibold text-fg">{props.titulo}</h3>
+        <span className="ml-auto" />
+        {props.extra}
       </div>
-      {aberto && <div className="flex flex-col gap-2 border-t border-line px-3 pt-2.5 pb-3">{props.children}</div>}
+      {props.children}
     </section>
-  );
-}
-
-/** Recolhível dentro de um grupo (a lista de gravações, que cresce). */
-function Recolhe(props: { id: string; titulo: string; resumo?: string; children: React.ReactNode }) {
-  const chave = `forja.assistente.recolhe.${props.id}`;
-  const [aberto, setAberto] = useState(() => abertoGuardado(chave, false));
-  const alterna = () => setAberto((v) => { try { localStorage.setItem(chave, v ? "0" : "1"); } catch { /* sem storage */ } return !v; });
-  return (
-    <div className="rounded-[9px] border border-line bg-surface">
-      <button onClick={alterna} aria-expanded={aberto} className="flex w-full items-center gap-2 px-2.5 py-2 text-left">
-        <ChevronDown className={`size-3 shrink-0 text-faint transition-transform duration-200 ${aberto ? "" : "-rotate-90"}`} />
-        <span className="text-[12px] text-fg-2">{props.titulo}</span>
-        {props.resumo && <span className="ml-auto truncate text-[11px] text-faint">{props.resumo}</span>}
-      </button>
-      {aberto && <div className="border-t border-line p-1.5">{props.children}</div>}
-    </div>
   );
 }
 

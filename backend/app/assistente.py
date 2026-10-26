@@ -160,7 +160,8 @@ PADRAO = {"ligado": False, "mic": "", "saida": "", "whisper": "small", "motor": 
           "humor": "sarcastico", "favoritos": [], "modelo": None, "ocioso_min": 5, "atalho": "",
           "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado", "permitidos": [],
           "imagem": "", "video": "", "pasta_projetos": "", "resumo_hora": "", "cidade": "", "avisos_email": [],
-          "pastas_documentos": [], "conversa_continua": True}
+          "pastas_documentos": [], "conversa_continua": True, "trocavoz_saida": "", "trocavoz_retorno": False, "trocavoz_pausa": 0.6,
+          "trocavoz_whisper": "base"}
 MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se o modelo desandar
 # raciocínio do modelo antes de falar: desligado é o padrão (resposta falada quer velocidade); os outros são os
 # esforços do Forja (config.REASONING_BUDGET), e o pensamento nunca é falado
@@ -231,6 +232,13 @@ def gravar(patch: dict) -> dict:
         d["atalho"] = str(d["atalho"] or "").strip()[:60]
         if d["raciocinio"] not in RACIOCINIO:
             raise ToolError("raciocinio deve ser " + ", ".join(RACIOCINIO))
+        if d["trocavoz_whisper"] not in ("base", "small", "medium"):
+            raise ToolError("trocavoz_whisper deve ser base, small ou medium")
+        d["trocavoz_retorno"] = bool(d["trocavoz_retorno"])
+        try:
+            d["trocavoz_pausa"] = max(0.2, min(3.0, float(d["trocavoz_pausa"])))
+        except (TypeError, ValueError):
+            raise ToolError("trocavoz_pausa vai de 0,2 a 3 segundos.") from None
         if d["detector"] not in ("whisper", "treinado", "ambos"):
             raise ToolError("detector deve ser whisper, treinado ou ambos")
         if d["detector"] != "whisper" and not DETECTOR.is_file():
@@ -262,6 +270,9 @@ def gravar(patch: dict) -> dict:
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
         parar()
         iniciar()
+    if ({"mic", "saida", "voz", "trocavoz_saida", "trocavoz_retorno", "trocavoz_whisper",
+         "trocavoz_pausa"} & set(patch)) and trocavoz()["ligado"]:
+        trocavoz_ligar(True)  # o trocador também recebe na linha de comando
     return d
 
 
@@ -307,7 +318,7 @@ def estado() -> dict:
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "vozes_kokoro": vozes_kokoro(), "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
             "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado(),
-            "acompanhar": _web().lista(), "acoes": acoes(30), "idioma": _idioma.get("nome", "")}
+            "acompanhar": _web().lista(), "acoes": acoes(30), "idioma": _idioma.get("nome", ""), "trocavoz": trocavoz()}
 
 
 def _web():
@@ -358,6 +369,7 @@ def resumo() -> dict:
     """O pedaço do /api/activity: barato, sem tocar no disco."""
     # `lembrete`: o último que tocou; a tela do PC mostra a notificação do Windows quando o n muda
     return {"ligado": _vivo(), "estado": _estado["estado"], "ultimo": _estado["ultimo"], "instalado": instalado(),
+            "troca": _troca.get("estado", "") if trocavoz()["ligado"] else "",
             "lembrete": {k: lembretes.disparado[k] for k in ("n", "titulo", "texto")} if lembretes.disparado["n"] else None,
             "abrir": dict(_abrir) if _abrir["n"] else None, "ditar": {"n": _ditar["n"], "texto": _ditar.get("texto", "")} if _ditar["n"] else None}
 
@@ -629,6 +641,71 @@ def parar() -> None:
     if p and p.poll() is None:
         native.kill_tree(p)
     _estado.update(estado="desligado")
+
+
+# ------------------------------------------------------------------ trocador de voz (assistente_trocavoz.py)
+
+_troca: dict = {}  # {"p": Popen, "erro": str, "saida": nome do aparelho}
+
+
+def _cabo() -> str:
+    """O VB-CABLE: o que toca no "CABLE Input" sai no microfone "CABLE Output" (o que se escolhe no Discord)."""
+    return next((m["id"] for m in microfones() if m["tipo"] == "saida" and m["api"] == "MME"
+                 and m["nome"].startswith("CABLE Input")), "")
+
+
+def trocavoz() -> dict:
+    p = _troca.get("p")
+    return {"ligado": bool(p and p.poll() is None), "erro": _troca.get("erro", ""), "saida": _troca.get("saida", "")}
+
+
+def trocavoz_ligar(ligado: bool) -> dict:
+    """Liga e desliga o trocador. Não fica gravado: o Forja reabre com ele desligado (ninguém quer a voz trocada
+    numa chamada sem ter pedido)."""
+    p = _troca.pop("p", None)
+    if p and p.poll() is None:
+        native.kill_tree(p)
+    _troca.update(erro="", saida="")
+    if not ligado:
+        return trocavoz()
+    if not instalado():
+        raise ToolError("Instale o assistente de voz primeiro.")
+    cfg = ler()
+    saida = cfg["trocavoz_saida"] or _cabo()
+    if not saida:
+        raise ToolError("Nenhum cabo de áudio virtual encontrado. Instale o VB-CABLE (vb-audio.com/Cable) e tente de novo.")
+    argv = [str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_trocavoz.py")),
+            "--modelos", str(MODELOS), "--whisper", cfg["trocavoz_whisper"], "--voz", _voz_arg(cfg["voz"]), "--saida", saida]
+    argv += ["--pausa", str(cfg["trocavoz_pausa"])]
+    if cfg["trocavoz_retorno"]:
+        argv += ["--retorno", cfg["saida"] or "padrao"]  # no alto-falante do assistente (o fone, por exemplo)
+    if _com_filtro(cfg["voz"]):
+        argv += ["--efeito", "glados"]
+    if so_ingles(cfg["voz"]):
+        argv.append("--traduz")
+    if cfg["mic"]:
+        argv += ["--mic", cfg["mic"]]
+    env = {**os.environ, "HF_HUB_CACHE": str(PASTA / "hf"), "HF_HUB_DISABLE_SYMLINKS_WARNING": "1"}
+    p = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                         encoding="utf-8", errors="replace", env=env, cwd=str(PASTA), **native.popen_kwargs())
+    _troca.update(p=p, saida=saida.rsplit(" ", 1)[0])
+    threading.Thread(target=_le_troca, args=(p,), daemon=True).start()
+    return trocavoz()
+
+
+def _le_troca(p: subprocess.Popen) -> None:
+    ultimas: list[str] = []
+    for linha in p.stdout:  # type: ignore[union-attr]
+        tipo, _, resto = linha.rstrip().partition(" ")
+        if tipo == "ERRO":
+            _troca["erro"] = resto
+        elif tipo == "ESTADO":
+            _troca["estado"] = resto  # captando | convertendo | falando | ouvindo: o círculo do canto acompanha
+        elif tipo == "LOG" or (tipo not in ("FALOU", "PRONTO") and linha.strip()):
+            ultimas = (ultimas + [linha.rstrip()])[-6:]
+            print(f"Forja: trocador de voz: {linha.rstrip()}", flush=True)  # nunca o que foi dito: só avisos
+    if _troca.get("p") is p:  # caiu sozinho
+        _troca["erro"] = _troca.get("erro") or " | ".join(ultimas)[-400:] or "O trocador de voz saiu."
 
 
 _transcricoes: dict = {}  # ditado pedido ao ouvido: id -> {"pronto": Event, "texto" | "erro"}

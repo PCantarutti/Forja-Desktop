@@ -91,11 +91,14 @@ def frases(texto: str) -> list[str]:
 
 class Boca:
     """Duas threads: uma sintetiza a frase seguinte enquanto a outra toca a atual."""
+    eco: int | None = None  # trocador de voz: toca também neste aparelho (o retorno no seu fone)
+    ao_tocar = None  # trocador de voz: chamado com o texto quando a frase começa a tocar (mede o atraso)
 
-    def __init__(self, modelos: Path, voz: str, efeito: str = ""):
+    def __init__(self, modelos: Path, voz: str, efeito: str = "", eco: int | None = None):
         from kokoro_onnx import Kokoro
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
         self.voz, self.piper, self.efeito = voz, None, None
+        self.eco = eco
         if voz.endswith(".onnx"):  # voz treinada no Piper: o português dela; o Kokoro fica para os outros idiomas
             try:
                 from piper import PiperVoice
@@ -109,6 +112,11 @@ class Boca:
                 import assistente_glados  # ao lado deste arquivo (o ouvido roda como script)
                 import pyworld  # noqa: F401  (falha aqui, e não na primeira frase)
                 self.efeito = assistente_glados.aplica
+                # aquece aqui (thread principal): os imports do filtro (scipy, pedalboard) feitos pela thread de
+                # síntese com o Whisper rodando na principal travavam no carregamento das DLLs (trocador mudo)
+                import numpy as np
+                self.efeito(np.concatenate([c.audio_float_array for c in self.piper.synthesize("Ok.")]),
+                            self.piper.config.sample_rate)
             except Exception as e:  # sem pyworld no venv: fala com a voz treinada, sem o filtro
                 diz("LOG", f"filtro GLaDOS indisponível, falando sem ele: {e.__class__.__name__}: {e}")
         self.textos: queue.Queue = queue.Queue()
@@ -179,6 +187,7 @@ class Boca:
                 self.textos.task_done()
 
     def _toca(self) -> None:
+        import contextlib
         import numpy as np
         import sounddevice as sd
         while True:
@@ -187,13 +196,19 @@ class Boca:
                 if not curto:
                     diz("ESTADO", "falando")
                 self.atual = texto
+                if self.ao_tocar and texto:
+                    self.ao_tocar(texto)
                 bloco = sr // 10  # 0,1 s: o tanto que o "cala" demora para valer
-                with sd.OutputStream(samplerate=sr, channels=1 if amostras.ndim == 1 else amostras.shape[1],
-                                     dtype="float32") as saida:
+                canais = 1 if amostras.ndim == 1 else amostras.shape[1]
+                with sd.OutputStream(samplerate=sr, channels=canais, dtype="float32") as saida,                         (sd.OutputStream(device=self.eco, samplerate=sr, channels=canais, dtype="float32")
+                         if self.eco is not None else contextlib.nullcontext()) as eco:
                     for i in range(0, len(amostras), bloco):
                         if g != self.geracao:
                             break
-                        saida.write(np.ascontiguousarray(amostras[i:i + bloco], dtype=np.float32))
+                        pedaco = np.ascontiguousarray(amostras[i:i + bloco], dtype=np.float32)
+                        saida.write(pedaco)
+                        if eco:
+                            eco.write(pedaco)
                 self.atual = ""
             self.audios.task_done()
             if self.textos.unfinished_tasks == 0 and self.audios.unfinished_tasks == 0:

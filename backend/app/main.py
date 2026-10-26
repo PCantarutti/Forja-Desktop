@@ -92,6 +92,7 @@ async def lifespan(_app):
     shell.close_all()     # servidores e processos em segundo plano do agente
     terminal.close_all()  # shells do usuário; no app o Electron mata a árvore, mas em dev não
     assistente.parar()    # o microfone fecha com o backend
+    assistente.trocavoz_ligar(False)
     for vigia_voz in (assistente._tarefa.get("vigia"), assistente._tarefa.get("lembretes"), assistente._tarefa.get("rotina")):
         if vigia_voz:
             vigia_voz.cancel()  # a ociosidade do modelo do assistente e a hora dos lembretes
@@ -1346,6 +1347,12 @@ def assistente_gravar(body: dict):
 def assistente_ligar(body: dict):
     """Botão do microfone (trilho do PC e bandeja do sistema)."""
     return _tts(assistente.ligar, bool(body.get("ligado")))
+
+
+@app.post("/api/assistente/trocavoz")
+def assistente_trocavoz(body: dict):
+    """Trocador de voz: a fala do microfone sai com a voz do assistente no cabo virtual (VB-CABLE)."""
+    return _tts(assistente.trocavoz_ligar, bool(body.get("ligado")))
 
 
 @app.post("/api/assistente/instalar")

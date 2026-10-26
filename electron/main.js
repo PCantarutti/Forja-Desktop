@@ -466,6 +466,7 @@ function syncTray() {
 // ------------------------------------------------------------------ assistente de voz (bandeja)
 
 let voz = { instalado: false, ligado: false };
+let trocador = false;  // trocador de voz ligado: o círculo do canto mostra quando ele capta e quando fala
 // Atalho global (configurado na página F.O.R.J.A): funciona com o Forja minimizado, na bandeja ou atrás de outra
 // janela. `erro`: outro programa já usa a combinação, ou ela não é válida; a página mostra.
 let atalho = { atual: "", ok: false, erro: "" };
@@ -511,6 +512,7 @@ async function vigiaVoz() {
     const r = await fetch(`http://127.0.0.1:${port}/api/assistente`, { headers: { "x-forja-token": token } });
     const e = await r.json();
     registraAtalho(e.instalado ? String(e.atalho || "") : "");
+    trocador = Boolean(e.trocavoz?.ligado);
     if (Boolean(e.instalado) !== voz.instalado || Boolean(e.ligado) !== voz.ligado) {
       voz = { instalado: Boolean(e.instalado), ligado: Boolean(e.ligado) };
       syncTray();
@@ -588,7 +590,7 @@ function mostraBolha(modo) {
 }
 
 async function vigiaBolha() {
-  if (!voz.ligado || !port) return mostraBolha("");
+  if ((!voz.ligado && !trocador) || !port) return mostraBolha("");
   try {
     const r = await fetch(`http://127.0.0.1:${port}/api/assistente/estado`, { headers: { "x-forja-token": token } });
     const e = await r.json();
@@ -596,7 +598,10 @@ async function vigiaBolha() {
         // escutando: ouviu "Forja" (ou o atalho) e grava o pedido; entendendo/pensando: Whisper e modelo; falando: a voz
     const modo = { escutando: "escutando", entendendo: "pensando", pensando: "pensando", falando: "falando" }[e.estado] || "";
     const naTela = paginaAssistente && mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible() && !mainWindow.isMinimized();
-    mostraBolha(naTela || !prefs.overlayAssistente ? "" : modo);
+    // trocador de voz: captando sua fala (ondas), convertendo (apagado), a voz dele saindo na chamada (pulsando).
+    // Aparece mesmo com a página do assistente à vista: o círculo grande dela não mostra o trocador
+    const troca = { captando: "escutando", convertendo: "pensando", falando: "falando" }[e.troca] || "";
+    mostraBolha(!prefs.overlayAssistente ? "" : (!naTela && modo) || troca);
   } catch { /* backend reiniciando */ }
 }
 
