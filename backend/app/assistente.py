@@ -82,6 +82,11 @@ def vozes_kokoro() -> list[dict]:
     return treinadas + VOZES_KOKORO
 
 
+def _com_filtro(voz: str) -> bool:
+    """`piper:<nome>:glados`. Só o sufixo não basta: a voz treinada da GLaDOS original se chama "glados"."""
+    return voz.startswith("piper:") and voz.count(":") == 2 and voz.endswith(":glados")
+
+
 def so_ingles(voz: str | None = None) -> bool:
     """Voz treinada em inglês (a GLaDOS do jogo): ele entende qualquer idioma, mas sempre responde em inglês."""
     voz = ler()["voz"] if voz is None else voz
@@ -253,7 +258,7 @@ def gravar(patch: dict) -> dict:
         indexa_documentos()  # pasta nova: já começa a ler, para a primeira pergunta não esperar
     reinicia = {"mic", "saida", "whisper", "voz", "detector", "sensibilidade"} & set(patch)
     if str(patch.get("voz") or "").startswith("piper:") and instalado():
-        threading.Thread(target=_garante_piper, args=(patch["voz"].endswith(":glados"),), daemon=True).start()
+        threading.Thread(target=_garante_piper, args=(_com_filtro(patch["voz"]),), daemon=True).start()
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
         parar()
         iniciar()
@@ -597,7 +602,7 @@ def iniciar() -> None:
     cfg = ler()
     argv = [str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_ouvido.py")),
             "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"])]
-    if cfg["voz"].startswith("piper:") and cfg["voz"].endswith(":glados"):
+    if _com_filtro(cfg["voz"]):
         argv += ["--efeito", "glados"]
     if so_ingles(cfg["voz"]):
         argv += ["--stt", "auto"]  # fala com ela em qualquer idioma: o Whisper detecta
@@ -1039,30 +1044,26 @@ def _abre(conv: int, kind: str) -> None:
     _estado["ultimo"] = {"conv": conv, "kind": kind, "n": n}
 
 
-def fala(texto: str, voz: str = "", lang: str = "") -> None:
+def fala(texto: str, voz: str = "", lang: str = "", traduzir: bool = True) -> None:
     if not voz and so_ingles():
-        _em_ingles.put(texto)  # uma fila: a tradução não troca a ordem das frases
+        _em_ingles.put((texto, traduzir))  # uma fila: a tradução não troca a ordem das frases
         return
     _anota("forja", texto)
     _manda("fala", texto=texto, **({"voz": voz, "lang": lang} if voz else {}))
 
 
-# Voz que só fala inglês: as frases prontas do assistente (em português no código) passam por tradução antes. Cache em
-# disco: são sempre as mesmas, e na segunda vez não custa nada. Sem modelo no ar, fala o original na voz em português.
-TRADUCOES_EN = PASTA / "traducoes_en.json"
-PORTUGUES = re.compile(r"[ãõçáéíóúâêà]|\b(?:nao|voce|esta|que|para|com|uma?|de|em|os|pra|isso|aqui)\b", re.I)
+# Voz que só fala inglês: tudo o que ele diz fora a resposta do modelo (frases prontas do código, resumos pedidos em
+# português) passa por tradução antes. Cache só na memória: frase pronta pode levar dado da pessoa (o texto de um
+# lembrete), e a conversa falada nunca vai para o disco. Sem modelo no ar, fala o original na voz em português.
 TRADUZ_EN = ("Translate to natural spoken English. Reply ONLY with the translation, no quotes or explanations. "
              "Keep names, numbers and meaning. ")
-_em_ingles: queue.Queue[str] = queue.Queue()
+_em_ingles: queue.Queue[tuple[str, bool]] = queue.Queue()
+_traducoes_en: dict[str, str] = {}
 
 
 def _traduz_en(texto: str) -> str:
-    try:
-        cache = json.loads(TRADUCOES_EN.read_text("utf-8"))
-    except (OSError, ValueError):
-        cache = {}
-    if texto in cache:
-        return cache[texto]
+    if texto in _traducoes_en:
+        return _traducoes_en[texto]
     from . import modelctl
     spec = modelo_assistente()
     if modelctl.gerenciavel(spec) and localai.status().get("alias") != spec["model"]:
@@ -1070,16 +1071,17 @@ def _traduz_en(texto: str) -> str:
     slot = modelctl.slot_auxiliar() if modelctl.gerenciavel(spec) else None
     ingles = asyncio.run(_gera(spec, slot, TRADUZ_EN + DADO_DE_FORA, _dados([texto]), 300))
     if ingles:
-        cache[texto] = ingles
-        TRADUCOES_EN.write_text(json.dumps(cache, ensure_ascii=False, indent=0), "utf-8")
+        if len(_traducoes_en) > 500:  # ponytail: esvazia de vez; LRU se as frases variarem muito
+            _traducoes_en.clear()
+        _traducoes_en[texto] = ingles
     return ingles or texto
 
 
 def _fala_em_ingles() -> None:
     while True:
-        texto = _em_ingles.get()
+        texto, traduzir = _em_ingles.get()
         voz = {}
-        if PORTUGUES.search(_sem_acento(texto) + texto):
+        if traduzir:
             try:
                 texto = _traduz_en(texto)
             except Exception as e:
@@ -1094,7 +1096,7 @@ threading.Thread(target=_fala_em_ingles, daemon=True).start()
 
 def _fala_resposta(texto: str) -> None:
     """A resposta do modelo: na conversa em outro idioma, com a voz nativa dele."""
-    fala(texto, _idioma.get("voz", ""), _idioma.get("lang", ""))
+    fala(texto, _idioma.get("voz", ""), _idioma.get("lang", ""), traduzir=False)  # já vem em inglês na voz só-inglês
 
 
 def _anota(quem: str, texto: str) -> None:
