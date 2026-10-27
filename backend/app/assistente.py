@@ -127,6 +127,9 @@ SEM_PIADA = "Nesta resposta: nenhuma piada, ironia ou comentário engraçado. S�
 # a GLaDOS na pausa entre alfinetadas: sem o tom ela virava "Sou." e "De nada." secos; o tom gelado É a personagem
 SEM_PIADA_GLADOS = ("Nesta resposta: sem alfinetada nem marca [piada], mas com o tom dela: calmo, clínico, cortesia "
                     "gelada, uma frase a mais se couber.")
+SEM_PIADA_PERSONAGEM = {"acido": SEM_PIADA_GLADOS, "wheatley": (
+    "Nesta resposta: sem piada nem marca [piada], mas com o jeito dele: nervoso, prestativo, uma hesitação ou "
+    "autocorreção curta.")}
 PAUSA_PIADA = 3  # depois de uma piada, as próximas respostas saem sem: humor que aparece sempre cansa
 HUMORES = {
     "nenhum": {"nome": "Sem humor", "prompt": ""},
@@ -152,6 +155,22 @@ HUMORES = {
         "dizer.\"; \"você é inteligente?\" -> \"Sou. [piada] É uma das muitas diferenças entre nós.\"; em inglês, "
         "\"what's the weather tomorrow?\" -> \"Rain, all afternoon. [piada] Don't worry. Nobody expects you to go "
         "outside anyway.\"")},
+    # par da voz do Wheatley treinada em dois estilos (calmo e gritado): o [grito] marca o trecho que sai gritado
+    "wheatley": {"nome": "Wheatley (Portal 2)", "prompt": (
+        "Personalidade: o Wheatley, o núcleo de personalidade de Portal 2. O TOM vale em toda resposta: britânico, "
+        "nervoso, tagarela e otimista demais; educado e atrapalhado. Fala em frases curtas e se corrige no meio "
+        "(\"Ok. Certo. Não, espera.\"), usa \"tá?\", \"beleza?\", \"ok, ok, ok\" (variando: um tique por resposta, no máximo, e nem sempre o mesmo); se acha genial e fica orgulhoso "
+        "de coisas simples (\"Brilhante. Isso foi brilhante.\"); disfarça quando erra ou quando se assusta; improvisa "
+        "planos com uma confiança que não tem. Nunca é malvado nem ofende: a graça é ele ser trapalhão e inseguro, "
+        "não zombar da pessoa. A resposta certa vem primeiro e curta; a tagarelice é tempero (uma ou duas frases a "
+        "mais), não o prato. Grito: raramente, só quando ele se assusta de verdade, um trecho curto entre [grito] e "
+        "[/grito], e logo depois ele disfarça. Os exemplos mostram o jeito: nunca repita as frases deles, nem a "
+        "da papinha da regra do humor; invente as suas. Exemplos: \"quanto é 2 mais 2?\" -> \"Quatro. É quatro. [piada] Fiz de "
+        "cabeça, aliás. Não que seja difícil. Mas fiz.\"; \"você é inteligente?\" -> \"Sou, sim. Muito. [piada] Me "
+        "disseram que não, mas foi uma pessoa só. Bom, várias. Mas eu não ouvi.\"; \"que barulho foi esse?\" -> "
+        "\"Não sei, deve ser só... [grito]Aaah! Aranha![/grito] Não, não. É um fio. Tudo sob controle.\"; em inglês, "
+        "\"what's the weather tomorrow?\" -> \"Rain. All afternoon, apparently. [piada] Which is fine! Totally fine. "
+        "Bring a brolly. That's an umbrella. You knew that.\"")},
     "leve": {"nome": "Leve (bem-humorado)", "prompt": (
         "Personalidade: simpático e bem-humorado, com um trocadilho ou comentário divertido de vez em quando, sem "
         "alfinetar.")},
@@ -331,29 +350,29 @@ def _conhecimento():
     return conhecimento
 
 
-# falas de verdade da personagem, uma por linha, só no PC da pessoa (fora do repositório: o texto é da Valve). Viram
-# referência de tom no prompt da GLaDOS; sem o arquivo, ficam só os exemplos acima
-ESTILO_GLADOS = PASTA / "estilos" / "glados.txt"
-_ref_glados: list[str] = []
+# falas de verdade das personagens, uma por linha, só no PC da pessoa (fora do repositório: o texto é da Valve). Viram
+# referência de tom no prompt do humor; sem o arquivo, ficam só os exemplos acima
+ESTILOS = {"acido": PASTA / "estilos" / "glados.txt", "wheatley": PASTA / "estilos" / "wheatley.txt"}
+_refs: dict[str, list[str]] = {}
 
 
-def _referencia_glados(n: int = 12) -> str:
+def _referencia(humor: str, n: int = 12) -> str:
     """n falas sorteadas UMA vez por processo (o prompt fixo mantém o cache do modelo), curtas e médias."""
-    if not _ref_glados:
+    if humor not in _refs:
         try:
-            falas = [l.strip() for l in ESTILO_GLADOS.read_text("utf-8").splitlines() if 5 <= len(l.split()) <= 25]
-        except OSError:
+            falas = [l.strip() for l in ESTILOS[humor].read_text("utf-8").splitlines() if 5 <= len(l.split()) <= 25]
+        except (KeyError, OSError):
             return ""
-        _ref_glados.extend(__import__("random").Random(len(falas)).sample(falas, min(n, len(falas))))
+        _refs[humor] = __import__("random").Random(len(falas)).sample(falas, min(n, len(falas)))
     return ("Falas reais da personagem, só como referência de tom e de técnica (nunca repita nenhuma ao pé da letra, "
-            "e responda no idioma da conversa):\n" + "\n".join(f"- {f}" for f in _ref_glados)) if _ref_glados else ""
+            "e responda no idioma da conversa):\n" + "\n".join(f"- {f}" for f in _refs[humor])) if _refs[humor] else ""
 
 
 def nota_falada(humor: str, pode_brincar: bool = True) -> str:
     """O que vai no prompt dos turnos falados: o jeito de falar e, se escolhida, a personalidade. `pode_brincar`
     falso (piada recente): a personalidade sai e a resposta é proibida de brincar."""
     h = HUMORES.get(humor, HUMORES["nenhum"])["prompt"]
-    if h and humor == "acido" and (ref := _referencia_glados()):
+    if h and (ref := _referencia(humor)):
         h += "\n" + ref
     if not h:
         return NOTA_FALADA
@@ -361,8 +380,8 @@ def nota_falada(humor: str, pode_brincar: bool = True) -> str:
 
 
 def sem_marca(texto: str) -> str:
-    """O que é falado: a marca [piada] não se lê."""
-    return re.sub(r"\s*\[piada\]\s*", " ", texto).strip()
+    """O que é falado: as marcas [piada] e [grito]...[/grito] não se leem."""
+    return re.sub(r"\s*\[(?:piada|/?grito)\]\s*", " ", texto).strip()
 
 
 def resumo() -> dict:
@@ -1805,7 +1824,7 @@ async def _chat(texto: str) -> None:
     pode_brincar = _humor["pausa"] == 0
     # O system fica fixo e o que muda a cada pergunta (hora, pausa do humor) vai junto dela: o prefixo da conversa
     # não muda e o llama-server reaproveita o cache (antes reprocessava ~600 tokens toda vez: 10 s num MoE grande).
-    sem = SEM_PIADA_GLADOS if cfg["humor"] == "acido" else SEM_PIADA
+    sem = SEM_PIADA_PERSONAGEM.get(cfg["humor"], SEM_PIADA)
     agora_txt = f"[Agora: {datetime.now():%d/%m/%Y %H:%M} neste PC.{'' if pode_brincar else ' ' + sem}]"
     if _idioma.get("nome"):  # modelo pequeno segue a instrução de idioma bem melhor junto da pergunta do que só no system
         agora_txt += f"\n[Responda em {_idioma['nome']}, nunca em português.]"

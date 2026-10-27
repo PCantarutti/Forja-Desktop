@@ -495,11 +495,16 @@ def test_voz_so_ingles_traduz_frases_prontas(tmp_path, monkeypatch):
 def test_humor_glados_usa_falas_locais_como_referencia(tmp_path, monkeypatch):
     # o texto da Valve não vai para o repositório: só um arquivo local, sorteado uma vez (o prompt fica fixo, o cache vale)
     arq = tmp_path / "glados.txt"
-    monkeypatch.setattr(assistente, "ESTILO_GLADOS", arq)
-    monkeypatch.setattr(assistente, "_ref_glados", [])
+    monkeypatch.setattr(assistente, "ESTILOS", {"acido": arq, "wheatley": tmp_path / "wheatley.txt"})
+    monkeypatch.setattr(assistente, "_refs", {})
     assert "Falas reais" not in assistente.nota_falada("acido")          # sem o arquivo, só os exemplos próprios
     arq.write_text("\n".join(f"Linha de teste numero {i} com algumas palavras" for i in range(40)) + "\nxyzcurta\n", "utf-8")
     a, b = assistente.nota_falada("acido"), assistente.nota_falada("acido")
     assert "Falas reais" in a and a == b and a.count("\n- ") == 12 and "xyzcurta" not in a
     assert "Falas reais" not in assistente.nota_falada("sarcastico")
     assert "criatura" in assistente.HUMORES["acido"]["prompt"]  # proibida, e dita como proibida
+    # o Wheatley tem o arquivo dele, e a marca de grito nunca é lida em voz alta
+    (tmp_path / "wheatley.txt").write_text("Okay, do not panic, alright, stay calm, everything is fine\n", "utf-8")
+    assert "do not panic" in assistente.nota_falada("wheatley") and "do not panic" not in a
+    assert assistente.sem_marca("Não sei... [grito]Aaah! Aranha![/grito] É um fio. [piada] Sob controle.") == \
+        "Não sei... Aaah! Aranha! É um fio. Sob controle."
