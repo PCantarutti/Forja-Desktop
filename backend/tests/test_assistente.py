@@ -1,3 +1,5 @@
+import pytest
+
 from app import assistente
 from app.assistente_ouvido import acorda
 
@@ -187,7 +189,6 @@ def test_transcricao_so_em_memoria_e_agrupa_a_resposta(monkeypatch):
 
 
 def test_salvar_sem_conversa_avisa():
-    import pytest
     assistente.esquecer()
     with pytest.raises(assistente.ToolError):
         assistente.salvar_conversa()
@@ -510,12 +511,16 @@ def test_humor_glados_usa_falas_locais_como_referencia(tmp_path, monkeypatch):
     assert assistente.sem_marca("Não sei... [grito]Aaah! Aranha![/grito] É um fio. [piada] Sob controle.") == \
         "Não sei... Aaah! Aranha! É um fio. Sob controle."
     # a boca recebe o [grito] (só a [piada] sai) e troca de estilo por frase, mesmo com o grito cortado entre pedidos
-    from app.assistente_ouvido import agudos, com_estilo
+    from app.assistente_ouvido import com_estilo
     assert assistente.sem_piada("Abrindo. [piada] [grito]Aaah![/grito]") == "Abrindo. [grito]Aaah![/grito]"
     partes, grito = com_estilo("Abrindo o YouTube. O que é isso? [grito]Aaah! Uma", False)
     assert partes == [(False, "Abrindo o YouTube."), (False, "O que é isso?"), (True, "Aaah!"), (True, "Uma")] and grito
     assert com_estilo("aranha![/grito] Brincadeira.", grito) == ([(True, "aranha!"), (False, "Brincadeira.")], False)
-    import numpy as np
+
+
+def test_agudos_sobem_no_mesmo_pico():
+    np = pytest.importorskip("numpy")  # só no venv do assistente, não no do backend
+    from app.assistente_ouvido import agudos
     y = np.sin(np.arange(22050) * 2 * np.pi * np.array([[300], [5000]]) / 22050).sum(0).astype(np.float32)
     z = agudos(y, 22050, 7)
     alto = lambda v: np.abs(np.fft.rfft(v))[5000]  # 1 Hz por posição: 1 s a 22.050 Hz
