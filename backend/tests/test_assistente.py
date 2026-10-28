@@ -505,6 +505,8 @@ def test_humor_glados_usa_falas_locais_como_referencia(tmp_path, monkeypatch):
     assert "Falas reais" not in assistente.nota_falada("sarcastico")
     assert "criatura" in assistente.HUMORES["acido"]["prompt"]  # proibida, e dita como proibida
     assert all(p in assistente.HUMORES["acido"]["prompt"] for p in ("monstro", "gorda", "Pássaro", "batata"))
+    assert all(p in assistente.HUMORES["arthur"]["prompt"] for p in ("Dutch", "Tio", "cavalo", "sincero"))
+    assert "Falas reais" not in assistente.nota_falada("arthur")  # sem arthur.txt: só o jeito descrito
     # o Wheatley tem o arquivo dele, e a marca de grito nunca é lida em voz alta
     (tmp_path / "wheatley.txt").write_text("Okay, do not panic, alright, stay calm, everything is fine\n", "utf-8")
     assert "do not panic" in assistente.nota_falada("wheatley") and "do not panic" not in a
