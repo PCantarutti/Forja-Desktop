@@ -503,8 +503,20 @@ def test_humor_glados_usa_falas_locais_como_referencia(tmp_path, monkeypatch):
     assert "Falas reais" in a and a == b and a.count("\n- ") == 12 and "xyzcurta" not in a
     assert "Falas reais" not in assistente.nota_falada("sarcastico")
     assert "criatura" in assistente.HUMORES["acido"]["prompt"]  # proibida, e dita como proibida
+    assert all(p in assistente.HUMORES["acido"]["prompt"] for p in ("monstro", "gorda", "Pássaro", "batata"))
     # o Wheatley tem o arquivo dele, e a marca de grito nunca é lida em voz alta
     (tmp_path / "wheatley.txt").write_text("Okay, do not panic, alright, stay calm, everything is fine\n", "utf-8")
     assert "do not panic" in assistente.nota_falada("wheatley") and "do not panic" not in a
     assert assistente.sem_marca("Não sei... [grito]Aaah! Aranha![/grito] É um fio. [piada] Sob controle.") == \
         "Não sei... Aaah! Aranha! É um fio. Sob controle."
+    # a boca recebe o [grito] (só a [piada] sai) e troca de estilo por frase, mesmo com o grito cortado entre pedidos
+    from app.assistente_ouvido import agudos, com_estilo
+    assert assistente.sem_piada("Abrindo. [piada] [grito]Aaah![/grito]") == "Abrindo. [grito]Aaah![/grito]"
+    partes, grito = com_estilo("Abrindo o YouTube. O que é isso? [grito]Aaah! Uma", False)
+    assert partes == [(False, "Abrindo o YouTube."), (False, "O que é isso?"), (True, "Aaah!"), (True, "Uma")] and grito
+    assert com_estilo("aranha![/grito] Brincadeira.", grito) == ([(True, "aranha!"), (False, "Brincadeira.")], False)
+    import numpy as np
+    y = np.sin(np.arange(22050) * 2 * np.pi * np.array([[300], [5000]]) / 22050).sum(0).astype(np.float32)
+    z = agudos(y, 22050, 7)
+    alto = lambda v: np.abs(np.fft.rfft(v))[5000]  # 1 Hz por posição: 1 s a 22.050 Hz
+    assert abs(np.abs(z).max() - np.abs(y).max()) < 1e-3 and alto(z) / np.abs(np.fft.rfft(z))[300] >         2 * alto(y) / np.abs(np.fft.rfft(y))[300]  # os 5 kHz sobem em relação aos 300 Hz, no mesmo pico

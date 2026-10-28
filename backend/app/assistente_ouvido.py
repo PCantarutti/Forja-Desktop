@@ -89,6 +89,27 @@ def frases(texto: str) -> list[str]:
     return [f.strip() for f in re.split(r"(?<=[.!?…;:])\s+|\n+", texto) if f.strip()]
 
 
+def com_estilo(texto: str, grito: bool) -> tuple[list[tuple[bool, str]], bool]:
+    """As frases com o estilo de cada uma (True = gritado), pelas marcas [grito]...[/grito] do humor. O estado segue de
+    um pedido para o outro: a resposta chega frase a frase e o grito pode atravessar a divisão."""
+    saida = []
+    for i, p in enumerate(re.split(r"\[(/?)grito\]", texto, flags=re.I)):
+        if i % 2:
+            grito = not p
+        else:
+            saida += [(grito, f) for f in frases(p)]
+    return saida, grito
+
+
+def agudos(y, sr: int, db: float):
+    """Prateleira de agudos: sobe de 1,5 kHz até 4 kHz e fica, no mesmo pico. A voz do Wheatley sai abafada como os
+    áudios do jogo em que foi treinada (mais épocas não mudam isso)."""
+    import numpy as np
+    fr = np.fft.rfftfreq(len(y), 1 / sr)
+    z = np.fft.irfft(np.fft.rfft(y) * 10 ** (db / 20 * np.clip((fr - 1500) / 2500, 0, 1)), len(y))
+    return (z * np.abs(y).max() / max(np.abs(z).max(), 1e-9)).astype(np.float32)
+
+
 class Boca:
     """Duas threads: uma sintetiza a frase seguinte enquanto a outra toca a atual."""
     eco: int | None = None  # trocador de voz: toca também neste aparelho (o retorno no seu fone)
@@ -99,10 +120,13 @@ class Boca:
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
         self.voz, self.piper, self.efeito = voz, None, None
         self.eco = eco
+        self.grito = False
+        self.ajuste: dict = {}  # "forja" no .onnx.json: {"pausa_s", "agudos_db": {"calmo", "gritado"}}
         if voz.endswith(".onnx"):  # voz treinada no Piper: o português dela; o Kokoro fica para os outros idiomas
             try:
                 from piper import PiperVoice
                 self.piper = PiperVoice.load(voz)
+                self.ajuste = json.loads(Path(voz + ".json").read_text("utf-8")).get("forja", {})
                 self.voz = "pf_dora"
             except Exception as e:  # sem o piper-tts no venv (instalação antiga) ou modelo quebrado: fala, mas na padrão
                 diz("LOG", f"voz treinada indisponível, usando a padrão: {e.__class__.__name__}: {e}")
@@ -129,9 +153,10 @@ class Boca:
         threading.Thread(target=self._toca, daemon=True).start()
 
     def fala(self, texto: str, voz: str | None = None, lang: str | None = None) -> None:
-        for f in frases(texto):
+        pedacos, self.grito = com_estilo(texto, self.grito)
+        for grito, f in pedacos:
             self.falando.set()
-            self.textos.put((self.geracao, f, voz, lang))
+            self.textos.put((self.geracao, f, voz, lang, grito))
 
     def bip(self) -> None:
         """Dois tons curtos (~0,2 s): "estou ouvindo". Curto de propósito e marcado para quase não fechar o microfone:
@@ -165,18 +190,28 @@ class Boca:
         # só marca: quem para é o _toca, no próximo bloco. sd.stop() daqui (thread dos pedidos) com o _toca no meio do
         # sd.play derrubava o processo com access violation dentro do PortAudio (visto num "para" no meio da resposta)
         self.geracao += 1
+        self.grito = False
 
     def _sintetiza(self) -> None:
         while True:
-            g, t, voz, lang = self.textos.get()
+            g, t, voz, lang, grito = self.textos.get()
             try:
                 if g == self.geracao:
                     if self.piper and not voz and not lang:
                         import numpy as np
-                        amostras = np.concatenate([c.audio_float_array for c in self.piper.synthesize(t)])
+                        from piper import SynthesisConfig
+                        estilo = "gritado" if grito else "calmo"
+                        # voz com estilos (Wheatley: calmo 0, gritado 1); nas de um locutor só, o grito é só texto
+                        sid = self.piper.config.speaker_id_map.get(estilo) if self.piper.config.num_speakers > 1 else None
+                        amostras = np.concatenate([c.audio_float_array for c in
+                                                   self.piper.synthesize(t, syn_config=SynthesisConfig(speaker_id=sid))])
                         sr = self.piper.config.sample_rate
+                        if db := self.ajuste.get("agudos_db", {}).get(estilo):
+                            amostras = agudos(amostras, sr, db)
                         if self.efeito:  # o filtro GLaDOS: ~0,15 s por segundo de fala, enquanto a frase anterior toca
                             amostras = self.efeito(amostras, sr)
+                        if pausa := self.ajuste.get("pausa_s"):  # o Piper cola uma frase na outra
+                            amostras = np.concatenate([amostras, np.zeros(int(pausa * sr), np.float32)])
                     else:
                         amostras, sr = self.kokoro.create(t, voice=voz or self.voz, speed=1.1 if not lang else 1.0,
                                                           lang=lang or "pt-br")
@@ -216,6 +251,7 @@ class Boca:
                 self.fim_fala = time.time() - (0.35 if curto else 0)
                 self.falando.clear()
                 if not curto:
+                    self.grito = False  # o modelo esqueceu o [/grito]: a próxima resposta não começa gritando
                     diz("FALOU")
                     diz("ESTADO", "ouvindo")
 
