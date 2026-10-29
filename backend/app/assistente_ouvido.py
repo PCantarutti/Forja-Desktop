@@ -99,6 +99,12 @@ def frases(texto: str) -> list[str]:
     return [f.strip() for f in re.split(r"(?<=[.!?…;:])\s+|\n+", texto) if f.strip()]
 
 
+def grunhido(texto: str, ingles: bool) -> str:
+    """O espeak soletra "Hm", "Mm" e "Hmph" (agá-eme): troca pela grafia que ele lê como grunhido, "Hmm" no inglês
+    ("Hmmm" sai com eco: o "həm" tônico quase não aparece no treino) e "Hum" no português."""
+    return re.sub(r"\b(?:h+m+|m{2,}|hmph)\b", "Hmm" if ingles else "Hum", texto, flags=re.I)
+
+
 def com_estilo(texto: str, grito: bool) -> tuple[list[tuple[bool, str]], bool]:
     """As frases com o estilo de cada uma (True = gritado), pelas marcas [grito]...[/grito] do humor. O estado segue de
     um pedido para o outro: a resposta chega frase a frase e o grito pode atravessar a divisão."""
@@ -213,6 +219,7 @@ class Boca:
                         estilo = "gritado" if grito else "calmo"
                         # voz com estilos (Wheatley: calmo 0, gritado 1); nas de um locutor só, o grito é só texto
                         sid = self.piper.config.speaker_id_map.get(estilo) if self.piper.config.num_speakers > 1 else None
+                        t = grunhido(t, self.piper.config.espeak_voice.startswith("en"))
                         amostras = np.concatenate([c.audio_float_array for c in
                                                    self.piper.synthesize(t, syn_config=SynthesisConfig(speaker_id=sid))])
                         sr = self.piper.config.sample_rate
