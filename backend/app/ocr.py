@@ -41,6 +41,11 @@ def _motor_windows():
 
 
 async def _ler_windows(imagem: bytes, motor) -> str:
+    return _em_ordem_de_leitura(await reconhece_windows(imagem, motor))
+
+
+async def reconhece_windows(imagem: bytes, motor):
+    """O OcrResult cru (linhas com as caixas de cada palavra): quem precisa da posição, como o print da tela."""
     from winrt.windows.graphics.imaging import BitmapDecoder
     from winrt.windows.storage.streams import DataWriter, InMemoryRandomAccessStream
 
@@ -50,8 +55,7 @@ async def _ler_windows(imagem: bytes, motor) -> str:
     await escritor.store_async()
     decodificador = await BitmapDecoder.create_async(stream)
     bitmap = await decodificador.get_software_bitmap_async()
-    resultado = await motor.recognize_async(bitmap)
-    return _em_ordem_de_leitura(resultado)
+    return await motor.recognize_async(bitmap)
 
 
 def _em_ordem_de_leitura(resultado) -> str:

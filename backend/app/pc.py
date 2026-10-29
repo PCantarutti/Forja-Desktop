@@ -97,6 +97,11 @@ def _numeros(c: str) -> str:
                   lambda m: str(DEZENAS[m[1]] + (UNIDADES[m[2]] if m[2] else 0)), c)
 
 
+# pedido com mais uma etapa depois de abrir/achar ("... e escreve uma lista", "... e organiza por tipo")
+MAIS_ETAPAS = re.compile(r"\s(?:e|e depois|depois|e entao)\s+(?:escrev|digit|cri|faz|fac|salv|col|bot|preench|clic|mand|envi|"
+                         r"organiz|renome|mov|copi|apag|separ|junt|instal|configur|procur|ach)\w*")
+
+
 def entende(comando: str) -> tuple[str, str] | None:
     """(ação, argumento) quando o pedido é uma das ações do PC; None para o resto (pergunta, Forja...)."""
     c = _numeros(PEDIDO_EDUCADO.sub("", _norm(comando).strip(" .!?,")).strip())
@@ -138,6 +143,8 @@ def entende(comando: str) -> tuple[str, str] | None:
         alvo = m.group(2).strip()
         return {"maximiz": "maximizar", "minimiz": "minimizar", "restaur": "restaurar"}[m.group(1)], \
             "" if ESSA_JANELA.match(alvo) else alvo
+    if MAIS_ETAPAS.search(c):  # "abre o bloco de notas e escreve...": é tarefa do agente, não só abrir
+        return None
     if m := PASTA.search(c):
         return "pasta", m.group(1)
     if m := ARQUIVO.search(c):

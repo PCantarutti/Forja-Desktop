@@ -65,7 +65,8 @@ export type Conversation = {
   pinned?: boolean;
   archived?: boolean;
   snippet?: string; // trecho que casou na busca por conteúdo
-  origem?: { conv_id: number; message_id: number } | null; // Imagens aberta pela IA (skill gerar-imagens)
+  // Imagens aberta pela IA (skill gerar-imagens), ou tarefa temporária do assistente de voz ({temporaria: true})
+  origem?: { conv_id?: number; message_id?: number; temporaria?: boolean } | null;
 };
 
 /** Arquivo alterado pelo agente nesta conversa (checkpoints), com diff do antes para o agora. */

@@ -47,6 +47,16 @@ KOKORO = {"modelo": "kokoro-v1.0.int8.onnx", "vozes": "voices-v1.0.bin"}
 # idioma da conversa ("vamos conversar em inglês"): o Whisper detecta sozinho fora do português (o "Forja" dito no
 # meio do inglês sai certo, o que language="en" às vezes vira "Forge"), e o pedido de voz troca a do Kokoro
 IDIOMA = {"stt": "pt"}
+# ajustes do microfone que mudam com ele ligado ({"cmd": "ajusta"}): ganho do sinal, sensibilidade da voz (0..1, 0,5 =
+# o limiar de sempre), pausa que fecha um pedido (blocos) e até quando mandar o NIVEL para o medidor da página
+AJUSTE = {"ganho": 1.0, "voz": 0.5, "fim": FIM_SILENCIO_COMANDO, "medidor": 0.0}
+
+
+def limiar_voz(piso: float) -> float:
+    """O limiar de energia da fala: 3,5x o ruído da sala (mínimo 0,008) na sensibilidade 0,5; cada 0,5 a mais divide
+    por 2 (pega voz baixa/longe), cada 0,5 a menos multiplica por 2 (ignora TV e conversa ao fundo)."""
+    fator = 2 ** ((0.5 - AJUSTE["voz"]) * 2)
+    return max(0.008 * fator, piso * 3.5 * fator)
 
 
 _saida = threading.Lock()
@@ -266,12 +276,16 @@ class Detector:
         d = np.load(npz)
         self.W1, self.b1, self.W2, self.b2 = d["W1"], d["b1"], d["W2"], d["b2"]
         self.media, self.desvio, self.quadros = d["media"], d["desvio"], int(d["quadros"])
-        # sensibilidade 0..1 (0,5 = o limiar do treino): mais alta pega voz baixa/longe e erra mais
-        self.limiar = float(min(0.97, max(0.2, float(d["limiar"]) - (sensibilidade - 0.5) * 0.4)))
+        self.treino = float(d["limiar"])
+        self.sensibiliza(sensibilidade)
         self.af = AudioFeatures(melspec_model_path=str(oww / "melspectrogram.onnx"),
                                 embedding_model_path=str(oww / "embedding_model.onnx"), inference_framework="onnx")
         self.buf = np.zeros(0, np.int16)
         self.anterior, self.ultimo = 0.0, 0.0
+
+    def sensibiliza(self, sensibilidade: float) -> None:
+        # sensibilidade 0..1 (0,5 = o limiar do treino): mais alta pega voz baixa/longe e erra mais
+        self.limiar = float(min(0.97, max(0.2, self.treino - (sensibilidade - 0.5) * 0.4)))
 
     def prob(self, x):
         import numpy as np
@@ -336,14 +350,28 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
     import numpy as np
     import sounddevice as sd
     blocos: queue.Queue = queue.Queue()
-    with sd.InputStream(device=mic, samplerate=SR, channels=1, dtype="float32", blocksize=BLOCO,
+    with sd.InputStream(device=mic, samplerate=SR, channels=1, dtype="float32", blocksize=BLOCO, latency="low",
                         callback=lambda d, *_: blocos.put(d[:, 0].copy())):
         piso, antes, atual, acima, silencio, acordado, checou = 0.003, [], None, 0, 0, False, False
         motivo = ""  # por que este trecho é pedido: "escuta" (janela aberta), "detector" ou "nome" (checagem rápida)
         detectou = 0.0  # quando o detector acendeu (pode ser um instante antes de o trecho abrir)
         por_cima, checou_por_cima = deque(maxlen=40), 0.0  # fala da pessoa por cima da resposta (1,2 s) e a última checagem
+        nivel_t, pico, atrasou = 0.0, 0.0, 0.0
         while True:
             b = blocos.get()
+            if AJUSTE["ganho"] != 1.0:
+                b = np.clip(b * AJUSTE["ganho"], -1, 1)
+            if blocos.qsize() > 10 and time.time() - atrasou > 10:  # > 300 ms de áudio esperando: algo trava a escuta
+                atrasou = time.time()
+                diz("LOG", f"microfone atrasado {blocos.qsize() * BLOCO * 1000 // SR} ms")
+            if AJUSTE["medidor"] > time.time():  # a página F.O.R.J.A aberta: nível e limiar para o medidor, ~10 por s
+                pico = max(pico, float(np.sqrt(np.mean(b * b))))
+                if time.time() - nivel_t > 0.1:
+                    nivel_t = time.time()
+                    diz("NIVEL", json.dumps({"rms": round(pico, 4), "limiar": round(limiar_voz(piso), 4),
+                                             "prob": round(detector.anterior, 3) if detector else None,
+                                             "det_limiar": round(detector.limiar, 3) if detector else None}))
+                    pico = 0.0
             escuta.vigia()
             if boca.falando.is_set() or time.time() - boca.fim_fala < 0.4:
                 atual, antes, acima = None, [], 0  # a própria voz (e o eco dela) não vira pedido...
@@ -375,7 +403,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                     acordado, motivo = True, "detector"
                     diz("ESTADO", "escutando")
             rms = float(np.sqrt(np.mean(b * b)))
-            limiar = max(0.008, piso * 3.5)
+            limiar = limiar_voz(piso)
             if atual is None:
                 piso = piso * 0.995 + rms * 0.005 if rms < limiar else piso  # o ruído de fundo, devagar
                 antes = (antes + [b])[-PRE_ROLL:]
@@ -393,7 +421,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                 if verifica(np.concatenate(atual)):
                     acordado, motivo = True, "nome"
                     diz("ESTADO", "escutando")
-            fim = FIM_SILENCIO_COMANDO if acordado else FIM_SILENCIO  # no meio de um pedido, a pausa pode ser maior
+            fim = AJUSTE["fim"] if acordado else FIM_SILENCIO  # no meio de um pedido, a pausa pode ser maior
             if silencio >= fim or len(atual) * BLOCO >= MAX_TRECHO:
                 yield np.concatenate(atual), acordado, motivo
                 atual, antes, acima, acordado, motivo = None, [], 0, False, ""
@@ -473,15 +501,22 @@ def main() -> int:
         print(json.dumps({"texto": dita(WhisperModel(a.whisper, device="cpu", compute_type="int8"), a.transcrever)},
                          ensure_ascii=False), flush=True)
         return 0
+    if sys.platform == "win32":
+        # acima do normal: com o modelo, o build ou um jogo puxando a CPU, o microfone e o Whisper ficavam na fila do
+        # Windows e o "escutando" demorava. Não "alta": o áudio é pouco, só não pode esperar.
+        import ctypes
+        # -1 é o pseudo-handle do próprio processo; como int puro o ctypes o mandava em 32 bits (handle inválido no x64)
+        if not ctypes.windll.kernel32.SetPriorityClass(ctypes.c_void_p(-1), 0x8000):
+            diz("LOG", "não deu para subir a prioridade do ouvido")
     try:
+        import os
         import sounddevice as sd
         from faster_whisper import WhisperModel
-        mic = a.mic or None
         mic = dispositivo(a.mic, "entrada")
         nome = sd.query_devices(mic, kind="input")["name"]
         if a.saida:
             sd.default.device = (None, dispositivo(a.saida, "saida"))
-        stt = WhisperModel(a.whisper, device="cpu", compute_type="int8")
+        stt = WhisperModel(a.whisper, device="cpu", compute_type="int8", cpu_threads=max(4, (os.cpu_count() or 8) // 2))
         boca = Boca(Path(a.modelos), a.voz, a.efeito)
         detector = Detector(Path(a.detector), Path(a.oww), a.sensibilidade) if a.detector else None
     except Exception as e:
@@ -514,6 +549,21 @@ def main() -> int:
                     boca.toca(q["arquivo"])
                 elif q["cmd"] == "escuta":
                     escuta.abre(suave=bool(q.get("suave")))
+                    if q.get("agora"):  # atalho ou botão: bip e círculo na hora, sem esperar o próximo bloco
+                        boca.bip()
+                        escuta.anunciada = True
+                        diz("ESTADO", "escutando")
+                elif q["cmd"] == "ajusta":
+                    if "ganho" in q:
+                        AJUSTE["ganho"] = min(4.0, max(0.5, float(q["ganho"])))
+                    if "voz" in q:
+                        AJUSTE["voz"] = min(1.0, max(0.0, float(q["voz"])))
+                    if "pausa" in q:
+                        AJUSTE["fim"] = round(min(3.0, max(0.8, float(q["pausa"]))) * SR / BLOCO)
+                    if "sensibilidade" in q and detector:
+                        detector.sensibiliza(min(1.0, max(0.0, float(q["sensibilidade"]))))
+                elif q["cmd"] == "medidor":
+                    AJUSTE["medidor"] = time.time() + float(q.get("s") or 3)
                 elif q["cmd"] == "cala":
                     boca.cala()
                 elif q["cmd"] == "bip":
@@ -533,14 +583,30 @@ def main() -> int:
     so_detector = bool(detector) and not a.com_whisper
     diz("LOG", "Forja: detector treinado" + (" + Whisper" if detector and not so_detector else "") if detector
         else "Forja pelo Whisper em toda fala")
-    for audio, acordado, motivo in trechos(mic, boca, escuta, verifica, detector, so_detector):
+    # o microfone numa thread só dele: com o Whisper transcrevendo no mesmo laço (segundos no medium), os blocos
+    # esperavam na fila e o "escutando" do atalho, o detector e o fim da fala andavam com esse atraso
+    # ponytail: um worker do Whisper; a checagem rápida (modo whisper/ambos) espera a transcrição em curso. num_workers=2
+    # se isso pesar (dobra a memória do modelo)
+    falas: queue.Queue = queue.Queue()
+
+    def captura() -> None:
+        try:
+            for t in trechos(mic, boca, escuta, verifica, detector, so_detector):
+                falas.put(t)
+        except Exception as e:
+            diz("ERRO", f"microfone: {e.__class__.__name__}: {e}")
+        falas.put(None)
+    threading.Thread(target=captura, daemon=True).start()
+    for audio, acordado, motivo in iter(falas.get, None):
         if so_detector and not acordado:
             diz("ESTADO", "ouvindo")
             continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
         diz("ESTADO", "entendendo" if acordado else "transcrevendo")
+        t0 = time.perf_counter()
         segs, _ = stt.transcribe(audio, language=IDIOMA["stt"] or None, beam_size=1, initial_prompt="Forja.",
                                  vad_filter=False, condition_on_previous_text=False)
         texto = " ".join(s.text for s in segs).strip()
+        diz("LOG", f"Whisper {time.perf_counter() - t0:.2f} s para {len(audio) / SR:.1f} s de fala")
         if ALUCINACAO.search(normaliza(texto)):
             diz("LOG", "ignorado: alucinação do Whisper")  # sem o texto: a fala da pessoa não vai para o log
             texto = ""

@@ -24,7 +24,9 @@ from . import config
 MODES = ("auto", "manual", "edits", "plan", "bypass")
 FILE_EDITS = {"write_file", "edit_file"}
 # Ações de baixo risco no modo Automático: mexem na pasta de trabalho ou na página, não no sistema.
-AUTO_TOOLS = FILE_EDITS | {"browser_click", "browser_type", "browser_upload"}
+# desktop_*: o agente de voz mexendo na tela (app/desktop.py); clique a clique não dá para pedir "sim"
+AUTO_TOOLS = FILE_EDITS | {"browser_click", "browser_type", "browser_upload", "open_in_browser", "desktop_media", "desktop_open", "desktop_focus", "desktop_click",
+                            "desktop_type", "desktop_key", "desktop_scroll"}
 
 # Comandos de leitura/teste que o modo Automático libera (primeira palavra, ou duas para subcomandos).
 SAFE_COMMANDS = {
@@ -50,7 +52,7 @@ SAFE_WINDOWS = {
     "get-childitem", "gci", "dir", "get-location", "gl", "get-item", "gi", "get-itemproperty",
     "select-object", "select", "where-object", "where", "measure-object", "measure", "sort-object",
     "format-table", "ft", "format-list", "fl", "get-command", "gcm", "resolve-path", "split-path",
-    "join-path", "get-filehash", "write-output", "write-host",
+    "join-path", "get-filehash", "write-output", "write-host", "start-sleep", "sleep",
 }
 DANGEROUS = re.compile(r"(^|\s)(rm|rmdir|mv|dd|mkfs|chmod|chown|sudo|su|kill|pkill|shutdown|reboot|"
                        r"curl|wget|nc|ssh|scp|apt|apt-get|yum|brew|systemctl)(\s|$)")
@@ -195,7 +197,8 @@ def decide(tool, args: dict, mode: str) -> tuple[bool, str | None]:
         return True, None
     achada = _rule(tool.name, args)
     # Apagar/formatar/desligar/sudo pergunta em qualquer modo — só uma regra exata dispensa o card.
-    if destructive_args(args):
+    # desktop_type num terminal aberto é shell: o mesmo "rm -rf" digitado pergunta igual
+    if destructive_args(args) or (tool.name == "desktop_type" and destructive_command(str(args.get("texto") or ""))):
         return (False, achada[0]) if achada and achada[1] else (True, None)
     if achada:
         return False, achada[0]

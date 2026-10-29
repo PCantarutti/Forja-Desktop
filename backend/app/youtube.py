@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 import httpx
 
 from . import db, segredo
-from .tools import ToolError
+from .tools import Tool, ToolError, register
 
 CHAVE = "youtube"   # AppSetting: {client_id, client_secret, refresh_token, canal}
 ESCOPOS = "https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly"
@@ -225,3 +225,56 @@ def enviar(video: Path, titulo: str, descricao: str, privacidade: str = "private
     if final == "private" and privacidade != "private" and not publicar_em:
         aviso = (aviso + " · " if aviso else "") + "O YouTube deixou privado (projeto do Google sem auditoria da API)."
     return {"video_id": vid, "url": f"https://youtu.be/{vid}", "privacidade": final, "aviso": aviso}
+
+
+# ------------------------------------------------------------------ leitura para o agente (o "Jarvis" de voz)
+# A API não tem o feed da página inicial (as recomendações): o que dá para ler com o login é o que a pessoa assina.
+
+def inscricoes(_root: Path, args: dict) -> str:
+    """Os canais que a pessoa assina (até 200), com o id para youtube_channel_videos."""
+    canais, pagina = [], None
+    while len(canais) < 200:
+        r = httpx.get(f"{API}/subscriptions", headers=_h(), timeout=30,
+                      params={"part": "snippet", "mine": "true", "maxResults": 50, "order": "relevance",
+                              **({"pageToken": pagina} if pagina else {})})
+        if r.status_code != 200:
+            raise ToolError(_erro(r))
+        d = r.json()
+        canais += [f"- {i['snippet']['title']} ({i['snippet']['resourceId']['channelId']})" for i in d.get("items", [])]
+        if not (pagina := d.get("nextPageToken")):
+            break
+    return f"{len(canais)} inscrições:\n" + "\n".join(canais) if canais else "A conta não assina nenhum canal."
+
+
+def videos_canais(_root: Path, args: dict) -> str:
+    """Os vídeos mais recentes de até 10 canais, pela playlist de envios (UU + o id do canal sem o UC)."""
+    ids = [str(c).strip() for c in (args.get("channel_ids") or []) if str(c).strip().startswith("UC")][:10]
+    if not ids:
+        raise ToolError("Passe channel_ids (ids que começam com UC, do youtube_subscriptions).")
+    n = max(1, min(10, int(args.get("por_canal") or 5)))
+    linhas = []
+    for c in ids:
+        r = httpx.get(f"{API}/playlistItems", headers=_h(), timeout=30,
+                      params={"part": "snippet,contentDetails", "playlistId": "UU" + c[2:], "maxResults": n})
+        if r.status_code != 200:
+            linhas.append(f"{c}: {_erro(r)}")
+            continue
+        for i in r.json().get("items", []):
+            s, vid = i["snippet"], i["contentDetails"]["videoId"]
+            linhas.append(f"- [{s.get('channelTitle', '')}] {s['title']} ({i['contentDetails'].get('videoPublishedAt', '')[:10]})"
+                          f" https://www.youtube.com/watch?v={vid}")
+    return "\n".join(linhas) or "Nenhum vídeo encontrado."
+
+
+def _conectado() -> bool:
+    return bool(_ler().get("refresh_token"))
+
+
+register(Tool("youtube_subscriptions", "Lista os canais que a pessoa assina no YouTube (a conta conectada no Forja), "
+              "com o id de cada um. A API não dá o feed de recomendações: as inscrições são a base para achar algo "
+              "para ela ver.", {"type": "object", "properties": {}, "required": []}, inscricoes, available=_conectado))
+register(Tool("youtube_channel_videos", "Os vídeos mais recentes de até 10 canais (título, data e URL que toca "
+              "sozinha). Para ver, abra a URL com open_in_browser.",
+              {"type": "object", "properties": {"channel_ids": {"type": "array", "items": {"type": "string"}},
+                                                "por_canal": {"type": "integer", "description": "1 a 10. Padrão: 5"}},
+               "required": ["channel_ids"]}, videos_canais, available=_conectado))

@@ -22,16 +22,19 @@ GRUPOS: dict[str, tuple[str, ...]] = {
     "terminal": ("terminal_open", "terminal_send", "terminal_read", "terminal_close", "terminal_list"),
     "memoria": ("remember", "recall", "forget", "session_search", "session_read"),
     "navegador_extra": ("browser_eval", "browser_tabs", "browser_upload", "browser_scroll"),
+    "tela": ("desktop_screenshot", "desktop_media", "desktop_open", "desktop_windows", "desktop_focus", "desktop_click", "desktop_type", "desktop_key",
+             "desktop_scroll"),
     "agentes": ("list_agents", "interrupt_agent"),
     "codigo": ("ast", "imports"),
     "board": ("board_card",),
+    "youtube": ("youtube_subscriptions", "youtube_channel_videos"),
 }
 # Janela muito pequena (< MINIMO tokens): também saem estes, e fica o núcleo (arquivos, shell, tarefas, perguntas).
 GRUPOS_MINIMO: dict[str, tuple[str, ...]] = {
     "navegador": ("browser_navigate", "browser_read", "browser_screenshot", "browser_click", "browser_type",
                   "browser_console", "browser_validate"),
     "servidores": ("serve_start", "serve_status", "serve_stop"),
-    "web": ("web_search", "fetch_url"),
+    "web": ("web_search", "fetch_url", "open_in_browser"),
     "subagentes": ("delegate_task", "explore"),
     "busca": ("code_search", "tree"),
 }

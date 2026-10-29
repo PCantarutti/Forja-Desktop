@@ -12,7 +12,8 @@ type Estado = {
   imagem: string; video: string; pasta_projetos: string; favoritos: Favorito[];
   modelo: { provider: string; model: string } | null; ocioso_min: number; atalho: string; raciocinio: string;
   permitidos: { provider: string; model: string }[];
-  detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number;
+  detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number; gravacoes_novas: number;
+  ganho: number; sensibilidade_voz: number; pausa_fim: number;
   metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
   vozes_kokoro: { id: string; nome: string }[]; humores: { id: string; nome: string }[];
@@ -28,6 +29,31 @@ type Memoria = { name: string; slug: string; description: string; type: string }
 type GoogleConta = { client_id: string; tem_chave: boolean; conectado: boolean; email: string | null; pode_copiar_youtube: boolean };
 type Mic = { id: string; nome: string; api: string; tipo: "entrada" | "saida"; padrao: boolean };
 type Favorito = { nome: string; provider: string; model: string };
+type Nivel = { rms: number; limiar: number; prob: number | null; det_limiar: number | null };
+
+const pct = (rms: number) => Math.max(0, Math.min(100, (20 * Math.log10(Math.max(rms, 1e-4)) + 60) / 60 * 100));  // -60..0 dB
+
+/** Nível do microfone ao vivo: a barra é o som, o traço é o limiar a partir do qual ele considera fala. Com o detector,
+ *  uma segunda barra mostra a certeza de "Forja" e o traço dela, o ponto em que acende. */
+function Medidor({ n }: { n: Nivel | null }) {
+  if (!n) return <p className="text-[11.5px] text-faint">Ligue o assistente para ver o nível do microfone.</p>;
+  const fala = n.rms > n.limiar;
+  return (
+    <div className="flex flex-col gap-1.5" aria-label="Nível do microfone">
+      <div className="relative h-2 overflow-hidden rounded-full bg-line">
+        <div className={`h-full rounded-full transition-[width] duration-100 ${fala ? "bg-ok" : "bg-muted"}`} style={{ width: `${pct(n.rms)}%` }} />
+        <div className="absolute top-0 h-full w-[2px] bg-warn" style={{ left: `${pct(n.limiar)}%` }} title="Limiar de fala" />
+      </div>
+      {n.prob !== null && n.det_limiar !== null && (
+        <div className="relative h-2 overflow-hidden rounded-full bg-line" title="Certeza do detector de que ouviu “Forja”">
+          <div className={`h-full rounded-full transition-[width] duration-100 ${n.prob >= n.det_limiar ? "bg-accent" : "bg-muted"}`} style={{ width: `${n.prob * 100}%` }} />
+          <div className="absolute top-0 h-full w-[2px] bg-warn" style={{ left: `${n.det_limiar * 100}%` }} />
+        </div>
+      )}
+      <span className="text-[11px] text-faint">{fala ? "Ouvindo fala" : "Silêncio ou ruído"}{n.prob !== null ? ` · “Forja”: ${Math.round(n.prob * 100)}%` : ""}</span>
+    </div>
+  );
+}
 type Gravacao = { id: string; segundos_voz: number; pico: number; aviso: string; reconhecida: boolean | null };
 type Catalogo = { id: string; name: string; models: string[] }[];
 type Job = { id: string; detail?: string; error?: string; status: string };
@@ -124,7 +150,11 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
-    texto: "Um modelo pequeno treinado só para o nome acende o círculo na hora e quase não gasta CPU. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele bem melhor (ouça e apague as ruins na lista). “Detector + Whisper” acende rápido e não deixa o nome escapar." },
+    texto: "Um modelo pequeno treinado só para o nome acende o círculo na hora e quase não gasta CPU. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele bem melhor (ouça e apague as ruins na lista). Gravação só conta depois de treinar de novo (a página avisa quando há gravação fora do treino); a barra de baixo mostra ao vivo a certeza de “Forja” e o traço, onde ele acende. “Detector + Whisper” acende rápido e não deixa o nome escapar." },
+  { titulo: "Tarefas: faça qualquer coisa", exemplos: ["Forja, reproduza um vídeo aleatório das minhas inscrições do YouTube", "Forja, pesquise placas de vídeo de até 3800 reais e abra os links no meu navegador", "Forja, organiza minha pasta de downloads por tipo de arquivo", "Forja, vê por que meu disco C tá tão cheio", "Forja, mantém essa tarefa"],
+    texto: "Pedido para fazer algo vira trabalho do agente do Forja, numa conversa temporária “🎙 …” do modo Agente, com o modelo do assistente. Ela é só o trabalho de fundo: se apaga sozinha 1 hora depois da última atividade, a menos que você clique em Manter nela ou diga “Forja, mantém essa tarefa”. Ele dá o próprio jeito: web, sua conta do YouTube (conectada em Conteúdo), arquivos, comandos, scripts que ele mesmo escreve, o navegador do Forja e a tela (print, clique, digitação; ver a tela pede modelo com visão). O que é para você ver abre no SEU navegador. Quando demora, avisa o que está fazendo; dúvida que muda o resultado ele pergunta em voz alta e você responde falando. Comando que muda algo pede seu “sim”; comprar, pagar, enviar mensagem e digitar senha ficam sempre com você. Quando acha um caminho novo, guarda na memória para ir direto da próxima vez. No fim, fala o que fez; “Forja, para o agente” interrompe." },
+  { titulo: "Ajustes do microfone", exemplos: ["Ganho", "Sensibilidade da voz", "Pausa que encerra o pedido", "Nível do microfone"],
+    texto: "Em Ouvir e falar. A barra mostra o som ao vivo e o traço, o limiar de fala: falando normalmente a barra passa do traço com folga; em silêncio, fica abaixo. Ganho sobe o sinal do microfone baixo; sensibilidade muda o limiar; a pausa é quanto silêncio fecha o pedido. Vale na hora, sem recarregar o Whisper. O atalho e o botão do microfone dão um bip quando ele começa a ouvir." },
 ];
 
 function Tutorial() {
@@ -206,6 +236,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
     .then((r) => setMemorias(r.items.filter((m) => m.type === "usuario" || m.type === "preferencia"))).catch(() => {}), []);
   useEffect(() => { carregaMemorias(); const t = setInterval(carregaMemorias, 5000); return () => clearInterval(t); }, [carregaMemorias]);
   const [vivo, setVivo] = useState("desligado");  // o estado do ouvido, rápido: o círculo acompanha a fala
+  const [nivel, setNivel] = useState<Nivel | null>(null);
   const [transcricao, setTranscricao] = useState<{ quem: "voce" | "forja"; texto: string }[]>([]);
   const fimConversa = useRef<HTMLDivElement>(null);
   const carregaConversa = useCallback(() => api.get<{ transcricao: { quem: "voce" | "forja"; texto: string }[] }>("/assistente/conversa")
@@ -214,7 +245,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
     let parado = false;
     const t = setInterval(() => {
       if (document.hidden || parado) return;
-      api.get<{ estado: string }>("/assistente/estado").then((r) => setVivo(r.estado)).catch(() => {});
+      api.get<{ estado: string; nivel?: Nivel | null }>("/assistente/estado?medidor=1").then((r) => { setVivo(r.estado); setNivel(r.nivel ?? null); }).catch(() => {});
     }, 300);
     const c = setInterval(() => { if (!document.hidden) carregaConversa(); }, 1000);
     carregaConversa();
@@ -477,8 +508,26 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     <select className={`${campo} cursor-pointer`} value={e.whisper} onChange={(ev) => grava({ whisper: ev.target.value })}>
                       <option value="base">base (rápido)</option>
                       <option value="small">small (equilibrado)</option>
-                      <option value="medium">medium (preciso, mais lento)</option>
+                      <option value="medium">medium (preciso, 2 a 4 s por pedido na CPU)</option>
                     </select>
+                  </Caixa>
+                  <Caixa rotulo="Nível do microfone">
+                    <Medidor n={e.ligado ? nivel : null} />
+                  </Caixa>
+                  <Caixa rotulo={`Ganho: ${(e.ganho ?? 1).toFixed(1).replace(".", ",")}× (aumente se a barra mal se mexe quando você fala)`}>
+                    <input type="range" min={0.5} max={4} step={0.1} defaultValue={(e.ganho ?? 1)} className="w-full accent-accent"
+                           onPointerUp={(ev) => grava({ ganho: Number((ev.target as HTMLInputElement).value) })}
+                           onKeyUp={(ev) => grava({ ganho: Number((ev.target as HTMLInputElement).value) })} />
+                  </Caixa>
+                  <Caixa rotulo={`Sensibilidade da voz: ${Math.round((e.sensibilidade_voz ?? 0.5) * 100)}% (alta pega voz baixa ou de longe; baixa ignora TV e conversa ao fundo)`}>
+                    <input type="range" min={0} max={1} step={0.05} defaultValue={(e.sensibilidade_voz ?? 0.5)} className="w-full accent-accent"
+                           onPointerUp={(ev) => grava({ sensibilidade_voz: Number((ev.target as HTMLInputElement).value) })}
+                           onKeyUp={(ev) => grava({ sensibilidade_voz: Number((ev.target as HTMLInputElement).value) })} />
+                  </Caixa>
+                  <Caixa rotulo={`Pausa que encerra o pedido: ${(e.pausa_fim ?? 1.65).toFixed(1).replace(".", ",")} s (aumente se ele corta você no meio)`}>
+                    <input type="range" min={0.8} max={3} step={0.1} defaultValue={(e.pausa_fim ?? 1.65)} className="w-full accent-accent"
+                           onPointerUp={(ev) => grava({ pausa_fim: Number((ev.target as HTMLInputElement).value) })}
+                           onKeyUp={(ev) => grava({ pausa_fim: Number((ev.target as HTMLInputElement).value) })} />
                   </Caixa>
                 
                   <Caixa rotulo="Alto-falante (onde ele fala)">
@@ -606,6 +655,13 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                               className={`flex-1 rounded-[6px] py-1.5 disabled:opacity-40 ${e.detector === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>{rot}</button>
                     ))}
                   </div>
+                  {(e.gravacoes_novas ?? 0) > 0 && !e.treinando && (
+                    <CartaoEstado tom="aviso" titulo={`${e.gravacoes_novas} ${e.gravacoes_novas > 1 ? "gravações suas ainda não entraram" : "gravação sua ainda não entrou"} no detector`}
+                      acoes={<button className={botaoEstadoPrimario} onClick={() => api.post<Job>("/assistente/treinar").then(carrega).catch((er) => onError(er.message))}>Treinar agora</button>}>
+                      O detector só aprende sua voz quando treina de novo. Com 20 a 30 gravações (perto e longe do microfone, baixo e alto) ele erra bem menos.
+                    </CartaoEstado>
+                  )}
+                  {e.detector !== "whisper" && e.ligado && <Medidor n={nivel} />}
                   {e.detector !== "whisper" && (
                     <Caixa rotulo={`Sensibilidade: ${Math.round(e.sensibilidade * 100)}% (mais alta pega voz baixa ou de longe, e acende à toa mais vezes)`}>
                       <input type="range" min={0} max={1} step={0.05} defaultValue={e.sensibilidade} className="w-full accent-accent"
@@ -626,7 +682,7 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                         {e.detector_treinado ? "Treinar de novo" : "Treinar o detector"}
                       </button>
                       <button className={botaoEstado} disabled={gravandoVoz || e.minha_voz >= 30}
-                              title="Clique e diga “Forja” uma vez, no seu tom normal. 5 a 10 gravações ajudam o detector com a sua voz."
+                              title="Clique e diga “Forja” uma vez. Varie: perto e longe do microfone, baixo e alto, rápido e devagar. 20 a 30 gravações, depois treine de novo."
                               onClick={() => { setGravandoVoz(true); setAvisoGrav(""); api.post<{ minha_voz: number; gravacao: Gravacao }>("/assistente/gravar-voz")
                                 .then((r) => { setE((a) => a && { ...a, minha_voz: r.minha_voz }); setAvisoGrav(r.gravacao.aviso ? `Gravação ${r.gravacao.id}: ${r.gravacao.aviso}. Apague e grave de novo.` : ""); carregaGravs(); })
                                 .catch((er) => onError(er.message)).finally(() => setGravandoVoz(false)); }}>

@@ -20,7 +20,7 @@ from typing import AsyncIterator
 
 from . import apelidos, checkpoints, compact, config, db, llm, memory, mirror, native, policy, uploads, workspace
 from . import autonomo, juiz, catalogo, kvcache, maestro, metricas, mobile, modelctl, progresso, projstate, qualidade, taskdb
-from . import browser, busca, documentos, shell, subagents, tasks, web  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
+from . import browser, busca, desktop, documentos, shell, subagents, tasks, web, youtube  # noqa: F401  (registram run_command, web_*, browser_*, delegate_task, update_tasks, write_document...)
 from . import board, codebusca, codigo, exploracoes, goals, hooks, sandbox, lsp, revisor, sessoes, skills, terminal  # noqa: F401  (terminal registra terminal_*; codigo registra tree, ast, imports; codebusca registra code_search; board registra board_card)
 from .parsing import (LoopDetector, aviso_repeticao, detect_promise, looks_like_plan, parse_text_tool_calls,
                       split_think)
@@ -549,6 +549,14 @@ def regras_plano(names: list[str]) -> list[str]:
     return regras
 
 
+# instruções extras de uma conversa, vindas de fora do agente (as tarefas faladas ao assistente F.O.R.J.A):
+# conv_id -> texto, que entra no contexto de execução de cada turno dela
+NOTAS_CONVERSA: dict[int, str] = {}
+# conversas em que o revisor automático decide no lugar do card no modo Automático, mesmo sem config.AUTO_REVIEW: as
+# tarefas faladas, onde parar a cada script para um "sim" em voz alta emperrava tudo (o destrutivo segue perguntando)
+REVISOR_CONVERSA: set[int] = set()
+
+
 def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, names: list[str]) -> str:
     """O que muda durante a conversa, numa mensagem só (DeepSeek Harness: runtime-context snapshot)."""
     partes = [CONTEXTO_PREFIXO + " Substitui os contextos anteriores.",
@@ -566,6 +574,8 @@ def contexto_runtime(permission: str, plan: str | None, maestro_mode: bool, name
     root = workspace.root()
     if (conv := goals.CONV.get()) is not None:
         texto += goals.contexto(conv)
+        if nota := NOTAS_CONVERSA.get(conv):
+            texto += "\n\n" + nota
     return (texto + _memorias() + memory.instrucoes_workspace(root, list(LIDOS.get() or ()))
             + (skills.catalogo(root) if "skill" in names else ""))
 
@@ -687,6 +697,12 @@ def prompt_base(via: str, caps: set[str] | None = None, exclude: set[str] | None
             rules.append("- Se o usuário pedir um print, chame browser_screenshot: a imagem aparece para ele no chat. "
                          "Você não tem visão e não recebe a imagem, então valide layout pelo browser_read "
                          "(estrutura) e browser_console (erros).")
+    if "desktop_click" in names:
+        rules.append("- Programas do PC (desktop_*): só quando não há outra via. Arquivo se mexe com as ferramentas de "
+                     "arquivo (texto para um .txt é write_file, nunca digitado no Bloco de Notas), programa se abre com "
+                     "desktop_open, site é browser_*. Na tela: desktop_focus na janela, desktop_screenshot antes de "
+                     "clicar e de novo depois para conferir; atalho de teclado (desktop_key) é mais certo que procurar "
+                     "botão. Nunca digite nem clique num documento que a pessoa já tinha aberto.")
     if "write_document" in names or "write_spreadsheet" in names:
         # Aconteceu em uso: pediram "a tabela deste PDF em Excel" e o modelo escreveu dois scripts
         # Python, gerou um .csv e tentou `pip install openpyxl` — que o usuário recusou, e aí desistiu.
@@ -2448,7 +2464,7 @@ async def _run_call(conv_id: int, call: dict, req: RunRequest, run: Run, caps: s
     # noite toda em `rm -f` e `chmod` no container). Quem decide é o modelo da Maestro, pelo revisor; negado
     # vira erro para o Worker procurar outro caminho, nunca espera.
     elif needs_approval and (req.mode == "maestro" or (
-            run.permission == "auto" and config.AUTO_REVIEW
+            run.permission == "auto" and (config.AUTO_REVIEW or conv_id in REVISOR_CONVERSA)
             and not policy.destructive_args(args))):  # fora do Maestro, destrutivo pergunta sempre
         acao = {"ferramenta": name, "descricao": tool.description[:400], "argumentos": args}
         if name in policy.SHELLS and sandbox.isolar() and sandbox.motor_ativo():

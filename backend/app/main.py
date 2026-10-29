@@ -1333,9 +1333,10 @@ def assistente_estado():
 
 
 @app.get("/api/assistente/estado")
-def assistente_resumo():
-    """Barato (sem disco): o Electron consulta 4x por segundo para o círculo de "falando" no canto da tela."""
-    return assistente.resumo()
+def assistente_resumo(medidor: bool = False):
+    """Barato (sem disco): o Electron consulta 4x por segundo para o círculo de "falando" no canto da tela.
+    `medidor=1`: a página F.O.R.J.A pede também o nível do microfone."""
+    return assistente.resumo(medidor)
 
 
 @app.put("/api/assistente")
@@ -4076,6 +4077,12 @@ def restore_checkpoints(conv_id: int, body: dict):
     if active_run(conv_id):
         raise HTTPException(409, "Espere a execução atual terminar")
     return {"restored": checkpoints.restore_from(conv_id, int(body["turn_id"]))}
+
+
+@app.post("/api/conversations/{conv_id}/manter")
+def manter_conversa(conv_id: int):
+    """Tarefa temporária do assistente de voz que a pessoa quer guardar: vira conversa comum."""
+    return {"ok": assistente.manter(conv_id)}
 
 
 @app.delete("/api/conversations/{conv_id}")

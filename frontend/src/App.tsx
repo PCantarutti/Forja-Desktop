@@ -282,6 +282,21 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   browser_click: (a) => `Clicando em ${trecho(a.selector, 36) ?? "um elemento"}`,
   browser_type: (a) => `Digitando em ${trecho(a.selector, 30) ?? "um campo"}`,
   browser_upload: (a) => `Enviando ${arquivo(a.path) ?? "um arquivo"} para a p\u00e1gina`,
+  desktop_screenshot: (a) => (a.janela ? `Olhando a janela ${trecho(a.janela, 30)}` : "Olhando a tela do PC"),
+  open_in_browser: (a) => {
+    const urls = Array.isArray(a.urls) ? a.urls : [];
+    return `Abrindo ${urls.length > 1 ? `${urls.length} links` : endereco(a.url ?? urls[0]) ?? "um link"} no seu navegador`;
+  },
+  youtube_subscriptions: () => "Olhando suas inscrições do YouTube",
+  youtube_channel_videos: () => "Olhando os vídeos recentes dos canais",
+  desktop_media: (a) => (a.acao === "pausar" ? "Pausando o que está tocando" : a.acao === "tocar" ? "Dando play" : "Vendo o que está tocando"),
+  desktop_open: (a) => `Abrindo ${trecho(a.programa, 30) ?? "um programa"}`,
+  desktop_windows: () => "Listando as janelas abertas",
+  desktop_focus: (a) => `Trazendo ${trecho(a.janela, 30) ?? "a janela"} para a frente`,
+  desktop_click: (a) => `Clicando na tela em ${a.x}, ${a.y}`,
+  desktop_type: (a) => `Digitando ${trecho(a.texto, 30) ?? "na tela"}`,
+  desktop_key: (a) => `Apertando ${trecho(a.teclas, 20) ?? "uma tecla"}`,
+  desktop_scroll: (a) => `Rolando para ${a.para === "cima" ? "cima" : "baixo"}`,
   browser_screenshot: (a) => (a.selector ? `Fotografando ${trecho(a.selector, 30)}` : "Tirando um print da tela"),
   browser_scroll: (a) =>
     a.selector
@@ -2015,6 +2030,15 @@ export default function App() {
     <div className="mx-auto max-w-3xl">
       {agentica && <ModeWarning permission={settings.permission} />}
       {error && <div className="mb-2 text-sm text-red-300">{error}</div>}
+      {conv?.origem?.temporaria && (
+        <div className="mb-2 flex items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2 text-[12.5px] text-muted">
+          <span className="flex-1">Tarefa temporária do assistente de voz: é apagada sozinha 1 hora depois da última atividade.</span>
+          <button className="shrink-0 font-medium text-accent hover:underline"
+                  onClick={() => api.post(`/conversations/${conv.id}/manter`).then(() => refreshConversations()).catch((er) => setError(er.message))}>
+            Manter
+          </button>
+        </div>
+      )}
 
       <CaixaPrompt>
         {(attachments.length > 0 || uploading) && (
