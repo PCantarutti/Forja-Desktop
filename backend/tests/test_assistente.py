@@ -445,8 +445,8 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     (tmp_path / "mae.onnx").write_bytes(b"x")
     (tmp_path / "mae.onnx.json").write_text("{}", "utf-8")
     (tmp_path / "sem-config.onnx").write_bytes(b"x")  # sem o .json o Piper não carrega: fica de fora
-    assert assistente.vozes_kokoro()[:2] == [{"id": "piper:mae", "nome": "Mae (treinada)"},
-                                             {"id": "piper:mae:glados", "nome": "GLaDOS (Mae, com filtro)"}]
+    assert assistente.vozes_kokoro()[:2] == [{"id": "piper:mae", "nome": "Mae (treinada)", "rvc": False},
+                                             {"id": "piper:mae:glados", "nome": "GLaDOS (Mae, com filtro)", "rvc": False}]
     assert [v["id"] for v in assistente.vozes_kokoro()].count("piper:sem-config") == 0
     assert assistente._voz_arg("piper:mae") == str(tmp_path / "mae.onnx")
     assert assistente._voz_arg("piper:mae:glados") == str(tmp_path / "mae.onnx")  # o filtro vai no --efeito
@@ -465,6 +465,26 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     assert chamadas == [False, True] and assistente.ler()["voz"] == "piper:mae:glados"
 
 
+def test_rvc_da_voz_treinada_usa_o_runtime_e_respeita_a_chave(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(assistente, "VOZES_PIPER", tmp_path)
+    monkeypatch.setattr(assistente, "RVC", tmp_path / "rvc")
+    (tmp_path / "arthur.onnx").write_bytes(b"x")
+    (tmp_path / "arthur.onnx.json").write_text("{}", "utf-8")
+    cfg = {**assistente.PADRAO, "voz": "piper:arthur"}
+    assert assistente._rvc(cfg) == []  # sem o .rvc.pth: Piper puro
+    (tmp_path / "arthur.rvc.pth").write_bytes(b"x")
+    assert assistente.vozes_kokoro()[0]["rvc"] is True
+    assert assistente._rvc(cfg) == []  # com o modelo, mas sem runtime nem Applio de fora
+    fora = {"forja": {"rvc": {"python": "C:/a/python.exe", "applio": "C:/a/Applio", "index_rate": 0.5}}}
+    (tmp_path / "arthur.onnx.json").write_text(json.dumps(fora), "utf-8")
+    assert json.loads(assistente._rvc(cfg)[1]) == {"python": "C:/a/python.exe", "applio": "C:/a/Applio", "config": ""}
+    monkeypatch.setattr(assistente, "rvc_instalado", lambda: True)  # instalado pela tela: ganha do de fora
+    alvo = json.loads(assistente._rvc(cfg)[1])
+    assert alvo["python"] == str(assistente._py_rvc()) and alvo["applio"] == str(tmp_path / "rvc" / "applio")
+    assert assistente._rvc({**cfg, "rvc": False}) == [] and assistente._rvc({**cfg, "voz": "pf_dora"}) == []
+
+
 def test_voz_so_ingles_traduz_frases_prontas(tmp_path, monkeypatch):
     # a GLaDOS do jogo só fala inglês: sem filtro na lista, e as frases prontas (em português) saem traduzidas, com cache
     monkeypatch.setattr(assistente, "VOZES_PIPER", tmp_path)
@@ -472,7 +492,7 @@ def test_voz_so_ingles_traduz_frases_prontas(tmp_path, monkeypatch):
     monkeypatch.setattr(assistente, "_traducoes_en", {})
     (tmp_path / "glados.onnx").write_bytes(b"x")
     (tmp_path / "glados.onnx.json").write_text('{"espeak": {"voice": "en-us"}}', "utf-8")
-    assert assistente.vozes_kokoro()[0] == {"id": "piper:glados", "nome": "Glados (treinada, só inglês)"}
+    assert assistente.vozes_kokoro()[0] == {"id": "piper:glados", "nome": "Glados (treinada, só inglês)", "rvc": False}
     assert "piper:glados:glados" not in [v["id"] for v in assistente.vozes_kokoro()]
     assert assistente.so_ingles("piper:glados") and not assistente.so_ingles("pf_dora")
     assert not assistente._com_filtro("piper:glados") and assistente._com_filtro("piper:mae:glados")

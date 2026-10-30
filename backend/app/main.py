@@ -1361,6 +1361,12 @@ def assistente_instalar():
     return assistente.instalar()
 
 
+@app.post("/api/assistente/instalar-rvc")
+def assistente_instalar_rvc():
+    """Runtime do RVC (Applio, só a inferência) que limpa o timbre da voz treinada que tem um .rvc.pth."""
+    return assistente.instalar_rvc()
+
+
 @app.get("/api/assistente/microfones")
 async def assistente_microfones():
     return await asyncio.to_thread(assistente.microfones)

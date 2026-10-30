@@ -131,7 +131,7 @@ class Boca:
     eco: int | None = None  # trocador de voz: toca também neste aparelho (o retorno no seu fone)
     ao_tocar = None  # trocador de voz: chamado com o texto quando a frase começa a tocar (mede o atraso)
 
-    def __init__(self, modelos: Path, voz: str, efeito: str = "", eco: int | None = None):
+    def __init__(self, modelos: Path, voz: str, efeito: str = "", eco: int | None = None, rvc: str = ""):
         from kokoro_onnx import Kokoro
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
         self.voz, self.piper, self.efeito = voz, None, None
@@ -147,7 +147,7 @@ class Boca:
             except Exception as e:  # sem o piper-tts no venv (instalação antiga) ou modelo quebrado: fala, mas na padrão
                 diz("LOG", f"voz treinada indisponível, usando a padrão: {e.__class__.__name__}: {e}")
                 self.voz = "pf_dora"
-        self.rvc = self._abre_rvc(voz) if self.piper and self.ajuste.get("rvc") else None
+        self.rvc = self._abre_rvc(voz, json.loads(rvc), self.ajuste.get("rvc", {})) if self.piper and rvc else None
         if self.rvc:  # a 1ª conversão aquece o modelo (~10 s): aqui, e não na primeira resposta
             try:
                 import numpy as np
@@ -178,16 +178,16 @@ class Boca:
         threading.Thread(target=self._toca, daemon=True).start()
 
     @staticmethod
-    def _abre_rvc(voz: str):
-        """O conversor RVC por cima do Piper ("rvc" no "forja" do .onnx.json: python e pasta do Applio; o modelo é o
-        <voz>.rvc.pth ao lado do .onnx, com o .rvc.index se houver). Sem ele (Applio fora, modelo quebrado): o Piper puro."""
+    def _abre_rvc(voz: str, cfg: dict, ajuste: dict):
+        """O conversor RVC por cima do Piper. `cfg` (o --rvc, do backend): python, pasta do Applio e config dele; o
+        modelo é o <voz>.rvc.pth ao lado do .onnx, com o .rvc.index se houver, e o index_rate vem do "rvc" no "forja"
+        do .onnx.json. Sem ele (Applio fora, modelo quebrado): o Piper puro."""
         import subprocess
-        cfg = json.loads(Path(voz + ".json").read_text("utf-8"))["forja"]["rvc"]
         base = voz.removesuffix(".onnx")
         try:
             p = subprocess.Popen([cfg["python"], str(Path(__file__).with_name("assistente_rvc.py")),
                                   "--applio", cfg["applio"], "--pth", base + ".rvc.pth", "--index", base + ".rvc.index",
-                                  "--index-rate", str(cfg.get("index_rate", 0.3)), "--config", cfg.get("config", "")],
+                                  "--index-rate", str(ajuste.get("index_rate", 0.3)), "--config", cfg.get("config", "")],
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                                  encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             pronto = p.stdout.readline().strip()
@@ -554,6 +554,7 @@ def main() -> int:
     p.add_argument("--sensibilidade", type=float, default=0.5)
     p.add_argument("--com-whisper", action="store_true")  # detector + Whisper: o detector acende rápido, o Whisper não deixa passar
     p.add_argument("--transcrever", default="")  # ditado com o assistente desligado: transcreve o arquivo e sai
+    p.add_argument("--rvc", default="")  # JSON {python, applio, config}: a voz treinada passa pelo RVC (assistente._rvc)
     a = p.parse_args()
     IDIOMA["stt"] = "" if a.stt == "auto" else a.stt
     if a.listar:
@@ -579,7 +580,7 @@ def main() -> int:
         if a.saida:
             sd.default.device = (None, dispositivo(a.saida, "saida"))
         stt = WhisperModel(a.whisper, device="cpu", compute_type="int8", cpu_threads=max(4, (os.cpu_count() or 8) // 2))
-        boca = Boca(Path(a.modelos), a.voz, a.efeito)
+        boca = Boca(Path(a.modelos), a.voz, a.efeito, rvc=a.rvc)
         detector = Detector(Path(a.detector), Path(a.oww), a.sensibilidade) if a.detector else None
     except Exception as e:
         diz("ERRO", f"{e.__class__.__name__}: {e}")

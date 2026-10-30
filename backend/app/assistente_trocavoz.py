@@ -64,6 +64,7 @@ def main() -> int:
     p.add_argument("--efeito", default="")
     p.add_argument("--pausa", type=float, default=0.6)  # segundos de silêncio que fecham a frase
     p.add_argument("--retorno", default="")  # também toca aqui ("padrao" = o alto-falante padrão): você se ouve
+    p.add_argument("--rvc", default="")  # o mesmo do ouvido: a voz treinada pelo RVC
     p.add_argument("--traduz", action="store_true")  # voz que só fala inglês: o Whisper já traduz para o inglês
     a = p.parse_args()
     try:
@@ -74,7 +75,7 @@ def main() -> int:
         eco = None if not a.retorno else sd.query_devices(kind="output")["index"] if a.retorno == "padrao"             else dispositivo(a.retorno, "saida")
         sd.default.device = (None, saida)
         stt = WhisperModel(a.whisper, device="cpu", compute_type="int8")
-        boca = Boca(Path(a.modelos), a.voz, a.efeito, eco)
+        boca = Boca(Path(a.modelos), a.voz, a.efeito, eco, a.rvc)
     except Exception as e:
         diz("ERRO", f"{e.__class__.__name__}: {e}")
         return 1

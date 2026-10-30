@@ -38,7 +38,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from . import config, db, downloads, lembretes, localai, mobile, native, pc, tts
+from . import comfy, config, db, downloads, lembretes, localai, mobile, native, pc, tts
 from .tools import ToolError
 
 PASTA = localai.RUNTIMES / "assistente"
@@ -66,6 +66,16 @@ VOZES_KOKORO = [{"id": "pf_dora", "nome": "Dora (feminina)"}, {"id": "pm_alex", 
 # vozes treinadas no Piper (uma pessoa de verdade, pt-BR nativo, sem sotaque): <nome>.onnx + <nome>.onnx.json. Falam na
 # CPU, frase a frase como o Kokoro e mais rápido (~40x o tempo real); o Kokoro segue carregado para os outros idiomas
 VOZES_PIPER = PASTA / "piper"
+# RVC por cima da voz treinada (<voz>.rvc.pth ao lado do .onnx, que cada um traz): runtime à parte, só a inferência do
+# Applio (torch não cabe no venv do assistente). ponytail: CUDA na NVIDIA, CPU no resto; a inferência do Applio não
+# conhece XPU (só o treino, com patch), e na CPU já converte mais rápido que o tempo real
+RVC = PASTA / "rvc"
+APPLIO_COMMIT = "c817f1f83f689ef72e0dfeb1c17ae990b9248506"  # testado em 2026-10-30
+APPLIO_MODELOS = "https://huggingface.co/IAHispano/Applio/resolve/main/Resources/"
+APPLIO_ARQUIVOS = ["predictors/rmvpe.pt", "embedders/contentvec/pytorch_model.bin", "embedders/contentvec/config.json"]
+PACOTES_RVC = ["torch==2.11.0", "torchaudio==2.11.0", "faiss-cpu==1.14.3", "librosa==0.11.0", "soundfile==0.14.0",
+               "soxr==1.1.0", "torchcrepe==0.0.24", "transformers==5.13.1", "numpy==2.4.6", "onnxruntime", "psutil",
+               "requests", "tqdm"]
 
 
 def vozes_kokoro() -> list[dict]:
@@ -74,11 +84,12 @@ def vozes_kokoro() -> list[dict]:
     for f in sorted(VOZES_PIPER.glob("*.onnx")):
         if f.with_suffix(".onnx.json").is_file():
             nome = f.stem.replace("-", " ").replace("_", " ").capitalize()
+            rvc = f.with_suffix(".rvc.pth").is_file()
             if so_ingles(f"piper:{f.stem}"):  # a GLaDOS original já é ela: nada de filtro por cima
-                treinadas.append({"id": f"piper:{f.stem}", "nome": f"{nome} (treinada, só inglês)"})
+                treinadas.append({"id": f"piper:{f.stem}", "nome": f"{nome} (treinada, só inglês)", "rvc": rvc})
                 continue
-            treinadas += [{"id": f"piper:{f.stem}", "nome": f"{nome} (treinada)"},
-                          {"id": f"piper:{f.stem}:glados", "nome": f"GLaDOS ({nome}, com filtro)"}]
+            treinadas += [{"id": f"piper:{f.stem}", "nome": f"{nome} (treinada)", "rvc": rvc},
+                          {"id": f"piper:{f.stem}:glados", "nome": f"GLaDOS ({nome}, com filtro)", "rvc": rvc}]
     return treinadas + VOZES_KOKORO
 
 
@@ -107,6 +118,25 @@ def _voz_arg(voz: str) -> str:
     nome = voz[6:].removesuffix(":glados")  # o filtro vai à parte, no --efeito
     f = VOZES_PIPER / f"{nome}.onnx"
     return str(f) if re.fullmatch(r"[\w-]+", nome) and f.is_file() else PADRAO["voz"]
+
+
+def _rvc(cfg: dict) -> list[str]:
+    """O --rvc do ouvido e do trocador: a voz treinada tem o .rvc.pth e a chave `rvc` está ligada. Usa o runtime
+    instalado pela tela; sem ele, o Applio de fora indicado no "rvc" do "forja" do .onnx.json (python, applio, config)."""
+    voz = _voz_arg(cfg["voz"])
+    if not (cfg["rvc"] and voz.endswith(".onnx") and Path(voz.removesuffix(".onnx") + ".rvc.pth").is_file()):
+        return []
+    try:
+        fora = json.loads(Path(voz + ".json").read_text("utf-8")).get("forja", {}).get("rvc", {})
+    except (OSError, ValueError):
+        fora = {}
+    if rvc_instalado():
+        alvo = {"python": str(_py_rvc()), "applio": str(RVC / "applio"), "config": str(RVC / "config.json")}
+    elif fora.get("python") and fora.get("applio"):
+        alvo = {k: str(fora.get(k) or "") for k in ("python", "applio", "config")}
+    else:
+        return []
+    return ["--rvc", json.dumps(alvo)]
 # A conversa falada mora só na memória (nunca no banco nem no log): some quando o modelo do assistente sai da placa,
 # ou quando a pessoa pede para transformá-la num chat do Forja ("salva nossa conversa num chat").
 TRANSCRICAO_MAX = 60
@@ -223,7 +253,7 @@ PADRAO = {"ligado": False, "mic": "", "saida": "", "whisper": "small", "motor": 
           "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado", "permitidos": [],
           "imagem": "", "video": "", "pasta_projetos": "", "resumo_hora": "", "cidade": "", "avisos_email": [],
           "pastas_documentos": [], "conversa_continua": True, "trocavoz_saida": "", "trocavoz_retorno": False, "trocavoz_pausa": 0.6,
-          "trocavoz_whisper": "base", "ganho": 1.0, "sensibilidade_voz": 0.5, "pausa_fim": 1.65}
+          "trocavoz_whisper": "base", "ganho": 1.0, "sensibilidade_voz": 0.5, "pausa_fim": 1.65, "rvc": True}
 AJUSTES = ("ganho", "sensibilidade_voz", "pausa_fim", "sensibilidade")  # o ouvido aplica ligado, sem recarregar
 MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se o modelo desandar
 # raciocínio do modelo antes de falar: desligado é o padrão (resposta falada quer velocidade); os outros são os
@@ -299,6 +329,7 @@ def gravar(patch: dict) -> dict:
         if d["trocavoz_whisper"] not in ("base", "small", "medium"):
             raise ToolError("trocavoz_whisper deve ser base, small ou medium")
         d["trocavoz_retorno"] = bool(d["trocavoz_retorno"])
+        d["rvc"] = bool(d["rvc"])
         try:
             d["trocavoz_pausa"] = max(0.2, min(3.0, float(d["trocavoz_pausa"])))
         except (TypeError, ValueError):
@@ -334,7 +365,7 @@ def gravar(patch: dict) -> dict:
         CONFIG.write_text(json.dumps(d, ensure_ascii=False, indent=2), "utf-8")
     if "pastas_documentos" in patch and d["pastas_documentos"]:
         indexa_documentos()  # pasta nova: já começa a ler, para a primeira pergunta não esperar
-    reinicia = {"mic", "saida", "whisper", "voz", "detector"} & set(patch)
+    reinicia = {"mic", "saida", "whisper", "voz", "detector", "rvc"} & set(patch)
     if set(AJUSTES) & set(patch):
         _ajusta(d)
     if str(patch.get("voz") or "").startswith("piper:") and instalado():
@@ -342,7 +373,7 @@ def gravar(patch: dict) -> dict:
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
         parar()
         iniciar()
-    if ({"mic", "saida", "voz", "trocavoz_saida", "trocavoz_retorno", "trocavoz_whisper",
+    if ({"mic", "saida", "voz", "rvc", "trocavoz_saida", "trocavoz_retorno", "trocavoz_whisper",
          "trocavoz_pausa"} & set(patch)) and trocavoz()["ligado"]:
         trocavoz_ligar(True)  # o trocador também recebe na linha de comando
     return d
@@ -382,8 +413,16 @@ def instalado() -> bool:
     return _py().is_file() and (PASTA / "pronto").is_file()
 
 
+def _py_rvc() -> Path:
+    return RVC / "venv" / ("Scripts/python.exe" if native.WINDOWS else "bin/python")
+
+
+def rvc_instalado() -> bool:
+    return _py_rvc().is_file() and (RVC / "pronto").is_file()
+
+
 def estado() -> dict:
-    job, treino = _job.get("j"), _job.get("treino")
+    job, treino, rvc = _job.get("j"), _job.get("treino"), _job.get("rvc")
     try:
         metricas = json.loads(METRICAS.read_text("utf-8"))
     except (OSError, ValueError):
@@ -392,6 +431,7 @@ def estado() -> dict:
             "instalando": job["id"] if job and job["status"] == "running" else "",
             "detector_treinado": DETECTOR.is_file(), "metricas": metricas,
             "treinando": treino["id"] if treino and treino["status"] == "running" else "",
+            "rvc_instalado": rvc_instalado(), "rvc_instalando": rvc["id"] if rvc and rvc["status"] == "running" else "",
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "gravacoes_novas": gravacoes_novas(),
             "vozes_kokoro": vozes_kokoro(), "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
@@ -538,6 +578,46 @@ def instalar() -> dict:
         parar()  # o venv vai ser refeito: o processo de pé segura os arquivos
         job = _job["j"] = downloads.create("runtime", "Assistente de voz (Whisper + Kokoro)")
     threading.Thread(target=_instalar, args=(job,), daemon=True).start()
+    return job
+
+
+def _instalar_rvc(job: dict) -> None:
+    """venv com torch + o Applio no commit testado (só a pasta rvc/ é usada) + o rmvpe e o contentvec (~0,5 GB)."""
+    estava = _vivo()
+    try:
+        if rvc_instalado():
+            parar()  # refazendo: o conversor de pé segura os arquivos do venv
+        RVC.mkdir(parents=True, exist_ok=True)
+        (RVC / "pronto").unlink(missing_ok=True)
+        uv = tts._uv(job)
+        tts._passo(job, [uv, "venv", str(RVC / "venv"), "--python", "3.12", "--clear"], "criando o Python")
+        backend = "auto" if comfy.gpu() == "nvidia" else "cpu"
+        tts._passo(job, [uv, "pip", "install", "--python", str(_py_rvc()), "--torch-backend", backend, *PACOTES_RVC],
+                   f"instalando PyTorch ({'CUDA' if backend == 'auto' else 'CPU'}) e o RVC")
+        downloads.update(job["id"], detail="baixando o Applio")
+        tts._fonte(job, f"https://github.com/IAHispano/Applio/archive/{APPLIO_COMMIT}.zip", RVC / "applio")
+        for arq in APPLIO_ARQUIVOS:
+            destino = RVC / "applio" / "rvc" / "models" / arq
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            downloads.update(job["id"], detail=f"baixando {arq.rsplit('/', 1)[-1]}")
+            downloads._fetch(APPLIO_MODELOS + arq, destino, job, 0, 0)
+        (RVC / "pronto").write_text(time.strftime("%Y-%m-%d %H:%M"), "utf-8")
+        downloads.finish(job["id"], result=str(RVC))
+    except Exception as e:
+        downloads.finish(job["id"], error=str(e) if isinstance(e, ToolError) else f"{e.__class__.__name__}: {e}")
+        return
+    if estava:  # a voz atual com .rvc.pth já sai pelo RVC
+        parar()
+        iniciar()
+
+
+def instalar_rvc() -> dict:
+    with _lock:
+        job = _job.get("rvc")
+        if job and job["status"] == "running":
+            return job
+        job = _job["rvc"] = downloads.create("runtime", "RVC da voz treinada (Applio)")
+    threading.Thread(target=_instalar_rvc, args=(job,), daemon=True).start()
     return job
 
 
@@ -716,7 +796,7 @@ def iniciar() -> None:
         return
     cfg = ler()
     argv = [str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_ouvido.py")),
-            "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"])]
+            "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"]), *_rvc(cfg)]
     if _com_filtro(cfg["voz"]):
         argv += ["--efeito", "glados"]
     if so_ingles(cfg["voz"]):
@@ -779,7 +859,7 @@ def trocavoz_ligar(ligado: bool) -> dict:
         raise ToolError("Nenhum cabo de áudio virtual encontrado. Instale o VB-CABLE (vb-audio.com/Cable) e tente de novo.")
     argv = [str(_py()), "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_trocavoz.py")),
             "--modelos", str(MODELOS), "--whisper", cfg["trocavoz_whisper"], "--voz", _voz_arg(cfg["voz"]), "--saida", saida]
-    argv += ["--pausa", str(cfg["trocavoz_pausa"])]
+    argv += ["--pausa", str(cfg["trocavoz_pausa"]), *_rvc(cfg)]
     if cfg["trocavoz_retorno"]:
         argv += ["--retorno", cfg["saida"] or "padrao"]  # no alto-falante do assistente (o fone, por exemplo)
     if _com_filtro(cfg["voz"]):

@@ -16,7 +16,7 @@ type Estado = {
   ganho: number; sensibilidade_voz: number; pausa_fim: number;
   metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
-  vozes_kokoro: { id: string; nome: string }[]; humores: { id: string; nome: string }[];
+  vozes_kokoro: { id: string; nome: string; rvc?: boolean }[]; rvc: boolean; rvc_instalado: boolean; rvc_instalando: string; humores: { id: string; nome: string }[];
   lembretes: { id: string; quando: string; texto: string }[];
   resumo_hora: string; cidade: string; avisos_email: string[];
   pastas_documentos: string[]; notas: { id: string; texto: string; quando: string }[];
@@ -88,7 +88,7 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Escolher o modelo falando", exemplos: ["o de sempre", "qwen 3.6", "gemma 12b", "meu favorito de código", "…usando o modelo qwen 3.6"],
     texto: "Quando ele pergunta “Com qual modelo?”: o nome do modelo, “o de sempre” (o do último envio no Forja) ou um dos seus favoritos por uso. Dizendo “usando o modelo X” no próprio pedido, ele nem pergunta. Não achou? Ele diz os modelos que você tem." },
   { titulo: "Microfone, alto-falante e voz", exemplos: ["Fone do headset", "Voz treinada", "GLaDOS em inglês", "Wheatley", "Arthur Morgan", "Voz rápida", "Voz clonada da tela Voz"],
-    texto: "Escolha de qual microfone ele ouve e em qual alto-falante ele fala (o fone, por exemplo). As vozes “(treinada)” são de uma pessoa de verdade, treinadas no Piper com gravações dela: português nativo, sem sotaque, e falam na CPU frase a frase, mais rápido que a voz rápida. Ficam na pasta piper do runtime do assistente (o .onnx e o .onnx.json). Cada uma tem também a versão “GLaDOS (…, com filtro)”: a mesma voz com afinação robótica cravada em escala, entonação de máquina e o timbre metálico, ainda na CPU. Voz treinada em inglês (“… (treinada, só inglês)”, como a GLaDOS do jogo): fale com ela em qualquer idioma, ela sempre responde em inglês, e as frases prontas dele saem traduzidas (guardadas: da segunda vez é na hora). A do Wheatley tem dois estilos, calmo e gritado, e troca no meio da resposta quando ele leva um susto. A do Arthur Morgan (Red Dead Redemption 2) também é só inglês, com um estilo só, e combina com a personalidade dele; ela passa por um modelo RVC que limpa o timbre (o .rvc.pth ao lado do .onnx, com o Applio indicado no .onnx.json), com ~1 s a mais na primeira frase. Microfone desconectado: ele tenta voltar sozinho e avisa aqui se não der." },
+    texto: "Escolha de qual microfone ele ouve e em qual alto-falante ele fala (o fone, por exemplo). As vozes “(treinada)” são de uma pessoa de verdade, treinadas no Piper com gravações dela: português nativo, sem sotaque, e falam na CPU frase a frase, mais rápido que a voz rápida. Ficam na pasta piper do runtime do assistente (o .onnx e o .onnx.json). Cada uma tem também a versão “GLaDOS (…, com filtro)”: a mesma voz com afinação robótica cravada em escala, entonação de máquina e o timbre metálico, ainda na CPU. Voz treinada em inglês (“… (treinada, só inglês)”, como a GLaDOS do jogo): fale com ela em qualquer idioma, ela sempre responde em inglês, e as frases prontas dele saem traduzidas (guardadas: da segunda vez é na hora). A do Wheatley tem dois estilos, calmo e gritado, e troca no meio da resposta quando ele leva um susto. A do Arthur Morgan (Red Dead Redemption 2) também é só inglês, com um estilo só, e combina com a personalidade dele; ela passa por um modelo RVC que limpa o timbre, com ~1 s a mais na primeira frase. Qualquer voz treinada ganha o RVC: coloque o seu <voz>.rvc.pth (e o .rvc.index, se tiver) ao lado do .onnx na pasta piper; embaixo da voz aparece “Instalar o RVC” (PyTorch e Applio, uma vez só: ~2 GB na CPU, ~4 GB com CUDA na NVIDIA) e, instalado, o interruptor que liga e desliga. O index_rate opcional fica no “rvc” do “forja” do .onnx.json (padrão 0,3). Microfone desconectado: ele tenta voltar sozinho e avisa aqui se não der." },
   { titulo: "Trocador de voz (Discord e chamadas)", exemplos: ["Configurações › Voz › Trocador de voz", "microfone “CABLE Output” no Discord"],
     texto: "Você fala no seu microfone e seus amigos ouvem a voz do assistente: cada frase é transcrita pelo Whisper e falada de novo na voz escolhida (Kokoro, treinada ou GLaDOS) num microfone virtual, ~1 s depois na velocidade rápida (a equilibrada entende melhor, ~2 s). Ligue o Retorno para ouvir a voz dele no seu fone. Se ele te corta no meio da frase, aumente a “Pausa que encerra a frase” (padrão 0,6 s); se demora para sair, diminua a pausa ou use a velocidade rápida. Precisa do VB-CABLE (grátis, vb-audio.com); no Discord, escolha o microfone “CABLE Output”. Com voz só em inglês, ele traduz o que você fala. Liga no interruptor da aba Voz e desliga sozinho ao fechar o Forja." },
   { titulo: "Personalidade", exemplos: ["Sarcástico", "GLaDOS", "Wheatley", "Arthur Morgan", "Leve", "Sem humor"],
@@ -274,17 +274,19 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
     api.get<Tts>("/tts").then(setTts).catch(() => {});
   }, [e?.instalado]);
   const [treino, setTreino] = useState<Job & { done?: number; total?: number } | null>(null);
+  const [rvcJob, setRvcJob] = useState<Job | null>(null);
   useEffect(() => {  // instalando/treinando: a barra anda pelo job; ligado: o estado (ouvindo, falando...) acompanha
-    if (!e?.instalando && !e?.ligado && !e?.treinando) return;
+    if (!e?.instalando && !e?.ligado && !e?.treinando && !e?.rvc_instalando) return;
     const t = setInterval(() => {
       carrega();
-      if (e?.instalando || e?.treinando) api.get<{ jobs: (Job & { done?: number; total?: number })[] }>("/local").then((r) => {
+      if (e?.instalando || e?.treinando || e?.rvc_instalando) api.get<{ jobs: (Job & { done?: number; total?: number })[] }>("/local").then((r) => {
         if (e?.instalando) setJob(r.jobs.find((j) => j.id === e.instalando) ?? null);
         if (e?.treinando) setTreino(r.jobs.find((j) => j.id === e.treinando) ?? null);
+        if (e?.rvc_instalando) setRvcJob(r.jobs.find((j) => j.id === e.rvc_instalando) ?? null);
       }).catch(() => {});
     }, 1500);
     return () => clearInterval(t);
-  }, [e?.instalando, e?.ligado, e?.treinando, carrega]);
+  }, [e?.instalando, e?.ligado, e?.treinando, e?.rvc_instalando, carrega]);
 
   if (!e) return <div className="flex-1 bg-bg" />;
   const grava = (patch: Partial<Estado>) => api.put<Estado>("/assistente", patch).then((r) => setE((a) => a && { ...a, ...r })).catch((er) => onError(er.message));
@@ -543,13 +545,23 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                               className={`flex-1 rounded-[6px] py-1.5 ${e.motor === id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>{rot}</button>
                     ))}
                   </div>
-                  {e.motor === "kokoro" ? (
+                  {e.motor === "kokoro" ? (<>
                     <Caixa rotulo="Voz">
                       <select className={`${campo} cursor-pointer`} value={e.voz} onChange={(ev) => grava({ voz: ev.target.value })}>
                         {e.vozes_kokoro.map((v) => <option key={v.id} value={v.id}>{v.nome}</option>)}
                       </select>
                     </Caixa>
-                  ) : (
+                    {e.vozes_kokoro.find((v) => v.id === e.voz)?.rvc && (e.rvc_instalado
+                      ? <Interruptor ligado={e.rvc} onChange={(v) => grava({ rvc: v })}
+                                     rotulo="Limpar o timbre com o RVC desta voz (o .rvc.pth ao lado dela)" />
+                      : e.rvc_instalando
+                        ? <p className="font-mono text-[11.5px] text-muted">RVC: {rvcJob?.detail || "começando…"}</p>
+                        : <p className="text-[11.5px] leading-relaxed text-faint">
+                            Esta voz tem um modelo RVC (.rvc.pth) que limpa o timbre.{" "}
+                            <button className="underline hover:text-fg" onClick={() => api.post<Job>("/assistente/instalar-rvc").then((j) => { setRvcJob(j); carrega(); }).catch((er) => onError(er.message))}>
+                              Instalar o RVC</button> (PyTorch e Applio: ~2 GB na CPU, ~4 GB com CUDA na NVIDIA).
+                          </p>)}
+                  </>) : (
                     <>
                       <div className="grid grid-cols-2 gap-1.5">
                         <Caixa rotulo="Modelo da tela Voz">
