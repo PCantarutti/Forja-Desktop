@@ -147,6 +147,15 @@ class Boca:
             except Exception as e:  # sem o piper-tts no venv (instalação antiga) ou modelo quebrado: fala, mas na padrão
                 diz("LOG", f"voz treinada indisponível, usando a padrão: {e.__class__.__name__}: {e}")
                 self.voz = "pf_dora"
+        self.rvc = self._abre_rvc(voz) if self.piper and self.ajuste.get("rvc") else None
+        if self.rvc:  # a 1ª conversão aquece o modelo (~10 s): aqui, e não na primeira resposta
+            try:
+                import numpy as np
+                self._converte(np.concatenate([c.audio_float_array for c in self.piper.synthesize("Okay.")]),
+                               self.piper.config.sample_rate)
+            except Exception as e:
+                diz("LOG", f"RVC falhou ao aquecer, falando só com o Piper: {e}")
+                self.rvc = None
         if efeito == "glados" and self.piper:
             try:
                 import assistente_glados  # ao lado deste arquivo (o ouvido roda como script)
@@ -167,6 +176,46 @@ class Boca:
         self.atual = ""   # a frase tocando agora (a interrupção por "Forja" ignora a frase que diz o nome)
         threading.Thread(target=self._sintetiza, daemon=True).start()
         threading.Thread(target=self._toca, daemon=True).start()
+
+    @staticmethod
+    def _abre_rvc(voz: str):
+        """O conversor RVC por cima do Piper ("rvc" no "forja" do .onnx.json: python e pasta do Applio; o modelo é o
+        <voz>.rvc.pth ao lado do .onnx, com o .rvc.index se houver). Sem ele (Applio fora, modelo quebrado): o Piper puro."""
+        import subprocess
+        cfg = json.loads(Path(voz + ".json").read_text("utf-8"))["forja"]["rvc"]
+        base = voz.removesuffix(".onnx")
+        try:
+            p = subprocess.Popen([cfg["python"], str(Path(__file__).with_name("assistente_rvc.py")),
+                                  "--applio", cfg["applio"], "--pth", base + ".rvc.pth", "--index", base + ".rvc.index",
+                                  "--index-rate", str(cfg.get("index_rate", 0.3)), "--config", cfg.get("config", "")],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                 encoding="utf-8", creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            pronto = p.stdout.readline().strip()
+            if pronto != "PRONTO":
+                raise RuntimeError(pronto or "o conversor fechou")
+            diz("LOG", "RVC pronto")
+            return p
+        except Exception as e:
+            diz("LOG", f"RVC indisponível, falando só com o Piper: {e.__class__.__name__}: {e}")
+            return None
+
+    def _converte(self, amostras, sr: int):
+        """A frase do Piper pelo RVC (~0,6x o tempo real no Arc: a próxima converte enquanto esta toca)."""
+        import tempfile
+        import numpy as np
+        with tempfile.TemporaryDirectory() as d:
+            entrada, destino = Path(d) / "piper.wav", Path(d) / "rvc.wav"
+            with wave.open(str(entrada), "wb") as w:
+                w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+                w.writeframes((np.clip(amostras, -1, 1) * 32767).astype(np.int16).tobytes())
+            self.rvc.stdin.write(f"{entrada}\t{destino}\n"); self.rvc.stdin.flush()
+            resposta = self.rvc.stdout.readline().strip()
+            if resposta != "OK":
+                raise RuntimeError(f"RVC: {resposta or 'o conversor fechou'}")
+            with wave.open(str(destino)) as w:
+                sr, larg, bruto = w.getframerate(), w.getsampwidth(), w.readframes(w.getnframes())
+        tipo = {2: np.int16, 4: np.int32}[larg]
+        return np.frombuffer(bruto, tipo).astype(np.float32) / np.iinfo(tipo).max, sr
 
     def fala(self, texto: str, voz: str | None = None, lang: str | None = None) -> None:
         pedacos, self.grito = com_estilo(texto, self.grito)
@@ -223,7 +272,13 @@ class Boca:
                         amostras = np.concatenate([c.audio_float_array for c in
                                                    self.piper.synthesize(t, syn_config=SynthesisConfig(speaker_id=sid))])
                         sr = self.piper.config.sample_rate
-                        if db := self.ajuste.get("agudos_db", {}).get(estilo):
+                        if self.rvc:
+                            try:
+                                amostras, sr = self._converte(amostras, sr)
+                            except Exception as e:  # conversor caiu: segue no Piper puro, sem travar a fala
+                                diz("LOG", f"RVC falhou, falando só com o Piper: {e}")
+                                self.rvc = None
+                        if db :=self.ajuste.get("agudos_db", {}).get(estilo):
                             amostras = agudos(amostras, sr, db)
                         if self.efeito:  # o filtro GLaDOS: ~0,15 s por segundo de fala, enquanto a frase anterior toca
                             amostras = self.efeito(amostras, sr)
