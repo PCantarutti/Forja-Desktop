@@ -18,7 +18,8 @@ const PY = path.join(PY_DIR, "python.exe");
 const PY_VERSION = "3.12"; // a mesma linha usada no desenvolvimento do backend
 
 const run = (cmd, args, opts = {}) =>
-  execFileSync(cmd, args, { stdio: "inherit", cwd: ROOT, ...opts, env: { ...process.env, ...(opts.env ?? {}) } });
+  execFileSync(cmd, args, { stdio: ["ignore", "inherit", "inherit"], cwd: ROOT, ...opts,
+    env: { ...process.env, ...(opts.env ?? {}) } });  // stdin "ignore": ver o rodar() do release.mjs
 
 const step = (msg) => console.log(NL + "=== " + msg);
 
@@ -90,8 +91,9 @@ async function fetchPython() {
 
 function pipInstall() {
   step("instalando as dependências do backend");
-  run(PY, ["-m", "pip", "install", "--upgrade", "pip", "--no-warn-script-location"]);
-  run(PY, ["-m", "pip", "install", "--no-warn-script-location", "-r", path.join(ROOT, "backend", "requirements.txt")]);
+  // sem atualizar o próprio pip a cada release (ia à rede toda vez); --timeout: conexão morta não trava para sempre
+  run(PY, ["-m", "pip", "install", "--no-warn-script-location", "--disable-pip-version-check", "--timeout", "60",
+    "-r", path.join(ROOT, "backend", "requirements.txt")]);
 }
 
 /**

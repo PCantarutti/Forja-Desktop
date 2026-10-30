@@ -43,8 +43,10 @@ function parar(motivo, comoResolver) {
 }
 
 const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).trim();
+// stdin "ignore": herdando o stdin que o readline das perguntas abriu, o python.exe filho (pytest, pip do
+// prepare) às vezes ficava parado para sempre, sem CPU (0.22.0 no pytest, 0.23.0 no pip, 1 h cada)
 const rodar = (cmd, args, cwd = ROOT) =>
-  execFileSync(cmd, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
+  execFileSync(cmd, args, { cwd, stdio: ["ignore", "inherit", "inherit"], shell: process.platform === "win32" });
 
 /**
  * fetch que aguenta a conexão morta do pool. O script bloqueia o event loop por minutos (execFileSync nos
