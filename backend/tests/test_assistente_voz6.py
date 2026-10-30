@@ -54,10 +54,10 @@ def test_traduz_com_voz_nativa_e_conversa_em_ingles(monkeypatch, tmp_path):
     asyncio.run(assistente._idioma_voz("traduzir", {"texto": "bom dia", "idioma": "espanhol"}, SPEC, None))
     assert mandados[-1] == ("fala", {"texto": "Buenos días", "voz": "ef_dora", "lang": "es"})
     asyncio.run(assistente._idioma_voz("idioma", {"idioma": "inglês"}, SPEC, None))
-    assert ("idioma", {"stt": ""}) in mandados and mandados[-1][1]["voz"] == "af_heart"
+    assert ("idioma", {"extra": "en"}) in mandados and mandados[-1][1]["voz"] == "af_heart"
     assert assistente._idioma["cod"] == "en"
     asyncio.run(assistente._idioma_voz("idioma", {"idioma": "português"}, SPEC, None))
-    assert assistente._idioma == {} and ("idioma", {"stt": "pt"}) in mandados
+    assert assistente._idioma == {} and ("idioma", {"extra": ""}) in mandados
 
 
 def test_regra_do_desfaz():

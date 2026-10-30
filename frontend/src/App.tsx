@@ -321,6 +321,7 @@ const FASE: Record<string, (a: Record<string, unknown>) => string | undefined> =
   edit_spreadsheet: (a) => `Alterando a planilha ${arquivo(a.path) ?? ""}`.trim(),
 
   // mem\u00f3ria, plano e delega\u00e7\u00e3o
+  salvar_receita: (a) => `Guardando o caminho: ${trecho(a.nome, 50) ?? ""}`.trim(),
   remember: (a) => `Guardando na mem\u00f3ria: ${trecho(a.description, 40) ?? trecho(a.name, 30) ?? ""}`.trim(),
   recall: (a) => `Consultando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
   forget: (a) => `Apagando a mem\u00f3ria ${trecho(a.name, 30) ?? ""}`.trim(),
@@ -666,9 +667,8 @@ export default function App() {
     atividadeAnterior.current = activity;
     if (!antes) return;
     if (activity.lista && antes.lista && activity.lista !== antes.lista) refreshConversations();
-    // "Forja, crie uma imagem de...": o comando falado abriu uma conversa, e o PC vai até ela.
-    const voz = activity.voz?.ultimo;
-    if (voz && voz.n !== antes.voz?.ultimo?.n) irParaConversa(voz.conv, voz.kind as Section);
+    // "Forja, crie uma imagem de...": a conversa aberta pelo comando falado NÃO pula a tela: vira um cartão com botão
+    // na conversa da página F.O.R.J.A (AssistenteView).
     // "Forja, me lembre de... às 14h": deu a hora (o celular recebe o push pelo backend)
     const lembrete = activity.voz?.lembrete;
     if (lembrete && lembrete.n !== antes.voz?.lembrete?.n) notify(lembrete.titulo || "Lembrete", lembrete.texto, true);
@@ -2615,7 +2615,7 @@ export default function App() {
             onConversationChanged={refreshConversations}
           />
         ) : section === "assistente" ? (
-          <AssistenteView onError={setError} />
+          <AssistenteView onError={setError} onAbrirConversa={(id, kind) => irParaConversa(id, kind as Section)} />
         ) : section === "tts" ? (
           <TtsView
             conv={currentId}

@@ -151,7 +151,7 @@ def instrucoes_workspace(root: Path, tocados: list[str] | None = None) -> str:
 
 def project_read() -> dict:
     p = project_path()
-    return {"enabled": config.PROJECT_MEMORY, "file": config.PROJECT_MEMORY_FILE,
+    return {"enabled": config.PROJECT_MEMORY, "file": config.PROJECT_MEMORY_FILE, "pasta": str(p.parent),
             "exists": p.is_file(), "content": p.read_text(encoding="utf-8", errors="replace") if p.is_file() else "",
             "truncated_at": MAX_PROJECT_MEMORY}
 

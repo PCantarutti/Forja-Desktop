@@ -37,6 +37,7 @@ CHECA_WAKE = 33  # blocos (1 s) até a checagem rápida de "Forja" no começo do
 ALUCINACAO = re.compile(r"amara\.org|legenda|inscreva-se|obrigad[oa] por assistir|ate a proxima|tchau,? tchau|"
                         r"^\W*(obrigad[oa]|e ai|hum+|ah+)\W*$")
 MAX_TRECHO = SR * 15
+ATRASO_MAX = 12  # s: trecho que esperou mais que isto na fila do Whisper não vira pedido (a pessoa já seguiu)
 ESCUTA_S = 10  # depois de "escuta", quanto tempo espera a resposta
 INTERROMPE_MARGEM = 0.05  # "Forja" por cima da fala dele: um pouco mais de certeza (eco sozinho fica em ~0,04)
 # ponytail: palavra de ativação por transcrição (Whisper em todo trecho de fala). Gasta CPU com TV ligada; modelo de
@@ -46,7 +47,9 @@ WAKE = re.compile(r"^\s*(?:(?:ei|oi|ok|ola|e ai|hey)\s+)?(?:forja|forjas|forje|f
 KOKORO = {"modelo": "kokoro-v1.0.int8.onnx", "vozes": "voices-v1.0.bin"}
 # idioma da conversa ("vamos conversar em inglês"): o Whisper detecta sozinho fora do português (o "Forja" dito no
 # meio do inglês sai certo, o que language="en" às vezes vira "Forge"), e o pedido de voz troca a do Kokoro
-IDIOMA = {"stt": "pt"}
+# lista: os idiomas que a pessoa escolheu na página (um só = o Whisper nem detecta); extra: o da conversa para treinar
+IDIOMA = {"lista": ["pt"], "extra": ""}
+ECO_S = 60  # o que ele falou nos últimos tantos segundos pode voltar pelo microfone (caixa de som alta, sem fone)
 # ajustes do microfone que mudam com ele ligado ({"cmd": "ajusta"}): ganho do sinal, sensibilidade da voz (0..1, 0,5 =
 # o limiar de sempre), pausa que fecha um pedido (blocos) e até quando mandar o NIVEL para o medidor da página
 AJUSTE = {"ganho": 1.0, "voz": 0.5, "fim": FIM_SILENCIO_COMANDO, "medidor": 0.0}
@@ -135,6 +138,7 @@ class Boca:
         from kokoro_onnx import Kokoro
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
         self.voz, self.piper, self.efeito = voz, None, None
+        self.ditas: deque = deque(maxlen=30)  # (quando, frase) do que ele tocou: o filtro de eco compara com isto
         self.eco = eco
         self.grito = False
         self.ajuste: dict = {}  # "forja" no .onnx.json: {"pausa_s", "agudos_db": {"calmo", "gritado"}}
@@ -235,7 +239,7 @@ class Boca:
         self.falando.set()
         self.audios.put((self.geracao, np.concatenate(partes).astype(np.float32), sr, True, ""))
 
-    def toca(self, arquivo: str) -> None:
+    def toca(self, arquivo: str, texto: str = "") -> None:
         import numpy as np
         with wave.open(arquivo) as w:
             sr, n, larg = w.getframerate(), w.getnchannels(), w.getsampwidth()
@@ -246,7 +250,7 @@ class Boca:
             return
         a = np.frombuffer(bruto, tipo).astype(np.float32) / np.iinfo(tipo).max
         self.falando.set()
-        self.audios.put((self.geracao, a.reshape(-1, n), sr, False, ""))
+        self.audios.put((self.geracao, a.reshape(-1, n), sr, False, texto))
 
     def diz_o_nome(self) -> bool:
         return "forja" in re.sub(r"[^a-z]", "", normaliza(self.atual))
@@ -303,6 +307,8 @@ class Boca:
                 if not curto:
                     diz("ESTADO", "falando")
                 self.atual = texto
+                if texto:
+                    self.ditas.append((time.time(), texto))
                 if self.ao_tocar and texto:
                     self.ao_tocar(texto)
                 bloco = sr // 10  # 0,1 s: o tanto que o "cala" demora para valer
@@ -402,6 +408,73 @@ class Escuta:
         elif not self.anunciada:
             self.anunciada = True
             diz("ESTADO", "escutando")
+
+
+# Idiomas que o assistente fala (português, a voz só-inglês e os da conversa para treinar: assistente.IDIOMAS). Na
+# detecção automática, ruído ou fala curta às vezes saíam como khmer ou galês, com caracteres sem sentido no chat.
+IDIOMAS_FALADOS = ("pt", "en", "es", "fr", "it", "ja", "zh", "hi")
+
+
+def permitidos() -> list[str]:
+    return list(dict.fromkeys([*IDIOMA["lista"], *([IDIOMA["extra"]] if IDIOMA["extra"] else [])])) or ["pt"]
+
+
+def transcreve_fala(stt, audio) -> str:
+    """Só nos idiomas escolhidos: um só é forçado; vários, o Whisper detecta entre eles (e nunca fora deles)."""
+    kw = dict(beam_size=1, initial_prompt="Forja.", vad_filter=False, condition_on_previous_text=False,
+              without_timestamps=True)
+    ok = permitidos()
+    segs, info = stt.transcribe(audio, language=ok[0] if len(ok) == 1 else None, **kw)
+    if len(ok) > 1 and info.language not in ok:
+        # a detecção roda antes de decodificar (segs é um gerador): refazer não custa a transcrição jogada fora
+        provaveis = [l for l, _ in sorted(info.all_language_probs or [], key=lambda x: -x[1]) if l in ok]
+        diz("LOG", f"Whisper detectou {info.language}: transcrevendo como {(provaveis or ok)[0]}")
+        segs, _ = stt.transcribe(audio, language=(provaveis or ok)[0], **kw)
+    return " ".join(s.text for s in segs).strip()
+
+
+def _so_letras(texto: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", normaliza(texto)).split())
+
+
+def eco(texto: str, ditas: list[tuple[float, str]], agora: float | None = None) -> bool:
+    """A transcrição é a voz dele voltando pela caixa de som? Parecida com uma frase recente dele (80%), ou quase toda
+    contida no que ele disse por último (a frase do Whisper pode juntar o fim de uma com o começo da outra)."""
+    import difflib
+    t = _so_letras(texto)
+    agora = time.time() if agora is None else agora
+    recentes = [_so_letras(x) for quando, x in ditas if agora - quando < ECO_S and x]
+    if not t or not recentes:
+        return False
+    if any(difflib.SequenceMatcher(None, t, r).ratio() >= 0.8 for r in recentes):
+        return True
+    junto = " ".join(recentes)
+    m = difflib.SequenceMatcher(None, t, junto, autojunk=False).find_longest_match(0, len(t), 0, len(junto))
+    return len(t) >= 12 and m.size >= 0.85 * len(t)
+
+
+def proximo(falas: queue.Queue):
+    """O próximo trecho a transcrever, sem fila acumulada. Com o Whisper mais lento que a fala (medium na CPU, TV
+    ligada, o "Forja" repetido porque ele demorou), os trechos empilhavam e saíam um a um minutos depois: o microfone
+    abria e fechava sem parar e um pedido velho ia para o assistente no lugar do novo. Do que esperou, fica só o mais
+    recente com "Forja" ouvido (senão o mais recente), e nada mais velho que ATRASO_MAX."""
+    item = falas.get()
+    if item is None:
+        return None
+    lote = [item]
+    while True:
+        try:
+            lote.append(falas.get_nowait())
+        except queue.Empty:
+            break
+    if None in lote:
+        return None
+    agora = time.monotonic()
+    novos = [t for t in lote if agora - t[3] <= ATRASO_MAX] or lote[-1:]
+    escolhido = next((t for t in reversed(novos) if t[1]), novos[-1])
+    if len(lote) > 1:
+        diz("LOG", f"fila do Whisper: {len(lote) - 1} trecho(s) velho(s) ou repetido(s) descartado(s)")
+    return escolhido[:3]
 
 
 def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Detector | None = None,
@@ -556,7 +629,8 @@ def main() -> int:
     p.add_argument("--transcrever", default="")  # ditado com o assistente desligado: transcreve o arquivo e sai
     p.add_argument("--rvc", default="")  # JSON {python, applio, config}: a voz treinada passa pelo RVC (assistente._rvc)
     a = p.parse_args()
-    IDIOMA["stt"] = "" if a.stt == "auto" else a.stt
+    # "pt,en": os idiomas escolhidos; "auto" (versão antiga) = todos os que ele fala
+    IDIOMA["lista"] = list(IDIOMAS_FALADOS) if a.stt == "auto" else [x for x in a.stt.split(",") if x] or ["pt"]
     if a.listar:
         return listar()
     if a.transcrever:
@@ -607,9 +681,12 @@ def main() -> int:
                 if q["cmd"] == "fala":
                     boca.fala(q["texto"], q.get("voz"), q.get("lang"))
                 elif q["cmd"] == "idioma":
-                    IDIOMA["stt"] = q.get("stt") or ""
+                    if "lista" in q:
+                        IDIOMA["lista"] = [x for x in q["lista"] if x] or ["pt"]
+                    if "extra" in q:
+                        IDIOMA["extra"] = q["extra"] or ""
                 elif q["cmd"] == "toca":
-                    boca.toca(q["arquivo"])
+                    boca.toca(q["arquivo"], q.get("texto") or "")
                 elif q["cmd"] == "escuta":
                     escuta.abre(suave=bool(q.get("suave")))
                     if q.get("agora"):  # atalho ou botão: bip e círculo na hora, sem esperar o próximo bloco
@@ -655,23 +732,25 @@ def main() -> int:
     def captura() -> None:
         try:
             for t in trechos(mic, boca, escuta, verifica, detector, so_detector):
-                falas.put(t)
+                falas.put((*t, time.monotonic()))
         except Exception as e:
             diz("ERRO", f"microfone: {e.__class__.__name__}: {e}")
         falas.put(None)
     threading.Thread(target=captura, daemon=True).start()
-    for audio, acordado, motivo in iter(falas.get, None):
+    while (item := proximo(falas)) is not None:
+        audio, acordado, motivo = item
         if so_detector and not acordado:
             diz("ESTADO", "ouvindo")
             continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
         diz("ESTADO", "entendendo" if acordado else "transcrevendo")
         t0 = time.perf_counter()
-        segs, _ = stt.transcribe(audio, language=IDIOMA["stt"] or None, beam_size=1, initial_prompt="Forja.",
-                                 vad_filter=False, condition_on_previous_text=False)
-        texto = " ".join(s.text for s in segs).strip()
+        texto = transcreve_fala(stt, audio)
         diz("LOG", f"Whisper {time.perf_counter() - t0:.2f} s para {len(audio) / SR:.1f} s de fala")
         if ALUCINACAO.search(normaliza(texto)):
             diz("LOG", "ignorado: alucinação do Whisper")  # sem o texto: a fala da pessoa não vai para o log
+            texto = ""
+        elif texto and eco(texto, list(boca.ditas)):
+            diz("LOG", "ignorado: era a voz dele voltando pela caixa de som")
             texto = ""
         # vale a janela de quando a pessoa COMEÇOU a falar: um pedido longo depois do bip passava dos 10 s até
         # terminar de transcrever, a janela fechava no meio e o pedido sumia sem resposta nenhuma

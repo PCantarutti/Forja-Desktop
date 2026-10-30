@@ -3,7 +3,10 @@ import { api } from "../api";
 import type { LocalModel } from "../types";
 import CartaoEstado, { botaoEstado, botaoEstadoPrimario } from "./CartaoEstado";
 import { BarraTopo, Caixa } from "./ImagensView";
-import { Mic, X } from "./icons";
+import { ChevronDown, Mic, X } from "./icons";
+import { ACTION, Thinking } from "./MessageView";
+import { useStickyBottom } from "../useStickyBottom";
+import ReceitasTarefas from "./ReceitasTarefas";
 import { Interruptor } from "./Settings";
 
 type Estado = {
@@ -13,7 +16,7 @@ type Estado = {
   modelo: { provider: string; model: string } | null; ocioso_min: number; atalho: string; raciocinio: string;
   permitidos: { provider: string; model: string }[];
   detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number; gravacoes_novas: number;
-  ganho: number; sensibilidade_voz: number; pausa_fim: number;
+  ganho: number; sensibilidade_voz: number; pausa_fim: number; idiomas_whisper: string[]; idiomas: { id: string; nome: string }[];
   metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
   vozes_kokoro: { id: string; nome: string; rvc?: boolean }[]; rvc: boolean; rvc_instalado: boolean; rvc_instalando: string; humores: { id: string; nome: string }[];
@@ -30,6 +33,77 @@ type GoogleConta = { client_id: string; tem_chave: boolean; conectado: boolean; 
 type Mic = { id: string; nome: string; api: string; tipo: "entrada" | "saida"; padrao: boolean };
 type Favorito = { nome: string; provider: string; model: string };
 type Nivel = { rms: number; limiar: number; prob: number | null; det_limiar: number | null };
+type Fala = {
+  quem: "voce" | "forja"; texto: string; raciocinio?: string; ferramentas?: { nome: string; arg: string; resultado: string }[];
+  conv?: { id: number; kind: string; titulo?: string; rodando?: boolean; fazendo?: string };
+};
+const TIPO_CONVERSA: Record<string, string> = { agent: "Agente", maestro: "Maestro", chat: "Chat", pesquisa: "Pesquisa", imagem: "Imagem", video: "Vídeo" };
+
+/** A linha "Pensando…" das outras telas: o que a IA está fazendo agora. */
+function Fazendo({ texto }: { texto: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[12.5px] text-accent-text">
+      <span className="size-3 shrink-0 animate-spin rounded-full border border-sky-400/30 border-t-sky-300" />
+      {texto}
+    </span>
+  );
+}
+
+function FerramentaFalada({ f }: { f: { nome: string; arg: string; resultado: string } }) {
+  const [aberto, setAberto] = useState(false);
+  return (
+    <div className="my-1.5 overflow-hidden rounded-xl border border-line bg-surface">
+      <button onClick={() => setAberto(!aberto)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] hover:bg-raised/50">
+        <span className="font-mono text-fg">{f.nome}</span>
+        <span className="truncate text-faint">{f.arg}</span>
+        <span className={`ml-auto shrink-0 text-[11.5px] ${f.resultado ? "text-muted" : "text-accent-text"}`}>● {f.resultado ? "ok" : "executando"}</span>
+        <ChevronDown className={`size-3 shrink-0 text-faint transition-transform ${aberto ? "" : "-rotate-90"}`} />
+      </button>
+      {aberto && f.resultado && (
+        <pre className="max-h-60 overflow-auto border-t border-line bg-code px-3 py-2 font-mono text-[11px] whitespace-pre-wrap text-muted">{f.resultado}</pre>
+      )}
+    </div>
+  );
+}
+
+const ACAO_FALADA: Record<string, string> = { controlar_pc: "Mexeu no PC", tarefa: "Passou uma tarefa ao agente", lembrete: "Mexeu nos lembretes" };
+
+/** Raciocínio e ferramentas de uma resposta num grupo fechado, como o ActivityGroup da tela de agente. */
+function AtividadeFalada({ x, vivo }: { x: Fala; vivo: boolean }) {
+  const [aberto, setAberto] = useState(false);
+  const fs = x.ferramentas ?? [];
+  const alvo = fs[0]?.nome === "web_search" ? fs[0].arg : "";
+  const cabeca = (fs.length ? (ACTION[fs[0].nome] ?? ACAO_FALADA[fs[0].nome] ?? `Usou ${fs[0].nome}`) : "Raciocinou") + (alvo ? ` — ${alvo}` : "");
+  const resumo = (vivo && !fs.length ? "Trabalhando" : fs.length > 1 ? `${cabeca}, usou ${fs.length} ferramentas` : cabeca) + (vivo ? "…" : "");
+  return (
+    <div className="my-2">
+      <button onClick={() => setAberto(!aberto)} className="flex items-center gap-1.5 text-left text-[13.5px] text-faint transition-colors hover:text-muted">
+        <span className={vivo ? "animate-pulse" : ""}>{resumo}</span>
+        <ChevronDown className={`size-3.5 shrink-0 transition-transform duration-150 ${aberto ? "" : "-rotate-90"}`} />
+      </button>
+      {aberto && (
+        <div className="mt-2 border-l border-line pl-3.5">
+          {x.raciocinio && <Thinking text={x.raciocinio} live={vivo && !fs.length} />}
+          {fs.map((f, j) => <FerramentaFalada key={j} f={f} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A conversa que o pedido abriu: não pula a tela, fica aqui um botão para ir até ela e o que ela está fazendo. */
+function CartaoConversa({ c, onAbrir }: { c: NonNullable<Fala["conv"]>; onAbrir: (id: number, kind: string) => void }) {
+  return (
+    <button onClick={() => onAbrir(c.id, c.kind)} title="Ir para a conversa"
+            className="mt-2 flex w-full max-w-[440px] items-center gap-3 rounded-xl border border-line bg-surface px-3.5 py-2.5 text-left transition-colors hover:border-accent">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] text-fg"><span className="text-faint">{TIPO_CONVERSA[c.kind] ?? c.kind} · </span>{c.titulo}</div>
+        <div className="mt-1">{c.rodando ? <Fazendo texto={c.fazendo || "Trabalhando"} /> : <span className="text-[12px] text-faint">Terminou</span>}</div>
+      </div>
+      <span className="shrink-0 text-[12px] text-muted">Abrir ›</span>
+    </button>
+  );
+}
 
 const pct = (rms: number) => Math.max(0, Math.min(100, (20 * Math.log10(Math.max(rms, 1e-4)) + 60) / 60 * 100));  // -60..0 dB
 
@@ -68,21 +142,21 @@ const ESTADO: Record<string, string> = {
 /** Tutorial da página: TUDO o que o assistente sabe fazer. Feature nova do assistente entra aqui junto (CLAUDE.md). */
 const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Chamar", exemplos: ["Forja, …", "Ei Forja, …", "Forja (sozinho)"],
-    texto: "Comece com “Forja” e fale o pedido (pode dar uma pausa depois do nome). Só o nome: toca um bip e ele ouve o próximo pedido, sem precisar repetir. Se o círculo acendeu e ele não entendeu o pedido, ele diz “Não entendi. Pode repetir?” e continua ouvindo. Liga e desliga no microfone do canto da janela, na bandeja do sistema ou aqui." },
+    texto: "Comece com “Forja” e fale o pedido (pode dar uma pausa depois do nome). Só o nome: toca um bip e ele ouve o próximo pedido, sem precisar repetir. Se o círculo acendeu e ele não entendeu o pedido, ele diz “Não entendi. Pode repetir?” e continua ouvindo. Chamou várias vezes enquanto ele ainda transcrevia? Vale só o último pedido: o que ficou para trás (mais de 12 s) é descartado, nada de pedido velho saindo depois. Liga e desliga no microfone do canto da janela, na bandeja do sistema ou aqui. O que ele mesmo falou e voltou pela caixa de som (sem fone) não vira pedido: frase quase igual a uma dele do último minuto é ignorada." },
   { titulo: "Perguntar", exemplos: ["Forja, quanto é 15% de 200?", "Forja, quais são as notícias de hoje?", "Forja, e em dólar?"],
-    texto: "Responde só falando, sem abrir nem mexer em nada no Forja. Pesquisa na web quando precisa (“Pesquisando.”) e lembra a conversa enquanto o modelo dele estiver carregado, então dá para emendar perguntas." },
+    texto: "Responde só falando, sem abrir nem mexer em nada no Forja. Pesquisa na web quando precisa (“Pesquisando.”) e lembra a conversa enquanto o modelo dele estiver carregado, então dá para emendar perguntas. Na tela dele aparecem, como no Agente, o raciocínio e as buscas (clique para abrir) e a linha do que ele está fazendo agora." },
   { titulo: "Conversa só na memória", exemplos: ["Forja, salva nossa conversa num chat", "Salvar como chat", "Esquecer"],
     texto: "Nada do que vocês conversam vai para o disco nem para o log: some quando o modelo dele descarrega. Para guardar, peça para transformar a conversa num chat do Forja (ou use o botão Salvar como chat na tela dele). Esquecer apaga na hora." },
   { titulo: "Tela do assistente", exemplos: ["botão do microfone", "Como usar", "Configurações"],
     texto: "O círculo grande mostra o que ele está fazendo; o botão do microfone fala com ele na hora (como o atalho); embaixo, a transcrição do que você disse e do que ele respondeu, e um campo para escrever. As configurações ficam no painel da direita (que recolhe), em abas: Voz, Chamar, Modelos, Dados e Atividade." },
   { titulo: "Criar imagem", exemplos: ["Forja, crie uma imagem de um gato esquiando"],
-    texto: "Abre uma conversa nova em Imagem e gera com o seu modelo favorito de imagem (em Comandos, abaixo)." },
+    texto: "Cria uma conversa nova em Imagem (a tela não pula: aparece um cartão na conversa dele com o botão para ir até ela) e gera com o seu modelo favorito de imagem (em Comandos, abaixo)." },
   { titulo: "Gerar vídeo", exemplos: ["Forja, gere um vídeo de um cachorro surfando"],
     texto: "O mesmo na tela Vídeo, com o modelo favorito de vídeo." },
   { titulo: "Abrir um chat no Forja", exemplos: ["Forja, abra um chat no Forja sobre receitas de bolo", "Forja, inicia uma conversa nova"],
-    texto: "Pergunta com qual modelo seguir, abre a conversa no Chat e já manda o assunto como primeira mensagem." },
+    texto: "Pergunta com qual modelo seguir, cria a conversa no Chat e já manda o assunto como primeira mensagem." },
   { titulo: "Trabalhar no modo agente ou na Maestro", exemplos: ["Forja, no modo agente crie um site de ecommerce", "Forja, crie um jogo para mim no modo agente", "Forja, pede pro agente fazer um script", "Forja, no maestro crie um sistema de estoque"],
-    texto: "Se uma conversa já trabalha numa pasta com nome parecido, pergunta se continua nela ou cria uma pasta nova (em chat-agente/ ou chat-maestro/ dentro da pasta dos projetos). Depois pergunta o modelo e começa." },
+    texto: "Se uma conversa já trabalha numa pasta com nome parecido, pergunta se continua nela ou cria uma pasta nova (em chat-agente/ ou chat-maestro/ dentro da pasta dos projetos). Depois pergunta o modelo e começa, sem trocar a tela: a conversa vira um cartão com o que ela está fazendo e o botão Abrir." },
   { titulo: "Pesquisa profunda", exemplos: ["Forja, faça uma pesquisa profunda sobre carros elétricos", "Forja, pesquise a fundo isso que conversamos"],
     texto: "Abre uma pesquisa na tela Pesquisa (a funda, com fontes). “Isso que conversamos” vira uma pergunta completa a partir da conversa falada. Quando termina, ele avisa e lê as conclusões em poucas frases. Pesquisa simples (“pesquise o valor do dólar”) ele mesmo responde falando." },
   { titulo: "Escolher o modelo falando", exemplos: ["o de sempre", "qwen 3.6", "gemma 12b", "meu favorito de código", "…usando o modelo qwen 3.6"],
@@ -127,8 +201,8 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
     texto: "Sem horário vira nota; com horário (“às 14h”) vira lembrete." },
   { titulo: "Projetos do Forja", exemplos: ["Forja, cria um card no board do Forja: bug no login", "Forja, onde o Forja trata o upload de imagem?", "Forja, o que o agente fez no projeto da loja hoje?"],
     texto: "O projeto é achado pelo nome entre as pastas do Agente e da Maestro (sem nome: o mais recente). O card entra no backlog do board; “onde” usa o índice de código do agente; o histórico junta as conversas do dia e os commits." },
-  { titulo: "Sites e preços", exemplos: ["Forja, abre o site da Caixa", "Forja, abre o g1 no navegador do Forja", "Forja, vê quanto tá o PS5 nas lojas"],
-    texto: "Acha o site oficial pela busca e fala o endereço para você conferir. Sem “do Forja”, abre no seu navegador (onde estão seus logins); com, no painel Navegador. Preço: lê as lojas agora e diz as três mais baratas. Login e compra são sempre seus." },
+  { titulo: "Sites e preços", exemplos: ["Forja, abre o site da Caixa", "Forja, abre o g1 no navegador do Forja", "Forja, vê quanto tá o PS5 nas lojas", "Forja, abre os links que você achou", "Forja, abre os links de compra", "Forja, onde eu compro esse?"],
+    texto: "Acha o site oficial pela busca e fala o endereço para você conferir. Sem “do Forja”, abre no seu navegador (onde estão seus logins); com, no painel Navegador. Preço: lê as lojas agora e diz as três mais baratas. Depois de uma pesquisa falada, “abre os links” abre no seu navegador as fontes que ele usou, e “os links de compra” (ou “onde eu compro esse?”) abre três lojas do produto de que vocês falaram, sem abrir tarefa do agente. Tarefa do agente que fala de “isso”, “esse” ou “os links” leva junto o fim da conversa falada (só nesses pedidos: a tarefa fica gravada por 1 hora). Login e compra são sempre seus." },
   { titulo: "O que está na sua tela", exemplos: ["Forja, o que tem na minha tela?", "Forja, o que esse erro aqui quer dizer?", "Forja, acha produtos parecidos com esse que eu tô vendo", "Forja, onde eu compro isso mais barato?"],
     texto: "Tira um print do monitor da janela da frente e responde olhando para ele: lê erros, resume a página, explica o que aparece. Com produto na tela, descobre qual é, diz as três lojas mais baratas e abre a busca no painel Navegador. Precisa de um modelo com visão (gemma 4, por exemplo); com modelo da nuvem, o print sai do PC. Ele não fica salvo." },
   { titulo: "Acompanhar e avisar", exemplos: ["Forja, me avisa quando o Galaxy S25 baixar de 4 mil", "Forja, me fala quando sair versão nova do llama.cpp", "Forja, o que você está acompanhando?", "Forja, para de acompanhar o Galaxy"],
@@ -144,15 +218,15 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Conversa contínua", exemplos: ["Forja, quanto é 15% de 200?", "… e de 300?"],
     texto: "Depois de responder, ele fica uns segundos ouvindo a próxima pergunta sem precisar de “Forja” (o círculo mostra que está escutando). Barulho nessa janela é ignorado. Liga e desliga em Ouvir e falar." },
   { titulo: "Outros idiomas", exemplos: ["Forja, como se diz bom dia em espanhol?", "Forja, traduz isso pro inglês", "Forja, vamos conversar em inglês pra eu treinar", "Let's go back to Portuguese"],
-    texto: "Traduz e fala com uma voz nativa (inglês, espanhol, francês, italiano, japonês, chinês, hindi). Na conversa para treinar, ele ouve e responde no idioma e corrige seus erros de leve, até você pedir para voltar ao português." },
+    texto: "Traduz e fala com uma voz nativa (inglês, espanhol, francês, italiano, japonês, chinês, hindi). Os idiomas que ele OUVE você escolhe em Configurações › Voz (Português, Inglês… um ou vários juntos): fora deles o Whisper não inventa texto em outra língua; na conversa para treinar, o idioma dela entra sozinho. Na conversa para treinar, ele ouve e responde no idioma e corrige seus erros de leve, até você pedir para voltar ao português." },
   { titulo: "Desfazer e registro", exemplos: ["Forja, desfaz", "Forja, volta o que você fez"],
     texto: "Tudo o que ele faz por voz fica em “O que ele fez” (só a ação, nunca a conversa). Dá para desfazer volume, mudo, saída de som, lembrete, nota, memória, card, acompanhamento e evento da agenda; e-mail enviado, aprovação e programa fechado não voltam, por isso esses pedem confirmação ou nome antes." },
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
     texto: "Um modelo pequeno treinado só para o nome acende o círculo na hora e quase não gasta CPU. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele bem melhor (ouça e apague as ruins na lista). Gravação só conta depois de treinar de novo (a página avisa quando há gravação fora do treino); a barra de baixo mostra ao vivo a certeza de “Forja” e o traço, onde ele acende. “Detector + Whisper” acende rápido e não deixa o nome escapar." },
-  { titulo: "Tarefas: faça qualquer coisa", exemplos: ["Forja, reproduza um vídeo aleatório das minhas inscrições do YouTube", "Forja, pesquise placas de vídeo de até 3800 reais e abra os links no meu navegador", "Forja, organiza minha pasta de downloads por tipo de arquivo", "Forja, vê por que meu disco C tá tão cheio", "Forja, mantém essa tarefa"],
-    texto: "Pedido para fazer algo vira trabalho do agente do Forja, numa conversa temporária “🎙 …” do modo Agente, com o modelo do assistente. Ela é só o trabalho de fundo: se apaga sozinha 1 hora depois da última atividade, a menos que você clique em Manter nela ou diga “Forja, mantém essa tarefa”. Ele dá o próprio jeito: web, sua conta do YouTube (conectada em Conteúdo), arquivos, comandos, scripts que ele mesmo escreve, o navegador do Forja e a tela (print, clique, digitação; ver a tela pede modelo com visão). O que é para você ver abre no SEU navegador. Quando demora, avisa o que está fazendo; dúvida que muda o resultado ele pergunta em voz alta e você responde falando. Comando que muda algo pede seu “sim”; comprar, pagar, enviar mensagem e digitar senha ficam sempre com você. Quando acha um caminho novo, guarda na memória para ir direto da próxima vez. No fim, fala o que fez; “Forja, para o agente” interrompe." },
+  { titulo: "Tarefas: faça qualquer coisa", exemplos: ["Forja, reproduza um vídeo aleatório das minhas inscrições do YouTube", "Forja, pesquise placas de vídeo de até 3800 reais e abra os links no meu navegador", "Forja, organiza minha pasta de downloads por tipo de arquivo", "Forja, vê por que meu disco C tá tão cheio", "Forja, mantém essa tarefa", "Sim, ficou certo", "Não, era das curtidas", "Forja, tá errado"],
+    texto: "Pedido para fazer algo vira trabalho do agente do Forja, numa conversa temporária “🎙 …” do modo Agente, com o modelo do assistente. A tela não pula para ela: na conversa dele aparece um cartão com o que o agente está fazendo agora (“Pensando…”, “Pesquisando na web”) e o botão Abrir. Ela é só o trabalho de fundo: se apaga sozinha 1 hora depois da última atividade, a menos que você clique em Manter nela ou diga “Forja, mantém essa tarefa”. Ele dá o próprio jeito: web, sua conta do YouTube (conectada em Conteúdo), arquivos, comandos, scripts que ele mesmo escreve, o navegador do Forja e a tela (print, clique, digitação; ver a tela pede modelo com visão). O que é para você ver abre no SEU navegador. Quando demora, avisa o que está fazendo; dúvida que muda o resultado ele pergunta em voz alta e você responde falando. Comando que muda algo pede seu “sim”; comprar, pagar, enviar mensagem e digitar senha ficam sempre com você. Aprende com receitas: antes de começar, procura a receita de um pedido parecido (“spotify”, “curtidas”…) e segue o caminho curto dela. Sem receita, resolve, confere e pergunta “Ficou certo?”: com o seu sim, guarda o caminho; com “não, era das curtidas”, tenta de novo com a sua correção (até 3 vezes). Receita aprovada que funcionou não pergunta; se não estava certo, “Forja, tá errado” (até 10 minutos depois) reabre e ele corrige a receita, guardando a versão anterior até você aprovar a nova. Ficam em Configurações › Memória › Receitas de tarefas do assistente (e na aba Dados do painel desta página), para ver, aprovar ou apagar. No fim, fala o que fez; “Forja, para o agente” interrompe." },
   { titulo: "Ajustes do microfone", exemplos: ["Ganho", "Sensibilidade da voz", "Pausa que encerra o pedido", "Nível do microfone"],
     texto: "Em Ouvir e falar. A barra mostra o som ao vivo e o traço, o limiar de fala: falando normalmente a barra passa do traço com folga; em silêncio, fica abaixo. Ganho sobe o sinal do microfone baixo; sensibilidade muda o limiar; a pausa é quanto silêncio fecha o pedido. Vale na hora, sem recarregar o Whisper. O atalho e o botão do microfone dão um bip quando ele começa a ouvir." },
 ];
@@ -210,7 +284,7 @@ const DICA_HUMOR: Record<string, string> = {
 /** Página do assistente de voz F.O.R.J.A (Ferramenta Operacional Relativamente Jumenta e Autônoma): instalar e ligar,
  *  microfone, a voz com que ele responde (a rápida, Kokoro, ou uma voz clonada da tela Voz), o humor, os modelos
  *  favoritos dos comandos de imagem e vídeo e a pasta dos projetos novos do agente. */
-export default function AssistenteView(props: { onError: (e: string) => void }) {
+export default function AssistenteView(props: { onError: (e: string) => void; onAbrirConversa: (id: number, kind: string) => void }) {
   const { onError } = props;
   const [e, setE] = useState<Estado | null>(null);
   const [mics, setMics] = useState<Mic[]>([]);
@@ -237,23 +311,28 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
   useEffect(() => { carregaMemorias(); const t = setInterval(carregaMemorias, 5000); return () => clearInterval(t); }, [carregaMemorias]);
   const [vivo, setVivo] = useState("desligado");  // o estado do ouvido, rápido: o círculo acompanha a fala
   const [nivel, setNivel] = useState<Nivel | null>(null);
-  const [transcricao, setTranscricao] = useState<{ quem: "voce" | "forja"; texto: string }[]>([]);
-  const fimConversa = useRef<HTMLDivElement>(null);
-  const carregaConversa = useCallback(() => api.get<{ transcricao: { quem: "voce" | "forja"; texto: string }[] }>("/assistente/conversa")
-    .then((r) => setTranscricao((a) => (JSON.stringify(a) === JSON.stringify(r.transcricao) ? a : r.transcricao))).catch(() => {}), []);
+  const [transcricao, setTranscricao] = useState<Fala[]>([]);
+  const [fazendo, setFazendo] = useState("");
+  const carregaConversa = useCallback(() => api.get<{ transcricao: Fala[]; fazendo: string }>("/assistente/conversa")
+    .then((r) => {
+      setTranscricao((a) => (JSON.stringify(a) === JSON.stringify(r.transcricao) ? a : r.transcricao));
+      setFazendo(r.fazendo || "");
+    }).catch(() => {}), []);
   useEffect(() => {
     let parado = false;
     const t = setInterval(() => {
       if (document.hidden || parado) return;
       api.get<{ estado: string; nivel?: Nivel | null }>("/assistente/estado?medidor=1").then((r) => { setVivo(r.estado); setNivel(r.nivel ?? null); }).catch(() => {});
     }, 300);
-    const c = setInterval(() => { if (!document.hidden) carregaConversa(); }, 1000);
+    const c = setInterval(() => { if (!document.hidden) carregaConversa(); }, 500);
     carregaConversa();
     // a tela grande mostra o círculo: a sobreposição do canto some enquanto ela estiver à vista
     window.forja?.assistenteVisivel?.(true);
     return () => { parado = true; clearInterval(t); clearInterval(c); window.forja?.assistenteVisivel?.(false); };
   }, [carregaConversa]);
-  useEffect(() => { fimConversa.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [transcricao.length]);
+  const entendendo = vivo === "entendendo" || vivo === "transcrevendo";
+  // cola no fim a cada resposta (a resposta cresce na mesma bolha: o tamanho da lista não muda); rolar para cima solta
+  const { ref: rolagem, fim: fimConversa, onScroll: seguirConversa } = useStickyBottom<HTMLDivElement>([transcricao, fazendo, entendendo]);
   const chamar = () => api.post<{ ligado: boolean; estado: string }>("/assistente/chamar")
     .then((r) => { setVivo(r.estado); carrega(); }).catch((er) => onError(er.message));
   useEffect(() => {  // o registro é da casca (Electron): mudou a configuração, ela registra em até 5 s
@@ -361,16 +440,24 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                   : ESTADO[vivo] ?? vivo}
               </p>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div ref={rolagem} onScroll={seguirConversa} className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto flex max-w-[720px] flex-col items-center px-5 pb-6">
               <div className="mt-3 flex w-full flex-col gap-2.5">
-                {transcricao.map((x, i) => (
-                  <div key={i} className={`flex ${x.quem === "voce" ? "justify-end" : "justify-start"}`}>
-                    <p className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-[13.5px] leading-relaxed ${x.quem === "voce" ? "bg-raised text-fg" : "text-fg-2"}`}>
-                      {x.texto}
-                    </p>
+                {transcricao.map((x, i) => x.quem === "voce" ? (
+                  <div key={i} className="flex justify-end">
+                    <p className="max-w-[80%] rounded-2xl bg-raised px-3.5 py-2 text-[13.5px] leading-relaxed text-fg">{x.texto}</p>
+                  </div>
+                ) : (
+                  <div key={i} className="max-w-[85%] px-3.5">
+                    {(x.raciocinio || !!x.ferramentas?.length) && <AtividadeFalada x={x} vivo={i === transcricao.length - 1 && !!fazendo && !x.texto} />}
+                    {x.texto && <p className="py-1 text-[13.5px] leading-relaxed text-fg-2">{x.texto}</p>}
+                    {x.conv && <CartaoConversa c={x.conv} onAbrir={props.onAbrirConversa} />}
                   </div>
                 ))}
+                {entendendo && (
+                  <div className="flex justify-end"><p className="rounded-2xl bg-raised px-3.5 py-2"><Fazendo texto="Transcrevendo…" /></p></div>
+                )}
+                {fazendo && !entendendo && <div className="px-3.5"><Fazendo texto={fazendo} /></div>}
                 <div ref={fimConversa} />
               </div>
               {transcricao.length > 0 && (
@@ -512,6 +599,22 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                       <option value="small">small (equilibrado)</option>
                       <option value="medium">medium (preciso, 2 a 4 s por pedido na CPU)</option>
                     </select>
+                  </Caixa>
+                  <Caixa rotulo="Idiomas que você fala com ele (um só: mais rápido e sem confusão; vários: ele descobre qual, só entre estes)">
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {(e.idiomas ?? []).map((i) => {
+                        const sel = (e.idiomas_whisper ?? ["pt"]).includes(i.id);
+                        const lista = sel ? e.idiomas_whisper.filter((x) => x !== i.id) : [...(e.idiomas_whisper ?? []), i.id];
+                        return (
+                          <button key={i.id} disabled={sel && e.idiomas_whisper.length === 1} aria-pressed={sel}
+                                  title={sel && e.idiomas_whisper.length === 1 ? "Ao menos um idioma" : undefined}
+                                  onClick={() => grava({ idiomas_whisper: lista })}
+                                  className={`rounded-full border px-2.5 py-0.5 text-[12px] transition-colors ${sel ? "border-accent bg-accent/15 text-accent-text" : "border-line text-muted hover:text-fg"}`}>
+                            {i.nome}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </Caixa>
                   <Caixa rotulo="Nível do microfone">
                     <Medidor n={e.ligado ? nivel : null} />
@@ -804,6 +907,10 @@ export default function AssistenteView(props: { onError: (e: string) => void }) 
                     O resumo do dia sai falado (com ele ligado), no Windows e no celular: agenda, e-mails importantes, lembretes,
                     o que o Forja trabalhou durante a noite, o clima e notícias. Os avisos de e-mail conferem a caixa a cada 3 minutos.
                   </p>
+                </Secao>}
+
+                {aba === "dados" && <Secao titulo="Receitas de tarefas">
+                  <ReceitasTarefas onError={onError} />
                 </Secao>}
 
                 {aba === "dados" && <Secao titulo="Documentos e memória">

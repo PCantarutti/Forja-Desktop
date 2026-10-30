@@ -4,6 +4,7 @@ import { UsageBars, useCloudUsage } from "./CloudUsage";
 import { api } from "../api";
 import type { Especialidade } from "../types";
 import Confirma from "./Confirma";
+import ReceitasTarefas from "./ReceitasTarefas";
 import { Modal } from "./Modal";
 import type { McpStatus, ToolInfo } from "./InfoPanel";
 import { Shield, Trash, Wrench, X } from "./icons";
@@ -420,9 +421,7 @@ export default function Settings(props: {
               <Mcp mcp={props.mcp} onChanged={props.onChanged} />
             ) : (
               <>
-                <PersonalMemory s={s} set={set} save={save} />
-                <ProjectMemory s={s} set={set} save={save} />
-                <MemoryTab />
+                <MemoriaTela s={s} set={set} save={save} />
               </>
             )}
           </div>
@@ -2077,7 +2076,7 @@ function ProjectMemory({ s, set, save }: {
   set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void;
   save: (patch: Partial<AppSettings>) => void;
 }) {
-  const [file, setFile] = useState<{ content: string; exists: boolean; file: string } | null>(null);
+  const [file, setFile] = useState<{ content: string; exists: boolean; file: string; pasta?: string } | null>(null);
   const [msg, setMsg] = useState("");
 
   const load = () => api.get<any>("/memory/project").then(setFile).catch(() => {});
@@ -2086,9 +2085,9 @@ function ProjectMemory({ s, set, save }: {
   }, [s.project_memory_file]);
 
   return (
-    <section className="mb-8 max-w-2xl space-y-3 border-b border-line pb-6">
+    <section className="space-y-3 rounded-xl border border-line p-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm text-fg">Memória do projeto</h3>
+        <h3 className="text-sm text-fg">Arquivo de memória do projeto <span className="font-mono text-muted">{s.project_memory_file}</span></h3>
         <label className="flex items-center gap-2 text-xs text-muted">
           <input
             type="checkbox"
@@ -2099,8 +2098,8 @@ function ProjectMemory({ s, set, save }: {
         </label>
       </div>
       <p className="text-xs text-muted">
-        Arquivo na raiz da pasta de trabalho que vai junto no system prompt. O agente é instruído a mantê-lo com
-        decisões, convenções e comandos do projeto. Você também pode editar aqui.
+        Fica na raiz da pasta de trabalho{file?.pasta ? <> (<span className="font-mono">{file.pasta}</span>)</> : ""} e vai inteiro no
+        prompt. O agente o mantém com decisões, convenções e comandos do projeto; você também pode editar aqui.
       </p>
       <div className="flex gap-2">
         <input
@@ -2141,19 +2140,41 @@ function ProjectMemory({ s, set, save }: {
   );
 }
 
-type Lembranca = { name: string; slug: string; description: string; type: string; updated: string; size: number };
+type Lembranca = { name: string; slug: string; description: string; type: string; updated: string; size: number; scope?: "projeto" | "global" };
 
-/** O que o agente guardou sobre o usuário. No prompt entra só esta lista (uma linha cada); o conteúdo
- *  ele lê com `recall` quando o assunto aparece — é o que segura o custo no modelo local. */
-function PersonalMemory({ s, set, save }: {
+type AbaMemoria = "voce" | "referencias" | "projeto" | "tarefas" | "grafo";
+const ABAS_MEMORIA: { id: AbaMemoria; titulo: string; quando: string }[] = [
+  { id: "voce", titulo: "Sobre você",
+    quando: "Fatos e preferências que você contou (nome, hardware, como gosta das respostas). Valem em toda conversa: uma linha de cada vai junto; o detalhe longo, só quando o assunto aparece." },
+  { id: "referencias", titulo: "Referências",
+    quando: "Atalhos, links e jeitos de fazer que o agente anotou para consultar depois. Também valem em toda conversa (uma linha de cada)." },
+  { id: "projeto", titulo: "Projeto",
+    quando: "Só valem na pasta de trabalho atual: as anotações que o agente fez sobre este projeto e o arquivo de memória do projeto, que vai inteiro no prompt." },
+  { id: "tarefas", titulo: "Tarefas do assistente",
+    quando: "O caminho que o F.O.R.J.A aprendeu em cada tipo de tarefa falada. Não vão em toda conversa: só a receita que combina com o pedido entra nele." },
+  { id: "grafo", titulo: "Grafo (MCP)",
+    quando: "Entidades e relações de um servidor MCP de memória ligado na aba MCP." },
+];
+
+/** Aba de cada memória guardada: as do projeto pela pasta (ou tipo), as referências pelo tipo, o resto é sobre você. */
+const abaDe = (m: Lembranca): AbaMemoria =>
+  m.scope === "projeto" || m.type === "projeto" ? "projeto" : m.type === "referencia" ? "referencias" : "voce";
+
+/** O que a IA lembra, separado pelo que é e por quando entra no prompt. No prompt entra só o índice das memórias
+ *  (uma linha cada); o conteúdo o agente lê com `recall` quando o assunto aparece — é o que segura o custo no local. */
+function MemoriaTela({ s, set, save }: {
   s: AppSettings;
   set: <K extends keyof AppSettings>(k: K, v: AppSettings[K]) => void;
   save: (patch?: Partial<AppSettings>) => Promise<void>;
 }) {
   const [itens, setItens] = useState<Lembranca[] | null>(null);
   const [pasta, setPasta] = useState("");
-  const [aberta, setAberta] = useState<string>("");
+  const [aberta, setAberta] = useState("");
   const [corpo, setCorpo] = useState("");
+  const [aba, setAba] = useState<AbaMemoria>("voce");
+  const [busca, setBusca] = useState("");
+  const [receitas, setReceitas] = useState<number | null>(null);
+  const [grafo, setGrafo] = useState(false);
 
   const carrega = () =>
     api
@@ -2166,6 +2187,8 @@ function PersonalMemory({ s, set, save }: {
 
   useEffect(() => {
     carrega();
+    api.get<unknown[]>("/assistente/receitas").then((r) => setReceitas(r.length)).catch(() => setReceitas(0));
+    api.get<Memory>("/memory").then((m) => setGrafo(!!m.available)).catch(() => {});
   }, []);
 
   async function abrir(m: Lembranca) {
@@ -2181,54 +2204,104 @@ function PersonalMemory({ s, set, save }: {
     carrega();
   }
 
-  return (
-    <div className="max-w-3xl space-y-3">
-      <Field
-        label="Memória sobre você"
-        hint="O agente guarda o que você contar de duradouro (como gosta de trabalhar, seu hardware, decisões suas). No prompt entra só o índice — uma linha por memória —, e o conteúdo só quando o assunto aparece. Vale a partir da conversa seguinte."
-      >
-        <Toggle
-          checked={s.personal_memory}
-          onChange={(v) => {
-            set("personal_memory", v);
-            save({ personal_memory: v });
-          }}
-          label={s.personal_memory ? "Ligada" : "Desligada"}
-        />
-      </Field>
+  const conta = (a: AbaMemoria) => (a === "tarefas" ? receitas : a === "grafo" ? null : (itens ?? []).filter((m) => abaDe(m) === a).length);
+  const q = busca.trim().toLowerCase();
+  const daAba = (itens ?? []).filter((m) => abaDe(m) === aba);
+  // os fatos antes das preferências (a lista vem ordenada por tipo, e "preferencia" vinha primeiro)
+  const lista = daAba.filter((m) => !q || `${m.name} ${m.description}`.toLowerCase().includes(q))
+    .sort((a, b) => Number(a.type === "preferencia") - Number(b.type === "preferencia"));
+  const info = ABAS_MEMORIA.find((a) => a.id === aba)!;
 
-      {itens === null ? (
-        <p className="text-sm text-muted">Carregando…</p>
-      ) : !itens.length ? (
-        <p className="text-sm text-muted">Nada guardado ainda.</p>
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-line">
-          {itens.map((m) => (
-            <div key={m.slug} className="border-b border-line last:border-0">
-              <div className="flex items-center gap-3 px-3 py-2 hover:bg-raised">
-                <button className="min-w-0 flex-1 text-left" onClick={() => abrir(m)}>
-                  <span className="block truncate text-sm text-fg">{m.name}</span>
-                  <span className="block truncate text-xs text-muted">{m.description}</span>
-                </button>
-                <span className="shrink-0 text-xs text-faint">{m.type}</span>
-                <span className="shrink-0 text-xs text-faint">{m.updated}</span>
-                <Confirma
-                  rotulo="esquecer"
-                  pergunta={`Esquecer "${m.name}"?`}
-                  className="shrink-0 text-xs text-faint hover:text-red-400"
-                  onSim={() => void apagar(m)}
-                />
-              </div>
-              {aberta === m.slug && (
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-code px-3 py-2 text-xs text-muted">
-                  {corpo || "…"}
-                </pre>
-              )}
-            </div>
-          ))}
+  return (
+    <div className="max-w-3xl space-y-4">
+      <div className="flex items-start justify-between gap-6">
+        <div>
+          <h3 className="text-[15px] text-fg">O que a IA lembra</h3>
+          <p className="mt-0.5 text-xs leading-snug text-faint">
+            Tudo o que o agente e o assistente F.O.R.J.A guardam de uma conversa para outra, separado pelo que é. As
+            conversas em si não ficam aqui.
+          </p>
         </div>
+        <div className="shrink-0 whitespace-nowrap">
+          <Toggle
+            checked={s.personal_memory}
+            onChange={(v) => {
+              set("personal_memory", v);
+              save({ personal_memory: v });
+            }}
+            label={s.personal_memory ? "Lembrando" : "Sem lembrar"}
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-1 rounded-[10px] border border-line bg-surface p-1" role="tablist">
+        {ABAS_MEMORIA.filter((a) => a.id !== "grafo" || grafo).map((a) => {
+          const n = conta(a.id);
+          return (
+            <button key={a.id} role="tab" aria-selected={aba === a.id}
+                    onClick={() => { setAba(a.id); setAberta(""); setBusca(""); }}
+                    className={`rounded-[7px] px-3 py-1.5 text-[12.5px] transition-colors ${aba === a.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}>
+              {a.titulo}{n !== null && <span className="ml-1.5 text-faint">{n}</span>}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-xs leading-relaxed text-muted">{info.quando}</p>
+      {!s.personal_memory && aba !== "tarefas" && aba !== "grafo" && (
+        <p className="rounded-lg border border-line bg-raised px-3 py-2 text-xs text-muted">
+          Lembrar está desligado: o que está aqui continua guardado, mas não vai para o modelo e nada novo é anotado.
+        </p>
       )}
-      {pasta && <p className="text-xs text-faint">Arquivos em {pasta} — um .md por memória, dá para editar à mão.</p>}
+
+      {aba === "tarefas" ? (
+        <ReceitasTarefas onError={() => {}} nota={false} />
+      ) : aba === "grafo" ? (
+        <MemoryTab />
+      ) : (
+        <>
+          {daAba.length > 4 && (
+            <input className={input} placeholder="Buscar" value={busca} onChange={(e) => setBusca(e.target.value)} />
+          )}
+          {itens === null ? (
+            <p className="text-sm text-muted">Carregando…</p>
+          ) : !lista.length ? (
+            <p className="rounded-lg border border-dashed border-line px-3 py-4 text-center text-xs text-faint">
+              {q ? "Nada com essa busca."
+                : aba === "voce" ? "Nada ainda. Conte algo duradouro numa conversa (“meu nome é…”, “prefiro respostas curtas”) e o agente guarda."
+                : aba === "referencias" ? "Nada ainda. O agente anota aqui atalhos e jeitos de fazer que achou."
+                : "Nenhuma anotação do agente sobre este projeto."}
+            </p>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-line">
+              {lista.map((m) => (
+                <div key={m.slug} className="border-b border-line last:border-0">
+                  <div className="flex items-center gap-3 px-3 py-2 hover:bg-raised">
+                    <button className="min-w-0 flex-1 text-left" onClick={() => abrir(m)} aria-expanded={aberta === m.slug}>
+                      <span className="block truncate text-sm text-fg">{m.name.replace(/^como:\s*/i, "")}</span>
+                      <span className="block truncate text-xs text-muted">{m.description}</span>
+                    </button>
+                    {m.type === "preferencia" && <span className="shrink-0 rounded bg-raised px-1.5 text-[10.5px] text-muted">preferência</span>}
+                    <span className="shrink-0 text-xs text-faint">{m.updated}</span>
+                    <Confirma
+                      rotulo="esquecer"
+                      pergunta={`Esquecer "${m.name}"?`}
+                      className="shrink-0 text-xs text-faint hover:text-red-400"
+                      onSim={() => void apagar(m)}
+                    />
+                  </div>
+                  {aberta === m.slug && (
+                    <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-code px-3 py-2 text-xs text-muted">
+                      {corpo || "…"}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {aba === "projeto" && <ProjectMemory s={s} set={set} save={save} />}
+          {pasta && aba !== "projeto" && <p className="text-xs text-faint">Arquivos em {pasta} — um .md por memória, dá para editar à mão.</p>}
+        </>
+      )}
     </div>
   );
 }

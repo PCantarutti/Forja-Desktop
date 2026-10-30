@@ -1429,6 +1429,26 @@ def assistente_apagar_lembrete(lid: str):
     return lembretes.apagar({lid})
 
 
+@app.get("/api/assistente/receitas")
+def assistente_receitas():
+    """O caminho que já deu certo em cada tipo de tarefa falada (receitas.py)."""
+    from . import receitas
+    return receitas.todas()
+
+
+@app.post("/api/assistente/receitas/{rid}/aprovar")
+def assistente_receita_aprovar(rid: str):
+    from . import receitas
+    return _tts(receitas.aprovar, rid)
+
+
+@app.delete("/api/assistente/receitas/{rid}")
+def assistente_receita_apagar(rid: str):
+    from . import receitas
+    _tts(receitas.apagar, rid)
+    return {"ok": True}
+
+
 @app.post("/api/assistente/salvar-conversa")
 def assistente_salvar_conversa():
     """Transforma a conversa falada num chat do Forja (o único jeito de ela ir para o disco)."""

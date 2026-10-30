@@ -75,6 +75,7 @@ APELIDOS: dict[str, tuple[str, ...]] = {
                      "todo_list", "set_todos"),
     "remember": ("memorize", "save_memory", "add_memory", "store_memory", "create_memory", "memory_add"),
     "recall": ("read_memory", "get_memory", "retrieve_memory", "memory_get"),
+    "salvar_receita": ("save_recipe", "save_procedure", "save_skill"),
     "forget": ("delete_memory", "remove_memory", "memory_delete"),
     "skill": ("use_skill", "run_skill", "load_skill", "invoke_skill"),
     "serve_start": ("start_server", "run_server", "dev_server", "background_process", "start_process",

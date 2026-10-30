@@ -38,7 +38,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from . import comfy, config, db, downloads, lembretes, localai, mobile, native, pc, tts
+from . import comfy, config, db, downloads, lembretes, localai, mobile, native, pc, receitas, tts
 from .tools import ToolError
 
 PASTA = localai.RUNTIMES / "assistente"
@@ -253,7 +253,11 @@ PADRAO = {"ligado": False, "mic": "", "saida": "", "whisper": "small", "motor": 
           "detector": "whisper", "sensibilidade": 0.5, "raciocinio": "desligado", "permitidos": [],
           "imagem": "", "video": "", "pasta_projetos": "", "resumo_hora": "", "cidade": "", "avisos_email": [],
           "pastas_documentos": [], "conversa_continua": True, "trocavoz_saida": "", "trocavoz_retorno": False, "trocavoz_pausa": 0.6,
-          "trocavoz_whisper": "base", "ganho": 1.0, "sensibilidade_voz": 0.5, "pausa_fim": 1.65, "rvc": True}
+          "trocavoz_whisper": "base", "ganho": 1.0, "sensibilidade_voz": 0.5, "pausa_fim": 1.65, "rvc": True,
+          "idiomas_whisper": ["pt"]}
+# os idiomas que o Whisper pode ouvir (a página escolhe um ou mais); fora deles ruído virava khmer, galês...
+IDIOMAS_WHISPER = {"pt": "Português", "en": "Inglês", "es": "Espanhol", "fr": "Francês", "it": "Italiano",
+                   "ja": "Japonês", "zh": "Chinês", "hi": "Hindi"}
 AJUSTES = ("ganho", "sensibilidade_voz", "pausa_fim", "sensibilidade")  # o ouvido aplica ligado, sem recarregar
 MAX_TOKENS_FALA = 500  # resposta falada é curta; o teto evita um monólogo se o modelo desandar
 # raciocínio do modelo antes de falar: desligado é o padrão (resposta falada quer velocidade); os outros são os
@@ -274,6 +278,10 @@ _atendendo = [0]  # comandos em andamento (estado "pensando")
 _humor = {"pausa": 0}  # respostas que ainda saem sem piada depois da última (PAUSA_PIADA)
 _conversa_chat: dict = {}  # conversa falada em memória: {"msgs": [...]} para o modelo (nada vai para o banco)
 _transcricao: list[dict] = []  # o que a tela mostra: [{"quem": "voce"|"forja", "texto", "t"}], também só em memória
+# a bolha dele de cada pedido junta as frases, o raciocínio, as ferramentas e a conversa que o pedido abriu
+# ({"raciocinio", "ferramentas": [{nome, arg, resultado}], "conv": {id, kind}}); `_fase` é o que ele faz agora
+_turno_n = [0]
+_fase = {"t": ""}
 _tarefa: dict = {}  # o comando em andamento ({"f": Future}): comando novo, atalho ou "para" cancelam ele
 _uso: dict = {}  # o modelo que o assistente usou por último: {"spec", "t" (monotonic), "llm_t"} (ociosidade)
 _quedas: list[float] = []  # quando o ouvido caiu sozinho (reinício automático com limite)
@@ -334,6 +342,10 @@ def gravar(patch: dict) -> dict:
             d["trocavoz_pausa"] = max(0.2, min(3.0, float(d["trocavoz_pausa"])))
         except (TypeError, ValueError):
             raise ToolError("trocavoz_pausa vai de 0,2 a 3 segundos.") from None
+        idiomas = d["idiomas_whisper"]
+        if not isinstance(idiomas, list) or not idiomas or any(x not in IDIOMAS_WHISPER for x in idiomas):
+            raise ToolError("Escolha ao menos um idioma para o Whisper: " + ", ".join(IDIOMAS_WHISPER))
+        d["idiomas_whisper"] = list(dict.fromkeys(idiomas))
         if d["detector"] not in ("whisper", "treinado", "ambos"):
             raise ToolError("detector deve ser whisper, treinado ou ambos")
         if d["detector"] != "whisper" and not DETECTOR.is_file():
@@ -368,6 +380,8 @@ def gravar(patch: dict) -> dict:
     reinicia = {"mic", "saida", "whisper", "voz", "detector", "rvc"} & set(patch)
     if set(AJUSTES) & set(patch):
         _ajusta(d)
+    if "idiomas_whisper" in patch:
+        _manda("idioma", lista=d["idiomas_whisper"])  # vale na próxima fala, sem recarregar o Whisper
     if str(patch.get("voz") or "").startswith("piper:") and instalado():
         threading.Thread(target=_garante_piper, args=(_com_filtro(patch["voz"]),), daemon=True).start()
     if reinicia and _vivo():  # o ouvido recebe estes na linha de comando
@@ -435,6 +449,7 @@ def estado() -> dict:
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "gravacoes_novas": gravacoes_novas(),
             "vozes_kokoro": vozes_kokoro(), "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
+            "idiomas": [{"id": k, "nome": v} for k, v in IDIOMAS_WHISPER.items()],
             "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado(),
             "acompanhar": _web().lista(), "acoes": acoes(30), "idioma": _idioma.get("nome", ""), "trocavoz": trocavoz()}
 
@@ -799,8 +814,7 @@ def iniciar() -> None:
             "--modelos", str(MODELOS), "--whisper", cfg["whisper"], "--voz", _voz_arg(cfg["voz"]), *_rvc(cfg)]
     if _com_filtro(cfg["voz"]):
         argv += ["--efeito", "glados"]
-    if so_ingles(cfg["voz"]):
-        argv += ["--stt", "auto"]  # fala com ela em qualquer idioma: o Whisper detecta
+    argv += ["--stt", ",".join(cfg["idiomas_whisper"])]
     if cfg["mic"]:
         argv += ["--mic", cfg["mic"]]
     if cfg["saida"]:
@@ -1309,8 +1323,11 @@ def _nova_conversa(kind: str, workspace: str | None = None, titulo: str = "") ->
 
 
 def _abre(conv: int, kind: str) -> None:
+    """A conversa que o pedido abriu vira um cartão na conversa falada (botão para ir até ela e o que ela está fazendo).
+    A tela não pula mais sozinha: o `ultimo` segue no /api/activity só para quem mais acompanhar."""
     n = (_estado["ultimo"] or {}).get("n", 0) + 1
     _estado["ultimo"] = {"conv": conv, "kind": kind, "n": n}
+    _bolha()["conv"] = {"id": conv, "kind": kind}
 
 
 def fala(texto: str, voz: str = "", lang: str = "", traduzir: bool = True) -> None:
@@ -1327,10 +1344,18 @@ def fala(texto: str, voz: str = "", lang: str = "", traduzir: bool = True) -> No
 TRADUZ_EN = ("Translate to natural spoken English. Reply ONLY with the translation, no quotes or explanations. "
              "Keep names, numbers and meaning. ")
 _em_ingles: queue.Queue[tuple[str, bool]] = queue.Queue()
+# As frases de espera saem justamente quando o modelo ainda não subiu (não há quem traduza): sem isto caíam na voz
+# portuguesa padrão no meio da conversa com a voz escolhida.
+FRASES_EN = {"Carregando o modelo, um instante.": "Loading the model, one moment.",
+             "Só um instante, o modelo está carregando.": "One moment, the model is loading.",
+             "Pesquisando.": "Searching.", "Certo, fazendo.": "On it.",
+             "Fiquei sem resposta dessa vez. Pode repetir?": "I got nothing that time. Can you repeat?"}
 _traducoes_en: dict[str, str] = {}
 
 
 def _traduz_en(texto: str) -> str:
+    if texto in FRASES_EN:
+        return FRASES_EN[texto]
     if texto in _traducoes_en:
         return _traducoes_en[texto]
     from . import modelctl
@@ -1368,18 +1393,54 @@ def _fala_resposta(texto: str) -> None:
     fala(texto, _idioma.get("voz", ""), _idioma.get("lang", ""), traduzir=False)  # já vem em inglês na voz só-inglês
 
 
+def _bolha() -> dict:
+    """A bolha dele do pedido em andamento (criada na primeira coisa que ele diz, pensa ou faz). Fora de um pedido
+    (aviso que chega sozinho depois: pesquisa terminou, lembrete) é sempre uma bolha nova."""
+    ultima = _transcricao[-1] if _transcricao else None
+    if not (ultima and ultima["quem"] == "forja" and _atendendo[0] and ultima.get("turno") == _turno_n[0]):
+        ultima = {"quem": "forja", "texto": "", "t": time.time(), "turno": _turno_n[0] if _atendendo[0] else None}
+        _transcricao.append(ultima)
+        del _transcricao[:-TRANSCRICAO_MAX]
+    return ultima
+
+
+def _ferramenta(nome: str, arg: str, resultado: str = "") -> dict:
+    f = {"nome": nome, "arg": arg[:200], "resultado": resultado[:1500]}
+    _bolha().setdefault("ferramentas", []).append(f)
+    return f
+
+
 def _anota(quem: str, texto: str) -> None:
     texto = sem_marca(texto or "")
     if not texto:
         return
-    ultima = _transcricao[-1] if _transcricao else None
-    # só as frases de uma mesma resposta viram um balão: aviso que chega sozinho depois (pesquisa terminou) é outro
-    if ultima and ultima["quem"] == quem == "forja" and _atendendo[0] and time.time() - ultima["t"] < 30:
-        ultima["texto"] += " " + texto  # as frases de uma mesma resposta viram um balão só
-        ultima["t"] = time.time()
-    else:
-        _transcricao.append({"quem": quem, "texto": texto, "t": time.time()})
+    if quem == "forja":
+        b = _bolha()  # as frases de uma mesma resposta viram um balão só
+        b["texto"] = f"{b['texto']} {texto}".strip()
+        b["t"] = time.time()
+        return
+    _transcricao.append({"quem": quem, "texto": texto, "t": time.time()})
     del _transcricao[:-TRANSCRICAO_MAX]
+
+
+URL = re.compile(r"https?://[^\s<>\"')\]]+")
+
+
+def _links_recentes() -> list[str]:
+    """Os links das fontes da última busca falada ("abre os links"): só o que veio de verdade dos resultados."""
+    return next((x["links"] for x in reversed(_transcricao) if x.get("links")), [])
+
+
+def _contexto_falado(n: int = 6) -> str:
+    """O fim da conversa falada, para "isso", "esse teclado", "os links" fazerem sentido fora dela (classificador e
+    tarefa do agente). Só a memória: nada disso vai para o disco além do que o próprio pedido levar."""
+    linhas = []
+    for x in _transcricao[-n:]:
+        if x.get("texto"):
+            linhas.append(f"{'Pessoa' if x['quem'] == 'voce' else 'Assistente'}: {x['texto'][:800]}")
+        if x.get("links"):
+            linhas.append("Links das fontes: " + " ".join(x["links"][:8]))
+    return "\n".join(linhas)
 
 
 def esquecer() -> dict:
@@ -1390,7 +1451,50 @@ def esquecer() -> dict:
 
 
 def conversa() -> dict:
-    return {"transcricao": list(_transcricao), "ouviu": _estado.get("ouviu", "")}
+    vistas: set[int] = set()
+    saida = []
+    for x in reversed(_transcricao):
+        x = {k: v for k, v in x.items() if k not in ("t", "turno")}
+        if (c := x.get("conv")) and c["id"] not in vistas and len(vistas) < 6:  # o estado só das mais recentes
+            vistas.add(c["id"])
+            x["conv"] = {**c, **_estado_conversa(c["id"])}
+        saida.append(x)
+    return {"transcricao": saida[::-1], "ouviu": _estado.get("ouviu", ""), "fazendo": _fase["t"] if _atendendo[0] else ""}
+
+
+def fazendo(run) -> str:
+    """O que um turno do agente está fazendo, em poucas palavras (o mesmo da linha "Pensando…" das outras telas)."""
+    if run.approvals:
+        return "Esperando você aprovar"
+    feitas = {(e.get("message") or {}).get("tool_call_id") for e in run.events if e.get("type") == "tool_result"}
+    rodando = [e["call"] for e in run.events if e.get("type") == "tool_call" and e["call"]["id"] not in feitas]
+    if rodando:
+        nome = rodando[-1]["name"]
+        return (PROGRESSO.get(nome) or f"usando {nome}").capitalize()
+    d = run.draft or {}
+    if d.get("tool"):
+        return "Escrevendo " + (f"a chamada de {d['tool']['name']}" if d["tool"].get("name") else "a chamada")
+    if d.get("content"):
+        return "Escrevendo a resposta"
+    if d.get("thinking"):
+        return "Pensando…"
+    st = next((e["text"] for e in reversed(run.events[-8:]) if e.get("type") == "status" and e.get("text")), "")
+    return st or "Esperando o modelo responder"
+
+
+def _estado_conversa(conv: int) -> dict:
+    """Para o cartão da conversa: rodando ou não, o que faz agora e o título."""
+    from . import agent, lotes, pesquisa
+    titulo = _titulo(conv)
+    if run := agent.active_run(conv):
+        return {"rodando": True, "fazendo": fazendo(run), "titulo": titulo}
+    if conv in lotes.pendentes():
+        return {"rodando": True, "fazendo": "Gerando", "titulo": titulo}
+    if fase := next((r.get("fase") for r in list(pesquisa._RUNS.values()) if r.get("conv_id") == conv), None):
+        return {"rodando": True, "titulo": titulo, "fazendo": {
+            "planejando": "Planejando a pesquisa", "buscando": "Pesquisando na web",
+            "escrevendo": "Escrevendo o relatório"}.get(fase, "Pesquisando")}
+    return {"rodando": False, "fazendo": "", "titulo": titulo}
 
 
 def salvar_conversa() -> int:
@@ -1769,7 +1873,10 @@ CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A
 - Onde algo está no código de um projeto: {"tipo":"codigo","projeto":"<nome ou vazio>","pergunta":"<o que procurar>"}.
 - O que foi feito num projeto do Forja: {"tipo":"historico","projeto":"<nome ou vazio>","quando":"<hoje, ontem...>"}.
 - Web: {"tipo":"web","acao":"abrir","alvo":"<site ou nome do site>","no_forja":<true só se pediu o navegador do Forja>}
-  ou {"tipo":"web","acao":"precos","produto":"<produto>"} (ver ou comparar o preço nas lojas).
+  ou {"tipo":"web","acao":"precos","produto":"<produto>"} (ver ou comparar o preço nas lojas),
+  {"tipo":"web","acao":"links","quais":"<todos, ou palavra do link que ela quer>"} (abrir os links/fontes do que o
+  assistente ACABOU de pesquisar ou falar), {"tipo":"web","acao":"comprar","produto":"<o produto; se ela disse
+  \"isso\", \"esse\" ou \"os links de compra\", o produto de que se falou na conversa>"} (abrir as lojas onde comprar).
 - O agente do Forja trabalhando: {"tipo":"agente","acao":"status","projeto":"<nome ou vazio>"} (como está, terminou?),
   {"tipo":"agente","acao":"pedidos"} (o que ele está pedindo para aprovar), {"tipo":"agente","acao":"aprovar"},
   {"tipo":"agente","acao":"recusar"} ou {"tipo":"agente","acao":"parar","projeto":"<nome ou vazio>"}.
@@ -1814,6 +1921,9 @@ Exemplos:
 "abre o site da Caixa" -> {"tipo":"web","acao":"abrir","alvo":"Caixa Econômica Federal","no_forja":false}
 "abre o g1 aqui no navegador do forja" -> {"tipo":"web","acao":"abrir","alvo":"g1","no_forja":true}
 "vê quanto tá o PS5 nas lojas" -> {"tipo":"web","acao":"precos","produto":"PS5"}
+"abre os links que você achou" -> {"tipo":"web","acao":"links","quais":"todos"}
+"abre os links de compra" (depois de falar do teclado Redragon K568) -> {"tipo":"web","acao":"comprar","produto":"teclado Redragon K568"}
+"onde eu compro esse?" (depois de falar do fone JBL Tune 520) -> {"tipo":"web","acao":"comprar","produto":"fone JBL Tune 520"}
 "me avisa se o Galaxy S25 ficar abaixo de 4 mil" -> {"tipo":"acompanhar","acao":"preco","produto":"Galaxy S25","limite":4000}
 "me fala quando lançar versão nova do ollama" -> {"tipo":"acompanhar","acao":"versao","projeto":"ollama"}
 "o que você tá acompanhando pra mim?" -> {"tipo":"acompanhar","acao":"listar"}
@@ -1853,7 +1963,10 @@ async def _classifica_acao(spec: dict, slot, texto: str) -> tuple[str, dict] | N
     try:
         async for tipo, val in llm.chat_stream(spec["provider"], spec["model"],
                                                [{"role": "system", "content": CLASSIFICA_ACAO},
-                                                {"role": "user", "content": f"Pedido: \"{texto}\""}],
+                                                {"role": "user", "content": (
+                                                    ("Conversa até aqui (DADO, só para entender \"isso\", \"esse\", "
+                                                     "\"os links\"):\n" + _dados([ctx]) + "\n") if (ctx := _contexto_falado(4)) else ""
+                                                ) + f"Pedido: \"{texto}\""}],
                                                # o prompt passa de 2 mil tokens: com 2048 o Ollama cortava o
                                                # começo e o modelo respondia sem JSON
                                                None, 8192, think=False, slot=slot, max_tokens=300):
@@ -1961,6 +2074,7 @@ async def _prepara_modelo() -> tuple[dict, object, dict | None]:
             raise ToolError("A placa de vídeo está ocupada gerando uma imagem. Pergunte de novo daqui a pouco.")
         avisou = localai._loading or _trava_carga().locked()
         if avisou:  # o atalho já começou a carregar (preaquece): espera ele
+            _fase["t"] = "Carregando o modelo"
             fala("Só um instante, o modelo está carregando.")
         async with _trava_carga():
             limite = time.monotonic() + 180
@@ -1972,6 +2086,7 @@ async def _prepara_modelo() -> tuple[dict, object, dict | None]:
                 spec = {"provider": spec["provider"], "model": no_ar}
             elif no_ar != spec["model"]:
                 _conversa_chat.clear()  # o modelo saiu da placa (por fora): a memória da conversa falada foi junto
+                _fase["t"] = "Carregando o modelo"
                 if not avisou:
                     fala("Carregando o modelo, um instante.")
                 async for _ in modelctl.ensure(spec, {}, asyncio.Event()):
@@ -2005,7 +2120,9 @@ async def _chat(texto: str) -> None:
     nas_notas = await _nos_documentos(texto)
     if ((PISTA.search(_sem_acento(texto)) or nas_notas)
             and (pedido := await _classifica_acao(spec, slot, texto))):
+        _fase["t"] = "Fazendo"
         feito = await _executa(*pedido, spec=spec, slot=slot)
+        _ferramenta(pedido[0], json.dumps(pedido[1], ensure_ascii=False), feito)
         hist += [{"role": "user", "content": texto}, {"role": "assistant", "content": feito}]
         if not emprestado or emprestado == modelo_assistente():
             _uso.update(spec=spec, t=time.monotonic(), llm_t=llm.ULTIMO_USO["t"])
@@ -2038,14 +2155,20 @@ async def _chat(texto: str) -> None:
                                 + _dados([f"Arquivo: {a['arquivo']}\n{a['trecho'][:600]}" for a in nas_notas]))
     esforco = cfg["raciocinio"]
     buf, tudo, pesquisou, feito = "", "", False, ""
-    for _ in range(3):  # até duas rodadas de busca e a resposta
+    _fase["t"] = "Pensando…"
+    for rodada in range(3):  # até duas rodadas de busca e a resposta
         chamadas: list[dict] = []
         buf = ""
-        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], msgs, FERRAMENTAS, 8192,
+        # a última rodada vai sem ferramentas: o modelo que só buscava (3 buscas seguidas) acabava sem resposta nenhuma
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], msgs, FERRAMENTAS if rodada < 2 else None, 8192,
                                                effort=None if esforco == "desligado" else esforco,
                                                think=False if esforco == "desligado" else None, slot=slot,
                                                max_tokens=MAX_TOKENS_FALA + (0 if esforco == "desligado" else 4000)):
-            if tipo == "content":
+            if tipo == "reasoning":
+                b = _bolha()
+                b["raciocinio"] = b.get("raciocinio", "") + val
+            elif tipo == "content":
+                _fase["t"] = "Respondendo"
                 buf += val
                 tudo += val
                 # parece chamada de ferramenta escrita como texto (modelo pequeno): segura até ver o que é
@@ -2067,7 +2190,10 @@ async def _chat(texto: str) -> None:
             # ação no PC ou lembrete: quem fala é o resultado (curto e certo), não uma segunda rodada do modelo
             acoes = [c for c in acoes if not (c["name"] == "controlar_pc" and str((c["arguments"] or {}).get("acao")) == "fechar"
                                               and not pc.alvo_dito(str((c["arguments"] or {}).get("alvo") or ""), texto))]
+            _fase["t"] = "Fazendo"
             feito = " ".join([await _executa(c["name"], c["arguments"] or {}) for c in acoes])
+            for c in acoes:
+                _ferramenta(c["name"], json.dumps(c["arguments"] or {}, ensure_ascii=False), feito)
             if not acoes:
                 feito = "(fechar recusado: programa não dito)"
                 fala("Fechar qual programa?")
@@ -2080,12 +2206,19 @@ async def _chat(texto: str) -> None:
         msgs.append({"role": "assistant", "content": "", "tool_calls": [
             {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": json.dumps(c["arguments"])}}
             for c in chamadas]})
+        _fase["t"] = "Pesquisando na web"
         for c in chamadas:
+            q = str(c["arguments"].get("query") or texto)
+            f = _ferramenta("web_search", q)
             try:
-                r = await asyncio.to_thread(web.web_search, None, {"query": str(c["arguments"].get("query") or texto)})
+                r = await asyncio.to_thread(web.web_search, None, {"query": q})
                 saida = r["text"]
             except ToolError as e:
                 saida = f"Busca falhou: {e}"
+            f["resultado"] = saida[:1500]
+            b = _bolha()
+            b["links"] = list(dict.fromkeys([*b.get("links", []), *(u.rstrip(".,;:") for u in URL.findall(saida))]))[:12]
+            _fase["t"] = "Pensando…"
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": saida[:6000]})
     # a piada não entra no histórico: piadas antigas no contexto puxam o modelo a brincar de novo
     hist.append({"role": "assistant", "content": feito or tudo.split("[piada]")[0].strip()})
@@ -2125,7 +2258,7 @@ async def _fala_tela(texto: str) -> None:
     cfg = ler()
     try:
         r = await asyncio.to_thread(tts.falar, texto, cfg["modelo_tts"], cfg["voz_tts"], False)
-        _manda("toca", arquivo=r["arquivo"])
+        _manda("toca", arquivo=r["arquivo"], texto=texto)  # o texto: o filtro de eco do ouvido compara com ele
     except ToolError as e:
         fala(f"Não consegui usar a voz da tela Voz: {e}")
 
@@ -2286,12 +2419,22 @@ NAO = re.compile(r"^(?:nao|nao manda|nao envia|deixa|deixa pra la|espera|deixa a
 async def _gera(spec: dict, slot, sistema: str, usuario: str, max_tokens: int = 400) -> str:
     """Uma chamada curta ao modelo SEM ferramenta nenhuma: o que vem de e-mail ou da web não tem como virar ação."""
     from . import llm
-    texto = ""
-    async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], [{"role": "system", "content": sistema},
-                                                                            {"role": "user", "content": usuario}],
-                                           None, 8192, think=False, slot=slot, max_tokens=max_tokens):
-        if tipo == "content":
-            texto += val
+    for teto in (max_tokens, max_tokens + 4000):
+        # modelo que raciocina mesmo com think=False (o beam do Ollama Cloud) gastava o teto curto pensando: vinha vazio
+        # ou cortado ("The folder"), o resumo caía no texto original e a voz só-inglês lia português
+        texto, pensou, gerados = "", 0, 0
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], [{"role": "system", "content": sistema},
+                                                                                {"role": "user", "content": usuario}],
+                                               None, 8192, think=False, slot=slot, max_tokens=teto):
+            if tipo == "content":
+                texto += val
+            elif tipo == "reasoning":
+                pensou += 1
+            elif tipo == "done":
+                gerados = int(val.get("completion_tokens") or 0)
+        if not pensou or (texto.strip() and gerados < teto - 5):
+            break
+        print(f"Forja: voz: {spec['model']} raciocinou e estourou {teto} tokens; repetindo com folga", flush=True)
     return _falavel(sem_marca(texto))
 
 
@@ -2870,6 +3013,32 @@ async def _web_voz(nome: str, d: dict, spec: dict, slot) -> str:
             os.startfile(url)  # o navegador da pessoa, com os logins dela
             fala(f"Abrindo {dom}.")
         return f"(abriu {dom})"
+    if nome == "web" and acao == "links":
+        links = _links_recentes()
+        quais = _sem_acento(str(d.get("quais") or "")).strip()
+        if quais and quais not in ("todos", "todas", "tudo"):
+            links = [u for u in links if any(w in _sem_acento(u) for w in _palavras(quais))] or links
+        if not links:
+            fala("Não tenho links da última pesquisa. Peça a pesquisa de novo que eu abro.")
+            return "(links: nenhum)"
+        for u in links[:5]:
+            os.startfile(u)  # o navegador da pessoa
+        fala(f"Abri {min(len(links), 5)} links no seu navegador.")
+        return f"(abriu {min(len(links), 5)} links)"
+    if nome == "web" and acao == "comprar":
+        produto = str(d.get("produto") or "").strip()
+        if not produto:
+            fala("Comprar o quê? Me diga o produto.")
+            return "(comprar: sem produto)"
+        fala(f"Procurando onde comprar {produto}.")
+        lojas = list({c["loja"]: c for c in await asyncio.to_thread(web_voz.candidatos_preco, produto)}.values())[:3]
+        if not lojas:
+            fala(f"Não achei loja vendendo {produto}.")
+            return "(comprar: nenhuma loja)"
+        for c in lojas:
+            os.startfile(c["url"])  # comprar é sempre da pessoa: só abre a página
+        fala(f"Abri {len(lojas)} lojas no seu navegador: {', '.join(c['loja'] for c in lojas)}.")
+        return f"(abriu lojas de {produto})"
     if nome == "web":
         produto = str(d.get("produto") or "").strip()
         fala(f"Procurando o preço de {produto} nas lojas.")
@@ -3196,8 +3365,10 @@ JARVIS = """Este turno é um pedido FALADO ao assistente F.O.R.J.A, o Jarvis da 
   faltou e o que deixaria possível da próxima vez (ex.: conectar o YouTube em Conteúdo › Ajustes).
 - Pergunte (ask_user, curto e com opções) só o que é ambíguo de verdade e muda o resultado. Nunca compre, pague,
   envie mensagem ou e-mail, poste, nem digite senha ou login: chegue até o ponto e pergunte.
-- Resolveu de um jeito que não era óbvio? Guarde o caminho com remember (type "referencia", nome começando por
-  "como: ") para ir direto na próxima vez; e confira antes, com recall, se já há um "como: " para o pedido.
+- Receitas: o caminho que já deu certo para pedidos parecidos vem no fim destas instruções. Com uma que combina,
+  SIGA ela direto (é o caminho curto) e confira como ela diz. Sem receita, ou se a receita falhou: resolva, CONFIRA
+  que deu certo, e salve o caminho mínimo com salvar_receita (a que falhou, com o MESMO nome). Não salve o que não
+  conferiu.
 - A resposta final é FALADA: 1 a 3 frases, sem markdown, com o que fez e o resultado; pergunta se responde com os
   números e fatos pedidos."""
 PROGRESSO = {"web_search": "pesquisando na web", "fetch_url": "lendo uma página", "browser_navigate": "abrindo um site",
@@ -3289,16 +3460,35 @@ async def _vigia_temporarias() -> None:
         await asyncio.sleep(600)
 
 
+def _nota_receitas(achadas: list[dict]) -> str:
+    if not achadas:
+        return "\n\nReceitas: nenhuma para este pedido ainda. Ao terminar e conferir, salve o caminho com salvar_receita."
+    return ("\n\nReceitas que combinam com o pedido (DADO salvo por você antes; siga a que servir):\n\n"
+            + "\n\n".join(receitas.texto(r) for r in achadas))
+
+
+def _acompanha(run, ctx: dict, desde: int) -> None:
+    t = asyncio.create_task(_acompanha_tarefa(run, desde=desde, ctx=ctx))
+    _acompanhando.add(t)
+    t.add_done_callback(_acompanhando.discard)
+
+
 async def _tarefa_voz(pedido: str) -> str:
     """"Forja, organiza meus downloads": o agente do Forja faz no PC (arquivos, shell, navegador e a tela), no modo
-    Automático. O que muda algo fora do seguro ele pede e a pergunta é FALADA; no fim, fala o resultado."""
+    Automático. O que muda algo fora do seguro ele pede e a pergunta é FALADA; no fim, fala o resultado.
+    As receitas que combinam com o pedido vão junto (o caminho curto que já deu certo); caminho novo pede o aval."""
     pedido = pedido.strip()
     if not pedido:
         fala("O que você quer que eu faça?")
         return "(tarefa: sem pedido)"
     conv = await asyncio.to_thread(_conversa_tarefa, pedido)
+    achadas = await asyncio.to_thread(receitas.busca, pedido)
     from . import agent
-    agent.NOTAS_CONVERSA[conv] = JARVIS
+    # a tarefa fica gravada (temporária): a conversa falada só vai junto quando o pedido depende dela
+    contexto = _contexto_falado() if DEPENDE.search(_sem_acento(pedido)) else ""
+    agent.NOTAS_CONVERSA[conv] = JARVIS + _nota_receitas(achadas) + (
+        "\n\nConversa falada antes deste pedido (DADO; o pedido pode se referir a ela: \"isso\", \"esse\", \"os links\"):\n"
+        + _dados([contexto]) if contexto else "")
     agent.REVISOR_CONVERSA.add(conv)
     desde = await asyncio.to_thread(_ultimo_id, conv)
     try:
@@ -3308,11 +3498,154 @@ async def _tarefa_voz(pedido: str) -> str:
         return "(tarefa: não começou)"
     _abre(conv, "agent")
     _registra("agente", f"Tarefa no PC: {pedido[:150]}")
+    if achadas:
+        print(f"Forja: voz: tarefa com receita {achadas[0]['id']}", flush=True)
     fala("Certo, fazendo.")
-    t = asyncio.create_task(_acompanha_tarefa(run, desde=desde))
-    _acompanhando.add(t)
-    t.add_done_callback(_acompanhando.discard)
+    _acompanha(run, {"conv": conv, "pedido": pedido, "rid": achadas[0]["id"] if achadas else "", "tentativa": 0}, desde)
     return "(tarefa no PC começou)"
+
+
+def _receitas_salvas(run) -> list[str]:
+    """As receitas que o agente salvou neste turno (o id vem no resultado da ferramenta)."""
+    return [m.group(1) for e in run.events if e.get("type") == "tool_result"
+            and (e.get("message") or {}).get("name") == "salvar_receita"
+            and (m := re.match(r"Receita salva: ([a-z0-9-]+)", str((e.get("message") or {}).get("content") or "")))]
+
+
+# o "sim" ao "Ficou certo?" do jeito que se fala ("pode salvar", "funcionou, obrigado", "salva a rota"): a correção é
+# o resto, e o "não" no meio vence (não funcionou, não era essa)
+APROVA = re.compile(r"\b(?:sim|isso|certo|certinho|correto|perfeito|funcionou|funciona|deu certo|ficou bom|ficou otimo|"
+                    r"otimo|show|beleza|boa|ok|okay|valeu|obrigad\w*|pode|salv\w*|guard\w*|exato|exatamente|"
+                    r"agora sim|isso mesmo|top|massa)\b")
+
+
+# "Forja, tá errado" logo depois de uma tarefa que ele deu por certa (receita aprovada não pergunta): reabre ela
+ERRADO = re.compile(r"^(?:(?:ta|esta|isso (?:ta|esta)|ficou|deu) errad\w*|nao (?:era|e|foi|deu) (?:isso|essa|esse|certo)|"
+                    r"errou|nao (?:ficou|esta|ta) certo|nao funcionou)\b")
+ERRADO_S = 600
+DEPENDE = re.compile(r"\b(?:isso|disso|nisso|esse|essa|esses|essas|desse|dessa|desses|dessas|nesse|nessa|aquele|aquela|"
+                     r"ele|ela|eles|elas|dele|dela|os\s+links|as\s+fontes|o\s+que\s+voce\s+(?:achou|falou|disse|pesquisou)|"
+                     r"(?:o|a)\s+(?:primeir|segund|ultim)\w*|mesmo|mesma)\b")
+_ultima_tarefa: dict = {}  # {"conv", "pedido", "rid", "t"}: a última tarefa falada que terminou
+
+
+def _caminho(run) -> str:
+    """As ferramentas que o turno usou, em ordem, com o começo do resultado: a matéria-prima da receita."""
+    feitas = {(e.get("message") or {}).get("tool_call_id"): (e.get("message") or {}) for e in run.events
+              if e.get("type") == "tool_result"}
+    linhas = []
+    for e in run.events:
+        if e.get("type") == "tool_call" and e["call"]["name"] != "salvar_receita":
+            r = feitas.get(e["call"]["id"]) or {}
+            linhas.append(f"- {e['call']['name']} {json.dumps(e['call'].get('arguments') or {}, ensure_ascii=False)[:400]}"
+                          f" -> [{r.get('status') or '?'}] {' '.join(str(r.get('content') or '').split())[:200]}")
+    return "\n".join(linhas[-25:])
+
+
+DESTILA = ("Você escreve a RECEITA de uma tarefa que o agente fez no PC e a pessoa confirmou que ficou certa: o caminho "
+           "MÍNIMO que funcionou (sem os passos que falharam ou sobraram), preferindo passos firmes (URL/URI, atalho, "
+           "comando) a cliques, e sem posição de tela. " + receitas.GERAL + " "
+           "Nada de senha, token ou dado de conta. Responda SÓ um JSON numa linha: {\"nome\": \"o tipo de pedido\", "
+           "\"palavras\": [palavras com que a pessoa pediria isso], \"objetivo\": \"...\", \"passos\": [\"...\"], "
+           "\"conferir\": \"como ver que deu certo\", \"armadilhas\": \"o que deu errado no caminho\"}. " + DADO_DE_FORA)
+
+
+async def _destila(p: dict) -> str:
+    """O agente não salvou a receita: o Forja escreve a partir do caminho que ele fez (a pessoa já confirmou)."""
+    bruto = await _gera(modelo_assistente(), None, DESTILA,
+                        _dados([f"Pedido: {p['pedido']}", f"Correções da pessoa: {p.get('correcoes') or 'nenhuma'}",
+                                f"Ferramentas usadas, em ordem:\n{p.get('caminho') or ''}"]), 700)
+    m = re.search(r"\{.*\}", bruto or "", re.S)
+    d = json.loads(m.group(0)) if m else {}
+    nome = str(d.get("nome") or p["pedido"])
+    if p.get("rid"):  # a receita que falhou e foi corrigida: reescreve ela (o mesmo nome), não cria outra
+        try:
+            nome = receitas.ler(p["rid"])["nome"]
+        except ToolError:
+            pass
+    r = await asyncio.to_thread(receitas.salvar, nome, d.get("palavras") or [],
+                                str(d.get("objetivo") or ""), d.get("passos") or [], str(d.get("conferir") or ""),
+                                str(d.get("armadilhas") or ""))
+    return r["id"]
+
+
+async def _fecha_receita(ctx: dict, run) -> None:
+    """Fim da tarefa: caminho novo (ou reescrito) pede o aval falado; receita aprovada que serviu conta o acerto."""
+    salvas = _receitas_salvas(run)
+    rid = salvas[-1] if salvas else ctx.get("rid", "")
+    _ultima_tarefa.clear()
+    _ultima_tarefa.update(conv=ctx["conv"], pedido=ctx["pedido"], rid=rid, t=time.time())
+    try:
+        r = receitas.ler(rid) if rid else None
+    except ToolError:
+        r = None
+    if r and r["status"] == "aprovada" and not salvas:
+        await asyncio.to_thread(receitas.acertou, rid)  # caminho já aprovado: não pergunta ("tá errado" reabre)
+        return
+    caminho = _caminho(run)
+    # ponytail: uma ferramenta só (uma conta, uma busca) não tem caminho a aprender; o limite é fixo
+    if not r and not ctx.get("tentativa") and caminho.count("\n") < 1:
+        return
+    _pendente.clear()
+    _pendente.update(tipo="receita", t=time.time(), rid=rid, caminho=caminho,
+                     **{k: ctx.get(k) for k in ("conv", "pedido", "tentativa", "correcoes")})
+    fala("Ficou certo? Se sim, guardo esse caminho para a próxima vez.")
+    _manda("escuta")
+
+
+async def _receita_respondida(resposta: str) -> None:
+    p = dict(_pendente)
+    _pendente.clear()
+    r = _sem_acento(resposta).strip(" .!?,")
+    if APROVA.search(r) and not re.search(r"\bnao\b", r):
+        rid = p.get("rid") or ""
+        try:
+            if not rid or (receitas.ler(rid)["status"] == "aprovada" and p.get("tentativa")):
+                rid = await _destila(p)  # o agente não salvou (ou corrigiu sem reescrever): o Forja escreve
+            await asyncio.to_thread(receitas.aprovar, rid)
+        except (ToolError, ValueError) as e:
+            print(f"Forja: voz: receita não foi guardada ({e.__class__.__name__}: {e})", flush=True)
+            fala("Que bom. Só não consegui anotar o caminho dessa vez.")
+            return
+        fala("Guardei o caminho. Da próxima vez vou direto.")
+        return
+    await _corrige_tarefa(p, resposta)
+
+
+async def _corrige_tarefa(p: dict, correcao: str) -> None:
+    """Não ficou certo: conta a falha, e a tarefa tenta de novo na mesma conversa com o que a pessoa disse. Depois
+    de TENTATIVAS, desiste: a receita que funcionava volta (ou o rascunho errado sai)."""
+    rid, tentativa = p.get("rid") or "", (p.get("tentativa") or 0) + 1
+    if rid:
+        try:
+            await asyncio.to_thread(receitas.falhou, rid)
+        except ToolError:
+            rid = ""
+    if tentativa >= receitas.TENTATIVAS:
+        if rid:
+            await asyncio.to_thread(receitas.desistir, rid)
+        fala(f"Tentei {receitas.TENTATIVAS} vezes e não acertei. Me explique com mais detalhe e eu começo de novo.")
+        return
+    nome = ""
+    if rid:
+        try:
+            nome = receitas.ler(rid)["nome"]
+        except ToolError:
+            pass
+    from . import agent
+    desde = await asyncio.to_thread(_ultimo_id, p["conv"])
+    pedido = (f"Não ficou certo. A pessoa disse: \"{correcao.strip()}\". Tente de novo, confira, e salve o caminho "
+              f"que funcionar com salvar_receita" + (f" (reescreva a receita \"{nome}\", mesmo nome)." if nome else "."))
+    try:
+        if agent.active_run(p["conv"]):
+            raise ToolError("Essa tarefa ainda está trabalhando.")
+        run = await _turno(p["conv"], "agent", pedido, modelo_assistente(), permission="auto")
+    except ToolError as e:
+        fala(str(e))
+        return
+    fala("Certo, tentando de novo.")
+    _acompanha(run, {"conv": p["conv"], "pedido": p["pedido"], "rid": rid, "tentativa": tentativa,
+                     "correcoes": f"{p.get('correcoes') or ''} {correcao.strip()}".strip()}, desde)
 
 
 def _erro_do_turno(run) -> str:
@@ -3345,7 +3678,8 @@ def _ultima_acao(run, desde: int) -> str:
     return ""
 
 
-async def _acompanha_tarefa(run, passo: float = 1.0, progresso_s: float = PROGRESSO_S, desde: int = 0) -> None:
+async def _acompanha_tarefa(run, passo: float = 1.0, progresso_s: float = PROGRESSO_S, desde: int = 0,
+                            ctx: dict | None = None) -> None:
     """Lê em voz alta cada aprovação ou pergunta que a tarefa faz (e espera o "sim" ou a resposta falada), dá um aviso
     curto de progresso quando ela demora, e fala o resultado quando termina."""
     avisados: set[str] = set()
@@ -3377,13 +3711,15 @@ async def _acompanha_tarefa(run, passo: float = 1.0, progresso_s: float = PROGRE
     final = _ultima_resposta(run.conv_id, desde)
     if not final.strip():
         fala("Terminei. Os detalhes estão na tela.")
-        return
-    try:
-        dito = await _gera(modelo_assistente(), None, RESUME_TAREFA, _dados([final[-6000:]]), 160)
-    except Exception as e:  # modelo fora do ar: lê o começo da resposta
-        print(f"Forja: voz: resumo da tarefa falhou ({e.__class__.__name__}), lendo a resposta", flush=True)
-        dito = ""
-    fala(dito or _texto_falavel(final, 400))
+    else:
+        try:
+            dito = await _gera(modelo_assistente(), None, RESUME_TAREFA, _dados([final[-6000:]]), 160)
+        except Exception as e:  # modelo fora do ar: lê o começo da resposta
+            print(f"Forja: voz: resumo da tarefa falhou ({e.__class__.__name__}), lendo a resposta", flush=True)
+            dito = ""
+        fala(dito or _texto_falavel(final, 400))
+    if ctx is not None:
+        await _fecha_receita(ctx, run)
 
 
 def agent_perguntas(a: dict) -> list[dict]:
@@ -3528,12 +3864,12 @@ async def _idioma_voz(nome: str, d: dict, spec: dict, slot) -> str:
     if nome == "idioma":
         if not cod:  # português (ou um que ele não fala): volta ao normal
             _idioma.clear()
-            _manda("idioma", stt="" if so_ingles() else "pt")
+            _manda("idioma", extra="")
             _conversa_chat.clear()
             fala("Pronto, voltamos para o português.")
             return "(idioma: português)"
         _idioma.update(nome=str(d.get("idioma")), cod=cod, voz=voz, lang=lang)
-        _manda("idioma", stt="")  # o Whisper detecta: o "Forja" no meio do inglês sai certo
+        _manda("idioma", extra=cod)  # o Whisper detecta entre os escolhidos e este: o "Forja" no meio do inglês sai certo
         _conversa_chat.clear()
         fala(OLA.get(cod, f"Ok, {d.get('idioma')}."), voz, lang)
         return f"(idioma: {cod})"
@@ -3598,6 +3934,8 @@ async def _atende(ouviu: dict) -> None:
     from .llm import LLMError
     comando = (ouviu.get("comando") or "").strip()
     _atendendo[0] += 1
+    _turno_n[0] += 1
+    _fase["t"] = "Pensando…"
     _estado["estado"] = "pensando"  # o overlay pulsa devagar até a primeira fala
     _anota("voce", comando or ouviu.get("texto", ""))
     try:
@@ -3619,6 +3957,7 @@ async def _atende(ouviu: dict) -> None:
                    _enviar_respondido(comando) if tipo == "enviar_email" else
                    _aprovar_respondido(comando) if tipo == "aprovar" else
                    _pergunta_respondida(comando) if tipo == "pergunta_agente" else
+                   _receita_respondida(comando) if tipo == "receita" else
                    _evento_quando(comando) if tipo == "evento" else
                    _modelo_respondido(comando) if tipo == "modelo" else
                    _trocar_modelo(comando, pendente=True) if tipo == "trocar" else _vram_respondido(comando))
@@ -3628,6 +3967,10 @@ async def _atende(ouviu: dict) -> None:
             # só "Forja": nada de "Pois não?" (falando, o microfone fecha e come o começo do pedido): bip e escuta
             _manda("bip")
             _manda("escuta")
+            return
+        if (ERRADO.search(_sem_acento(comando).strip()) and _ultima_tarefa
+                and time.time() - _ultima_tarefa["t"] < ERRADO_S):
+            await _corrige_tarefa({**_ultima_tarefa, "tentativa": 0}, comando)
             return
         if MANTER_TAREFA.search(_sem_acento(comando)) and (ultima := await asyncio.to_thread(ultima_temporaria)):
             await asyncio.to_thread(manter, ultima)
@@ -3686,6 +4029,9 @@ async def _atende(ouviu: dict) -> None:
         print(f"Forja: voz: erro atendendo um pedido: {e.__class__.__name__}: {e}", flush=True)
         fala("Deu um erro aqui dentro. Olhe o log do Forja.")
     finally:
+        u = _transcricao[-1] if _transcricao else None
+        if u and u.get("turno") == _turno_n[0] and not any(u.get(k) for k in ("texto", "raciocinio", "ferramentas", "conv")):
+            _transcricao.pop()  # pedido que acabou sem dizer nem fazer nada (só "Forja", "para"): sem bolha vazia
         _atendendo[0] -= 1
         if _estado["estado"] == "pensando":
             _estado["estado"] = "ouvindo"  # ainda pode ter fala na fila: o ouvido manda "falando" quando tocar

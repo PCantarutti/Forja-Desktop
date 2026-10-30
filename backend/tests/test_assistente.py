@@ -188,6 +188,46 @@ def test_transcricao_so_em_memoria_e_agrupa_a_resposta(monkeypatch):
     assert assistente.conversa()["transcricao"] == []
 
 
+def test_bolha_guarda_raciocinio_ferramenta_e_cartao_da_conversa(monkeypatch):
+    monkeypatch.setattr(assistente, "_manda", lambda *a, **k: None)
+    monkeypatch.setattr(assistente, "_estado_conversa", lambda c: {"rodando": True, "fazendo": "Pensando…", "titulo": "x"})
+    assistente.esquecer()
+    assistente._anota("voce", "pesquisa o dólar")
+    assistente._atendendo[0] += 1
+    assistente._turno_n[0] += 1
+    assistente._bolha()["raciocinio"] = "preciso buscar"
+    assistente._ferramenta("web_search", "cotação do dólar", "R$ 5")
+    assistente._abre(42, "agent")  # a tela não pula: vira cartão na bolha
+    assistente.fala("Cinco reais.")
+    assistente._atendendo[0] -= 1
+    t = assistente.conversa()["transcricao"]
+    assert len(t) == 2 and t[1]["texto"] == "Cinco reais." and t[1]["raciocinio"] == "preciso buscar"
+    assert t[1]["ferramentas"][0]["nome"] == "web_search" and t[1]["conv"]["id"] == 42 and t[1]["conv"]["rodando"]
+    assistente.esquecer()
+
+
+def test_frase_de_espera_sai_em_ingles_sem_modelo():
+    # sem modelo no ar a tradução falhava e a frase caía na voz portuguesa padrão
+    assert assistente._traduz_en("Carregando o modelo, um instante.") == "Loading the model, one moment."
+
+
+def test_fila_do_whisper_fica_so_com_o_pedido_recente():
+    import queue, time
+    from app.assistente_ouvido import proximo
+    q = queue.Queue()
+    agora = time.monotonic()
+    q.put(("velho", True, "detector", agora - 60))  # pedido de um minuto atrás: não vale mais
+    q.put(("forja1", True, "detector", agora - 3))
+    q.put(("ruido", False, "", agora - 2))
+    q.put(("forja2", True, "detector", agora - 1))  # chamou de novo: só este
+    q.put(("tv", False, "", agora))
+    assert proximo(q) == ("forja2", True, "detector") and q.empty()
+    q.put(("so", False, "", agora - 100))  # sozinho na fila: segue, mesmo velho (não sobra nada mais novo)
+    assert proximo(q) == ("so", False, "")
+    q.put(None)
+    assert proximo(q) is None
+
+
 def test_salvar_sem_conversa_avisa():
     assistente.esquecer()
     with pytest.raises(assistente.ToolError):
@@ -426,8 +466,10 @@ def test_boca_cala_sem_mexer_no_audio_de_outra_thread(monkeypatch):
     monkeypatch.setitem(sys.modules, "sounddevice", falso)
     monkeypatch.setitem(sys.modules, "numpy", types.SimpleNamespace(float32=None, ascontiguousarray=lambda x, dtype=None: x))
     monkeypatch.setattr(o, "diz", lambda *a: None)
+    from collections import deque
     b = o.Boca.__new__(o.Boca)
     b.textos, b.audios, b.falando, b.fim_fala, b.geracao, b.atual = queue.Queue(), queue.Queue(), threading.Event(), 0.0, 0, ""
+    b.ditas = deque(maxlen=30)
     threading.Thread(target=b._toca, daemon=True).start()
     b.falando.set()
     b.audios.put((0, Amostras([0.0] * 24000 * 10), 24000, False, "uma resposta longa"))  # 10 s = 100 blocos
@@ -579,3 +621,197 @@ def test_rvc_le_o_indice_uma_vez_so():
         i = f.read_index("voz.index")
         assert i.reconstruct_n(0, i.ntotal) == [0, 3] and i.search("v", 8) == ("busca", "v", 8)
     assert lidas == ["voz.index", "matriz"] and f.METRIC_L2 == 1
+
+
+def test_idioma_estranho_na_deteccao_vira_um_dos_falados(monkeypatch):
+    # voz só-inglês (detecção automática): ruído saía como khmer ("ឍ្្្្") no chat
+    from types import SimpleNamespace
+    from app import assistente_ouvido as o
+    monkeypatch.setitem(o.IDIOMA, "lista", ["pt", "en"])
+    monkeypatch.setattr(o, "diz", lambda *a: None)
+    pedidos = []
+
+    class Stt:
+        def transcribe(self, audio, language=None, **kw):
+            pedidos.append(language)
+            if language is None:
+                return iter([SimpleNamespace(text="ឍ្្្")]), SimpleNamespace(language="km", all_language_probs=[("km", .4), ("en", .3), ("pt", .2)])
+            return iter([SimpleNamespace(text="turn it up")]), SimpleNamespace(language=language)
+    assert o.transcreve_fala(Stt(), None) == "turn it up" and pedidos == [None, "en"]
+
+
+def test_um_idioma_so_e_forcado(monkeypatch):
+    from types import SimpleNamespace
+    from app import assistente_ouvido as o
+    monkeypatch.setitem(o.IDIOMA, "lista", ["pt"])
+    monkeypatch.setitem(o.IDIOMA, "extra", "")
+    pedidos = []
+
+    class Stt:
+        def transcribe(self, audio, language=None, **kw):
+            pedidos.append(language)
+            return iter([SimpleNamespace(text="oi")]), SimpleNamespace(language=language)
+    assert o.transcreve_fala(Stt(), None) == "oi" and pedidos == ["pt"]
+    monkeypatch.setitem(o.IDIOMA, "extra", "es")  # conversa para treinar espanhol: detecta entre pt e es
+    assert o.permitidos() == ["pt", "es"]
+
+
+def test_eco_da_propria_voz_e_ignorado():
+    from app.assistente_ouvido import eco
+    ditas = [(100.0, "Dollar closed around 5.41 reais today, ranged 5.38 to 5.45."), (101.0, "Pulled that from dolarhoje.net.")]
+    assert eco("dollar closed around 5.41 reais today", ditas, agora=105)
+    assert eco("Ranged 5.38 to 5.45. Pulled that from", ditas, agora=105)  # o fim de uma com o começo da outra
+    assert eco("Done.", [(100.0, "Done.")], agora=101)
+    assert not eco("qual a previsão do tempo amanhã?", ditas, agora=105)
+    assert not eco("dollar closed around 5.41 reais today", ditas, agora=500)  # passou do ECO_S: é a pessoa
+    assert not eco("e o euro?", ditas, agora=105)
+
+
+def test_idiomas_do_whisper_validados():
+    with pytest.raises(assistente.ToolError):
+        assistente.gravar({"idiomas_whisper": []})
+    with pytest.raises(assistente.ToolError):
+        assistente.gravar({"idiomas_whisper": ["km"]})
+
+
+def _receitas(monkeypatch, tmp_path):
+    from app import receitas
+    monkeypatch.setattr(receitas, "PASTA", tmp_path / "receitas")
+    return receitas
+
+
+SPOTIFY = dict(nome="tocar música aleatória das curtidas no Spotify", palavras=["spotify", "música", "curtidas", "aleatória"],
+               objetivo="Tocar as Músicas Curtidas no aleatório", passos=["Abrir spotify:collection:tracks", "Ligar o aleatório e dar play"],
+               conferir="O Spotify mostra Músicas Curtidas tocando com o aleatório verde")
+
+
+def test_receita_achada_pelas_palavras_do_pedido(monkeypatch, tmp_path):
+    receitas = _receitas(monkeypatch, tmp_path)
+    receitas.salvar(**SPOTIFY)
+    receitas.salvar(nome="abrir vídeo das inscrições do YouTube", palavras=["youtube", "vídeo", "inscrições"],
+                    objetivo="", passos=["youtube_subscriptions"], conferir="vídeo tocando")
+    achadas = receitas.busca("escolhe uma música aleatória das minhas curtidas no spotify pra mim")
+    assert [r["id"] for r in achadas] == [receitas.ler(receitas._slug(SPOTIFY["nome"]))["id"]]
+    assert receitas.busca("que horas são?") == []
+    assert "1. Abrir spotify:collection:tracks" in receitas.texto(achadas[0])
+
+
+def test_receita_reescrita_guarda_a_anterior_e_desistir_volta_ela(monkeypatch, tmp_path):
+    receitas = _receitas(monkeypatch, tmp_path)
+    rid = receitas.salvar(**SPOTIFY)["id"]
+    assert receitas.aprovar(rid)["status"] == "aprovada"
+    nova = receitas.salvar(**{**SPOTIFY, "passos": ["Clicar em Curtidas na tela"]})
+    assert nova["status"] == "rascunho" and nova["anterior"]["passos"][0] == "Abrir spotify:collection:tracks"
+    volta = receitas.desistir(rid)
+    assert volta["status"] == "aprovada" and volta["passos"][0] == "Abrir spotify:collection:tracks" and not volta["anterior"]
+    rascunho = receitas.salvar(**{**SPOTIFY, "nome": "outra coisa"})["id"]
+    assert receitas.desistir(rascunho) is None and receitas.busca("outra coisa spotify curtidas")[0]["id"] == rid
+
+
+def test_sim_aprova_e_nao_tenta_de_novo_com_a_correcao(monkeypatch, tmp_path):
+    import asyncio
+    receitas = _receitas(monkeypatch, tmp_path)
+    rid = receitas.salvar(**SPOTIFY)["id"]
+    falas, turnos = [], []
+    monkeypatch.setattr(assistente, "fala", lambda t, *a, **k: falas.append(t))
+    monkeypatch.setattr(assistente, "_ultimo_id", lambda c: 0)
+    monkeypatch.setattr(assistente, "modelo_assistente", lambda: {"provider": "x", "model": "y"})
+    monkeypatch.setattr(assistente, "_acompanha", lambda run, ctx, desde: turnos.append(ctx))
+
+    async def turno(conv, kind, texto, spec=None, permission=""):
+        turnos.append(texto)
+        return object()
+    monkeypatch.setattr(assistente, "_turno", turno)
+    base = {"tipo": "receita", "conv": 7, "pedido": "música das curtidas", "rid": rid, "tentativa": 0, "t": 0}
+    assistente._pendente.update(base)
+    asyncio.run(assistente._receita_respondida("Sim, ficou certo"))
+    assert receitas.ler(rid)["status"] == "aprovada" and "Guardei" in falas[-1]
+
+    assistente._pendente.update(base)
+    asyncio.run(assistente._receita_respondida("não, era das curtidas, não da playlist"))
+    assert turnos, falas
+    assert "era das curtidas" in turnos[0] and turnos[1]["tentativa"] == 1 and receitas.ler(rid)["falhas"] == 1
+
+    assistente._pendente.update({**base, "tentativa": 2})  # terceira correção: desiste
+    asyncio.run(assistente._receita_respondida("não"))
+    assert "Tentei 3 vezes" in falas[-1] and len(turnos) == 2
+    assistente._pendente.clear()
+
+
+def test_aval_do_jeito_que_se_fala():
+    for frase in ("Pode salvar.", "Funcionou. Obrigado.", "salva a rota", "agora sim", "isso, perfeito", "ok"):
+        r = assistente._sem_acento(frase).strip(" .!?,")
+        assert assistente.APROVA.search(r) and not assistente.re.search(r"\bnao\b", r), frase
+    for frase in ("não, era a outra", "não funcionou", "toca a daddy daddy do"):
+        r = assistente._sem_acento(frase).strip(" .!?,")
+        assert not (assistente.APROVA.search(r) and not assistente.re.search(r"\bnao\b", r)), frase
+
+
+def test_receita_sem_posicao_de_tela(monkeypatch, tmp_path):
+    receitas = _receitas(monkeypatch, tmp_path)
+    with pytest.raises(assistente.ToolError, match="posição"):
+        receitas.salvar(nome="tocar uma música específica no Spotify", palavras=["spotify", "música"], objetivo="",
+                        passos=["Clicar na barra de busca (±690,98)", "Digitar <música>"], conferir="tocando")
+    r = receitas.salvar(nome="tocar uma música específica no Spotify", palavras=["spotify", "música", "tocar"], objetivo="",
+                        passos=["Abrir spotify:search:<música>", "Enter na primeira faixa"], conferir="<música> tocando")
+    assert receitas.busca("toca a música bohemian rhapsody no spotify")[0]["id"] == r["id"]
+
+
+def test_ta_errado_reabre_a_ultima_tarefa():
+    for frase in ("tá errado", "ta errada", "não era isso", "isso tá errado", "não funcionou", "errou"):
+        assert assistente.ERRADO.search(assistente._sem_acento(frase)), frase
+    assert not assistente.ERRADO.search(assistente._sem_acento("o que é um erro de digitação?"))
+
+
+def test_sim_sem_receita_salva_o_forja_escreve_pelo_caminho(monkeypatch, tmp_path):
+    import asyncio
+    receitas = _receitas(monkeypatch, tmp_path)
+    falas, pedidos = [], []
+    monkeypatch.setattr(assistente, "fala", lambda t, *a, **k: falas.append(t))
+    monkeypatch.setattr(assistente, "modelo_assistente", lambda: {"provider": "x", "model": "y"})
+
+    async def gera(spec, slot, sistema, usuario, max_tokens=400):
+        pedidos.append(usuario)
+        return 'Aqui: {"nome": "tocar curtidas no Spotify", "palavras": ["spotify", "curtidas"], "objetivo": "x", ' \
+               '"passos": ["abrir spotify:collection:tracks", "aleatório e play"], "conferir": "Curtidas tocando"}'
+    monkeypatch.setattr(assistente, "_gera", gera)
+    assistente._pendente.update(tipo="receita", conv=1, pedido="música das curtidas", rid="", tentativa=0, t=0,
+                                caminho="- desktop_open {} -> [ok] aberto\n- desktop_key {} -> [ok]")
+    asyncio.run(assistente._receita_respondida("isso, perfeito"))
+    r = receitas.busca("toca minhas curtidas no spotify")[0]
+    assert r["status"] == "aprovada" and r["passos"][0] == "abrir spotify:collection:tracks" and "desktop_open" in pedidos[0]
+    assert "Guardei" in falas[-1]
+
+
+def test_gera_repete_com_folga_quando_o_modelo_so_raciocina(monkeypatch):
+    # o beam pensa mesmo com think=False: no teto curto vinha vazio, e a voz só-inglês lia o português original
+    import asyncio
+    from app import llm
+    tetos = []
+
+    async def stream(*a, max_tokens=None, **k):
+        tetos.append(max_tokens)
+        yield "reasoning", "hmm"
+        yield "content", "Loading the model." if max_tokens > 1000 else "Loading"
+        yield "done", {"completion_tokens": 120 if max_tokens > 1000 else max_tokens}  # o curto bateu no teto: cortado
+    monkeypatch.setattr(llm, "chat_stream", stream)
+    assert asyncio.run(assistente._gera({"provider": "x", "model": "beam"}, None, "s", "u", 300)) == "Loading the model."
+    assert tetos == [300, 4300]
+
+
+def test_links_da_busca_ficam_na_conversa_e_contexto_so_quando_depende(monkeypatch):
+    monkeypatch.setattr(assistente, "_manda", lambda *a, **k: None)
+    assistente.esquecer()
+    assistente._anota("voce", "pesquise um teclado mecânico abnt")
+    assistente._atendendo[0] += 1
+    assistente._turno_n[0] += 1
+    assistente._bolha()["links"] = ["https://www.kabum.com.br/produto/123", "https://exemplo.com/review"]
+    assistente.fala("O Redragon K568 é o melhor custo-benefício.")
+    assistente._atendendo[0] -= 1
+    assert assistente._links_recentes()[0] == "https://www.kabum.com.br/produto/123"
+    ctx = assistente._contexto_falado()
+    assert "Redragon K568" in ctx and "kabum.com.br" in ctx
+    assert assistente.DEPENDE.search(assistente._sem_acento("abra os links de compra no navegador"))
+    assert assistente.DEPENDE.search(assistente._sem_acento("compra esse pra mim"))
+    assert not assistente.DEPENDE.search(assistente._sem_acento("organiza minha pasta de downloads"))
+    assistente.esquecer()

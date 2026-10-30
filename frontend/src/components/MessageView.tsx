@@ -821,7 +821,7 @@ export const NOTA_DO_AGENTE: Record<string, string> = {
 };
 
 // Primeira ferramenta do grupo vira a frase de abertura do resumo.
-const ACTION: Record<string, string> = {
+export const ACTION: Record<string, string> = {
   plan_feature: "Planejou uma funcionalidade",
   run_task: "Despachou uma tarefa",
   update_task: "Atualizou uma tarefa",
@@ -841,6 +841,7 @@ const ACTION: Record<string, string> = {
   imports: "Conferiu os imports",
   search: "Procurou no projeto",
   web_search: "Pesquisou na web",
+  salvar_receita: "Guardou o caminho da tarefa",
   fetch_url: "Abriu uma página",
   delegate_task: "Delegou a um subagente",
   update_tasks: "Atualizou as tarefas",
