@@ -16,6 +16,45 @@ import os
 import sys
 
 
+class _FaissFixo:
+    """O faiss do pipeline do Applio, com o índice lido uma vez: ele relia o .index (centenas de MB) e remontava a
+    matriz inteira a cada frase, ~0,5 s de cada conversão. Mesma conta, mesmo resultado."""
+
+    def __init__(self, faiss):
+        self._faiss, self._lidos = faiss, {}
+
+    def __getattr__(self, nome):
+        return getattr(self._faiss, nome)
+
+    def read_index(self, arquivo):
+        if arquivo not in self._lidos:
+            self._lidos[arquivo] = _IndiceFixo(self._faiss.read_index(arquivo))
+        return self._lidos[arquivo]
+
+
+class _IndiceFixo:
+    def __init__(self, indice):
+        self._indice, self.ntotal, self._todos = indice, indice.ntotal, None
+
+    def search(self, *a, **k):
+        return self._indice.search(*a, **k)
+
+    def reconstruct_n(self, *_):  # o pipeline só pede a matriz inteira (0, ntotal)
+        if self._todos is None:
+            self._todos = self._indice.reconstruct_n(0, self.ntotal)
+        return self._todos
+
+
+BORDA_S = 0.3  # o Applio converte 1 s de reflexo antes e depois de cada trecho; numa frase falada, 0,3 s soa igual
+
+
+def borda(p, tgt_sr: int) -> None:
+    """Encurta o reflexo das bordas do pipeline (~20% a menos por frase, mais nas curtas). Inteiros: vão para o np.pad."""
+    p.t_pad = int(p.sample_rate * BORDA_S)
+    p.t_pad_tgt = int(tgt_sr * BORDA_S)
+    p.t_pad2 = p.t_pad * 2
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--applio", required=True)
@@ -32,8 +71,10 @@ def main() -> None:
         os.chdir(a.applio)  # o Applio acha os modelos dele (rmvpe, contentvec) pelo caminho relativo
         sys.path.insert(0, a.applio)
         with contextlib.redirect_stdout(io.StringIO()):  # o Applio imprime progresso: o stdout é do protocolo
+            from rvc.infer import pipeline
             from rvc.infer.infer import VoiceConverter
             vc = VoiceConverter()
+        pipeline.faiss = _FaissFixo(pipeline.faiss)
     except Exception as e:
         print(f"ERRO {e.__class__.__name__}: {e}", file=saida, flush=True)
         return
@@ -41,6 +82,8 @@ def main() -> None:
     for linha in sys.stdin:
         entrada, _, destino = linha.rstrip("\n").partition("\t")
         try:
+            if vc.vc:  # o pipeline nasce na 1ª conversão (o aquecimento da Boca)
+                borda(vc.vc, vc.tgt_sr)
             with contextlib.redirect_stdout(io.StringIO()):
                 vc.convert_audio(entrada, destino, a.pth, a.index if os.path.isfile(a.index) else "",
                                  index_rate=a.index_rate if os.path.isfile(a.index) else 0, protect=a.protect,

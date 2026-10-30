@@ -554,3 +554,28 @@ def test_grunhido_vira_grafia_que_o_espeak_le():
     assert grunhido("Hm. I reckon, hmmm... Mm. Hmph!", True) == "Hmm. I reckon, Hmm... Hmm. Hmm!"
     assert grunhido("Hm, sei lá.", False) == "Hum, sei lá."
     assert grunhido("Hmm, ham e mom.", True) == "Hmm, ham e mom."  # palavras de verdade ficam
+
+
+def test_rvc_le_o_indice_uma_vez_so():
+    from app.assistente_rvc import _FaissFixo
+    lidas = []
+
+    class Indice:
+        ntotal = 3
+        def reconstruct_n(self, a, b):
+            lidas.append("matriz")
+            return [a, b]
+        def search(self, x, k):
+            return ("busca", x, k)
+
+    class Faiss:
+        METRIC_L2 = 1
+        def read_index(self, f):
+            lidas.append(f)
+            return Indice()
+
+    f = _FaissFixo(Faiss())
+    for _ in range(3):
+        i = f.read_index("voz.index")
+        assert i.reconstruct_n(0, i.ntotal) == [0, 3] and i.search("v", 8) == ("busca", "v", 8)
+    assert lidas == ["voz.index", "matriz"] and f.METRIC_L2 == 1
