@@ -190,12 +190,16 @@ def _pastas() -> list[Path]:
 
 
 def _arquivo(nome: str) -> Path | None:
-    slug = _slug(nome)
-    return next((p / f"{slug}.md" for p in _pastas() if (p / f"{slug}.md").is_file()), None)
+    # o slug de antes (acento virava hífen) continua achando as memórias gravadas com ele
+    antigo = re.sub(r"[^a-z0-9]+", "-", str(nome).strip().lower()).strip("-")[:60]
+    return next((p / f"{s}.md" for s in dict.fromkeys([_slug(nome), antigo]) for p in _pastas() if s and (p / f"{s}.md").is_file()), None)
 
 
 def _slug(nome: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", str(nome).strip().lower()).strip("-")
+    import unicodedata
+    # sem acento antes: "aniversário" virava "anivers-rio"
+    sem = "".join(c for c in unicodedata.normalize("NFKD", str(nome).strip().lower()) if not unicodedata.combining(c))
+    s = re.sub(r"[^a-z0-9]+", "-", sem).strip("-")
     if not s:
         raise MemoryError("Nome vazio.")
     return s[:60]

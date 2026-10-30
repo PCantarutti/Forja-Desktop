@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from app import assistente
@@ -722,10 +723,16 @@ def test_sim_aprova_e_nao_tenta_de_novo_com_a_correcao(monkeypatch, tmp_path):
         turnos.append(texto)
         return object()
     monkeypatch.setattr(assistente, "_turno", turno)
+
+    async def gera(spec, slot, sistema, usuario, max_tokens=400):  # o Forja generaliza a receita no "sim"
+        return json.dumps({**SPOTIFY, "nome": "tocar as curtidas no Spotify"})
+    monkeypatch.setattr(assistente, "_gera", gera)
     base = {"tipo": "receita", "conv": 7, "pedido": "música das curtidas", "rid": rid, "tentativa": 0, "t": 0}
     assistente._pendente.update(base)
     asyncio.run(assistente._receita_respondida("Sim, ficou certo"))
-    assert receitas.ler(rid)["status"] == "aprovada" and "Guardei" in falas[-1]
+    rid = "tocar-as-curtidas-no-spotify"  # o nome generalizou: a do caso saiu e a nova herdou
+    base["rid"] = rid
+    assert receitas.ler(rid)["status"] == "aprovada" and "Guardei" in falas[-1] and len(receitas.todas()) == 1
 
     assistente._pendente.update(base)
     asyncio.run(assistente._receita_respondida("não, era das curtidas, não da playlist"))
@@ -815,3 +822,27 @@ def test_links_da_busca_ficam_na_conversa_e_contexto_so_quando_depende(monkeypat
     assert assistente.DEPENDE.search(assistente._sem_acento("compra esse pra mim"))
     assert not assistente.DEPENDE.search(assistente._sem_acento("organiza minha pasta de downloads"))
     assistente.esquecer()
+
+
+def test_pendente_da_receita_nao_engole_pedido_novo():
+    assert assistente._aprovou("tá ótimo, valeu") and assistente._aprovou("aham, ficou certinho") and assistente._aprovou("Pode salvar.")
+    assert not assistente._aprovou("esquece aquilo de responder curtinho, pode falar normal")
+    assert not assistente._aprovou("não, era a outra")
+    assert assistente.NEGA.match(assistente._sem_acento("era a playlist do anime"))
+    assert assistente._parece_pedido("o que foi que eu anotei hoje?")
+
+
+def test_preferencia_guardada_como_preferencia():
+    assert assistente.PREFERE.search(assistente._sem_acento("A pessoa prefere que o assistente responda bem curtinho"))
+    assert not assistente.PREFERE.search(assistente._sem_acento("O aniversário da pessoa é dia 14 de março"))
+    from app import memory
+    assert memory._slug("aniversário") == "aniversario"
+
+
+def test_pedido_de_arquivo_nao_vira_lembrete_e_pergunta_nao_vira_receita():
+    s = assistente._sem_acento
+    assert assistente.MEXE_ARQUIVO.search(s("abre o bloco de notas, escreve 'comprar pão e leite amanhã' e salva como lembrete.txt"))
+    assert not assistente.MEXE_ARQUIVO.search(s("me lembra de comprar pão amanhã às 9"))
+    assert assistente.PERGUNTA.search(s("quanto espaço livre eu tenho no disco C?"))
+    assert assistente.PERGUNTA.search(s("quais são os 3 maiores arquivos da pasta de logs"))
+    assert not assistente.PERGUNTA.search(s("organiza por tipo a pasta de downloads"))

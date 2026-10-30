@@ -131,6 +131,15 @@ def desistir(rid: str) -> dict | None:
     return r
 
 
+def herda(de: str, para: str) -> dict:
+    """A receita do caso (\"criar afazeres.txt em ...\") virou a geral: os números vão junto e a do caso sai."""
+    velha, nova = ler(de), ler(para)
+    for k in ("usos", "acertos", "falhas"):
+        nova[k] = nova.get(k, 0) + velha.get(k, 0)
+    apagar(de)
+    return _grava(nova)
+
+
 def apagar(rid: str) -> None:
     _arquivo(rid).unlink(missing_ok=True)
 

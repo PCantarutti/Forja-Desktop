@@ -1790,7 +1790,8 @@ async def _troca_e_comeca(conv: int, kind: str, pedido: str, spec: dict, aviso: 
 
 BUSCA = {"type": "function", "function": {
     "name": "web_search", "description": "Pesquisa na web. Use para informação atual (notícias, preços, cotações, clima, "
-    "resultados, lançamentos) ou o que você não sabe com certeza.",
+    "resultados, lançamentos) ou o que você não sabe com certeza. Não pesquise para conversa, piada, conta, "
+    "curiosidade ou conhecimento geral que você já sabe: responda direto.",
     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}
 
 
@@ -1819,7 +1820,29 @@ LEMBRETE = {"type": "function", "function": {
         "quando": {"type": "string", "description": "criar: o horário como a pessoa disse (ex.: 'às 14h', 'daqui a 30 "
                                                     "minutos', 'amanhã às 8 da manhã'); vazio se ela não disse"}},
         "required": ["acao"]}}}
-FERRAMENTAS = [BUSCA, CONTROLAR_PC, LEMBRETE]
+# o chat falado dizia "não tenho ferramenta para escrever arquivo" e "anotado" sem anotar nada quando o pedido escapava
+# do classificador: com estas duas ele passa o trabalho ao agente e guarda a memória de verdade
+TAREFA = {"type": "function", "function": {
+    "name": "tarefa",
+    "description": "Passa para o agente do Forja FAZER algo no PC ou na web que as outras ferramentas não fazem: criar, "
+                   "escrever, mover, renomear ou organizar arquivos e pastas, usar um programa (escrever no bloco de "
+                   "notas, mexer numa planilha), instalar ou configurar algo, investigar o PC, pesquisar e abrir coisas no "
+                   "navegador. Nunca diga que não consegue fazer algo no PC: chame isto com o pedido completo.",
+    "parameters": {"type": "object", "properties": {
+        "pedido": {"type": "string", "description": "O pedido completo, como a pessoa disse, com caminhos e nomes"}},
+        "required": ["pedido"]}}}
+MEMORIA = {"type": "function", "function": {
+    "name": "memoria",
+    "description": "Guarda para sempre um fato sobre a pessoa ('meu carro é um Onix', 'só pra você saber...') ou como ela "
+                   "prefere que você aja ('responde curtinho'), ou esquece um. Chame sempre que ela contar algo "
+                   "duradouro ou pedir para esquecer; nunca diga 'anotado' ou 'guardei' sem chamar.",
+    "parameters": {"type": "object", "properties": {
+        "acao": {"type": "string", "enum": ["guardar", "esquecer"]},
+        "assunto": {"type": "string", "description": "2 a 4 palavras (ex.: 'carro', 'respostas curtas')"},
+        "texto": {"type": "string", "description": "guardar: o fato completo, em terceira pessoa ('O carro da pessoa é um Onix prata')"},
+        "preferencia": {"type": "boolean", "description": "true se é como a pessoa quer que o assistente aja ou responda"}},
+        "required": ["acao", "assunto"]}}}
+FERRAMENTAS = [BUSCA, CONTROLAR_PC, LEMBRETE, TAREFA, MEMORIA]
 # palavra que pode ser pedido de PC ou lembrete: só aí vale a chamada extra do classificador (pergunta pura não paga)
 PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w*|pause|pausa\w*|play|stop|janela\w*|tela|"
                    r"monitor|desktop|area\s+de\s+trabalho|fone\w*|caixa|headset|headphone|pasta|arquivo\w*|pdf|planilha|"
@@ -1840,7 +1863,8 @@ PISTA = re.compile(r"\b(?:som|volume|audio|mud[oa]|musica\w*|faixa|cancao|toca\w
                    r"desfa\w*|volta\s+o\s+que|vendo|olhando|print|parecid\w*|similar\w*|pagina|erro\w*|(?:isso|isto|esse|essa|este|esta)\s+aqui|"
                    r"organiz\w*|renome\w*|mov\w*|copi\w*|instal\w*|configur\w*|disco|excel|word|bloco\s+de\s+notas|notepad|"
                    r"terminal|comando|script|tarefa\w*|procur\w*|pesquis\w*|reproduz\w*|assist\w*|ach\w*|encontr\w*|busc\w*|"
-                   r"coloc\w*|youtube|videos?|inscri\w*|feed|links?|instal\w*)\b")
+                   r"coloc\w*|youtube|videos?|inscri\w*|feed|links?|instal\w*|prefir\w*|prefer\w*|sabendo|"
+                   r"pra\s+voce\s+saber|meu\s+aniversario|cri\w*|bot\w*\s+num)\b")
 # pedido do Forja que é consulta, não trabalho novo: não passa pelo classifica_rota (que podia abrir o agente).
 # "abre o g1 no navegador do Forja" e "o que é essa foto na tela?" também: sem isso viravam "abrir um chat no Forja"
 # (que perguntava o modelo) ou pedido de imagem
@@ -1866,7 +1890,8 @@ CLASSIFICA_ACAO = """Você decide o que um pedido falado ao assistente F.O.R.J.A
 - Resumo do dia (agenda, e-mails, lembretes, clima, notícias): {"tipo":"resumo_dia"}.
 - Documentos da pessoa (contratos, notas, PDFs nas pastas dela): {"tipo":"documentos","pergunta":"<a pergunta>"}.
 - Memória pessoal (um fato para guardar para sempre): {"tipo":"memoria","acao":"guardar","assunto":"<2 a 4 palavras>",
-  "texto":"<o fato completo>"} ou {"tipo":"memoria","acao":"esquecer","assunto":"<palavras>"}.
+  "texto":"<o fato completo>","preferencia":<true se é como a pessoa quer que o assistente aja ou responda>} ou
+  {"tipo":"memoria","acao":"esquecer","assunto":"<palavras>"} (também "esquece aquilo de...", "não precisa mais...").
 - Nota rápida (sem horário): {"tipo":"nota","acao":"anotar","texto":"<a nota>"}, {"tipo":"nota","acao":"listar",
   "quando":"<hoje, ontem... ou vazio>"} ou {"tipo":"nota","acao":"apagar","texto":"<palavras>"}.
 - Card no board de um projeto do Forja: {"tipo":"card","projeto":"<nome ou vazio>","titulo":"<o card>"}.
@@ -1911,7 +1936,9 @@ Exemplos:
 "bota na agenda academia amanhã às 7 e me avisa meia hora antes" -> {"tipo":"agenda","acao":"criar","titulo":"academia","quando":"amanhã às 7","aviso_min":30}
 "como tá meu dia?" -> {"tipo":"resumo_dia"}
 "lembra que meu carro é um Onix prata" -> {"tipo":"memoria","acao":"guardar","assunto":"carro","texto":"O carro da pessoa é um Onix prata"}
-"anota que a Bia prefere reunião à tarde" -> {"tipo":"memoria","acao":"guardar","assunto":"Bia reuniões","texto":"A Bia prefere reunião à tarde"}
+"anota que a Bia prefere reunião à tarde" -> {"tipo":"memoria","acao":"guardar","assunto":"Bia reuniões","texto":"A Bia prefere reunião à tarde","preferencia":false}
+"prefiro que você me responda curtinho" -> {"tipo":"memoria","acao":"guardar","assunto":"respostas curtas","texto":"A pessoa prefere respostas curtas do assistente","preferencia":true}
+"esquece aquilo de responder curto" -> {"tipo":"memoria","acao":"esquecer","assunto":"respostas curtas"}
 "anota aí: trocar a lâmpada da sala" -> {"tipo":"nota","acao":"anotar","texto":"trocar a lâmpada da sala"}
 "o que foi que eu anotei ontem?" -> {"tipo":"nota","acao":"listar","quando":"ontem"}
 "até quando vale a garantia da geladeira?" -> {"tipo":"documentos","pergunta":"até quando vale a garantia da geladeira"}
@@ -2154,7 +2181,7 @@ async def _chat(texto: str) -> None:
                                 "use só se forem sobre ela, e diga de qual arquivo veio):]\n"
                                 + _dados([f"Arquivo: {a['arquivo']}\n{a['trecho'][:600]}" for a in nas_notas]))
     esforco = cfg["raciocinio"]
-    buf, tudo, pesquisou, feito = "", "", False, ""
+    buf, tudo, pesquisou, feito, pensou = "", "", False, "", False
     _fase["t"] = "Pensando…"
     for rodada in range(3):  # até duas rodadas de busca e a resposta
         chamadas: list[dict] = []
@@ -2165,6 +2192,7 @@ async def _chat(texto: str) -> None:
                                                think=False if esforco == "desligado" else None, slot=slot,
                                                max_tokens=MAX_TOKENS_FALA + (0 if esforco == "desligado" else 4000)):
             if tipo == "reasoning":
+                pensou = True
                 b = _bolha()
                 b["raciocinio"] = b.get("raciocinio", "") + val
             elif tipo == "content":
@@ -2191,7 +2219,7 @@ async def _chat(texto: str) -> None:
             acoes = [c for c in acoes if not (c["name"] == "controlar_pc" and str((c["arguments"] or {}).get("acao")) == "fechar"
                                               and not pc.alvo_dito(str((c["arguments"] or {}).get("alvo") or ""), texto))]
             _fase["t"] = "Fazendo"
-            feito = " ".join([await _executa(c["name"], c["arguments"] or {}) for c in acoes])
+            feito = " ".join([await _executa(c["name"], c["arguments"] or {}, spec=spec, slot=slot) for c in acoes])
             for c in acoes:
                 _ferramenta(c["name"], json.dumps(c["arguments"] or {}, ensure_ascii=False), feito)
             if not acoes:
@@ -2228,6 +2256,16 @@ async def _chat(texto: str) -> None:
     _humor["pausa"] = PAUSA_PIADA if "[piada]" in tudo else max(0, _humor["pausa"] - 1)
     if feito:
         return  # a ação já falou o resultado
+    if not sem_marca(tudo) and pensou:
+        # o beam raciocina mesmo com think=False e gastava o teto da fala pensando ("quando é meu aniversário?" sem
+        # resposta): mais uma vez, sem ferramenta e com folga
+        print(f"Forja: voz: {spec['model']} só raciocinou; respondendo de novo com folga", flush=True)
+        async for tipo, val in llm.chat_stream(spec["provider"], spec["model"], msgs, None, 8192, think=False,
+                                               slot=slot, max_tokens=MAX_TOKENS_FALA + 4000):
+            if tipo == "content":
+                tudo += val
+                buf += val
+        hist[-1]["content"] = tudo.split("[piada]")[0].strip()
     if not sem_marca(tudo):
         fala("Fiquei sem resposta dessa vez. Pode repetir?")
     elif kokoro or _idioma.get("voz"):
@@ -2845,7 +2883,9 @@ async def _saber_voz(nome: str, d: dict, spec: dict, slot) -> str:
             fala("O que eu guardo?")
             return "(memória: vazia)"
         assunto = str(d.get("assunto") or "").strip() or " ".join(texto.split()[:4])
-        memory.personal_write(assunto, texto[:200], texto, "usuario")
+        # como a pessoa quer que ele seja ("responde curtinho", "não me chama de senhor") é preferência, não fato dela
+        tipo = "preferencia" if (d.get("preferencia") is True or PREFERE.search(_sem_acento(texto))) else "usuario"
+        memory.personal_write(assunto, texto[:200], texto, tipo)
         _registra("memoria", f"Memória guardada: {assunto}", {"memoria": memory._slug(assunto)})
         print("Forja: voz: memória guardada", flush=True)  # sem o conteúdo no log
         fala("Guardado.")
@@ -3347,6 +3387,8 @@ JARVIS = """Este turno é um pedido FALADO ao assistente F.O.R.J.A, o Jarvis da 
   API ou ferramenta própria (youtube_*, web_search, fetch_url), o navegador da pessoa (open_in_browser abre uma URL
   no navegador dela, onde estão os logins), o navegador do Forja (browser_*), a tela (desktop_*), ou um script
   Python/PowerShell que você escreve e roda. Desista só depois de esgotar os caminhos, e diga o que tentou.
+- Consultar o PC (espaço em disco, maiores arquivos, programas, rede) é UM run_command direto, sem criar arquivo de
+  script. Script que você criar vai para o TEMP e fica lá: nunca peça para apagar arquivo que a pessoa não pediu.
 - Conta da pessoa (YouTube, e-mail, lojas, redes): o navegador do Forja (browser_*) NÃO tem os logins dela. A ordem
   é: a API conectada (youtube_*); senão, abra a página no navegador DELA com open_in_browser (lá ela está logada),
   espere uns segundos e enxergue e aja pela tela: desktop_screenshot traz o print E o texto da tela com o ponto de
@@ -3368,7 +3410,7 @@ JARVIS = """Este turno é um pedido FALADO ao assistente F.O.R.J.A, o Jarvis da 
 - Receitas: o caminho que já deu certo para pedidos parecidos vem no fim destas instruções. Com uma que combina,
   SIGA ela direto (é o caminho curto) e confira como ela diz. Sem receita, ou se a receita falhou: resolva, CONFIRA
   que deu certo, e salve o caminho mínimo com salvar_receita (a que falhou, com o MESMO nome). Não salve o que não
-  conferiu.
+  conferiu, nem pedido que é só pergunta ("quanto espaço tenho?", "quais os maiores arquivos?").
 - A resposta final é FALADA: 1 a 3 frases, sem markdown, com o que fez e o resultado; pergunta se responde com os
   números e fatos pedidos."""
 PROGRESSO = {"web_search": "pesquisando na web", "fetch_url": "lendo uma página", "browser_navigate": "abrindo um site",
@@ -3377,9 +3419,10 @@ PROGRESSO = {"web_search": "pesquisando na web", "fetch_url": "lendo uma página
              "youtube_subscriptions": "olhando suas inscrições", "youtube_channel_videos": "olhando os vídeos dos canais",
              "write_file": "escrevendo um arquivo", "recall": "lembrando de como fiz antes"}
 PROGRESSO_S = 25  # um aviso falado no máximo a cada tanto, enquanto a tarefa demora
-RESUME_TAREFA = ("Resuma para ser FALADO em voz alta, em 1 a 3 frases curtas e em português, o que o agente fez e o "
-                 "resultado. Se o pedido era uma pergunta, a resposta vai com os números e fatos que ele achou (não "
-                 "diga só que verificou). Sem markdown, sem caminho longo, sem listar arquivo por arquivo. " + DADO_DE_FORA)
+RESUME_TAREFA = ("Resuma para ser FALADO em voz alta, em 1 a 3 frases curtas e em português, o que foi feito e o "
+                 "resultado, em PRIMEIRA pessoa (quem fez foi você: \"verifiquei\", \"organizei\"; nunca \"o agente\" "
+                 "nem \"ele\"). Se o pedido era uma pergunta, a resposta vai com os números e fatos achados (não diga "
+                 "só que verificou). Sem markdown, sem caminho longo, sem listar arquivo por arquivo. " + DADO_DE_FORA)
 _acompanhando: set = set()  # tasks que acompanham as tarefas em andamento (referência, senão o GC leva)
 
 
@@ -3514,15 +3557,32 @@ def _receitas_salvas(run) -> list[str]:
 
 # o "sim" ao "Ficou certo?" do jeito que se fala ("pode salvar", "funcionou, obrigado", "salva a rota"): a correção é
 # o resto, e o "não" no meio vence (não funcionou, não era essa)
-APROVA = re.compile(r"\b(?:sim|isso|certo|certinho|correto|perfeito|funcionou|funciona|deu certo|ficou bom|ficou otimo|"
-                    r"otimo|show|beleza|boa|ok|okay|valeu|obrigad\w*|pode|salv\w*|guard\w*|exato|exatamente|"
-                    r"agora sim|isso mesmo|top|massa)\b")
+APROVA = re.compile(r"^(?:(?:ah|e|entao|olha|ta|esta|ficou|nossa|opa)[\s,]+)*(?:sim|isso|certo|certinho|correto|perfeito|"
+                    r"funcionou|funciona|deu certo|ficou bom|ficou otimo|otimo|show|beleza|boa|ok|okay|valeu|obrigad\w*|"
+                    r"pode (?:salvar|guardar|ser|sim)|salv\w*|guard\w*|exato|exatamente|agora sim|isso mesmo|top|massa|"
+                    r"aham|uhum|claro|perfeitamente|maravilha|show de bola|era isso)\b")
+# o começo da fala manda: "esquece aquilo... pode falar normal" não é o "pode" do sim
+NEGA = re.compile(r"(?:nao|errad\w*|ta errad\w*|quase|faltou|era (?:a|o|um|uma|outr)\w*|nada a ver|nope|negativo)\b")
+PREFERE = re.compile(r"\b(?:prefir\w*|prefer\w*|gost\w*|nao gost\w*|quero que (?:voce|vc)|me respond\w*|respond\w* (?:curt|long)|"
+                     r"me cham\w*|odeio|detesto|sempre que|nunca)\b")
+
+
+def _aprovou(resposta: str) -> bool:
+    r = _sem_acento(resposta).strip(" .!?,")
+    return bool(APROVA.match(r)) and not re.search(r"\bnao\b", r)
 
 
 # "Forja, tá errado" logo depois de uma tarefa que ele deu por certa (receita aprovada não pergunta): reabre ela
 ERRADO = re.compile(r"^(?:(?:ta|esta|isso (?:ta|esta)|ficou|deu) errad\w*|nao (?:era|e|foi|deu) (?:isso|essa|esse|certo)|"
                     r"errou|nao (?:ficou|esta|ta) certo|nao funcionou)\b")
 ERRADO_S = 600
+# "abre o bloco de notas, escreve 'pão amanhã' e salva como lembrete.txt" virava lembrete para amanhã às 9h: pedido de
+# mexer num programa ou arquivo não passa pela regra rápida de lembrete (o classificador decide)
+MEXE_ARQUIVO = re.compile(r"\b(?:abr[ea]|escrev\w*|salv[ae]\w*|cri[ae]\w*|digit\w*)\b.*\b(?:bloco\s+de\s+notas|notepad|word|excel|"
+                          r"arquivo|pasta|documento|planilha)\b|\b\w+\.(?:txt|md|docx?|xlsx?|csv|pdf|json)\b")
+# tarefa que é pergunta ("quanto espaço livre tenho?", "quais os maiores arquivos?"): a resposta é o resultado, não há
+# caminho a aprender, e o "Ficou certo?" depois dela só atrapalha
+PERGUNTA = re.compile(r"^(?:quant[oa]s?|qua(?:l|is)|quem|quando|onde|como|o\s+que|que|tem|existe|ja|sera)\b|\?\s*$")
 DEPENDE = re.compile(r"\b(?:isso|disso|nisso|esse|essa|esses|essas|desse|dessa|desses|dessas|nesse|nessa|aquele|aquela|"
                      r"ele|ela|eles|elas|dele|dela|os\s+links|as\s+fontes|o\s+que\s+voce\s+(?:achou|falou|disse|pesquisou)|"
                      r"(?:o|a)\s+(?:primeir|segund|ultim)\w*|mesmo|mesma)\b")
@@ -3551,27 +3611,40 @@ DESTILA = ("Você escreve a RECEITA de uma tarefa que o agente fez no PC e a pes
 
 
 async def _destila(p: dict) -> str:
-    """O agente não salvou a receita: o Forja escreve a partir do caminho que ele fez (a pessoa já confirmou)."""
-    bruto = await _gera(modelo_assistente(), None, DESTILA,
-                        _dados([f"Pedido: {p['pedido']}", f"Correções da pessoa: {p.get('correcoes') or 'nenhuma'}",
-                                f"Ferramentas usadas, em ordem:\n{p.get('caminho') or ''}"]), 700)
-    m = re.search(r"\{.*\}", bruto or "", re.S)
-    d = json.loads(m.group(0)) if m else {}
-    nome = str(d.get("nome") or p["pedido"])
-    if p.get("rid"):  # a receita que falhou e foi corrigida: reescreve ela (o mesmo nome), não cria outra
+    """A pessoa confirmou: o Forja escreve a receita final, geral, a partir do caminho que o agente fez e da receita
+    que ele salvou (que costuma vir com o caso fixo). Receita aprovada que foi corrigida mantém o nome e os números."""
+    velha = None
+    if p.get("rid"):
         try:
-            nome = receitas.ler(p["rid"])["nome"]
+            velha = receitas.ler(p["rid"])
         except ToolError:
             pass
-    r = await asyncio.to_thread(receitas.salvar, nome, d.get("palavras") or [],
-                                str(d.get("objetivo") or ""), d.get("passos") or [], str(d.get("conferir") or ""),
-                                str(d.get("armadilhas") or ""))
+    rascunho = json.dumps({k: velha[k] for k in ("nome", "palavras", "objetivo", "passos", "conferir", "armadilhas")},
+                          ensure_ascii=False) if velha else "nenhuma"
+    bruto = await _gera(modelo_assistente(), None, DESTILA,
+                        _dados([f"Pedido: {p['pedido']}", f"Correções da pessoa: {p.get('correcoes') or 'nenhuma'}",
+                                f"Ferramentas usadas, em ordem:\n{p.get('caminho') or ''}",
+                                f"Receita que o agente salvou (pode estar presa ao caso: generalize): {rascunho}"]), 700)
+    m = re.search(r"\{.*\}", bruto or "", re.S)
+    d = json.loads(m.group(0)) if m else {}
+    nome = str(d.get("nome") or (velha or {}).get("nome") or p["pedido"])
+    if velha and (velha.get("anterior") or (p.get("tentativa") and velha["status"] == "aprovada")):
+        nome = velha["nome"]  # a aprovada que falhou e foi corrigida: reescreve ela, não cria outra
+    r = await asyncio.to_thread(receitas.salvar, nome, d.get("palavras") or (velha or {}).get("palavras") or [],
+                                str(d.get("objetivo") or ""), d.get("passos") or (velha or {}).get("passos") or [],
+                                str(d.get("conferir") or (velha or {}).get("conferir") or ""), str(d.get("armadilhas") or ""))
+    if velha and r["id"] != velha["id"]:  # o nome generalizou: a do caso sai, e os números vão para a nova
+        await asyncio.to_thread(receitas.herda, velha["id"], r["id"])
     return r["id"]
 
 
 async def _fecha_receita(ctx: dict, run) -> None:
     """Fim da tarefa: caminho novo (ou reescrito) pede o aval falado; receita aprovada que serviu conta o acerto."""
     salvas = _receitas_salvas(run)
+    if salvas and not ctx.get("tentativa") and PERGUNTA.search(_sem_acento(ctx["pedido"]).strip()):
+        for x in salvas:  # pergunta não tem caminho a aprender: o rascunho que o agente salvou sai
+            await asyncio.to_thread(receitas.desistir, x)
+        salvas = []
     rid = salvas[-1] if salvas else ctx.get("rid", "")
     _ultima_tarefa.clear()
     _ultima_tarefa.update(conv=ctx["conv"], pedido=ctx["pedido"], rid=rid, t=time.time())
@@ -3583,9 +3656,8 @@ async def _fecha_receita(ctx: dict, run) -> None:
         await asyncio.to_thread(receitas.acertou, rid)  # caminho já aprovado: não pergunta ("tá errado" reabre)
         return
     caminho = _caminho(run)
-    # ponytail: uma ferramenta só (uma conta, uma busca) não tem caminho a aprender; o limite é fixo
-    if not r and not ctx.get("tentativa") and caminho.count("\n") < 1:
-        return
+    if not r and not ctx.get("tentativa") and (not caminho or PERGUNTA.search(_sem_acento(ctx["pedido"]).strip())):
+        return  # nada feito, ou era pergunta: não há caminho a aprender
     _pendente.clear()
     _pendente.update(tipo="receita", t=time.time(), rid=rid, caminho=caminho,
                      **{k: ctx.get(k) for k in ("conv", "pedido", "tentativa", "correcoes")})
@@ -3596,12 +3668,10 @@ async def _fecha_receita(ctx: dict, run) -> None:
 async def _receita_respondida(resposta: str) -> None:
     p = dict(_pendente)
     _pendente.clear()
-    r = _sem_acento(resposta).strip(" .!?,")
-    if APROVA.search(r) and not re.search(r"\bnao\b", r):
-        rid = p.get("rid") or ""
+    if _aprovou(resposta):
         try:
-            if not rid or (receitas.ler(rid)["status"] == "aprovada" and p.get("tentativa")):
-                rid = await _destila(p)  # o agente não salvou (ou corrigiu sem reescrever): o Forja escreve
+            # sempre pelo Forja: o agente salvava o caso fixo (o caminho e o conteúdo da vez) e às vezes nem salvava
+            rid = await _destila(p)
             await asyncio.to_thread(receitas.aprovar, rid)
         except (ToolError, ValueError) as e:
             print(f"Forja: voz: receita não foi guardada ({e.__class__.__name__}: {e})", flush=True)
@@ -3950,6 +4020,9 @@ async def _atende(ouviu: dict) -> None:
             _pendente.clear()  # "cancela" respondendo a uma pergunta: desiste dela
             fala("Ok, deixei pra lá.")
             return
+        if (_pendente and _pendente["tipo"] == "receita" and ouviu.get("resposta")
+                and not _aprovou(comando) and not NEGA.match(_sem_acento(comando).strip()) and _parece_pedido(comando)):
+            _pendente.clear()  # "Ficou certo?" e veio outra coisa ("o que eu anotei hoje?"): é pedido novo, não correção
         if _pendente and ouviu.get("resposta"):
             tipo = _pendente["tipo"]
             await (_agente(_pendente["pedido"], comando) if tipo == "pasta" else
@@ -3984,7 +4057,7 @@ async def _atende(ouviu: dict) -> None:
         if tipo == "chat" and DESFAZ.search(_sem_acento(comando)):
             await _desfaz()
             return
-        if tipo == "chat" and (lem := lembretes.entende(comando)):
+        if tipo == "chat" and not MEXE_ARQUIVO.search(_sem_acento(comando)) and (lem := lembretes.entende(comando)):
             await _lembrete(*lem)
             return
         if tipo == "chat" and (acao := pc.entende(comando)) and await asyncio.to_thread(pc.certeza, *acao):
