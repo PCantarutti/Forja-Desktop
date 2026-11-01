@@ -160,6 +160,30 @@ function copyBackend() {
   });
 }
 
+/**
+ * Vozes treinadas que vão no instalador (o backend copia para runtimes/assistente/piper na primeira subida). Vêm do
+ * Forja desta máquina; o "rvc" do .onnx.json perde os caminhos do Applio daqui, que no outro PC não existem.
+ */
+const VOZES = ["arthur", "caroline", "glados", "wheatley"];
+function copyVozes() {
+  step("copiando as vozes treinadas");
+  const origem = path.join(process.env.APPDATA ?? "", "Forja", "runtimes", "assistente", "piper");
+  const dest = path.join(RES, "vozes");
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+  for (const voz of VOZES) {
+    if (!fs.existsSync(path.join(origem, voz + ".onnx"))) throw new Error(`voz ${voz} não está em ${origem}`);
+    for (const ext of [".onnx", ".rvc.pth", ".rvc.index"]) {
+      const f = path.join(origem, voz + ext);
+      if (fs.existsSync(f)) fs.copyFileSync(f, path.join(dest, voz + ext));
+    }
+    const cfg = JSON.parse(fs.readFileSync(path.join(origem, voz + ".onnx.json"), "utf8"));
+    const rvc = cfg.forja?.rvc;
+    if (rvc) for (const k of ["python", "applio", "config"]) delete rvc[k];
+    fs.writeFileSync(path.join(dest, voz + ".onnx.json"), JSON.stringify(cfg, null, 2));
+  }
+}
+
 function makeIcon() {
   const png = path.join(ROOT, "build", "icon.png"); // o electron-builder gera o .ico a partir dele
   if (fs.existsSync(png)) return console.log("build/icon.png já existe");
@@ -183,4 +207,5 @@ makeIcon();
 copyIcon();
 buildUi();
 copyBackend();
+copyVozes();
 console.log("\nresources/ pronto. Agora: npx electron-builder --win nsis");

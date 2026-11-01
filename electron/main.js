@@ -177,6 +177,7 @@ function startBackend(cdp) {
     FORJA_PORT: String(port), // o servidor MCP grava este endereço em mcp_endpoint.json (sem ele, 8765)
     ...(cdp ? { FORJA_CDP: cdp } : {}), // sem CDP o backend cai no Chromium headless com espelho
     FORJA_WEB: process.env.FORJA_WEB ?? path.join(ROOT, "web"),
+    FORJA_VOZES: path.join(ROOT, DEV ? "resources" : ".", "vozes"), // vozes treinadas do instalador (prepare.mjs)
     PYTHONUNBUFFERED: "1",
     PYTHONUTF8: "1",
   };

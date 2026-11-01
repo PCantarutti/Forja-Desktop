@@ -846,3 +846,18 @@ def test_pedido_de_arquivo_nao_vira_lembrete_e_pergunta_nao_vira_receita():
     assert assistente.PERGUNTA.search(s("quanto espaço livre eu tenho no disco C?"))
     assert assistente.PERGUNTA.search(s("quais são os 3 maiores arquivos da pasta de logs"))
     assert not assistente.PERGUNTA.search(s("organiza por tipo a pasta de downloads"))
+
+
+def test_vozes_do_instalador_entram_so_as_que_faltam(tmp_path, monkeypatch):
+    from app import assistente
+    origem, piper = tmp_path / "vozes", tmp_path / "piper"
+    origem.mkdir()
+    (origem / "arthur.onnx").write_text("novo")
+    (origem / "arthur.onnx.json").write_text("{}")
+    piper.mkdir()
+    (piper / "arthur.onnx").write_text("retreinada")
+    monkeypatch.setattr(assistente, "VOZES_PIPER", piper)
+    assert assistente.instalar_vozes_empacotadas(str(origem)) == ["arthur.onnx.json"]
+    assert (piper / "arthur.onnx").read_text() == "retreinada"
+    assert assistente.instalar_vozes_empacotadas(str(origem)) == []
+    assert assistente.instalar_vozes_empacotadas(str(tmp_path / "nada")) == []

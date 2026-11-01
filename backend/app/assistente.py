@@ -1065,10 +1065,33 @@ def _le(p: subprocess.Popen) -> None:
         _reinicia_se_caiu()
 
 
+def instalar_vozes_empacotadas(origem: str | None = None) -> list[str]:
+    """As vozes treinadas que vêm no instalador (resources/vozes, em FORJA_VOZES) entram em VOZES_PIPER na primeira
+    subida. Só o arquivo que falta: o que a pessoa já tem (ou retreinou) fica. ponytail: voz apagada à mão volta na
+    próxima subida; marcar as recusadas se isso incomodar."""
+    origem = Path(origem or os.environ.get("FORJA_VOZES") or "")
+    if not origem.name or not origem.is_dir():
+        return []
+    import shutil
+    novos = []
+    for f in origem.iterdir():
+        alvo = VOZES_PIPER / f.name
+        if f.is_file() and not alvo.exists():
+            VOZES_PIPER.mkdir(parents=True, exist_ok=True)
+            parte = alvo.with_name(alvo.name + ".part")  # cópia cortada no meio não passa por voz pronta
+            shutil.copyfile(f, parte)
+            os.replace(parte, alvo)
+            novos.append(f.name)
+    if novos:
+        print(f"Forja: voz: {len(novos)} arquivo(s) de voz do instalador em {VOZES_PIPER}", flush=True)
+    return novos
+
+
 def ao_subir(loop: asyncio.AbstractEventLoop) -> None:
     """Lifespan do backend: guarda o loop (os comandos viram turnos nele), reabre ouvindo se estava ligado e começa a
     vigiar a ociosidade do modelo do assistente."""
     _loop[:] = [loop]
+    instalar_vozes_empacotadas()
     _tarefa["vigia"] = loop.create_task(_vigia_ocioso())
     _tarefa["lembretes"] = loop.create_task(lembretes.vigia(fala))
     _tarefa["rotina"] = loop.create_task(_vigia_rotina())
