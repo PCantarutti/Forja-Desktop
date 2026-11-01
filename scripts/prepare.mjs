@@ -164,7 +164,7 @@ function copyBackend() {
  * Vozes treinadas que vão no instalador (o backend copia para runtimes/assistente/piper na primeira subida). Vêm do
  * Forja desta máquina; o "rvc" do .onnx.json perde os caminhos do Applio daqui, que no outro PC não existem.
  */
-const VOZES = ["arthur", "caroline", "glados", "wheatley"];
+const VOZES = ["arthur", "caroline", "glados", "wheatley", "wheatley-limpo"];
 function copyVozes() {
   step("copiando as vozes treinadas");
   const origem = path.join(process.env.APPDATA ?? "", "Forja", "runtimes", "assistente", "piper");

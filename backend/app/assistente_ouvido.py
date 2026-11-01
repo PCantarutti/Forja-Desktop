@@ -134,10 +134,10 @@ class Boca:
     eco: int | None = None  # trocador de voz: toca também neste aparelho (o retorno no seu fone)
     ao_tocar = None  # trocador de voz: chamado com o texto quando a frase começa a tocar (mede o atraso)
 
-    def __init__(self, modelos: Path, voz: str, efeito: str = "", eco: int | None = None, rvc: str = ""):
+    def __init__(self, modelos: Path, voz: str, eco: int | None = None, rvc: str = ""):
         from kokoro_onnx import Kokoro
         self.kokoro = Kokoro(str(modelos / KOKORO["modelo"]), str(modelos / KOKORO["vozes"]))
-        self.voz, self.piper, self.efeito = voz, None, None
+        self.voz, self.piper = voz, None
         self.ditas: deque = deque(maxlen=30)  # (quando, frase) do que ele tocou: o filtro de eco compara com isto
         self.eco = eco
         self.grito = False
@@ -160,18 +160,6 @@ class Boca:
             except Exception as e:
                 diz("LOG", f"RVC falhou ao aquecer, falando só com o Piper: {e}")
                 self.rvc = None
-        if efeito == "glados" and self.piper:
-            try:
-                import assistente_glados  # ao lado deste arquivo (o ouvido roda como script)
-                import pyworld  # noqa: F401  (falha aqui, e não na primeira frase)
-                self.efeito = assistente_glados.aplica
-                # aquece aqui (thread principal): os imports do filtro (scipy, pedalboard) feitos pela thread de
-                # síntese com o Whisper rodando na principal travavam no carregamento das DLLs (trocador mudo)
-                import numpy as np
-                self.efeito(np.concatenate([c.audio_float_array for c in self.piper.synthesize("Ok.")]),
-                            self.piper.config.sample_rate)
-            except Exception as e:  # sem pyworld no venv: fala com a voz treinada, sem o filtro
-                diz("LOG", f"filtro GLaDOS indisponível, falando sem ele: {e.__class__.__name__}: {e}")
         self.textos: queue.Queue = queue.Queue()
         self.audios: queue.Queue = queue.Queue()
         self.falando = threading.Event()
@@ -284,8 +272,6 @@ class Boca:
                                 self.rvc = None
                         if db :=self.ajuste.get("agudos_db", {}).get(estilo):
                             amostras = agudos(amostras, sr, db)
-                        if self.efeito:  # o filtro GLaDOS: ~0,15 s por segundo de fala, enquanto a frase anterior toca
-                            amostras = self.efeito(amostras, sr)
                         if pausa := self.ajuste.get("pausa_s"):  # o Piper cola uma frase na outra
                             amostras = np.concatenate([amostras, np.zeros(int(pausa * sr), np.float32)])
                     else:
@@ -618,7 +604,6 @@ def main() -> int:
     p.add_argument("--mic", default="")
     p.add_argument("--whisper", default="small")
     p.add_argument("--voz", default="pf_dora")
-    p.add_argument("--efeito", default="")  # "glados": o filtro de assistente_glados.py sobre a voz treinada
     p.add_argument("--stt", default="pt")  # "auto": o Whisper detecta o idioma (voz que só fala inglês)
     p.add_argument("--saida", default="")  # alto-falante (pedaço do nome + API); vazio = o padrão do Windows
     p.add_argument("--listar", action="store_true")
@@ -654,7 +639,7 @@ def main() -> int:
         if a.saida:
             sd.default.device = (None, dispositivo(a.saida, "saida"))
         stt = WhisperModel(a.whisper, device="cpu", compute_type="int8", cpu_threads=max(4, (os.cpu_count() or 8) // 2))
-        boca = Boca(Path(a.modelos), a.voz, a.efeito, rvc=a.rvc)
+        boca = Boca(Path(a.modelos), a.voz, rvc=a.rvc)
         detector = Detector(Path(a.detector), Path(a.oww), a.sensibilidade) if a.detector else None
     except Exception as e:
         diz("ERRO", f"{e.__class__.__name__}: {e}")

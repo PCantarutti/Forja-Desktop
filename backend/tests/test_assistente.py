@@ -488,11 +488,10 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     (tmp_path / "mae.onnx").write_bytes(b"x")
     (tmp_path / "mae.onnx.json").write_text("{}", "utf-8")
     (tmp_path / "sem-config.onnx").write_bytes(b"x")  # sem o .json o Piper não carrega: fica de fora
-    assert assistente.vozes_kokoro()[:2] == [{"id": "piper:mae", "nome": "Mae (treinada)", "rvc": False},
-                                             {"id": "piper:mae:glados", "nome": "GLaDOS (Mae, com filtro)", "rvc": False}]
+    assert assistente.vozes_kokoro()[0] == {"id": "piper:mae", "nome": "Mae (treinada)", "rvc": False}
+    assert "piper:mae:glados" not in [v["id"] for v in assistente.vozes_kokoro()]  # o filtro GLaDOS saiu
     assert [v["id"] for v in assistente.vozes_kokoro()].count("piper:sem-config") == 0
     assert assistente._voz_arg("piper:mae") == str(tmp_path / "mae.onnx")
-    assert assistente._voz_arg("piper:mae:glados") == str(tmp_path / "mae.onnx")  # o filtro vai no --efeito
     assert assistente._voz_arg("pf_dora") == "pf_dora"
     assert assistente._voz_arg("piper:apagada") == assistente.PADRAO["voz"]
     assert assistente._voz_arg("piper:../../x") == assistente.PADRAO["voz"]
@@ -501,11 +500,12 @@ def test_voz_treinada_no_piper_aparece_e_vai_para_o_ouvido(tmp_path, monkeypatch
     monkeypatch.setattr(assistente, "CONFIG", tmp_path / "assistente.json")
     monkeypatch.setattr(assistente, "instalado", lambda: True)
     monkeypatch.setattr(assistente, "_vivo", lambda: False)
-    monkeypatch.setattr(assistente, "_garante_piper", lambda glados=False: chamadas.append(glados))
+    monkeypatch.setattr(assistente, "_garante_piper", lambda: chamadas.append(1))
     monkeypatch.setattr(threading, "Thread", lambda target, args=(), daemon=None: type("T", (), {"start": lambda s: target(*args)})())
     assistente.gravar({"voz": "piper:mae"})
-    assistente.gravar({"voz": "piper:mae:glados"})  # com o filtro: instala também pyworld e pedalboard
-    assert chamadas == [False, True] and assistente.ler()["voz"] == "piper:mae:glados"
+    assert chamadas == [1] and assistente.ler()["voz"] == "piper:mae"
+    assistente.CONFIG.write_text('{"voz": "piper:mae:glados"}', "utf-8")  # salva com o filtro GLaDOS, que saiu
+    assert assistente.ler()["voz"] == "piper:mae"
 
 
 def test_rvc_da_voz_treinada_usa_o_runtime_e_respeita_a_chave(tmp_path, monkeypatch):
@@ -529,7 +529,7 @@ def test_rvc_da_voz_treinada_usa_o_runtime_e_respeita_a_chave(tmp_path, monkeypa
 
 
 def test_voz_so_ingles_traduz_frases_prontas(tmp_path, monkeypatch):
-    # a GLaDOS do jogo só fala inglês: sem filtro na lista, e as frases prontas (em português) saem traduzidas, com cache
+    # a GLaDOS do jogo só fala inglês, e as frases prontas (em português) saem traduzidas, com cache
     monkeypatch.setattr(assistente, "VOZES_PIPER", tmp_path)
     import queue
     monkeypatch.setattr(assistente, "_traducoes_en", {})
@@ -538,7 +538,6 @@ def test_voz_so_ingles_traduz_frases_prontas(tmp_path, monkeypatch):
     assert assistente.vozes_kokoro()[0] == {"id": "piper:glados", "nome": "Glados (treinada, só inglês)", "rvc": False}
     assert "piper:glados:glados" not in [v["id"] for v in assistente.vozes_kokoro()]
     assert assistente.so_ingles("piper:glados") and not assistente.so_ingles("pf_dora")
-    assert not assistente._com_filtro("piper:glados") and assistente._com_filtro("piper:mae:glados")
     monkeypatch.setattr(assistente, "ler", lambda: {**assistente.PADRAO, "voz": "piper:glados"})
     monkeypatch.setattr(assistente, "modelo_assistente", lambda: {"provider": "ollama-cloud", "model": "x"})
     pedidos = []

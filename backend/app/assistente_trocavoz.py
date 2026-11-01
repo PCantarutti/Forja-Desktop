@@ -1,10 +1,10 @@
 """Trocador de voz do F.O.R.J.A: o que você fala no microfone sai com a voz do assistente num cabo de áudio virtual
 (VB-CABLE: toca no "CABLE Input", o Discord ouve o microfone "CABLE Output"). Whisper transcreve cada frase e a Boca
-do ouvido (Kokoro ou a voz treinada, com o filtro GLaDOS se for o caso) fala no cabo. Roda no venv do assistente,
+do ouvido (Kokoro ou a voz treinada) fala no cabo. Roda no venv do assistente,
 chamado por assistente.py.
 
     python assistente_trocavoz.py --modelos <pasta do Kokoro> --saida "CABLE Input (VB-Audio Virtual Cable) MME"
-                                  [--mic ...] [--whisper small] [--voz pf_dora] [--efeito glados] [--traduz]
+                                  [--mic ...] [--whisper small] [--voz pf_dora] [--traduz]
 
 Saída no stdout: "PRONTO <saída>", "ERRO <mensagem>", "LOG <texto>". Fecha quando o stdin fecha (o backend saiu).
 ponytail: frase a frase (fala → pausa escolhida, 0,6 s por padrão → voz nova), ~1 s de atraso com o Whisper base. Conversão de voz em tempo real (RVC) só se
@@ -61,7 +61,6 @@ def main() -> int:
     p.add_argument("--mic", default="")
     p.add_argument("--whisper", default="small")
     p.add_argument("--voz", default="pf_dora")
-    p.add_argument("--efeito", default="")
     p.add_argument("--pausa", type=float, default=0.6)  # segundos de silêncio que fecham a frase
     p.add_argument("--retorno", default="")  # também toca aqui ("padrao" = o alto-falante padrão): você se ouve
     p.add_argument("--rvc", default="")  # o mesmo do ouvido: a voz treinada pelo RVC
@@ -75,7 +74,7 @@ def main() -> int:
         eco = None if not a.retorno else sd.query_devices(kind="output")["index"] if a.retorno == "padrao"             else dispositivo(a.retorno, "saida")
         sd.default.device = (None, saida)
         stt = WhisperModel(a.whisper, device="cpu", compute_type="int8")
-        boca = Boca(Path(a.modelos), a.voz, a.efeito, eco, a.rvc)
+        boca = Boca(Path(a.modelos), a.voz, eco, a.rvc)
     except Exception as e:
         diz("ERRO", f"{e.__class__.__name__}: {e}")
         return 1
