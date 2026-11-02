@@ -63,6 +63,7 @@ const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "o
 const nomeMes = (m: string) => MESES[Number(m.slice(5, 7)) - 1] ?? m;
 const campo = "w-full min-w-0 bg-transparent text-[12.5px] text-fg outline-none placeholder:text-faint";
 const hoje = () => new Date().toLocaleDateString("sv-SE");   // AAAA-MM-DD no fuso local
+const agoraSeg = () => Date.now() / 1000;   // carimbo do chat, como o `quando` do backend
 const dataCurta = (s: string) => `${s.slice(8, 10)}/${s.slice(5, 7)}`;
 const KINDS: Record<string, string> = { corrente: "Conta corrente", poupanca: "Poupança", dinheiro: "Dinheiro", carteira: "Carteira digital",
   cartao: "Cartão de crédito", investimento: "Investimentos" };
@@ -217,7 +218,7 @@ function Chat(props: { e: Estado; setE: React.Dispatch<React.SetStateAction<Esta
     const ac = new AbortController();
     cancelar.current = ac;
     const rotulo = tipo === "pergunta" ? null : ACOES.find((a) => a.id === tipo)!.rotulo;
-    setRodando({ pedido: { papel: "user", texto, rotulo, quando: Date.now() / 1000 }, texto: "" });
+    setRodando({ pedido: { papel: "user", texto, rotulo, quando: agoraSeg() }, texto: "" });
     streamSSE("/financas/analise", { method: "POST", body: JSON.stringify({ tipo, pergunta: texto }), signal: ac.signal }, (ev) => {
       if (ev.texto) setRodando((s) => s && { ...s, texto: s.texto + ev.texto });
       if (ev.erro) onError(ev.erro);
