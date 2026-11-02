@@ -16,11 +16,14 @@ import base64
 import calendar
 import json
 import os
+import re
 import secrets
 import time
+import unicodedata
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import httpx
 
@@ -301,9 +304,77 @@ def _proximos(hoje: date, n: int) -> list[str]:
     return saida
 
 
-def agregados(d: dict, hoje: date | None = None, meses: int = 12) -> dict:
+def _palavras(s: str) -> list[str]:
+    sem = unicodedata.normalize("NFD", s or "").encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9 ]", " ", sem).split()
+
+
+# palavras de notificação/extrato que não dizem onde foi o gasto (mesma lista do IPorte)
+GENERICAS = set("compra compras aprovada aprovado pagamento pago pix enviado enviada recebido debito credito cartao "
+                "final transferencia boleto parcela valor loja para com dos das por app".split())
+# palavras da pergunta que não são termo de busca
+PERGUNTA = set("quanto quantos quantas gasto gastos gastei gasta gastamos media medio mensal mensalmente mes meses ano "
+               "anual por com qual quais que onde minha meu meus minhas eu nos nas foi esse este essa esta ultimo "
+               "ultimos passado total vezes paguei pago dinheiro tenho estou sobre ultima ultimas semana dia dias".split())
+
+
+def estabelecimento(descricao: str) -> str | None:
+    """1ª palavra que não é genérica: "Compra aprovada UBER *TRIP" → "uber"."""
+    return next((w for w in _palavras(descricao) if len(w) >= 3 and not any(c.isdigit() for c in w)
+                 and w not in GENERICAS), None)
+
+
+def _media(itens: list[dict], mes_atual: str, n_base: int) -> float:
+    """Média por mês completo: o mês atual (pela metade) fica fora da soma e da divisão."""
+    if not n_base:
+        return round(sum(x["valor"] for x in itens), 2)
+    return round(sum(x["valor"] for x in itens if x["mes"] < mes_atual) / n_base, 2)
+
+
+def _por_estabelecimento(gastos: list[dict], mes_atual: str, base: list[str]) -> list[dict]:
+    grupos: dict[str, list[dict]] = defaultdict(list)
+    for g in gastos:
+        if k := estabelecimento(g["descricao"]):
+            grupos[k].append(g)
+    saida = [{"nome": v[0]["descricao"].strip(), "total": round(sum(x["valor"] for x in v), 2),
+              "lancamentos": len(v), "media_mensal": _media(v, mes_atual, len(base))} for v in grupos.values()]
+    return sorted(saida, key=lambda x: -x["total"])[:25]
+
+
+def busca(pergunta: str, gastos: list[dict], numeros: dict) -> list[dict]:
+    """A "query" da IA: termos da pergunta casados com descrição/categoria das despesas dos 12 meses, já somados
+    (a IA não soma, só lê). Até 3 termos com resultado.
+    ponytail: casamento por prefixo de palavra; sinônimo ("corrida" → Uber) não acha."""
+    base = numeros["periodo_base"]
+    meses_base = numeros["meses_base"]
+    saida = []
+    for termo in dict.fromkeys(_palavras(pergunta)):
+        if len(termo) < 3 or termo in PERGUNTA or termo in GENERICAS:
+            continue
+        achados = [g for g in gastos if any(w.startswith(termo) for w in _palavras(f"{g['descricao']} {g['categoria']}"))]
+        if not achados:
+            continue
+        por_mes: dict[str, dict] = {}
+        for g in achados:
+            m = por_mes.setdefault(g["mes"], {"total": 0.0, "lancamentos": 0})
+            m["total"] = round(m["total"] + g["valor"], 2)
+            m["lancamentos"] += 1
+        saida.append({
+            "termo": termo, "lancamentos": len(achados), "total_12m": round(sum(g["valor"] for g in achados), 2),
+            "media_mensal": _media(achados, numeros["mes_atual"], meses_base),
+            "media_sobre": f"{meses_base} meses completos ({base}), sem o mês atual" if meses_base else "só o mês atual",
+            "por_mes": dict(sorted(por_mes.items())),
+            "ultimos": [{k: g[k] for k in ("data", "descricao", "categoria", "valor")}
+                        for g in sorted(achados, key=lambda x: x["data"], reverse=True)[:10]],
+        })
+        if len(saida) == 3:
+            break
+    return saida
+
+
+def agregados(d: dict, hoje: date | None = None, meses: int = 12, gastos: list | None = None) -> dict:
     """Tudo o que a tela desenha e a IA lê. Transferência (transfer_group) mexe no saldo das contas, mas não é
-    receita nem despesa."""
+    receita nem despesa. `gastos`, se vier, recebe as despesas da janela já no mês de competência (busca da IA)."""
     hoje = hoje or date.today()
     cats = {c["id"]: c for c in d["categorias"]}
     contas = {c["id"]: c for c in d["contas"]}
@@ -332,6 +403,7 @@ def agregados(d: dict, hoje: date | None = None, meses: int = 12) -> dict:
     caixa_ids = {cid for cid, c in contas.items() if c.get("kind") not in ("cartao", "investimento")}
     caixa_mes: dict[str, float] = defaultdict(float)   # variação do caixa por mês (para a linha de saldo)
     maiores = []
+    gastos = [] if gastos is None else gastos
     for t in d["transacoes"]:
         v = float(t["amount"] or 0)
         tipo = t["type"]
@@ -352,6 +424,8 @@ def agregados(d: dict, hoje: date | None = None, meses: int = 12) -> dict:
             meta = not t.get("category_id") and (t.get("description") or "").startswith("Aporte:")
             nome = "Metas" if meta else cats.get(t.get("category_id"), {}).get("nome") or "Sem categoria"
             por_cat_mes[nome][m] += v
+            gastos.append({"mes": m, "data": t["transaction_date"], "descricao": t.get("description") or "",
+                           "categoria": nome, "valor": v})
             if m == mes_atual:
                 maiores.append({"descricao": t.get("description") or nome, "categoria": nome, "valor": v,
                                 "data": t["transaction_date"]})
@@ -374,6 +448,9 @@ def agregados(d: dict, hoje: date | None = None, meses: int = 12) -> dict:
     for s in serie:
         s["receitas"], s["despesas"] = round(s["receitas"], 2), round(s["despesas"], 2)
     fechados = serie[-4:-1]   # os 3 meses completos antes do atual
+    # base das médias mensais da IA: meses completos desde o primeiro com movimento
+    inicio = next((i for i, s in enumerate(serie) if s["receitas"] or s["despesas"]), len(serie) - 1)
+    base = janela[inicio:-1]
     media_desp = sum(s["despesas"] for s in fechados) / max(1, len(fechados))
     media_rec = sum(s["receitas"] for s in fechados) / max(1, len(fechados))
     atual = serie[-1]
@@ -425,6 +502,14 @@ def agregados(d: dict, hoje: date | None = None, meses: int = 12) -> dict:
                    "prazo": g.get("deadline")} for g in d["metas"]],
         "historico": historico,
         "projecao": projecao,
+        # para a IA: categorias dos meses anteriores, gasto por estabelecimento e a base das médias mensais
+        "categorias_por_mes": [{"mes": m, "categorias": sorted(({"categoria": k, "valor": round(v[m], 2)}
+                                                                for k, v in por_cat_mes.items() if v.get(m)),
+                                                               key=lambda x: -x["valor"])[:8]}
+                               for m in reversed(janela[-7:-1])],
+        "por_estabelecimento": _por_estabelecimento(gastos, mes_atual, base),
+        "meses_base": len(base),
+        "periodo_base": f"{base[0]} a {base[-1]}" if base else None,
     }
 
 
@@ -440,7 +525,13 @@ PEDIDOS = {
 }
 SISTEMA = ("Você é um analista financeiro pessoal. Responda em português do Brasil, em markdown curto (títulos ###, "
            "listas). Use SÓ os números do JSON fornecido — não invente valores; quando estimar, diga que é estimativa. "
-           "Valores em R$ com vírgula decimal. Não recomende produtos financeiros específicos.")
+           "Valores em R$ com vírgula decimal. Não recomende produtos financeiros específicos.\n"
+           "Onde achar no JSON: \"serie\" = receitas e despesas de cada mês (o atual por último, pode estar no começo); "
+           "\"categorias_por_mes\" = categorias dos meses anteriores; \"por_estabelecimento\" = gasto por loja/app nos "
+           "12 meses, com media_mensal; \"busca\" (quando houver) = lançamentos que casam com termos da pergunta, já "
+           "somados (total_12m, media_mensal com o período em media_sobre, por_mes com total e contagem, ultimos). "
+           "Médias mensais usam os meses_base completos do periodo_base; cite o período. Os valores já vêm somados: "
+           "não refaça contas. kpis.poupanca é fração (-3.13 = -313%). Se o dado não estiver no JSON, diga o que falta.")
 
 
 ROTULOS = {"panorama": "Panorama do mês", "projecao": "Projeção dos próximos meses", "economia": "Onde economizar"}
@@ -478,8 +569,11 @@ async def analise(tipo: str, pergunta: str = ""):
         raise ToolError("Escreva a pergunta.")
     from . import llm
     spec = modelo()
-    numeros = agregados(await dados())
+    gastos: list[dict] = []
+    numeros = agregados(await dados(), gastos=gastos)
     pedido = pergunta.strip()[:2000] if tipo == "pergunta" else PEDIDOS[tipo]
+    if tipo == "pergunta" and (achados := busca(pedido, gastos, numeros)):
+        numeros["busca"] = achados
     historico = chat()
     msgs = [{"role": "system", "content": f"{SISTEMA}\n\nDados de hoje (JSON):\n"
                                                   f"{json.dumps(numeros, ensure_ascii=False)}"},
@@ -498,7 +592,7 @@ async def analise(tipo: str, pergunta: str = ""):
 
 async def completar(corpo: dict) -> dict:
     """Proxy compatível com OpenAI para o IPorte (sem streaming e sem ferramentas). O modelo é o da tela
-    Finanças: o celular não escolhe o que roda no PC."""
+    Finanças, que o celular também troca (ver `modelos`/`escolher`/`carregar`)."""
     from . import llm
     msgs = corpo.get("messages")
     if not isinstance(msgs, list) or not msgs or len(json.dumps(msgs)) > 64_000:
@@ -520,6 +614,69 @@ async def completar(corpo: dict) -> dict:
     return {"id": f"forja-{int(time.time() * 1000)}", "object": "chat.completion", "created": int(time.time()),
             "model": spec["model"],
             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": texto}}]}
+
+
+# ------------------------------------------------------------------ modelo pelo celular
+# O IPorte escolhe o modelo das finanças e qual GGUF o PC carrega. Só GGUF da lista do painel IA local: o token do
+# IPorte não aponta caminho arbitrário do disco.
+
+def _locais() -> list[dict]:
+    from . import localai
+    st = localai.status()
+    saida = []
+    for m in localai.scan():
+        if m.get("kind") != "chat":
+            continue
+        e = localai.estimate(m["path"], localai.params(m["path"]))
+        saida.append({"path": m["path"], "nome": m.get("name") or Path(m["path"]).stem, "alias": localai.alias_of(m["path"]),
+                      "tamanho": m.get("size") or 0, "ctx": localai.ctx_de(m["path"]), "visao": localai.tem_visao(m["path"]),
+                      "vram": e.get("gpu") if e.get("ok") else None, "total": e.get("total") if e.get("ok") else None,
+                      "carregado": bool(st.get("running")) and os.path.normcase(st.get("path") or "") == os.path.normcase(m["path"])})
+    return sorted(saida, key=lambda x: (not x["carregado"], x["nome"].lower()))
+
+
+async def modelos() -> dict:
+    """Tudo o que o seletor do IPorte mostra: o modelo em uso, o que o PC tem carregado (e a VRAM), os GGUF que
+    dá para carregar (com a VRAM estimada) e os modelos dos provedores de nuvem configurados."""
+    from . import config, llm, localai
+
+    async def provedor(p: dict) -> dict:
+        try:
+            ms = await llm.list_models(p["id"])
+            escolha = config.ENABLED_MODELS.get(p["id"])
+            return {"id": p["id"], "nome": p["name"], "modelos": [m for m in ms if not escolha or m in escolha]}
+        except Exception as e:   # provedor sem chave/fora: aparece com o erro, não derruba a lista
+            return {"id": p["id"], "nome": p["name"], "modelos": [], "erro": str(e)[:200]}
+
+    nuvem = [p for p in config.PROVIDERS.values() if p["id"] != "local"]
+    provs, locais, uso = await asyncio.gather(asyncio.gather(*(provedor(p) for p in nuvem)),
+                                              asyncio.to_thread(_locais), asyncio.to_thread(localai.uso))
+    try:
+        escolhido = modelo()
+    except ToolError:
+        escolhido = None
+    return {"escolhido": escolhido, "uso": uso, "locais": locais, "nuvem": list(provs)}
+
+
+def escolher(provider: str, model: str) -> dict:
+    """O celular trocou o modelo das finanças: grava e avisa a tela do PC (activity.iporte)."""
+    from . import config
+    if not model or (provider != "local" and provider not in config.PROVIDERS):
+        raise ToolError("Provedor ou modelo inválido.")
+    modelo({"provider": provider, "model": model})
+    USO["t"] = time.time()
+    return modelo()
+
+
+def carregar(path: str) -> dict:
+    """Carrega um GGUF da lista (substitui o que estiver na GPU) e passa a usá-lo nas finanças."""
+    from . import localai
+    alvo = next((m for m in localai.scan() if m.get("kind") == "chat"
+                 and os.path.normcase(m["path"]) == os.path.normcase(path or "")), None)
+    if not alvo:
+        raise ToolError("Modelo não está na lista do painel IA local.")
+    r = localai.load(alvo["path"], None)
+    return escolher("local", r.get("alias") or localai.alias_of(alvo["path"]))
 
 
 # ------------------------------------------------------------------ escrita (as mesmas regras do app)

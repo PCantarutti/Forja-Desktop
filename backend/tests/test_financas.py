@@ -63,6 +63,25 @@ def test_agregados_e_projecao():
     assert a["serie"][-1]["mes"] == "2026-10" and len(a["serie"]) == 12
 
 
+def test_busca_da_ia_soma_e_tira_media_dos_meses_completos():
+    d = _dados()
+    d["transacoes"] += [
+        {"id": f"u{m}", "account_id": "a", "category_id": None, "amount": v, "type": "despesa",
+         "transaction_date": f"2026-{m:02d}-15", "description": "Compra aprovada UBER *TRIP", "transfer_group": None}
+        for m, v in ((7, 30), (9, 60), (10, 20))]
+    gastos: list = []
+    a = financas.agregados(d, hoje=date(2026, 10, 20), gastos=gastos)
+    assert (a["meses_base"], a["periodo_base"]) == (3, "2026-07 a 2026-09")
+    assert a["categorias_por_mes"][0]["mes"] == "2026-09"
+    assert {"nome": "Compra aprovada UBER *TRIP", "total": 110, "lancamentos": 3, "media_mensal": 30} in a["por_estabelecimento"]
+    [b] = financas.busca("Quanto eu gasto em média com uber mensalmente?", gastos, a)
+    # outubro (20, mês atual) fica fora da média: (30 + 60) / 3 meses completos
+    assert (b["termo"], b["total_12m"], b["media_mensal"]) == ("uber", 110, 30)
+    assert b["media_sobre"] == "3 meses completos (2026-07 a 2026-09), sem o mês atual"
+    assert b["por_mes"]["2026-09"] == {"total": 60, "lancamentos": 1}
+    assert financas.busca("quanto gastei este mês?", gastos, a) == []
+
+
 def test_token_do_iporte_so_abre_o_proxy(cliente, monkeypatch):
     monkeypatch.setattr(config, "API_TOKEN", "do-electron")
     tok = financas.token()
@@ -72,6 +91,32 @@ def test_token_do_iporte_so_abre_o_proxy(cliente, monkeypatch):
     assert cliente.get("/api/iporte/pareamento", headers=h).status_code == 403
     assert cliente.get("/api/iporte/v1/ping", headers=h).status_code == 200
     assert cliente.get("/api/iporte/v1/ping", headers={"X-Forja-Token": "errado"}).status_code == 403
+
+
+def test_celular_escolhe_modelo_e_so_carrega_gguf_da_lista(cliente, monkeypatch):
+    from app import localai
+    monkeypatch.setattr(config, "API_TOKEN", "do-electron")
+    h = {"X-Forja-Token": financas.token()}
+    gguf = {"path": r"D:\m\qwen.gguf", "name": "qwen", "size": 5 * 2**30, "kind": "chat"}
+    monkeypatch.setattr(localai, "scan", lambda *a: [gguf, {"path": r"D:\m\flux.gguf", "kind": "image"}])
+    monkeypatch.setattr(localai, "status", lambda: {"running": True, "path": r"d:\M\qwen.gguf", "alias": "qwen"})
+    monkeypatch.setattr(localai, "estimate", lambda p, prm: {"ok": True, "gpu": 4 * 2**30, "total": 6 * 2**30})
+    monkeypatch.setattr(localai, "params", lambda p: {})
+    monkeypatch.setattr(localai, "ctx_de", lambda p: 8192)
+    monkeypatch.setattr(localai, "tem_visao", lambda p: False)
+    monkeypatch.setattr(localai, "uso", lambda: {"modelo": {"alias": "qwen"}, "gpus": [{"nome": "Arc", "total": 12, "usado": 5}]})
+    carregados = []
+    monkeypatch.setattr(localai, "load", lambda p, patch=None: carregados.append(p) or {"alias": "qwen"})
+
+    r = cliente.get("/api/iporte/v1/modelos", headers=h).json()
+    assert [(m["nome"], m["vram"], m["carregado"]) for m in r["locais"]] == [("qwen", 4 * 2**30, True)]   # imagem fora
+    assert r["uso"]["gpus"][0]["nome"] == "Arc"
+    # caminho fora da lista do painel: recusado sem tocar na GPU
+    assert cliente.post("/api/iporte/v1/carregar", json={"path": r"C:\Windows\x.gguf"}, headers=h).status_code == 400
+    assert cliente.post("/api/iporte/v1/carregar", json={"path": r"D:\m\qwen.gguf"}, headers=h).json() == \
+        {"provider": "local", "model": "qwen"}
+    assert carregados == [r"D:\m\qwen.gguf"] and financas.modelo() == {"provider": "local", "model": "qwen"}
+    assert cliente.put("/api/iporte/v1/modelo", json={"provider": "nao-existe", "model": "x"}, headers=h).status_code == 400
 
 
 def test_porteiro_da_lan_tambem_prende_o_token_do_iporte():

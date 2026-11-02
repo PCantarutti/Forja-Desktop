@@ -4517,6 +4517,36 @@ async def iporte_chat(body: dict):
         raise HTTPException(502, f"Modelo indisponível: {e}")
 
 
+@app.get("/api/iporte/v1/modelos")
+async def iporte_modelos():
+    """Seletor do IPorte: modelo em uso, o carregado no PC com a VRAM, os GGUF e os modelos de nuvem."""
+    return await financas.modelos()
+
+
+@app.put("/api/iporte/v1/modelo")
+def iporte_modelo(body: dict):
+    try:
+        return financas.escolher(str(body.get("provider") or ""), str(body.get("model") or ""))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/iporte/v1/carregar")
+async def iporte_carregar(body: dict):
+    """Carrega um GGUF da lista no PC (só responde com o modelo pronto: dezenas de segundos)."""
+    try:
+        return await asyncio.to_thread(financas.carregar, str(body.get("path") or ""))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/iporte/v1/descarregar")
+async def iporte_descarregar():
+    from . import localai
+    await asyncio.to_thread(localai.unload)
+    return {"ok": True}
+
+
 @app.get("/api/mobile")
 def mobile_info():
     """O que a aba Celular põe no QR: endereço na tailnet (se o Tailscale estiver no PC) e o token."""
