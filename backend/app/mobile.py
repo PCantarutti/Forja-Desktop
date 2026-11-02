@@ -193,7 +193,10 @@ def _porteiro(app):
             headers = dict(scope["headers"])
             dado = headers.get(b"x-forja-token", b"").decode() or \
                 parse_qs(scope.get("query_string", b"").decode()).get("t", [""])[0]
-            if not scope["path"].startswith("/api/") or not secrets.compare_digest(dado, token()):
+            from . import financas   # o IPorte só alcança o proxy de IA dele (ver main.fronteira)
+            ok = secrets.compare_digest(dado, token()) or (
+                scope["path"].startswith("/api/iporte/v1/") and financas.token_ok(dado))
+            if not scope["path"].startswith("/api/") or not ok:
                 await send({"type": "http.response.start", "status": 403,
                             "headers": [(b"content-type", b"application/json")]})
                 await send({"type": "http.response.body", "body": b'{"detail":"Token ausente ou invalido"}'})

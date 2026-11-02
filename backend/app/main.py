@@ -31,7 +31,7 @@ from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
 from .parsing import split_think
 from .tools import REGISTRY, SPILL_DIR, ToolError
-from . import assistente, design_modelos, design_repo, design_revisao, maestro, tts, youtube
+from . import assistente, design_modelos, design_repo, design_revisao, financas, maestro, tts, youtube
 
 
 settings.apply()
@@ -151,7 +151,9 @@ async def fronteira(request, call_next):
             and not path.startswith("/api/design-janela/")   # a chave do link é a autorização
             and not (path == "/api/tts/falar" and token == tts.TOKEN_FALAR)   # narração da tela Conteúdo
             and path not in ("/api/youtube/retorno", "/api/google/retorno")   # volta do login do Google; o `state` autoriza
-            and token not in (config.API_TOKEN, mobile.token())):
+            and token not in (config.API_TOKEN, mobile.token())
+            # o IPorte (app de finanças) só alcança o proxy de IA dele: nada de shell, arquivos ou agentes
+            and not (path.startswith("/api/iporte/v1/") and financas.token_ok(token or ""))):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
 
@@ -514,7 +516,9 @@ async def get_activity():
             # Conteúdo (E18): com automação marcada o Electron segura o sono do PC — dormindo às 3h, nada roda
             "acordado": conteudo_agenda.acordado(),
             # assistente de voz: o botão do microfone (PC e bandeja) e a conversa que um comando falado abriu
-            "voz": assistente.resumo()}
+            "voz": assistente.resumo(),
+            # tela Finanças: o IPorte usou a IA do PC (classificou ou analisou) -> recarrega os dados
+            "iporte": financas.USO["t"]}
 
 
 # ------------------------------------------------------------------ board de issues (E15)
@@ -4378,6 +4382,139 @@ def approve(run_id: str, body: ApproveBody):
     if not _get_run(run_id).resolve(body.call_id, decision):
         raise HTTPException(409, "Nenhuma aprovação pendente para esta chamada")
     return {"ok": True}
+
+
+# ------------------------------------------------------------------ finanças (IPorte)
+
+class FinancasConectarBody(BaseModel):
+    email: str
+    senha: str
+
+
+@app.get("/api/financas")
+def financas_estado():
+    return {**financas.estado(), "chat": financas.chat()}
+
+
+@app.post("/api/financas/conectar")
+async def financas_conectar(body: FinancasConectarBody):
+    try:
+        return await financas.conectar(body.email, body.senha)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/financas/desconectar")
+def financas_desconectar():
+    return financas.desconectar()
+
+
+@app.get("/api/financas/dados")
+async def financas_dados():
+    try:
+        d = await financas.dados()
+        return {**financas.agregados(d), **financas.cadastro(d)}
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+# Lançamentos feitos no PC: gravam no Supabase do IPorte (o celular puxa no próximo sync)
+_FIN_ESCRITA = {"transacao": financas.nova_transacao, "conta": financas.nova_conta,
+                "investimento": financas.novo_investimento, "movimento": financas.movimento_investimento}
+
+
+@app.post("/api/financas/novo/{tipo}")
+async def financas_gravar(tipo: str, body: dict):
+    if tipo not in _FIN_ESCRITA:
+        raise HTTPException(404, "tipo desconhecido")
+    try:
+        return await _FIN_ESCRITA[tipo](body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/financas/transacao/{tid}")
+async def financas_apagar(tid: str):
+    try:
+        return await financas.apagar_transacao(tid)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/financas/revisao/{lid}")
+async def financas_revisao(lid: str, body: dict):
+    try:
+        return await financas.revisar_notificacao(lid, str(body.get("acao") or ""))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/financas/chat")
+def financas_limpar_chat():
+    financas.limpar_chat()
+    return {"ok": True}
+
+
+@app.put("/api/financas/modelo")
+def financas_modelo(body: dict):
+    try:
+        financas.modelo({"provider": str(body.get("provider") or ""), "model": str(body.get("model") or "")})
+        return financas.estado()
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/financas/analise")
+async def financas_analise(body: dict):
+    async def stream():
+        try:
+            async for pedaco in financas.analise(str(body.get("tipo") or ""), str(body.get("pergunta") or "")):
+                yield f"data: {json.dumps({'texto': pedaco}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'fim': True})}\n\n"
+        except Exception as e:   # ToolError ou o provedor caindo: a tela mostra, o stream não fica pendurado
+            yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/iporte/pareamento")
+def iporte_pareamento():
+    return financas.pareamento()
+
+
+@app.post("/api/iporte/rotate")
+def iporte_rotate():
+    financas.rotate()
+    return financas.pareamento()
+
+
+@app.get("/api/iporte/v1/ping")
+def iporte_ping():
+    try:
+        m = financas.modelo()
+    except ToolError:
+        m = None
+    return {"ok": True, "pronto": bool(m), "modelo": m and m["model"]}
+
+
+@app.post("/api/iporte/v1/hello")
+def iporte_hello(body: dict):
+    try:
+        return financas.hello(body.get("supabase_url", ""), body.get("anon_key", ""), body.get("email", ""),
+                              body.get("dispositivo", ""))
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/iporte/v1/chat/completions")
+async def iporte_chat(body: dict):
+    try:
+        return await financas.completar(body)
+    except ToolError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:   # provedor fora: o IPorte cai para a próxima origem de IA
+        raise HTTPException(502, f"Modelo indisponível: {e}")
 
 
 @app.get("/api/mobile")

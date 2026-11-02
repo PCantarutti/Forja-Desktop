@@ -36,6 +36,7 @@ import ModeloCarregado from "./components/ModeloCarregado";
 import { LogoMark } from "./components/Logo";
 import { lerAparencia } from "./aparencia";
 import AssistenteView from "./components/AssistenteView";
+import FinancasView from "./components/FinancasView";
 import {
   BotaoVoz,
   ModeWarning,
@@ -1638,6 +1639,8 @@ export default function App() {
   // Agente e Maestro agem numa pasta de trabalho: os dois têm seletor de pasta, modos de permissão,
   // aviso de modo e Shift+Tab. Uma condição só, para os dois não divergirem de novo.
   const agentica = section === "agent" || section === "maestro";
+  // páginas sem lista de conversas nem chat
+  const semLista = section === "assistente" || section === "financas";
   const semPasta = agentica && currentId === null && !pendingWs;
   // A conversa desenhada como no chat. Função de uma lista de mensagens, e não bloco fixo, porque o
   // cockpit do Maestro desenha a do Worker com ela também: o mesmo "Raciocinou ›", os mesmos blocos
@@ -2370,8 +2373,8 @@ export default function App() {
           </button>
         </>}
       />
-      {!sidebarHidden && section !== "assistente" && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : abrindoLista ? "lista-abre" : ""}`}>{lista}</div>}
-      {sidebarHidden && section !== "assistente" && espiando !== "fora" && (
+      {!sidebarHidden && !semLista && <div className={`flex shrink-0 ${fechandoLista ? "lista-fecha" : abrindoLista ? "lista-abre" : ""}`}>{lista}</div>}
+      {sidebarHidden && !semLista && espiando !== "fora" && (
         // A lista por cima do conteúdo, sem empurrar: aparece no hover do botão e fica enquanto o mouse
         // estiver no botão ou nela.
         <div
@@ -2411,7 +2414,7 @@ export default function App() {
           {/* Esquerda: título, pasta e atalhos; direita: botões do painel (tudo numa faixa só, como no Claude Desktop). */}
           <div className={`flex min-w-0 items-center gap-2 overflow-hidden ${sidebarHidden ? "pl-9" : ""}`}>
           <span className="min-w-12 truncate text-sm font-medium text-fg" title={conv?.title}>
-            {section === "assistente" ? "F.O.R.J.A" : conv?.title ?? "Nova conversa"}
+            {section === "assistente" ? "F.O.R.J.A" : section === "financas" ? "Finanças" : conv?.title ?? "Nova conversa"}
           </span>
           {agentica && (
           <button
@@ -2614,6 +2617,8 @@ export default function App() {
             onError={setError}
             onConversationChanged={refreshConversations}
           />
+        ) : section === "financas" ? (
+          <FinancasView carimbo={activity.iporte} onError={setError} />
         ) : section === "assistente" ? (
           <AssistenteView onError={setError} onAbrirConversa={(id, kind) => irParaConversa(id, kind as Section)} />
         ) : section === "tts" ? (
@@ -2652,7 +2657,7 @@ export default function App() {
       {/* Mostrar/esconder a lista: um botão só, fixo à direita do logo e na altura dele. Com a lista
           aberta cai no começo do cabeçalho dela; fechada, no começo do cabeçalho da conversa. Fica por último
           no DOM: no Electron a região de arrastar que vem depois engole o no-drag de quem veio antes. */}
-      {section !== "assistente" && <button
+      {!semLista && <button
         onClick={alternaLista}
         title={sidebarHidden ? "Mostrar conversas" : "Esconder conversas"}
         aria-pressed={!sidebarHidden}

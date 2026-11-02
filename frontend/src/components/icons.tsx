@@ -65,6 +65,7 @@ export const Code = base(<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 5l-4 14" />);
 // larguras do canvas da tela Design
 export const Monitor = base(<><rect x="3" y="4" width="18" height="12" rx="1.5" /><path d="M9 20h6M12 16v4" /></>);
 export const Tablet = base(<><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M11 18h2" /></>);
+export const Carteira = base(<><path d="M4 7a2 2 0 0 1 2-2h11v4" /><path d="M4 7v10a2 2 0 0 0 2 2h13a1 1 0 0 0 1-1V10a1 1 0 0 0-1-1H6a2 2 0 0 1-2-2z" /><circle cx="16" cy="14" r="1.2" fill="currentColor" /></>);
 export const Celular = base(<><rect x="7" y="3" width="10" height="18" rx="2" /><path d="M11 18h2" /></>);
 export const LadoALado = base(<><rect x="2" y="6" width="9" height="10" rx="1" /><rect x="13" y="5" width="5" height="12" rx="1" /><rect x="20" y="8" width="2" height="7" rx=".5" /></>);
 export const Camadas = base(<><path d="m12 3 9 5-9 5-9-5z" /><path d="m3 13 9 5 9-5" /></>);   // painel Camadas do Design

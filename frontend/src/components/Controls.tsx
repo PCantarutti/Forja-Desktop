@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import type { Activity } from "../types";
 import CartaoEstado from "./CartaoEstado";
-import { Balanca, Bubble, Camera, Check, ChevronDown, Code, Film, Image, Livro, Mic, MicOff, Onda, Prancheta, Search, Split } from "./icons";
+import { Balanca, Bubble, Camera, Carteira, Check, ChevronDown, Code, Film, Image, Livro, Mic, MicOff, Onda, Prancheta, Search, Split } from "./icons";
 
 export type Permission = "auto" | "manual" | "edits" | "plan" | "bypass";
 export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
 // "imagem" é o mesmo literal do `kind` da conversa no backend: a barra lateral interpola
 // a seção direto na query de /conversations.
 // "assistente" é uma página (configurações do assistente de voz), não um tipo de conversa: não tem lista nem chat.
-export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudos" | "conteudo" | "tts" | "assistente";
+export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudos" | "conteudo" | "tts" | "assistente" | "financas";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string }[] = [
   { id: "auto", label: "Automático", hint: "O Forja decide: edições passam, o resto pergunta" },
@@ -230,6 +230,7 @@ export const SECOES: { id: Section; label: string; title: string; icon: React.Re
   { id: "conteudo", label: "Conteúdo", title: "Conteúdo (roteiros e vídeos para o canal)", icon: <Camera className="size-[18px]" /> },
   { id: "tts", label: "Voz", title: "Voz (texto para fala)", icon: <Onda className="size-[18px]" /> },
   { id: "assistente", label: "F.O.R.J.A", title: "Assistente de voz F.O.R.J.A", icon: <Mic className="size-[18px]" /> },
+  { id: "financas", label: "Finanças", title: "Finanças (IPorte + IA)", icon: <Carteira className="size-[18px]" /> },
 ];
 
 /** Trilho de seções à esquerda (60 px), sempre visível. Com a lista de conversas escondida, mostra o

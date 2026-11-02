@@ -33,6 +33,7 @@ export type Activity = {
   local_alias?: string;  // qual: o seletor com "IA local" segue o que está carregado
   lista?: string;  // carimbo das conversas: mudou (outro aparelho), a barra lateral recarrega
   board?: string;  // carimbo do board de issues: card mudou ou varredura começou/terminou
+  iporte?: number;  // último uso da IA do PC pelo IPorte (tela Finanças recarrega)
   autonomo?: number[];  // conversas com trabalho autônomo ligado (PC e celular acompanham)
   // assistente de voz F.O.R.J.A: o botão do microfone e a conversa que o último comando falado abriu (`n` sobe a cada uma)
   voz?: { ligado: boolean; instalado: boolean; estado: string; ultimo: { conv: number; kind: string; n: number } | null;
