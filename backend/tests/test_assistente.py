@@ -860,3 +860,39 @@ def test_vozes_do_instalador_entram_so_as_que_faltam(tmp_path, monkeypatch):
     assert (piper / "arthur.onnx").read_text() == "retreinada"
     assert assistente.instalar_vozes_empacotadas(str(origem)) == []
     assert assistente.instalar_vozes_empacotadas(str(tmp_path / "nada")) == []
+
+
+def test_detector_sem_voz_da_certeza_zero():
+    # quarto silencioso: o chiado do microfone levava o classificador a 96-100% de "Forja"
+    import numpy as np
+    from app.assistente_ouvido import Detector
+
+    class Feats:
+        def __call__(self, x): pass
+        def get_features(self, n): return np.zeros((n, 1))
+    d = Detector.__new__(Detector)
+    d.af, d.quadros, d.limiar, d.buf = Feats(), 16, 0.9, np.zeros(0, np.int16)
+    d.anterior = d.ultimo = d.voz_ate = 0.0
+    d.prob = lambda x: 0.99
+    bloco = np.zeros(1280, np.float32)
+    assert not d.alimenta(bloco, voz=False) and d.anterior == 0.0
+    assert d.alimenta(bloco, voz=True) is False  # a 1ª janela com voz só soma na média
+    assert d.alimenta(bloco, voz=True)
+
+
+def test_cascata_parece_nome():
+    from app.assistente_ouvido import parece_nome
+    for t in ("Forja.", "Força, que horas são", "ei porja", "Forge"):
+        assert parece_nome(t), t
+    for t in ("que horas são", "liga a televisão", "o jogo começou", ""):
+        assert not parece_nome(t), t
+
+
+def test_cascata_guarda_falso_com_teto(tmp_path, monkeypatch):
+    import numpy as np
+    from app import assistente_ouvido as o
+    monkeypatch.setattr(o, "MAX_FALSOS", 2)
+    for i in range(3):
+        (tmp_path / f"0000-{i}.wav").write_bytes(b"")  # os mais velhos
+    o.guarda_falso(str(tmp_path), np.zeros(1600, np.float32))
+    assert len(list(tmp_path.glob("*.wav"))) == 2 and not (tmp_path / "0000-0.wav").exists()

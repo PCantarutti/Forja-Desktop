@@ -15,7 +15,7 @@ type Estado = {
   imagem: string; video: string; pasta_projetos: string; favoritos: Favorito[];
   modelo: { provider: string; model: string } | null; ocioso_min: number; atalho: string; raciocinio: string;
   permitidos: { provider: string; model: string }[];
-  detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number; gravacoes_novas: number;
+  detector: "whisper" | "treinado" | "ambos"; sensibilidade: number; detector_treinado: boolean; treinando: string; minha_voz: number; gravacoes_novas: number; falsos_alarmes?: number;
   ganho: number; sensibilidade_voz: number; pausa_fim: number; idiomas_whisper: string[]; idiomas: { id: string; nome: string }[];
   metricas: { acerto: number; falsos: number; minha_voz_acerto: number | null; alarmes_fala_corrida: number; minutos_fala_corrida: number; vozes: number;
               minha_voz: number; quando: string } | null;
@@ -224,7 +224,7 @@ const CAPACIDADES: { titulo: string; exemplos: string[]; texto: string }[] = [
   { titulo: "Raciocínio do modelo", exemplos: ["desligado (rápido)", "baixo", "médio", "alto"],
     texto: "Em Modelo do assistente: quanto ele pensa antes de responder. Desligado é o mais rápido; ligado ajuda em conta e lógica, mas a fala demora. O pensamento nunca é falado." },
   { titulo: "Detector treinado de “Forja”", exemplos: ["Só Whisper", "Detector", "Detector + Whisper", "Gravar minha voz"],
-    texto: "Um modelo pequeno treinado só para o nome acende o círculo na hora e quase não gasta CPU. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele bem melhor (ouça e apague as ruins na lista). Gravação só conta depois de treinar de novo (a página avisa quando há gravação fora do treino); a barra de baixo mostra ao vivo a certeza de “Forja” e o traço, onde ele acende. “Detector + Whisper” acende rápido e não deixa o nome escapar." },
+    texto: "Um modelo pequeno treinado só para o nome acende o círculo na hora e quase não gasta CPU. Treina sozinho com vozes sintéticas; gravações da sua voz deixam ele bem melhor (ouça e apague as ruins na lista). Gravação só conta depois de treinar de novo (a página avisa quando há gravação fora do treino); a barra de baixo mostra ao vivo a certeza de “Forja” e o traço, onde ele acende. “Detector + Whisper” acende rápido e não deixa o nome escapar. Funciona em cascata: quando o detector acende, o Whisper confere o 1,5 s em volta e, se ouviu fala sem o nome, ignora. Esses alarmes falsos ficam guardados no PC e entram como exemplos negativos no próximo “Treinar de novo”: ele aprende com os erros da sua casa." },
   { titulo: "Tarefas: faça qualquer coisa", exemplos: ["Forja, reproduza um vídeo aleatório das minhas inscrições do YouTube", "Forja, pesquise placas de vídeo de até 3800 reais e abra os links no meu navegador", "Forja, organiza minha pasta de downloads por tipo de arquivo", "Forja, vê por que meu disco C tá tão cheio", "Forja, mantém essa tarefa", "Sim, ficou certo", "Não, era das curtidas", "Forja, tá errado"],
     texto: "Pedido para fazer algo vira trabalho do agente do Forja, numa conversa temporária “🎙 …” do modo Agente, com o modelo do assistente. A tela não pula para ela: na conversa dele aparece um cartão com o que o agente está fazendo agora (“Pensando…”, “Pesquisando na web”) e o botão Abrir. Ela é só o trabalho de fundo: se apaga sozinha 1 hora depois da última atividade, a menos que você clique em Manter nela ou diga “Forja, mantém essa tarefa”. Ele dá o próprio jeito: web, sua conta do YouTube (conectada em Conteúdo), arquivos, comandos, scripts que ele mesmo escreve, o navegador do Forja e a tela (print, clique, digitação; ver a tela pede modelo com visão). O que é para você ver abre no SEU navegador. Quando demora, avisa o que está fazendo; dúvida que muda o resultado ele pergunta em voz alta e você responde falando. Comando que muda algo pede seu “sim”; comprar, pagar, enviar mensagem e digitar senha ficam sempre com você. Aprende com receitas: antes de começar, procura a receita de um pedido parecido (“spotify”, “curtidas”…) e segue o caminho curto dela. Sem receita, resolve, confere e pergunta “Ficou certo?”: com o seu sim, guarda o caminho; com “não, era das curtidas”, tenta de novo com a sua correção (até 3 vezes). Pergunta (“quanto espaço livre eu tenho?”) não vira receita nem pergunta “Ficou certo?”. Receita aprovada que funcionou não pergunta; se não estava certo, “Forja, tá errado” (até 10 minutos depois) reabre e ele corrige a receita, guardando a versão anterior até você aprovar a nova. Ficam em Configurações › Memória › Receitas de tarefas do assistente (e na aba Dados do painel desta página), para ver, aprovar ou apagar. No fim, fala o que fez; “Forja, para o agente” interrompe." },
   { titulo: "Ajustes do microfone", exemplos: ["Ganho", "Sensibilidade da voz", "Pausa que encerra o pedido", "Nível do microfone"],
@@ -803,6 +803,11 @@ export default function AssistenteView(props: { onError: (e: string) => void; on
                                 .catch((er) => onError(er.message)).finally(() => setGravandoVoz(false)); }}>
                         {gravandoVoz ? "Diga “Forja” agora…" : `Gravar minha voz (${e.minha_voz})`}
                       </button>
+                      {(e.falsos_alarmes ?? 0) > 0 && (
+                        <span className="text-[11.5px] text-faint" title="Vezes em que o detector acendeu e o Whisper ouviu fala sem “Forja”. Entram como exemplos negativos ao treinar de novo.">
+                          {e.falsos_alarmes} {e.falsos_alarmes === 1 ? "alarme falso guardado" : "alarmes falsos guardados"} para o treino
+                        </span>
+                      )}
                     </div>
                   )}
                   {avisoGrav && <p className="text-[11.5px] text-warn">{avisoGrav}</p>}

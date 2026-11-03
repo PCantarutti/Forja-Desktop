@@ -55,6 +55,7 @@ OWW_URL = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/"
 OWW_ARQUIVOS = ["melspectrogram.onnx", "embedding_model.onnx"]
 PACOTES_DETECTOR = ["openwakeword", "scikit-learn"]
 MINHA_VOZ = PASTA / "minha_voz"
+FALSOS = PASTA / "falsos_alarmes"  # o que o Whisper recusou na cascata: negativos do próximo treino
 GRAVA = ("import sys,wave,sounddevice as sd;"
          "a=sd.rec(int(float(sys.argv[3])*16000),samplerate=16000,channels=1,dtype='int16',device=sys.argv[2] or None);"
          "sd.wait();w=wave.open(sys.argv[1],'wb');w.setnchannels(1);w.setsampwidth(2);w.setframerate(16000);"
@@ -438,6 +439,7 @@ def estado() -> dict:
             "rvc_instalado": rvc_instalado(), "rvc_instalando": rvc["id"] if rvc and rvc["status"] == "running" else "",
             "minha_voz": len(list(MINHA_VOZ.glob("*.wav"))) if MINHA_VOZ.is_dir() else 0,
             "gravacoes_novas": gravacoes_novas(),
+            "falsos_alarmes": len(list(FALSOS.glob("*.wav"))) if FALSOS.is_dir() else 0,
             "vozes_kokoro": vozes_kokoro(), "humores": [{"id": k, "nome": h["nome"]} for k, h in HUMORES.items()],
             "idiomas": [{"id": k, "nome": v} for k, v in IDIOMAS_WHISPER.items()],
             "lembretes": lembretes.lista(), "notas": _conhecimento().notas()[-30:], "documentos": _conhecimento().estado(),
@@ -643,7 +645,7 @@ def _treinar(job: dict) -> None:
                        **native.popen_kwargs())
         proc = subprocess.Popen([py, "-X", "utf8", "-s", str(Path(__file__).with_name("assistente_treino.py")),
                                  "--kokoro", str(MODELOS), "--oww", str(OWW), "--saida", str(DETECTOR),
-                                 "--ambiente", str(ambiente), "--minha-voz", str(MINHA_VOZ)],
+                                 "--ambiente", str(ambiente), "--minha-voz", str(MINHA_VOZ), "--falsos", str(FALSOS)],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
                                 errors="replace", cwd=str(PASTA), **native.popen_kwargs())
         fim, ultimas = "", []
@@ -808,7 +810,8 @@ def iniciar() -> None:
     if cfg["saida"]:
         argv += ["--saida", cfg["saida"]]
     if cfg["detector"] != "whisper" and DETECTOR.is_file():
-        argv += ["--detector", str(DETECTOR), "--oww", str(OWW), "--sensibilidade", str(cfg["sensibilidade"])]
+        argv += ["--detector", str(DETECTOR), "--oww", str(OWW), "--sensibilidade", str(cfg["sensibilidade"]),
+                 "--falsos", str(FALSOS)]
         if cfg["detector"] == "ambos":
             argv.append("--com-whisper")
     # o Whisper fica no runtime, não no perfil; sem symlink no Windows o hub reclama a cada subida (funciona igual)

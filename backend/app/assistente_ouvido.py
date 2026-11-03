@@ -40,6 +40,13 @@ MAX_TRECHO = SR * 15
 ATRASO_MAX = 12  # s: trecho que esperou mais que isto na fila do Whisper não vira pedido (a pessoa já seguiu)
 ESCUTA_S = 10  # depois de "escuta", quanto tempo espera a resposta
 INTERROMPE_MARGEM = 0.05  # "Forja" por cima da fala dele: um pouco mais de certeza (eco sozinho fica em ~0,04)
+# cascata (como os assistentes comerciais): o detector dispara um pouco mais fácil e o Whisper confere só o 1,5 s em
+# volta do disparo. O que o Whisper recusa vira negativo no próximo treino (pasta --falsos).
+# ponytail: folga fixa; calibrar pelo treino (limiar de recall, não de alarme) se ainda perder o nome
+CASCATA_FOLGA = 0.05
+JANELA_NOME = 50  # blocos (1,5 s) antes do disparo que o Whisper confere...
+DEPOIS_NOME = 20  # ...e 600 ms depois: com a folga ele dispara no meio do nome ("Ei Forja" saía "Eif")
+MAX_FALSOS = 300  # alarmes falsos guardados (os mais velhos saem)
 # ponytail: palavra de ativação por transcrição (Whisper em todo trecho de fala). Gasta CPU com TV ligada; modelo de
 # wake word treinado para "Forja" (openWakeWord) quando isso pesar.
 WAKE = re.compile(r"^\s*(?:(?:ei|oi|ok|ola|e ai|hey)\s+)?(?:forja|forjas|forje|forge|forjar|porja|forca|forj[ao])\b"
@@ -76,6 +83,25 @@ def diz(tipo: str, texto: str = "") -> None:
 def normaliza(texto: str) -> str:
     t = unicodedata.normalize("NFKD", texto.lower())
     return "".join(c for c in t if not unicodedata.combining(c))
+
+
+def parece_nome(texto: str) -> bool:
+    """Alguma palavra da transcrição lembra "Forja" ("Força", "Porja", "Forge" contam: o Whisper erra o nome). 0,7 e
+    não 0,6: com 0,6 "horas" e "porta" passavam."""
+    import difflib
+    return any(WAKE.match(p) or difflib.SequenceMatcher(None, p, "forja").ratio() >= 0.7 for p in _so_letras(texto).split())
+
+
+def guarda_falso(pasta: str, janela) -> None:
+    """O áudio de um alarme falso, para o treino aprender a recusar (fica só no PC, na pasta do assistente)."""
+    import numpy as np
+    d = Path(pasta)
+    d.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(d / f"{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time() * 1000) % 1000:03d}.wav"), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
+        w.writeframes((np.clip(janela, -1, 1) * 32767).astype(np.int16).tobytes())
+    for velho in sorted(d.glob("*.wav"))[:-MAX_FALSOS]:
+        velho.unlink(missing_ok=True)
 
 
 def sem_quase_nome(texto: str) -> str:
@@ -336,6 +362,7 @@ class Detector:
                                 embedding_model_path=str(oww / "embedding_model.onnx"), inference_framework="onnx")
         self.buf = np.zeros(0, np.int16)
         self.anterior, self.ultimo = 0.0, 0.0
+        self.voz_ate = 0.0  # até quando houve voz na janela que o classificador vê (quadros x 80 ms)
 
     def sensibiliza(self, sensibilidade: float) -> None:
         # sensibilidade 0..1 (0,5 = o limiar do treino): mais alta pega voz baixa/longe e erra mais
@@ -346,17 +373,21 @@ class Detector:
         h = np.maximum(0, ((x - self.media) / self.desvio) @ self.W1 + self.b1)
         return float(1 / (1 + np.exp(-(h @ self.W2 + self.b2)[0])))
 
-    def alimenta(self, bloco, margem: float = 0.0) -> bool:
+    def alimenta(self, bloco, margem: float = 0.0, voz: bool = True) -> bool:
         """Um bloco do microfone (float32). True quando "Forja" acabou de ser dito: a média de 2 janelas seguidas
         (160 ms) passa do limiar, no máximo uma vez a cada 2 s. Média e não "as duas acima": a probabilidade oscila em
-        volta do limiar na palavra, e uma janela de queda não pode perder o nome."""
+        volta do limiar na palavra, e uma janela de queda não pode perder o nome.
+        `voz`: o bloco passou do limiar de fala. Sem voz nenhuma na janela que ele vê, a certeza é 0: em quarto
+        silencioso o classificador chegava a 96-100% só com o chiado do microfone (o treino viu ruído mais alto)."""
         import numpy as np
+        if voz:
+            self.voz_ate = time.time() + self.quadros * 0.08
         self.buf = np.concatenate([self.buf, (np.clip(bloco, -1, 1) * 32767).astype(np.int16)])
         disparou = False
         while len(self.buf) >= 1280:
-            self.af(self.buf[:1280])
+            self.af(self.buf[:1280])  # as características andam sempre, com ou sem voz
             self.buf = self.buf[1280:]
-            p = self.prob(self.af.get_features(self.quadros).reshape(-1))
+            p = self.prob(self.af.get_features(self.quadros).reshape(-1)) if time.time() < self.voz_ate else 0.0
             if (p + self.anterior) / 2 >= min(0.99, self.limiar + margem) and time.time() - self.ultimo > 2:
                 self.ultimo, disparou = time.time(), True
             self.anterior = p
@@ -456,11 +487,11 @@ def proximo(falas: queue.Queue):
     if None in lote:
         return None
     agora = time.monotonic()
-    novos = [t for t in lote if agora - t[3] <= ATRASO_MAX] or lote[-1:]
+    novos = [t for t in lote if agora - t[-1] <= ATRASO_MAX] or lote[-1:]
     escolhido = next((t for t in reversed(novos) if t[1]), novos[-1])
     if len(lote) > 1:
         diz("LOG", f"fila do Whisper: {len(lote) - 1} trecho(s) velho(s) ou repetido(s) descartado(s)")
-    return escolhido[:3]
+    return escolhido[:-1]
 
 
 def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Detector | None = None,
@@ -478,6 +509,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
         detectou = 0.0  # quando o detector acendeu (pode ser um instante antes de o trecho abrir)
         por_cima, checou_por_cima = deque(maxlen=40), 0.0  # fala da pessoa por cima da resposta (1,2 s) e a última checagem
         nivel_t, pico, atrasou = 0.0, 0.0, 0.0
+        disparo = 0  # em que bloco do trecho o detector disparou (o recorte da cascata sai dali)
         while True:
             b = blocos.get()
             if AJUSTE["ganho"] != 1.0:
@@ -491,7 +523,7 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                     nivel_t = time.time()
                     diz("NIVEL", json.dumps({"rms": round(pico, 4), "limiar": round(limiar_voz(piso), 4),
                                              "prob": round(detector.anterior, 3) if detector else None,
-                                             "det_limiar": round(detector.limiar, 3) if detector else None}))
+                                             "det_limiar": round(detector.limiar - CASCATA_FOLGA, 3) if detector else None}))
                     pico = 0.0
             escuta.vigia()
             if boca.falando.is_set() or time.time() - boca.fim_fala < 0.4:
@@ -502,9 +534,9 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                 if not boca.falando.is_set() or boca.diz_o_nome():
                     por_cima.clear()
                     continue
-                interrompe = bool(detector and detector.alimenta(b, margem=INTERROMPE_MARGEM))
                 por_cima.append(b)
                 com_voz = [float(np.sqrt(np.mean(x * x))) > max(0.007, piso * 3) for x in por_cima]
+                interrompe = bool(detector and detector.alimenta(b, margem=INTERROMPE_MARGEM, voz=com_voz[-1]))
                 # confere quando a palavra termina (o "Forja" sozinho é curto) ou quando já há fala longa por cima
                 pronto = sum(com_voz) >= 25 or (sum(com_voz) >= 4 and not any(com_voz[-6:]))
                 if not interrompe and pronto and time.time() - checou_por_cima > 1.5:
@@ -518,13 +550,13 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                     escuta.abre()
                     diz("ESTADO", "escutando")
                 continue
-            if detector and detector.alimenta(b):
-                detectou = time.time()
+            rms = float(np.sqrt(np.mean(b * b)))
+            limiar = limiar_voz(piso)
+            if detector and detector.alimenta(b, margem=-CASCATA_FOLGA, voz=rms > limiar):
+                detectou, disparo = time.time(), len(atual) if atual is not None else 0
                 if atual is not None and not acordado:
                     acordado, motivo = True, "detector"
                     diz("ESTADO", "escutando")
-            rms = float(np.sqrt(np.mean(b * b)))
-            limiar = limiar_voz(piso)
             if atual is None:
                 piso = piso * 0.995 + rms * 0.005 if rms < limiar else piso  # o ruído de fundo, devagar
                 antes = (antes + [b])[-PRE_ROLL:]
@@ -544,8 +576,10 @@ def trechos(mic: str | None, boca: Boca, escuta: Escuta, verifica, detector: Det
                     diz("ESTADO", "escutando")
             fim = AJUSTE["fim"] if acordado else FIM_SILENCIO  # no meio de um pedido, a pausa pode ser maior
             if silencio >= fim or len(atual) * BLOCO >= MAX_TRECHO:
-                yield np.concatenate(atual), acordado, motivo
-                atual, antes, acima, acordado, motivo = None, [], 0, False, ""
+                recorte = atual[max(0, disparo - JANELA_NOME):disparo + DEPOIS_NOME]
+                janela = np.concatenate(recorte) if motivo == "detector" and recorte else None
+                yield np.concatenate(atual), acordado, motivo, janela
+                atual, antes, acima, acordado, motivo, disparo = None, [], 0, False, "", 0
 
 def audio_16k(arquivo: str):
     """WebM/opus da tela (ou WAV) em float32 mono 16 kHz pelo PyAV. O decode_audio do faster-whisper passa um
@@ -610,6 +644,7 @@ def main() -> int:
     p.add_argument("--detector", default="")  # .npz do detector treinado de "Forja" (vazio: Whisper em toda fala)
     p.add_argument("--oww", default="")       # pasta com melspectrogram.onnx e embedding_model.onnx
     p.add_argument("--sensibilidade", type=float, default=0.5)
+    p.add_argument("--falsos", default="")  # pasta onde guardar os alarmes falsos do detector (negativos do treino)
     p.add_argument("--com-whisper", action="store_true")  # detector + Whisper: o detector acende rápido, o Whisper não deixa passar
     p.add_argument("--transcrever", default="")  # ditado com o assistente desligado: transcreve o arquivo e sai
     p.add_argument("--rvc", default="")  # JSON {python, applio, config}: a voz treinada passa pelo RVC (assistente._rvc)
@@ -652,6 +687,17 @@ def main() -> int:
         segs, _ = stt.transcribe(inicio, language="pt", beam_size=1, initial_prompt="Forja.", vad_filter=False,
                                  condition_on_previous_text=False, without_timestamps=True)
         return acorda(" ".join(s.text for s in segs)) is not None
+
+    def confere_nome(janela) -> str:
+        """Segundo estágio da cascata: o 1,5 s do disparo tem "Forja"? "sim", "nao" (havia fala, sem o nome: alarme
+        falso certo) ou "vazio". Com o prompt "Forja.": sem ele o nome sozinho saía "Forte" e virava negativo do treino;
+        com ele, frase sem o nome continua saindo sem (testado com Kokoro em 2026-11-03)."""
+        segs, _ = stt.transcribe(janela, language="pt", beam_size=1, initial_prompt="Forja.", vad_filter=False,
+                                 condition_on_previous_text=False, without_timestamps=True)
+        texto = " ".join(s.text for s in segs).strip()
+        if ALUCINACAO.search(normaliza(texto)):
+            texto = ""
+        return "sim" if parece_nome(texto) else "nao" if _so_letras(texto) else "vazio"
 
     def transcreve(q: dict) -> None:
         try:
@@ -723,10 +769,20 @@ def main() -> int:
         falas.put(None)
     threading.Thread(target=captura, daemon=True).start()
     while (item := proximo(falas)) is not None:
-        audio, acordado, motivo = item
+        audio, acordado, motivo, janela = item
         if so_detector and not acordado:
             diz("ESTADO", "ouvindo")
             continue  # o detector não ouviu "Forja": nem gasta o Whisper (o motivo de ter o detector)
+        # "vazio" (o Whisper não ouviu nada) pode ser o nome dito baixo: segue como antes, só "nao" é recusado
+        if janela is not None and confere_nome(janela) == "nao":
+            diz("LOG", "alarme falso do detector: o Whisper ouviu fala sem o nome")
+            if a.falsos:
+                try:
+                    guarda_falso(a.falsos, janela)
+                except OSError as e:
+                    diz("LOG", f"não deu para guardar o alarme falso: {e}")
+            diz("ESTADO", "ouvindo")
+            continue
         diz("ESTADO", "entendendo" if acordado else "transcrevendo")
         t0 = time.perf_counter()
         texto = transcreve_fala(stt, audio)

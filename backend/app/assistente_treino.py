@@ -1,12 +1,13 @@
 """Treina o detector da palavra "Forja" (roda no venv do assistente, chamado por assistente.py).
 
     python assistente_treino.py --kokoro <pasta do Kokoro> --oww <pasta dos .onnx do openWakeWord> --saida forja.npz
-                                [--ambiente <wav do microfone>] [--minha-voz <pasta com wavs>]
+                                [--ambiente <wav do microfone>] [--minha-voz <pasta com wavs>] [--falsos <pasta com wavs>]
 
 Não precisa de ninguém falando: os exemplos positivos são o Kokoro dizendo "Forja" com todas as vozes dele (de vários
 idomas, lendo a fonética do português) em velocidades diferentes, com ruído e volume variados. Os negativos são palavras
 parecidas ("força", "fora", "forma"...), frases comuns, ruído e o som ambiente do microfone de quem usa. Gravações da
-própria voz (--minha-voz) entram como positivos extras, com peso.
+própria voz (--minha-voz) entram como positivos extras, com peso; os alarmes falsos que o Whisper recusou ao vivo
+(--falsos, a cascata do ouvido) entram como negativos extras, com peso: o detector aprende com os erros da casa.
 
 As características são as do openWakeWord (melspectrograma + embedding pré-treinados, 96 números a cada 80 ms); o
 classificador é uma MLP pequena sobre as últimas 16 janelas (~1,3 s). Saída: um .npz com os pesos, a normalização e o
@@ -123,6 +124,7 @@ def main() -> int:
     ap.add_argument("--saida", required=True)
     ap.add_argument("--ambiente", default="")
     ap.add_argument("--minha-voz", default="")
+    ap.add_argument("--falsos", default="")
     ap.add_argument("--semente", type=int, default=7)
     a = ap.parse_args()
     rng = random.Random(a.semente)
@@ -178,6 +180,12 @@ def main() -> int:
                     depois = rng.choice(frases_fala) if (i % 4 == 3 and frases_fala) else None
                     minha.append(monta(v, ruido, rng, fim=rng.uniform(0.7, 0.85) if depois is not None else None,
                                        depois=depois))
+        falsos = []  # alarmes falsos de verdade, do microfone da casa: os negativos que mais valem
+        if a.falsos and Path(a.falsos).is_dir():
+            for p in sorted(Path(a.falsos).glob("*.wav")):
+                w = ler_wav(p)
+                for _ in range(4):  # volume e posição variados; o ruído da sala já vem junto
+                    falsos.append(monta(w, Ruidos(None, rng), rng, fim=rng.uniform(0.9, 1.0)))
         diz("FASE", "extraindo características (openWakeWord)")
         diz("PROGRESSO", "0.72")
         oww = Path(a.oww)
@@ -208,13 +216,13 @@ def main() -> int:
         teste_corrida = corrida(frases_teste)
         Xc = feats(varre(teste_corrida, 1280))  # passo de 80 ms, como o ao vivo
         minutos = len(teste_corrida) / SR / 60
-        Xp, Xn, Xm = feats(pos), np.concatenate([feats(neg), Xd]), feats(minha)
+        Xp, Xn, Xm, Xf = feats(pos), np.concatenate([feats(neg), Xd]), feats(minha), feats(falsos)
         Xpv, Xnv = feats(pos_v), feats(neg_v)
         diz("FASE", "treinando o detector")
         diz("PROGRESSO", "0.85")
-        X = np.concatenate([Xp, Xm, Xn])
-        y = np.concatenate([np.ones(len(Xp) + len(Xm)), np.zeros(len(Xn))])
-        peso = np.concatenate([np.ones(len(Xp)), np.full(len(Xm), 3.0), np.ones(len(Xn))])
+        X = np.concatenate([Xp, Xm, Xn, Xf])
+        y = np.concatenate([np.ones(len(Xp) + len(Xm)), np.zeros(len(Xn) + len(Xf))])
+        peso = np.concatenate([np.ones(len(Xp)), np.full(len(Xm), 3.0), np.ones(len(Xn)), np.full(len(Xf), 3.0)])
         media, desvio = X.mean(0), X.std(0) + 1e-6
         clf = mlp_treina((X - media) / desvio, y, peso, a.semente)
 
@@ -254,7 +262,7 @@ def main() -> int:
         diz("PROGRESSO", "1")
         diz("OK", json.dumps({"acerto": round(acerto, 3), "falsos": round(falsos, 4), "limiar": round(limiar, 3),
                               "alarmes_fala_corrida": alarmes, "minutos_fala_corrida": round(minutos, 1),
-                              "positivos": len(Xp) + len(Xm), "negativos": len(Xn), "vozes": total,
+                              "positivos": len(Xp) + len(Xm), "negativos": len(Xn), "falsos_alarmes": len(Xf) // 4, "vozes": total,
                               "minha_voz": len(minha_limpa), "minha_voz_detalhe": minha_detalhe,
                               "minha_voz_acerto": round(float(np.mean(list(minha_detalhe.values()))), 3) if minha_detalhe else None}))
         return 0
