@@ -864,7 +864,7 @@ def test_vozes_do_instalador_entram_so_as_que_faltam(tmp_path, monkeypatch):
 
 def test_detector_sem_voz_da_certeza_zero():
     # quarto silencioso: o chiado do microfone levava o classificador a 96-100% de "Forja"
-    import numpy as np
+    np = pytest.importorskip("numpy")  # só no venv do assistente, não no do backend
     from app.assistente_ouvido import Detector
 
     class Feats:
@@ -889,7 +889,7 @@ def test_cascata_parece_nome():
 
 
 def test_cascata_guarda_falso_com_teto(tmp_path, monkeypatch):
-    import numpy as np
+    np = pytest.importorskip("numpy")  # só no venv do assistente, não no do backend
     from app import assistente_ouvido as o
     monkeypatch.setattr(o, "MAX_FALSOS", 2)
     for i in range(3):
