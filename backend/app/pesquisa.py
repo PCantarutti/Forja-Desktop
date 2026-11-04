@@ -397,8 +397,9 @@ def _escolher(run: dict, resultados: list[dict], quantas: int) -> list[dict]:
     return escolhidas
 
 
-async def _extrair(run: dict, fonte: dict, spec: dict) -> None:
-    """Lê uma página e resume contra a pergunta. Nunca levanta: a falha é o status da fonte."""
+async def _extrair(run: dict, fonte: dict, spec: dict, reserva: dict | None = None) -> None:
+    """Lê uma página e resume contra a pergunta. Nunca levanta: a falha é o status da fonte.
+    reserva: o escritor. Extrator que falha (nuvem sem crédito, chave vencida) não pode zerar a pesquisa."""
     if _acabou(run):
         return
     fonte["status"] = "lendo"
@@ -416,15 +417,22 @@ async def _extrair(run: dict, fonte: dict, spec: dict) -> None:
     if _acabou(run):
         fonte["status"] = "fila"
         return
+    user = (f"Pergunta: {run['pergunta']}\nURL: {fonte['url']}\nTítulo: {fonte['titulo']}\n\n"
+            f"{web.UNTRUSTED}{pagina['text']}")
     try:
-        texto = await _perguntar(
-            spec, EXTRATOR_PROMPT,
-            f"Pergunta: {run['pergunta']}\nURL: {fonte['url']}\nTítulo: {fonte['titulo']}\n\n"
-            f"{web.UNTRUSTED}{pagina['text']}", run)
+        texto = await _perguntar(spec, EXTRATOR_PROMPT, user, run)
     except Exception as e:
-        fonte.update(status="erro", erro=f"Falha ao resumir: {e}"[:200])
-        _persistir(run)
-        return
+        if not reserva or reserva == spec or _acabou(run):
+            fonte.update(status="erro", erro=f"Falha ao resumir: {e}"[:200])
+            _persistir(run)
+            return
+        run["aviso"] = run["aviso"] or f"O extrator {spec['model']} falhou ({str(e)[:120]}); li as páginas com {reserva['model']}."
+        try:
+            texto = await _perguntar(reserva, EXTRATOR_PROMPT, user, run)
+        except Exception as e2:
+            fonte.update(status="erro", erro=f"Falha ao resumir: {e2}"[:200])
+            _persistir(run)
+            return
     campos = _campos(texto, run["porte"]["resumo"])
     if not campos["relevante"] or _lixo(campos["resumo"]):
         fonte["status"] = "vazia"
@@ -617,7 +625,7 @@ async def _rodar(run: dict, extrator: dict, escritor: dict, rodadas: int, fontes
                     if _acabou(run):
                         return
                     async with extrai:
-                        await _extrair(run, fonte, extrator)
+                        await _extrair(run, fonte, extrator, escritor)
 
             await asyncio.gather(*(uma(f) for f in novas))
             run["stats"].update(fontes=len(run["fontes"]),

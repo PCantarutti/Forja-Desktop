@@ -1051,7 +1051,7 @@ async def _pesquisar(run: dict, extrator: dict, escritor: dict, itens: list[dict
             if pesquisa._acabou(run):
                 return
             async with extrai:
-                await pesquisa._extrair(run, fonte, extrator)
+                await pesquisa._extrair(run, fonte, extrator, escritor)
 
     for n in range(1, porte["rodadas"] + 1):
         if pesquisa._acabou(run) or not consultas:

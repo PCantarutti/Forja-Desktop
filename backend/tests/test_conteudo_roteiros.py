@@ -305,3 +305,31 @@ def test_limite_de_roteiros_apaga_os_antigos_na_ordem_certa():
     assert velha not in restam and restam[meio] == ["aprovado"]   # rodada vazia some; aprovado nunca sai
     with pytest.raises(ToolError):
         conteudo.salvar_pastas({"roteiros_max": "muitos"})
+    # rodada que deu erro (só o aviso, sem roteiro) conta no limite e sai antes de qualquer roteiro
+    erro = R._save(cid, role="assistant", name=R.NOME, content="", status="erro",
+                   meta={R.CHAVE: {"roteiros": [], "aviso": "Nenhuma página lida tinha novidade sobre o tema."}}).id
+    rodada("novo")                                    # a mais recente agora; 5 roteiros + 1 erro = 6 > 4
+    assert R.podar(cid) == 2                          # sai o erro primeiro, depois o descartado
+    restam = {r["id"]: [x["status"] for x in r["roteiros"]] for r in R.listar(cid)}
+    assert erro not in restam and restam[nova] == ["novo", "novo"] and restam[meio] == ["aprovado"]
+
+
+def test_extrator_que_falha_cai_no_escritor(monkeypatch):
+    """Slot 'rapido' na nuvem sem crédito (HTTP 402) zerava toda rodada: a página é lida de novo pelo escritor."""
+    from app import pesquisa
+
+    async def perguntar(spec, system, user, run, *a, **k):
+        if spec["model"] == "nuvem":
+            raise ToolError("ollama-cloud respondeu HTTP 402")
+        return "RELEVANTE: sim\nRESUMO: A empresa X lançou o produto Y em 3 de novembro de 2026, por 499 reais, em 12 países."
+
+    monkeypatch.setattr(pesquisa, "_perguntar", perguntar)
+    monkeypatch.setattr(pesquisa.web, "ler", lambda url, n: {"title": "T", "text": "texto"})
+    monkeypatch.setattr(pesquisa, "_persistir", lambda run: None)
+    run = {"cancelar": False, "t0": 0, "teto": 1e12, "pergunta": "p", "aviso": "", "porte": {"pagina": 1000, "resumo": 500}}
+    fonte = {"url": "https://x.com/a", "titulo": "", "status": "fila"}
+    asyncio.run(pesquisa._extrair(run, fonte, {"provider": "c", "model": "nuvem"}, {"provider": "l", "model": "local"}))
+    assert fonte["status"] == "util" and "nuvem" in run["aviso"]
+    fonte2 = {"url": "https://x.com/b", "titulo": "", "status": "fila"}
+    asyncio.run(pesquisa._extrair(run, fonte2, {"provider": "c", "model": "nuvem"}))
+    assert fonte2["status"] == "erro"                 # sem reserva, como antes

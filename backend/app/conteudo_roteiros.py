@@ -332,7 +332,7 @@ async def _rodar(run: dict, spec: dict, extrator: dict, escritor: dict) -> None:
             async def uma(fonte: dict) -> None:
                 async with limite:
                     async with extrai:
-                        await pesquisa._extrair(run, fonte, extrator)
+                        await pesquisa._extrair(run, fonte, extrator, escritor)
 
             await asyncio.gather(*(uma(f) for f in novas))
             run["stats"].update(fontes=len(run["fontes"]), rodadas=n,
@@ -611,7 +611,7 @@ def _roteiros_da_conversa(s, conv_id: int) -> list[db.Message]:
 
 
 # Ordem de quem sai primeiro quando passa do limite. Aprovado nunca sai: está na fila da produção.
-ORDEM_PODA = {"descartado": 0, "novo": 1, "produzido": 2}
+ORDEM_PODA = {"vazia": -1, "descartado": 0, "novo": 1, "produzido": 2}
 
 
 def podar(conv_id: int) -> int:
@@ -624,7 +624,8 @@ def podar(conv_id: int) -> int:
     with db.session() as s:
         ms = sorted(_roteiros_da_conversa(s, conv_id), key=lambda m: m.id)
         intocadas = {m.id for m in ms if m.status in ("running", "aguardando") or m.id in _RUNS} | ({ms[-1].id} if ms else set())
-        todos = [(m, x) for m in ms for x in ((m.meta or {}).get(CHAVE) or {}).get("roteiros") or []]
+        # Rodada que terminou sem roteiro (o aviso de erro) conta como um item e sai antes de tudo.
+        todos = [(m, x) for m in ms for x in ((m.meta or {}).get(CHAVE) or {}).get("roteiros") or [{"id": None, "status": "vazia"}]]
         excesso = len(todos) - limite
         if excesso <= 0:
             return 0
