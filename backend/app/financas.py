@@ -613,6 +613,83 @@ def _conteudo(c) -> str | list[dict]:
     return partes
 
 
+async def progresso() -> dict:
+    """Progresso do modelo local para a tela do IPorte (o proxy não faz streaming). `etapa`:
+    "carregando" (subindo o GGUF, % estimada pelo Forja), "lendo" (o llama-server processando a entrada —
+    com imagem é a parte longa; % = tokens lidos / total) ou "escrevendo" (gerando; sem %, só os tokens já
+    saídos: o tamanho da resposta não se sabe antes). Nada rodando no PC (ou modelo de nuvem): etapa None.
+    ponytail: um pedido por vez no llama-server; outro uso do Forja ao mesmo tempo aparece aqui também."""
+    from . import config, localai
+    st = localai.status()
+    if (carga := st.get("loading")) and carga.get("percent") is not None:
+        return {"etapa": "carregando", "percent": int(carga["percent"]), "modelo": carga.get("name")}
+    if not st.get("running"):
+        return {"etapa": None}
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2) as c:
+            slots = (await c.get(f"http://127.0.0.1:{config.LOCAL_PORT}/slots")).json()
+    except Exception:
+        return {"etapa": None}
+    s = next((x for x in slots if isinstance(x, dict) and x.get("is_processing")), None)
+    if not s:
+        return {"etapa": None}
+    saidos = int(((s.get("next_token") or [{}])[0] or {}).get("n_decoded") or 0)
+    if saidos:
+        return {"etapa": "escrevendo", "tokens": saidos}
+    # Lendo a entrada. Com imagem, o /slots não conta os tokens enquanto o projetor (mmproj) processa: a % vem
+    # do log do llama-server ("task N | prompt processing, … progress = 0.77"), da tarefa que está rodando.
+    total, lidos = int(s.get("n_prompt_tokens") or 0), int(s.get("n_prompt_tokens_processed") or 0)
+    lidos += int(s.get("n_prompt_tokens_cache") or 0)   # o que veio do cache já está lido
+    pct = _progresso_no_log(s.get("id_task"))
+    if pct is None and total and lidos:
+        pct = lidos / total
+    return {"etapa": "lendo", "percent": min(99, int((pct or 0) * 100)), "tokens": total or None}
+
+
+_PROGRESSO_LOG = re.compile(r"task (\d+) \| prompt processing.*?progress = ([0-9.]+)")
+
+
+def _progresso_no_log(tarefa) -> float | None:
+    """Última `progress = x` do log do llama-server para esta tarefa (lê só o fim do arquivo)."""
+    from . import localai
+    try:
+        with open(localai.LOG_FILE, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 16_384))
+            fim = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    achados = [float(p) for t, p in _PROGRESSO_LOG.findall(fim) if str(t) == str(tarefa)]
+    return achados[-1] if achados else None
+
+
+def _um_system(msgs: list[dict], extra: str = "") -> list[dict]:
+    """Um system só, no começo: os templates do Qwen3.x recusam um segundo ("System message must be at the
+    beginning") — e o IPorte já manda o dele, então o aviso de JSON entra no mesmo texto."""
+    textos = [extra] if extra else []
+    resto = []
+    for m in msgs:
+        if m["role"] == "system":
+            c = m["content"]
+            textos.append(c if isinstance(c, str) else "\n".join(p["text"] for p in c if p["type"] == "text"))
+        else:
+            resto.append(m)
+    return ([{"role": "system", "content": "\n\n".join(t for t in textos if t)}] if textos else []) + resto
+
+
+def _modelo_pedido(nome) -> dict | None:
+    """`model` do pedido no formato "provider::model" (a lista de fallback do celular). Inválido → None (usa o
+    da tela Finanças). Local só de GGUF das pastas do painel: o `ensure` recusa caminho fora delas."""
+    from . import config
+    if not isinstance(nome, str) or "::" not in nome:
+        return None
+    provider, _, model = nome.partition("::")
+    if not model or (provider != "local" and provider not in config.PROVIDERS):
+        return None
+    return {"provider": provider, "model": model}
+
+
 async def completar(corpo: dict) -> dict:
     """Proxy compatível com OpenAI para o IPorte (sem streaming e sem ferramentas). O modelo é o da tela
     Finanças, que o celular também troca (ver `modelos`/`escolher`/`carregar`). Aceita imagem (print da fatura)
@@ -630,11 +707,14 @@ async def completar(corpo: dict) -> dict:
     if texto_total > 64_000 or imagens > MAX_IMAGENS:
         raise ToolError(f"messages inválido (até 64 KB de texto e {MAX_IMAGENS} imagens)")
     quer_json = (corpo.get("response_format") or {}).get("type") == "json_object"
-    if quer_json:
-        limpas.insert(0, {"role": "system", "content": "Responda APENAS com um objeto JSON válido, sem texto fora dele."})
-    spec = modelo()
+    limpas = _um_system(limpas, "Responda APENAS com um objeto JSON válido, sem texto fora dele." if quer_json else "")
+    spec = _modelo_pedido(corpo.get("model")) or modelo()
     if imagens and "vision" not in (await llm.capabilities(spec["provider"], spec["model"]) or set()):
         raise ToolError(f"SEM_VISAO: o modelo {spec['model']} não lê imagem")
+    # Modelo local só sobe quando o IPorte precisa (escolher no celular não carrega nada).
+    from . import modelctl
+    async for _ in modelctl.ensure(spec):
+        pass
     USO["t"] = time.time()
     texto = ""
     async for ev, val in llm.chat_stream(spec["provider"], spec["model"], limpas, None, 16384, think=False,

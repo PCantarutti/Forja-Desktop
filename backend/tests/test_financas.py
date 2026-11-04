@@ -405,3 +405,64 @@ def test_proxy_passa_imagem_so_para_modelo_com_visao(monkeypatch):
     with pytest.raises(financas.ToolError):   # só data:image/, nada de URL externa
         asyncio.run(financas.completar({"messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "http://x/y.png"}}]}]}))
+
+
+def test_proxy_um_system_so_e_modelo_do_pedido(monkeypatch):
+    # Qwen3.6: "System message must be at the beginning" com o system do JSON + o do IPorte
+    from app import llm, config
+    vistos = {}
+
+    async def falso(provider, model, msgs, tools, num_ctx, **kw):
+        vistos.update(provider=provider, model=model, msgs=msgs)
+        yield "content", "{}"
+
+    monkeypatch.setattr(llm, "chat_stream", falso)
+    monkeypatch.setattr(financas, "modelo", lambda: {"provider": "p", "model": "padrao"})
+    prov = next(iter(config.PROVIDERS))
+    asyncio.run(financas.completar({
+        "model": f"{prov}::outro",
+        "response_format": {"type": "json_object"},
+        "messages": [{"role": "system", "content": "regras"}, {"role": "user", "content": "oi"}]}))
+    assert [m["role"] for m in vistos["msgs"]] == ["system", "user"]
+    assert "JSON" in vistos["msgs"][0]["content"] and "regras" in vistos["msgs"][0]["content"]
+    assert (vistos["provider"], vistos["model"]) == (prov, "outro")
+    asyncio.run(financas.completar({"model": "inexistente::x", "messages": [{"role": "user", "content": "oi"}]}))
+    assert vistos["model"] == "padrao"
+
+
+def test_progresso_do_modelo_local(monkeypatch, tmp_path):
+    from app import localai
+    import httpx
+
+    estado = {"st": {"running": True, "loading": {}}, "slots": []}
+    monkeypatch.setattr(localai, "status", lambda: estado["st"])
+
+    class Resp:
+        def json(self):
+            return estado["slots"]
+
+    class Cliente:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url): return Resp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", Cliente)
+    p = lambda: asyncio.run(financas.progresso())
+    assert p() == {"etapa": None}
+    log = tmp_path / "llama-server.log"
+    log.write_text("x | task 3 | prompt processing, n_tokens = 1, progress = 0.40, t = 1 s\n"
+                   "x | task 7 | prompt processing, n_tokens = 9, progress = 0.55, t = 9 s\n", encoding="utf-8")
+    monkeypatch.setattr(localai, "LOG_FILE", log)
+    # imagem: o /slots ainda não contou nada → a % vem do log, da tarefa certa
+    estado["slots"] = [{"is_processing": True, "id_task": 7, "n_prompt_tokens": 0, "n_prompt_tokens_processed": 0,
+                        "next_token": [{"n_decoded": 0}]}]
+    assert p() == {"etapa": "lendo", "percent": 55, "tokens": None}
+    # sem linha no log para a tarefa: cai na conta do /slots
+    estado["slots"] = [{"is_processing": True, "id_task": 9, "n_prompt_tokens": 10000, "n_prompt_tokens_processed": 7700,
+                        "n_prompt_tokens_cache": 0, "next_token": [{"n_decoded": 0}]}]
+    assert p() == {"etapa": "lendo", "percent": 77, "tokens": 10000}
+    estado["slots"][0].update(n_prompt_tokens_processed=10000, next_token=[{"n_decoded": 312}])
+    assert p() == {"etapa": "escrevendo", "tokens": 312}
+    estado["st"] = {"running": False, "loading": {"percent": 40, "name": "Qwen"}}
+    assert p() == {"etapa": "carregando", "percent": 40, "modelo": "Qwen"}

@@ -4517,6 +4517,12 @@ async def iporte_chat(body: dict):
         raise HTTPException(502, f"Modelo indisponível: {e}")
 
 
+@app.get("/api/iporte/v1/progresso")
+async def iporte_progresso():
+    """Onde está o pedido do IPorte no modelo local (carregando / lendo / escrevendo), para a tela do celular."""
+    return await financas.progresso()
+
+
 @app.get("/api/iporte/v1/modelos")
 async def iporte_modelos():
     """Seletor do IPorte: modelo em uso, o carregado no PC com a VRAM, os GGUF e os modelos de nuvem."""
