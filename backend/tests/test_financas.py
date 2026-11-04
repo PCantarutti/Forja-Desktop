@@ -377,3 +377,31 @@ def test_revisao_cria_ignora_e_ensina_a_ia(supa):
     assert n1["feedback"] == "corrigida" and n1["parsed"] is True and n1["sync_version"] == 1
     asyncio.run(financas.revisar_notificacao("n2", "ignorar"))
     assert n2["status"] == "ignored" and "feedback" not in n2   # sem rascunho da IA: nada a aprender
+
+
+def test_proxy_passa_imagem_so_para_modelo_com_visao(monkeypatch):
+    from app import llm
+    vistos = {}
+
+    async def falso(provider, model, msgs, tools, num_ctx, **kw):
+        vistos["msgs"] = msgs
+        yield "content", '{"itens": []}'
+
+    caps = {"m": {"vision"}}
+
+    async def capacidades(provider, model):
+        return caps.get(model, set())
+
+    monkeypatch.setattr(llm, "chat_stream", falso)
+    monkeypatch.setattr(llm, "capabilities", capacidades)
+    monkeypatch.setattr(financas, "modelo", lambda: {"provider": "p", "model": "m"})
+    img = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}
+    corpo = {"messages": [{"role": "user", "content": [{"type": "text", "text": "leia"}, img]}]}
+    asyncio.run(financas.completar(corpo))
+    assert vistos["msgs"][0]["content"] == [{"type": "text", "text": "leia"}, img]
+    caps.clear()
+    with pytest.raises(financas.ToolError, match="SEM_VISAO"):
+        asyncio.run(financas.completar(corpo))
+    with pytest.raises(financas.ToolError):   # só data:image/, nada de URL externa
+        asyncio.run(financas.completar({"messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "http://x/y.png"}}]}]}))

@@ -590,19 +590,51 @@ async def analise(tipo: str, pergunta: str = ""):
                  {"papel": "assistant", "texto": texto, "quando": time.time(), "modelo": spec["model"]}])
 
 
+MAX_IMAGENS = 4
+MAX_IMAGEM = 4_000_000  # data: URL (base64) de um print longo
+
+
+def _conteudo(c) -> str | list[dict]:
+    """Texto, ou as partes do formato OpenAI (text + image_url com data: URL) — só esses dois tipos passam."""
+    if not isinstance(c, list):
+        return str(c or "")
+    partes = []
+    for p in c:
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") == "text":
+            partes.append({"type": "text", "text": str(p.get("text") or "")})
+        elif p.get("type") == "image_url":
+            url = str((p.get("image_url") or {}).get("url") or "")
+            if url.startswith("data:image/") and len(url) <= MAX_IMAGEM:
+                partes.append({"type": "image_url", "image_url": {"url": url}})
+            else:
+                raise ToolError(f"imagem inválida (data:image/... de até {MAX_IMAGEM // 1_000_000} MB)")
+    return partes
+
+
 async def completar(corpo: dict) -> dict:
     """Proxy compatível com OpenAI para o IPorte (sem streaming e sem ferramentas). O modelo é o da tela
-    Finanças, que o celular também troca (ver `modelos`/`escolher`/`carregar`)."""
+    Finanças, que o celular também troca (ver `modelos`/`escolher`/`carregar`). Aceita imagem (print da fatura)
+    em content parts; modelo sem visão → ToolError "SEM_VISAO" e o IPorte lê o print pelo OCR."""
     from . import llm
     msgs = corpo.get("messages")
-    if not isinstance(msgs, list) or not msgs or len(json.dumps(msgs)) > 64_000:
-        raise ToolError("messages inválido (lista de até 64 KB)")
+    if not isinstance(msgs, list) or not msgs:
+        raise ToolError("messages inválido (lista de até 64 KB de texto)")
     limpas = [{"role": m.get("role") if m.get("role") in ("system", "user", "assistant") else "user",
-               "content": str(m.get("content") or "")} for m in msgs if isinstance(m, dict)]
+               "content": _conteudo(m.get("content"))} for m in msgs if isinstance(m, dict)]
+    partes = [p for m in limpas if isinstance(m["content"], list) for p in m["content"]]
+    imagens = sum(p["type"] == "image_url" for p in partes)
+    texto_total = sum(len(m["content"]) for m in limpas if isinstance(m["content"], str)) + \
+        sum(len(p["text"]) for p in partes if p["type"] == "text")
+    if texto_total > 64_000 or imagens > MAX_IMAGENS:
+        raise ToolError(f"messages inválido (até 64 KB de texto e {MAX_IMAGENS} imagens)")
     quer_json = (corpo.get("response_format") or {}).get("type") == "json_object"
     if quer_json:
         limpas.insert(0, {"role": "system", "content": "Responda APENAS com um objeto JSON válido, sem texto fora dele."})
     spec = modelo()
+    if imagens and "vision" not in (await llm.capabilities(spec["provider"], spec["model"]) or set()):
+        raise ToolError(f"SEM_VISAO: o modelo {spec['model']} não lê imagem")
     USO["t"] = time.time()
     texto = ""
     async for ev, val in llm.chat_stream(spec["provider"], spec["model"], limpas, None, 16384, think=False,
