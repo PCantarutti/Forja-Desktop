@@ -55,7 +55,14 @@
       "uninstallDisplayName": "Forja ${version}",
       "runAfterFinish": true,
       "allowElevation": false,
-      "menuCategory": false
+      "menuCategory": false,
+      "installerLanguages": [
+        "pt_BR"
+      ],
+      "language": "1046",
+      "include": "installer/installer.nsh",
+      "installerHeader": "installer/header.bmp",
+      "installerSidebar": "installer/sidebar.bmp"
     },
     "publish": [
       {
