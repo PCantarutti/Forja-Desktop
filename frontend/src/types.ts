@@ -636,6 +636,7 @@ export type ModelInfo = {
   arch: string;
   mtp?: boolean; // o GGUF traz as camadas de MTP (nextn): serve para a geração especulativa draft-mtp
   n_layer: number;
+  n_slot?: number; // camadas como o -ngl conta (modelo com loop: as voltas desenroladas)
   n_head_kv: number;
   head_dim: number;
   ctx_train: number; // contexto máximo treinado

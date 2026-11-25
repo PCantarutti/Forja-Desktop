@@ -37,7 +37,7 @@ const AJUDA: Record<string, string> = {
   ubatch: "Quantos tokens vão de fato juntos para a GPU. Menor gasta menos memória de cálculo.",
   parallel: "Quantas conversas o servidor atende ao mesmo tempo. 0 = o llama.cpp decide (hoje, 4 slots).",
   ctx_checkpoints: "Pontos de retomada do contexto: evitam reprocessar tudo quando o histórico é reescrito.",
-  n_cpu_moe: "Deixa os especialistas (MoE) das primeiras N camadas na RAM. É o jeito de rodar um MoE grande com pouca VRAM.",
+  n_cpu_moe: "Deixa os especialistas (MoE) de N camadas na RAM: as primeiras, ou, em modelo com loop (Inkling 2), as de fora do loop antes. É o jeito de rodar um MoE grande com pouca VRAM.",
   n_expert: "Quantos especialistas o modelo consulta por token. Menos = mais rápido e mais burro.",
   seed: "Semente do sorteio de tokens. 0 = aleatória a cada resposta.",
   rope_freq_base: "Ajuste do RoPE para esticar o contexto além do treinado. 0 = o valor do próprio modelo.",
@@ -950,11 +950,17 @@ function Models(props: { st: LocalState; onDone: () => void; onError: (e: string
               label="GPU offload (n_gpu_layers)"
               chave="ngl"
               value={form.ngl}
-              max={info?.n_layer || 999}
+              max={info?.n_layer ? (info.n_slot || info.n_layer) + 1 : 999}
               onChange={(v) => set("ngl", v)}
               mudado={mudou("ngl")}
               onReset={() => reset("ngl")}
-              hint={info?.n_layer ? `${info.n_layer} = todas.` : undefined}
+              hint={
+                !info?.n_layer
+                  ? undefined
+                  : info.n_slot && info.n_slot > info.n_layer
+                    ? `${info.n_slot + 1} = todas: o loop deste modelo vira ${info.n_slot} camadas no llama.cpp, + a de saída.`
+                    : `${info.n_layer + 1} = todas (as ${info.n_layer} camadas + a de saída).`
+              }
             />
             <Toggle
               label="Flash Attention"

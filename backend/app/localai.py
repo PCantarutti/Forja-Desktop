@@ -315,7 +315,10 @@ def defaults_for(path: str = "") -> dict:
     d.update({k: v for k, v in (read_config().get("defaults") or {}).items() if k in d})  # o usuário vence
     info = gguf_info(path) if path else None
     if info and info["n_layer"]:
-        d["ngl"] = info["n_layer"]                                   # tudo na GPU, como o LM Studio
+        # Tudo na GPU, como o LM Studio. +1: o llama.cpp conta a camada de saída como uma das N; -ngl n_layer
+        # deixava a camada 0 na CPU. n_slot: em modelo com loop o -ngl conta as voltas desenroladas
+        # (Inkling 2 Mini: -ngl 24 e 25 = 6 t/s, 49 = 20 t/s).
+        d["ngl"] = info["n_slot"] + 1
         d["ctx"] = min(info["ctx_train"] or d["ctx"], 32768)         # a janela cheia costuma não caber
         d["n_expert"] = info["n_expert_used"] or 0
         if info["n_expert"]:
@@ -967,7 +970,27 @@ def gguf_info(path: str) -> dict:
             "ssm_conv": get("ssm.conv_kernel"), "ssm_groups": get("ssm.group_count"),
             "size": st.st_size, "tensors": data["tensors"], "formas": data.get("formas") or {}}
     info["layers"] = _camadas(info, kv, arch, bruto)
+    # Camadas que rodam mais de uma vez por token (Inkling 2: 6..17, 3 voltas). [início, fim)
+    inicio, fim = get("loop.start"), get("loop.end")
+    info["loop"] = (inicio, fim) if get("loop.count") > 1 and 0 <= inicio < fim <= n_layer else None
+    # O llama.cpp desenrola o loop: cada volta extra vira camadas a mais, e o -ngl conta sobre elas
+    # (inkling2-loop.cpp, n_slot = 24 + 2*12 = 48 no Inkling 2 Mini). As físicas são as primeiras.
+    info["n_slot"] = n_layer + (get("loop.count") - 1) * (fim - inicio) if info["loop"] else n_layer
     return info
+
+
+def camadas_moe_cpu(info: dict, n: int) -> list[int]:
+    """Quais camadas deixam os especialistas na RAM quando o usuário pede N (--n-cpu-moe manda as N primeiras).
+
+    Em modelo com loop, as camadas repetidas releem os especialistas a cada volta: na RAM isso custa 3x a
+    banda. Elas são as últimas a sair da GPU. Inkling 2 Mini Q4 na B580, ctx 32k, 12 camadas na RAM:
+    as 12 primeiras 15 t/s, as 12 fora do loop 19,5 t/s (bench: 15,2 vs 24,7)."""
+    total = info["n_layer"]
+    loop = info.get("loop")
+    ordem = list(range(total))
+    if loop:
+        ordem.sort(key=lambda i: loop[0] <= i < loop[1])  # estável: fora do loop primeiro, em ordem
+    return sorted(ordem[:max(0, min(n, total))])
 
 
 def _camadas(info: dict, kv: dict, arch: str, bruto) -> list[dict]:
@@ -1060,12 +1083,15 @@ def estimate(path: str, p: dict) -> dict:
     if not info["n_layer"] or not info["tensors"]:
         return {"ok": False}
     n_layer = info["n_layer"]
-    ngl = min(int(p.get("ngl") or 0), n_layer)
-    ncmoe = int(p.get("n_cpu_moe") or 0)
+    n_slot = info.get("n_slot") or n_layer  # camadas como o -ngl conta (loop desenrolado)
+    ngl = min(int(p.get("ngl") or 0), n_slot + 1)  # n_slot + 1 = todas, contando a de saída
+    moe_cpu = set(camadas_moe_cpu(info, int(p.get("n_cpu_moe") or 0)))
     # O llama.cpp descarrega as ÚLTIMAS camadas, e a primeira coisa que sobe é a camada de saída:
     # com -ngl 19 ele registra "18 repeating layers" + a saída = 19/41.
     repetidas = max(0, ngl - 1) if ngl else 0
-    na_gpu = set(range(n_layer - repetidas, n_layer))
+    # ponytail: em modelo com loop, -ngl abaixo de n_slot+1 é aproximado contando só as físicas (medido no
+    # Inkling: -ngl 25 = 8,4 GB de VRAM, todas = 9,6). Mapear slot a slot se alguém usar oferta parcial.
+    na_gpu = set(range(n_layer - min(repetidas, n_layer), n_layer))
     saida_na_gpu = ngl > 0
 
     pesos_gpu = pesos_cpu = 0
@@ -1074,7 +1100,7 @@ def estimate(path: str, p: dict) -> dict:
         camada = int(m.group(1)) if m else -1
         # -1 = token_embd/output: só vão para a GPU quando todas as camadas couberam (ngl > n_layer).
         gpu = (camada in na_gpu) if m else saida_na_gpu
-        if gpu and m and "_exps" in nome and camada < ncmoe:
+        if gpu and m and "_exps" in nome and camada in moe_cpu:
             gpu = False  # --n-cpu-moe: os especialistas destas camadas ficam na RAM
         if gpu:
             pesos_gpu += tam
@@ -1111,7 +1137,7 @@ def estimate(path: str, p: dict) -> dict:
     total = pesos_gpu + pesos_cpu + kv + rs + compute_gpu + HOST_BASE
     return {"ok": True, "gpu": pesos_gpu + kv_gpu + rs_gpu + compute_gpu, "total": total,
             "weights_gpu": pesos_gpu, "weights_cpu": pesos_cpu, "kv": kv, "kv_gpu": kv_gpu,
-            "recurrent": rs, "compute_gpu": compute_gpu, "layers_gpu": ngl, "n_layer": n_layer,
+            "recurrent": rs, "compute_gpu": compute_gpu, "layers_gpu": len(na_gpu), "n_layer": n_layer,
             "ctx_train": info["ctx_train"], "attn_layers": len(atencao)}
 
 
@@ -1726,10 +1752,17 @@ def argv(exe: Path, path: str, p: dict, known: frozenset[str] = frozenset()) -> 
     if ligadas and len(ligadas) != len(gpus) and ok("--device"):
         mapa = vulkan_env(gpus)[1]  # GPU desligada em Configurações › Hardware (escondida do driver, se Vulkan)
         a += ["--device", ",".join(mapa.get(g, g) for g in ligadas)]
-    for key, flag in (("threads", "-t"), ("batch", "-b"), ("ubatch", "-ub"), ("ctx_checkpoints", "--ctx-checkpoints"),
-                      ("n_cpu_moe", "--n-cpu-moe")):
+    for key, flag in (("threads", "-t"), ("batch", "-b"), ("ubatch", "-ub"), ("ctx_checkpoints", "--ctx-checkpoints")):
         if int(p.get(key) or 0) > 0 and ok(flag):
             a += [flag, str(int(p[key]))]
+    ncmoe = int(p.get("n_cpu_moe") or 0)
+    info = gguf_info(path) if ncmoe > 0 else {}
+    if ncmoe > 0 and info.get("loop") and ok("--override-tensor"):
+        # Modelo com loop: as camadas fora do loop vão para a RAM antes (ver camadas_moe_cpu).
+        lista = "|".join(map(str, camadas_moe_cpu(info, ncmoe)))
+        a += ["--override-tensor", rf"blk\.({lista})\.ffn_.*_exps\.=CPU"]
+    elif ncmoe > 0 and ok("--n-cpu-moe"):
+        a += ["--n-cpu-moe", str(ncmoe)]
     # 0 = o llama.cpp decide (abre 4). 1 também vai explícito: omitido, o servidor abria os 4 dele e o
     # "1 previsão simultânea" das Configurações não valia (visto com o Qwen3.6 na Maestro)
     if int(p.get("parallel") or 0) >= 1:

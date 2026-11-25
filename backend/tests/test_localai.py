@@ -142,7 +142,7 @@ def test_padroes_saem_do_help_do_binario_e_do_gguf(isolado, monkeypatch):
 
     assert (d["batch"], d["ubatch"], d["ctx_checkpoints"]) == (2048, 512, 8)
     assert d["threads"] == 0                       # -1 = automático: continua 0 na interface
-    assert d["ngl"] == 40 and d["n_expert"] == 8   # do gguf: todas as camadas e os especialistas do modelo
+    assert d["ngl"] == 41 and d["n_expert"] == 8   # do gguf: as 40 camadas + a de saída, e os especialistas
     assert d["ctx"] == 32768                       # 262144 treinados, mas o padrão não estoura a memória
     localai.help_defaults.cache_clear()
 
@@ -533,6 +533,33 @@ def test_tamanho_do_tensor_sai_dos_offsets_mesmo_com_tipo_desconhecido(isolado):
     (isolado / "n.gguf").write_bytes(cab + b"\0" * (576 + 256))
 
     assert localai.gguf_info(str(isolado / "n.gguf"))["tensors"] == [("a", 576), ("b", 256)]
+
+
+def test_modelo_com_loop_tira_da_gpu_primeiro_as_camadas_de_fora_do_loop(isolado):
+    """Inkling 2 Mini: 24 camadas, 6..17 rodam 3x por token. Medido na B580: as 12 de fora do loop na RAM
+    dão 19,5 t/s; as 12 primeiras (o que o --n-cpu-moe faz), 15."""
+    kvs = [("x.block_count", 4, _u32(24)), ("x.attention.head_count", 4, _u32(24)),
+           ("x.loop.count", 4, _u32(3)), ("x.loop.start", 4, _u32(6)), ("x.loop.end", 4, _u32(18))]
+    tensores = [(f"blk.{i}.ffn_down_exps.weight", 100) for i in range(24)]
+    modelo = _gguf(isolado / "loop.gguf", "x", kvs, tensores)
+    info = localai.gguf_info(str(modelo))
+
+    # o llama.cpp desenrola as 2 voltas extras: o -ngl conta 24 + 2*12 = 48 camadas (+1 a de saída)
+    assert info["n_slot"] == 48 and localai.defaults_for(str(modelo))["ngl"] == 49
+    assert localai.camadas_moe_cpu(info, 12) == [0, 1, 2, 3, 4, 5, 18, 19, 20, 21, 22, 23]
+    assert localai.camadas_moe_cpu(info, 14) == [0, 1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22, 23]
+    a = localai.argv(Path("llama-server"), str(modelo), {**localai.DEFAULT_PARAMS, "n_cpu_moe": 12},
+                     NOVO | {"--override-tensor"})
+    assert "--n-cpu-moe" not in a
+    assert a[a.index("--override-tensor") + 1] == r"blk\.(0|1|2|3|4|5|18|19|20|21|22|23)\.ffn_.*_exps\.=CPU"
+    e = localai.estimate(str(modelo), {**localai.DEFAULT_PARAMS, "ngl": 99, "n_cpu_moe": 12})
+    assert e["weights_cpu"] == 12 * 100 * 2
+
+    # sem loop, continua o --n-cpu-moe de sempre (as primeiras N)
+    sem = _gguf(isolado / "sem.gguf", "x", kvs[:2], tensores)
+    assert localai.camadas_moe_cpu(localai.gguf_info(str(sem)), 3) == [0, 1, 2]
+    b = localai.argv(Path("llama-server"), str(sem), {**localai.DEFAULT_PARAMS, "n_cpu_moe": 3}, NOVO)
+    assert b[b.index("--n-cpu-moe") + 1] == "3" and "--override-tensor" not in b
 
 
 def test_falha_do_llama_server_vem_com_o_que_fazer():
