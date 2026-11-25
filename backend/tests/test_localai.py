@@ -535,6 +535,14 @@ def test_tamanho_do_tensor_sai_dos_offsets_mesmo_com_tipo_desconhecido(isolado):
     assert localai.gguf_info(str(isolado / "n.gguf"))["tensors"] == [("a", 576), ("b", 256)]
 
 
+def test_falha_do_llama_server_vem_com_o_que_fazer():
+    """Logs reais do Inkling 2 Mini: llama.cpp b12099 e, depois de atualizar, mmap desligado."""
+    assert "atualizar" in localai._dica_falha(
+        "E llama_model_load: error loading model: unknown model architecture: 'inkling2_loop'")
+    assert "mmap" in localai._dica_falha("E llama_model_load: error loading model: unable to allocate CPU buffer")
+    assert localai._dica_falha("E srv load_model: qualquer outra coisa") == ""
+
+
 def test_estimativa_sem_metadados_nao_inventa(isolado):
     (isolado / "x.gguf").write_bytes(b"nao e gguf")
     assert localai.estimate(str(isolado / "x.gguf"), localai.DEFAULT_PARAMS) == {"ok": False}

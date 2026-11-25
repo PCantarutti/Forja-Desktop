@@ -2106,6 +2106,20 @@ def _health() -> bool:
         return False
 
 
+_DICAS_FALHA = (  # (trecho do log, o que fazer). A primeira que bater vai na frente do log.
+    ("unknown model architecture",
+     "O llama.cpp instalado não conhece a arquitetura deste modelo: clique em \"atualizar\" ao lado de "
+     "llama.cpp no painel IA local."),
+    ("unable to allocate CPU buffer",
+     "Faltou RAM para copiar os pesos que ficam na CPU. Ligue o mmap neste modelo (lê direto do arquivo) "
+     "ou ponha mais camadas na GPU."),
+)
+
+
+def _dica_falha(log_texto: str) -> str:
+    return next((f"\n{dica}" for trecho, dica in _DICAS_FALHA if trecho in log_texto), "")
+
+
 def _wait_ready(proc: subprocess.Popen, timeout: int = 900) -> None:
     """Espera /health responder 200. Carregar 30GB do disco demora (mais ainda sem mmap); o erro mostra o log."""
     deadline = time.time() + timeout
@@ -2115,7 +2129,8 @@ def _wait_ready(proc: subprocess.Popen, timeout: int = 900) -> None:
             raise ToolError("Carregamento cancelado.")
         if proc.poll() is not None:
             unload()
-            raise ToolError(f"llama-server saiu com código {proc.returncode}.\n{log(15)}")
+            texto = log(15)
+            raise ToolError(f"llama-server saiu com código {proc.returncode}.{_dica_falha(texto)}\n{texto}")
         # Só vale se quem respondeu foi o processo que acabamos de subir.
         if _health() and proc.poll() is None:
             return
