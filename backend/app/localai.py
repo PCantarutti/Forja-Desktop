@@ -906,14 +906,23 @@ def _gguf(path: str, _stamp: tuple) -> dict:
             shape = struct.unpack(f"<{dims}Q", f.read(8 * dims))
             if "blocks.0." in name:
                 formas[name] = list(shape)
-            ttype = struct.unpack("<I", f.read(4))[0]
-            f.read(8)  # offset
+            ttype, offset = struct.unpack("<IQ", f.read(12))
             bloco, bytes_bloco = _GGML.get(ttype, (1, 2))
             elementos = 1
             for d in shape:
                 elementos *= d
-            tensors.append((name, elementos // bloco * bytes_bloco))
-    return {"kv": kv, "tensors": tensors, "formas": formas}
+            tensors.append((name, offset, elementos // bloco * bytes_bloco))
+        # Tamanho real = distância até o próximo tensor. Vale para qualquer tipo, inclusive os que a
+        # tabela não conhece (NVFP4, tipo 40, caía em 2 bytes/peso: Inkling Q8_K_XL de 23 GB virava 49).
+        alinha = int(kv.get("general.alignment") or 32)
+        inicio = -(-f.tell() // alinha) * alinha
+        dados = os.fstat(f.fileno()).st_size - inicio
+    offsets = sorted({t[1] for t in tensors})
+    if len(offsets) < len(tensors) or not offsets or offsets[-1] >= dados:
+        # sem a área de dados (só cabeçalho) ou offsets repetidos: fica a conta pela tabela de tipos
+        return {"kv": kv, "tensors": [(n, est) for n, _, est in tensors], "formas": formas}
+    proximo = dict(zip(offsets, offsets[1:] + [dados]))
+    return {"kv": kv, "tensors": [(n, proximo[off] - off) for n, off, _ in tensors], "formas": formas}
 
 
 def gguf_info(path: str) -> dict:

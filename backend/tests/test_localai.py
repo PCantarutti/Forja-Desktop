@@ -518,6 +518,23 @@ def test_estimativa_separa_gpu_de_ram(isolado):
     assert e["total"] > e["gpu"] and e["attn_layers"] == 2
 
 
+def test_tamanho_do_tensor_sai_dos_offsets_mesmo_com_tipo_desconhecido(isolado):
+    """Tipo 40 (NVFP4) não está na tabela; antes contava como f16 e o Inkling Q8_K_XL de 23 GB virava 49."""
+    import struct
+
+    def s(txt: bytes) -> bytes:
+        return struct.pack("<Q", len(txt)) + txt
+
+    kv = s(b"general.architecture") + struct.pack("<I", 8) + s(b"x")
+    tensores = [(b"a", 1000, 40, 0, 576), (b"b", 64, 0, 576, 256)]  # nome, elementos, tipo, offset, bytes
+    corpo = b"".join(s(n) + struct.pack("<IQIQ", 1, el, t, off) for n, el, t, off, _ in tensores)
+    cab = b"GGUF" + struct.pack("<IQQ", 3, len(tensores), 1) + kv + corpo
+    cab += b"\0" * (-len(cab) % 32)
+    (isolado / "n.gguf").write_bytes(cab + b"\0" * (576 + 256))
+
+    assert localai.gguf_info(str(isolado / "n.gguf"))["tensors"] == [("a", 576), ("b", 256)]
+
+
 def test_estimativa_sem_metadados_nao_inventa(isolado):
     (isolado / "x.gguf").write_bytes(b"nao e gguf")
     assert localai.estimate(str(isolado / "x.gguf"), localai.DEFAULT_PARAMS) == {"ok": False}
