@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { Ctx } from "./EstudoView";
+import Simulados, { JanelaPdf } from "./Simulados";
 import type { Prova, Questao } from "./tipos";
 import { btn, btnLeve, btnPrimary, campo, card, pct, pilula, pilulaLigada, relogio, rotulo } from "./ui";
 
@@ -16,7 +17,7 @@ export default function Provas({ ctx }: { ctx: Ctx }) {
   // prova recém-gerada abre sozinha
   const [vistas, setVistas] = useState(() => new Set(estudo.provas.map((p) => p.id)));
   useEffect(() => {
-    const nova = estudo.provas.find((p) => !vistas.has(p.id));
+    const nova = estudo.provas.find((p) => !vistas.has(p.id) && !p.simulado);   // prova real não abre sozinha
     if (nova) { setAberta(nova.id); setVistas(new Set(estudo.provas.map((p) => p.id))); }
   }, [estudo.provas]);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -32,7 +33,7 @@ export default function Provas({ ctx }: { ctx: Ctx }) {
             return (
               <div key={p.id} className="flex items-center gap-3 rounded-lg px-2 py-2 text-[13.5px] hover:bg-raised">
                 <button className="min-w-0 flex-1 text-left" onClick={() => setAberta(p.id)}>
-                  <span className="text-fg">{p.id} · {p.questoes.length} questões · {TIPOS.find((x) => x.id === p.config.tipo)?.label}</span>
+                  <span className="text-fg">{p.id} · {p.questoes.length} questões · {p.simulado ? `Prova real · ${p.titulo ?? ""}` : TIPOS.find((x) => x.id === p.config.tipo)?.label}</span>
                   <span className="ml-2 text-[12px] text-muted">{new Date(p.criada * 1000).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
                     {p.descartadas ? ` · ${p.descartadas} descartadas por falta de fonte` : ""}</span>
                 </button>
@@ -43,6 +44,7 @@ export default function Provas({ ctx }: { ctx: Ctx }) {
           })}
         </section>
       )}
+      <Simulados ctx={ctx} abrirProva={setAberta} />
     </div>
   );
 }
@@ -101,12 +103,13 @@ function Fazer({ ctx, prova, voltar }: { ctx: Ctx; prova: Prova; voltar: () => v
   const nomes = Object.fromEntries(ctx.estudo.programa.map((t) => [t.id, t.titulo]));
   const corrigindo = ctx.rodando && ctx.estudo.run?.tipo === "correcao";
   const res = !refazendo ? ultima?.resultado : undefined;
+  const [pagina, setPagina] = useState<number | null>(null);   // página do caderno aberta (prova real)
 
   return (
     <div className="mx-auto max-w-3xl px-6 py-6">
       <div className="mb-5 flex items-center gap-3">
         <button className={btnLeve} onClick={voltar}>← Provas</button>
-        <div className="text-[13.5px] text-muted">{prova.id} · {prova.questoes.length} questões</div>
+        <div className="text-[13.5px] text-muted">{prova.id} · {prova.questoes.length} questões{prova.simulado ? ` · prova real · ${prova.titulo ?? ""}` : ""}</div>
         <div className="ml-auto flex items-center gap-2 text-[13px]">
           {res ? <span className="font-medium text-fg">Nota: {ultima.acertos}/{ultima.total} ({pct(ultima.acertos / ultima.total)})</span>
                : <span className="font-mono text-muted">{relogio((agora - inicio) / 1000)}</span>}
@@ -116,9 +119,13 @@ function Fazer({ ctx, prova, voltar }: { ctx: Ctx; prova: Prova; voltar: () => v
       <div className="grid gap-4">
         {prova.questoes.map((q, i) => (
           <QuestaoCard key={q.id} n={i + 1} q={q} topico={nomes[q.topico]} valor={resp[q.id] ?? ""} res={res?.[q.id]}
-                       onChange={(v) => setResp((r) => ({ ...r, [q.id]: v }))} abrirTrecho={ctx.abrirTrecho} />
+                       onChange={(v) => setResp((r) => ({ ...r, [q.id]: v }))} abrirTrecho={ctx.abrirTrecho}
+                       verPagina={prova.simulado ? setPagina : undefined} />
         ))}
       </div>
+      {pagina !== null && prova.simulado && (
+        <JanelaPdf conv={ctx.conv} sid={prova.simulado} pagina={pagina} onClose={() => setPagina(null)} />
+      )}
       {!res && (
         <div className="mt-6 flex justify-end">
           <button className={btnPrimary} disabled={ctx.rodando || corrigindo}
@@ -132,13 +139,21 @@ function Fazer({ ctx, prova, voltar }: { ctx: Ctx; prova: Prova; voltar: () => v
 }
 
 function QuestaoCard(props: { n: number; q: Questao; topico?: string; valor: string; res?: { resposta: string; certa: boolean; nota?: number; comentario?: string };
-                              onChange: (v: string) => void; abrirTrecho: (id: string, destaque?: string) => void }) {
+                              onChange: (v: string) => void; abrirTrecho: (id: string, destaque?: string) => void;
+                              verPagina?: (pagina: number) => void }) {
   const { q, res } = props;
   const opcoes = q.tipo === "certo_errado" ? [["C", "Certo"], ["E", "Errado"]] : q.alternativas.map((a, i) => [LETRAS[i], a]);
   return (
     <div className={`${card} ${res ? (res.certa ? "border-ok/50" : "border-err/50") : ""}`}>
       <div className="mb-2 flex items-center gap-2 text-[11.5px] text-faint">
-        <span className="font-mono">Questão {props.n}</span>{props.topico && <span>· {props.topico}</span>}
+        <span className="font-mono">{q.numero ? `Questão ${q.numero} do caderno` : `Questão ${props.n}`}</span>
+        {props.topico && <span>· {props.topico}</span>}
+        {q.assunto && <span>· {q.assunto}</span>}
+        {props.verPagina && (
+          <button className={`ml-auto ${q.figura ? "text-warn" : ""} hover:text-fg`} onClick={() => props.verPagina!(q.pagina || 1)}>
+            {q.figura ? "Tem figura: ver no PDF" : "Ver no PDF"}{q.pagina ? ` (p. ${q.pagina})` : ""}
+          </button>
+        )}
       </div>
       <div className="mb-3 whitespace-pre-wrap text-[15px] leading-relaxed text-fg">{q.enunciado}</div>
       {q.tipo === "discursiva" ? (

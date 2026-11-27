@@ -47,11 +47,12 @@ def desempenho(est: dict) -> dict:
         d["total"] += 1
         d["acertos"] += 1 if r.get("certa") else 0
     nomes = {t["id"]: t["titulo"] for t in est["programa"]}
-    topicos = [{"id": k, "titulo": nomes.get(k, k), **v, "acerto": round(v["acertos"] / v["total"], 2)}
-               for k, v in por.items()]
+    # questão de simulado real que não casou com nenhum tópico do programa fica em "Fora do programa" (id "")
+    topicos = [{"id": k, "titulo": nomes.get(k) or ("Fora do programa" if not k else k), **v,
+                "acerto": round(v["acertos"] / v["total"], 2)} for k, v in por.items()]
     tot = sum(v["total"] for v in por.values())
     return {"topicos": topicos, "geral": round(sum(v["acertos"] for v in por.values()) / tot, 2) if tot else None,
-            "respondidas": tot, "fracos": [t["id"] for t in topicos if t["total"] >= 3 and t["acerto"] < FRACO]}
+            "respondidas": tot, "fracos": [t["id"] for t in topicos if t["id"] and t["total"] >= 3 and t["acerto"] < FRACO]}
 
 
 def caderno(est: dict) -> list[dict]:

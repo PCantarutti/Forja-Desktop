@@ -39,9 +39,11 @@ function Erros({ ctx }: { ctx: Ctx }) {
             <div className="text-[13px] text-ok">{e.correta}) {e.alternativas["ABCDE".indexOf(e.correta)]}</div>
           )}
           <div className="mt-2 text-[13px] text-fg-2">{e.explicacao}</div>
-          <button className="mt-2 text-left text-[12.5px] text-muted hover:text-fg" onClick={() => ctx.abrirTrecho(e.fonte, e.citacao)}>
-            <span className="font-mono text-accent-text">[{e.fonte}]</span> “{e.citacao}”
-          </button>
+          {e.fonte && (
+            <button className="mt-2 text-left text-[12.5px] text-muted hover:text-fg" onClick={() => ctx.abrirTrecho(e.fonte, e.citacao)}>
+              <span className="font-mono text-accent-text">[{e.fonte}]</span> “{e.citacao}”
+            </button>
+          )}
         </div>
       ))}
     </div>

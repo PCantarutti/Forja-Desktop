@@ -48,7 +48,8 @@ def tocar(conv_id: int, titulo: str | None = None) -> None:
 
 def novo_estado() -> dict:
     return {"pedido": "", "nivel": "concurso", "programa": [], "fontes": [], "material": {}, "provas": [],
-            "flashcards": [], "duvidas": [], "seq": {"fonte": 0, "prova": 0, "cartao": 0, "topico": 0}}
+            "flashcards": [], "duvidas": [], "simulados": [],
+            "seq": {"fonte": 0, "prova": 0, "cartao": 0, "topico": 0, "simulado": 0}}
 
 
 def ler(conv_id: int) -> dict:

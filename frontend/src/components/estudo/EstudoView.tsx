@@ -32,6 +32,7 @@ export type Ctx = {
 const NOMES: Record<Run["tipo"], string> = {
   programa: "Montando o programa", pesquisa: "Pesquisando as fontes", material: "Escrevendo o material",
   prova: "Gerando a prova", correcao: "Corrigindo", flashcards: "Fazendo flashcards",
+  simulado: "Lendo a prova real", busca: "Buscando provas reais",
 };
 
 export default function EstudoView(props: {

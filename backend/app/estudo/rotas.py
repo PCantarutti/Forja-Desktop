@@ -4,13 +4,13 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from .. import config
 from ..tools import ToolError
-from . import base, corpus, extras, fontes, material, prova
+from . import base, corpus, extras, fontes, material, prova, simulado
 
 router = APIRouter(prefix="/api/estudo")
 
@@ -84,7 +84,9 @@ def _tela(conv_id: int) -> dict:
             "edital": est.get("edital"), "programa": est["programa"], "fontes": est["fontes"],
             "material": est["material"], "provas": [prova.para_tela(p) for p in est["provas"]],
             "flashcards": est["flashcards"], "duvidas": est["duvidas"][-50:],
-            "desempenho": extras.desempenho(est), "caderno": extras.caderno(est), "run": base.estado_run(conv_id)}
+            "desempenho": extras.desempenho(est), "caderno": extras.caderno(est), "run": base.estado_run(conv_id),
+            "simulados": [{k: v for k, v in s.items() if k != "assuntos"} for s in est.get("simulados", [])],
+            "ranking": simulado.ranking(est)}
 
 
 def _disparar(conv_id: int, tipo: str, body: Motor, alvo: dict, coro_de) -> dict:
@@ -294,3 +296,72 @@ async def duvida(conv_id: int, body: DuvidaBody):
         return await extras.tutor(conv_id, base.spec_de(body.provider, body.model), body.pergunta, body.topico)
     except ToolError as e:
         raise HTTPException(400, str(e))
+
+
+# ------------------------------------------------------------------ simulados reais
+
+class BuscaBody(Motor):
+    pedido: str = ""
+
+
+class GabaritoBody(BaseModel):
+    texto: str = ""
+    bloco: str = ""
+
+
+@router.post("/{conv_id}/simulado/arquivo")
+async def simulado_arquivo(conv_id: int, file: UploadFile = File(...), gabarito_arquivo: UploadFile | None = File(None),
+                           gabarito: str = Form(""), provider: str = Form(""), model: str = Form("")):
+    """O caderno da prova (PDF) e, opcional, o gabarito: arquivo ou texto colado ("91 C 92 A ...")."""
+    base.conferir_conv(conv_id)
+    dados = await file.read()
+    if not dados.lstrip().startswith(b"%PDF"):
+        raise HTTPException(400, "Mande o caderno da prova em PDF.")
+    if len(dados) > config.MAX_DOC_BYTES:
+        raise HTTPException(413, f"Arquivo maior que {config.MAX_DOC_BYTES // 1_000_000} MB.")
+    if simulado.ja_tem(conv_id, dados):
+        raise HTTPException(400, "Este PDF já está nos simulados da matéria.")
+    if gabarito_arquivo is not None:
+        try:
+            g = await gabarito_arquivo.read()
+            gabarito = (gabarito + "\n" + await asyncio.to_thread(corpus.extrair, gabarito_arquivo.filename or "gabarito.pdf", g)).strip()
+        except ToolError as e:
+            raise HTTPException(400, f"Gabarito: {e}")
+    if gabarito.strip() and not simulado.R.ler_gabarito(gabarito):
+        raise HTTPException(400, "Não li nenhum par número-letra no gabarito (ex.: 91 C 92 A).")
+    spec = _ok(base.spec_de, provider, model)
+    if conv_id in base._RUNS:
+        raise HTTPException(400, "Esta matéria já tem uma tarefa rodando. Espere ou pare antes.")
+    sid = simulado.novo(conv_id, (file.filename or "prova").rsplit(".", 1)[0], dados, file.filename or "")
+    run = base.novo_run(conv_id, "simulado", spec)
+    run["alvo"] = {"simulado": sid, "gabarito": gabarito}
+    base.disparar(run, simulado.rodar_arquivo(run))
+    return base.publico(run)
+
+
+@router.post("/{conv_id}/simulado/buscar")
+async def simulado_buscar(conv_id: int, body: BuscaBody):
+    if len(body.pedido.strip()) < 3:
+        raise HTTPException(400, "Diga qual prova procurar (ex.: ENEM 2023 2º dia, TRF 2024 técnico judiciário).")
+    return _ok(_disparar, conv_id, "busca", body, {"pedido": body.pedido.strip()[:300]}, simulado.rodar_busca)
+
+
+@router.post("/{conv_id}/simulado/{sid}/gabarito")
+def simulado_gabarito(conv_id: int, sid: str, body: GabaritoBody):
+    base.conferir_conv(conv_id)
+    return _ok(simulado.regabaritar, conv_id, sid, body.texto, body.bloco)
+
+
+@router.get("/{conv_id}/simulado/{sid}/pdf")
+def simulado_pdf(conv_id: int, sid: str):
+    base.conferir_conv(conv_id)
+    return Response(_ok(simulado.pdf, conv_id, sid), media_type="application/pdf")
+
+
+@router.delete("/{conv_id}/simulado/{sid}")
+def simulado_apagar(conv_id: int, sid: str):
+    base.conferir_conv(conv_id)
+    if conv_id in base._RUNS:
+        raise HTTPException(400, "Espere a tarefa da matéria terminar.")
+    simulado.apagar(conv_id, sid)
+    return {"ok": True}
