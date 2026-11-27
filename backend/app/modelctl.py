@@ -515,8 +515,9 @@ def em_uso() -> bool:
             return True
     # telas que rodam o modelo sem passar pelo agente (pesquisa de roteiros do Conteúdo, Estudos, Pesquisa profunda,
     # Comparar, Design): em 2026-10-07 a pesquisa funda do Conteúdo levou o modelo derrubado por "ociosidade" no meio
-    from . import comparar, conteudo_roteiros, design, estudos, pesquisa
-    if any(m._RUNS for m in (comparar, conteudo_roteiros, design, estudos, pesquisa)):
+    from . import comparar, conteudo_roteiros, design, pesquisa
+    from .estudo import base as estudo_base
+    if any(m._RUNS for m in (comparar, conteudo_roteiros, design, estudo_base, pesquisa)):
         return True
     return bool(localai and (localai.image_busy() or localai._loading))
 

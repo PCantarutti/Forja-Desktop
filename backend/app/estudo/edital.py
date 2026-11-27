@@ -1,20 +1,25 @@
-"""Ler o edital: o modelo tira as matérias da prova, o peso de cada uma (questões no quadro de provas) e os
-tópicos do conteúdo programático. Sai uma PROPOSTA (execução tipo "edital"); nada muda até o aluno conferir e
-aplicar (`aplicar`): matéria nova é criada, a que já existe ganha o peso e os tópicos.
-
-Edital é longo (100+ páginas, quase tudo regra de inscrição): vai para o modelo só o que interessa — o quadro
-de provas (onde diz quantas questões) e o conteúdo programático —, em pedaços."""
+"""Leitor de edital (portado do Estudos v1, calibrado com editais reais): recorta o quadro de provas e o conteúdo
+programático do cargo, junta o que o modelo acha em cada pedaço e corrige as questões pela tabela lida sem modelo.
+Também baixa o edital pelo link da página do concurso (só PDF, com checagem de rede pública a cada salto)."""
 from __future__ import annotations
 
 import asyncio
 import re
+import ssl
 import time
 import unicodedata
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
-from . import documentos, estudos as E, mirror, pesquisa, web
-from .estudos import _save
-from .tools import ToolError
+import httpx
+
+from .. import config, documentos, web
+from ..tools import ToolError
+from .corpus import EXT_TEXTO, MARCA_PAGINA, glifos
+
+PEDACO = 12_000
+TETO_PDF = min(config.MAX_DOC_BYTES, 30_000_000)
+
 
 TETO = 120                 # segundos por pedaço
 MAX_PEDACOS = 6            # ~70 mil caracteres no máximo
@@ -96,8 +101,8 @@ def _do_cargo(texto: str, cargo: str) -> list[str]:
         fim = next((m.start() + pos + 300 for m in CARGO_SEGUINTE.finditer(prog[pos + 300:pos + 40_000])), pos + 40_000)
         nivel = max((m.start() for m in NIVEL.finditer(prog, 0, pos)), default=None)
         if nivel is not None and pos - nivel < 40_000:
-            partes += E._pedacos(prog[nivel:pos])      # a parte comum do nível do cargo
-        partes += E._pedacos(prog[pos:fim])            # o específico do cargo
+            partes += _pedacos(prog[nivel:pos])      # a parte comum do nível do cargo
+        partes += _pedacos(prog[pos:fim])            # o específico do cargo
     return partes
 
 
@@ -115,14 +120,14 @@ def trechos(texto: str, cargo: str = "") -> list[str]:
 
 
 def _trechos(texto: str) -> list[str]:
-    if len(texto) <= E.PEDACO * MAX_PEDACOS:
-        return E._pedacos(texto)[:MAX_PEDACOS]
+    if len(texto) <= PEDACO * MAX_PEDACOS:
+        return _pedacos(texto)[:MAX_PEDACOS]
     partes = []
     if q := QUADRO.search(texto):
         partes.append(texto[max(0, q.start() - 1500):q.start() + 6000])
     p = PROGRAMATICO.search(texto, q.end() if q else 0) or CONHECIMENTOS.search(texto, q.end() + 6000 if q else 0)
     ini = max(0, p.start() - 500) if p else 0
-    partes += E._pedacos(texto[ini:ini + JANELA])
+    partes += _pedacos(texto[ini:ini + JANELA])
     return partes[:MAX_PEDACOS]
 
 
@@ -221,16 +226,7 @@ def juntar(atual: dict[str, dict], achadas: list) -> None:
                 m["topicos"].append(t)
 
 
-def proposta(conv_id: int, achadas: dict[str, dict]) -> list[dict]:
-    """[{nome, peso, questoes, topicos, existe}] — `existe` = id da matéria que já tem esse nome."""
-    ja = {_norm(x["nome"]): x["id"] for x in E.materias(conv_id)}
-    return [{**m, "peso": E._peso(m["questoes"] or 1), "existe": ja.get(k)} for k, m in achadas.items()]
 
-
-# ------------------------------------------------------------------ por link
-# Página de banca (IBGP, FGV, Cebraspe…) monta a lista de anexos por JavaScript: o HTML cru não tem os links. A
-# página é aberta num Chromium headless (o mesmo do PDF do resumo) e lida depois de montada. Toda requisição dela
-# passa pelo check de rede pública (nada de 127.0.0.1/rede local) e imagem/fonte/vídeo nem carregam.
 MAX_ANEXOS = 6
 _LINKS_JS = """() => [...document.querySelectorAll('a[href]')].map(a => ({
   href: a.href, texto: (a.innerText || a.title || '').trim().slice(0, 160),
@@ -312,47 +308,17 @@ async def pagina_renderizada(url: str) -> tuple[str, list[dict]]:
     return re.sub(r"\n{3,}", "\n\n", texto or "").strip()[:8000], links
 
 
-def nome_do_concurso(pagina: str, cargo: str = "") -> str:
-    """"Concurso Público do Município de Contagem/MG — Analista de TI": a linha da página que fala do concurso
-    (ou do edital) e o cargo. "" se a página não tiver uma."""
-    linha = next((l.strip() for l in (pagina or "").splitlines()
-                  if not l.startswith("===") and re.search(r"(?i)concurso|processo seletivo|edital", l) and 12 <= len(l.strip()) <= 140), "")
-    linha = re.sub(r"\s*[-–]\s*EDITAL\s+N[º°o.]*\s*[\d/.-]+\s*$", "", linha, flags=re.I).strip()
-    if not linha:
-        return ""
-    if linha.isupper():   # caixa alta da página: "Município de Contagem/MG" (preposição baixa, UF alta)
-        def palavra(w: str) -> str:
-            if w in ("de", "do", "da", "dos", "das", "e"):
-                return w
-            return "/".join(p.upper() if len(p) == 2 and i else p.capitalize() for i, p in enumerate(w.split("/")))
-        linha = " ".join(palavra(w) for w in linha.lower().split())
-    return (f"{linha} — {cargo}" if cargo else linha)[:120]
-
-
-def _nomear(conv_id: int, pagina: str, cargo: str) -> None:
-    """O objetivo que ainda se chama "Nova conversa" ganha o nome do concurso (a página do concurso diz)."""
-    nome = nome_do_concurso(pagina, cargo)
-    if not nome:
-        return
-    with E.db.session() as s:
-        c = E._conv(s, conv_id)
-        if c.title in ("", "Nova conversa"):
-            c.title = nome
-            E._tocar(s, conv_id)
-            s.commit()
-
 
 def texto_de_link(url: str, cancelado=None) -> dict:
     """{texto, pagina, anexos}: o PDF do link, ou os anexos que importam da página do concurso, baixados (só PDF,
     pelo download checado da busca de provas) e lidos. O texto da página vai junto: ele traz a data da prova."""
     import asyncio
     import tempfile
-    from . import estudos_busca as B
     url = (url or "").strip()
     if not re.match(r"(?i)https?://", url):
         raise ToolError("Cole o endereço da página do concurso ou do PDF do edital (http:// ou https://).")
     try:
-        dados = B.baixar_pdf(url, B.TETO_PDF, cancelado)   # o link já é o PDF
+        dados = baixar_pdf(url, TETO_PDF, cancelado)   # o link já é o PDF
         anexos, pagina = [{"url": url, "nome": url.rsplit("/", 1)[-1][:120], "dados": dados}], ""
     except ToolError:
         pagina, links = asyncio.run(pagina_renderizada(url))
@@ -361,7 +327,7 @@ def texto_de_link(url: str, cancelado=None) -> dict:
             if cancelado and cancelado():
                 raise ToolError("cancelado")
             try:
-                anexos.append({**a, "dados": B.baixar_pdf(a["url"], B.TETO_PDF, cancelado)})
+                anexos.append({**a, "dados": baixar_pdf(a["url"], TETO_PDF, cancelado)})
             except ToolError as e:
                 anexos.append({**a, "erro": str(e)[:120]})
     partes = [f"=== Página do concurso ===\n{pagina}"] if pagina else []
@@ -371,7 +337,7 @@ def texto_de_link(url: str, cancelado=None) -> dict:
                 continue
             p = Path(d) / f"{i:02d}.pdf"
             p.write_bytes(a.pop("dados"))
-            t = E._glifos(documentos.extrair(p) or "").strip()
+            t = glifos(documentos.extrair(p) or "").strip()
             a["chars"] = len(t)
             if t:
                 partes.append(f"=== {a['nome']} ===\n{t}")
@@ -387,134 +353,198 @@ def texto_de_arquivo(nome: str, dados: bytes) -> dict:
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / f"edital{ext}"
         p.write_bytes(dados)
-        if ext in E.EXT_TEXTO:
+        if ext in EXT_TEXTO:
             texto = dados.decode("utf-8", "replace")
         else:
             try:
                 texto = documentos.extrair(p) or ""
             except Exception as e:
                 raise ToolError(f"Não consegui ler o arquivo: {e}") from e
-    texto = E._glifos(texto).strip()
+    texto = glifos(texto).strip()
     if len(texto) < 200:
         raise ToolError("O arquivo quase não tem texto (edital escaneado?). Cole o trecho do conteúdo programático.")
     return {"texto": texto, "chars": len(texto)}
 
 
-def start(conv_id: int, texto: str, cargo: str = "", provider: str = "", model: str = "", link: str = "") -> dict:
-    """Lê o edital colado, ou o do `link` (a página do concurso ou o PDF): o download roda dentro da execução."""
-    texto, cargo, link = (texto or "").strip(), (cargo or "").strip()[:120], (link or "").strip()[:2000]
-    if link and not re.match(r"(?i)https?://", link):
-        raise ToolError("Cole o endereço da página do concurso ou do PDF do edital (http:// ou https://).")
-    if not link and len(texto) < 200:
-        raise ToolError("Cole o edital (ou pelo menos o quadro de provas e o conteúdo programático), ou o link dele.")
-    _, escritor, claude = E.modelos(provider, model)
-    if claude:
-        raise ToolError("Ler o edital roda num modelo do Forja (pelo MCP, o Claude cria as matérias direto).")
-    with E.db.session() as s:
-        E._conv(s, conv_id)
-    if E.rodando(conv_id):
-        raise ToolError("Este estudo já está rodando. Espere terminar ou pare antes.")
-    E.materias(conv_id)
-    partes = [] if link else em_lotes(trechos(texto, cargo))
-    publico = {"tipo": "edital", "titulo": "Edital", "cargo": cargo, "link": link, "anexos": [], "status": "rodando",
-               "etapa": "baixando" if link else "lendo",
-               "progresso": "", "aviso": "", "pedacos": len(partes), "proposta": [], "data_prova": "",
-               "stats": E.stats_novos(escritor, escritor)}
-    msg = _save(conv_id, role="assistant", content="", status="running", meta={"estudos": publico})
-    run = {**publico, "message_id": msg.id, "conv_id": conv_id, "cancelar": False, "t0": time.monotonic(), "teto": TETO,
-           "texto": "", "gravar": E._gravar, "_partes": partes, "_colunas": [] if link else quadro_do_cargo(texto, cargo)}
-    E.disparar(run, _rodar(run, escritor))
-    return msg.to_dict()
+def _eh_pdf(url: str) -> bool:
+    return urlparse(url).path.lower().endswith(".pdf")
 
 
-async def _rodar(run: dict, spec: dict) -> None:
-    from . import design
-    from .estudos_prova import _json
-    conv_id, achadas = run["conv_id"], {}
+class _Links(web.HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links: list[tuple[str, str]] = []
+        self.base = ""
+        self._href, self._buf = "", []
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "base" and (a.get("href") or "").startswith(("http://", "https://")):
+            self.base = a["href"]
+        if tag == "a":
+            self._href, self._buf = a.get("href") or "", []
+
+    def handle_data(self, data):
+        if self._href and sum(map(len, self._buf)) < 300:   # texto do link: dado da web, curto
+            self._buf.append(data)
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._href:
+            self.links.append((self._href, re.sub(r"\s+", " ", "".join(self._buf)).strip()[:160]))
+            self._href = ""
+
+
+def links_pdf(html: str, base: str) -> list[dict]:
+    """Os links .pdf de uma página, com o texto do link (o INEP escreve "Caderno 1 - Azul - 2º dia"). `base` é a
+    URL final (depois dos redirects); um <base href> da página vale mais."""
+    p = _Links()
     try:
-        if run["link"]:   # a página do concurso (ou o PDF): só PDF baixa, e cada salto passa pelo check de rede
-            run["progresso"] = "abrindo a página e baixando os anexos"
-            E._gravar(run)
-            r = await asyncio.to_thread(texto_de_link, run["link"], lambda: run["cancelar"])
-            run["anexos"] = r["anexos"]
-            run["_partes"] = em_lotes(trechos(r["texto"], run["cargo"]))
-            run["_colunas"] = quadro_do_cargo(r["texto"], run["cargo"])
-            _nomear(conv_id, r["pagina"], run["cargo"])
-            run.update(pedacos=len(run["_partes"]), etapa="lendo")
-            E._gravar(run)
-        await design._garantir_local({"spec": spec})
-        cargo = f"Cargo pedido: {run['cargo']}\n" if run["cargo"] else ""
-        for i, p in enumerate(run["_partes"]):
-            if run["cancelar"]:
-                break
-            run["progresso"] = f"lendo {i + 1} de {len(run['_partes'])}"
-            E._gravar(run)
-            E._teto(run, TETO)
-            try:
-                obj = _json(await pesquisa._perguntar(spec, EDITAL_PROMPT, f"{cargo}{web.UNTRUSTED}{p}", run)) or {}
-            except Exception as e:
-                E._avisar(run, f"Um pedaço falhou: {e.__class__.__name__}.")
-                continue
-            juntar(achadas, obj.get("materias"))
-            if not run["data_prova"] and re.fullmatch(r"20\d\d-\d\d-\d\d", str(obj.get("data_prova") or "")):
-                run["data_prova"] = obj["data_prova"]
-            corrigir_pelo_quadro(achadas, run.get("_colunas") or [])   # a tabela lida sem modelo vale mais
-            run["proposta"] = proposta(conv_id, achadas)
-        if not run["proposta"] and not run["cancelar"]:
-            E._avisar(run, "Não achei as disciplinas no texto. Cole o trecho do conteúdo programático ou do quadro de provas.")
-        run["status"] = "cancelado" if run["cancelar"] else ("pronto" if run["proposta"] else "erro")
+        p.feed(html)
+    except Exception:
+        return []
+    raiz = p.base or base
+    out, vistos = [], set()
+    for href, texto in p.links:
+        url = urljoin(raiz, href)
+        if _eh_pdf(url) and url not in vistos and url.startswith("http"):
+            vistos.add(url)
+            out.append({"url": url, "titulo": texto or url.rsplit("/", 1)[-1][:160], "trecho": f"PDF na página {web.dominio(base)}"})
+    return out
+
+
+CA_ISSUERS = b"\x06\x08\x2b\x06\x01\x05\x05\x07\x30\x02\x86"   # OID caIssuers + [6] IA5String, dentro do AIA
+_CADEIAS: dict[str, "ssl.SSLContext"] = {}
+PRAZO = 120              # segundos por arquivo: servidor que pinga byte a byte não prende a busca
+
+
+class _TLS(Exception):
+    """Cadeia incompleta no salto para `host` (o redirect pode levar a outro servidor)."""
+    def __init__(self, host: str):
+        super().__init__(host)
+        self.host = host
+
+
+def _baixar(url: str, teto: int, aceita=None, prazo: float = PRAZO, cancelado=None) -> tuple[bytes, str, str]:
+    """(dados, url final, content-type). Segue no máximo 6 redirects à mão, checando cada destino (nada de rede
+    local), lê em stream com teto e prazo, e escolhe a verificação TLS pelo host de cada salto (o contexto com o
+    intermediário do AIA, se aquele servidor precisou). `aceita(ctype, inicio)` recusa cedo o que não serve."""
+    t0 = time.monotonic()
+    for _ in range(7):
+        web.check_public_url(url)
+        host = urlparse(url).hostname or ""
+        try:
+            with httpx.Client(timeout=httpx.Timeout(30, connect=15), headers={"User-Agent": web.UA}, follow_redirects=False,
+                              verify=_CADEIAS.get(host, True)) as c, c.stream("GET", url) as r:
+                if r.is_redirect and r.next_request:
+                    url = str(r.next_request.url)
+                    continue
+                if r.status_code >= 400:
+                    raise ToolError(f"HTTP {r.status_code}")
+                if int(r.headers.get("content-length") or 0) > teto:
+                    raise ToolError(f"maior que {teto // 1_000_000} MB")
+                ctype = r.headers.get("content-type", "")
+                dados = bytearray()
+                for parte in r.iter_bytes():
+                    if aceita and not dados and not aceita(ctype, parte[:1024]):
+                        raise ToolError("não é o tipo de arquivo esperado")
+                    dados += parte
+                    if len(dados) > teto:
+                        raise ToolError(f"maior que {teto // 1_000_000} MB")
+                    if time.monotonic() - t0 > prazo:
+                        raise ToolError("demorou demais")
+                    if cancelado and cancelado():
+                        raise ToolError("cancelado")
+                return bytes(dados), url, ctype
+        except httpx.ConnectError as e:
+            if "CERTIFICATE_VERIFY_FAILED" in str(e) and host not in _CADEIAS:
+                raise _TLS(host) from e
+            raise
+    raise ToolError("redirecionamentos demais")
+
+
+def _cadeia_completa(host: str):
+    """Servidor que manda a cadeia sem o intermediário (o download.inep.gov.br): o navegador e o curl do Windows
+    completam sozinhos pelo AIA do certificado; o Python não. Aqui: lê o certificado (sem verificar, só para achar
+    o AIA), baixa o intermediário pelo mesmo caminho checado (redirect a redirect, até 20 KB) e monta um contexto
+    com ele + as raízes do certifi — a conexão de verdade continua VERIFICADA até uma raiz confiável (a cadeia
+    parcial fica desligada; um intermediário falso não fecha em raiz nenhuma)."""
+    import socket
+    import ssl
+
+    import certifi
+    if host in _CADEIAS:
+        return _CADEIAS[host]
+    web.check_public_url(f"https://{host}/")
+    leitura = ssl.create_default_context()
+    leitura.check_hostname, leitura.verify_mode = False, ssl.CERT_NONE
+    with socket.create_connection((host, 443), timeout=15) as s, leitura.wrap_socket(s, server_hostname=host) as t:
+        der = t.getpeercert(binary_form=True) or b""
+    i = der.find(CA_ISSUERS)
+    if i < 0:
+        raise ToolError("certificado sem cadeia (e sem AIA)")
+    n = der[i + len(CA_ISSUERS)]
+    aia = der[i + len(CA_ISSUERS) + 1:i + len(CA_ISSUERS) + 1 + n].decode("ascii", "ignore")
+    inter, _, _ = _baixar(aia, 20_000, prazo=30)
+    try:
+        cert = inter if inter[:1] == b"\x30" else ssl.PEM_cert_to_DER_cert(inter.decode("ascii", "ignore"))
+        ssl.DER_cert_to_PEM_cert(cert)
     except Exception as e:
-        run["status"] = "erro"
-        E._avisar(run, str(e)[:300] if isinstance(e, ToolError) else f"{e.__class__.__name__}: {e}"[:300])
-    finally:
-        run["etapa"] = "pronto"
-        run["progresso"] = ""
-        run["stats"]["segundos"] = round(time.monotonic() - run["t0"], 1)
+        raise ToolError("o intermediário do AIA não é certificado") from e
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    ctx.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN   # o intermediário só vale se fechar numa raiz do certifi
+    ctx.load_verify_locations(cadata=cert)
+    _CADEIAS[host] = ctx
+    return ctx
+
+
+def _com_tls(fn, *a, **kw):
+    """Roda `fn`; se um salto bater em cadeia incompleta, completa a daquele host e tenta de novo (até 3 hosts).
+    Conexão que cai ganha mais uma tentativa (o servidor do INEP derruba de vez em quando)."""
+    quedas = 0
+    for _ in range(6):
         try:
-            E._patch(run["message_id"], status=run["status"], content="", meta={"estudos": E._publico(run)})
-            mirror.write(conv_id)
-        except ToolError:
-            pass
-        E._RUNS.pop(run["message_id"], None)
+            return fn(*a, **kw)
+        except _TLS as e:
+            _cadeia_completa(e.host)
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError, httpx.ReadError) as e:
+            quedas += 1
+            if quedas > 1:
+                raise ToolError("não conectou" if isinstance(e, httpx.ConnectError) else "a conexão caiu no meio") from e
+            time.sleep(2)
+    raise ToolError("não conectou")
 
 
-def aplicar(conv_id: int, itens: list[dict], cronograma: dict | None = None) -> list[dict]:
-    """Cria as matérias novas e dá peso e tópicos às que já existem (pelo nome). Com `cronograma` ({data, minutos}),
-    monta o plano de estudos do objetivo até a prova (pelos tópicos do edital, sem esperar resumo)."""
-    escolhidos = []
-    for x in itens or []:
-        nome = re.sub(r"\s+", " ", str((x or {}).get("nome") or "")).strip()[:60]
-        if nome:
-            topicos = [re.sub(r"\s+", " ", str(t)).strip()[:140] for t in x.get("topicos") or [] if str(t).strip()][:MAX_TOPICOS]
-            escolhidos.append({"nome": nome, "peso": E._peso(x.get("peso")), "topicos": topicos})
-    if not escolhidos:
-        raise ToolError("Marque pelo menos uma matéria.")
-
-    def f(lista, s):
-        for x in escolhidos:
-            alvo = next((y for y in lista if _norm(y["nome"]) == _norm(x["nome"])), None)
-            if alvo:
-                alvo.update(peso=x["peso"], **({"topicos": x["topicos"]} if x["topicos"] else {}))
-            else:
-                n = max((int(y["id"][1:]) for y in lista if y["id"][1:].isdigit()), default=0) + 1
-                lista.append({"id": f"m{n}", **x})
-    lista = E._mudar_materias(conv_id, f)
-    if cronograma and cronograma.get("data"):
-        from . import estudos_revisao
-        marca = E.MATERIA.set(None)   # o plano é do objetivo inteiro
-        try:
-            estudos_revisao.planejar(conv_id, str(cronograma["data"]), E._int(cronograma.get("minutos")) or 60)
-        finally:
-            E.MATERIA.reset(marca)
-    return lista
+def _pagina_html(url: str) -> tuple[str, str]:
+    """(HTML cru, URL final) de uma página — o web.ler devolve só o texto, sem os links. Até 2 MB, só HTML."""
+    dados, final, ctype = _com_tls(_baixar, url, 2_000_000, aceita=lambda ct, ini: "html" in ct, prazo=30)
+    return dados.decode("utf-8", "replace"), final
 
 
-def ultima(conv_id: int) -> dict | None:
-    from sqlalchemy import select
-    with E.db.session() as s:
-        for m in s.scalars(select(E.db.Message).where(E.db.Message.conversation_id == conv_id, E.db.Message.role == "assistant")
-                           .order_by(E.db.Message.id.desc())):
-            e = (m.meta or {}).get("estudos") or {}
-            if e.get("tipo") == "edital":
-                return {"message_id": m.id, **e, "status": E._situacao(m.status)}
-    return None
+def baixar_pdf(url: str, teto: int = TETO_PDF, cancelado=None) -> bytes:
+    """Só PDF: confere o "%PDF" do começo, corta no teto e no prazo e checa cada redirect (nada de rede local)."""
+    dados, _, _ = _com_tls(_baixar, url, teto, aceita=lambda ct, ini: ini.lstrip().startswith(b"%PDF"), cancelado=cancelado)
+    if not dados.lstrip().startswith(b"%PDF"):
+        raise ToolError("não é PDF")
+    return dados
+
+def _pedacos(texto: str, tamanho: int = PEDACO) -> list[str]:
+    """Pedaços de até `tamanho` caracteres, cortados em parágrafo. Pedaço que começa no meio de uma página
+    leva a marca dela de novo: sem isso o extrator perde o número para citar [p. N]."""
+    out: list[str] = []
+    atual, pagina = "", 0
+    for bloco in texto.split("\n\n"):
+        if m := MARCA_PAGINA.match(bloco.strip()):
+            pagina = int(m.group(1))
+        while len(bloco) > tamanho:   # parágrafo gigante (PDF sem quebra)
+            out.append(bloco[:tamanho])
+            bloco = bloco[tamanho:]
+        if atual and len(atual) + len(bloco) + 2 > tamanho:
+            out.append(atual)
+            atual = ""
+        if not atual and pagina and not MARCA_PAGINA.match(bloco.strip()):
+            atual = f"--- página {pagina} (continuação) ---"
+        atual = f"{atual}\n\n{bloco}" if atual else bloco
+    if atual.strip():
+        out.append(atual)
+    return out
+

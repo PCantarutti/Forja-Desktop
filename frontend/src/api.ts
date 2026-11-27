@@ -2,12 +2,7 @@
 // numa aba comum do navegador (dev com Vite) — e ali o backend também não exige.
 export const auth = (): Record<string, string> => ({
   ...(window.forja?.token ? { "X-Forja-Token": window.forja.token } : {}),
-  ...(materiaEstudos ? { "X-Forja-Materia": materiaEstudos } : {}),
 });
-// A matéria aberta na tela Estudos: toda chamada leva (o backend só lê em /api/estudos), e as abas filtram e marcam
-// por ela sem passar nada adiante. null = "Tudo". ponytail: global de módulo, só uma tela Estudos por janela.
-let materiaEstudos: string | null = null;
-export const setMateriaEstudos = (m: string | null) => { materiaEstudos = m; };
 // <img src> e link de download não mandam header: levam o token neste cookie (sem Max-Age, morre com o
 // app, como o próprio token). Strict: página de outro site não consegue fazer o navegador mandá-lo.
 if (window.forja?.token) document.cookie = `forja_token=${window.forja.token}; path=/api; SameSite=Strict`;
@@ -55,7 +50,7 @@ export async function uploadReferencia(file: File, video = false): Promise<strin
   return (await r.json()).path;
 }
 
-/** Arquivo para uma rota que recebe multipart `file` (o material da tela Estudos). */
+/** Arquivo para uma rota que recebe multipart `file` (fontes e edital da tela Estudos). */
 export async function enviarArquivo<T>(path: string, file: File): Promise<T> {
   const form = new FormData();
   form.append("file", file);

@@ -308,7 +308,7 @@ def _publico(run: dict) -> dict:
 def _persistir(run: dict) -> None:
     """Só em transição de fase — gravar por token seria animar a tela escrevendo no disco."""
     run["stats"]["segundos"] = round(time.monotonic() - run["t0"], 1)
-    if gravar := run.get("gravar"):   # estudos.py usa estas etapas com o meta dele
+    if gravar := run.get("gravar"):   # quem reaproveita estas etapas (conteúdo) grava no meta dele
         return gravar(run)
     _patch(run["message_id"], meta={"pesquisa": _publico(run)})
 

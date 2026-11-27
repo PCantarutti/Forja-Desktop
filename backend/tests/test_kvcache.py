@@ -196,17 +196,18 @@ def test_aviso_dos_padroes_novos_aparece_uma_vez_e_desfazer_volta_o_f16(monkeypa
 
 def test_pesquisa_do_conteudo_e_outras_telas_seguram_o_modelo(monkeypatch):
     # 2026-10-07: a pesquisa funda do Conteúdo (roteiros do Algoritmia) teve o modelo derrubado por "ociosidade" no meio
-    from app import comparar, conteudo_roteiros, design, estudos, pesquisa
+    from app import comparar, conteudo_roteiros, design, pesquisa
+    from app.estudo import base as estudo_base
     monkeypatch.setattr(localai, "status", lambda: {"running": True, "alias": "m"})
     monkeypatch.setattr(localai, "image_busy", lambda: False)
     monkeypatch.setattr(localai, "_loading", {})
     monkeypatch.setattr(config, "DESCARREGAR_OCIOSO_MIN", 15)
     monkeypatch.setitem(llm.ULTIMO_USO, "t", time.monotonic() - 16 * 60)
     monkeypatch.setattr(agent, "RUNS", {})
-    for m in (comparar, conteudo_roteiros, design, estudos, pesquisa):
+    for m in (comparar, conteudo_roteiros, design, estudo_base, pesquisa):
         monkeypatch.setattr(m, "_RUNS", {})
     assert modelctl.precisa_descarregar()
-    for m in (comparar, conteudo_roteiros, design, estudos, pesquisa):
+    for m in (comparar, conteudo_roteiros, design, estudo_base, pesquisa):
         monkeypatch.setattr(m, "_RUNS", {1: {}})
         assert not modelctl.precisa_descarregar(), m.__name__
         monkeypatch.setattr(m, "_RUNS", {})

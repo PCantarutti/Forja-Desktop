@@ -11,7 +11,7 @@ import VideoView from "./components/VideoView";
 import CompararView from "./components/CompararView";
 import PesquisaView from "./components/PesquisaView";
 import TtsView from "./components/TtsView";
-import EstudosView from "./components/EstudosView";
+import EstudoView from "./components/estudo/EstudoView";
 import DesignView from "./components/DesignView";
 import ConteudoView from "./components/ConteudoView";
 import PlansPanel, { type PlanEntry } from "./components/PlansPanel";
@@ -717,7 +717,7 @@ export default function App() {
                      video: ["Geração de vídeo concluída", "O vídeo está pronto."],
                      comparar: ["Comparação terminou", conv(id)?.title ?? "Comparação"],
                      design: ["Design terminou", conv(id)?.title ?? "Design"],
-                     estudos: ["Estudo pronto", conv(id)?.title ?? "Estudos"] } as Record<string, string[]>)[c.kind ?? ""];
+                     estudo: ["Estudo pronto", conv(id)?.title ?? "Estudos"] } as Record<string, string[]>)[c.kind ?? ""];
       if (fim) notify(fim[0], fim[1], id !== currentId, id);
       if (c.kind !== "maestro") continue;
       api.get<MaestroBoard>(`/maestro/${id}/board`).then((b) => {
@@ -2549,8 +2549,8 @@ export default function App() {
               if (currentId !== null) setUnread((u) => new Set(u).add(currentId));
             }}
           />
-        ) : section === "estudos" ? (
-          <EstudosView
+        ) : section === "estudo" ? (
+          <EstudoView
             conv={currentId}
             carimbo={activity.lista}
             ensureConversation={ensureConversation}

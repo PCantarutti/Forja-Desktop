@@ -9,7 +9,7 @@ export type Effort = "baixo" | "medio" | "alto" | "maximo" | "extremo";
 // "imagem" é o mesmo literal do `kind` da conversa no backend: a barra lateral interpola
 // a seção direto na query de /conversations.
 // "assistente" é uma página (configurações do assistente de voz), não um tipo de conversa: não tem lista nem chat.
-export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudos" | "conteudo" | "tts" | "assistente" | "financas";
+export type Section = "chat" | "agent" | "maestro" | "imagem" | "video" | "comparar" | "pesquisa" | "design" | "estudo" | "conteudo" | "tts" | "assistente" | "financas";
 
 export const PERMISSIONS: { id: Permission; label: string; hint: string }[] = [
   { id: "auto", label: "Automático", hint: "O Forja decide: edições passam, o resto pergunta" },
@@ -226,7 +226,7 @@ export const SECOES: { id: Section; label: string; title: string; icon: React.Re
   { id: "comparar", label: "Comparar", title: "Comparar modelos", icon: <Balanca className="size-[18px]" /> },
   { id: "pesquisa", label: "Pesquisa", title: "Pesquisa profunda", icon: <Search className="size-[18px]" /> },
   { id: "design", label: "Design", title: "Design (sites e apresentações)", icon: <Prancheta className="size-[18px]" /> },
-  { id: "estudos", label: "Estudos", title: "Estudos (resumo e prova do seu material)", icon: <Livro className="size-[18px]" /> },
+  { id: "estudo", label: "Estudos", title: "Estudos (material e provas a partir das fontes)", icon: <Livro className="size-[18px]" /> },
   { id: "conteudo", label: "Conteúdo", title: "Conteúdo (roteiros e vídeos para o canal)", icon: <Camera className="size-[18px]" /> },
   { id: "tts", label: "Voz", title: "Voz (texto para fala)", icon: <Onda className="size-[18px]" /> },
   { id: "assistente", label: "F.O.R.J.A", title: "Assistente de voz F.O.R.J.A", icon: <Mic className="size-[18px]" /> },

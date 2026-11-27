@@ -4,7 +4,7 @@ Uma rodada = mensagem `assistant` (name="roteiros") na conversa da especificaç�
 `meta["roteiros"]`. Duas formas de rodar:
 
 - modelo do Forja: as etapas do pesquisa.py (planejar, buscar, ler e extrair) com a persistência daqui
-  (`run["gravar"]`, o mesmo gancho que o estudos.py usa), e uma etapa final que escreve N roteiros em JSON
+  (`run["gravar"]`), e uma etapa final que escreve N roteiros em JSON
   seguindo o arquivo do estilo;
 - Claude via MCP: a mensagem fica `aguardando` e o Claude a pega por `conteudo_pedidos`, pesquisa com a
   própria busca e grava com `conteudo_salvar_roteiros` (como os pedidos da tela Estudos).
@@ -31,7 +31,7 @@ from .tools import ToolError
 
 CHAVE = "roteiros"
 NOME = "roteiros"               # Message.name das rodadas
-MOTOR_CLAUDE = "claude-mcp"     # o mesmo literal de estudos.MOTOR_CLAUDE
+MOTOR_CLAUDE = "claude-mcp"     # provider que manda o pedido para o Claude via MCP
 STATUS = ("novo", "aprovado", "descartado", "produzido")
 LONGO = 240                     # segundos de duração mínima a partir dos quais cada roteiro sai numa chamada própria
 PALAVRAS_POR_SEGUNDO = 3.0      # medido nos vídeos prontos (Edge TTS +32%, com as pausas): 150 palavras ≈ 50 s, não 62

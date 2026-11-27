@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (baterias, board, board_auto, checkpoints, convencoes, mcp_servidor, compact, comparar, config, db, documentos, downloads, gitops, goals, imagegen, llm,
                kvcache, localai, lotes, lsp, metricas,
-               mcp_client, memory, mirror, mobile, native, pesquisa, design, estudos, conteudo, conteudo_roteiros, conteudo_producao, conteudo_agenda, servico, servico_instalar, design_html, policy, relatorio, settings, shell, skills, subagents,
+               mcp_client, memory, mirror, mobile, native, pesquisa, design, conteudo, conteudo_roteiros, conteudo_producao, conteudo_agenda, servico, servico_instalar, design_html, policy, relatorio, settings, shell, skills, subagents,
                modelctl, projstate, taskdb, terminal, uploads, workspace)
 from .agent import RUNS, Run, RunRequest, _load, _save, active_run
 from .browser import MANAGER
@@ -49,7 +49,6 @@ async def lifespan(_app):
     servico.trava(config.DATA_DIR)  # um backend por pasta de dados: o serviço sem janela e a janela nunca juntos
     localai.reap_orphan()
     taskdb.reap()  # tentativas de tarefa que ficaram abertas numa queda anterior  # sobra de um backend que morreu sem descarregar o modelo
-    estudos.reap()  # resumo de estudo que ficou rodando numa queda anterior
     conteudo_roteiros.reap()  # pesquisa de roteiros (Conteúdo) que ficou rodando numa queda anterior
     conteudo_producao.reap()  # produção de vídeo (claude -p) que o fechamento do app interrompeu
     lotes.reap()  # lotes de imagem que ficaram "gerando" quando o app fechou no meio
@@ -63,13 +62,8 @@ async def lifespan(_app):
     vivas = {asyncio.create_task(asyncio.to_thread(localai.load_last))}  # "carregar ao iniciar"
     vigia = asyncio.create_task(modelctl.vigia_ociosidade())  # E4: descarrega o modelo local sem uso
     vivas.add(vigia)
-    from . import estudos_revisao
-    lembrete = asyncio.create_task(estudos_revisao.vigia())  # Estudos: o aviso do dia no celular, de hora em hora
-    vivas.add(lembrete)
     agenda = asyncio.create_task(conteudo_agenda.vigia())  # Conteúdo (E18): roteiros e vídeos nos horários marcados
     vivas.add(agenda)
-    from . import estudos_piloto
-    estudos_piloto.retomar()  # Estudos: piloto que estava rodando quando o app fechou (o item interrompido é refeito)
     assistente.ao_subir(asyncio.get_running_loop())  # assistente de voz: reabre ouvindo se estava ligado
     # Espelho em Markdown: gera o que falta (banco anterior ao espelho) e limpa .md órfão.
     print(f"Forja: conversas espelhadas em {mirror.ROOT} ({mirror.sync()} arquivo(s) gerado(s))", flush=True)
@@ -86,7 +80,6 @@ async def lifespan(_app):
     await mobile.desliga_lan()
     task.cancel()
     vigia.cancel()  # laço sem fim: sem o cancel o gather abaixo esperava para sempre
-    lembrete.cancel()
     agenda.cancel()
     await asyncio.gather(*vivas, return_exceptions=True)  # sem isto, "Task exception was never retrieved"
     shell.close_all()     # servidores e processos em segundo plano do agente
@@ -103,6 +96,8 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Forja", lifespan=lifespan)
+from .estudo import base as estudo_base, rotas as estudo_rotas  # noqa: E402
+app.include_router(estudo_rotas.router)
 # /mcp fora de /api: tem o próprio porteiro (token fixo do MCP + interruptor), não o token da interface.
 from starlette.routing import Route  # noqa: E402
 app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=["GET", "POST", "DELETE"]))
@@ -127,7 +122,7 @@ app.router.routes.append(Route("/mcp", endpoint=mcp_servidor.PORTEIRO, methods=[
 # isso, qualquer processo da máquina lia os arquivos da conversa — `.env` incluído — e a conversa
 # inteira pelo /export. Só fica sem token a página do relatório da pesquisa, que o botão abre no
 # navegador do usuário via window.open (`/relatorio`), onde o cookie do app não existe.
-TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/estudos-figura/", "/api/conteudo/video/", "/api/tts/arquivo",
+TOKEN_FORA_DO_HEADER = ("/api/files", "/api/local/image/file", "/api/conteudo/video/", "/api/tts/arquivo",
                         "/api/assistente/gravacoes/")
 SUFIXO_SEM_TOKEN = ("/relatorio",)
 
@@ -156,19 +151,6 @@ async def fronteira(request, call_next):
             and not (path.startswith("/api/iporte/v1/") and financas.token_ok(token or ""))):
         return JSONResponse({"detail": "Token da API ausente ou inválido"}, status_code=403)
     return await call_next(request)
-
-
-@app.middleware("http")
-async def materia_estudos(request, call_next):
-    """A matéria aberta na tela Estudos (cabeçalho x-forja-materia; sem ele = "Tudo"): quem lê filtra por ela,
-    quem grava marca com ela — também nas execuções que a requisição dispara (a task copia o contexto)."""
-    if not request.url.path.startswith("/api/estudos"):
-        return await call_next(request)
-    marca = estudos.MATERIA.set(request.headers.get("x-forja-materia") or None)
-    try:
-        return await call_next(request)
-    finally:
-        estudos.MATERIA.reset(marca)
 
 
 @app.get("/api/config")
@@ -466,9 +448,8 @@ async def get_activity():
         entrada(r["conv_id"])["running"] = True
     for r in list(comparar._RUNS.values()):  # comparação e lote de imagem/vídeo também
         entrada(r["conv_id"])["running"] = True
-    for r in list(estudos._RUNS.values()):   # e o resumo/prova da tela Estudos (dúvida não: viraria "Estudo pronto")
-        if r.get("tipo") != "duvida":
-            entrada(r["conv_id"])["running"] = True
+    for c in list(estudo_base._RUNS):   # tela Estudos (v2): pesquisa, material, prova, correção
+        entrada(c)["running"] = True
     for c in [*lotes.pendentes(), *tts.pendentes()]:
         entrada(c)["running"] = True
     for c in conteudo_roteiros.ativos() + conteudo_producao.ativos():   # pesquisa e produção da tela Conteúdo
@@ -2921,547 +2902,6 @@ def conteudo_marcar_roteiro(message_id: int, roteiro_id: str, body: dict):
     return _conteudo(conteudo_roteiros.marcar, message_id, roteiro_id, str((body or {}).get("status") or ""))
 
 
-# ------------------------------------------------------------------ estudos
-
-
-class EstudosBody(BaseModel):
-    tema: str = ""
-    preferencias: dict = {}         # nivel, objetivo, tom, tamanho, extras[], observacoes
-    web: bool = True                # completar o material com pesquisa na web
-    profundidade: str = "normal"    # rapida | normal | funda (a da pesquisa)
-    provider: str = ""              # "claude-mcp" = o pedido fica para o Claude via MCP
-    model: str = ""
-    ex_provider: str = ""           # quem lê o material e as páginas; vazio = slot "rapido"
-    ex_model: str = ""
-
-
-class MaterialTextoBody(BaseModel):
-    nome: str = ""
-    texto: str = ""
-
-
-class MaterialUsoBody(BaseModel):
-    uso: str | None = None          # conteudo | prova
-    materia: str | None = None      # id da matéria; "" = Geral (serve para todas)
-
-
-class MateriaBody(BaseModel):
-    nome: str | None = None
-    peso: int | None = None         # proporção no simulado geral e no cronograma (questões no edital)
-
-
-def _sse_estudos(message_id: int) -> StreamingResponse:
-    """Retrato inteiro por tick, como a pesquisa."""
-    async def stream():
-        while True:
-            try:
-                est = estudos.estado(message_id)
-            except ToolError as e:
-                yield f"data: {json.dumps({'erro': str(e)}, ensure_ascii=False)}\n\n"
-                return
-            yield f"data: {json.dumps(est, ensure_ascii=False, default=str)}\n\n"
-            if est["status"] != "rodando":
-                return
-            await asyncio.sleep(estudos.TICK)
-
-    return StreamingResponse(stream(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.get("/api/estudos/{conv_id}")
-def estudos_projeto(conv_id: int):
-    try:
-        return estudos.projeto(conv_id)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/material")
-async def estudos_material(conv_id: int, file: UploadFile = File(...)):
-    """PDF, DOCX, PPTX, XLSX, CSV, TXT, MD, HTML ou foto. PDF escaneado e foto passam pelo OCR (demora)."""
-    dados = await file.read()
-    if len(dados) > config.MAX_DOC_BYTES:
-        raise HTTPException(413, f"Arquivo maior que {config.MAX_DOC_BYTES // 1_000_000} MB.")
-    try:
-        return await asyncio.to_thread(estudos.adicionar_material, conv_id, file.filename or "material", dados)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/material/texto")
-def estudos_material_texto(conv_id: int, body: MaterialTextoBody):
-    try:
-        return estudos.adicionar_material(conv_id, body.nome or "texto colado.txt", texto=body.texto)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.patch("/api/estudos/material/{material_id}")
-def estudos_material_uso(material_id: int, body: MaterialUsoBody):
-    try:
-        return estudos.alterar_material(material_id, body.uso, body.materia)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/materias")
-def estudos_materia_nova(conv_id: int, body: MateriaBody):
-    try:
-        return estudos.nova_materia(conv_id, body.nome or "", body.peso or 1)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.patch("/api/estudos/{conv_id}/materias/{materia}")
-def estudos_materia_renomear(conv_id: int, materia: str, body: MateriaBody):
-    try:
-        return estudos.alterar_materia(conv_id, materia, body.nome, body.peso)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-class EditalBody(BaseModel):
-    texto: str = ""
-    link: str = ""                   # a página do concurso ou o PDF do edital (lido em vez do texto)
-    cargo: str = ""
-    provider: str = ""
-    model: str = ""
-
-
-class EditalAplicarBody(BaseModel):
-    materias: list[dict] = []        # [{nome, peso, topicos}] marcadas na proposta
-    cronograma: dict | None = None   # {data: AAAA-MM-DD, minutos}: monta o plano até a prova
-
-
-class JuntarBody(BaseModel):
-    de: int                          # o estudo que vem para dentro deste objetivo (e some da lista)
-
-
-@app.post("/api/estudos/{conv_id}/edital/arquivo")
-async def estudos_edital_arquivo(conv_id: int, file: UploadFile = File(...)):
-    """O texto do edital enviado (não vira material: edital não é conteúdo de estudo)."""
-    from . import estudos_edital
-    dados = await file.read()
-    if len(dados) > config.MAX_DOC_BYTES:
-        raise HTTPException(413, f"Arquivo maior que {config.MAX_DOC_BYTES // 1_000_000} MB.")
-    try:
-        return await asyncio.to_thread(estudos_edital.texto_de_arquivo, file.filename or "edital.pdf", dados)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/edital")
-async def estudos_edital_ler(conv_id: int, body: EditalBody):
-    """Lê o edital e propõe as matérias, com peso e tópicos (SSE). Nada muda até aplicar."""
-    from . import estudos_edital
-    try:
-        msg = estudos_edital.start(conv_id, body.texto, body.cargo, body.provider, body.model, body.link)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-@app.post("/api/estudos/{conv_id}/edital/aplicar")
-def estudos_edital_aplicar(conv_id: int, body: EditalAplicarBody):
-    from . import estudos_edital
-    try:
-        return estudos_edital.aplicar(conv_id, body.materias, body.cronograma)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/juntar")
-async def estudos_juntar(conv_id: int, body: JuntarBody):
-    """Traz outro estudo para dentro deste objetivo e apaga a conversa dele (vazia)."""
-    try:
-        r = await asyncio.to_thread(estudos.juntar, conv_id, body.de)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    await delete_conversation(body.de)
-    return r
-
-
-@app.get("/api/estudos/{conv_id}/visao")
-def estudos_visao(conv_id: int):
-    try:
-        return estudos.visao(conv_id)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.delete("/api/estudos/{conv_id}/materias/{materia}")
-def estudos_materia_apagar(conv_id: int, materia: str):
-    try:
-        return estudos.apagar_materia(conv_id, materia)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.delete("/api/estudos/material/{material_id}")
-def estudos_material_remover(material_id: int):
-    try:
-        return estudos.remover_material(material_id)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/estudar")
-async def estudos_estudar(conv_id: int, body: EstudosBody):
-    try:
-        msg = estudos.start(conv_id, body.tema, body.preferencias, body.web, body.profundidade,
-                            body.provider, body.model, body.ex_provider, body.ex_model)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-class ProvaBody(BaseModel):
-    config: dict = {}               # me, vf, disc (quantas), dificuldade, topicos[], estilo, tempo (min), instrucoes
-    provider: str = ""              # "claude-mcp" = a prova fica para o Claude via MCP
-    model: str = ""
-    ex_provider: str = ""
-    ex_model: str = ""
-
-
-class EntregaBody(BaseModel):
-    respostas: dict = {}            # {questao_id: índice (me) | true/false (vf) | texto (disc)}
-    segundos: int = 0
-    provider: str = ""              # quem corrige as discursivas
-    model: str = ""
-    modo: str = "prova"             # prova | treino
-
-
-class ConferirBody(BaseModel):
-    questao_id: str
-    resposta: int | bool | str | None = None
-
-
-@app.post("/api/estudos/{conv_id}/prova")
-async def estudos_prova_gerar(conv_id: int, body: ProvaBody):
-    from . import estudos_prova
-    try:
-        msg = estudos_prova.start(conv_id, body.config, body.provider, body.model, body.ex_provider, body.ex_model)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-@app.post("/api/estudos/prova/{prova_id}/entregar")
-async def estudos_prova_entregar(prova_id: int, body: EntregaBody):
-    from . import estudos_prova
-    try:
-        msg = estudos_prova.entregar(prova_id, body.respostas, body.segundos, body.provider, body.model, body.modo)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-@app.post("/api/estudos/prova/{prova_id}/conferir")
-def estudos_prova_conferir(prova_id: int, body: ConferirBody):
-    """Modo treino: o gabarito e a explicação de uma questão, logo depois de respondida."""
-    from . import estudos_prova
-    try:
-        return estudos_prova.conferir(prova_id, body.questao_id, body.resposta)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.delete("/api/estudos/prova/{prova_id}")
-def estudos_prova_apagar(prova_id: int):
-    from . import estudos_prova
-    try:
-        return estudos_prova.apagar_prova(prova_id)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-class DuvidaBody(BaseModel):
-    pergunta: str = ""
-    fio: str = "geral"              # "geral"; numa questão, vem o `questao` e o fio sai dele
-    questao: dict | None = None     # {tentativa_id, questao_id}
-    trecho: str = ""                # trecho do resumo marcado ("explique de outro jeito")
-    provider: str = ""              # "claude-mcp" = a resposta fica para o Claude via MCP
-    model: str = ""
-
-
-@app.post("/api/estudos/{conv_id}/duvida")
-async def estudos_duvida(conv_id: int, body: DuvidaBody):
-    from . import estudos_duvidas
-    try:
-        msg = estudos_duvidas.perguntar(conv_id, body.pergunta, body.fio, body.questao, body.trecho,
-                                        body.provider, body.model)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-@app.get("/api/estudos/{conv_id}/duvidas")
-def estudos_duvidas_fio(conv_id: int, fio: str = "geral"):
-    from . import estudos_duvidas
-    try:
-        return estudos_duvidas.conversa(conv_id, fio)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-class RevisarBody(BaseModel):
-    chave: str                      # q:<prova>:<questão> | f:<cartão>
-    acertou: bool = False
-    tirar: bool = False             # sai da revisão de vez (questão com defeito)
-
-
-class FlashcardsBody(BaseModel):
-    quantos: int = 20
-    provider: str = ""              # "claude-mcp" = os cartões ficam para o Claude via MCP
-    model: str = ""
-
-
-class CronogramaBody(BaseModel):
-    data: str                       # AAAA-MM-DD, o dia da prova
-    minutos: int = 60               # por dia
-
-
-class MarcarBody(BaseModel):
-    tarefa_id: str
-    feito: bool = True
-
-
-class PdfBody(BaseModel):
-    titulo: str = ""
-    html: str                       # o resumo como a tela desenhou (KaTeX incluso)
-    css: str = ""                   # o CSS da tela, com as fontes usadas embutidas
-
-
-def _revisao(f, *args, codigo: int = 400):
-    from . import estudos_revisao
-    try:
-        return getattr(estudos_revisao, f)(*args)
-    except ToolError as e:
-        raise HTTPException(codigo, str(e))
-
-
-@app.get("/api/estudos/{conv_id}/revisao")
-def estudos_revisao_painel(conv_id: int):
-    return _revisao("painel", conv_id, codigo=404)
-
-
-@app.post("/api/estudos/{conv_id}/revisao")
-def estudos_revisao_responder(conv_id: int, body: RevisarBody):
-    return _revisao("revisar", conv_id, body.chave, body.acertou, body.tirar)
-
-
-@app.post("/api/estudos/{conv_id}/flashcards")
-async def estudos_flashcards(conv_id: int, body: FlashcardsBody):
-    msg = _revisao("start", conv_id, body.quantos, body.provider, body.model)
-    return _sse_estudos(msg["id"])
-
-
-@app.delete("/api/estudos/{conv_id}/flashcards/{cartao_id}")
-def estudos_flashcard_apagar(conv_id: int, cartao_id: str):
-    return _revisao("apagar_cartao", conv_id, cartao_id)
-
-
-class SimuladoBody(BaseModel):
-    material_id: int
-    gabarito: str = ""              # o gabarito colado ("91 C 92 A ...")
-    gabarito_material: int = 0      # ou um material que é o gabarito
-    provider: str = ""
-    model: str = ""
-    ex_provider: str = ""
-    ex_model: str = ""
-
-
-class BuscaBody(BaseModel):
-    pedido: str                     # "ENEM 2023 2º dia", "FUVEST 2024 1ª fase"
-    provider: str = ""
-    model: str = ""
-    ex_provider: str = ""
-    ex_model: str = ""
-
-
-@app.post("/api/estudos/{conv_id}/simulado")
-async def estudos_simulado_start(conv_id: int, body: SimuladoBody):
-    """Confere a IA com o gabarito oficial: recorta as questões reais, resolve às cegas e compara (SSE)."""
-    from . import estudos_simulado
-    try:
-        msg = estudos_simulado.start(conv_id, body.material_id, body.gabarito, body.gabarito_material,
-                                     body.provider, body.model, body.ex_provider, body.ex_model)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-@app.get("/api/estudos/simulado/{message_id}")
-def estudos_simulado_detalhe(message_id: int):
-    from . import estudos_simulado
-    try:
-        return estudos_simulado.detalhe(message_id)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.post("/api/estudos/simulado/{message_id}/prova")
-def estudos_simulado_prova(message_id: int):
-    """O simulado real como prova (gabarito oficial, letras do caderno)."""
-    from . import estudos_simulado
-    try:
-        return estudos_simulado.criar_prova(message_id)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.delete("/api/estudos/simulado/{message_id}")
-def estudos_simulado_apagar(message_id: int):
-    from . import estudos_simulado
-    try:
-        return estudos_simulado.apagar(message_id)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/busca")
-async def estudos_busca_start(conv_id: int, body: BuscaBody):
-    """Procura PDFs de prova e gabarito na web e anexa os que conferem (SSE)."""
-    from . import estudos_busca
-    try:
-        msg = estudos_busca.start(conv_id, body.pedido, body.provider, body.model, body.ex_provider, body.ex_model)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    return _sse_estudos(msg["id"])
-
-
-@app.get("/api/estudos-figura/{conv_id}/{material_id}/{figura}")
-def estudos_figura(conv_id: int, material_id: int, figura: str):
-    """O recorte de uma figura do PDF (questão com figura). Fora do /api/estudos para valer o token do cookie
-    e do `?t=` (é um <img>)."""
-    from . import estudos_figuras
-    try:
-        p = estudos_figuras.arquivo(conv_id, material_id, figura)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-    return FileResponse(p, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
-
-
-@app.get("/api/estudos/{conv_id}/flashcards.csv")
-def estudos_flashcards_csv(conv_id: int):
-    """Para o Anki: frente, verso e o tópico como etiqueta."""
-    texto = _revisao("anki_csv", conv_id, codigo=404)
-    return Response(texto.encode("utf-8-sig"), media_type="text/csv",
-                    headers={"Content-Disposition": "attachment; filename*=UTF-8''flashcards.csv"})
-
-
-@app.get("/api/estudos/{conv_id}/desempenho")
-def estudos_desempenho(conv_id: int):
-    return _revisao("desempenho", conv_id, codigo=404)
-
-
-@app.post("/api/estudos/{conv_id}/cronograma")
-def estudos_cronograma(conv_id: int, body: CronogramaBody):
-    return _revisao("planejar", conv_id, body.data, body.minutos)
-
-
-@app.post("/api/estudos/{conv_id}/cronograma/marcar")
-def estudos_cronograma_marcar(conv_id: int, body: MarcarBody):
-    return _revisao("marcar", conv_id, body.tarefa_id, body.feito)
-
-
-@app.delete("/api/estudos/{conv_id}/cronograma")
-def estudos_cronograma_apagar(conv_id: int):
-    return _revisao("apagar_plano", conv_id)
-
-
-class BlocoBody(BaseModel):
-    bloco: str
-
-
-@app.post("/api/estudos/simulado/{message_id}/gabarito")
-def estudos_simulado_bloco(message_id: int, body: BlocoBody):
-    from . import estudos_simulado
-    try:
-        return estudos_simulado.trocar_bloco(message_id, body.bloco)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/gabarito/imagem")
-async def estudos_gabarito_imagem(conv_id: int, request: Request):
-    """Print(s) do gabarito → um modelo que enxerga anota em texto → material do estudo (o de PDF segue igual)."""
-    from . import estudos_gabarito
-    form = await request.form()
-    imagens = []
-    for f in form.getlist("files"):
-        dados = await f.read()
-        if len(dados) > config.MAX_DOC_BYTES:
-            raise HTTPException(413, f"{f.filename}: imagem grande demais.")
-        imagens.append((f.filename or "", dados))
-    try:
-        return await estudos_gabarito.transcrever(conv_id, imagens, str(form.get("provider") or ""), str(form.get("model") or ""))
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-class PilotoBody(BaseModel):
-    # tudo opcional: o que não vier fica como da última vez (o "Continuar" do celular manda só o pedido)
-    ate: str | None = None          # AAAA-MM-DD: prepara o cronograma até este dia
-    provider: str | None = None
-    model: str | None = None
-    ex_provider: str | None = None
-    ex_model: str | None = None
-    preferencias: dict | None = None
-    web: bool | None = None
-    profundidade: str | None = None
-    questoes: int | None = None     # por prova
-
-
-# async: o piloto vive numa task do loop (um endpoint síncrono roda numa thread sem loop)
-@app.post("/api/estudos/{conv_id}/piloto")
-async def estudos_piloto_comecar(conv_id: int, body: PilotoBody):
-    from . import estudos_piloto
-    try:
-        return estudos_piloto.start(conv_id, body.ate, body.provider, body.model, body.ex_provider, body.ex_model,
-                                    body.preferencias, body.web, body.profundidade, body.questoes)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/estudos/{conv_id}/piloto/pausar")
-async def estudos_piloto_pausar(conv_id: int):
-    from . import estudos_piloto
-    return estudos_piloto.pausar(conv_id)
-
-
-@app.post("/api/estudos/pdf")
-async def estudos_pdf(body: PdfBody):
-    from urllib.parse import quote
-    from . import estudos_revisao
-    try:
-        dados = await estudos_revisao.pdf(body.html, body.css, body.titulo)
-    except ToolError as e:
-        raise HTTPException(400, str(e))
-    seguro = re.sub(r'[\\/:*?"<>|]+', "", body.titulo).strip()[:60] or "resumo"
-    nome = quote(f"{seguro}.pdf")
-    return Response(dados, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{nome}"})
-
-
-@app.get("/api/estudos/execucao/{message_id}")
-def estudos_execucao(message_id: int):
-    """Resumo, prova (sem gabarito até a 1ª entrega) ou entrega corrigida (com as questões reveladas)."""
-    try:
-        return estudos.estado(message_id)
-    except ToolError as e:
-        raise HTTPException(404, str(e))
-
-
-@app.get("/api/estudos/execucao/{message_id}/stream")
-def estudos_stream(message_id: int):
-    return _sse_estudos(message_id)
-
-
-@app.post("/api/estudos/execucao/{message_id}/cancelar")
-def estudos_cancelar(message_id: int):
-    return estudos.cancelar(message_id)
-
-
 # ------------------------------------------------------------------ navegador integrado
 # Uma sessão por conversa: `conv` é o id da conversa ("0" = rascunho da tela inicial).
 
@@ -3715,8 +3155,8 @@ def create_conversation(body: dict | None = None):
         except workspace.WorkspaceError as e:
             raise HTTPException(400, str(e))
     kind = (body or {}).get("kind") or "agent"
-    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudos", "conteudo", "tts"):
-        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design, estudos, conteudo ou tts")
+    if kind not in ("chat", "agent", "maestro", "imagem", "video", "comparar", "pesquisa", "design", "estudo", "conteudo", "tts"):
+        raise HTTPException(400, "kind deve ser chat, agent, maestro, imagem, video, comparar, pesquisa, design, estudo, conteudo ou tts")
     if not folder and kind in ("agent", "maestro"):
         folder = config.WORKSPACE_PADRAO  # None: a pasta é escolhida antes do 1º envio (start_run barra)
     with db.session() as s:
@@ -3757,7 +3197,7 @@ async def bulk_conversations(body: BulkBody):
             if not c:
                 continue
             if body.action == "delete":
-                if active_run(cid) or estudos.rodando(cid):
+                if active_run(cid) or cid in estudo_base._RUNS:
                     skipped.append(cid)  # não apaga conversa com execução em andamento
                     continue
                 s.query(db.Checkpoint).filter(db.Checkpoint.conversation_id == cid).delete()
@@ -4120,7 +3560,7 @@ async def delete_conversation(conv_id: int):
     # A execução em andamento continua salvando mensagem nesta conversa: sem a guarda, o próximo
     # `_save` acha `None` no lugar dela e a execução morre com AttributeError. O caminho em lote
     # já recusava; este não.
-    if active_run(conv_id) or estudos.rodando(conv_id):
+    if active_run(conv_id) or conv_id in estudo_base._RUNS:
         raise HTTPException(409, "Esta conversa tem uma execução em andamento. Pare antes de apagar.")
     with db.session() as s:
         c = _get_conv(s, conv_id)
@@ -4148,7 +3588,7 @@ def _limpar_disco(conv_id: int, pasta: str | None):
         lotes.apagar_referencias(refs, conv_id)  # só as que outra conversa não usa
         mirror.remove(conv_id)  # o .md espelhado
         design_repo.apagar(conv_id)  # projeto de design: a pasta dele (repositório, fotos, imagens da skill)
-        estudos.apagar(conv_id)  # estudo: o material anexado e o texto extraído
+        estudo_base.apagar(conv_id)  # estudo (v2): estado e corpus
         kvcache.apagar_conversa(conv_id)  # E4: o cache do prompt em disco
         shutil.rmtree(SPILL_DIR / str(conv_id), ignore_errors=True)  # saídas grandes das ferramentas
     return depois
